@@ -1,7 +1,7 @@
 # CONTAINER LABELS — the reap-by-label channel (scripts/stack/naming.ts).
 #
-# Every service below carries the same three labels, and so does the pgdata
-# volume at the bottom of this file:
+# Every service below carries the same three labels, as do the pgdata volume
+# and default network at the bottom of this file:
 #
 #   robotmoney.demo.project=<compose project>  which RUN created it
 #   robotmoney.env=ci|local                    which ENVIRONMENT CLASS created it
@@ -60,16 +60,10 @@ services:
       # the prod default.
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
-      # PINNED literal (not a passthrough): this overlay IS the demo, so every
-      # runtime container knows it. DEMO_MODE is the single "this stack is the
-      # demo" signal — the backend selects hard-coded demo values off it (e.g.
-      # the 1h provider-cache TTLs in analytics/extract/fetch-cache.ts and
-      # chain/token-prices.ts) instead of growing per-property env knobs. The
-      # cache TTLs exist because the standing demo and the self-hosted CI
-      # runner share one host IP against GeckoTerminal + the public Base RPC.
-      DEMO_MODE: "1"
-      # Cache DIRECTORY (a path is genuinely environmental, unlike the TTLs).
+      # Shared demo/smoke orchestration supplies one-hour capability TTLs.
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
+      HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
       # PINNED off (issue #208): repo demo/e2e never auto-runs the swarm.*
       # session crons — the demo drives lifecycle jobs itself via the explicit
       # admin enqueue-job endpoint (unaffected by this issue). This overrides
@@ -96,15 +90,19 @@ services:
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
-      # Same pinned demo signal as api — the internal samplers are the
-      # main provider-quota consumers, so the DEMO_MODE-selected 1h cache TTLs
-      # (analytics/extract/fetch-cache.ts, chain/token-prices.ts) matter most here.
-      DEMO_MODE: "1"
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
+      HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
 
   worker-analytics: *demo-worker
 
   worker-research: *demo-worker
+
+  # The independent producer performs the heavy analytics HTTP fetches. Token
+  # price caching is irrelevant to this service.
+  analytics-producer:
+    environment:
+      HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
 
   # Onboarding eval (docs/architecture.md §11 R8, Stage 5): a vanilla OpenCode
   # agent container, no Robot Money tooling preinstalled (see
@@ -167,5 +165,16 @@ volumes:
       robotmoney.demo.project: ${DEMO_PROJECT}
       # Same environment labels the containers carry, so a volume left behind by
       # a killed CI job is attributable to that job without parsing its name.
+      robotmoney.env: ${RM_STACK_ENV_CLASS}
+      robotmoney.env.hash: ${RM_STACK_ENV_HASH}
+
+# A Compose network can outlive every container when a run is interrupted after
+# container cleanup but before `compose down`. Label it explicitly so demo:reap
+# can discover that network-only orphan without deriving it from `docker ps`.
+networks:
+  default:
+    labels:
+      robotmoney.demo.network: "1"
+      robotmoney.demo.project: ${DEMO_PROJECT}
       robotmoney.env: ${RM_STACK_ENV_CLASS}
       robotmoney.env.hash: ${RM_STACK_ENV_HASH}

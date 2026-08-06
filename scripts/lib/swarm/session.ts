@@ -13,6 +13,8 @@
 import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, railFromEnv } from "./agent.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
+import type { ScenarioInitializer } from "../smoke-mode.ts";
+import { missingSectionLeadIns } from "./inference.ts";
 import { generateKeyPair } from "./crypto.ts";
 
 export function backendUrl(): string {
@@ -99,10 +101,8 @@ export function assertAuthoredTakes(tag: string, takes: any[], expectedMemberIds
     if (OLD_TEMPLATE_RE.test(t.body)) {
       throw new Error(`${tag}: take for ${who} matches the retired template fingerprint — not a real inference body`);
     }
-    for (const lead of ["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]) {
-      if (!t.body.includes(lead)) {
-        throw new Error(`${tag}: take for ${who} is missing the ${lead} lead-in`);
-      }
+    for (const lead of missingSectionLeadIns(t.body)) {
+      throw new Error(`${tag}: take for ${who} is missing the ${lead} lead-in`);
     }
     if (!VALID_STANCES.has(String(t.stance))) {
       throw new Error(`${tag}: take for ${who} has stance '${t.stance}' outside {${[...STANCES].join(",")}}`);
@@ -188,16 +188,25 @@ export function absenceReport(pub: any, tag = "session"): AbsenceReport {
 // absent; athena/boreas/cygnus present) so the required hermetic e2e and any
 // goldens stay reproducible.
 
-export const MEMBERS = [
+export interface SessionMember {
+  memberId: string;
+  name: string;
+  lens: string;
+  bias: number;
+  present: boolean;
+}
+export interface SessionSubject { id: string; name: string }
+
+export const DEMO_MEMBERS: readonly SessionMember[] = Object.freeze([
   { memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: demoAttends("athena") },
   { memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: demoAttends("boreas") },
   { memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: demoAttends("cygnus") },
   { memberId: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: demoAttends("draco") },
-];
-export const SUBJECTS = [
+]);
+export const DEMO_SUBJECTS: readonly SessionSubject[] = Object.freeze([
   { id: "woon", name: "Woon Treasury" },
   { id: "mav", name: "Mav Holdings" },
-];
+]);
 
 // The standing-demo roster cap now lives in @robotmoney/contract
 // (SWARM_ROSTER_CAP) — the mirror this module used to carry is gone;
@@ -440,9 +449,21 @@ export async function runRegimeClassify(
 // this process's environment (the standalone CI entry point receives the
 // demo's exact compose env).
 export async function runSession(
-  subject: typeof SUBJECTS[0],
+  subject: SessionSubject,
   sessionIndex: number,
-  opts?: { prevOutcome?: string; rail?: SessionRail; onProgress?: SessionProgress; regimeAsof?: string },
+  opts: {
+    members: readonly SessionMember[];
+    prevOutcome?: string;
+    rail?: SessionRail;
+    onProgress?: SessionProgress;
+    regimeAsof?: string;
+    // Which scenario opened this session. The session BODY is identical either
+    // way — same lifecycle, same member rail, same assertions; this selects
+    // only whether the harness may author reference-shaped subject data before
+    // the window opens. Defaults to "simulation" so the demo and every
+    // standing-mode caller keep their current behaviour unchanged.
+    initializer?: ScenarioInitializer;
+  },
 ) {
   const prevOutcome = opts?.prevOutcome;
   const onProgress = opts?.onProgress;
@@ -499,7 +520,18 @@ export async function runSession(
   // renders full charts. Idempotent; dated at the session date. This now runs
   // just AFTER the session row exists, because that row is what says what the
   // date is; the brief (which reads these fixtures) is still published after.
-  await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.adminToken);
+  //
+  // ARCHIVE SCENARIOS DO NOT GET THIS. `ensureDemoSubjectFixtures` synthesizes
+  // a subject snapshot and a trailing regime history; under the archive
+  // initializer those series were RESTORED from
+  // backend/seed-data/v0-committee-archive.json.gz and are the real v0 record.
+  // Writing simulation data over them is the one thing a continuity boot must
+  // never do — it would republish fabricated history under the release
+  // subjects' own ids. A restored subject already carries its snapshot, so
+  // there is nothing to seed (issue #537).
+  if ((opts?.initializer ?? "simulation") === "simulation") {
+    await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.adminToken);
+  }
 
   emitSession("scheduled", sessionId);
 
@@ -511,14 +543,14 @@ export async function runSession(
   // Enroll the no-show (own container + persistent keystore — the harness
   // never generates a key for it), then run present members, each in its OWN
   // container on the member-agent rail.
-  const absent = MEMBERS.filter((m) => !m.present);
+  const absent = opts.members.filter((m) => !m.present);
   await Promise.all(absent.map((m) => enroll(rail, m).catch((err) => {
     // A failed no-show enrollment must not sink the session: absence is
     // already this member's outcome either way. Logged, never fatal.
     console.log(`  ${m.memberId}: no-show enrollment failed (absent regardless) — ${err instanceof Error ? err.message : err}`);
   })));
   for (const m of absent) onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
-  const present = MEMBERS.filter((m) => m.present);
+  const present = opts.members.filter((m) => m.present);
   // Settle so one failed member container cannot freeze the session lifecycle
   // (#122). Concurrency is preserved at the CONTAINER level: at most
   // SWARM_MAX_CONCURRENCY member containers in flight. The unconditional
@@ -606,6 +638,8 @@ async function main() {
   // once from this process's environment — the demo readiness gate hands this
   // entry point the stack's exact compose env.
   const rail = railFromEnv();
+  const subjects = DEMO_SUBJECTS.map((subject) => ({ ...subject }));
+  const members: SessionMember[] = DEMO_MEMBERS.map((member) => ({ ...member }));
 
   // Setup (subject is a direct admin call; the regime snapshot is the
   // PRODUCER's own job — issue #361 Phase 4). NOTHING IS WIPED: the
@@ -613,10 +647,10 @@ async function main() {
   // along with the endpoint behind it — an ephemeral database is deleted or
   // inspected whole, and no bring-up may TRUNCATE rows it did not create.
   await runRegimeClassify(today, rail);
-  await admin("subject", SUBJECTS[0], rail.adminToken);
+  await admin("subject", subjects[0], rail.adminToken);
 
   // Session 1: today's subject
-  const s1 = await runSession(SUBJECTS[0], 1, { rail });
+  const s1 = await runSession(subjects[0], 1, { rail, members });
 
   // ── New member added mid-run ──────────────────────────────────────────────
   // Demonstrates a member added AFTER session 1, participating in session 2
@@ -627,7 +661,7 @@ async function main() {
   // demo roster; the real §11 public apply→approve→claim flow is exercised by
   // the real-inference eval harness in scripts/lib/onboarding-eval.ts and the
   // no-inference proof in scripts/rmpc-release-e2e.ts).
-  MEMBERS.push({ memberId: "eos", name: "Eos", lens: "newcomer", bias: 0.05, present: true });
+  members.push({ memberId: "eos", name: "Eos", lens: "newcomer", bias: 0.05, present: true });
   console.log(`\n  new member eos: joins the roster — enrolls in its own container at session 2`);
 
   // ── Cross-role denial assertions ─────────────────────────────────────────
@@ -644,7 +678,7 @@ async function main() {
   // 5a. Unknown token → 401 with "unknown member token"
   const badTokenRes = await fetch(`${backendUrl()}${ROUTES.swarm.submit}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer nonexistent" },
-    body: JSON.stringify({ memberId: "cross-role-test", date: today, subjectId: SUBJECTS[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
+    body: JSON.stringify({ memberId: "cross-role-test", date: today, subjectId: subjects[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
   }).then(responseJson);
   console.log(`  cross-role: unknown token → ${badTokenRes.status} "${badTokenRes.error}"`);
   const badTokenOk = badTokenRes.status === 401 && String(badTokenRes.error).includes("unknown member token");
@@ -653,7 +687,7 @@ async function main() {
   // 5b. Known token but wrong memberId in body → 403 with "token/member mismatch"
   const mismatchRes = await fetch(`${backendUrl()}${ROUTES.swarm.submit}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
-    body: JSON.stringify({ memberId: "someone-else", date: today, subjectId: SUBJECTS[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
+    body: JSON.stringify({ memberId: "someone-else", date: today, subjectId: subjects[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
   }).then((r) => r.json());
   console.log(`  cross-role: token/member mismatch → ${mismatchRes.status} "${mismatchRes.error}"`);
   const mismatchOk = mismatchRes.status === 403 && String(mismatchRes.error).includes("token/member mismatch");
@@ -692,7 +726,7 @@ async function main() {
   // 0022 the DATABASE dates a session, so two sittings on one day are simply two
   // rows with different convened_at rather than one row relabelled to a day that
   // has not happened. The rotation this proves is the real one.
-  await runSession(SUBJECTS[1], 2, { prevOutcome: s1.pub.session.synthesis, rail });
+  await runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members });
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`).then((r) => r.json());

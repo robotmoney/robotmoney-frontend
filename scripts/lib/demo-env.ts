@@ -33,6 +33,8 @@
 // path is byte-for-byte unaffected.
 import { resolveDemoCadence } from "./demo-schedule.ts";
 
+export const NORMAL_DEMO_CACHE_TTL_MS = 3_600_000;
+
 export interface DemoEnvResolution {
   /**
    * Resolved BASE_RPC_URL for the api/worker containers. `undefined` means
@@ -72,12 +74,17 @@ export function resolveDemoEnv(
   const producerCronEnv: Record<string, string> = opts.stage === true
     ? { PRODUCER_REGIME_CRON: cadence.regimeCron, PRODUCER_RESEARCH_CRON: cadence.researchCron }
     : {};
+  const cacheEnv: Record<string, string> = {
+    HTTP_FETCH_CACHE_TTL_MS: String(NORMAL_DEMO_CACHE_TTL_MS),
+    TOKEN_PRICE_CACHE_TTL_MS: String(NORMAL_DEMO_CACHE_TTL_MS),
+  };
 
   const composeEnv: Record<string, string> = {
     ...(baseRpcUrl !== undefined ? { BASE_RPC_URL: baseRpcUrl } : {}),
     BASE_RPC_SOURCE: baseRpcSource,
     ANALYTICS_SOURCE: analyticsSource,
     ANALYTICS_FLOOR_SEED: analyticsFloorSeed,
+    ...cacheEnv,
     ...producerCronEnv,
   };
 

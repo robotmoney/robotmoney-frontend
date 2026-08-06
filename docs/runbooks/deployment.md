@@ -161,7 +161,7 @@ to rediscover:
   publishes past it.
 
 Note also that a pinned-port origin serves a **demo** stack (`RM_ALLOW_INSECURE=1`,
-`DEMO_MODE=1`, fixture-backed `/projects`), not a production one — see §5 for
+explicit demo schedules, fixture-backed `/projects`), not a production one — see §5 for
 what a production deployment requires instead.
 
 ### 3.4 Origin CA certificate (for the proxied app subdomains)

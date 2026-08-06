@@ -20,6 +20,7 @@ import {
   ENV_HASH_LABEL,
   isGithubActions,
   LOCAL_PROJECT_PREFIX,
+  MANAGED_NETWORK_LABEL,
   PROJECT_LABEL,
   projectPrefix,
   resolveStackEnvironment,
@@ -173,6 +174,7 @@ describe("labels — the channel tooling selects on", () => {
     expect(PROJECT_LABEL).toBe("robotmoney.demo.project");
     expect(ENV_CLASS_LABEL).toBe("robotmoney.env");
     expect(ENV_HASH_LABEL).toBe("robotmoney.env.hash");
+    expect(MANAGED_NETWORK_LABEL).toBe("robotmoney.demo.network");
   });
 
   test("dockerLabelFlags emits --label pairs in a stable order (raw `docker run` spawners)", () => {
@@ -190,15 +192,16 @@ describe("labels — the channel tooling selects on", () => {
 // spawners: these are the places the scheme has to be APPLIED, and none of them
 // is reachable from a unit test any other way (each one needs Docker to run).
 describe("the scheme is actually wired into every spawner", () => {
-  test("docker-compose.demo.yml stamps both env labels on every service and on the pgdata volume", () => {
+  test("docker-compose.demo.yml stamps attribution on services, pgdata, and the managed default network", () => {
     const demo = readFileSync(join(repoRoot, "docker-compose.demo.yml"), "utf8");
     const classLines = demo.split("\n").filter((l) => l.includes(`${ENV_CLASS_LABEL}:`));
     const hashLines = demo.split("\n").filter((l) => l.includes(`${ENV_HASH_LABEL}:`));
-    // postgres, api, the shared worker anchor, member-agent, and the volume.
-    expect(classLines.length).toBe(5);
-    expect(hashLines.length).toBe(5);
+    // postgres, api, the shared worker anchor, member-agent, volume, network.
+    expect(classLines.length).toBe(6);
+    expect(hashLines.length).toBe(6);
     for (const l of classLines) expect(l).toContain(`\${${ENV_CLASS_COMPOSE_VAR}}`);
     for (const l of hashLines) expect(l).toContain(`\${${ENV_HASH_COMPOSE_VAR}}`);
+    expect(demo).toContain(`${MANAGED_NETWORK_LABEL}: "1"`);
   });
 
   test("no spawner keeps a private ad-hoc name shape", () => {

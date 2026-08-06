@@ -1,7 +1,6 @@
-// Label-driven reaper for errant containers left behind by ANY of the four
-// container-spawning families (scripts/stack/naming.ts: stack / eval / infra /
-// pgtest). Pure decision logic + injectable docker runner, so every guard below
-// is provable without a daemon.
+// Label-driven reaper for errant containers and Compose networks left behind by
+// the stack families in scripts/stack/naming.ts. Pure decision logic + an
+// injectable Docker runner keep every guard provable without a daemon.
 //
 // WHY THIS EXISTS — the incident, 2026-07-29. e2e run 30406428674 was CANCELLED
 // mid-boot. The demo boot step owns its own `docker compose down`, so killing it
@@ -55,8 +54,11 @@
 // reproduce run 30406428674 exactly. Every such removal says so out loud.
 import { existsSync, readFileSync } from "node:fs";
 import {
+  CI_PROJECT_PREFIX,
   ENV_CLASS_LABEL,
   ENV_HASH_LABEL,
+  LOCAL_PROJECT_PREFIX,
+  MANAGED_NETWORK_LABEL,
   PROJECT_LABEL,
   type EnvironmentClass,
 } from "../stack/naming.ts";
@@ -68,7 +70,7 @@ import { listDemoVolumes, removeDemoVolumes, type DockerRunner } from "./demo-vo
 // than reconstructing the network NAME from the project name.
 export const COMPOSE_PROJECT_LABEL = "com.docker.compose.project";
 
-/** Which env classes a sweep considers. `all` = "every container we labelled". */
+/** Which env classes a sweep considers. `all` = every managed resource. */
 export type EnvClassSelector = EnvironmentClass | "all";
 
 export interface ReapContainer {
@@ -99,12 +101,34 @@ export interface ReapVerdict {
   reason: string;
 }
 
+export interface ReapNetwork {
+  id: string;
+  name: string;
+  project: string | null;
+  composeProject: string | null;
+  envClass: string | null;
+  envHash: string | null;
+  managed: string | null;
+  createdAt: Date | null;
+  createdRaw: string;
+  attachedContainerIds: string[];
+}
+
+export interface ReapNetworkVerdict {
+  network: ReapNetwork;
+  reap: boolean;
+  reason: string;
+}
+
 export interface ReapPlan {
   verdicts: ReapVerdict[];
   /** Containers to remove, in listing order. */
   doomed: ReapContainer[];
   /** Distinct non-null projects every doomed container belongs to. */
   doomedProjects: string[];
+  networkVerdicts: ReapNetworkVerdict[];
+  /** Managed networks safe to remove after doomed containers have gone. */
+  doomedNetworks: ReapNetwork[];
 }
 
 export interface PlanOptions {
@@ -231,6 +255,72 @@ export function listLabeledContainers(run: DockerRunner, envClass: EnvClassSelec
   return out;
 }
 
+function labelsFromRecord(value: unknown): Map<string, string> {
+  const labels = new Map<string, string>();
+  if (!value || typeof value !== "object" || Array.isArray(value)) return labels;
+  for (const [key, labelValue] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof labelValue === "string") labels.set(key, labelValue);
+  }
+  return labels;
+}
+
+/**
+ * Enumerate networks carrying our explicit managed-network label, then inspect
+ * each one. `docker network ls` is only candidate discovery; inspect is the
+ * authoritative source for identity, creation time, and live attachments.
+ * Any Docker or parse failure throws so an incomplete scan cannot read green.
+ */
+export function listManagedNetworks(run: DockerRunner, envClass: EnvClassSelector = "all"): ReapNetwork[] {
+  const args = ["network", "ls", "--filter", `label=${MANAGED_NETWORK_LABEL}=1`];
+  if (envClass !== "all") args.push("--filter", `label=${ENV_CLASS_LABEL}=${envClass}`);
+  args.push("--format", "{{.ID}}");
+  const listed = run(args);
+  if (listed.exitCode !== 0) {
+    throw new Error(`docker network ls failed (exit ${listed.exitCode}): ${listed.stderr.trim() || listed.stdout.trim()}`);
+  }
+
+  const networks: ReapNetwork[] = [];
+  for (const id of listed.stdout.split("\n").map((line) => line.trim()).filter(Boolean)) {
+    networks.push(inspectManagedNetwork(run, id));
+  }
+  return networks;
+}
+
+function inspectManagedNetwork(run: DockerRunner, id: string): ReapNetwork {
+  const inspected = run(["network", "inspect", id]);
+  if (inspected.exitCode !== 0) {
+    throw new Error(`docker network inspect ${id} failed (exit ${inspected.exitCode}): ${inspected.stderr.trim() || inspected.stdout.trim()}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(inspected.stdout);
+  } catch {
+    throw new Error(`docker network inspect ${id} returned invalid JSON`);
+  }
+  const obj = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+    throw new Error(`docker network inspect ${id} returned no network object`);
+  }
+  const record = obj as Record<string, unknown>;
+  const labels = labelsFromRecord(record.Labels);
+  const attached = record.Containers && typeof record.Containers === "object" && !Array.isArray(record.Containers)
+    ? Object.keys(record.Containers as Record<string, unknown>)
+    : [];
+  const createdRaw = typeof record.Created === "string" ? record.Created : "";
+  return {
+    id: typeof record.Id === "string" ? record.Id : id,
+    name: typeof record.Name === "string" ? record.Name : "",
+    project: labels.get(PROJECT_LABEL) ?? null,
+    composeProject: labels.get(COMPOSE_PROJECT_LABEL) ?? null,
+    envClass: labels.get(ENV_CLASS_LABEL) ?? null,
+    envHash: labels.get(ENV_HASH_LABEL) ?? null,
+    managed: labels.get(MANAGED_NETWORK_LABEL) ?? null,
+    createdAt: parseDockerTimestamp(createdRaw),
+    createdRaw,
+    attachedContainerIds: attached,
+  };
+}
+
 // ── G1 input: the active demo ───────────────────────────────────────────────
 
 export interface ActiveProjectRead {
@@ -280,7 +370,7 @@ function groupKey(c: ReapContainer): string {
  * reported just as loudly as removed ones, because "the reaper found nothing"
  * and "the reaper refused to act" are different facts and must read differently.
  */
-export function planReap(containers: ReapContainer[], opts: PlanOptions): ReapPlan {
+export function planReap(containers: ReapContainer[], opts: PlanOptions, networks: ReapNetwork[] = []): ReapPlan {
   const active = new Set(opts.activeProjects ?? []);
   const groups = new Map<string, ReapContainer[]>();
   for (const c of containers) {
@@ -347,11 +437,63 @@ export function planReap(containers: ReapContainer[], opts: PlanOptions): ReapPl
   // Preserve the input order so output is stable and diffable.
   const verdicts = containers.map((c) => byId.get(c.id)!).filter(Boolean);
   const doomed = verdicts.filter((v) => v.reap).map((v) => v.container);
+  const doomedIds = new Set(doomed.map((container) => container.id));
+  const networkVerdicts: ReapNetworkVerdict[] = networks.map((network) => {
+    const identityProblem = managedNetworkIdentityProblem(network);
+    if (identityProblem) return { network, reap: false, reason: identityProblem };
+    if (active.has(network.project!)) {
+      return { network, reap: false, reason: `G1 active demo project (.agents/demo-state.json names ${network.project})` };
+    }
+    if (opts.selfEnvHash && network.envHash === opts.selfEnvHash) {
+      return { network, reap: false, reason: `G3 this job's own environment (robotmoney.env.hash=${opts.selfEnvHash})` };
+    }
+    // `docker ps` commonly reports a 12-character id while network inspect uses
+    // the full id. Prefix equivalence is Docker's normal identity convention.
+    const attachmentIsDoomed = (id: string) => [...doomedIds].some((doomedId) =>
+      id === doomedId || id.startsWith(doomedId) || doomedId.startsWith(id));
+    const foreignAttachments = network.attachedContainerIds.filter((id) => !attachmentIsDoomed(id));
+    if (foreignAttachments.length > 0) {
+      return { network, reap: false, reason: `attached to ${foreignAttachments.length} container(s) not selected for removal — preserving an in-use network` };
+    }
+    if (!network.createdAt) {
+      return { network, reap: false, reason: `unknown age — docker reported Created ${JSON.stringify(network.createdRaw)}, which this parser does not accept; never guessing` };
+    }
+    const age = opts.now.getTime() - network.createdAt.getTime();
+    if (age < opts.olderThanMs) {
+      return { network, reap: false, reason: `younger than the threshold (age ${formatAge(age)} < ${formatAge(opts.olderThanMs)})` };
+    }
+    const afterContainers = network.attachedContainerIds.length > 0
+      ? `; ${network.attachedContainerIds.length} attached container(s) are selected for removal and zero attachments will be re-verified`
+      : "; zero attached containers verified";
+    return { network, reap: true, reason: `managed network age ${formatAge(age)} >= ${formatAge(opts.olderThanMs)}${afterContainers}` };
+  });
+  const doomedNetworks = networkVerdicts.filter((verdict) => verdict.reap).map((verdict) => verdict.network);
   const doomedProjects: string[] = [];
   for (const c of doomed) {
     if (c.project && !doomedProjects.includes(c.project)) doomedProjects.push(c.project);
   }
-  return { verdicts, doomed, doomedProjects };
+  // Network-only projects do NOT become volume-reclamation projects. Demo
+  // teardown intentionally preserves pgdata; discovering a leaked network is
+  // not authorization to erase that persistent database. The historical
+  // container-orphan path above retains its existing volume behavior.
+  return { verdicts, doomed, doomedProjects, networkVerdicts, doomedNetworks };
+}
+
+function managedNetworkIdentityProblem(network: ReapNetwork): string | null {
+  if (network.managed !== "1") return `managed ownership label ${MANAGED_NETWORK_LABEL}=1 is missing or changed`;
+  if (network.envClass !== "ci" && network.envClass !== "local") return `invalid ${ENV_CLASS_LABEL} label ${JSON.stringify(network.envClass)}`;
+  if (!network.envHash || !/^[0-9a-f]{10}$/.test(network.envHash)) return `invalid ${ENV_HASH_LABEL} label ${JSON.stringify(network.envHash)}`;
+  if (!network.project) return `missing ${PROJECT_LABEL} label`;
+  if (network.composeProject !== network.project) {
+    return `${COMPOSE_PROJECT_LABEL}=${JSON.stringify(network.composeProject)} does not match ${PROJECT_LABEL}=${JSON.stringify(network.project)}`;
+  }
+  const prefix = network.envClass === "ci" ? CI_PROJECT_PREFIX : LOCAL_PROJECT_PREFIX;
+  const expected = new RegExp(`^${prefix}_(?:stack|eval|eval-swarm|infra|pgtest)_${network.envHash}$`);
+  if (!expected.test(network.project)) return `project ${JSON.stringify(network.project)} does not match its environment labels`;
+  if (network.name !== `${network.project}_default`) {
+    return `network name ${JSON.stringify(network.name)} does not match managed default network ${JSON.stringify(`${network.project}_default`)}`;
+  }
+  return null;
 }
 
 // ── Execution ───────────────────────────────────────────────────────────────
@@ -411,16 +553,35 @@ export function executeReap(run: DockerRunner, plan: ReapPlan, opts: { dryRun?: 
     else out.failedContainers.push({ name: c.name || c.id, reason: (r.stderr.trim() || r.stdout.trim()).replace(/\s+/g, " ") });
   }
 
-  for (const project of plan.doomedProjects) {
-    for (const net of listProjectNetworks(run, project)) {
-      if (dryRun) {
-        out.removedNetworks.push(net);
-        continue;
-      }
-      const r = run(["network", "rm", net]);
-      if (r.exitCode === 0) out.removedNetworks.push(net);
-      else out.failedNetworks.push({ name: net, reason: (r.stderr.trim() || r.stdout.trim()).replace(/\s+/g, " ") });
+  for (const planned of plan.doomedNetworks) {
+    if (dryRun) {
+      out.removedNetworks.push(planned.name);
+      continue;
     }
+
+    // Re-read immediately before deletion. Container removals happen above,
+    // but another process could attach in the meantime or labels could have
+    // changed. The actual mutation is allowed only with identity still intact
+    // and an authoritative empty Containers map.
+    let current: ReapNetwork;
+    try {
+      current = inspectManagedNetwork(run, planned.id);
+    } catch (err) {
+      out.failedNetworks.push({ name: planned.name, reason: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
+    const identityProblem = managedNetworkIdentityProblem(current);
+    if (identityProblem) {
+      out.failedNetworks.push({ name: planned.name, reason: `identity changed before removal: ${identityProblem}` });
+      continue;
+    }
+    if (current.attachedContainerIds.length > 0) {
+      out.failedNetworks.push({ name: planned.name, reason: `network acquired ${current.attachedContainerIds.length} attached container(s); preserved` });
+      continue;
+    }
+    const r = run(["network", "rm", current.id]);
+    if (r.exitCode === 0) out.removedNetworks.push(current.name);
+    else out.failedNetworks.push({ name: current.name, reason: (r.stderr.trim() || r.stdout.trim()).replace(/\s+/g, " ") });
   }
 
   for (const project of plan.doomedProjects) {

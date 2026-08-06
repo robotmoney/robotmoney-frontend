@@ -70,7 +70,7 @@ jobs:
     # if it were a test.
     env:
       CI_CLASS: ignore
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
@@ -90,7 +90,7 @@ jobs:
     needs: [changes]
     # Path-gated ONLY on pull_request: a push to main always runs regardless.
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

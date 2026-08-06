@@ -1,6 +1,5 @@
-// `bun run demo:reap` — sweep errant containers left behind by ANY of the four
-// container-spawning families (scripts/stack/naming.ts: stack / eval / infra /
-// pgtest), selecting by LABEL and never by name substring.
+// `bun run demo:reap` — sweep errant containers and Compose networks left
+// behind by any stack family, selecting by LABEL and never by name substring.
 //
 // WHY (incident, 2026-07-29): e2e run 30406428674 was cancelled mid-boot, its
 // in-process `docker compose down` never ran, and NOTHING ELSE ever reaped a
@@ -20,7 +19,7 @@
 //
 // Flags (all CLI ARGUMENTS, never env vars — same rule as `--pg-data` /
 // `--stage`, so nothing a shell exports can silently widen a sweep):
-//   --older-than <dur>   only containers older than this. <int><s|m|h|d>, default 6h.
+//   --older-than <dur>   only resources older than this. <int><s|m|h|d>, default 6h.
 //   --env-class <c>      ci | local | all (default all). `ci` can never match the
 //                        standing stage demo or an operator's shell.
 //   --dry-run            print the plan, mutate nothing.
@@ -35,6 +34,7 @@ import {
   executeReap,
   formatAge,
   listLabeledContainers,
+  listManagedNetworks,
   parseDuration,
   planReap,
   readActiveProjects,
@@ -91,16 +91,20 @@ if (selfEnvHash) console.log(`[demo:reap]   G3 protects this job's own environme
 const run = makeDockerRunner();
 
 let containers;
+let networks;
 try {
   containers = listLabeledContainers(run, envClass);
+  // Deliberately independent of the container result: interrupted Compose
+  // teardown commonly leaves `<project>_default` after every container is gone.
+  networks = listManagedNetworks(run, envClass);
 } catch (err) {
-  // A dead daemon must never read as "no leaks".
-  console.error(`[demo:reap] could not list containers: ${err instanceof Error ? err.message : err}`);
+  // A dead daemon or incomplete discovery must never read as "no leaks".
+  console.error(`[demo:reap] could not enumerate managed resources: ${err instanceof Error ? err.message : err}`);
   process.exit(1);
 }
 
-if (containers.length === 0) {
-  console.log("[demo:reap] no labelled containers in scope — nothing to consider.");
+if (containers.length === 0 && networks.length === 0) {
+  console.log("[demo:reap] no labelled containers or managed networks in scope — nothing to consider.");
   process.exit(0);
 }
 
@@ -109,7 +113,7 @@ const plan = planReap(containers, {
   olderThanMs,
   activeProjects: active.projects,
   selfEnvHash,
-});
+}, networks);
 
 // Loud on BOTH sides: every candidate is accounted for with a reason, so "the
 // reaper found nothing" and "the reaper refused to act" never look alike.
@@ -118,6 +122,18 @@ console.log(`[demo:reap] considered ${containers.length} labelled container(s): 
 if (kept.length) {
   console.log("[demo:reap] KEPT:");
   for (const v of kept) console.log(`  · ${v.container.name} [${v.container.envClass ?? "?"}/${v.container.envHash ?? "?"}] — ${v.reason}`);
+}
+const keptNetworks = plan.networkVerdicts.filter((verdict) => !verdict.reap);
+console.log(`[demo:reap] considered ${networks.length} managed network(s): ${plan.doomedNetworks.length} to remove, ${keptNetworks.length} kept.`);
+if (keptNetworks.length) {
+  console.log("[demo:reap] KEPT NETWORKS:");
+  for (const verdict of keptNetworks) console.log(`  · ${verdict.network.name || verdict.network.id} — ${verdict.reason}`);
+}
+if (plan.doomedNetworks.length) {
+  console.log(`[demo:reap] ${dryRun ? "WOULD REMOVE NETWORKS" : "REMOVING NETWORKS"}:`);
+  for (const verdict of plan.networkVerdicts.filter((candidate) => candidate.reap)) {
+    console.log(`  ✗ ${verdict.network.name} [${verdict.network.envClass ?? "?"}/${verdict.network.envHash ?? "?"}] project=${verdict.network.project ?? "<none>"} — ${verdict.reason}`);
+  }
 }
 if (plan.doomed.length) {
   console.log(`[demo:reap] ${dryRun ? "WOULD REMOVE" : "REMOVING"}:`);

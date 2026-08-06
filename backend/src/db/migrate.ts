@@ -5,7 +5,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql, closeDb } from "./client.ts";
-import { seed } from "./seed.ts";
+import { seed, seedDemoJobSchedules } from "./seed.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 
@@ -27,7 +27,7 @@ async function waitForDb(timeoutMs = 30_000): Promise<void> {
   }
 }
 
-export async function migrate(): Promise<void> {
+export async function migrate(options: { seedDemoSchedules?: boolean } = {}): Promise<void> {
   await waitForDb();
   await sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -59,11 +59,12 @@ export async function migrate(): Promise<void> {
   // so safe on every boot — gives the worker recurring work without a manual
   // admin trigger. See seed.ts.
   await seed();
+  if (options.seedDemoSchedules) await seedDemoJobSchedules();
 }
 
 // Run directly: `bun run src/db/migrate.ts`
 if (import.meta.url === `file://${process.argv[1]}`) {
-  migrate()
+  migrate({ seedDemoSchedules: process.argv.includes("--seed-demo-schedules") })
     .then(closeDb)
     .catch((err) => {
       console.error(err);

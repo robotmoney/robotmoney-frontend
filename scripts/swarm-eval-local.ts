@@ -4,7 +4,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveAdmissionEvalModelConfig } from "./onboarding-eval-local.ts";
-import { admin, MEMBERS, runRegimeClassify, runSession, SUBJECTS } from "./lib/swarm/session.ts";
+import { admin, DEMO_MEMBERS, DEMO_SUBJECTS, runRegimeClassify, runSession } from "./lib/swarm/session.ts";
 import {
   createStack,
   composeArgs,
@@ -171,13 +171,15 @@ export async function runSwarmAuthoringEvalCase(
     // stack it created, so there is no prior history to clear — and if it is
     // ever pointed at one that has some, wiping it would be the wrong answer.
     await runRegimeClassify(today, rail);
-    await admin("subject", SUBJECTS[0]);
+    const subject = DEMO_SUBJECTS[0];
+    const members = DEMO_MEMBERS.map((member) => ({ ...member }));
+    await admin("subject", subject);
 
     // Member-container rail (issue #361 Phase 2): the session's members run in
     // their own containers against this eval stack.
-    const sessionRun = await runSession(SUBJECTS[0], 1, { rail });
+    const sessionRun = await runSession(subject, 1, { rail, members });
     sessionState = sessionRun.pub?.session?.state ?? null;
-    const presentMembers = MEMBERS.filter((m) => m.present);
+    const presentMembers = members.filter((m) => m.present);
     authoredCount = sessionRun.pub?.takes?.filter((t: any) => typeof t?.body === "string" && t.body.trim().length > 0).length ?? 0;
 
     if (sessionState === "published" && authoredCount >= presentMembers.length) {

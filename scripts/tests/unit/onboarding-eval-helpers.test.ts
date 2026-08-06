@@ -64,6 +64,7 @@ import {
   ONBOARDING_PROMPT,
 } from "@robotmoney/contract";
 import { isKeylessModel, MODEL_FAMILIES, resolveAgentModel } from "../../lib/model-registry.ts";
+import { boundedExitAfterTerminate, inspectThenCleanup } from "../../agent/member-agent.ts";
 
 // ── Pure helper unit tests (no Docker) ──────────────────────────────────────
 describe("onboarding-eval pure helpers", () => {
@@ -322,6 +323,43 @@ describe("member-agent container primitive", () => {
     expect(memberAgentContainerName("rm_demo_stack_abc", "run1")).toBe("rm_demo_stack_abc-member-agent-eval-run1");
   });
 
+  test("a failed diagnostic capture cannot skip container cleanup", async () => {
+    const order: string[] = [];
+    const result = await inspectThenCleanup({
+      inspect: async () => {
+        order.push("inspect");
+        throw new Error("artifact disk failed with OPENCODE_API_KEY=secret");
+      },
+      onInspectError: () => order.push("capture-failure-recorded"),
+      cleanup: () => {
+        order.push("docker-rm");
+        return 0;
+      },
+    });
+    expect(order).toEqual(["inspect", "capture-failure-recorded", "docker-rm"]);
+    expect(result.cleanupExitCode).toBe(0);
+    expect(result.inspectError).toBeInstanceOf(Error);
+  });
+
+  test("a stuck Docker CLI cannot delay inspection and cleanup indefinitely", async () => {
+    const order: string[] = [];
+    const started = Date.now();
+    const exitCode = await boundedExitAfterTerminate({
+      exited: new Promise<number>(() => {}),
+      kill: (signal) => order.push(`signal-${signal}`),
+      termGraceMs: 10,
+      killGraceMs: 10,
+    });
+    const lifecycle = await inspectThenCleanup({
+      inspect: async () => { order.push("inspect"); },
+      cleanup: () => { order.push("docker-rm"); return 0; },
+    });
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(exitCode).toBeNull();
+    expect(lifecycle.cleanupExitCode).toBe(0);
+    expect(order).toEqual(["signal-9", "inspect", "docker-rm"]);
+  });
+
   test("FUNDED: the argv is byte-for-byte what the eval spawns, with exactly one -e credential", () => {
     expect(buildMemberAgentArgv({ ...base, modelConfig: FUNDED })).toEqual([
       "docker",
@@ -339,7 +377,9 @@ describe("member-agent container primitive", () => {
       "--model", "opencode/deepseek-v4-flash",
       "--format", "json",
       "--auto",
-      "--title", "onboarding-eval-run1",
+      "--title", "onboarding-eval-run1-opencode-deepseek-v4-flash",
+      "--print-logs",
+      "--log-level", "DEBUG",
       "--dir", "/home/agent",
       "PROMPT TEXT",
     ]);
@@ -407,7 +447,9 @@ describe("member-agent container primitive", () => {
     const funded = buildMemberAgentArgv({ ...base, modelConfig: FUNDED });
     // Structurally the same argv once the credential pair and the model id are
     // removed: the keyless path is not a second, divergent code path.
-    const strip = (a: string[]) => a.filter((x, i) => x !== "-e" && a[i - 1] !== "-e" && !x.startsWith("opencode/"));
+    const strip = (a: string[]) => a.filter((x, i) =>
+      x !== "-e" && a[i - 1] !== "-e" && !x.startsWith("opencode/") &&
+      !x.startsWith("onboarding-eval-run1-opencode-"));
     expect(strip(keyless)).toEqual(strip(funded));
   });
 

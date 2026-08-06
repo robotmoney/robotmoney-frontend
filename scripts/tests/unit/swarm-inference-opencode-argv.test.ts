@@ -46,11 +46,13 @@ beforeAll(async () => {
   fakeOpenCode = join(fakeDir, "opencode");
   callsDir = join(fakeDir, "calls");
   await mkdir(callsDir, { recursive: true });
-  await writeFile(fakeOpenCode, `#!/usr/bin/env bun
-await Bun.write(
-  ${JSON.stringify(callsDir)} + "/" + crypto.randomUUID() + ".json",
+  await writeFile(fakeOpenCode, `#!/usr/bin/env node
+const { writeFileSync } = require("node:fs");
+const { randomUUID } = require("node:crypto");
+writeFileSync(
+  ${JSON.stringify(callsDir)} + "/" + randomUUID() + ".json",
   JSON.stringify({
-    argv: Bun.argv.slice(2),
+    argv: process.argv.slice(2),
     adminToken: process.env.ADMIN_TOKEN ?? "",
     analyticsToken: process.env.ANALYTICS_TOKEN ?? "",
     memberToken: process.env.RM_MEMBER_TOKEN ?? "",
@@ -58,7 +60,7 @@ await Bun.write(
     envKeys: Object.keys(process.env).sort(),
   }),
 );
-console.log(JSON.stringify({ type: "text", part: { type: "text", text: "**REGIME**\\n- one\\nSTANCE: bullish | CONFIDENCE: 0.8" } }));
+console.log(JSON.stringify({ type: "text", part: { type: "text", text: "**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8" } }));
 `);
   await chmod(fakeOpenCode, 0o755);
   process.env.OPENCODE_BIN = fakeOpenCode;
@@ -87,7 +89,8 @@ afterAll(async () => {
 const persona = (memberId: string) => ({ memberId, name: memberId, lens: "risk", bias: 0 });
 
 test("swarm inference passes OpenCode's real auto-approval flag", async () => {
-  const take = await authorTake(persona("member-1"), { composite: 0.5 }, "subject-1");
+  const telemetry: Array<{ milestone: string; model: string }> = [];
+  const take = await authorTake(persona("member-1"), { composite: 0.5 }, "subject-1", { telemetry: (event) => telemetry.push(event) });
 
   const calls = await recordedCalls();
   expect(take.stance).toBe("bullish");
@@ -95,7 +98,19 @@ test("swarm inference passes OpenCode's real auto-approval flag", async () => {
   for (const call of calls) {
     expect(call.argv).toContain("--auto");
     expect(call.argv).not.toContain("--dangerously-skip-permissions");
+    expect(call.argv.slice(call.argv.indexOf("--model"), call.argv.indexOf("--model") + 2)).toEqual([
+      "--model", "opencode/deepseek-v4-flash",
+    ]);
+    expect(call.argv).toContain("--title");
+    expect(call.argv[call.argv.indexOf("--title") + 1]).toBe("robotmoney-swarm-opencode-deepseek-v4-flash");
+    expect(call.argv).toContain("--print-logs");
+    expect(call.argv.slice(call.argv.indexOf("--log-level"), call.argv.indexOf("--log-level") + 2)).toEqual(["--log-level", "DEBUG"]);
   }
+  expect(telemetry.map((event) => event.milestone)).toEqual(expect.arrayContaining([
+    "inference_requested", "cli_spawn_requested", "cli_spawned", "first_stdout_byte",
+    "first_ndjson_event", "primary_stream_observed", "first_assistant_text_part", "process_exit", "completion",
+  ]));
+  expect(telemetry.every((event) => event.model === "opencode/deepseek-v4-flash")).toBe(true);
 });
 
 // ── Issue #361 Phase 0: the spawn environment is an ALLOWLIST, not an inherit ─
@@ -120,7 +135,7 @@ describe("opencode subprocess env is scrubbed down to the single model credentia
     // Everything present is on the documented allowlist. XDG overrides are
     // intentionally absent: isolation comes from the member container HOME.
     const allowed = new Set(["PATH", "HOME", "TERM", "OPENCODE_API_KEY"]);
-    for (const k of fresh[0].envKeys) expect(allowed.has(k)).toBe(true);
+    for (const k of fresh[0].envKeys) expect(allowed.has(k), `unexpected child env key ${k}`).toBe(true);
     expect(fresh[0].envKeys).not.toContain("XDG_DATA_HOME");
     expect(fresh[0].envKeys).not.toContain("XDG_STATE_HOME");
   });
@@ -328,4 +343,137 @@ describe("a funded-inference failure carries a machine-readable kind", () => {
     // guards a zero-take session must still reject — unchanged by this work.
     expect(() => assertAuthoredTakes("[session 1]", [], [])).toThrow(/no authored takes to assert on/);
   });
+});
+
+test("pre-stream timeout preserves partial diagnostics and reports that no primary stream was observed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "swarm-inference-hang-"));
+  const bin = join(dir, "opencode-hang");
+  await writeFile(bin, `#!/usr/bin/env node
+process.on("SIGTERM", () => {});
+console.error("opencode booted api_key=sk-planted-secret-123456789 prompt=" + process.argv.at(-1));
+console.log(JSON.stringify({type:"step_start",part:{type:"step-start"}}));
+setInterval(() => {}, 60_000);
+`);
+  await chmod(bin, 0o755);
+  const previousBin = process.env.OPENCODE_BIN;
+  const previousTimeout = process.env.OPENCODE_TIMEOUT_MS;
+  const previousKey = process.env.OPENCODE_API_KEY;
+  process.env.OPENCODE_BIN = bin;
+  process.env.OPENCODE_TIMEOUT_MS = "40";
+  process.env.OPENCODE_API_KEY = "sk-planted-secret-123456789";
+  const milestones: string[] = [];
+  try {
+    const started = Date.now();
+    try {
+      await authorTake(persona("hang"), { composite: 0.5 }, "subject-1", {
+        telemetry: (event) => milestones.push(event.milestone),
+        diagnosticArtifactPath: "/safe/artifacts/run",
+      });
+      throw new Error("expected timeout");
+    } catch (error) {
+      expect(error).toBeInstanceOf(InferenceFailure);
+      const message = (error as Error).message;
+      expect(message).toContain("primaryStreamObserved=false");
+      expect(message).toContain("opencode booted");
+      expect(message).toContain("<OPENCODE_API_KEY redacted>");
+      expect(message).not.toContain("sk-planted-secret-123456789");
+      expect(message).not.toContain("Subject under review: subject-1");
+      expect(message).toContain("<prompt redacted>");
+      expect(message).not.toContain("the zen model did not respond");
+      expect(message).toContain("artifact=/safe/artifacts/run");
+    }
+    expect(Date.now() - started).toBeLessThan(2_500);
+    expect(milestones).toEqual(expect.arrayContaining([
+      "cli_spawn_requested", "cli_spawned", "first_stderr_byte", "timeout_reached", "kill_signal", "process_exit",
+    ]));
+    expect(milestones).not.toContain("primary_stream_observed");
+    expect(milestones.filter((milestone) => milestone === "kill_signal")).toHaveLength(2);
+  } finally {
+    if (previousBin === undefined) delete process.env.OPENCODE_BIN; else process.env.OPENCODE_BIN = previousBin;
+    if (previousTimeout === undefined) delete process.env.OPENCODE_TIMEOUT_MS; else process.env.OPENCODE_TIMEOUT_MS = previousTimeout;
+    if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an auxiliary GPT title error is classified separately from a successful DeepSeek primary stream", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "swarm-inference-title-"));
+  const bin = join(dir, "opencode-title-error");
+  await writeFile(bin, `#!/usr/bin/env bun
+console.error("AI_APICallError: Model is disabled providerID=opencode modelID=gpt-5.4-nano agent=title");
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
+`);
+  await chmod(bin, 0o755);
+  const previous = process.env.OPENCODE_BIN;
+  process.env.OPENCODE_BIN = bin;
+  const milestones: string[] = [];
+  try {
+    const take = await authorTake(persona("title-error"), { composite: 0.5 }, "subject-1", {
+      telemetry: (event) => milestones.push(event.milestone),
+    });
+    expect(take.model).toBe("opencode/deepseek-v4-flash");
+    expect(milestones).toContain("auxiliary_title_error");
+    expect(milestones).toContain("primary_stream_observed");
+    expect(milestones).toContain("completion");
+    expect(milestones).not.toContain("primary_provider_error");
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_BIN; else process.env.OPENCODE_BIN = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a legitimately selected gpt-5.4-nano primary is not mislabeled as an auxiliary title model", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "swarm-inference-gpt-primary-"));
+  const bin = join(dir, "opencode-gpt-primary");
+  await writeFile(bin, `#!/usr/bin/env bun
+console.error("APIError providerID=opencode modelID=gpt-5.4-nano agent=title");
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
+`);
+  await chmod(bin, 0o755);
+  const previousBin = process.env.OPENCODE_BIN;
+  const previousModel = process.env.AGENT_MODEL;
+  process.env.OPENCODE_BIN = bin;
+  process.env.AGENT_MODEL = "opencode/gpt-5.4-nano";
+  const milestones: string[] = [];
+  try {
+    const take = await authorTake(persona("gpt-primary"), { composite: 0.5 }, "subject-1", {
+      telemetry: (event) => milestones.push(event.milestone),
+    });
+    expect(take.model).toBe("opencode/gpt-5.4-nano");
+    expect(milestones).not.toContain("auxiliary_title_error");
+    expect(milestones).toContain("primary_stream_observed");
+  } finally {
+    if (previousBin === undefined) delete process.env.OPENCODE_BIN; else process.env.OPENCODE_BIN = previousBin;
+    if (previousModel === undefined) delete process.env.AGENT_MODEL; else process.env.AGENT_MODEL = previousModel;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a successful parent with a descendant retaining pipes remains hard-bounded and preserves output", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "swarm-inference-held-pipe-"));
+  const bin = join(dir, "opencode-held-pipe");
+  await writeFile(bin, `#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 2000)"], {stdio:["ignore","inherit","inherit"]});
+child.unref();
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"retained output\\n**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
+process.exit(0);
+`);
+  await chmod(bin, 0o755);
+  const previous = process.env.OPENCODE_BIN;
+  process.env.OPENCODE_BIN = bin;
+  const milestones: string[] = [];
+  const started = Date.now();
+  try {
+    const take = await authorTake(persona("held-pipe"), { composite: 0.5 }, "subject-1", {
+      telemetry: (event) => milestones.push(event.milestone),
+    });
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(take.body).toContain("retained output");
+    expect(milestones).toContain("stream_drain_timeout");
+    expect(milestones).toContain("completion");
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_BIN; else process.env.OPENCODE_BIN = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
 });

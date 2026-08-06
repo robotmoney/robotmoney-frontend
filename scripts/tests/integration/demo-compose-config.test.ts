@@ -21,6 +21,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { resolveDemoEnv } from "../../demo.ts";
 import { COMMITTED_REGIME_CRON, COMMITTED_RESEARCH_CRON, resolveDemoCadence } from "../../lib/demo-schedule.ts";
+import { scenarioPlan } from "../../lib/smoke-mode.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 
@@ -31,6 +32,7 @@ interface ComposeConfig {
     volumes?: Array<{ source?: string; target?: string; read_only?: boolean }>;
   }>;
   secrets?: Record<string, { file?: string }>;
+  networks?: Record<string, { labels?: Record<string, string> }>;
 }
 
 // Base env for the compose call: inherit the caller's env (PATH/HOME/DOCKER_*)
@@ -41,6 +43,7 @@ function baseEnv(): Record<string, string> {
     if (v === undefined) continue;
     if ([
       "BASE_RPC_URL", "BASE_RPC_SOURCE", "ANALYTICS_SOURCE", "ANALYTICS_FLOOR_SEED",
+      "HTTP_FETCH_CACHE_TTL_MS", "TOKEN_PRICE_CACHE_TTL_MS",
       "ANALYTICS_TOKEN", "ANALYTICS_TOKEN_FILE_HOST", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME",
       // Cadence knobs (issue #371): only resolveDemoEnv's stage path may set
       // these, so an ambient value must never leak into a case's resolution.
@@ -62,9 +65,14 @@ function baseEnv(): Record<string, string> {
   return env;
 }
 
-function composeConfig(knobs: Record<string, string>): ComposeConfig {
+const DEMO_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo.yml"] as const;
+
+function composeConfig(
+  knobs: Record<string, string>,
+  composeFiles: readonly string[] = DEMO_COMPOSE_FILES,
+): ComposeConfig {
   const r = Bun.spawnSync(
-    ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.demo.yml", "config", "--format", "json"],
+    ["docker", "compose", ...composeFiles.flatMap((file) => ["-f", file]), "config", "--format", "json"],
     { cwd: repoRoot, env: { ...baseEnv(), ...knobs }, stdout: "pipe", stderr: "pipe" },
   );
   if (r.exitCode !== 0) {
@@ -82,8 +90,46 @@ function serviceEnv(cfg: ComposeConfig, svc: string): Record<string, string | nu
 // Every service whose process reads the Base RPC / analytics knobs: the api and
 // all three worker lanes (issue #107 topology — swarm/analytics/research).
 const RPC_CONSUMERS = ["api", "worker-swarm", "worker-analytics", "worker-research"] as const;
+const HTTP_CACHE_CONSUMERS = [...RPC_CONSUMERS, "analytics-producer"] as const;
+
+describe("docker compose config — production capability TTLs", () => {
+  test("base compose leaves optional TTLs blank so backend defaults remain authoritative", () => {
+    const cfg = composeConfig({}, ["docker-compose.yml"]);
+    for (const svc of HTTP_CACHE_CONSUMERS) {
+      expect(serviceEnv(cfg, svc).HTTP_FETCH_CACHE_TTL_MS ?? "").toBe("");
+    }
+    for (const svc of RPC_CONSUMERS) {
+      expect(serviceEnv(cfg, svc).TOKEN_PRICE_CACHE_TTL_MS ?? "").toBe("");
+    }
+    expect("TOKEN_PRICE_CACHE_TTL_MS" in serviceEnv(cfg, "analytics-producer")).toBe(false);
+  });
+
+  test("base compose honors explicit TTLs only on services that consume them", () => {
+    const cfg = composeConfig(
+      { HTTP_FETCH_CACHE_TTL_MS: "45000", TOKEN_PRICE_CACHE_TTL_MS: "90000" },
+      ["docker-compose.yml"],
+    );
+    for (const svc of HTTP_CACHE_CONSUMERS) {
+      expect(serviceEnv(cfg, svc).HTTP_FETCH_CACHE_TTL_MS).toBe("45000");
+    }
+    for (const svc of RPC_CONSUMERS) {
+      expect(serviceEnv(cfg, svc).TOKEN_PRICE_CACHE_TTL_MS).toBe("90000");
+    }
+    expect("TOKEN_PRICE_CACHE_TTL_MS" in serviceEnv(cfg, "analytics-producer")).toBe(false);
+  });
+});
 
 describe("docker compose config — demo data path resolution", () => {
+  test("the default network is explicitly attributable when no containers survive", () => {
+    const labels = composeConfig({}).networks?.default?.labels;
+    expect(labels).toMatchObject({
+      "robotmoney.demo.network": "1",
+      "robotmoney.demo.project": "compose-config-test",
+      "robotmoney.env": "local",
+      "robotmoney.env.hash": "composecfg0",
+    });
+  });
+
   test("the complete compose model parses without an analytics token file", () => {
     const cfg = composeConfig({});
     expect(cfg.secrets?.analytics_token?.file).toBe("/dev/null");
@@ -208,27 +254,29 @@ describe("member-agent compose template — zero ambient model configuration", (
   });
 });
 
-describe("DEMO_MODE — the single pinned demo-stack signal (per-IP quota protection)", () => {
-  // The demo overlay IS the demo, so DEMO_MODE is a pinned "1" literal (never a
-  // ${...} passthrough): every api/worker container knows it unconditionally,
-  // and the backend selects its hard-coded demo values off it (1h provider-cache
-  // TTLs in analytics/extract/fetch-cache.ts + chain/token-prices.ts; the seed's
-  // hourly wallet sampler). Motivation: the standing demo and the self-hosted CI
-  // runner share one host IP against GeckoTerminal + the public Base RPC.
-  test("compose pins DEMO_MODE=1 on api and every worker lane, regardless of caller env", () => {
-    // Even an explicit attempt to unset it from the caller env must not win —
-    // a pinned literal ignores interpolation.
-    const cfg = composeConfig({ DEMO_MODE: "" });
+describe("demo-specific behavior is selected by explicit orchestration", () => {
+  test("compose carries no generic demo-mode environment marker", () => {
+    const cfg = composeConfig({});
     for (const svc of RPC_CONSUMERS) {
-      expect(serviceEnv(cfg, svc).DEMO_MODE).toBe("1");
+      expect(Object.keys(serviceEnv(cfg, svc))).not.toContain(["DEMO", "MODE"].join("_"));
+    }
+  });
+
+  test("demo and smoke share one-hour capability TTLs; production keeps backend defaults", () => {
+    const normal = composeConfig(resolveDemoEnv({}).composeEnv);
+    const smoke = composeConfig(resolveDemoEnv({}).composeEnv);
+    for (const svc of HTTP_CACHE_CONSUMERS) {
+      expect(serviceEnv(normal, svc).HTTP_FETCH_CACHE_TTL_MS).toBe("3600000");
+      expect(serviceEnv(smoke, svc).HTTP_FETCH_CACHE_TTL_MS).toBe("3600000");
+    }
+    for (const svc of RPC_CONSUMERS) {
+      expect(serviceEnv(normal, svc).TOKEN_PRICE_CACHE_TTL_MS).toBe("3600000");
+      expect(serviceEnv(smoke, svc).TOKEN_PRICE_CACHE_TTL_MS).toBe("3600000");
     }
   });
 
   test("the retired per-property cache knobs are NOT compose passthroughs anymore", () => {
-    // FETCH_CACHE_TTL_MS / GECKO_PRICE_CACHE_TTL_MS were replaced by
-    // DEMO_MODE-selected constants in the backend. Setting them in the caller
-    // env must not reach any container — if a key reappears here, someone
-    // re-introduced an env tuning surface the review explicitly removed.
+    // Setting retired knobs in the caller env must not reach any container.
     const cfg = composeConfig({ FETCH_CACHE_TTL_MS: "123", GECKO_PRICE_CACHE_TTL_MS: "456" });
     for (const svc of RPC_CONSUMERS) {
       const env = serviceEnv(cfg, svc);
@@ -237,26 +285,32 @@ describe("DEMO_MODE — the single pinned demo-stack signal (per-IP quota protec
     }
   });
 
-  test("demo-main passes -e DEMO_MODE=1 on the migrate/seed one-shot and no retired flag survives", async () => {
-    // The migrate/seed `compose run` is where the seed's demo gating executes;
-    // this wiring guard proves the flag actually reaches it (deliberate
-    // redundancy with the compose pin above) and that the retired
-    // DEMO_FAST_SCHEDULES / DEMO_SLOW_SAMPLERS names are fully gone from the
-    // demo wiring + seed, so a stale reference can't silently gate anything.
+  test("demo and smoke share one migrate path with scenario-specific initialization", async () => {
+    const demo = scenarioPlan(false);
+    const smoke = scenarioPlan(true);
+
+    expect(demo.initializer).toBe("simulation");
+    expect(demo.migrateEnv).toEqual({ DEMO_SEED_PROJECTS: "1" });
+    expect(demo.migrateScriptArgs).toEqual(["--seed-demo-schedules"]);
+    expect(smoke.initializer).toBe("archive");
+    expect(smoke.migrateEnv).toEqual({});
+    expect(smoke.migrateScriptArgs).toEqual([]);
+
     const demoMain = await Bun.file(join(repoRoot, "scripts/lib/demo-main.ts")).text();
-    // The demo's bring-up now runs through scripts/stack (docs/architecture.md
-    // §11.3 E5), so this flag is passed as `migrateEnv` DATA instead of
-    // hand-built `-e` argv. BOTH ends of that seam are pinned, so the guarantee
-    // this test exists for — the flag really reaches the migrate/seed one-shot —
-    // keeps its teeth: demo-main declares it, and the shared stack turns
-    // migrateEnv into `-e KEY=VALUE` on the `compose run` that migrates.
-    expect(demoMain).toMatch(/migrateEnv:\s*\{[^}]*DEMO_MODE:\s*"1"/);
+    expect(demoMain.match(/await stack\.up\(/g) ?? []).toHaveLength(1);
+    expect(demoMain).toContain("migrateEnv: scenario.migrateEnv");
+    expect(demoMain).toContain("migrateScriptArgs: [...scenario.migrateScriptArgs]");
+    expect(demoMain).toContain("initialize: initializeScenario");
+    expect(demoMain).toContain('"--already-migrated"');
+    expect(demoMain).toContain('"src/producer/index.ts", "seed"');
+    expect(demoMain).not.toContain("v0-seed-bootstrap");
+    expect(demoMain).toContain("{ stage: staticPortMode }");
     const stackSrc = await Bun.file(join(repoRoot, "scripts/stack/stack.ts")).text();
-    expect(stackSrc).toContain("migrateEnv");
+    expect(stackSrc).toContain("migrateScriptArgs");
     const stackConfigSrc = await Bun.file(join(repoRoot, "scripts/stack/config.ts")).text();
     expect(`${stackSrc}${stackConfigSrc}`).toMatch(/"-e"/);
     const seed = await Bun.file(join(repoRoot, "backend/src/db/seed.ts")).text();
-    expect(seed).toContain("process.env.DEMO_MODE");
+    expect(seed).toContain("seedDemoJobSchedules");
     for (const retired of ["DEMO_FAST_SCHEDULES", "DEMO_SLOW_SAMPLERS"]) {
       expect(demoMain).not.toContain(retired);
       expect(seed).not.toContain(retired);

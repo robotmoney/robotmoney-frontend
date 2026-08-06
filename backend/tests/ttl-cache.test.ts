@@ -46,7 +46,7 @@ test("TtlCache: reset() clears every entry regardless of key", () => {
   expect(cache.get("b")).toBeUndefined();
 });
 
-test("TtlCache: a function TTL is re-resolved on every read/write (DEMO_MODE-style dynamic window)", () => {
+test("TtlCache: a function TTL is re-resolved on every read/write", () => {
   let ttl = 100;
   const cache = new TtlCache<string, number>(() => ttl);
   const t0 = 0;
@@ -54,7 +54,7 @@ test("TtlCache: a function TTL is re-resolved on every read/write (DEMO_MODE-sty
   cache.set("a", 1, t0);
   expect(cache.get("a", t0 + 50)).toBe(1); // within the 100ms window
 
-  ttl = 10; // window shrinks (e.g. DEMO_MODE flips off) — re-read at call time
+  ttl = 10; // window shrinks — re-read at call time
   expect(cache.get("a", t0 + 50)).toBeUndefined(); // now stale under the new window
 });
 

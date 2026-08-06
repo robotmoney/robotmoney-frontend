@@ -23,24 +23,22 @@ import { TtlCache } from "./ttl-cache.ts";
 const GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2";
 const GECKO_TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
 
-// In-memory spot-price reuse windows. Both values are SOURCE CONSTANTS on
-// purpose (user decision 2026-07-21: no per-property env knobs) — the only
-// runtime signal is the stack-level DEMO_MODE flag the demo compose pins.
-//   - 30s (production/default): short enough that the 1-minute sampler cron
-//     never persists the same spot twice in a row as if it were fresh.
-//   - 1h (demo): the standing demo shares its host/IP with the self-hosted CI
-//     runner and GeckoTerminal's keyless quota is metered PER IP, so the
-//     demo's 1-minute sampler was starving CI e2e of quota (the 429-exhaustion
-//     symptom tracked in #202). Hourly demo spot prices are an accepted
-//     tradeoff (user decision 2026-07-21) to keep that quota available to CI.
-const GECKO_PRICE_CACHE_TTL_MS = 30_000;
-const GECKO_PRICE_CACHE_TTL_DEMO_MS = 3_600_000;
+// Production defaults to 30s, short enough that the one-minute sampler never
+// persists the same spot twice as fresh. Shared demo/smoke orchestration
+// explicitly supplies one hour through this capability-specific setting.
+export const TOKEN_PRICE_CACHE_TTL_ENV = "TOKEN_PRICE_CACHE_TTL_MS";
+export const DEFAULT_TOKEN_PRICE_CACHE_TTL_MS = 30_000;
 
-// Resolved at CALL time (not module load) — the same truthiness read
-// db/seed.ts applies to its fast-schedule flag — so tests can flip DEMO_MODE
-// per case and the container env applies without an import-order footgun.
-function geckoPriceCacheTtlMs(): number {
-  return process.env.DEMO_MODE ? GECKO_PRICE_CACHE_TTL_DEMO_MS : GECKO_PRICE_CACHE_TTL_MS;
+export function resolveTokenPriceCacheTtlMs(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const raw = env[TOKEN_PRICE_CACHE_TTL_ENV];
+  if (raw === undefined || raw === "") return DEFAULT_TOKEN_PRICE_CACHE_TTL_MS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${TOKEN_PRICE_CACHE_TTL_ENV} must be a non-negative integer number of milliseconds`);
+  }
+  return value;
 }
 
 function intEnv(name: string, fallback: number, min: number): number {
@@ -71,11 +69,8 @@ const geckoWaiters: Array<() => void> = [];
 const geckoPending = new Map<string, Promise<number>>();
 // The shared keyed TTL-cache primitive (chain/ttl-cache.ts, issue #455), keyed
 // per lowercased token address. ttlMs is passed as a resolver function (not a
-// constant) so the DEMO_MODE-aware window above is read at call time, exactly
-// as geckoPriceCacheTtlMs() always has been — this file's two-TTL-constant
-// variant is intentionally NOT folded into the single-value ttlCached() shape
-// the other six chain/ modules use (see issue #455 scope).
-const geckoPriceCache = new TtlCache<string, number>(geckoPriceCacheTtlMs);
+// constant) so the capability TTL is resolved at call time.
+const geckoPriceCache = new TtlCache<string, number>(resolveTokenPriceCacheTtlMs);
 
 // The batch currently accepting joiners (null when none). It stays open until
 // its runner actually HOLDS the serializer slot (>= 1 microtask even when the

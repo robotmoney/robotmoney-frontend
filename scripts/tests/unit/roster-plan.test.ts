@@ -24,7 +24,8 @@ import {
   type RosterRow,
 } from "../../lib/swarm/roster-plan.ts";
 import { NEWCOMER_NAMES } from "../../lib/demo-newcomers.ts";
-import { personaIdentity } from "../../lib/swarm/persona-keys.ts";
+import { personaIdentities, personaIdentity } from "../../lib/swarm/persona-keys.ts";
+import { SMOKE_MEMBERS, adoptionFilter } from "../../lib/smoke-mode.ts";
 
 const row = (over: Partial<RosterRow> & { name: string }): RosterRow => ({
   id: over.id ?? `id-${over.name.toLowerCase()}`,
@@ -221,5 +222,82 @@ describe("admissionDelayMs — a skipped name costs nothing", () => {
       admitted++;
     }
     expect(waits).toEqual([FIRST, INTERVAL, INTERVAL, INTERVAL, INTERVAL]);
+  });
+});
+
+// ── Smoke adoption: the allowlist, exercised through the real planner ───────
+// Issue #537. `bun smoke` boots a PRODUCTION-shaped stack whose database holds
+// exactly what the production bootstrap put there — the three personas
+// backend/seed-data/v0-committee-archive.json.gz restores. A persistent
+// database can also carry members from an earlier `bun demo` boot or from a
+// real onboarding, and a smoke session must seat NONE of them, however good
+// their credentials are. These drive scripts/lib/smoke-mode.ts's adoptionFilter
+// through planAdoptions() — the same call scripts/lib/demo-main.ts and
+// scripts/smoke-session.ts make — rather than re-asserting the predicate alone.
+describe("planAdoptions under the smoke allowlist (issue #537)", () => {
+  const smokeFilter = adoptionFilter(true);
+  const demoFilter = adoptionFilter(false);
+  const RESTORED = [
+    row({ name: "Athena", id: "athena" }),
+    row({ name: "Robot Money", id: "robotmoney" }),
+    row({ name: "Noop analyst", id: "woon" }),
+  ];
+
+  test("the three restored personas are seated, by id", () => {
+    const plan = planAdoptions(RESTORED, new Set(), smokeFilter);
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
+    expect([...SMOKE_MEMBERS].map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
+  });
+
+  test("every persisted member outside the three is REJECTED — including demo characters with committed keys", () => {
+    // Boreas/Cygnus/Draco/Helios all HAVE a committed identity, so the plain
+    // demo filter adopts them. That is exactly why the smoke filter has to be
+    // an allowlist and not just "does a key exist".
+    const outsiders = [
+      row({ name: "Boreas", id: "boreas" }),
+      row({ name: "Cygnus", id: "cygnus" }),
+      row({ name: "Draco", id: "draco" }),
+      row({ name: "Helios", id: "helios" }),
+      row({ name: "Some Real Member", id: "real-1" }),
+    ];
+    const smoke = planAdoptions([...RESTORED, ...outsiders], new Set(), smokeFilter);
+    expect(smoke.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
+    for (const o of outsiders) expect(smoke.adopt.some((m) => m.id === o.id)).toBe(false);
+
+    // …and the demo path is UNCHANGED: it still adopts every character that
+    // owns a committed identity.
+    const demo = planAdoptions([...RESTORED, ...outsiders], new Set(), demoFilter);
+    expect(demo.adopt.some((m) => m.id === "boreas")).toBe(true);
+    expect(demo.adopt.some((m) => m.id === "real-1")).toBe(false);
+  });
+
+  test("names are matched case- and whitespace-insensitively, and only active rows count", () => {
+    const roster = [
+      row({ name: "  robot money  ", id: "robotmoney" }),
+      row({ name: "ATHENA", id: "athena" }),
+      row({ name: "Noop analyst", id: "woon-applied", status: "applied" }),
+    ];
+    const plan = planAdoptions(roster, new Set(), smokeFilter);
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney"]);
+  });
+
+  test("a duplicate row for a restored persona takes no second seat", () => {
+    const roster = [...RESTORED, row({ name: "Athena", id: "athena-dupe" })];
+    const plan = planAdoptions(roster, new Set(), smokeFilter);
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
+    expect(plan.duplicates.map((m) => m.id)).toEqual(["athena-dupe"]);
+  });
+
+  test("adoption creates and rotates NO credential — it only reads the committed fixture", () => {
+    // The filter's whole job is to answer a question. Freeze the committed
+    // fixture before and after a full plan and assert byte-identity: if any
+    // path minted, rotated or removed a persona key, this changes.
+    const before = JSON.stringify(personaIdentities());
+    const plan = planAdoptions([...RESTORED, row({ name: "Helios", id: "helios" })], new Set(), smokeFilter);
+    expect(plan.adopt.length).toBe(3);
+    expect(JSON.stringify(personaIdentities())).toBe(before);
+    // Every seated persona signs with a key that ALREADY existed — never one
+    // invented for it here.
+    for (const m of plan.adopt) expect(personaIdentity(m.name)).toBeDefined();
   });
 });

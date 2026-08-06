@@ -49,10 +49,10 @@
             <ul class="sv__list">
               <template x-for="s in subjects()" :key="s.id">
                 <li class="sv__subject-row">
-                  <div class="sv__subject-mark" x-text="initials(s.name)"></div>
+                  <a class="sv__subject-mark" :href="`/swarm/subjects/${s.id}`" x-text="initials(s.name)"></a>
                   <div class="sv__row-main">
                     <div class="sv__row-titleline">
-                      <span class="sv__row-title" x-text="s.name"></span>
+                      <a class="sv__row-title" :href="`/swarm/subjects/${s.id}`" x-text="s.name"></a>
                       <span class="sv__tag" x-text="s.operator || s.id"></span>
                     </div>
                     <p class="sv__row-copy" x-text="s.thesisBlurb || `${s.count} swarm session${s.count === 1 ? '' : 's'} published.`"></p>

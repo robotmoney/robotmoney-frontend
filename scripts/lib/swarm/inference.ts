@@ -1,8 +1,9 @@
 // Swarm-member take authorship via a REAL language-model call. This module
 // shells out to
 //
-//   opencode run "<persona + regime/subject brief>" \
-//     --model <resolved> --format json --auto
+//   opencode run --model <resolved> --format json --auto \
+//     --title <deterministic> --print-logs --log-level DEBUG \
+//     "<persona + regime/subject brief>"
 //
 // parses the NDJSON transcript for the final assistant message text, and returns
 // REGIME / ALLOCATION / SUBJECT prose ending in a parseable
@@ -29,16 +30,22 @@
 // THROWS — it NEVER falls back to a templated body.
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
-import { describeTranscriptError, extractAssistantText, transcriptErrors } from "../../agent/transcript.ts";
+import { assistantTextParts, describeTranscriptError, extractAssistantText, transcriptErrors } from "../../agent/transcript.ts";
 import {
   classifyInferenceFailure,
   InferenceFailure,
   inferenceFailureAction,
-  providerOf,
   renderInferenceDiagnostic,
 } from "../../agent/inference-failure.ts";
-import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../model-registry.ts";
+import {
+  buildOpenCodeRunArgs,
+  buildOpenCodeSpawnEnv,
+  resolveOpenCodeRun,
+  type ResolvedOpenCodeRun,
+} from "../../agent/opencode-run.ts";
+import { DEFAULT_AGENT_MODEL } from "../model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "../opencode-key.ts";
+import { redactTelemetryText } from "../onboarding-telemetry.ts";
 // Regime inputs passed to each live author. This used to live beside the retired
 // deterministic memo template; it belongs with the only remaining authoring
 // path so a future fallback cannot accidentally reappear through that module.
@@ -55,19 +62,76 @@ export interface RegimeContext {
 }
 
 export const DEFAULT_INFERENCE_MODEL = DEFAULT_AGENT_MODEL;
-// Resolved at call time (not module load) so an env override / test toggle
-// takes effect.
-const inferenceModel = () => resolveAgentModel();
-// The opencode binary name/path. Resolved at call time so a unit test can point
-// it at a nonexistent path to prove the loud-throw contract without a live call.
-const opencodeBin = () => process.env.OPENCODE_BIN ?? "opencode";
-// Hard ceiling on a single opencode-zen call (default 120s). A model can hang
-// indefinitely; without a bound, one stalled member call would block the whole
-// swarm session forever. Resolved at call time (not
-// module load) so the nightly job / an operator / a unit test can override via
-// OPENCODE_TIMEOUT_MS without a code change. On expiry we kill the subprocess and
-// throw loudly — still NO template fallback.
-const timeoutMs = () => Number(process.env.OPENCODE_TIMEOUT_MS ?? 120000);
+
+/** Scenario-neutral OpenCode runtime used by every swarm take. */
+export function resolveInferenceOpenCodeRun(
+  env: Record<string, string | undefined> = process.env,
+): ResolvedOpenCodeRun {
+  return resolveOpenCodeRun({ env, titleScope: "robotmoney-swarm" });
+}
+
+export type InferenceTelemetryMilestone =
+  | "cli_spawn_requested"
+  | "cli_spawned"
+  | "inference_requested"
+  | "first_stdout_byte"
+  | "first_stderr_byte"
+  | "first_ndjson_event"
+  | "primary_stream_observed"
+  | "first_assistant_text_part"
+  | "auxiliary_title_error"
+  | "primary_provider_error"
+  | "timeout_reached"
+  | "kill_signal"
+  | "process_exit"
+  | "stream_drain_timeout"
+  | "completion";
+
+export interface InferenceTelemetryEvent {
+  version: 1;
+  milestone: InferenceTelemetryMilestone;
+  timestamp: string;
+  provider: string;
+  model: string;
+  timeoutMs: number;
+  primaryStreamObserved: boolean;
+  detail?: string;
+}
+
+export type InferenceTelemetrySink = (event: InferenceTelemetryEvent) => void;
+
+export interface AuthorTakeOptions {
+  telemetry?: InferenceTelemetrySink;
+  diagnosticArtifactPath?: string;
+  // How many times to sample the model for a take that satisfies the section
+  // contract below. See authorTake().
+  structureAttempts?: number;
+}
+
+// The three bold section headers `promptFor` demands, and the ONLY definition
+// of them. session.ts's post-session `assertAuthoredTakes` reads this same
+// tuple, so the prompt, the author-time check, and the harness assertion can
+// never drift into disagreeing about what a well-formed take looks like.
+export const TAKE_SECTION_LEAD_INS: readonly string[] = Object.freeze([
+  "**REGIME**",
+  "**ALLOCATION**",
+  "**SUBJECT**",
+]);
+
+// Which required section headers a take body is missing ([] when well-formed).
+// Pure and exported so the unit suite can pin it without a spawn.
+export function missingSectionLeadIns(body: string): readonly string[] {
+  return TAKE_SECTION_LEAD_INS.filter((lead) => !body.includes(lead));
+}
+
+// A model that drops a section is not a broken model, it is an unlucky sample:
+// on 2026-08-06 the smoke run's athena returned a take with REGIME and
+// ALLOCATION but no SUBJECT, was signed and accepted by the API, and only blew
+// up at the end-of-session assertion — after the session had already published.
+// Re-sampling is the honest fix (the assertion stays exactly as strict), and
+// two attempts is enough for an omission this rare while keeping a stuck model
+// from burning the session's window.
+const DEFAULT_STRUCTURE_ATTEMPTS = 2;
 
 // Prompt-facing stance vocabulary (most bullish first), DERIVED from the
 // canonical contract tuple (finding 027) — never re-declared locally.
@@ -215,18 +279,7 @@ export function promptFor(p: Persona, regime: RegimeContext, subjectId: string):
 //     secret that may reach the model subprocess.
 //
 // Pure and exported so the unit suite can pin the allowlist hermetically.
-export function opencodeSpawnEnv(
-  hostEnv: Record<string, string | undefined> = process.env,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const k of ["PATH", "HOME", "TERM"]) {
-    const v = hostEnv[k];
-    if (v !== undefined) out[k] = v;
-  }
-  const key = hostEnv[ZEN_KEY_ENV];
-  if (key) out[ZEN_KEY_ENV] = key;
-  return out;
-}
+export { buildOpenCodeSpawnEnv as opencodeSpawnEnv } from "../../agent/opencode-run.ts";
 
 // What we actually know about the model credential. This used to print
 // "funded" whenever OPENCODE_API_KEY was merely SET — a claim the key cannot
@@ -266,7 +319,13 @@ export function emptyTranscriptCause(stdout: string, stderr: string): string {
 
 // The loud throw for a run that produced no assistant text, carrying the kind,
 // the provider and the resolved model id alongside the rendered diagnosis.
-function emptyTranscriptFailure(stdout: string, stderr: string, model: string, exitCode: number): InferenceFailure {
+function emptyTranscriptFailure(
+  stdout: string,
+  stderr: string,
+  model: string,
+  provider: string,
+  exitCode: number,
+): InferenceFailure {
   const errors = transcriptErrors(stdout, [zenApiKey() ?? ""]);
   const classification = classifyInferenceFailure(errors, stderr);
   return new InferenceFailure(
@@ -275,7 +334,7 @@ function emptyTranscriptFailure(stdout: string, stderr: string, model: string, e
       renderInferenceDiagnostic(classification, errors, stderr),
     {
       kind: classification.kind,
-      provider: providerOf(model),
+      provider,
       model,
       providerType: classification.error?.providerType ?? "",
       statusCode: classification.error?.statusCode ?? null,
@@ -284,23 +343,60 @@ function emptyTranscriptFailure(stdout: string, stderr: string, model: string, e
   );
 }
 
-// Run the opencode CLI on a prompt and return the concatenated final
-// assistant text. Throws loudly (no template fallback) when the binary cannot be
-// spawned (opencode unavailable) or the run yields no assistant text.
-async function runOpencode(prompt: string): Promise<string> {
-  const bin = opencodeBin();
-  const model = inferenceModel();
+// Run the opencode CLI on a prompt and return the concatenated final assistant
+// text plus the model resolved for that same run. Throws loudly (no template
+// fallback) when the binary cannot be spawned or the run yields no text.
+const DIAGNOSTIC_TAIL_BYTES = 12_000;
+const TERMINATE_GRACE_MS = 500;
+const KILL_GRACE_MS = 1_000;
+const PIPE_DRAIN_GRACE_MS = 500;
+
+function inferenceRedactions(prompt: string) {
+  return [
+    { value: zenApiKey(), placeholder: "<OPENCODE_API_KEY redacted>" },
+    { value: prompt, placeholder: "<prompt redacted>" },
+    { value: JSON.stringify(prompt).slice(1, -1), placeholder: "<escaped prompt redacted>" },
+  ];
+}
+
+function boundedTail(value: string, prompt: string): string {
+  const redacted = redactTelemetryText(value, inferenceRedactions(prompt));
+  return redacted.slice(-DIAGNOSTIC_TAIL_BYTES);
+}
+
+async function runOpencode(
+  prompt: string,
+  options: AuthorTakeOptions = {},
+): Promise<{ text: string; model: string }> {
+  const run = resolveInferenceOpenCodeRun();
+  const { executable: bin, model, timeoutMs: ms, provider } = run;
+  let primaryStreamObserved = false;
+  const emit = (milestone: InferenceTelemetryMilestone, detail?: string) => options.telemetry?.({
+    version: 1,
+    milestone,
+    timestamp: new Date().toISOString(),
+    provider,
+    model,
+    timeoutMs: ms,
+    primaryStreamObserved,
+    ...(detail ? { detail: redactTelemetryText(detail, inferenceRedactions(prompt)) } : {}),
+  });
+  // The prompt enters only the final execution argv; it is absent from the
+  // resolved runtime metadata used by telemetry/artifacts.
+  const argv = [bin, ...buildOpenCodeRunArgs(run, prompt)];
   let proc: ReturnType<typeof Bun.spawn>;
+  emit("inference_requested", `provider=${provider} model=${model} timeoutMs=${ms}`);
+  emit("cli_spawn_requested", `binary=${bin}`);
   try {
     proc = Bun.spawn(
-      [bin, "run", prompt, "--model", model, "--format", "json", "--auto"],
+      argv,
       // SCRUBBED environment (issue #361 Phase 0): the subprocess gets the
       // opencodeSpawnEnv allowlist (PATH/HOME/TERM + the single model
       // credential) — never a `process.env` spread, which handed every
       // member-model subprocess the stack's whole admin credential set
       // (ADMIN_TOKEN, ANALYTICS_TOKEN, …). OpenCode state stays in this
       // member container's isolated, persistent HOME.
-      { stdout: "pipe", stderr: "pipe", env: opencodeSpawnEnv(process.env) },
+      { stdout: "pipe", stderr: "pipe", env: buildOpenCodeSpawnEnv(process.env) },
     );
   } catch (err) {
     throw new Error(
@@ -308,42 +404,168 @@ async function runOpencode(prompt: string): Promise<string> {
         `Swarm takes require a working opencode CLI; there is NO template fallback in this path.`,
     );
   }
-  // Bound the call: a hung free-tier zen run would otherwise block forever (and
-  // freeze the whole swarm session). We RACE the read work against a timeout
-  // that rejects DIRECTLY — so the loud throw fires even if proc.kill() fails to
-  // close the stdout/stderr pipes (e.g. a killed opencode leaves a child holding
-  // them open). Never a template fallback.
-  const ms = timeoutMs();
+  emit("cli_spawned", `pid=${proc.pid}`);
+
+  let stdout = "";
+  let stderr = "";
+  let firstStdout = false;
+  let firstStderr = false;
+  let firstNdjson = false;
+  let firstText = false;
+  let auxiliaryTitleError = false;
+  let primaryProviderError = false;
+  let stdoutReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let stderrReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  const requestedModelId = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
+  const referencedModel = (line: string): string | null => {
+    const found = line.match(/model(?:ID)?[=: ]+(?:opencode\/)?([a-zA-Z0-9._-]+)/i)?.[1];
+    return found?.toLowerCase() ?? null;
+  };
+  const isAuxiliaryTitleLine = (line: string): boolean => {
+    const namedTitle = /agent[=: ]+title/i.test(line);
+    const referenced = referencedModel(line);
+    return namedTitle && referenced !== requestedModelId.toLowerCase();
+  };
+  const primaryProviderEvidence = (line: string): boolean => {
+    const lower = line.toLowerCase();
+    return lower.includes(model.toLowerCase()) || lower.includes(requestedModelId.toLowerCase()) ||
+      (provider === "opencode" && /opencode\.ai\/zen\//i.test(line));
+  };
+  const inspectLine = (stream: "stdout" | "stderr", line: string) => {
+    if (isAuxiliaryTitleLine(line)) {
+      if (!auxiliaryTitleError && /error|disabled|fail/i.test(line)) {
+        auxiliaryTitleError = true;
+        emit("auxiliary_title_error", "OpenCode auxiliary title agent reported an error; this is not the primary model stream");
+      }
+      return;
+    }
+    if (stream !== "stdout") return;
+    let event: any;
+    try { event = JSON.parse(line.trim()); } catch { return; }
+    if (!firstNdjson) {
+      firstNdjson = true;
+      emit("first_ndjson_event", `type=${String(event?.type ?? "unknown")}`);
+    }
+    const assistantText = event?.type === "text" && typeof event?.part?.text === "string" && event.part.text.trim();
+    const primaryError = event?.type === "error" && primaryProviderEvidence(line);
+    if (!primaryStreamObserved && (assistantText || primaryError)) {
+      primaryStreamObserved = true;
+      emit("primary_stream_observed", `type=${String(event?.type ?? "unknown")}`);
+    }
+    if (!firstText && assistantText) {
+      firstText = true;
+      emit("first_assistant_text_part");
+    }
+    if (!primaryProviderError && primaryError) {
+      primaryProviderError = true;
+      const errors = transcriptErrors(line, [zenApiKey() ?? ""]);
+      emit("primary_provider_error", errors[0] ? describeTranscriptError(errors[0]) : "structured primary error event");
+    }
+  };
+
+  const drainIncrementally = async (stream: ReadableStream<Uint8Array>, which: "stdout" | "stderr") => {
+    const reader = stream.getReader();
+    if (which === "stdout") stdoutReader = reader; else stderrReader = reader;
+    const decoder = new TextDecoder();
+    let pending = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      if (which === "stdout") {
+        if (!firstStdout) { firstStdout = true; emit("first_stdout_byte"); }
+        stdout += chunk;
+      } else {
+        if (!firstStderr) { firstStderr = true; emit("first_stderr_byte"); }
+        stderr += chunk;
+      }
+      pending += chunk;
+      for (;;) {
+        const newline = pending.indexOf("\n");
+        if (newline < 0) break;
+        inspectLine(which, pending.slice(0, newline));
+        pending = pending.slice(newline + 1);
+      }
+    }
+    const rest = decoder.decode();
+    if (rest) {
+      if (which === "stdout") stdout += rest; else stderr += rest;
+      pending += rest;
+    }
+    if (pending) inspectLine(which, pending);
+  };
+  const stdoutDrain = drainIncrementally(proc.stdout as ReadableStream<Uint8Array>, "stdout");
+  const stderrDrain = drainIncrementally(proc.stderr as ReadableStream<Uint8Array>, "stderr");
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      try { proc.kill(); } catch { /* best-effort */ }
-      reject(new InferenceFailure(
-        `opencode inference timed out after ${ms}ms for model '${model}' ` +
-          `(${keyLabel()}): the zen model did not respond; NO template fallback. ` +
-          `cause=timed-out — ${inferenceFailureAction("timed-out")}`,
-        { kind: "timed-out", provider: providerOf(model), model },
-      ));
-    }, ms);
-  });
-  let stdout: string, stderr: string, exitCode: number;
-  try {
-    [stdout, stderr, exitCode] = await Promise.race([
-      Promise.all([
-        new Response(proc.stdout as ReadableStream).text(),
-        new Response(proc.stderr as ReadableStream).text(),
-        proc.exited,
-      ]),
-      timeout,
+  const deadline = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), ms); });
+  const outcome = await Promise.race([proc.exited.then(() => "exited" as const), deadline]);
+  if (timer !== undefined) clearTimeout(timer);
+  let exitCode: number | null = null;
+  if (outcome === "timeout") {
+    emit("timeout_reached");
+    try {
+      proc.kill(15);
+      emit("kill_signal", "SIGTERM sent to OpenCode process");
+    } catch {
+      emit("kill_signal", "OpenCode process had already exited");
+    }
+    const afterTerm = await Promise.race([
+      proc.exited.then((code) => ({ exited: true as const, code })),
+      Bun.sleep(TERMINATE_GRACE_MS).then(() => ({ exited: false as const, code: null })),
     ]);
-  } finally {
-    clearTimeout(timer);
+    if (afterTerm.exited) {
+      exitCode = afterTerm.code;
+    } else {
+      try {
+        proc.kill(9);
+        emit("kill_signal", "SIGKILL sent after OpenCode ignored SIGTERM grace period");
+      } catch {
+        emit("kill_signal", "OpenCode process exited before SIGKILL escalation");
+      }
+      const afterKill = await Promise.race([
+        proc.exited.then((code) => ({ exited: true as const, code })),
+        Bun.sleep(KILL_GRACE_MS).then(() => ({ exited: false as const, code: null })),
+      ]);
+      if (afterKill.exited) exitCode = afterKill.code;
+    }
+  } else {
+    exitCode = await proc.exited;
+  }
+  emit("process_exit", exitCode === null ? "exit state unknown after bounded SIGKILL grace" : `exitCode=${exitCode}`);
+  const drains = Promise.all([stdoutDrain, stderrDrain]);
+  // OpenCode can exit while a descendant retains its inherited pipes. This is
+  // independent of the model timeout outcome: bound every drain, retain bytes
+  // collected so far, and cancel readers after the grace period.
+  const drained = await Promise.race([drains.then(() => true), Bun.sleep(PIPE_DRAIN_GRACE_MS).then(() => false)]);
+  if (!drained) {
+    emit("stream_drain_timeout", `stdout/stderr remained open after parent outcome=${outcome}; cancelling readers`);
+    await Promise.allSettled([stdoutReader?.cancel(), stderrReader?.cancel()]);
+  }
+  await Promise.race([drains.catch(() => []), Bun.sleep(PIPE_DRAIN_GRACE_MS)]);
+  if (outcome === "timeout") {
+    const artifact = options.diagnosticArtifactPath ? ` artifact=${options.diagnosticArtifactPath}.` : "";
+    throw new InferenceFailure(
+      `opencode inference timed out after ${ms}ms for model '${model}' (${keyLabel()}); ` +
+        `primaryStreamObserved=${primaryStreamObserved}. NO template fallback.${artifact} ` +
+        `Bounded redacted diagnostic tail: stdout=${JSON.stringify(boundedTail(stdout, prompt))} ` +
+        `stderr=${JSON.stringify(boundedTail(stderr, prompt))}. cause=timed-out — ${inferenceFailureAction("timed-out")}`,
+      { kind: "timed-out", provider, model },
+    );
   }
   const text = extractAssistantText(stdout);
   if (!text) {
-    throw emptyTranscriptFailure(stdout, stderr, model, exitCode);
+    const diagnosticRedactions = inferenceRedactions(prompt);
+    throw emptyTranscriptFailure(
+      redactTelemetryText(stdout, diagnosticRedactions),
+      redactTelemetryText(stderr, diagnosticRedactions),
+      model,
+      provider,
+      exitCode!,
+    );
   }
-  return text;
+  emit("completion", `assistantTextParts=${assistantTextParts(stdout).length}`);
+  return { text, model };
 }
 
 export interface AuthoredTake extends ParsedTake {
@@ -354,12 +576,38 @@ export interface AuthoredTake extends ParsedTake {
 // Throws (no fallback) when opencode is unavailable or the transcript is empty.
 // Returns the stored body (control line stripped) plus the parsed
 // stance/confidence.
+//
+// A sample that parses but omits a required section (see TAKE_SECTION_LEAD_INS)
+// is re-sampled up to `structureAttempts` times. Only the SECTION contract is
+// retried: parseStanceFromBody's own failures — a missing or out-of-vocabulary
+// STANCE/CONFIDENCE control line — still throw on the first attempt, because
+// #301/#319 settled that a member who cannot state a stance is ABSENT rather
+// than coaxed. When every attempt omits a section the member is likewise
+// rendered absent (session.ts settles per-member failures into a no-show); the
+// take is never patched, re-headed, or otherwise fabricated into compliance.
 export async function authorTake(
   p: Persona,
   regime: RegimeContext,
   subjectId: string,
+  options: AuthorTakeOptions = {},
 ): Promise<AuthoredTake> {
-  const text = await runOpencode(promptFor(p, regime, subjectId));
-  const parsed = parseStanceFromBody(text);
-  return { ...parsed, model: inferenceModel() };
+  const attempts = Math.max(1, options.structureAttempts ?? DEFAULT_STRUCTURE_ATTEMPTS);
+  const prompt = promptFor(p, regime, subjectId);
+  let missing: readonly string[] = [];
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const authored = await runOpencode(prompt, options);
+    const parsed = parseStanceFromBody(authored.text);
+    missing = missingSectionLeadIns(parsed.body);
+    if (missing.length === 0) return { ...parsed, model: authored.model };
+    console.warn(
+      `[inference] ${p.memberId}: take attempt ${attempt}/${attempts} omitted ${missing.join(", ")} — re-sampling`,
+    );
+  }
+
+  throw new Error(
+    `model take for ${p.memberId} omitted the ${missing.join(", ")} section${missing.length === 1 ? "" : "s"} ` +
+      `on all ${attempts} attempt${attempts === 1 ? "" : "s"} — the member is rendered ABSENT, never patched ` +
+      `into compliance with a synthesized section.`,
+  );
 }

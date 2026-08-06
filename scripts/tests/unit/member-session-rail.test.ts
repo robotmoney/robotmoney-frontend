@@ -53,6 +53,9 @@ describe("buildMemberAgentArgv — session-participation mode", () => {
     // No opencode-mode remnants.
     expect(argv).not.toContain("--auto");
     expect(argv).not.toContain("--title");
+    // The shared full-stack bring-up prebuilds this image once. Individual
+    // concurrent members must never request their own implicit build.
+    expect(argv).not.toContain("--build");
     expect(argv.join(" ")).not.toContain("opencode.json");
   });
 

@@ -236,8 +236,8 @@ does not exercise the cap that production applies.
 
 ### Cross-cutting: fetch cache and hermetic substitution
 
-- `extract/fetch-cache.ts:40-42` memoises GET bodies for 1 h when `DEMO_MODE` is
-  set; prod/CI TTL is 0 (off). No prod parity impact; under `DEMO_MODE` inputs
+- `extract/fetch-cache.ts` defaults GET memoisation off; normal demo supplies
+  an explicit one-hour TTL. No production parity impact; cached inputs
   can be up to 1 h staler than v0's.
 - `access/hermetic-source.ts:37-49` — with `ANALYTICS_SOURCE=hermetic` (the demo
   and CI e2e path) **every** series is replaced by a deterministic seeded random

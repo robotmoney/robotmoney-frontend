@@ -61,6 +61,11 @@ import {
   type OnboardingTelemetry,
   type RedactionSecret,
 } from "../lib/onboarding-telemetry.ts";
+import {
+  buildOpenCodeConfig,
+  buildOpenCodeRunArgs,
+  resolveOpenCodeRun,
+} from "./opencode-run.ts";
 
 /**
  * The model + credential this primitive runs with, resolved by the caller.
@@ -129,14 +134,7 @@ export interface MemberAgentModel {
 //
 // The model arrives as a PARAMETER, resolved by the caller from the registry —
 // this function invents nothing.
-export function buildAgentOpencodeConfig(model: string): Record<string, unknown> {
-  return {
-    $schema: "https://opencode.ai/config.json",
-    model,
-    autoupdate: false,
-    permission: { "*": "allow" },
-  };
-}
+export { buildOpenCodeConfig as buildAgentOpencodeConfig } from "./opencode-run.ts";
 
 // ── Secret redaction ────────────────────────────────────────────────────────
 // A failed run's transcript is printed WHOLE into CI logs and the demo's
@@ -321,35 +319,14 @@ export function buildMemberAgentArgv(a: MemberAgentArgvOptions): string[] {
   ];
 }
 
-// The default (opencode) command tail, extracted verbatim so the two modes
-// share one argv builder above it.
+// The default (opencode) command tail. Its OpenCode portion is assembled by the
+// same scenario-neutral builder as in-container swarm-session inference.
 function buildOpencodeRunTail(a: MemberAgentArgvOptions): string[] {
-  return [
-    "run",
-    "--model",
-    a.modelConfig.model,
-    "--format",
-    "json",
-    // opencode's REAL "the operator is not at the keyboard" flag: auto-approve
-    // every permission that is not explicitly denied, and buildAgentOpencodeConfig
-    // denies none.
-    //
-    // This used to be `--dangerously-skip-permissions`, which opencode has
-    // never had — `opencode run --help` in the pinned v1.18.1 image offers
-    // `--auto`. yargs accepts unknown `--flags` SILENTLY, so nothing failed and
-    // nothing warned while every permission `ask` stayed armed and, in a
-    // headless container, unanswerable. That cost four consecutive red runs of
-    // the required gate. The Docker-backed rails check
-    // (scripts/tests/integration/onboarding-eval-infra.test.ts) now asserts
-    // every flag emitted here against the pinned binary's own `--help`, because
-    // an assertion on our own argv could never have caught it.
-    "--auto",
-    "--title",
-    a.title!,
-    "--dir",
-    "/home/agent",
-    a.prompt!,
-  ];
+  // Resolve against an empty environment to preserve this builder's pure
+  // contract: the caller already supplied the resolved model and title scope.
+  // Only the process-owning layer may read ambient configuration.
+  const run = resolveOpenCodeRun({ model: a.modelConfig.model, titleScope: a.title!, env: {} });
+  return buildOpenCodeRunArgs(run, a.prompt!, { directory: "/home/agent" });
 }
 
 // ── Persistent member volumes (issue #361 Phase 3: identity continuity) ─────
@@ -564,6 +541,47 @@ export interface MemberAgentResult {
 // observer and applies its own DEFAULT_TIMEOUT_MS.
 export const DEFAULT_MEMBER_AGENT_TIMEOUT_MS = 20 * 60_000;
 
+export async function inspectThenCleanup(opts: {
+  inspect?: () => Promise<void>;
+  cleanup: () => number | null;
+  onInspectError?: (error: unknown) => void;
+}): Promise<{ cleanupExitCode: number | null; inspectError: unknown | null }> {
+  let inspectError: unknown | null = null;
+  let cleanupExitCode: number | null = null;
+  try {
+    if (opts.inspect) await opts.inspect();
+  } catch (error) {
+    inspectError = error;
+    try { opts.onInspectError?.(error); } catch { /* a broken artifact sink cannot block cleanup */ }
+  } finally {
+    try { cleanupExitCode = opts.cleanup(); } catch { /* already removed / daemon unavailable */ }
+  }
+  return { cleanupExitCode, inspectError };
+}
+
+export async function boundedExitAfterTerminate(opts: {
+  exited: Promise<number>;
+  kill: (signal: number) => void;
+  termGraceMs?: number;
+  killGraceMs?: number;
+  onEscalate?: () => void;
+}): Promise<number | null> {
+  const afterTerm = await Promise.race([
+    opts.exited.then((code) => ({ exited: true as const, code })),
+    Bun.sleep(opts.termGraceMs ?? 500).then(() => ({ exited: false as const, code: null })),
+  ]);
+  if (afterTerm.exited) return afterTerm.code;
+  try {
+    opts.kill(9);
+    opts.onEscalate?.();
+  } catch { /* process exited between the grace check and escalation */ }
+  const afterKill = await Promise.race([
+    opts.exited.then((code) => ({ exited: true as const, code })),
+    Bun.sleep(opts.killGraceMs ?? 1_000).then(() => ({ exited: false as const, code: null })),
+  ]);
+  return afterKill.exited ? afterKill.code : null;
+}
+
 export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAgentResult> {
   const log = opts.onEvent ?? (() => {});
   const keep = opts.keepUntilInspected ?? false;
@@ -593,7 +611,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
     // runs the member's own client (which invokes opencode itself, passing the
     // model on argv) and needs no mounted config.
     if (!commandMode) {
-      writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(opts.modelConfig.model), null, 2));
+      writeFileSync(opencodeConfigPath, JSON.stringify(buildOpenCodeConfig(opts.modelConfig.model), null, 2));
     }
 
     // A stack created by scripts/stack carries generated label and credential
@@ -690,36 +708,56 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
     // error here.
     try {
       proc.kill();
+      telemetry.emit({ source: "cleanup", stream: "event", message: "member-agent CLI kill signal sent", containerName });
     } catch {
-      /* already exited */
+      telemetry.emit({ source: "cleanup", stream: "event", message: "member-agent CLI already exited before kill", containerName });
     }
 
-    if (keep) {
-      // Inspection reads the STOPPED container's filesystem, so wait for it to
-      // stop first. (After a TIMEOUT the kill above only signalled the CLI, so
-      // `timedOut` is passed through — an observer that kills on timeout may be
-      // reading a still-running filesystem.)
-      await proc.exited;
-      if (opts.inspect) await opts.inspect({ containerName, timedOut });
-    }
-
-    let containerCleanupExitCode: number | null = null;
-    try {
-      const cleanup = Bun.spawnSync(["docker", "rm", "-f", containerName], { stdout: "ignore", stderr: "ignore" });
-      containerCleanupExitCode = cleanup.exitCode;
-    } catch {
-      /* already removed */
-    }
-    telemetry.emit({
-      source: "cleanup",
-      stream: "event",
-      message: `member-agent container cleanup exit=${containerCleanupExitCode ?? "already-removed"}`,
-      containerName,
+    const cliExitCode = await boundedExitAfterTerminate({
+      exited: proc.exited,
+      kill: (signal) => proc.kill(signal),
+      onEscalate: () => telemetry.emit({
+        source: "cleanup", stream: "event", message: "member-agent CLI SIGKILL escalation sent", containerName,
+      }),
     });
+    if (cliExitCode === null) {
+      try {
+        telemetry.emit({
+          source: "cleanup", stream: "event",
+          message: "member-agent CLI exit state unknown after bounded SIGKILL grace; continuing to inspect and remove container",
+          containerName,
+        });
+      } catch { /* diagnostics cannot block cleanup */ }
+    }
+
+    const lifecycle = await inspectThenCleanup({
+      inspect: keep && opts.inspect
+        ? async () => {
+            telemetry.emit({ source: "cleanup", stream: "event", message: "member-agent container inspection started", containerName });
+            await opts.inspect!({ containerName, timedOut });
+            telemetry.emit({ source: "cleanup", stream: "event", message: "member-agent container inspection completed", containerName });
+          }
+        : undefined,
+      cleanup: () => Bun.spawnSync(["docker", "rm", "-f", containerName], {
+        stdout: "ignore", stderr: "ignore",
+      }).exitCode,
+      onInspectError: (error) => {
+        const safe = redactTelemetryText(error instanceof Error ? error.message : String(error), injected).slice(0, 1000);
+        telemetry.emit({ source: "cleanup", stream: "event", message: `member-agent diagnostic capture failed: ${safe}`, containerName });
+      },
+    });
+    try {
+      telemetry.emit({
+        source: "cleanup",
+        stream: "event",
+        message: `member-agent container cleanup exit=${lifecycle.cleanupExitCode ?? "already-removed"}`,
+        containerName,
+      });
+    } catch { /* cleanup already completed; a broken artifact sink cannot undo it */ }
     // LOAD-BEARING ORDERING: `docker rm -f` runs BEFORE the drains are awaited.
     // Closing the container's pipes is what lets the drains finish; awaiting
     // them first would hang. Do not "tidy" this.
-    const [rawStdout, rawStderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, proc.exited]);
+    const [rawStdout, rawStderr] = await Promise.all([stdoutPromise, stderrPromise]);
     await launchWatcher; // resolves as soon as the CLI is gone; never outlives the run
 
     // Both strings were assembled only from already-redacted stream records;
@@ -727,9 +765,17 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
     const stdout = rawStdout;
     const stderr = rawStderr;
 
+    if (lifecycle.inspectError) {
+      const safe = redactTelemetryText(
+        lifecycle.inspectError instanceof Error ? lifecycle.inspectError.message : String(lifecycle.inspectError),
+        injected,
+      ).slice(0, 1000);
+      throw new Error(`member-agent diagnostic capture failed after container cleanup: ${safe}`);
+    }
+
     return {
       containerName,
-      exitCode,
+      exitCode: cliExitCode,
       stdout,
       stderr,
       transcript: `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
