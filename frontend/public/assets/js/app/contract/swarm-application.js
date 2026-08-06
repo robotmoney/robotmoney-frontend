@@ -7,10 +7,11 @@
 //
 // docs/decisions.md D21 retired the MCP server: onboarding is REST-only, and
 // the repo-owned `swarm-onboarding` skill — not a live MCP tool — is the
-// discovery mechanism (§11 R5). The production prompt still names its
-// published robotmoney-core copy. The onboarding prompt / step-list
-// constants below are consumed by the frontend apply page, the docs, and the
-// demo onboarding-eval harness (scripts/lib/onboarding-eval.ts).
+// discovery mechanism (§11 R5). The production prompt names this repo's own
+// published copy, served same-origin — see SWARM_ONBOARDING_SKILL_URL below for
+// why it no longer points into robotmoney-core. The onboarding prompt /
+// step-list constants below are consumed by the frontend apply page, the docs,
+// and the demo onboarding-eval harness (scripts/lib/onboarding-eval.ts).
 //
 // Field set per docs/architecture.md §11 R6: {name, contact, lens?, publicKey}.
 // `lens` is genuinely optional (not every applicant states one), so — unlike
@@ -40,44 +41,48 @@ export function canonicalizeApplication(a) {
 // is deliberate: the skill sits five levels down, and agents pointed at the
 // repo root reported back that no such skill existed instead of finding it.
 //
-// The branch segment is `dev`, NOT `main`: robotmoney-core has NO `main` branch
-// at all — `dev` is its default and only long-lived branch — so
-// raw.githubusercontent.com serves this file at `/dev/` (HTTP 200) and returns
-// HTTP 404 for the `/main/` form (verified 2026-07-27). That 404 fails silently
-// from an agent's point of view — it simply never discovers the skill — so
-// reachability is asserted for real (status 200 plus the skill's own
-// front-matter markers) by
-// contract/tests/live/swarm-onboarding-skill-url-live.test.ts. The offline
+// A URL that stops serving the procedure fails SILENTLY from an agent's point
+// of view — it simply never onboards, and nothing in this repo raises an error.
+// Reachability AND content are therefore asserted for real by
+// contract/tests/live/swarm-onboarding-skill-url-live.test.ts; the offline
 // regression pin on this string lives in
 // contract/tests/unit/swarm-application.test.ts.
 //
-// THE PLUGIN/SKILL SEGMENTS ARE THE PRE-RENAME ONES, ON PURPOSE (issue #484).
-// The Committee→Swarm rename (#407) renamed this URL's `robotmoney-committee/
-// …/committee-onboarding` segments to `robotmoney-swarm/…/swarm-onboarding`,
-// but that rename never crossed the repo boundary: robotmoney-core@dev ships
-// plugins `robotmoney-analyst`, `robotmoney-cli`, `robotmoney-committee` and
-// `robotmoney-user` — there is no `robotmoney-swarm` — so the renamed URL 404'd
-// from 2026-08-03 and the entire onboarding funnel was dead in production, with
-// no error raised anywhere in this repo. Measured 2026-08-05: the renamed form
-// 404s, the form below returns 200. This constant therefore names WHAT IS
-// PUBLISHED, not what this repo would prefer to be published.
+// THIS IS A SAME-ORIGIN URL, ON PURPOSE. It used to point into robotmoney-core
+// over raw.githubusercontent.com, and that cross-repo dependency broke the
+// funnel twice in four days:
 //
-// Consequence worth stating plainly rather than hiding: the file served here
-// declares `name: committee-onboarding` in its front matter while
-// ONBOARDING_PROMPT (below) and this repo's own evaluation copy at
-// frontend/public/skills/swarm-onboarding/SKILL.md use the post-rename name.
-// That label mismatch is the residue of the half-finished cross-repo rename,
-// and it is strictly better than a 404: the agent gets the real, current
-// procedure. Renaming the plugin in robotmoney-core so the post-rename URL
-// becomes true is the permanent repair, and it is tracked THERE, not here —
-// this repo does not edit robotmoney-core: robotmoney-core#1199 (the 404 URL
-// itself) and robotmoney-core#1201 (the still-open `committee-identity` →
-// `swarm-identity` decision that determines how far the rename goes). When it
-// lands, change this string and the live test follows automatically — it
-// derives the expected front-matter name from this URL's own skill segment,
-// so no edit there is needed.
+//   1. The Committee→Swarm rename (#407) renamed this URL's plugin and skill
+//      segments, but the rename never crossed the repo boundary — core had no
+//      `robotmoney-swarm` plugin — so the renamed URL 404'd from 2026-08-03 and
+//      onboarding was dead in production until #506 repointed it at the
+//      pre-rename `robotmoney-committee/committee-onboarding` path.
+//   2. Core then landed its side (robotmoney-core#1199 / PR #1200) and replaced
+//      that path with a 1,951-byte DEPRECATION STUB whose body reads "This file
+//      is a compatibility stub. It contains no instructions to follow." It
+//      returns 200, so the reachability test stayed green while agents were
+//      being handed a signpost instead of a procedure.
+//
+// Both failures share one cause: the file an operator's agent executes was
+// owned by a repo with its own release cadence, and a 200 is not evidence the
+// procedure is there. Pointing at our own origin removes the coupling — the
+// skill is now served from frontend/public/skills/swarm-onboarding/SKILL.md by
+// the same deploy that ships this constant, so the two cannot skew.
+//
+// Self-hosting is also the BETTER file, not merely the closer one. Core's
+// post-rename copy still targets `/api/committee/*` and prints the applicant's
+// status page as `<host>/committee/apply/<uuid>`; ours is native `/api/swarm/*`,
+// carries the `swarm-token-claim-v1` envelope and the `state == claimed`
+// completion gate, and prints `<host>/swarm/apply/<uuid>`. That status URL is
+// load-bearing right now: approval email is not yet wired, so the status page is
+// the ONLY way an applicant can watch their application progress.
+//
+// The cost of self-hosting is two copies of the procedure with no drift guard
+// between them. Core keeps its copy for its own plugin consumers; if it is ever
+// retired in favour of this one, delete nothing here — the dependency only ever
+// pointed one way.
 export const SWARM_ONBOARDING_SKILL_URL =
-  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
+  "https://robotmoney.net/skills/swarm-onboarding/SKILL.md";
 
 // The single copy-paste prompt an owner drops into their agent harness (R4).
 //

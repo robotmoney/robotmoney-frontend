@@ -48,10 +48,15 @@ const TIMEOUT_MS = 30_000;
 /**
  * The skill slug the URL itself names — the directory immediately above
  * `SKILL.md`. Derived rather than hardcoded so this file keeps asserting "the
- * file served IS the skill this URL claims to serve" across the half-finished
- * cross-repo Committee→Swarm rename: it reads `committee-onboarding` today
- * (that is what robotmoney-core actually publishes) and becomes
- * `swarm-onboarding` the moment the constant is repointed, with no edit here.
+ * file served IS the skill this URL claims to serve" wherever the constant
+ * points — it followed the constant through the cross-repo Committee→Swarm
+ * rename and through the move to same-origin hosting without an edit here.
+ *
+ * Note what that portability cost us, and why the body assertions below are not
+ * optional: a slug derived from the URL agrees with the served front matter
+ * even when the served file is a deprecation stub for that very slug. The name
+ * matching proves the file is ABOUT the right skill, never that it still
+ * contains one.
  */
 const SKILL_SLUG = new URL(SWARM_ONBOARDING_SKILL_URL).pathname.split("/").at(-2)!;
 
@@ -88,6 +93,34 @@ describe("SWARM_ONBOARDING_SKILL_URL — live reachability", () => {
       expect(body).toContain(`name: ${SKILL_SLUG}`);
       expect(body).toContain("rmpc");
       expect(body.length).toBeGreaterThan(500);
+
+      // A 200 with the right NAME is still not sufficient — measured, not
+      // hypothetical. When robotmoney-core landed its side of the rename
+      // (#1199 / PR #1200) it replaced the path this constant then pointed at
+      // with a 1,951-byte deprecation stub whose front matter kept the old
+      // `name:`, whose body mentioned `rmpc` (only to say it had not changed),
+      // and which was comfortably over 500 bytes. Every assertion above passed
+      // while the body read, verbatim: "This file is a compatibility stub. It
+      // contains no instructions to follow." Agents were handed a signpost
+      // instead of a procedure, and this job stayed green.
+      //
+      // So assert the PROCEDURE, not the label: the endpoint an application is
+      // actually POSTed to, the claim envelope, and the completion gate. A stub
+      // that points elsewhere cannot carry these without ceasing to be a stub.
+      expect(body).toContain("/api/swarm/apply");
+      expect(body).toContain("swarm-token-claim-v1");
+      expect(body).toContain("claimed");
+
+      // The applicant-facing status URL. Approval email is not wired yet, so
+      // this page is the ONLY way an applicant can watch their application move
+      // through review — if the skill stops telling the agent to surface it,
+      // the applicant is left with no way to check and no notification either.
+      expect(body).toContain("/swarm/apply/");
+
+      // Belt and braces on the stub shape itself: a deprecation notice is not a
+      // procedure, whatever else it happens to contain.
+      expect(body.toLowerCase()).not.toContain("no instructions to follow");
+      expect(body.length).toBeGreaterThan(10_000);
     },
     TIMEOUT_MS,
   );
