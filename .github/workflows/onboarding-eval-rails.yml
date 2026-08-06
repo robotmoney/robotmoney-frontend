@@ -63,7 +63,7 @@ jobs:
     # wrongly runs on drafts.
     env:
       CI_CLASS: ignore
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
@@ -90,7 +90,7 @@ jobs:
     # skip while the PR is still a draft. Path-gated ONLY on pull_request: a
     # push to main always runs regardless of needs.changes' output.
     if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft == false && needs.changes.outputs.onboarding_eval_rails == 'true') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc().
       RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
