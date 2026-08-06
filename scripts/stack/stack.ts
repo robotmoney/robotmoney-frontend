@@ -268,14 +268,12 @@ export function createStack(
   // tree, because that is precisely the shape that shipped the unfurl bug.
   async function assembleStaticDir(): Promise<void> {
     emit({ phase: "log", message: "assembling prerendered STATIC_DIR (_static)…" });
-    const proc = Bun.spawn(["bash", join(cfg.repoRoot, "scripts", "static-assembly.sh")], {
-      cwd: cfg.repoRoot,
-      env: spawnEnv,
-      stdin: "ignore",
-      stdout: (defaultIo.stdout ?? "pipe") as "pipe",
-      stderr: (defaultIo.stderr ?? "pipe") as "pipe",
-    });
-    const code = await proc.exited;
+    // Routed through the runtime seam like every other child process here.
+    // This one is `bash`, not `docker`, and it is the fourth and last way this
+    // module reaches outside itself — a spawn that bypassed the seam is a spawn
+    // that cannot be tested, which is exactly how it broke `up()`'s ordering
+    // test on a runner whose allowlisted PATH could not resolve `bash`.
+    const code = await runtime.run(["bash", join(cfg.repoRoot, "scripts", "static-assembly.sh")], defaultIo);
     if (code !== 0) throw new Error(`static assembly failed (scripts/static-assembly.sh exited ${code})`);
   }
 

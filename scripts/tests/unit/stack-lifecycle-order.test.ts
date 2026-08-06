@@ -128,6 +128,49 @@ test("a never-healthy API fails the boot and the initializer never runs", async 
   expect(rec.events).not.toContain("initialize:start");
 });
 
+// REGRESSION: up() also shells out to scripts/static-assembly.sh, and that
+// spawn originally bypassed the runtime seam. Nothing here caught it, because
+// on a developer box `bash` resolves and the script merely fails; on the CI
+// runner the spawn itself ENOENTs against the allowlisted PATH and every test
+// in this file died on a code path none of them meant to exercise. Asserting
+// the assembly runs THROUGH the seam is what keeps the seam total.
+test("static assembly is spawned through the runtime seam, before any container work", async () => {
+  const rec: Recorded = { events: [], probes: 0 };
+  const spawned: string[][] = [];
+
+  await stackFor(rec, {
+    async run(argv) {
+      spawned.push(argv);
+      return 0;
+    },
+  }).up();
+
+  const assemblyIdx = spawned.findIndex((a) => a.some((s) => s.endsWith("static-assembly.sh")));
+  const firstDockerIdx = spawned.findIndex((a) => a[0] === "docker");
+  expect(assemblyIdx).toBeGreaterThan(-1);
+  expect(firstDockerIdx).toBeGreaterThan(-1);
+  expect(assemblyIdx).toBeLessThan(firstDockerIdx);
+  // No unseamed child processes: everything up() launched came through here.
+  expect(spawned.every((a) => a[0] === "bash" || a[0] === "docker")).toBe(true);
+});
+
+test("a failed static assembly aborts the boot before any container starts", async () => {
+  const rec: Recorded = { events: [], probes: 0 };
+  let dockerRan = false;
+
+  await expect(
+    stackFor(rec, {
+      async run(argv) {
+        if (argv.some((s) => s.endsWith("static-assembly.sh"))) return 3;
+        dockerRan = true;
+        return 0;
+      },
+    }).up(),
+  ).rejects.toThrow(/static assembly failed .*exited 3/);
+
+  expect(dockerRan).toBe(false);
+});
+
 test("up() without an initializer still completes through the health gate", async () => {
   const rec: Recorded = { events: [], probes: 0 };
   const ports = await stackFor(rec).up();

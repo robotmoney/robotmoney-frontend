@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,6 +30,16 @@ describe("shared full-stack member-agent prebuild", () => {
         { mode: 0o755 },
       );
       chmodSync(dockerPath, 0o755);
+
+      // `up()` assembles the prerendered STATIC_DIR before it touches Docker,
+      // so this fake repo root needs the script that step runs. Without it the
+      // bring-up aborts at exit 127 and never reaches the prebuild ordering
+      // this test is about. A no-op stub is the right fidelity: static assembly
+      // has its own coverage, and mattering here would make this test fail for
+      // a reason that has nothing to do with member-agent prebuild.
+      mkdirSync(join(dir, "scripts"), { recursive: true });
+      writeFileSync(join(dir, "scripts", "static-assembly.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      chmodSync(join(dir, "scripts", "static-assembly.sh"), 0o755);
 
       const cfg: StackConfig = {
         repoRoot: dir,
