@@ -15,6 +15,9 @@
 //     with drift detection over both (review-data-integrity F1 and F3)
 //   • the read boundary reports these rows as ARCHIVAL, which is not the same
 //     statement as a failed signature check (F2)
+//   • CONVERGENCE with src/swarm/roster-seed.ts's seedLiveRoster(), the other
+//     writer of the two members they share: either ordering leaves zero member
+//     drift (issue #540)
 //
 // Counts are read from the archive manifest rather than hard-coded, so
 // regenerating the artifact (scripts/v0-seed-regenerate.ts) against a newer
@@ -22,11 +25,14 @@
 // per-dataset ASSERTIONS are still exact — "everything in the archive landed",
 // not "some rows landed".
 import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
 import { runV0SeedBootstrap } from "../scripts/v0-seed-bootstrap.ts";
 import { loadV0Archive, V0_ARCHIVE_PUBLIC_KEY_B64 } from "../src/swarm/v0-archive.ts";
 import { verifyStoredSubmissionSignature } from "../src/lib/signing.ts";
 import { getMemberTakes, getSession, getTakeReceipt } from "../src/swarm/domain.ts";
+import { LIVE_ROSTER_IDS, seedLiveRoster } from "../src/swarm/roster-seed.ts";
 
 const MEMBER_IDS = ["athena", "robotmoney", "woon"];
 const SUBJECT_IDS = ["robotmoney-allocation", "robotmoney-treasury", "robotmoney-vault", "woon"];
@@ -355,4 +361,142 @@ test("all three read paths report imported takes as archival, not as failed veri
   // No member key is registered for an archival take, so the receipt cannot
   // offer a fingerprint to check it against — and must not invent one.
   expect(receipt!.signer.publicKeyFingerprint).toBeNull();
+});
+
+// ── Convergence with the live-roster seeder (issue #540) ────────────────────
+//
+// Two pipelines write the SAME swarm_members rows for athena and robotmoney:
+// this backfill (v0's history) and src/swarm/roster-seed.ts's seedLiveRoster()
+// (who is seated now, from the committed manifests). They disagreed on two
+// things, and whichever ran second reported the disagreement as member drift —
+// which prod-bootstrap.ts turns into a non-zero exit, blocking the production
+// bootstrap path for rows nobody had edited:
+//   • the jsonb `avatar` column's `.path` — v0 published /avatars/committee/,
+//     the manifests publish /avatars/swarm/ (there is no `avatar_url` column);
+//   • voice_md and submit, which the seeder does not own and leaves NULL.
+//
+// Both orderings are covered below, because BOTH happen: an existing
+// deployment ran the backfill first, and a cold `bun run prod-bootstrap` runs
+// the seeder first (step 1's migrate() calls seed()).
+//
+// RED CONTROL, both halves measured against the reviewed head:
+//   • dropping canonicalizeAvatar()'s call in scripts/v0-seed-bootstrap.ts
+//     turns 4 of the 4 tests below red on `avatar`;
+//   • emptying its fill-empty-columns list turns 2 red — ordering B, on
+//     voice_md and submit, and the never-overwrite test, whose drifted count
+//     goes 1 -> 2.
+// Neither half can be satisfied by a constant: the expected avatar object is
+// read from the committed manifest on disk, and the expected voice_md/submit
+// are read from the archive artifact.
+const MANIFEST_DIR = join(import.meta.dir, "..", "..", "frontend", "public", "data", "swarm", "manifests", "members");
+
+function manifestAvatar(id: string): unknown {
+  return JSON.parse(readFileSync(join(MANIFEST_DIR, `${id}.json`), "utf8")).avatar;
+}
+
+test("v0's pre-rename avatar paths land canonicalized, byte-identical to the committed manifests", async () => {
+  // The ARTIFACT is untouched: the rewrite belongs to the importer, never to
+  // seed-data/. If this half ever goes green by editing the archive instead,
+  // it is this assertion that turns red.
+  const { payload } = await loadV0Archive();
+  expect(payload.members.length).toBe(3);
+  for (const m of payload.members) {
+    expect((m.avatar as { path: string }).path).toBe(`/avatars/committee/${m.id}.jpg`);
+  }
+
+  await runV0SeedBootstrap();
+
+  const rows = await sql<{ id: string; avatar: Record<string, unknown> }[]>`
+    SELECT id, avatar FROM swarm_members WHERE id = ANY(${MEMBER_IDS}) ORDER BY id`;
+  expect(rows.length).toBe(3);
+  for (const r of rows) {
+    expect(r.avatar.path).toBe(`/avatars/swarm/${r.id}.jpg`);
+    // Not merely "starts with /avatars/swarm/": the whole avatar object must
+    // equal what the site publishes for that member, credit and source_url
+    // included.
+    expect(r.avatar).toEqual(manifestAvatar(r.id) as Record<string, unknown>);
+  }
+});
+
+test("ordering A — backfill, then seedLiveRoster: a following bootstrap comparison reports zero member drift", async () => {
+  await runV0SeedBootstrap();
+  expect(await seedLiveRoster()).toBe(LIVE_ROSTER_IDS.length);
+
+  const result = await runV0SeedBootstrap();
+  expect(result.members).toEqual({ inserted: 0, unchanged: 3, drifted: 0, total: 3 });
+  expect(result.drifts).toEqual([]);
+
+  // The seeder rewrote `avatar` from the manifests; the archive agrees with it.
+  const rows = await sql<{ id: string; avatar: Record<string, unknown> }[]>`
+    SELECT id, avatar FROM swarm_members WHERE id = ANY(${MEMBER_IDS}) ORDER BY id`;
+  for (const r of rows) expect(r.avatar.path).toBe(`/avatars/swarm/${r.id}.jpg`);
+});
+
+test("ordering B — seedLiveRoster, then backfill (what prod-bootstrap itself produces): also zero member drift", async () => {
+  expect(await seedLiveRoster()).toBe(LIVE_ROSTER_IDS.length);
+
+  // The seeder owns only the manifests' profile columns, so the two rows it
+  // seats carry no voice_md and no submit — the state the backfill must
+  // complete rather than call drift.
+  const before = await sql<{ id: string; voice_md: string | null; submit: unknown }[]>`
+    SELECT id, voice_md, submit FROM swarm_members WHERE id = ANY(${[...LIVE_ROSTER_IDS]}) ORDER BY id`;
+  expect(before.length).toBe(LIVE_ROSTER_IDS.length);
+  for (const r of before) {
+    expect(r.voice_md).toBeNull();
+    expect(r.submit).toBeNull();
+  }
+
+  const result = await runV0SeedBootstrap();
+  // Only woon is genuinely new; the two seeded rows are completed in place.
+  expect(result.members).toEqual({ inserted: 1, unchanged: 2, drifted: 0, total: 3 });
+  expect(result.drifts).toEqual([]);
+
+  const { payload } = await loadV0Archive();
+  const after = await sql<{ id: string; voice_md: string | null; submit: unknown; avatar: Record<string, unknown> }[]>`
+    SELECT id, voice_md, submit, avatar FROM swarm_members WHERE id = ANY(${MEMBER_IDS}) ORDER BY id`;
+  expect(after.length).toBe(3);
+  for (const r of after) {
+    const archived = payload.members.find((m) => m.id === r.id)!;
+    expect(r.voice_md).toBe(archived.voice_md as string);
+    expect(r.voice_md!.length).toBeGreaterThan(0);
+    expect(r.submit ?? null).toEqual((archived.submit ?? null) as never);
+    expect(r.avatar.path).toBe(`/avatars/swarm/${r.id}.jpg`);
+  }
+  // robotmoney is the member whose archive `submit` is a real object, so the
+  // fill above is not vacuously true for every row.
+  expect(after.find((r) => r.id === "robotmoney")!.submit).not.toBeNull();
+
+  // Convergence, not oscillation: a third pass writes nothing more.
+  const third = await runV0SeedBootstrap();
+  expect(third.members).toEqual({ inserted: 0, unchanged: 3, drifted: 0, total: 3 });
+  expect(third.drifts).toEqual([]);
+});
+
+test("the reconciliation still never overwrites a non-empty column, and touches no credential or lifecycle timestamp", async () => {
+  await seedLiveRoster();
+  const applied = "2026-01-02T03:04:05.000Z";
+  const activated = "2026-01-03T04:05:06.000Z";
+  await sql`
+    UPDATE swarm_members
+       SET applied_at = ${applied}, activated_at = ${activated},
+           key_hash = 'hash_540', public_key = 'pk_540',
+           tagline = 'OPERATOR EDIT — must survive the backfill'
+     WHERE id = 'athena'`;
+
+  const result = await runV0SeedBootstrap();
+
+  // A non-empty column that differs is still reported, never overwritten.
+  expect(result.members.drifted).toBe(1);
+  const drift = result.drifts.find((d) => d.entity === "swarm_members" && d.field === "tagline");
+  expect(drift).toBeDefined();
+  expect(drift!.oldValue).toBe("OPERATOR EDIT — must survive the backfill");
+
+  const [row] = await sql<
+    { tagline: string; applied_at: Date | null; activated_at: Date | null; key_hash: string | null; public_key: string | null }[]
+  >`SELECT tagline, applied_at, activated_at, key_hash, public_key FROM swarm_members WHERE id = 'athena'`;
+  expect(row.tagline).toBe("OPERATOR EDIT — must survive the backfill");
+  expect(new Date(row.applied_at!).toISOString()).toBe(applied);
+  expect(new Date(row.activated_at!).toISOString()).toBe(activated);
+  expect(row.key_hash).toBe("hash_540");
+  expect(row.public_key).toBe("pk_540");
 });
