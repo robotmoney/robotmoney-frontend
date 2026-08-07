@@ -688,7 +688,12 @@ test("swarm admin: member filters, one-time credential reveal, and redacted deta
   await expect(page.getByRole("heading", { name: /Member nova/ })).toBeVisible();
 
   await page.getByTestId("member-activate").click();
-  await page.getByTestId("member-action-reason").fill("Approved after review of application.");
+  // Approve is the one action with NO reason field (RM-45): the backend never
+  // persisted it, so requiring it on the common path was a mandatory field that
+  // went nowhere. Asserted hidden rather than merely not filled, so re-adding it
+  // silently fails here. `x-show` hides without unmounting, hence toBeHidden
+  // rather than toHaveCount(0) — same pattern as the public-key field below.
+  await expect(page.getByTestId("member-action-reason")).toBeHidden();
   await page.getByTestId("member-action-submit").click();
 
   const tokenEl = page.getByTestId("credential-token");
