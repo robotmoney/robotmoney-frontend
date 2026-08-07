@@ -177,7 +177,7 @@ export async function runSwarmAuthoringEvalCase(
 
     // Member-container rail (issue #361 Phase 2): the session's members run in
     // their own containers against this eval stack.
-    const sessionRun = await runSession(subject, 1, { rail, members });
+    const sessionRun = await runSession(subject, 1, { rail, members, initializer: "simulation" });
     sessionState = sessionRun.pub?.session?.state ?? null;
     const presentMembers = members.filter((m) => m.present);
     authoredCount = sessionRun.pub?.takes?.filter((t: any) => typeof t?.body === "string" && t.body.trim().length > 0).length ?? 0;

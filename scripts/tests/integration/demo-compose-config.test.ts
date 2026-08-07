@@ -30,6 +30,7 @@ interface ComposeConfig {
     environment?: Record<string, string | null>;
     secrets?: Array<{ source: string; target: string }>;
     volumes?: Array<{ source?: string; target?: string; read_only?: boolean }>;
+    logging?: { driver?: string; options?: Record<string, string> };
   }>;
   secrets?: Record<string, { file?: string }>;
   networks?: Record<string, { labels?: Record<string, string> }>;
@@ -314,6 +315,34 @@ describe("demo-specific behavior is selected by explicit orchestration", () => {
     for (const retired of ["DEMO_FAST_SCHEDULES", "DEMO_SLOW_SAMPLERS"]) {
       expect(demoMain).not.toContain(retired);
       expect(seed).not.toContain(retired);
+    }
+  });
+});
+
+// Docker's json-file driver is UNBOUNDED by default, and a service that simply
+// omits `logging:` silently gets that default back — which is why this asserts
+// over EVERY resolved service rather than a named list. Container logs are the
+// primary debugging surface for a crashing lane, so they must be retained and
+// bounded, not merely one or the other.
+describe("container logs are bounded on every service", () => {
+  test("each resolved service pins a rotating json-file driver", () => {
+    const cfg = composeConfig({});
+    const services = Object.keys(cfg.services ?? {});
+    expect(services.length).toBeGreaterThan(0);
+
+    const unbounded = services.filter((name) => {
+      const log = cfg.services[name]?.logging;
+      return log?.driver !== "json-file" || !log?.options?.["max-size"] || !log?.options?.["max-file"];
+    });
+
+    expect(unbounded).toEqual([]);
+  });
+
+  test("retention is large enough to show a crash loop developing", () => {
+    const cfg = composeConfig({});
+    for (const [name, svc] of Object.entries(cfg.services ?? {})) {
+      const files = Number(svc.logging?.options?.["max-file"]);
+      expect(`${name}:${files}`).toBe(`${name}:${Math.max(files, 3)}`);
     }
   });
 });

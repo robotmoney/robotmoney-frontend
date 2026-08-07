@@ -25,9 +25,15 @@
 // Every step is attempted even if an earlier one failed (no fail-fast) — same
 // "attempt everything, decide the outcome at the end" principle
 // runV0SeedBootstrap() itself already follows for its own three entity kinds.
-// The final exit code is non-zero if ANY step FAILED, or if the v0-seed step
-// reported drift/inconsistency (matching that script's own existing exit-code
-// convention) — decided only after every step has run.
+// The final exit code is non-zero only if a step actually FAILED — decided
+// after every step has run. v0-seed DRIFT is deliberately NOT failing here:
+// this orchestrator is the boot path, and a boot may be adopting a working
+// production database (manually restored from a .dump, or a local postgres
+// volume that survived a restart) whose rows legitimately differ from the
+// archive. Existing rows win, the drift is printed field-by-field, the boot
+// proceeds. The standalone `bun run v0-seed:bootstrap` keeps its own strict
+// exit-nonzero-on-drift convention — THAT invocation is an explicit integrity
+// check, this one is initialization.
 //
 // Usage: DATABASE_URL=... [ANALYTICS_API_URL=... ANALYTICS_TOKEN=...] \
 //   bun run scripts/prod-bootstrap.ts
@@ -45,7 +51,10 @@ interface StepResult {
   status: StepStatus;
   summary: string;
   // Set when a step should contribute to a non-zero overall exit code even
-  // though its own status glyph isn't "failed" (the v0-seed drift case).
+  // though its own status glyph isn't "failed". No step sets it today —
+  // v0-seed drift used to, before adopted-production databases made drift an
+  // expected report — but the aggregation stays: it is the seam that lets a
+  // future step distinguish "warn the operator" from "fail the boot".
   failing?: boolean;
 }
 
@@ -90,10 +99,12 @@ async function runV0SeedStep(): Promise<StepResult> {
     `${result.snapshots.inserted} snapshots, ${result.briefs.inserted} briefs inserted, ` +
     `${result.drifts.length} drift`;
   if (result.drifts.length > 0) {
-    // Completed, but the existing script's own exit-code convention treats
-    // any drift as a non-zero outcome — surface it as a warning glyph here,
-    // not a hard failure, since every entity WAS still attempted.
-    return { status: "warning", summary, failing: true };
+    // Warning glyph, NOT failing: on an adopted production database the
+    // existing rows are the record and the archive is only the gap-filler, so
+    // "existing differs from archive" is a fact to report, not an error to
+    // abort on. runV0SeedBootstrap() has already printed every drifted field
+    // (old vs incoming) and left the existing rows untouched.
+    return { status: "warning", summary };
   }
   return { status: "success", summary };
 }

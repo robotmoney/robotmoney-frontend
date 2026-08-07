@@ -70,6 +70,17 @@ export interface StackUpOptions {
   // Extra `-e KEY=VALUE` pairs for the one-shot migrate container.
   migrateEnv?: Record<string, string>;
   migrateScriptArgs?: string[];
+  /**
+   * Last chance to refuse BEFORE anything is written.
+   *
+   * Runs after build() and the postgres phase — so images exist and the server
+   * is reachable — but before migrate(), which is the first step that writes.
+   * Throwing here aborts the boot with nothing committed. Deliberately NOT a
+   * new StackPhase: the phase sequence is pinned by
+   * scripts/tests/unit/stack-lifecycle-order.test.ts and this is a guard, not a
+   * stage of bring-up.
+   */
+  preflight?: () => Promise<void>;
   /** Scenario-specific initialization after services start but before the
    * stack is declared ready. Migration remains owned by this method exactly once. */
   initialize?: () => Promise<void>;
@@ -369,6 +380,10 @@ export function createStack(
       await waitForPostgres(upOpts.pgTimeoutMs);
       emit({ phase: "postgres", status: "done" });
     }
+
+    // Refuse before the first write, not after it. migrate() is that first
+    // write — it does not only migrate, it seeds.
+    if (upOpts.preflight) await upOpts.preflight();
 
     await migrate(upOpts.migrateEnv, upOpts.migrateScriptArgs);
 

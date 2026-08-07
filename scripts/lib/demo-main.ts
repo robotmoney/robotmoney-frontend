@@ -1,9 +1,9 @@
-import { mkdirSync, openSync, writeFileSync, writeSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
-import { EXTERNAL_PG_FLAG, externalPgOverlayYaml, resolveExternalPg } from "./demo-external-pg.ts";
+import { DB_PREFLIGHT_STEP, dbPreflightArgv, EXTERNAL_PG_FLAG, externalPgOverlayYaml, postgresPhaseNarration, resolveExternalPg } from "./demo-external-pg.ts";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
 import { provisionDemoAnalyticsTokenAfterPreflight, removeDemoAnalyticsToken } from "./demo-secret.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
@@ -69,7 +69,10 @@ import {
   memberGlyph,
   onboardGlyph,
   phaseGlyph,
+  renderResearchPane,
   setContainer,
+  setFatal,
+  setFatalWriters,
   setOnboardStep,
   setStep,
   STAGE_COLOR,
@@ -78,8 +81,15 @@ import {
   ticks,
   type DemoState,
   type UpcomingMember,
+  type WriterQuiesce,
 } from "./demo-tui-view.ts";
 import { createReadinessPolling } from "./demo-readiness-polling.ts";
+import {
+  DB_WRITER_SERVICES,
+  renderFailurePane,
+  selectFailureDetail,
+} from "./demo-failure.ts";
+import { renderTelemetryPane, startTelemetryPolling } from "./demo-telemetry.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..");
@@ -542,7 +552,10 @@ function serviceRoutes(base: string): { name: string; url: string }[] {
 const state: DemoState = {
   services: serviceRoutes(""),
   containers: [
-    { name: "postgres", phase: "pending" },
+    // Under --external-pg the stack starts no postgres container, so the row
+    // must not carry a tile for one — a green ✓ postgres beside five real
+    // services reads as a sixth container that `docker ps` would never show.
+    ...(externalPg.enabled ? [] : [{ name: "postgres", phase: "pending" as const }]),
     { name: "api", phase: "pending" },
     // One container per worker execution lane (issue #107): swarm is the
     // reserved interactive lane; analytics (regime + pipelines) and research
@@ -552,6 +565,8 @@ const state: DemoState = {
     { name: "worker-research", phase: "pending" },
   ],
   steps: [
+    // Only external boots carry the guard, so only they show its step.
+    ...(externalPg.enabled ? [{ name: "db preflight", status: "pending" as const }] : []),
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
     ...bootstrapStepNames(smokeMode).map((name) => ({ name, status: "pending" as const })),
@@ -561,6 +576,8 @@ const state: DemoState = {
   onboarded: [],
   upcoming: [],
   messages: [],
+  telemetry: [],
+  containerErrors: [],
 };
 
 // setContainer / setStep / startOnboarding / setOnboardStep (and the
@@ -810,6 +827,17 @@ function printResumeHint(): void {
   console.log(`[demo]   reclaim demo volumes: bun run demo:clean`);
 }
 
+// Wiring only; DB_WRITER_SERVICES carries which services and why. Best-effort
+// and non-throwing — raising from the failure path would replace the real cause
+// with a teardown error.
+function quiesceWriters(): WriterQuiesce {
+  try {
+    return dockerCompose(["stop", ...DB_WRITER_SERVICES], false).exitCode === 0 ? "stopped" : "failed";
+  } catch {
+    return "failed";
+  }
+}
+
 // Print how to inspect and tear down, then leave the stack UP. Used only by the
 // LOCAL startup-FAILURE path: a failed boot is left running for inspection (it does
 // NOT auto-tear-down); a clean Ctrl-C/SIGTERM tears down via onSignal(), keeping
@@ -893,19 +921,9 @@ let frame = 0;
 // closing over it.
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-function renderResearch(height: number): string[] {
-  const out = [
-    color("1", "Research") +
-      color("2", `  next regime ${fmtCountdown(readinessPolling.secsUntilNext("regime.classify"))} · research ${fmtCountdown(readinessPolling.secsUntilNext("research.refresh"))}`),
-  ];
-  out.push(color("2", "kind                 state    detail"));
-  for (const e of state.research.slice(0, Math.max(0, height - 2))) {
-    const stateLbl = e.state === "done" ? color("32", "done ") : e.state === "running" ? color("33", "run  ") : color("2", "queue");
-    out.push(`${ticks(e.state)} ${e.kind.padEnd(17)} ${stateLbl} ${e.note}`);
-  }
-  if (state.research.length === 0) out.push(color("2", "  (waiting for the worker's scheduler to fire…)"));
-  return out;
-}
+const renderResearch = (height: number): string[] =>
+  renderResearchPane(state, height, fmtCountdown(readinessPolling.secsUntilNext("regime.classify")),
+    fmtCountdown(readinessPolling.secsUntilNext("research.refresh")));
 
 function renderSwarm(subjectId: string, height: number): string[] {
   const c = state.swarms[subjectId];
@@ -952,6 +970,9 @@ function render(): string[] {
   lines.push(hr(W, readinessPolling.isHealthChecking() ? `Startup ${spinner(frame)}` : "Startup"));
   lines.push("  " + state.containers.map((c) => `${phaseGlyph(c.phase, frame)} ${c.name}${c.detail ? color("2", `(${c.detail})`) : ""}`).join("   "));
   lines.push("  " + state.steps.map((s) => `${stepGlyph(s.status, frame)} ${s.name}`).join("   "));
+
+  if (state.fatal) lines.push(...renderFailurePane(state.fatal, W, project));
+  lines.push(...renderTelemetryPane(state.telemetry, state.containerErrors, W));
 
   // Onboarding strip (full width): every prospective member keeps its join checklist
   // after admission (status checks stay visible), plus a queue of upcoming members with
@@ -1041,6 +1062,11 @@ async function main(): Promise<void> {
     tui.start();
     patchConsole(); // capture stray console.* (incl. imported e2e.ts) into the log file
   }
+  // Observe from here on, including through a failed boot. Keep the last good
+  // sample: an empty sweep means docker hiccuped, not that the lanes vanished.
+  startTelemetryPolling({ repoRoot, dockerEnv, onSample: ({ samples, errors }) => {
+    if (samples.length > 0) { state.telemetry = samples; state.containerErrors = errors; }
+  } });
 
   // ── The bring-up IS scripts/stack's bring-up (§11.3 E5) ──────────────────
   // build → postgres + wait → migrate → services → /health, in ONE shared
@@ -1062,13 +1088,9 @@ async function main(): Promise<void> {
         for (const c of state.containers) setContainer(state, c.name, "pending");
       }
     } else if (phase === "postgres") {
-      if (status === "start") {
-        log("starting postgres…");
-        setContainer(state, "postgres", "starting");
-      } else {
-        setContainer(state, "postgres", "healthy");
-        log("postgres healthy");
-      }
+      const n = postgresPhaseNarration(externalPg.enabled, status, e.detail);
+      if (n.container) setContainer(state, "postgres", n.container);
+      if (n.log) log(n.log);
     } else if (phase === "migrate") {
       if (status === "start") {
         log("running migrations…");
@@ -1138,9 +1160,18 @@ async function main(): Promise<void> {
   // readiness check, and only THEN typed scenario initialization — the order
   // the startup checklist above has always displayed (migrate → api /health →
   // archive restore | simulation seed).
+  // Wiring only; dbPreflightArgv carries what this is and why.
+  async function classifyDatabase(): Promise<void> {
+    setStep(state, DB_PREFLIGHT_STEP, "running");
+    await stack.composeAsync(dbPreflightArgv(scenario.initializer), "external database preflight", { stdout: outFd, stderr: errFd });
+    setStep(state, DB_PREFLIGHT_STEP, "done");
+    log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log");
+  }
+
   applyHostPorts(await stack.up({
     migrateEnv: scenario.migrateEnv,
     migrateScriptArgs: [...scenario.migrateScriptArgs],
+    preflight: externalPg.enabled ? classifyDatabase : undefined,
     initialize: initializeScenario,
   }));
 
@@ -1581,6 +1612,10 @@ async function main(): Promise<void> {
         const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
           members: sessionMembers,
+          // The STANDING loop needs this as much as the first session does.
+          // Omitting it made runSession fall back to "simulation" and write
+          // demo fixtures over archive-restored subjects — see session.ts.
+          initializer: scenario.initializer,
           onProgress: tuiActive ? swarmProgress(state, subject.id, log) : undefined,
         });
         c.publishedCount++;
@@ -1842,25 +1877,59 @@ async function main(): Promise<void> {
   await new Promise<never>(() => { /* run forever; Ctrl-C/SIGTERM (or `demo:down`) stops the stack */ });
 }
 
+// Wiring only: read the log off disk; selectFailureDetail() decides what of it
+// is worth showing.
+function failureDetail(): readonly string[] {
+  try { return selectFailureDetail(readFileSync(logFile, "utf8"), logFile); } catch { return []; }
+}
+
 main().catch((err) => {
   const em = err instanceof Error ? err.message : String(err);
-  if (tui) tui.stop();        // restore terminal FIRST (never leave escape junk)
-  unpatchConsole();
   if (logFd !== undefined) { try { writeSync(logFd, `[${ts()}] startup failed: ${em}\n`); } catch {} }
   for (const c of state.containers) if (c.phase === "starting" || c.phase === "building") setContainer(state, c.name, "failed");
-  console.error("[demo] startup failed:", em);
-  if (!cleaned) dumpDiagnostics();
-  // CI tears down on failure; LOCAL never does — leave containers up for
-  // inspection and tell the operator how to look and how to tear down.
+
+  // CI tears the stack down, which also stops the writers. Unchanged: a CI boot
+  // has no TUI to display in and must exit non-zero for the job to fail.
   if (process.env.CI) {
+    if (tui) tui.stop();      // restore terminal FIRST (never leave escape junk)
+    unpatchConsole();
+    console.error("[demo] startup failed:", em);
+    if (!cleaned) dumpDiagnostics();
     cleanup();
     cleanCiVolume(); // even on failure the shared runner must not leak this run's volume
-  } else {
-    // Failure may have happened before Phase A wrote the state file, yet the
-    // containers can already be up. Write it best-effort so `demo:down` can find
-    // and tear them down, then print instructions. Never auto-teardown locally.
-    try { writeStateFile(); } catch { /* best effort */ }
-    printLeaveRunning();
+    process.exit(1);
   }
+
+  // LOCAL: the stack stays up for inspection, so the writers must be stopped
+  // EXPLICITLY — leaving them running is what let a failed boot go on mutating
+  // the database (an external one, under --external-pg, that no teardown can
+  // roll back) for as long as the operator took to read the error.
+  setFatal(state, em, { step: state.steps.find((s) => s.status === "running")?.name, detail: failureDetail() });
+  setFatalWriters(state, quiesceWriters());
+  for (const c of state.containers) {
+    if (c.name !== "postgres" && c.phase === "healthy") setContainer(state, c.name, "failed", "stopped");
+  }
+  // Failure may have happened before Phase A wrote the state file, yet the
+  // containers can already be up. Write it best-effort so `demo:down` can find
+  // and tear them down. Never auto-teardown locally.
+  try { writeStateFile(); } catch { /* best effort */ }
+
+  if (tui) {
+    // Stay resident and keep painting: the TUI IS the error report. Exiting here
+    // is what used to tear the screen down and leave the operator with a bare
+    // sentence on the normal screen. Ctrl-C/SIGTERM still tears down via
+    // onSignal(), and `bun run demo:down` still works from another shell.
+    if (!cleaned) dumpDiagnostics(); // console is patched → lands in the log file
+    tui.repaint();
+    return;
+  }
+  // No TUI (non-TTY, --no-tui, NO_TUI): nothing would ever repaint, so staying
+  // resident would just hang. Print and exit exactly as before.
+  unpatchConsole();
+  console.error("[demo] startup failed:", em);
+  for (const d of failureDetail()) console.error(`[demo]   ${d}`);
+  if (!cleaned) dumpDiagnostics();
+  console.log(`[demo] database writers: ${state.fatal?.writers ?? "unknown"}`);
+  printLeaveRunning();
   process.exit(1);
 });

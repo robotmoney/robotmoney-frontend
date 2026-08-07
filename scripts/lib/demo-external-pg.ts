@@ -45,6 +45,81 @@ export const EPHEMERAL_PG_VOLUME = "pgdata";
 
 export const EXTERNAL_PG_FLAG = "--external-pg";
 
+/**
+ * The database classification step, as data.
+ *
+ * ONLY an external database gets it — the ephemeral compose postgres is this
+ * boot's own, created empty moments ago. For an external server the step
+ * states, in the boot log, which situation this boot is in: an EMPTY database
+ * gets bootstrapped (migrate + seed + archive restore); a POPULATED one is
+ * assumed to be working production data — restored manually from a .dump, or
+ * a surviving volume — and is ADOPTED: the same migrate + seed path runs, but
+ * every writer on it is idempotent and deduplicated, filling gaps and never
+ * overwriting existing rows (differences surface as drift reports, existing
+ * rows win). backend/scripts/db-preflight.ts carries the full rationale.
+ *
+ * Runs as a one-off container BEFORE migrate(), so the mode is on record
+ * before the first write. `--no-deps` because nothing else needs to be up to
+ * ask the question. It fails (and aborts the boot) only when the database
+ * cannot be reached at all.
+ */
+export const DB_PREFLIGHT_STEP = "db preflight";
+export const DB_PREFLIGHT_ARGV: readonly string[] = Object.freeze([
+  "run", "--rm", "--no-deps", "api", "bun", "run", "scripts/db-preflight.ts",
+]);
+
+/**
+ * The full preflight argv for a boot with a known scenario initializer.
+ *
+ * The initializer travels with the question because the answer depends on it:
+ * a populated database may be ADOPTED by an "archive" (production-shaped) boot,
+ * whose whole seed path is idempotent and non-clobbering — but never by a
+ * "simulation" boot, whose demo fixtures overwrite by design (their ON CONFLICT
+ * DO UPDATE is how corrected demo copy reaches a demo stack). db-preflight.ts
+ * refuses that combination, and treats a missing flag as simulation so the
+ * strict branch is the one you get by forgetting the parameter.
+ */
+export function dbPreflightArgv(initializer: "archive" | "simulation"): string[] {
+  return [...DB_PREFLIGHT_ARGV, `--initializer=${initializer}`];
+}
+
+/** What the postgres bring-up phase should say, and which container tile (if
+ *  any) it owns. */
+export interface PostgresNarration {
+  log?: string;
+  container?: "starting" | "healthy";
+}
+
+/**
+ * How to narrate the stack's `postgres` lifecycle phase.
+ *
+ * scripts/stack emits that phase UNCONDITIONALLY — the lifecycle order is
+ * pinned by scripts/tests/unit/stack-lifecycle-order.test.ts, so an external
+ * boot still passes through it — and carries the truth in `detail`
+ * ("external (managed) — no container started"). The demo used to ignore
+ * `detail` and print "starting postgres…" / "postgres healthy" either way, so
+ * an --external-pg boot narrated starting a container it had just announced it
+ * would not start, with both lines stamped the same millisecond because nothing
+ * happened between them.
+ *
+ * Under --external-pg there is nothing to start and no tile to own: the server
+ * was already running and belongs to somebody else. Reachability is not
+ * asserted here either — migrate() proves it a moment later with the driver's
+ * own connection error.
+ */
+export function postgresPhaseNarration(
+  external: boolean,
+  status: "start" | "done",
+  detail?: string,
+): PostgresNarration {
+  if (!external) {
+    return status === "start"
+      ? { log: "starting postgres…", container: "starting" }
+      : { log: "postgres healthy", container: "healthy" };
+  }
+  return status === "start" ? {} : { log: `postgres: ${detail ?? "external (managed) — no container started"}` };
+}
+
 export interface ExternalPgResolution {
   /** True when `--external-pg` was passed. Everything below is set only then. */
   enabled: boolean;
