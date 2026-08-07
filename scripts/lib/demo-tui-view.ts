@@ -52,6 +52,21 @@ export interface OnboardState { memberId: string; name: string; steps: OnboardSt
 // A member scheduled to be admitted in the future, with the epoch-ms of its
 // admission so the TUI can render a live countdown.
 export interface UpcomingMember { memberId: string; name: string; at: number; }
+// How the DB-writing lanes ended up after a startup failure. This — not the
+// error text — is what says whether the database stopped changing, so the TUI
+// renders it verbatim rather than implying it.
+export type WriterQuiesce = "pending" | "stopped" | "failed" | "none";
+
+// A startup failure, surfaced IN the TUI rather than by exiting. A failed boot
+// used to print to a dead terminal and leave the stack writing; the operator
+// saw neither the cause nor the fact that the database was still moving.
+export interface FatalState {
+  step?: string;      // the boot step that failed, if it failed inside one
+  message: string;
+  detail: string[];   // extra lines (drift rows, hints) shown under the message
+  writers: WriterQuiesce;
+}
+
 export interface DemoState {
   services: { name: string; url: string }[];
   containers: { name: string; phase: Phase; detail?: string }[];
@@ -61,6 +76,7 @@ export interface DemoState {
   onboarded: OnboardState[]; // every prospective member that has entered onboarding
   upcoming: UpcomingMember[]; // scheduled future admissions with a countdown
   messages: string[];
+  fatal?: FatalState; // set once, by the startup-failure path only
 }
 
 export const ONBOARD_STEPS = ["connect", "discover", "toolchain", "apply", "approve", "claim", "session", "memo", "admitted"];
@@ -73,6 +89,22 @@ export function setContainer(state: DemoState, name: string, phase: Phase, detai
 export function setStep(state: DemoState, name: string, status: StepStatus): void {
   const s = state.steps.find((x) => x.name === name);
   if (s) s.status = status;
+}
+// Record the startup failure. FIRST failure wins: the quiesce path itself can
+// raise follow-on errors, and overwriting would replace the real cause with a
+// symptom. Marks the owning step failed so the Startup pane and the failure
+// pane agree.
+export function setFatal(
+  state: DemoState,
+  message: string,
+  opts: { step?: string; detail?: readonly string[] } = {},
+): void {
+  if (state.fatal) return;
+  state.fatal = { step: opts.step, message, detail: [...(opts.detail ?? [])], writers: "pending" };
+  if (opts.step) setStep(state, opts.step, "failed");
+}
+export function setFatalWriters(state: DemoState, writers: WriterQuiesce): void {
+  if (state.fatal) state.fatal.writers = writers;
 }
 // Begin (or resume) a member's join checklist. The member is appended to the
 // persistent onboarded list so its status checks stay in the pane after

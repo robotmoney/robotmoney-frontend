@@ -45,6 +45,43 @@ export const EPHEMERAL_PG_VOLUME = "pgdata";
 
 export const EXTERNAL_PG_FLAG = "--external-pg";
 
+/** What the postgres bring-up phase should say, and which container tile (if
+ *  any) it owns. */
+export interface PostgresNarration {
+  log?: string;
+  container?: "starting" | "healthy";
+}
+
+/**
+ * How to narrate the stack's `postgres` lifecycle phase.
+ *
+ * scripts/stack emits that phase UNCONDITIONALLY — the lifecycle order is
+ * pinned by scripts/tests/unit/stack-lifecycle-order.test.ts, so an external
+ * boot still passes through it — and carries the truth in `detail`
+ * ("external (managed) — no container started"). The demo used to ignore
+ * `detail` and print "starting postgres…" / "postgres healthy" either way, so
+ * an --external-pg boot narrated starting a container it had just announced it
+ * would not start, with both lines stamped the same millisecond because nothing
+ * happened between them.
+ *
+ * Under --external-pg there is nothing to start and no tile to own: the server
+ * was already running and belongs to somebody else. Reachability is not
+ * asserted here either — migrate() proves it a moment later with the driver's
+ * own connection error.
+ */
+export function postgresPhaseNarration(
+  external: boolean,
+  status: "start" | "done",
+  detail?: string,
+): PostgresNarration {
+  if (!external) {
+    return status === "start"
+      ? { log: "starting postgres…", container: "starting" }
+      : { log: "postgres healthy", container: "healthy" };
+  }
+  return status === "start" ? {} : { log: `postgres: ${detail ?? "external (managed) — no container started"}` };
+}
+
 export interface ExternalPgResolution {
   /** True when `--external-pg` was passed. Everything below is set only then. */
   enabled: boolean;

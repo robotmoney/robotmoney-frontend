@@ -1,9 +1,9 @@
-import { mkdirSync, openSync, writeFileSync, writeSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
-import { EXTERNAL_PG_FLAG, externalPgOverlayYaml, resolveExternalPg } from "./demo-external-pg.ts";
+import { EXTERNAL_PG_FLAG, externalPgOverlayYaml, postgresPhaseNarration, resolveExternalPg } from "./demo-external-pg.ts";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
 import { provisionDemoAnalyticsTokenAfterPreflight, removeDemoAnalyticsToken } from "./demo-secret.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
@@ -70,6 +70,8 @@ import {
   onboardGlyph,
   phaseGlyph,
   setContainer,
+  setFatal,
+  setFatalWriters,
   setOnboardStep,
   setStep,
   STAGE_COLOR,
@@ -78,8 +80,14 @@ import {
   ticks,
   type DemoState,
   type UpcomingMember,
+  type WriterQuiesce,
 } from "./demo-tui-view.ts";
 import { createReadinessPolling } from "./demo-readiness-polling.ts";
+import {
+  DB_WRITER_SERVICES,
+  renderFailurePane,
+  selectFailureDetail,
+} from "./demo-failure.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..");
@@ -542,7 +550,10 @@ function serviceRoutes(base: string): { name: string; url: string }[] {
 const state: DemoState = {
   services: serviceRoutes(""),
   containers: [
-    { name: "postgres", phase: "pending" },
+    // Under --external-pg the stack starts no postgres container, so the row
+    // must not carry a tile for one — a green ✓ postgres beside five real
+    // services reads as a sixth container that `docker ps` would never show.
+    ...(externalPg.enabled ? [] : [{ name: "postgres", phase: "pending" as const }]),
     { name: "api", phase: "pending" },
     // One container per worker execution lane (issue #107): swarm is the
     // reserved interactive lane; analytics (regime + pipelines) and research
@@ -810,6 +821,28 @@ function printResumeHint(): void {
   console.log(`[demo]   reclaim demo volumes: bun run demo:clean`);
 }
 
+// Stop the writers after a failed startup, BEFORE handing the stack back for
+// inspection (the decision of WHICH services those are is DB_WRITER_SERVICES).
+//
+// A failed boot used to leave the entire stack running, so the worker lanes
+// went on polling, enqueueing and writing against a database whose
+// initialization had just failed part-way — the longer the operator spent
+// reading the error, the further the data drifted from the state that produced
+// it. Under --external-pg that database is a real remote server, and nothing in
+// `demo:down` or `demo:clean` can undo those writes: both only ever touch
+// containers and volumes, of which an external boot has none.
+//
+// STOPPED, not removed: `docker compose logs` and `demo:status` still work,
+// which is the whole reason a failed boot is left up. Best-effort and
+// non-throwing — raising here would replace the real cause with a teardown error.
+function quiesceWriters(): WriterQuiesce {
+  try {
+    return dockerCompose(["stop", ...DB_WRITER_SERVICES], false).exitCode === 0 ? "stopped" : "failed";
+  } catch {
+    return "failed";
+  }
+}
+
 // Print how to inspect and tear down, then leave the stack UP. Used only by the
 // LOCAL startup-FAILURE path: a failed boot is left running for inspection (it does
 // NOT auto-tear-down); a clean Ctrl-C/SIGTERM tears down via onSignal(), keeping
@@ -953,6 +986,8 @@ function render(): string[] {
   lines.push("  " + state.containers.map((c) => `${phaseGlyph(c.phase, frame)} ${c.name}${c.detail ? color("2", `(${c.detail})`) : ""}`).join("   "));
   lines.push("  " + state.steps.map((s) => `${stepGlyph(s.status, frame)} ${s.name}`).join("   "));
 
+  if (state.fatal) lines.push(...renderFailurePane(state.fatal, W, project));
+
   // Onboarding strip (full width): every prospective member keeps its join checklist
   // after admission (status checks stay visible), plus a queue of upcoming members with
   // a live countdown to when each is admitted.
@@ -1062,13 +1097,9 @@ async function main(): Promise<void> {
         for (const c of state.containers) setContainer(state, c.name, "pending");
       }
     } else if (phase === "postgres") {
-      if (status === "start") {
-        log("starting postgres…");
-        setContainer(state, "postgres", "starting");
-      } else {
-        setContainer(state, "postgres", "healthy");
-        log("postgres healthy");
-      }
+      const n = postgresPhaseNarration(externalPg.enabled, status, e.detail);
+      if (n.container) setContainer(state, "postgres", n.container);
+      if (n.log) log(n.log);
     } else if (phase === "migrate") {
       if (status === "start") {
         log("running migrations…");
@@ -1842,25 +1873,59 @@ async function main(): Promise<void> {
   await new Promise<never>(() => { /* run forever; Ctrl-C/SIGTERM (or `demo:down`) stops the stack */ });
 }
 
+// Wiring only: read the log off disk; selectFailureDetail() decides what of it
+// is worth showing.
+function failureDetail(): readonly string[] {
+  try { return selectFailureDetail(readFileSync(logFile, "utf8"), logFile); } catch { return []; }
+}
+
 main().catch((err) => {
   const em = err instanceof Error ? err.message : String(err);
-  if (tui) tui.stop();        // restore terminal FIRST (never leave escape junk)
-  unpatchConsole();
   if (logFd !== undefined) { try { writeSync(logFd, `[${ts()}] startup failed: ${em}\n`); } catch {} }
   for (const c of state.containers) if (c.phase === "starting" || c.phase === "building") setContainer(state, c.name, "failed");
-  console.error("[demo] startup failed:", em);
-  if (!cleaned) dumpDiagnostics();
-  // CI tears down on failure; LOCAL never does — leave containers up for
-  // inspection and tell the operator how to look and how to tear down.
+
+  // CI tears the stack down, which also stops the writers. Unchanged: a CI boot
+  // has no TUI to display in and must exit non-zero for the job to fail.
   if (process.env.CI) {
+    if (tui) tui.stop();      // restore terminal FIRST (never leave escape junk)
+    unpatchConsole();
+    console.error("[demo] startup failed:", em);
+    if (!cleaned) dumpDiagnostics();
     cleanup();
     cleanCiVolume(); // even on failure the shared runner must not leak this run's volume
-  } else {
-    // Failure may have happened before Phase A wrote the state file, yet the
-    // containers can already be up. Write it best-effort so `demo:down` can find
-    // and tear them down, then print instructions. Never auto-teardown locally.
-    try { writeStateFile(); } catch { /* best effort */ }
-    printLeaveRunning();
+    process.exit(1);
   }
+
+  // LOCAL: the stack stays up for inspection, so the writers must be stopped
+  // EXPLICITLY — leaving them running is what let a failed boot go on mutating
+  // the database (an external one, under --external-pg, that no teardown can
+  // roll back) for as long as the operator took to read the error.
+  setFatal(state, em, { step: state.steps.find((s) => s.status === "running")?.name, detail: failureDetail() });
+  setFatalWriters(state, quiesceWriters());
+  for (const c of state.containers) {
+    if (c.name !== "postgres" && c.phase === "healthy") setContainer(state, c.name, "failed", "stopped");
+  }
+  // Failure may have happened before Phase A wrote the state file, yet the
+  // containers can already be up. Write it best-effort so `demo:down` can find
+  // and tear them down. Never auto-teardown locally.
+  try { writeStateFile(); } catch { /* best effort */ }
+
+  if (tui) {
+    // Stay resident and keep painting: the TUI IS the error report. Exiting here
+    // is what used to tear the screen down and leave the operator with a bare
+    // sentence on the normal screen. Ctrl-C/SIGTERM still tears down via
+    // onSignal(), and `bun run demo:down` still works from another shell.
+    if (!cleaned) dumpDiagnostics(); // console is patched → lands in the log file
+    tui.repaint();
+    return;
+  }
+  // No TUI (non-TTY, --no-tui, NO_TUI): nothing would ever repaint, so staying
+  // resident would just hang. Print and exit exactly as before.
+  unpatchConsole();
+  console.error("[demo] startup failed:", em);
+  for (const d of failureDetail()) console.error(`[demo]   ${d}`);
+  if (!cleaned) dumpDiagnostics();
+  console.log(`[demo] database writers: ${state.fatal?.writers ?? "unknown"}`);
+  printLeaveRunning();
   process.exit(1);
 });
