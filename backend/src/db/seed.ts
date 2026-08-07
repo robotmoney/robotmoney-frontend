@@ -9,7 +9,7 @@
 // existing row — that lets the scheduler own slot bookkeeping and lets an
 // operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
-import { seedLiveRoster } from "../swarm/roster-seed.ts";
+import { seedLiveRoster, pruneToLiveRoster } from "../swarm/roster-seed.ts";
 import { seedDemoProjects } from "../projects/demo-seed.ts";
 import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
@@ -297,13 +297,28 @@ export async function seed(): Promise<void> {
   // what it was; the demo's own roster comes from backend/src/demo/e2e.ts and
   // must not gain two extra members.
   //
-  // Additive only: it upserts the roster and leaves every other member alone.
-  // Retiring the off-roster members a demo-driven deployment accumulated is
-  // the separately gated half (issue #530, SWARM_SEED_ROSTER_PRUNE) — the only
-  // half that can sweep away a legitimately admitted operator.
+  // Seating is additive only: it upserts the roster and leaves every other
+  // member alone. SWARM_SEED_ROSTER_PRUNE additionally retires (status=
+  // 'inactive', never deletes) every other ACTIVE member, which is how a
+  // deployment the demo drivers populated converges to the real roster.
+  //
+  // The prune is a SECOND flag, and deliberately nested INSIDE the seed gate
+  // (issue #530): it is the only half that can sweep away an operator
+  // legitimately admitted through the apply flow, and nesting it means a stray
+  // SWARM_SEED_ROSTER_PRUNE=1 alone can never retire the whole roster and seat
+  // nothing in its place. Set it for the one convergence run, not in the
+  // standing config.
   if (process.env.SWARM_SEED_ROSTER === "1") {
     const seated = await seedLiveRoster();
     console.log(`seeded swarm live roster (${seated} member(s), profile copy from the committed manifests)`);
+    if (process.env.SWARM_SEED_ROSTER_PRUNE === "1") {
+      const retired = await pruneToLiveRoster();
+      console.log(
+        retired.length
+          ? `retired ${retired.length} off-roster swarm member(s) to inactive: ${retired.join(", ")}`
+          : "no off-roster swarm members to retire",
+      );
+    }
   }
 }
 
