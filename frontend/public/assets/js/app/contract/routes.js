@@ -169,6 +169,7 @@ export const ROUTES = {
       members: "/api/swarm/admin/members", // GET list (all statuses, redacted) / POST manual add
       applications: "/api/swarm/admin/applications", // GET ?status= — application review queue
       memberReview: "/api/swarm/admin/members/:id/review", // POST { decision: approve|reject }
+      memberUpdate: "/api/swarm/admin/members/:id/update", // POST — versioned profile edit (409 stale_version)
       memberDeactivate: "/api/swarm/admin/members/:id/deactivate", // POST — versioned
       memberReactivate: "/api/swarm/admin/members/:id/reactivate", // POST — versioned, mints a fresh credential
       memberRotateKey: "/api/swarm/admin/members/:id/rotate-key", // POST — one-time credential in the response only
