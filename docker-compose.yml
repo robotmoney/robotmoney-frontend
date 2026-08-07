@@ -50,6 +50,21 @@
 # WORKER_LANE is REQUIRED by the worker entry (fails loudly when empty/unknown);
 # WORKER_ID defaults to `<lane>-<pid>` (unique per container, lane-visible in
 # locked_by/logs/admin dashboard). The producer is not a queue lane.
+# Container log retention. Docker's json-file driver defaults to UNBOUNDED: a
+# standing demo left up for days grows one log file per container until the host
+# disk is the limit. These logs are the primary debugging surface for a crashing
+# api or worker lane (`docker compose logs`, and the demo's own telemetry poll),
+# so the answer is to bound them, not to turn them off.
+#
+# 10m x 3 per container: enough history to see a crash loop develop across
+# several restarts, capped at ~30MB x 6 services. Applied to EVERY service —
+# a service without it silently keeps the unbounded default.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-worker-base: &worker-base
   build:
     context: .
@@ -59,6 +74,7 @@ x-worker-base: &worker-base
     postgres:
       condition: service_healthy
   restart: unless-stopped
+  logging: *default-logging
 
 # Shared worker env. The worker RUNS the projects.* cron pipelines, so a prod
 # worker needs PROJECTS_SOURCE=live (fail-closed — unset throws in prod; unset
@@ -96,6 +112,7 @@ x-worker-env: &worker-env
 services:
   postgres:
     image: postgres:17-alpine
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-robotmoney}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robotmoney}
@@ -205,6 +222,7 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
 
   worker-swarm:
     <<: *worker-base
@@ -245,6 +263,7 @@ services:
     depends_on:
       - api
     restart: unless-stopped
+    logging: *default-logging
 
   # D21 retired the member-facing MCP server: swarm members reach the
   # swarm REST API on the `api` service directly (docs/decisions.md D21).
