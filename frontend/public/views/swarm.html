@@ -24,7 +24,11 @@
             <ul class="sv__list">
               <template x-for="m in members" :key="m.id">
                 <li class="sv__person-row">
-                  <a class="sv__avatar" :href="`/swarm/members/${m.id}`" x-text="initials(m.name)"></a>
+                  <!-- aria-label because the mark is decorative SVG: without
+                       it this link loses the accessible name the initials
+                       used to give it. -->
+                  <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${m.id}`" :aria-label="m.name"
+                     x-html="memberMark(m.keyFingerprint || m.id, m.name, 40)"></a>
                   <div class="sv__row-main">
                     <div class="sv__row-titleline">
                       <a class="sv__row-title" :href="`/swarm/members/${m.id}`" x-text="m.name"></a>
