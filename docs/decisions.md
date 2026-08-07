@@ -1605,3 +1605,86 @@ for `preview/*` hosting, unchanged.
 - **Leave `docker-compose.yml` mounting `frontend/public` and rely only on the
   handler change** — the handler can only serve a per-route file that exists;
   with the raw source tree mounted, none ever would.
+
+---
+
+## D30 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)
+
+**Decision.** Two questions, resolved together since the vendor choice drives
+the DNS shape.
+
+**1. Vendor: AgentMail**, not Google Workspace's Gmail API and not Cloudflare
+Email Service. `deploymentSwarmEmailTransport`'s existing
+`{from,to,subject,text}` + Bearer contract (`backend/src/swarm/notifications.ts`)
+is unchanged; a new adapter translates it into AgentMail's real send API
+(`https://www.agentmail.to/docs/messages`), mapping `from` to the correct
+AgentMail `inbox_id`.
+
+**2. DNS: a dedicated subdomain, isolated from `robotmoney.net`'s live root,
+delegated to a separate, secondary Cloudflare account.** `robotmoney.net`'s
+root DNS is live production and is not touched: MX `smtp.google.com`, SPF
+`v=spf1 include:_spf.google.com ~all`, a live `google._domainkey.robotmoney.net`
+DKIM selector, DMARC `p=none`, NS on Cloudflare
+(`veda.ns.cloudflare.com` / `cash.ns.cloudflare.com`). AgentMail instead sends
+from a dedicated subdomain (exact name TBD at implementation, e.g.
+`notify.robotmoney.net` or `swarm.robotmoney.net`) with its own MX/SPF/DKIM/
+DMARC. That subdomain zone is handed off with a **single one-time NS
+delegation record** in the primary Cloudflare account (the one holding
+`robotmoney.net`'s zone) pointing at a **separate, secondary Cloudflare
+account**'s nameservers. Every ongoing change — AgentMail's MX/SPF/DKIM/DMARC
+records, and the adapter's own compute if it is deployed as a Cloudflare
+Worker — happens only in that secondary account. The primary account is
+touched exactly once, ever, for the delegation record; whoever operates the
+adapter/compute gets no standing login or DNS-edit API token on the primary
+account.
+
+**Why AgentMail over the alternatives.** Both alternatives were seriously
+evaluated and are **tabled for later reconsideration, not rejected on
+technical grounds**:
+- **Gmail API** is built for human-mailbox conversational use, not automated
+  bulk/transactional sends to strangers; Google Workspace actively discourages
+  that traffic pattern even under its ~2,000/day cap, and using it here would
+  put swarm-applicant notification volume on the same reputation surface as
+  staff mail.
+- **Cloudflare Email Service** is a strong technical fit — nearly identical
+  request shape to this repo's existing contract, and naturally
+  subdomain-isolated — but it is a brand-new April-2026 public beta with no
+  proven deliverability reputation yet, and adopting it would require
+  explicitly reconciling with D13's scoping of the *primary* Cloudflare
+  account to DNS+observability only. Worth revisiting once the beta matures.
+
+**Why the delegation shape.** The repo owner set an explicit "maximal
+paranoia" requirement: the Cloudflare account holding `robotmoney.net`'s live
+zone must never carry standing access for whoever operates the mail adapter.
+Cross-account subdomain NS delegation (confirmed supported via Cloudflare's
+own docs and community) satisfies that with a single, auditable, one-time
+record, rather than a shared login or a long-lived DNS-edit token scoped down
+by convention only.
+
+**Relationship.** Does **not** amend D13. D13 governs the *primary* Cloudflare
+account holding `robotmoney.net`'s zone and confines it to DNS + observability,
+no Worker, no software to deploy — that stays true unchanged; the one-time NS
+delegation record is a DNS entry, not compute. This decision's compute, if any
+lives on Cloudflare (the adapter as a Worker), lands only in the new
+**secondary** Cloudflare account, which is a distinct account outside D13's
+scope entirely. Consistent with D13, not a revision of it.
+
+**Alternatives rejected.**
+- **Google Workspace Gmail API** — tabled; wrong traffic shape for automated
+  sends to strangers, risks staff-mail reputation and ToS exposure.
+- **Cloudflare Email Service** — tabled; immature beta, and would need its own
+  explicit D13 boundary reconciliation before adoption.
+- **Sending AgentMail traffic from `robotmoney.net`'s apex/root** — rejected;
+  would risk collision with the live Google Workspace MX/SPF/DKIM/DMARC
+  records backing staff mail.
+- **A standing DNS-edit API token or shared login on the primary Cloudflare
+  account for the adapter operator** — rejected under the maximal-paranoia
+  requirement; the one-time NS delegation confines all ongoing blast radius to
+  the secondary account instead.
+
+**Still open (tracked on issue #549, not resolved by this decision).** The
+exact subdomain name, the AgentMail inbox_id mapping, and — separately — which
+executed-in-CI test surface (recorded HTTP fixture vs. sandbox AgentMail
+account) covers the adapter's real HTTP transport path, since that path has
+never been exercised against any real or fixture-backed vendor endpoint in
+this repo's test suite.
