@@ -78,6 +78,7 @@ export const ROUTES: {
       members: string;
       applications: string;
       memberReview: string;
+      memberUpdate: string;
       memberDeactivate: string;
       memberReactivate: string;
       memberRotateKey: string;

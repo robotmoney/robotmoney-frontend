@@ -56,6 +56,9 @@ function toSubjectAdmin(row: Record<string, any>) {
   };
 }
 
+// Every editable column is projected (issue #567): the admin edit form cannot
+// prefill — and the admin page cannot diff — what this does not return. Still
+// no key material: key_hash/token_hash/public_key are never projected here.
 function toMemberAdmin(row: Record<string, any>) {
   return {
     id: row.id,
@@ -65,6 +68,11 @@ function toMemberAdmin(row: Record<string, any>) {
     tagline: row.tagline ?? null,
     lens: row.lens ?? null,
     mandate: row.mandate ?? null,
+    biases: row.biases ?? null,
+    voiceMd: row.voice_md ?? null,
+    mode: row.mode ?? null,
+    operator: row.operator ?? null,
+    avatar: row.avatar ?? null,
     contactEmail: row.contact_email ?? null,
     appliedAt: row.applied_at ?? null,
     activatedAt: row.activated_at ?? null,
@@ -248,6 +256,89 @@ export async function reviewApplicationAdmin(
     await tx`UPDATE swarm_applications SET status = 'rejected', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
     await audit(actor, "member_reject", { memberId }, tx);
     return { ok: true, status: 200, memberId, memberStatus: "inactive", applicationStatus: "rejected" };
+  });
+}
+
+// The admin-editable member surface. `undefined` means "absent, leave it
+// alone"; an explicit `null` means "CLEAR this column". `name` has no null —
+// swarm_members.name is NOT NULL. Validated by validateMemberAdminPatch in
+// api/validation.ts, which is the only thing allowed to construct one of these
+// from an untrusted body.
+export interface MemberAdminPatch {
+  name?: string;
+  lens?: string | null;
+  contactEmail?: string | null;
+  tagline?: string | null;
+  mandate?: string | null;
+  biases?: string[] | null;
+  voiceMd?: string | null;
+  mode?: string | null;
+  operator?: string | null;
+  avatar?: Record<string, unknown> | null;
+}
+
+// The member counterpart to updateSubjectAdmin: same optimistic-concurrency
+// contract (FOR UPDATE, expectedVersion, 409 stale_version), same audit row.
+//
+// This is the ONLY write path that can correct name/lens/contact_email on a
+// seated member — the self-service profile route (#325) deliberately refuses
+// all three, which is right for the member and useless to the operator who has
+// to fix what an agent submitted at apply time.
+//
+// Deliberately NOT here: no status change (deactivate/reactivate own that), no
+// key or credential change (rotate-key owns that).
+export async function updateMemberAdmin(
+  memberId: string,
+  expectedVersion: number,
+  patch: MemberAdminPatch,
+  actor: Actor = ADMIN_ACTOR,
+  reason?: string,
+): Promise<AdminResult> {
+  return sql.begin(async (tx) => {
+    const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
+    if (!row) return err(404, "member not found");
+    if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
+
+    // `!== undefined`, NOT `??`. An explicit null is a CLEAR, and `??` reads it
+    // as "absent" and keeps the old value while returning 200 — a success the
+    // database did not perform. updateSubjectAdmin still has exactly that bug
+    // on linkedMemberId; it is filed as a separate one-line follow-up so this
+    // change does not also move the topic form's client-side guard.
+    const keep = <T>(next: T | undefined, current: T): T => (next !== undefined ? next : current);
+    const merged = {
+      name: keep(patch.name, row.name),
+      lens: keep(patch.lens, row.lens),
+      contact_email: keep(patch.contactEmail, row.contact_email),
+      tagline: keep(patch.tagline, row.tagline),
+      mandate: keep(patch.mandate, row.mandate),
+      biases: keep(patch.biases, row.biases),
+      voice_md: keep(patch.voiceMd, row.voice_md),
+      mode: keep(patch.mode, row.mode),
+      operator: keep(patch.operator, row.operator),
+      avatar: keep(patch.avatar, row.avatar),
+    };
+
+    const upd = await tx`
+      UPDATE swarm_members SET
+        name = ${merged.name}, lens = ${merged.lens},
+        contact_email = ${merged.contact_email}, tagline = ${merged.tagline},
+        mandate = ${merged.mandate}, biases = ${tx.json(merged.biases as any)},
+        voice_md = ${merged.voice_md}, mode = ${merged.mode}, operator = ${merged.operator},
+        avatar = ${tx.json(merged.avatar as any)},
+        version = version + 1, updated_at = now()
+      WHERE id = ${memberId} AND version = ${expectedVersion}
+      RETURNING *`;
+    if (upd.length === 0) return err(409, "stale_version");
+
+    // `reason` is PERSISTED here rather than discarded (#561's closing note).
+    // The scope also names the fields that changed, so the trail says what was
+    // edited and not only that an edit happened.
+    await audit(actor, "member_update", {
+      memberId,
+      fields: Object.keys(patch),
+      ...(reason ? { reason } : {}),
+    }, tx);
+    return { ok: true, status: 200, member: toMemberAdmin(upd[0]) };
   });
 }
 

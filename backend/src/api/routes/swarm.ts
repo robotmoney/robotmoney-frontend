@@ -11,6 +11,7 @@ import { parseSnapshots } from "./analytics.ts";
 import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
 import { jsonValue, sql } from "../../db/client.ts";
 import {
+  CONTACT_EMAIL_RE,
   parseApply,
   parseManualMember,
   parsePositiveNumber,
@@ -204,7 +205,9 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
         },
       };
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.contact)) {
+    // Shared with validateMemberAdminPatch (issue #567) so apply and the admin
+    // edit route can never disagree about what an address is.
+    if (!CONTACT_EMAIL_RE.test(b.contact)) {
       return { status: 400, body: { error: "valid contact email required for activation notification" } };
     }
     if (!await isValidEd25519PublicKey(b.publicKey)) {

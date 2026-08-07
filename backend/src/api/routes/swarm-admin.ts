@@ -16,6 +16,7 @@ import {
   parseSubjectCreate,
   readJsonObject,
   requiredString,
+  validateMemberAdminPatch,
 } from "../validation.ts";
 
 const PREFIX = "/api/swarm/admin/";
@@ -100,6 +101,18 @@ export async function handleSwarmAdmin(
         const decision = requiredString(b, "decision", 20);
         if (decision !== "approve" && decision !== "reject") return { status: 400, body: { error: "decision must be approve|reject" } };
         return fromResult(await admin.reviewApplicationAdmin(id, decision, "admin"));
+      }
+      if (segs[2] === "update") {
+        const expectedVersion = parseExpectedVersion(b);
+        if (expectedVersion == null) return { status: 400, body: { error: "expectedVersion (integer >= 1) required" } };
+        // `reason` is operator context, not a member column: pulled out before
+        // a validator that rejects unknown keys, and threaded to the audit row.
+        const { expectedVersion: _ev, reason: _reason, ...fields } = b as Record<string, unknown>;
+        const parsed = validateMemberAdminPatch(fields);
+        if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
+        return fromResult(await admin.updateMemberAdmin(
+          id, expectedVersion, parsed.data, "admin", requiredString(b, "reason", 500) ?? undefined,
+        ));
       }
       if (segs[2] === "deactivate" || segs[2] === "reactivate") {
         const expectedVersion = parseExpectedVersion(b);

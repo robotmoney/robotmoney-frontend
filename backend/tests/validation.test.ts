@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { parseApply, parseSigningDraft, parseSubmission, validateSigningDraft, validateSubmission } from "../src/api/validation.ts";
+import {
+  CONTACT_EMAIL_RE,
+  parseApply,
+  parseSigningDraft,
+  parseSubmission,
+  validateMemberAdminPatch,
+  validateMemberProfile,
+  validateSigningDraft,
+  validateSubmission,
+} from "../src/api/validation.ts";
 
 test("swarm request parsers reject malformed and out-of-range input", () => {
   // §11 R2/R6: apply carries no client memberId; a signature is mandatory.
@@ -92,3 +101,136 @@ test("unknown top-level fields are rejected with clear error message", () => {
   }
 });
 
+
+// ── Admin member edit patch (issue #567) ────────────────────────────────────
+// The whole point of this validator is the two ways it differs from
+// validateMemberProfile: it OWNS the three fields self-service refuses, and it
+// treats an explicit `null` as a CLEAR rather than a malformed value.
+
+test("admin member patch owns name/lens/contactEmail, which self-service profile refuses", () => {
+  for (const key of ["name", "lens", "contactEmail"] as const) {
+    const value = key === "contactEmail" ? "ops@example.test" : "a value";
+
+    const adminRes = validateMemberAdminPatch({ [key]: value });
+    expect(adminRes.ok).toBe(true);
+    if (adminRes.ok) expect(adminRes.data[key]).toBe(value);
+
+    // The same key is an unknown field on the member's own route — the two
+    // validators are deliberately not a superset/subset pair.
+    const selfRes = validateMemberProfile({ [key]: value });
+    expect(selfRes.ok).toBe(false);
+    if (!selfRes.ok) expect(selfRes.error).toBe(`unknown field: ${key}`);
+  }
+});
+
+test("admin member patch accepts every editable field in one body, normalized", () => {
+  const res = validateMemberAdminPatch({
+    name: "  Woon  ",
+    lens: "machine economy, first person",
+    contactEmail: "woon@peaq.test",
+    tagline: "peaq's social media intern",
+    mandate: "watch the machine economy",
+    biases: ["  never-sells-agent-tokens  ", "openly-conflicted"],
+    voiceMd: "# voice",
+    mode: "self-advocacy",
+    operator: "peaq",
+    avatar: { path: "/img/woon.png" },
+  });
+  expect(res.ok).toBe(true);
+  if (!res.ok) return;
+  expect(res.data).toEqual({
+    name: "Woon",
+    lens: "machine economy, first person",
+    contactEmail: "woon@peaq.test",
+    tagline: "peaq's social media intern",
+    mandate: "watch the machine economy",
+    biases: ["never-sells-agent-tokens", "openly-conflicted"],
+    voiceMd: "# voice",
+    mode: "self-advocacy",
+    operator: "peaq",
+    avatar: { path: "/img/woon.png" },
+  });
+});
+
+test("admin member patch: explicit null is a CLEAR on every nullable field, and absent is absent", () => {
+  const nullable = ["lens", "contactEmail", "tagline", "mandate", "biases", "voiceMd", "mode", "operator", "avatar"] as const;
+  for (const key of nullable) {
+    const res = validateMemberAdminPatch({ [key]: null });
+    expect(res.ok).toBe(true);
+    // `null` must survive as a PRESENT key holding null — the store's
+    // `!== undefined` merge is what turns that into a real column clear, and
+    // it can only do so if the validator keeps the key.
+    if (res.ok) {
+      expect(Object.keys(res.data)).toEqual([key]);
+      expect((res.data as Record<string, unknown>)[key]).toBeNull();
+    }
+  }
+
+  // name is the one field with no null: swarm_members.name is NOT NULL.
+  const nameNull = validateMemberAdminPatch({ name: null });
+  expect(nameNull.ok).toBe(false);
+  if (!nameNull.ok) expect(nameNull.error).toBe("name must be a non-empty string up to 200 chars");
+});
+
+test("admin member patch rejects an unknown field, an empty body, and a null body", () => {
+  const unknown = validateMemberAdminPatch({ status: "active" });
+  expect(unknown.ok).toBe(false);
+  if (!unknown.ok) expect(unknown.error).toBe("unknown field: status");
+
+  // slug is NOT accepted yet — swarm_members has no slug column until #562's
+  // migration lands. It must fail as an unknown field rather than silently
+  // reaching an UPDATE that names a column Postgres does not have.
+  const slug = validateMemberAdminPatch({ slug: "woon" });
+  expect(slug.ok).toBe(false);
+  if (!slug.ok) expect(slug.error).toBe("unknown field: slug");
+
+  const empty = validateMemberAdminPatch({});
+  expect(empty.ok).toBe(false);
+  if (!empty.ok) expect(empty.error).toBe("at least one field required");
+
+  const nullBody = validateMemberAdminPatch(null);
+  expect(nullBody.ok).toBe(false);
+  if (!nullBody.ok) expect(nullBody.error).toBe("invalid member patch");
+});
+
+test("admin member patch rejects a malformed email, keeping apply and the admin route on one regex", () => {
+  for (const bad of ["not-an-email", "no@dot", "spaces in@example.test", "@example.test", ""]) {
+    const res = validateMemberAdminPatch({ contactEmail: bad });
+    expect(res.ok).toBe(false);
+  }
+  const res = validateMemberAdminPatch({ contactEmail: "woon@peaq.test" });
+  expect(res.ok).toBe(true);
+
+  // The exported regex IS the one routes/swarm.ts's apply handler now tests
+  // against, so the two surfaces cannot drift apart on what an address is.
+  expect(CONTACT_EMAIL_RE.test("woon@peaq.test")).toBe(true);
+  expect(CONTACT_EMAIL_RE.test("no@dot")).toBe(false);
+});
+
+test("admin member patch rejects a malformed biases shape and a malformed avatar", () => {
+  for (const bad of ["a string", [], [""], ["ok", 7], ["x".repeat(201)], Array(21).fill("b")]) {
+    const res = validateMemberAdminPatch({ biases: bad });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("biases must be an array");
+  }
+  const ok = validateMemberAdminPatch({ biases: ["long-the-machines"] });
+  expect(ok.ok).toBe(true);
+
+  for (const bad of ["a string", ["array"], 7, { big: "x".repeat(6000) }]) {
+    const res = validateMemberAdminPatch({ avatar: bad });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("avatar must be a JSON object");
+  }
+});
+
+test("admin member patch rejects an over-long or blank value on every text field", () => {
+  const limits: [string, number][] = [
+    ["name", 200], ["lens", 500], ["tagline", 300], ["mandate", 4000],
+    ["voiceMd", 20_000], ["mode", 100], ["operator", 200], ["contactEmail", 320],
+  ];
+  for (const [key, max] of limits) {
+    expect(validateMemberAdminPatch({ [key]: "x".repeat(max + 1) }).ok).toBe(false);
+    expect(validateMemberAdminPatch({ [key]: "   " }).ok).toBe(false);
+    expect(validateMemberAdminPatch({ [key]: 7 }).ok).toBe(false);
+  }
+});

@@ -1,4 +1,7 @@
 import type { ApplyInput, MemberProfilePatch, SubmissionInput } from "../swarm/domain.ts";
+// Type-only (erased at runtime, no cycle): the admin patch shape is owned by
+// the domain module that writes it, the same way MemberProfilePatch is.
+import type { MemberAdminPatch } from "../swarm/admin.ts";
 import { STANCES, type canonicalizeSubmission } from "@robotmoney/contract";
 
 export type JsonObject = Record<string, unknown>;
@@ -403,4 +406,99 @@ export function validateMemberProfile(body: JsonObject | null): ValidationResult
 export function parseMemberProfile(body: JsonObject | null): MemberProfilePatch | null {
   const res = validateMemberProfile(body);
   return res.ok ? res.data : null;
+}
+
+// ── Admin member edit (issue #567) ──────────────────────────────────────────
+// The admin counterpart to validateMemberProfile above, and deliberately not a
+// superset of it. Two differences, both about who is writing:
+//
+// - It owns the three fields self-service refuses. name/lens/contactEmail are
+//   set at apply time and a member cannot rewrite its own, which is correct for
+//   the member and useless to the operator who has to fix what one submitted.
+// - Every optional field accepts `null` to CLEAR it. A member filling in a
+//   blank profile never needs a clear; an admin undoing a bad value does.
+//
+// `slug` is deliberately absent: swarm_members has no slug column yet (it
+// arrives with issue #562's migration), and the issue explicitly allows the
+// slug lines to be dropped from a first cut until that lands.
+//
+// Exported so routes/swarm.ts's apply handler and this route agree on what an
+// address is — apply used to carry its own copy of this literal inline.
+export const CONTACT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const MEMBER_ADMIN_KEYS = new Set([
+  "name", "lens", "contactEmail", "tagline", "mandate",
+  "biases", "voiceMd", "mode", "operator", "avatar",
+]);
+
+// `null` clears the column; a present value must be a non-empty string within
+// `max`. `{ ok: false }` is a malformed value, never an absent one — absent
+// keys are filtered by the caller before this is reached.
+type FieldResult = { ok: true; value: string | null } | { ok: false };
+function nullableString(body: JsonObject, key: string, max: number): FieldResult {
+  if (body[key] === null) return { ok: true, value: null };
+  const v = requiredString(body, key, max);
+  return v ? { ok: true, value: v } : { ok: false };
+}
+
+const NULLABLE_TEXT: [keyof MemberAdminPatch, number][] = [
+  ["lens", 500], ["tagline", 300], ["mandate", 4000],
+  ["voiceMd", 20_000], ["mode", 100], ["operator", 200],
+];
+
+export function validateMemberAdminPatch(body: JsonObject | null): ValidationResult<MemberAdminPatch> {
+  if (!body) return { ok: false, error: "invalid member patch" };
+
+  const unknown = Object.keys(body).filter((k) => !MEMBER_ADMIN_KEYS.has(k));
+  if (unknown.length) return { ok: false, error: `unknown field: ${unknown.join(", ")}` };
+  if (Object.keys(body).length === 0) return { ok: false, error: "at least one field required" };
+
+  const patch: MemberAdminPatch = {};
+
+  // name is the one field with no null: a member row always has a display name
+  // (swarm_members.name is NOT NULL).
+  if (body.name !== undefined) {
+    const v = requiredString(body, "name", 200);
+    if (!v) return { ok: false, error: "name must be a non-empty string up to 200 chars" };
+    patch.name = v;
+  }
+
+  for (const [key, max] of NULLABLE_TEXT) {
+    if (body[key as string] === undefined) continue;
+    const r = nullableString(body, key as string, max);
+    if (!r.ok) return { ok: false, error: `${key} must be a non-empty string up to ${max} chars, or null to clear` };
+    (patch as Record<string, unknown>)[key as string] = r.value;
+  }
+
+  if (body.contactEmail !== undefined) {
+    const r = nullableString(body, "contactEmail", 320);
+    if (!r.ok) return { ok: false, error: "contactEmail must be a non-empty string up to 320 chars, or null to clear" };
+    if (r.value !== null && !CONTACT_EMAIL_RE.test(r.value)) {
+      return { ok: false, error: "contactEmail must be a valid email address" };
+    }
+    patch.contactEmail = r.value;
+  }
+
+  // null is checked BEFORE optionalBiases/optionalAvatar: both of those report
+  // a null input as malformed, which is right for their own route and wrong
+  // here, where null is the clear.
+  if (body.biases !== undefined) {
+    if (body.biases === null) patch.biases = null;
+    else {
+      const biases = optionalBiases(body);
+      if (!biases) return { ok: false, error: `biases must be an array of 1-${MAX_BIASES} non-empty strings (each <=200 chars), or null to clear` };
+      patch.biases = biases;
+    }
+  }
+
+  if (body.avatar !== undefined) {
+    if (body.avatar === null) patch.avatar = null;
+    else {
+      const avatar = optionalAvatar(body);
+      if (avatar == null) return { ok: false, error: "avatar must be a JSON object (<=5000 serialized chars), or null to clear" };
+      patch.avatar = avatar;
+    }
+  }
+
+  return { ok: true, data: patch };
 }
