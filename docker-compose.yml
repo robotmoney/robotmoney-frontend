@@ -65,6 +65,32 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# Liveness for the lanes and the producer (backend/src/ops/heartbeat.ts).
+#
+# These four services deliberately carried NO healthcheck for a long time, and
+# the reason still stands: Docker already restarts a lane whose process exits, so
+# a check that only proves the process exists (`CMD true`, `pgrep bun`) buys
+# nothing and actively lies — it paints a WEDGED worker green. The failure mode
+# worth reporting is "alive but not making progress".
+#
+# What changed is that the loops now emit a signal that can tell those apart:
+# each writes a heartbeat from INSIDE its work loop, carrying its own staleness
+# budget, and this check just compares the file's age against that budget. A
+# deadlocked loop stops writing and goes red; an IDLE lane keeps writing (a claim
+# query that finds nothing is still a completed cycle) and stays green.
+#
+# `bun` rather than curl: the image is oven/bun:1.3.5, Debian-based, no curl —
+# same constraint the api's check works around.
+x-worker-healthcheck: &worker-healthcheck
+  test: ["CMD", "bun", "run", "src/ops/healthcheck.ts"]
+  interval: 15s
+  timeout: 10s
+  retries: 3
+  # First-boot cover. A lane records its first heartbeat before touching the
+  # database, so this only has to span container start; failures inside it are
+  # not counted (acceptance: a slow start is not a failure).
+  start_period: 40s
+
 x-worker-base: &worker-base
   build:
     context: .
@@ -75,6 +101,7 @@ x-worker-base: &worker-base
       condition: service_healthy
   restart: unless-stopped
   logging: *default-logging
+  healthcheck: *worker-healthcheck
 
 # Shared worker env. The worker RUNS the projects.* cron pipelines, so a prod
 # worker needs PROJECTS_SOURCE=live (fail-closed — unset throws in prod; unset
@@ -276,6 +303,17 @@ services:
       - api
     restart: unless-stopped
     logging: *default-logging
+    # Same file, same comparator as the lanes — but this process has no drain
+    # loop to speak for it (it owns two daily crons and an otherwise idle event
+    # loop), so what it reports is that both crons are still armed and that the
+    # REST gate it must submit through is answering. See the liveness block in
+    # backend/src/producer/index.ts for why that is the honest signal here.
+    healthcheck:
+      <<: *worker-healthcheck
+      # Longer than the lanes': startProducerSchedules blocks on waitForApi for
+      # up to 120s before the liveness loop writes its first heartbeat, and a
+      # producer that never gets there exits non-zero on its own.
+      start_period: 180s
 
   # D21 retired the member-facing MCP server: swarm members reach the
   # swarm REST API on the `api` service directly (docs/decisions.md D21).

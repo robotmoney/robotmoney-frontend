@@ -31,6 +31,9 @@ interface ComposeConfig {
     secrets?: Array<{ source: string; target: string }>;
     volumes?: Array<{ source?: string; target?: string; read_only?: boolean }>;
     logging?: { driver?: string; options?: Record<string, string> };
+    healthcheck?: { test?: string[]; interval?: string; timeout?: string; retries?: number; start_period?: string; disable?: boolean };
+    restart?: string;
+    profiles?: string[];
   }>;
   secrets?: Record<string, { file?: string }>;
   networks?: Record<string, { labels?: Record<string, string> }>;
@@ -71,9 +74,15 @@ const DEMO_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo.yml"] as 
 function composeConfig(
   knobs: Record<string, string>,
   composeFiles: readonly string[] = DEMO_COMPOSE_FILES,
+  profiles: readonly string[] = [],
 ): ComposeConfig {
   const r = Bun.spawnSync(
-    ["docker", "compose", ...composeFiles.flatMap((file) => ["-f", file]), "config", "--format", "json"],
+    [
+      "docker", "compose",
+      ...profiles.flatMap((profile) => ["--profile", profile]),
+      ...composeFiles.flatMap((file) => ["-f", file]),
+      "config", "--format", "json",
+    ],
     { cwd: repoRoot, env: { ...baseEnv(), ...knobs }, stdout: "pipe", stderr: "pipe" },
   );
   if (r.exitCode !== 0) {
@@ -344,5 +353,92 @@ describe("container logs are bounded on every service", () => {
       const files = Number(svc.logging?.options?.["max-file"]);
       expect(`${name}:${files}`).toBe(`${name}:${Math.max(files, 3)}`);
     }
+  });
+});
+
+// Every standing service must be able to answer "am I still working?" — the
+// worker lanes and the analytics producer shipped without one for a long time
+// because no honest answer existed for them (a process-existence probe paints a
+// WEDGED lane green, which is worse than no check at all). Now that they report
+// a work-loop heartbeat (backend/src/ops/heartbeat.ts), the gap is closed, and
+// these tests keep it closed.
+//
+// Iterated over the RESOLVED service set rather than a named list, for the same
+// reason as the logging tests above: a service added later that omits a
+// healthcheck inherits nothing and would otherwise ship silently unmonitored.
+describe("every long-running service reports its own health", () => {
+  // Checked against every composition the repo actually boots, not just the
+  // demo one: an overlay that replaces a service's block can drop the base
+  // healthcheck, and the stage overlay is what runs the public demo.
+  const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
+    ["base", ["docker-compose.yml"]],
+    ["demo", DEMO_COMPOSE_FILES],
+    ["stage", [...DEMO_COMPOSE_FILES, "docker-compose.stage.yml"]],
+  ];
+
+  for (const [label, files] of COMPOSITIONS) {
+    test(`each service resolved by the ${label} composition declares a healthcheck`, () => {
+      const cfg = composeConfig({}, files);
+      const services = Object.keys(cfg.services ?? {});
+      expect(services.length).toBeGreaterThan(0);
+
+      const unmonitored = services.filter((name) => {
+        const hc = cfg.services[name]?.healthcheck;
+        // `disable: true` is compose's explicit opt-out and counts as no check.
+        return hc?.disable === true || !(hc?.test?.length);
+      });
+
+      expect(`${label}:${unmonitored.join(",")}`).toBe(`${label}:`);
+    });
+  }
+
+  test("a slow first boot is not counted as a failure — every app service sets a start_period", () => {
+    const cfg = composeConfig({});
+    // postgres is exempt by construction: its pg_isready check has no
+    // start_period but retries 10x at 5s, which covers first boot the same way.
+    const withoutGrace = Object.entries(cfg.services ?? {})
+      .filter(([name]) => name !== "postgres")
+      .filter(([, svc]) => !svc.healthcheck?.start_period)
+      .map(([name]) => name);
+
+    expect(withoutGrace).toEqual([]);
+  });
+
+  test("the producer's grace covers the readiness wait it blocks on before its first heartbeat", () => {
+    const cfg = composeConfig({});
+    // startProducerSchedules blocks in waitForApi for up to 120s before the
+    // liveness loop writes anything; a shorter grace would report a healthy
+    // producer as failed on every cold boot.
+    const seconds = (v: string | undefined) => {
+      const m = /^(?:(\d+)m)?(?:(\d+)s)?$/.exec(v ?? "");
+      return m ? Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0) : 0;
+    };
+
+    expect(seconds(cfg.services["analytics-producer"]?.healthcheck?.start_period)).toBeGreaterThan(120);
+  });
+
+  test("the lanes and the producer all run the heartbeat check, not a process-existence probe", () => {
+    const cfg = composeConfig({});
+    for (const name of ["worker-swarm", "worker-analytics", "worker-research", "analytics-producer"]) {
+      const test_ = cfg.services[name]?.healthcheck?.test ?? [];
+      // Pinning the command is the point: `CMD true` / `pgrep bun` would satisfy
+      // the "declares a healthcheck" test above while proving nothing.
+      expect(`${name}:${test_.join(" ")}`).toBe(`${name}:CMD bun run src/ops/healthcheck.ts`);
+    }
+  });
+
+  test("the one-shot member-agent template is exempt BY PROFILE GATING, not by being forgotten", () => {
+    // It is a `docker compose run` template, not a standing service, so a
+    // standing healthcheck is the wrong mechanism for it. That exemption must
+    // rest on something the sweep above can see — profile gating keeps it out of
+    // the default resolution entirely.
+    expect(Object.keys(composeConfig({}).services)).not.toContain("member-agent");
+
+    const gated = composeConfig({}, DEMO_COMPOSE_FILES, ["member-agent"]);
+    expect(Object.keys(gated.services)).toContain("member-agent");
+    // And it is still a one-shot when it does appear: `restart: no`, so nothing
+    // supervises it as a standing process.
+    expect(gated.services["member-agent"]?.restart).toBe("no");
+    expect(gated.services["member-agent"]?.profiles).toEqual(["member-agent"]);
   });
 });

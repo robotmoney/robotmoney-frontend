@@ -42,6 +42,14 @@ export interface ClaimOptions {
   lane?: Lane;
   /** Owner id recorded in locked_by. Default: config.workerId. */
   workerId?: string;
+  /**
+   * Invoked once a job is claimed, BEFORE its handler runs. The drain loop uses
+   * this to widen its liveness deadline for the duration of the job: from the
+   * outside, "claimed a job" and "sat idle" are indistinguishable, and only this
+   * moment tells the loop which budget it is now working against
+   * (src/ops/heartbeat.ts). Must not throw and must not block.
+   */
+  onClaim?: (job: { id: number; kind: string }) => void;
 }
 
 // Claim exactly one due job WITHIN THE LANE'S KIND ALLOWLIST, lock it, run its
@@ -76,6 +84,7 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
 
   const job = claimed[0];
   if (!job) return false;
+  opts.onClaim?.({ id: job.id, kind: job.kind });
 
   const startedAt = new Date();
   const handler = getHandler(job.kind);
