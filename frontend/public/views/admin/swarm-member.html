@@ -1,7 +1,9 @@
-<!-- Admin — member detail (/admin/swarm/members/:id): activate/deactivate/
-     reactivate/rotate-key/reject behind a confirm dialog, and a one-time
-     credential reveal. The dialog asks for a reason on every action EXCEPT
-     approve (RM-45) — see REASON_REQUIRED in the factory for why.
+<!-- Admin — member detail (/admin/swarm/members/:id): profile edit (#567),
+     activate/deactivate/reactivate/rotate-key/reject behind a confirm dialog,
+     and a one-time credential reveal. The dialog asks for a reason on every
+     action EXCEPT approve (RM-45) — see REASON_REQUIRED in the factory for why.
+     The edit form's reason is optional for the same reason and PERSISTED,
+     which is the half RM-45 said was missing.
      Never renders token_hash or a bearer token in the detail JSON.
      Issue #159. Buildless — factory registered at boot
      (alpine/views/admin/swarm-member.js).
@@ -34,23 +36,84 @@
 
     <template x-if="member">
       <div>
-        <dl class="adm-meta-grid">
+        <dl class="adm-meta-grid" x-show="!editing">
           <dt>Name</dt><dd x-text="member.name"></dd>
           <dt>Status</dt><dd x-text="member.status"></dd>
           <dt>Application</dt><dd x-text="pendingApplication ? pendingApplication.status : '—'"></dd>
           <dt>Contact email</dt><dd x-text="member.contactEmail || '—'"></dd>
           <dt>Lens</dt><dd x-text="member.lens || '—'"></dd>
+          <dt>Tagline</dt><dd x-text="member.tagline || '—'"></dd>
+          <dt>Biases</dt><dd x-text="memberBiases().length ? memberBiases().join(', ') : '—'" data-testid="member-biases"></dd>
           <dt>Applied</dt><dd x-text="member.appliedAt || '—'"></dd>
           <dt>Activated</dt><dd x-text="member.activatedAt || '—'"></dd>
         </dl>
 
-        <div class="adm-toolbar">
+        <div class="adm-toolbar" x-show="!editing">
+          <button type="button" class="adm-btn" x-show="canEdit()" @click="startEdit()" data-testid="member-edit-toggle">Edit profile</button>
           <button type="button" class="adm-btn" x-show="canActivate()" @click="openConfirm('activate')" data-testid="member-activate">Activate</button>
           <button type="button" class="adm-btn adm-btn--ghost" x-show="canDeactivate()" @click="openConfirm('deactivate')" data-testid="member-deactivate">Deactivate</button>
           <button type="button" class="adm-btn" x-show="canReactivate()" @click="openConfirm('reactivate')" data-testid="member-reactivate">Reactivate</button>
           <button type="button" class="adm-btn" x-show="canRotateKey()" @click="openConfirm('rotate-key')" data-testid="member-rotate-key">Rotate key</button>
           <button type="button" class="adm-btn adm-btn--ghost" x-show="canReject()" @click="openConfirm('reject')" data-testid="member-reject">Reject</button>
         </div>
+
+        <!-- Profile edit (#567). Everything here is a correction an operator
+             makes to a record the member itself cannot change: `name`, `lens`
+             and `contactEmail` are refused by the self-service profile route
+             on purpose, and the rest is null on every member that arrived
+             through the funnel. An empty field is a CLEAR, not a no-op, and
+             only changed fields are sent. -->
+        <form x-show="editing" x-cloak @submit.prevent="submitEdit()" class="adm-form" data-testid="member-edit-form">
+          <label class="adm-field">
+            <span>Name</span>
+            <input type="text" x-model="editForm.name" class="adm-input" data-testid="edit-member-name" />
+            <span x-show="editErrors.name" x-text="editErrors.name" class="rm-error"></span>
+          </label>
+          <label class="adm-field">
+            <span>Lens</span>
+            <input type="text" x-model="editForm.lens" class="adm-input" data-testid="edit-member-lens" />
+            <span class="adm-dim">Set at apply time by the operator, and not editable by the member.</span>
+            <span x-show="editErrors.lens" x-text="editErrors.lens" class="rm-error"></span>
+          </label>
+          <label class="adm-field">
+            <span>Contact email</span>
+            <input type="text" x-model="editForm.contactEmail" class="adm-input" data-testid="edit-member-contact" />
+            <span x-show="editErrors.contactEmail" x-text="editErrors.contactEmail" class="rm-error"></span>
+          </label>
+          <label class="adm-field">
+            <span>Tagline</span>
+            <textarea x-model="editForm.tagline" class="adm-input" rows="2" data-testid="edit-member-tagline"></textarea>
+            <span x-show="editErrors.tagline" x-text="editErrors.tagline" class="rm-error"></span>
+          </label>
+          <label class="adm-field">
+            <span>Biases</span>
+            <textarea x-model="editForm.biases" class="adm-input" rows="4" placeholder="One per line" data-testid="edit-member-biases"></textarea>
+            <span class="adm-dim">One per line, up to 20. Empty clears them.</span>
+            <span x-show="editErrors.biases" x-text="editErrors.biases" class="rm-error"></span>
+          </label>
+          <label class="adm-field">
+            <span>Mandate</span>
+            <textarea x-model="editForm.mandate" class="adm-input" rows="3" data-testid="edit-member-mandate"></textarea>
+          </label>
+          <label class="adm-field">
+            <span>Operator</span>
+            <input type="text" x-model="editForm.operator" class="adm-input" data-testid="edit-member-operator" />
+          </label>
+          <label class="adm-field">
+            <span>Mode</span>
+            <input type="text" x-model="editForm.mode" class="adm-input" data-testid="edit-member-mode" />
+          </label>
+          <label class="adm-field">
+            <span>Reason (optional)</span>
+            <textarea x-model="editForm.reason" class="adm-input" rows="2" placeholder="Recorded in the audit trail" data-testid="edit-member-reason"></textarea>
+            <span x-show="editErrors.reason" x-text="editErrors.reason" class="rm-error"></span>
+          </label>
+          <span x-show="editErrors.form" x-text="editErrors.form" class="rm-error adm-msg"></span>
+          <div class="adm-toolbar">
+            <button type="submit" class="adm-btn" :disabled="submitting" data-testid="edit-member-submit">Save</button>
+            <button type="button" class="adm-btn adm-btn--ghost" @click="cancelEdit()" data-testid="edit-member-cancel">Cancel</button>
+          </div>
+        </form>
 
         <div x-show="confirm" x-cloak class="adm-modal" data-testid="member-action-confirm">
           <div class="adm-modal__panel">
@@ -84,8 +147,8 @@
           </div>
         </div>
 
-        <h2 class="adm-h2">Detail (redacted)</h2>
-        <pre class="adm-log" x-text="memberJson()" data-testid="member-json"></pre>
+        <h2 class="adm-h2" x-show="!editing">Detail (redacted)</h2>
+        <pre class="adm-log" x-show="!editing" x-text="memberJson()" data-testid="member-json"></pre>
       </div>
     </template>
   </div>

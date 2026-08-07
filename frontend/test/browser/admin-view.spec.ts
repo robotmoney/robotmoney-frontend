@@ -373,9 +373,17 @@ const MEMBER_APPLIED = {
 // the member itself).
 const NOVA_APPLICATION = { id: 1, member_id: "nova", status: "pending", created_at: "2026-07-10T00:00:00.000Z", reviewed_at: null };
 
+// Carries the fields #567 added to toMemberAdmin (biases/voiceMd/mode/
+// operator/avatar) — the edit form cannot prefill what the projection omits.
+// This is toMemberAdmin()'s shipped key set exactly: NO `slug`. swarm_members
+// has no slug column, so the projection cannot return one and the admin patch
+// validator answers `unknown field: slug`. Inventing one here would let the
+// form's slug affordance test green against a backend that has neither the
+// column nor the key.
 const MEMBER_ACTIVE = {
   id: "athena", status: "active", version: 2, name: "Athena", tagline: "macro lens", lens: "macro",
-  mandate: null, contactEmail: "athena@example.com",
+  mandate: null, biases: ["pro-diversification", "anti-reflexivity"], voiceMd: null, mode: null,
+  operator: null, avatar: null, contactEmail: "athena@example.com",
   appliedAt: "2026-06-01T00:00:00.000Z", activatedAt: "2026-06-02T00:00:00.000Z", updatedAt: "2026-06-02T00:00:00.000Z",
   // Stray field a buggy backend must never send — proves the client's own
   // defense-in-depth redaction (never trust the wire alone for secrets).
@@ -473,6 +481,9 @@ async function mockSwarmApi(
     route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_INACTIVE, status: "active" }, token: "reactivated-bearer-token-def456" })));
   await page.route(/\/api\/swarm\/admin\/members\/athena\/rotate-key$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, memberId: "athena", token: "rotated-bearer-token-ghi789" })));
+  // #567's versioned profile edit.
+  await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_ACTIVE, version: 3 } })));
 
   // ── Sessions ────────────────────────────────────────────────────────────
   await page.route(/\/api\/swarm\/admin\/sessions$/, (route) => {
@@ -727,6 +738,137 @@ test("swarm admin: topic deactivate flow posts to the dedicated endpoint with ex
 
 // AC: applied/active/inactive filtering + one-time credential reveal + no
 // token_hash/bearer token rendered in detail JSON.
+// AC (#567, RM-47): a profile edit sends ONLY the fields that changed. Posting
+// the whole row would re-send stale values for fields the operator never
+// touched, which the version guard cannot catch because we would be the writer.
+test("swarm admin: member profile edit posts only the changed fields, with the reason", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/members/athena");
+  await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
+  await expect(page.getByTestId("member-biases")).toHaveText("pro-diversification, anti-reflexivity");
+
+  let captured: unknown = null;
+  await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, async (route) => {
+    captured = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_ACTIVE, version: 3 } }));
+  });
+
+  await page.getByTestId("member-edit-toggle").click();
+  await page.getByTestId("edit-member-lens").fill("machine economy, first person");
+  await page.getByTestId("edit-member-biases").fill("never-sells-agent-tokens\nopenly-conflicted");
+  await page.getByTestId("edit-member-reason").fill("Operator correction requested by peaq.");
+  await page.getByTestId("edit-member-submit").click();
+
+  await expect(page.getByTestId("member-edit-form")).not.toBeVisible();
+  expect(captured).toEqual({
+    expectedVersion: 2,
+    lens: "machine economy, first person",
+    biases: ["never-sells-agent-tokens", "openly-conflicted"],
+    reason: "Operator correction requested by peaq.",
+  });
+});
+
+// AC (#567): an emptied field is a CLEAR, sent as an explicit null, and a form
+// with no change at all never reaches the network.
+test("swarm admin: member profile edit clears with null and refuses an empty save", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/members/athena");
+  await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
+
+  let captured: unknown = null;
+  let posts = 0;
+  await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, async (route) => {
+    posts += 1;
+    captured = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_ACTIVE, version: 3 } }));
+  });
+
+  await page.getByTestId("member-edit-toggle").click();
+  await page.getByTestId("edit-member-submit").click();
+  await expect(page.getByText("Nothing changed.")).toBeVisible();
+  expect(posts).toBe(0);
+
+  await page.getByTestId("edit-member-tagline").fill("");
+  await page.getByTestId("edit-member-submit").click();
+  await expect(page.getByTestId("member-edit-form")).not.toBeVisible();
+  expect(captured).toEqual({ expectedVersion: 2, tagline: null });
+  expect(posts).toBe(1);
+});
+
+// AC (#567): `stale_version` is the only 409 updateMemberAdmin() emits, and the
+// only one whose fix is "reload and retry". Every other 409 is rendered
+// verbatim — the client must not attach reload advice to a conflict a reload
+// cannot clear. The second leg here exercises the client's own passthrough
+// branch (and apiErrorText() unwrapping the envelope), NOT a backend error
+// shape: the synthetic body stands in for any unrecognised 409.
+test("swarm admin: member profile edit gives only stale_version the reload advice", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/members/athena");
+  await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
+
+  await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, (route) =>
+    route.fulfill(jsonReply({ ok: false, status: 409, error: "member is locked by another operation" }, 409)));
+  await page.getByTestId("member-edit-toggle").click();
+  await page.getByTestId("edit-member-name").fill("Athena Renamed");
+  await page.getByTestId("edit-member-submit").click();
+  await expect(page.getByText(/member is locked by another operation/)).toBeVisible();
+  await expect(page.getByText(/reload and try again/)).not.toBeVisible();
+
+  await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, (route) =>
+    route.fulfill(jsonReply({ ok: false, status: 409, error: "stale_version" }, 409)));
+  await page.getByTestId("edit-member-submit").click();
+  await expect(page.getByText(/stale version.*reload and try again/)).toBeVisible();
+});
+
+// AC (#567): client-side validation mirrors the server's shapes so an operator
+// is corrected before the round-trip, and a bad value never leaves the page.
+// Both bounds are the backend's own: CONTACT_EMAIL_RE and optionalBiases()'s
+// 200-char entry limit in api/validation.ts.
+test("swarm admin: member profile edit rejects a malformed email and an oversized bias locally", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/members/athena");
+  await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
+
+  let posts = 0;
+  await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, async (route) => {
+    posts += 1;
+    return route.fulfill(jsonReply({ ok: true, status: 200, member: MEMBER_ACTIVE }));
+  });
+
+  await page.getByTestId("member-edit-toggle").click();
+  await page.getByTestId("edit-member-contact").fill("not-an-email");
+  await page.getByTestId("edit-member-biases").fill("x".repeat(201));
+  await page.getByTestId("edit-member-submit").click();
+
+  await expect(page.getByText(/Enter a valid email address/)).toBeVisible();
+  await expect(page.getByText(/Each bias must be 200 characters or fewer/)).toBeVisible();
+  expect(posts).toBe(0);
+});
+
+// swarm_members has no slug column: validateMemberAdminPatch()'s
+// MEMBER_ADMIN_KEYS omits `slug` and the route answers `unknown field: slug`.
+// The form must therefore offer no slug affordance at all — this is the guard
+// that a later change cannot reintroduce one without the column.
+test("swarm admin: member profile edit offers no slug field the backend would reject", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/members/athena");
+  await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
+
+  await page.getByTestId("member-edit-toggle").click();
+  await expect(page.getByTestId("member-edit-form")).toBeVisible();
+  await expect(page.getByTestId("edit-member-slug")).toHaveCount(0);
+
+  let captured: unknown = null;
+  await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, async (route) => {
+    captured = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_ACTIVE, version: 3 } }));
+  });
+  await page.getByTestId("edit-member-name").fill("Athena Renamed");
+  await page.getByTestId("edit-member-submit").click();
+  await expect(page.getByTestId("member-edit-form")).not.toBeVisible();
+  expect(captured).toEqual({ expectedVersion: 2, name: "Athena Renamed" });
+});
+
 test("swarm admin: member filters, one-time credential reveal, and redacted detail JSON", async ({ page }) => {
   await mockSwarmApi(page);
   await signIn(page, "/admin/swarm");

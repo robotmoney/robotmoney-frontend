@@ -86,6 +86,26 @@ export function adminAuthState() {
 
 // ── Formatting helpers shared across admin views ────────────────────────────
 
+/**
+ * The operator-facing sentence inside an ApiError.
+ *
+ * `ApiError` is built as `API <status>: <response body>` (lib/api.js), and
+ * every admin route answers with a JSON envelope, so rendering `e.message`
+ * puts `API 400: {"ok":false,"status":400,"error":"contactEmail must be a
+ * valid email address"}` in front of an operator. The sentence is in there;
+ * this pulls it out. A body that is not the envelope (a proxy's HTML 502, say)
+ * falls back to the whole message, status prefix included, since nothing
+ * better exists.
+ */
+export function apiErrorText(e) {
+  const raw = String(e?.message ?? "");
+  try {
+    const parsed = JSON.parse(raw.replace(/^API \d+:\s*/, ""));
+    if (parsed && typeof parsed.error === "string" && parsed.error) return parsed.error;
+  } catch (_) { /* not the JSON envelope */ }
+  return raw;
+}
+
 export function fmtUtc(iso) {
   if (!iso) return "—";
   try {
