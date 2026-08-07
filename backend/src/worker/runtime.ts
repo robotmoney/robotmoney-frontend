@@ -117,6 +117,11 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
     // have to finish before the file exists at all. start_period in compose
     // covers the boot window either way.
     await beat("boot", idleProgressTimeoutMs);
+    // Edge-triggered: true once we've already written a `faulted` beat for the
+    // CURRENT run of consecutive failures, reset back to false the moment a
+    // cycle succeeds again. See the catch branch below for why this can't be
+    // unconditional.
+    let faulted = false;
     while (running) {
       try {
         const did = await processOneJob({
@@ -128,6 +133,7 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
         // Back to idle terms: a completed cycle — job finished, or a claim query
         // that found nothing — is the unit of progress this lane reports.
         await beat("idle", idleProgressTimeoutMs);
+        faulted = false; // a real cycle succeeded — the next failure is a fresh edge
         if (!did) await sleep(idlePollMs); // nothing to do — back off
       } catch (err) {
         // A failing claim/execute cycle is NOT progress on a job — but it IS
@@ -138,12 +144,30 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
         // just threw; skipping the beat here would leave that wide budget in
         // place, so a DB outage mid-job would take up to 15 minutes to report
         // unhealthy instead of the ~60s this loop otherwise guarantees.
-        // Write a `faulted` beat on the IDLE budget unconditionally — whether
-        // the failure landed while idle or mid-job — so repeated failures
-        // (lost database, exhausted pool) age out within the short budget and
-        // the lane reports unhealthy on the honest, short timeline.
+        //
+        // Write the `faulted` beat on the IDLE budget only on the EDGE from
+        // succeeding to failing — not on every repeated failure. The first
+        // failure after a success still narrows a stale wide BUSY budget down
+        // to the IDLE-sized one immediately (that's the case above). But if we
+        // kept writing on every subsequent failure too, each write would
+        // refresh `ts` to `now` — and in production idlePollMs (2s default)
+        // is LARGER than heartbeat.ts's MIN_WRITE_INTERVAL_MS (1s) write-
+        // coalescing window, so consecutive faulted cycles land outside that
+        // window and none of them would be suppressed. `ts` would then never
+        // stop advancing for as long as the outage lasted, `age` would never
+        // exceed the budget, and evaluateHeartbeat() would report the lane
+        // healthy FOREVER during a permanent outage — exactly the failure
+        // this heartbeat exists to catch. By writing once and then staying
+        // silent while `faulted` stays true, the on-disk `ts` freezes at the
+        // moment the outage started and ages out honestly past
+        // idleProgressTimeoutMs, the same way it did before this file's
+        // catch branch wrote anything at all — just narrowed to the right
+        // budget first.
         console.error(`[${workerId}] loop error:`, err);
-        await beat("faulted", idleProgressTimeoutMs, `error: ${err instanceof Error ? err.message : String(err)}`);
+        if (!faulted) {
+          await beat("faulted", idleProgressTimeoutMs, `error: ${err instanceof Error ? err.message : String(err)}`);
+          faulted = true;
+        }
         await sleep(idlePollMs);
       }
     }

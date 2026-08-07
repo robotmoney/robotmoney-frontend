@@ -247,3 +247,66 @@ test("a DB outage that hits MID-JOB narrows the stale BUSY budget back down inst
   // healthy again.
   await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 5000, "recovery once the database returns");
 });
+
+test("a SUSTAINED database outage stays unhealthy across many failed cycles, not just the first one", async () => {
+  // Real wall-clock timing (see below) pushes this comfortably past bun's
+  // 5000ms default per-test timeout; bunfig.toml's [test] timeout=30000
+  // covers the suite default, but this one still asks for its own explicit
+  // margin so it can't flake on a slower CI box.
+  // The MID-JOB test above proves the `faulted` beat fires on the FIRST
+  // failure after a success (the edge). It does not prove what happens on the
+  // SECOND, THIRD, ... failure in a row — and that is exactly where the
+  // regression this test targets lived: a beat written unconditionally on
+  // every failed cycle (the code that shipped in 595130b, this fix's parent
+  // commit) refreshes `ts` to "now" every cycle, so `age` never grows and the
+  // lane reports healthy forever during a PERMANENT outage.
+  //
+  // Reproducing that requires idlePollMs to actually exceed heartbeat.ts's
+  // MIN_WRITE_INTERVAL_MS write-coalescing window (1000ms, not exported — no
+  // injection seam exists for it). Below that threshold, repeated same-phase
+  // writes get suppressed by the coalescer itself regardless of whether
+  // drainLoop's catch branch is edge- or level-triggered, which is why the
+  // OTHER db-loss tests in this file (idlePollMs: 25 via fastOpts) do NOT
+  // discriminate fixed-vs-broken here — this is the one case in the file that
+  // deliberately uses real, near-production wall-clock timing instead of the
+  // compressed fastOpts scale, specifically so idlePollMs lands on the
+  // production side (2s default) of that 1000ms line.
+  const idlePollMs = 1200; // > MIN_WRITE_INTERVAL_MS, same ordering as production's 2000ms default
+  const idleProgressTimeoutMs = 2500; // a small multiple of idlePollMs, so several cycles fit inside one budget window
+  launch({
+    lane: LANES.research, workerId: "sustained-dbloss-research", heartbeatFile: path,
+    idlePollMs, schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 1000,
+    idleProgressTimeoutMs,
+  });
+  await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 3000, "a healthy idle lane first");
+
+  await sql`ALTER TABLE jobs RENAME TO jobs_fault_injection`;
+  try {
+    await waitFor(async () => (await record()).phase === "faulted", 3000, "the first faulted beat");
+    const first = await record();
+
+    // Let the outage run for several MORE poll cycles — spanning more than one
+    // full idleProgressTimeoutMs window past that first beat, not just a
+    // single transition.
+    await sleep(idlePollMs * 3 + 500);
+
+    // Under the pre-fix unconditional-beat code, each of those extra failed
+    // cycles would have rewritten `ts` to "now" (idlePollMs is above the
+    // coalescing window, so none of those writes get suppressed), so `age`
+    // would never exceed idlePollMs and this would report healthy — for as
+    // long as the outage continues. The fix must report unhealthy here.
+    const verdict = await checkHeartbeatFile(path);
+    expect(verdict.healthy).toBe(false);
+    expect(verdict.reason).toContain("no progress");
+
+    // And the on-disk record is still the FROZEN first faulted beat, not a
+    // moving target that just happened to be read at a stale instant.
+    const rec = await record();
+    expect(rec.phase).toBe("faulted");
+    expect(rec.ts).toBe(first.ts);
+  } finally {
+    await sql`ALTER TABLE jobs_fault_injection RENAME TO jobs`;
+  }
+
+  await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 5000, "recovery once the database returns");
+}, 20_000);
