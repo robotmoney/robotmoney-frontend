@@ -182,7 +182,7 @@ function diffRow(entity: string, naturalKey: string, fields: FieldSpec[], actual
 type RowOutcome = "inserted" | "unchanged" | "drift";
 
 // v0 published its member avatars under /avatars/committee/<id>.jpg. The
-// canonical v1 path is /avatars/swarm/<id>.<ext> (docs/decisions.md D30): it
+// canonical v1 path is /avatars/swarm/<id>.<ext> (docs/decisions.md D31): it
 // is what every committed manifest under
 // frontend/public/data/swarm/manifests/members/ says, what that directory's
 // _SCHEMA.md specifies, and what src/swarm/roster-seed.ts's LIVE_ROSTER
