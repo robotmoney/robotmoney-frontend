@@ -33,6 +33,7 @@
 // cheaper to make it unreachable than to check for it after the fact.
 import { PALETTE, SERIES } from "./chart-theme.js";
 
+/** @type {Record<string, string>} */
 const HUES = {
   emerald: SERIES.emerald, // #10b981 green
   sand: SERIES.sand, // #e8a640 warm
@@ -49,6 +50,7 @@ const HUES = {
 // leads with it looks switched off next to one that leads with green, which is
 // a status claim the mark has no business making. It stays available as the
 // contrast half, where it reads as ground rather than as the figure.
+/** @type {Record<string, string[]>} */
 const CONTRAST = {
   emerald: ["sand", "slate"],
   teal: ["sand", "slate"],
@@ -67,7 +69,13 @@ export const QUADRANT_MIN_PX = 32;
 // FNV-1a, re-mixed per byte. Deterministic, no dependencies, and stable across
 // engines, which matters because the same member must get the same mark on
 // every device and in the prerendered HTML.
+/**
+ * @param {string} seed
+ * @param {number} n
+ * @returns {number[]}
+ */
 function bytes(seed, n) {
+  /** @type {number[]} */
   const out = [];
   let h = 0x811c9dc5;
   for (let i = 0; i < n; i++) {
@@ -80,13 +88,19 @@ function bytes(seed, n) {
   return out;
 }
 
+/**
+ * @param {number[]} b
+ * @returns {[string, string]}
+ */
 function huesFor(b) {
   const primary = PRIMARIES[b[0] % PRIMARIES.length];
   const options = CONTRAST[primary];
   return [HUES[primary], HUES[options[b[1] % options.length]]];
 }
 
+/** @type {(x: number, y: number, w: number, h: number, fill: string) => string} */
 const rect = (x, y, w, h, fill) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}"/>`;
+/** @type {(x: number, y: number, s: number, fill: string, corner: number) => string} */
 const tri = (x, y, s, fill, corner) => {
   // Right triangle filling half the cell, hypotenuse away from `corner`.
   const pts = [
@@ -101,6 +115,12 @@ const tri = (x, y, s, fill, corner) => {
 // Four cells, each independently filled, halved or triangulated. The cell's
 // hue is one of the two, chosen per cell, so a mark reads as a composition
 // rather than a checkerboard.
+/**
+ * @param {number[]} b
+ * @param {string} h1
+ * @param {string} h2
+ * @returns {string}
+ */
 function quadrants(b, h1, h2) {
   const s = 50;
   let out = "";
@@ -124,6 +144,12 @@ function quadrants(b, h1, h2) {
 // size). Two cells with their own modes give 2 orientations x 4 modes squared
 // x 2 hue assignments, which is enough separation for a roster that will not
 // outgrow a page.
+/**
+ * @param {number[]} b
+ * @param {string} h1
+ * @param {string} h2
+ * @returns {string}
+ */
 function split(b, h1, h2) {
   const vertical = (b[2] & 1) === 0;
   const cells = vertical
@@ -150,7 +176,8 @@ function split(b, h1, h2) {
  * member id put there. That is what makes it safe to bind with `x-html`.
  *
  * @param {string} seed  keyFingerprint when one exists, else the member id.
- * @param {number} size  the rendered edge in px, which selects the detail level.
+ * @param {number} [size]  the rendered edge in px, which selects the detail level.
+ * @returns {string}
  */
 export function memberMark(seed, size = 40) {
   const key = String(seed || "");
@@ -168,6 +195,12 @@ export function memberMark(seed, size = 40) {
  * first is not built yet (it is the backend half of that issue), so this is the
  * bottom two rungs. `initialsFn` output is already stripped to letters and
  * digits by its own callers, so binding it through `x-html` renders text.
+ *
+ * @param {string} seed
+ * @param {string} name
+ * @param {number} size
+ * @param {(name: string) => string} initialsFn
+ * @returns {string}
  */
 export function memberMarkOrInitials(seed, name, size, initialsFn) {
   return memberMark(seed, size) || String(initialsFn(name) ?? "");
