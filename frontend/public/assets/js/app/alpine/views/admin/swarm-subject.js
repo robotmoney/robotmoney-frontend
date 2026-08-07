@@ -25,6 +25,7 @@ export function registerAdminSwarmSubject(Alpine) {
     error: null,
     subjectId: null,
     topic: null,
+    members: [], // admin member list, for the linked-member picker
 
     editing: false,
     editForm: null,
@@ -46,11 +47,20 @@ export function registerAdminSwarmSubject(Alpine) {
       this.loading = true;
       this.error = null;
       try {
-        const res = await api.adminGet(ROUTES.swarm.admin.subjects, this._token());
+        // Members ride along so the linked-member field can be a picker of real
+        // members rather than a box you paste a UUID into. A member that joined
+        // through the funnel has a server-minted UUID for an id, and nobody
+        // transcribes one of those correctly.
+        const [res, membersRes] = await Promise.all([
+          api.adminGet(ROUTES.swarm.admin.subjects, this._token()),
+          api.adminGet(ROUTES.swarm.admin.members, this._token()),
+        ]);
         if (!Array.isArray(res.subjects)) throw new Error("admin subjects response missing 'subjects' array");
+        if (!Array.isArray(membersRes.members)) throw new Error("admin members response missing 'members' array");
         const found = res.subjects.find((s) => s.id === this.subjectId);
         if (!found) throw new Error(`topic '${this.subjectId}' not found`);
         this.topic = found;
+        this.members = membersRes.members;
       } catch (e) {
         if (e.status === 403) this._handle403();
         else this.error = e.message;
@@ -76,6 +86,15 @@ export function registerAdminSwarmSubject(Alpine) {
       this.editing = true;
     },
     cancelEdit() { this.editing = false; this.editForm = null; this.editErrors = {}; },
+
+    // "Woon Treasury Allocation → Woon" reads; the raw UUID does not. Falls
+    // back to the stored id when it names a member the roster no longer
+    // carries, which is exactly the state a retired member leaves behind.
+    memberLabel(id) {
+      if (!id) return "—";
+      const m = this.members.find((x) => x.id === id);
+      return m ? `${m.name} (${m.id})` : `${id} (not on the roster)`;
+    },
     addWalletRow() { this.editForm.wallets.push({ address: "", chain: "", label: "" }); },
     removeWalletRow(i) { this.editForm.wallets.splice(i, 1); },
 
@@ -89,6 +108,15 @@ export function registerAdminSwarmSubject(Alpine) {
       }
       if (this.editForm.sourceType === "rpc" && this.editForm.wallets.length === 0) {
         errors.wallets = "rpc topics require at least one wallet.";
+      }
+      // Re-pointing a link works; REMOVING one does not, and the failure is
+      // silent. updateSubjectAdmin merges with `patch.linkedMemberId ??
+      // row.linked_member_id`, so a null we send to clear the field reads as
+      // "absent" and the old value survives a 200. Refuse it here rather than
+      // report a success the database did not perform. Lifting this needs the
+      // backend to switch that one merge to `!== undefined`.
+      if (this.topic.linkedMemberId && !this.editForm.linkedMemberId) {
+        errors.linkedMemberId = "Unlinking is not supported yet — the backend ignores a cleared link. Pick another member instead.";
       }
       const reasonErr = reasonError(this.editForm.reason);
       if (reasonErr) errors.reason = reasonErr;

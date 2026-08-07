@@ -31,6 +31,7 @@
           <dt>Thesis</dt><dd x-text="topic.thesisBlurb"></dd>
           <dt>Source type</dt><dd x-text="topic.source?.type"></dd>
           <dt>Recommendation type</dt><dd x-text="topic.recommendationType"></dd>
+          <dt>Linked member</dt><dd x-text="memberLabel(topic.linkedMemberId)" data-testid="topic-linked-member"></dd>
           <dt>Version</dt><dd x-text="topic.version"></dd>
           <dt>Updated</dt><dd x-text="fmtUtc(topic.updatedAt)"></dd>
         </dl>
@@ -83,6 +84,22 @@
           <option value="framework">framework</option>
         </select>
         <span x-show="editErrors.wallets" x-text="editErrors.wallets" class="rm-error"></span>
+      </label>
+      <!-- Linked member: when set, this topic IS that member, and the member
+           writes last in self-advocacy mode on its own session rather than
+           being recused (manifests/subjects/_SCHEMA.md, "Subject-member
+           overlap"). The update route has always accepted this field; it just
+           had no input. -->
+      <label class="adm-field">
+        <span>Linked member</span>
+        <select x-model="editForm.linkedMemberId" class="adm-input" data-testid="edit-linked-member">
+          <option value="">— not linked —</option>
+          <template x-for="m in members" :key="m.id">
+            <option :value="m.id" x-text="`${m.name} (${m.status})`"></option>
+          </template>
+        </select>
+        <span class="adm-dim">Set this when the topic is the linked member's own portfolio. That member then writes last and defends, seeing the other takes first.</span>
+        <span x-show="editErrors.linkedMemberId" x-text="editErrors.linkedMemberId" class="rm-error"></span>
       </label>
       <label class="adm-field">
         <span>Reason</span>

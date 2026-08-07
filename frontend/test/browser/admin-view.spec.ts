@@ -646,6 +646,63 @@ test("swarm admin: topic edit succeeds and posts the exact update body", async (
   });
 });
 
+// AC (RM-47): the linked-member picker. `linkedMemberId` has always been in
+// swarm-subject.js's update payload and accepted by the route; it had no input,
+// so a topic could only ever be linked by a database write. The picker lists
+// real members because a funnel member's id is a server-minted UUID.
+test("swarm admin: topic edit links a member by picker and names it in the detail view", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/subjects/woon-vault");
+  await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
+  await expect(page.getByTestId("topic-linked-member")).toHaveText("—");
+
+  let captured: unknown = null;
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/update$/, async (route) => {
+    captured = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, linkedMemberId: "athena", version: 4 } }));
+  });
+  await page.route(/\/api\/swarm\/admin\/subjects$/, (route) =>
+    route.fulfill(jsonReply({ subjects: [{ ...TOPIC_FIXTURE, linkedMemberId: "athena", version: 4 }] })));
+
+  await page.getByTestId("topic-edit-toggle").click();
+  await page.getByTestId("edit-linked-member").selectOption("athena");
+  await page.getByTestId("edit-reason").fill("Linking the topic to its own member.");
+  await page.getByTestId("edit-submit").click();
+
+  await expect(page.getByTestId("topic-edit-form")).not.toBeVisible();
+  expect(captured).toMatchObject({ expectedVersion: 3, linkedMemberId: "athena" });
+  // Reads as a name, not a UUID, and resolves through the member list.
+  await expect(page.getByTestId("topic-linked-member")).toHaveText("Athena (athena)");
+});
+
+// AC (RM-47): clearing a link is refused client-side rather than reported as a
+// success the database did not perform. updateSubjectAdmin merges with
+// `patch.linkedMemberId ?? row.linked_member_id`, so a null reads as "absent"
+// and the old value survives a 200. Delete this guard when that merge switches
+// to `!== undefined`.
+test("swarm admin: topic edit refuses to unlink a member and sends no request", async ({ page }) => {
+  await mockSwarmApi(page);
+  await page.route(/\/api\/swarm\/admin\/subjects$/, (route) =>
+    route.fulfill(jsonReply({ subjects: [{ ...TOPIC_FIXTURE, linkedMemberId: "athena" }] })));
+  await signIn(page, "/admin/swarm/subjects/woon-vault");
+  await expect(page.getByTestId("topic-linked-member")).toHaveText("Athena (athena)");
+
+  let posted = false;
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/update$/, async (route) => {
+    posted = true;
+    return route.fulfill(jsonReply({ ok: true, status: 200, subject: TOPIC_FIXTURE }));
+  });
+
+  await page.getByTestId("topic-edit-toggle").click();
+  await page.getByTestId("edit-linked-member").selectOption("");
+  await page.getByTestId("edit-reason").fill("Trying to unlink for coverage.");
+  await page.getByTestId("edit-submit").click();
+
+  await expect(page.getByText(/Unlinking is not supported yet/)).toBeVisible();
+  await expect(page.getByTestId("topic-edit-form")).toBeVisible();
+  expect(posted).toBe(false);
+});
+
 // AC: the deactivate flow (toggle → reason → confirm) POSTs the dedicated
 // deactivate endpoint and asserts expectedVersion/reason in the request body.
 test("swarm admin: topic deactivate flow posts to the dedicated endpoint with expectedVersion and reason", async ({ page }) => {
