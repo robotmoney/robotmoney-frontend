@@ -1612,6 +1612,10 @@ async function main(): Promise<void> {
         const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
           members: sessionMembers,
+          // The STANDING loop needs this as much as the first session does.
+          // Omitting it made runSession fall back to "simulation" and write
+          // demo fixtures over archive-restored subjects — see session.ts.
+          initializer: scenario.initializer,
           onProgress: tuiActive ? swarmProgress(state, subject.id, log) : undefined,
         });
         c.publishedCount++;

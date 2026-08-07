@@ -460,9 +460,16 @@ export async function runSession(
     // Which scenario opened this session. The session BODY is identical either
     // way — same lifecycle, same member rail, same assertions; this selects
     // only whether the harness may author reference-shaped subject data before
-    // the window opens. Defaults to "simulation" so the demo and every
-    // standing-mode caller keep their current behaviour unchanged.
-    initializer?: ScenarioInitializer;
+    // the window opens.
+    //
+    // REQUIRED, and deliberately so. It used to default to "simulation" so
+    // existing callers kept their behaviour — which made the DANGEROUS branch
+    // the one you got by forgetting the parameter. The standing-session loop
+    // did forget it, so a smoke boot restored the archive faithfully and then
+    // wrote simulation fixtures over the restored subjects: exactly what the
+    // block above says a continuity boot must never do. Stating it is now a
+    // compile-time obligation.
+    initializer: ScenarioInitializer;
   },
 ) {
   const prevOutcome = opts?.prevOutcome;
@@ -529,7 +536,7 @@ export async function runSession(
   // never do — it would republish fabricated history under the release
   // subjects' own ids. A restored subject already carries its snapshot, so
   // there is nothing to seed (issue #537).
-  if ((opts?.initializer ?? "simulation") === "simulation") {
+  if (opts.initializer === "simulation") {
     await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.adminToken);
   }
 
@@ -650,7 +657,7 @@ async function main() {
   await admin("subject", subjects[0], rail.adminToken);
 
   // Session 1: today's subject
-  const s1 = await runSession(subjects[0], 1, { rail, members });
+  const s1 = await runSession(subjects[0], 1, { rail, members, initializer: "simulation" });
 
   // ── New member added mid-run ──────────────────────────────────────────────
   // Demonstrates a member added AFTER session 1, participating in session 2
@@ -726,7 +733,7 @@ async function main() {
   // 0022 the DATABASE dates a session, so two sittings on one day are simply two
   // rows with different convened_at rather than one row relabelled to a day that
   // has not happened. The rotation this proves is the real one.
-  await runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members });
+  await runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members, initializer: "simulation" });
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`).then((r) => r.json());
