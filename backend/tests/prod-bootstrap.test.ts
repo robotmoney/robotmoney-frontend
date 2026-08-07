@@ -4,8 +4,8 @@
 // runV0SeedBootstrap(), bootstrapEdgarSeed()) are already covered by their
 // own test files — this file exercises the orchestration logic that is
 // UNIQUE to prod-bootstrap.ts and not exercised anywhere else: every step
-// always runs (no fail-fast), the v0-seed drift outcome is aggregated into
-// an overall "failing" result, the edgar step's unreachable-vs-genuine-
+// always runs (no fail-fast), the v0-seed drift outcome stays a non-failing
+// warning (adopted production data wins), the edgar step's unreachable-vs-genuine-
 // failure classification (skip vs. hard fail) is correct in both directions,
 // and — the only place this is reachable — the step ORDERING a public
 // deployment produces, where migrate() seats the live roster before the
@@ -123,7 +123,7 @@ test("idempotent: a second full run inserts nothing further and still reports no
   expect(second.some((r) => r.failing)).toBe(false);
 });
 
-test("drift aggregation: a v0-seed drift marks the run overall failing, but every step still runs (no fail-fast)", async () => {
+test("drift on an adopted database: reported as a warning, existing rows win, the run is NOT failing", async () => {
   delete process.env.ANALYTICS_TOKEN;
 
   await runProdBootstrap();
@@ -135,7 +135,13 @@ test("drift aggregation: a v0-seed drift marks the run overall failing, but ever
 
   const v0seed = reportFor(reports, "v0-seed:bootstrap");
   expect(v0seed.status).toBe("warning");
-  expect(v0seed.failing).toBe(true);
+  // NOT failing: this orchestrator is the boot path, and a populated database
+  // it boots against is adopted production data (a manual .dump restore, or a
+  // volume that survived a restart) whose rows legitimately differ from the
+  // archive. The drift is the report; the existing row is the record. The
+  // standalone v0-seed:bootstrap script keeps its strict exit-1-on-drift
+  // convention for explicit integrity checks — that split is deliberate.
+  expect(v0seed.failing).toBe(false);
   // "inserted" counts only — subjects/sessions already exist from the first
   // run (unchanged, not inserted), so this reads 0/0 even though the DB
   // still holds all of them; only the drift count reflects the mutation.
@@ -144,8 +150,8 @@ test("drift aggregation: a v0-seed drift marks the run overall failing, but ever
   expect(reportFor(reports, "migrations").failing).toBe(false);
   expect(reportFor(reports, "edgar-seed:bootstrap").failing).toBe(false);
 
-  // The overall run-level signal (what main() turns into a non-zero exit code).
-  expect(reports.some((r) => r.failing)).toBe(true);
+  // The overall run-level signal: a drifted adopt run exits 0.
+  expect(reports.some((r) => r.failing)).toBe(false);
 
   // Never silently overwritten.
   const [{ tagline }] = await sql<{ tagline: string }[]>`SELECT tagline FROM swarm_members WHERE id = 'athena'`;

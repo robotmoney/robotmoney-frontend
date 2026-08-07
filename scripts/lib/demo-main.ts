@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
-import { DB_PREFLIGHT_ARGV, DB_PREFLIGHT_STEP, EXTERNAL_PG_FLAG, externalPgOverlayYaml, postgresPhaseNarration, resolveExternalPg } from "./demo-external-pg.ts";
+import { DB_PREFLIGHT_STEP, dbPreflightArgv, EXTERNAL_PG_FLAG, externalPgOverlayYaml, postgresPhaseNarration, resolveExternalPg } from "./demo-external-pg.ts";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
 import { provisionDemoAnalyticsTokenAfterPreflight, removeDemoAnalyticsToken } from "./demo-secret.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
@@ -1160,18 +1160,18 @@ async function main(): Promise<void> {
   // readiness check, and only THEN typed scenario initialization — the order
   // the startup checklist above has always displayed (migrate → api /health →
   // archive restore | simulation seed).
-  // Wiring only; DB_PREFLIGHT_ARGV carries what this is and why.
-  async function refuseIfPopulated(): Promise<void> {
+  // Wiring only; dbPreflightArgv carries what this is and why.
+  async function classifyDatabase(): Promise<void> {
     setStep(state, DB_PREFLIGHT_STEP, "running");
-    await stack.composeAsync([...DB_PREFLIGHT_ARGV], "external database preflight", { stdout: outFd, stderr: errFd });
+    await stack.composeAsync(dbPreflightArgv(scenario.initializer), "external database preflight", { stdout: outFd, stderr: errFd });
     setStep(state, DB_PREFLIGHT_STEP, "done");
-    log("external database is empty — safe to initialize");
+    log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log");
   }
 
   applyHostPorts(await stack.up({
     migrateEnv: scenario.migrateEnv,
     migrateScriptArgs: [...scenario.migrateScriptArgs],
-    preflight: externalPg.enabled ? refuseIfPopulated : undefined,
+    preflight: externalPg.enabled ? classifyDatabase : undefined,
     initialize: initializeScenario,
   }));
 

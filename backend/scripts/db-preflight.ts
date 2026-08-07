@@ -1,23 +1,46 @@
-// Refuse to bootstrap seed data into a database that already has content.
+// Classify the target database before the boot's first write: fresh bootstrap,
+// or adopted production data.
 //
 // WHY THIS EXISTS. A `--external-pg` boot points the demo at a real managed
 // server, and its migrate one-shot does not only migrate: it seeds job
 // schedules, enqueues cold-start sampler jobs, backfills wallet samples and
-// writes the allocation framework. Those run BEFORE anything validates that the
-// target is a database this boot should be initializing at all. A boot aimed at
-// a populated server therefore wrote ~77 rows into it before failing for an
-// unrelated reason, and no teardown could take them back: demo:down and
-// demo:clean only ever touch containers and volumes, of which an external boot
-// has none.
+// writes the allocation framework. This step runs BEFORE any of that and states
+// which of the two legitimate situations the boot is in:
 //
-// THE RULE. A populated remote is assumed to be production or production-alike
-// (staging). We do not seed it, we do not migrate it, we abort. Emptiness is
-// judged by the presence of BASE TABLEs in `public`, checked BEFORE the migrate
-// step that would create them — so "empty" means a genuinely fresh database,
-// not one this boot just built.
+//   EMPTY     — a genuinely fresh database (no BASE TABLEs in `public`, checked
+//               before the migrate step that would create them). The boot
+//               bootstraps it: migrate, seed, archive restore.
+//   POPULATED — a working production database. It got that way either through
+//               a manual restore (pg_restore of a .dump) or because a local
+//               postgres container kept its prior volume. An ARCHIVE
+//               (production-shaped) boot ADOPTS it: the same migrate + seed
+//               path runs, and every writer on that path is idempotent and
+//               deduplicated — it fills in what is missing (new migrations,
+//               missing schedule rows, absent archive rows) and never
+//               overwrites rows that already exist. Where an existing row
+//               differs from what the seed would have written, the existing
+//               row WINS and the difference is reported as drift, not an
+//               error (see v0-seed-bootstrap.ts).
+//
+// This used to refuse the POPULATED case outright, on the assumption that a
+// populated remote could only mean a mistakenly-targeted production server.
+// Now that the remote IS production — populated deliberately, by restore — the
+// refusal would refuse every ordinary boot. What made the refusal necessary was
+// that the seed path clobbered; the guard against clobbering now lives in the
+// writers themselves (ON CONFLICT DO NOTHING, insert-or-report-drift), where it
+// also protects the resumed-volume case the old refusal never covered.
+//
+// THE REFUSAL THAT REMAINS. A SIMULATION boot (plain `bun demo`) against a
+// populated database is still refused: its demo fixtures overwrite by design
+// (ON CONFLICT DO UPDATE is how corrected demo copy reaches a demo stack), so
+// "idempotent and deduplicated" does not hold on that path. The initializer
+// arrives as --initializer=archive|simulation; when the flag is missing we
+// assume simulation, so the strict branch is the one a forgotten parameter
+// lands in — the same fail-closed shape session.ts uses for the same reason.
 //
 // Read-only by construction: it issues SELECTs against the catalog and nothing
-// else. Exit 0 = safe to initialize, exit 1 = refuse.
+// else. Exit 0 = classified (either mode); non-zero only when the database
+// cannot be reached or queried at all.
 //
 // Usage: DATABASE_URL=... bun run scripts/db-preflight.ts
 import { sql, closeDb } from "../src/db/client.ts";
@@ -39,6 +62,23 @@ export interface TableCensus {
   rows: number;
 }
 
+export type BootInitializer = "archive" | "simulation";
+
+export interface PreflightResult {
+  mode: "bootstrap" | "adopt" | "refuse";
+  tables: number;
+  census: TableCensus[];
+}
+
+/** Parse --initializer=… out of argv. Missing or unrecognised ⇒ simulation —
+ *  fail-closed, so only an explicit archive boot can adopt a populated DB. */
+export function parseInitializer(argv: readonly string[]): BootInitializer {
+  for (const a of argv) {
+    if (a === "--initializer=archive") return "archive";
+  }
+  return "simulation";
+}
+
 /** The biggest tables by live-row estimate — enough to recognise WHAT this is. */
 async function censusSample(limit = 8): Promise<TableCensus[]> {
   const rows = (await sql`
@@ -51,38 +91,56 @@ async function censusSample(limit = 8): Promise<TableCensus[]> {
   return rows.map((r) => ({ table: r.table, rows: Number(r.rows) }));
 }
 
-export async function main(): Promise<void> {
-  const target = redactedTarget(process.env.DATABASE_URL);
+/** Classify the database. Throws only when it cannot be queried at all. */
+export async function classifyDatabase(initializer: BootInitializer): Promise<PreflightResult> {
   const [{ count }] = (await sql`
     SELECT count(*)::int AS count
     FROM information_schema.tables
     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
   `) as unknown as { count: number }[];
+  if (count === 0) return { mode: "bootstrap", tables: 0, census: [] };
+  return { mode: initializer === "archive" ? "adopt" : "refuse", tables: count, census: await censusSample() };
+}
 
-  if (count === 0) {
-    console.log(`[db-preflight] ${target}: empty (no tables in public) — safe to initialize`);
-    return;
+/**
+ * The operator-facing report, as lines. Pure so the exact wording is
+ * executable by tests — this text is what lands in the boot log, and it is the
+ * one place that says whether existing data is at risk (it is not).
+ */
+export function reportLines(target: string, r: PreflightResult): string[] {
+  if (r.mode === "bootstrap") {
+    return [`[db-preflight] ${target}: empty (no tables in public) — bootstrapping (migrate + seed + archive restore)`];
   }
-
-  const sample = await censusSample();
-  const populated = sample.filter((s) => s.rows > 0);
-
-  console.error(
-    `[db-preflight] REFUSING to bootstrap: ${target} already has ${count} table(s) in public.\n` +
-      `[db-preflight] A populated remote database is assumed to be production or production-alike;\n` +
-      `[db-preflight] this boot would have run migrations and seeded it. Nothing has been written.`,
-  );
+  const lines =
+    r.mode === "adopt"
+      ? [
+          `[db-preflight] ${target}: populated (${r.tables} table(s) in public) — adopting as existing production data.`,
+          `[db-preflight] The same migrate + seed path runs, and it is idempotent and deduplicated:`,
+          `[db-preflight] it fills in what is missing and never overwrites existing rows — on any`,
+          `[db-preflight] difference the existing row wins and is reported as drift.`,
+        ]
+      : [
+          `[db-preflight] REFUSING a simulation boot: ${target} already has ${r.tables} table(s) in public.`,
+          `[db-preflight] Demo/simulation fixtures overwrite by design, so a populated database`,
+          `[db-preflight] can only be adopted by a production-shaped (archive) boot: bun smoke.`,
+          `[db-preflight] Nothing has been written.`,
+        ];
+  const populated = r.census.filter((s) => s.rows > 0);
   if (populated.length > 0) {
-    console.error(`[db-preflight] largest tables by row estimate:`);
-    for (const s of populated) console.error(`[db-preflight]   ${s.table} ~${s.rows} rows`);
+    lines.push(`[db-preflight] largest tables by row estimate:`);
+    for (const s of populated) lines.push(`[db-preflight]   ${s.table} ~${s.rows} rows`);
   } else {
-    console.error(`[db-preflight] all ${count} table(s) are empty — schema present, no rows.`);
+    lines.push(`[db-preflight] all ${r.tables} table(s) are empty — schema present, no rows.`);
   }
-  console.error(
-    `[db-preflight] To initialize a fresh database, point --external-pg at an empty one.\n` +
-      `[db-preflight] To run against this data, boot WITHOUT the seeding path.`,
-  );
-  process.exitCode = 1;
+  return lines;
+}
+
+export async function main(): Promise<void> {
+  const target = redactedTarget(process.env.DATABASE_URL);
+  const result = await classifyDatabase(parseInitializer(process.argv.slice(2)));
+  const emit = result.mode === "refuse" ? console.error : console.log;
+  for (const line of reportLines(target, result)) emit(line);
+  if (result.mode === "refuse") process.exitCode = 1;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

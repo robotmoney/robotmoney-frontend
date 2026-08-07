@@ -10,7 +10,7 @@
 import { expect, test } from "bun:test";
 import { createStack, type StackRuntime } from "../../stack/stack.ts";
 import { API_CONTAINER_PORT, type StackConfig } from "../../stack/config.ts";
-import { DB_PREFLIGHT_ARGV, DB_PREFLIGHT_STEP } from "../../lib/demo-external-pg.ts";
+import { DB_PREFLIGHT_ARGV, DB_PREFLIGHT_STEP, dbPreflightArgv } from "../../lib/demo-external-pg.ts";
 
 const config: StackConfig = {
   repoRoot: "/nonexistent-by-design",
@@ -100,4 +100,14 @@ test("DB_PREFLIGHT_ARGV asks the question without dragging up dependencies", () 
 
 test("the guard has a step name the TUI can mark failed", () => {
   expect(DB_PREFLIGHT_STEP.trim().length).toBeGreaterThan(0);
+});
+
+test("dbPreflightArgv carries the boot's initializer to the classifier", () => {
+  // The initializer decides whether a populated database is adopted (archive:
+  // idempotent, non-clobbering seed) or refused (simulation: demo fixtures
+  // overwrite by design). db-preflight.ts treats a MISSING flag as simulation,
+  // so this argv is the only thing standing between an archive boot and the
+  // strict branch — it must spell the mode out explicitly.
+  expect(dbPreflightArgv("archive")).toEqual([...DB_PREFLIGHT_ARGV, "--initializer=archive"]);
+  expect(dbPreflightArgv("simulation")).toEqual([...DB_PREFLIGHT_ARGV, "--initializer=simulation"]);
 });
