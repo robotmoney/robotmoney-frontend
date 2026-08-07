@@ -572,18 +572,41 @@ async function processSnapshot(snap: V0Snapshot, drifts: Drift[]): Promise<RowOu
 }
 
 // ── Briefs ──────────────────────────────────────────────────────────────────
+//
+// The natural key is the SESSION, not the day (migration 0028) — the same move
+// processSession() already made for sessions themselves. v0 was day-keyed, so
+// each archived brief belongs to the v0 session convened at UTC midnight of its
+// own date, resolved through the identical `convenedAtFromDate` conversion.
+//
+// 19 of the 73 archived briefs have NO archived session for their
+// (subject_id, date): v0 kept a brief for days whose session it did not export.
+// Those import with `session_id = NULL` — which 0028 deliberately allows —
+// rather than being dropped to satisfy a constraint. `IS NOT DISTINCT FROM`
+// (not `=`) is what makes the lookup match those NULL rows on a re-run, which
+// is what keeps the import idempotent for all 73 rather than only 54.
 async function processBrief(brief: V0Brief, drifts: Drift[]): Promise<RowOutcome> {
+  const sessionId = (
+    await sql<{ id: string }[]>`
+      SELECT id FROM swarm_sessions
+      WHERE subject_id = ${brief.subject_id} AND convened_at = ${convenedAtFromDate(brief.date)}
+    `
+  )[0]?.id ?? null;
+
   const existing = (
-    await sql`SELECT body FROM swarm_briefs WHERE date = ${brief.date} AND subject_id = ${brief.subject_id}`
+    await sql`
+      SELECT body FROM swarm_briefs
+      WHERE subject_id = ${brief.subject_id} AND date = ${brief.date}
+        AND session_id IS NOT DISTINCT FROM ${sessionId}
+    `
   )[0] as Record<string, unknown> | undefined;
 
   const fields: FieldSpec[] = [{ column: "body", kind: "json", expected: brief.body }];
-  const naturalKey = `date=${brief.date}, subject_id=${brief.subject_id}`;
+  const naturalKey = `session_id=${sessionId ?? "none"}, date=${brief.date}, subject_id=${brief.subject_id}`;
 
   if (!existing) {
     await sql`
-      INSERT INTO swarm_briefs (date, subject_id, body)
-      VALUES (${brief.date}, ${brief.subject_id}, ${sql.json(jsonValue(brief.body ?? null))})
+      INSERT INTO swarm_briefs (session_id, date, subject_id, body)
+      VALUES (${sessionId}, ${brief.date}, ${brief.subject_id}, ${sql.json(jsonValue(brief.body ?? null))})
     `;
     return "inserted";
   }

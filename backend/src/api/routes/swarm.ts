@@ -107,6 +107,12 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     return { status: r ? 200 : 404, body: r ?? { error: "not found" } };
   }
   if (m === "GET" && p === C.brief) {
+    // `?session=` is the unambiguous handle (migration 0028 keys a brief on its
+    // session), and `?date=&subject=` stays supported unchanged for every
+    // published member client and doc — it resolves to the LATEST session of
+    // that day, matching GET /api/swarm/sessions/:date/:subject.
+    const session = url.searchParams.get("session");
+    if (session) return { status: 200, body: await ic.getBriefBySession(decodeURIComponent(session)) };
     const date = url.searchParams.get("date") ?? "";
     const subject = url.searchParams.get("subject") ?? "";
     return { status: 200, body: await ic.getBrief(date, subject) };

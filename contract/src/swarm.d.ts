@@ -296,6 +296,13 @@ export interface SwarmBrief {
   id: string;
   date: string;
   subjectId: string;
+  /**
+   * The session this brief was published for. A brief is keyed on its session,
+   * not its day (migration 0028), so a subject that convenes several times a
+   * day keeps one brief — and one `windowClosesAt` — per session. Null only on
+   * pre-0028 archived rows whose session was never archived.
+   */
+  sessionId: string | null;
   body: SwarmBriefBody | null;
   createdAt: string;
 }

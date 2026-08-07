@@ -881,6 +881,93 @@ test("two sessions for one subject on one day: the dated route returns the LATES
   expect((await get(routePath(ROUTES.swarm.session, { date, subject: subj })))?.status).toBe(200);
 });
 
+// ── A brief belongs to its SESSION, not to its day (issue #574, migration 0028)
+//
+// THE DEFECT THIS TEST EXISTS FOR. swarm_briefs was born `UNIQUE (date,
+// subject_id)` and publishBrief() upserted `ON CONFLICT (date, subject_id) DO
+// UPDATE SET body = EXCLUDED.body`. Migration 0022 moved SESSIONS off the day
+// key, so at the production cadence a subject convenes many times a day — and
+// every one of those sessions overwrote the previous session's brief row. The
+// body carries `windowClosesAt`: the deadline that session had already
+// advertised to its members. One row per day meant only the last session's
+// deadline survived, and every earlier session's record of what it promised was
+// destroyed. Nothing asserted otherwise, which is why it shipped.
+//
+// RED CONTROL: restore publishBrief()'s `ON CONFLICT (date, subject_id)` upsert
+// and this test fails on the brief-row count (1, not 2) and on the first
+// session's windowClosesAt (the second session's value, not its own).
+test("two sessions for one subject on one day: BOTH briefs survive, each keeping its own windowClosesAt", async () => {
+  const subj = rid("twobriefs");
+  await ic.ensureSubject(subj, "Twice-Briefed Subject");
+
+  // Session 1: a 30-minute window. Publishing is what frees the subject to
+  // convene again — openSession is idempotent while a session is still
+  // scheduled/collecting.
+  const first = await ic.openSession(subj);
+  const firstPublished = await ic.publishBrief(first.id, 30);
+  await ic.closeWindow(first.id);
+  await ic.aggregateSession(first.id);
+  await ic.publishSession(first.id);
+
+  // Session 2, same subject, same day: a 90-minute window, so the two
+  // deadlines cannot coincide by accident.
+  const second = await ic.openSession(subj);
+  const secondPublished = await ic.publishBrief(second.id, 90);
+
+  expect(second.id).not.toBe(first.id);
+  const date = sessionDate(first);
+  // Same calendar day — the whole point. If this ever fails the run straddled
+  // midnight UTC, not a regression in the code under test.
+  expect(sessionDate(second)).toBe(date);
+  expect(secondPublished.windowClosesAt).not.toBe(firstPublished.windowClosesAt);
+
+  // TWO brief rows for the day, one per session — not one collapsed row.
+  const rows = await sql<{ session_id: string }[]>`
+    SELECT session_id FROM swarm_briefs
+    WHERE subject_id = ${subj} AND date = ${date} ORDER BY created_at`;
+  expect(rows.length).toBe(2);
+  expect(rows.map((r) => r.session_id).sort()).toEqual([first.id, second.id].sort());
+
+  // Each session's brief still advertises the deadline THAT session promised.
+  const firstBrief = await ic.getBriefBySession(first.id);
+  const secondBrief = await ic.getBriefBySession(second.id);
+  expect(firstBrief?.sessionId).toBe(first.id);
+  expect(secondBrief?.sessionId).toBe(second.id);
+  expect(firstBrief?.body?.windowClosesAt).toBe(firstPublished.windowClosesAt);
+  expect(secondBrief?.body?.windowClosesAt).toBe(secondPublished.windowClosesAt);
+
+  // The day-scoped read resolves to the LATEST session's brief — the same rule
+  // getSession(date, subject) has followed since 0022 — so every published
+  // member client keeps getting the brief that is actually current.
+  const dated = await ic.getBrief(date, subj);
+  expect(dated?.sessionId).toBe(second.id);
+  expect(dated?.body?.windowClosesAt).toBe(secondPublished.windowClosesAt);
+
+  // Re-publishing the SAME session (a retried swarm.publish_brief job) still
+  // updates in place — no third row — and must not touch session 1's brief.
+  const republished = await ic.publishBrief(second.id, 45);
+  const afterRepublish = await sql`SELECT id FROM swarm_briefs WHERE subject_id = ${subj} AND date = ${date}`;
+  expect(afterRepublish.length).toBe(2);
+  expect((await ic.getBriefBySession(second.id))?.body?.windowClosesAt).toBe(republished.windowClosesAt);
+  expect((await ic.getBriefBySession(first.id))?.body?.windowClosesAt).toBe(firstPublished.windowClosesAt);
+
+  // …and over HTTP, where the public route gained `?session=` as the
+  // unambiguous handle while `?date=&subject=` kept its meaning.
+  const get = async (p: string) => await handleSwarm(new Request(`http://test${p}`), new URL(`http://test${p}`));
+  const byFirst = await get(`${ROUTES.swarm.brief}?session=${first.id}`);
+  expect(byFirst?.status).toBe(200);
+  expect((byFirst?.body as { sessionId: string; body: { windowClosesAt: string } }).sessionId).toBe(first.id);
+  expect((byFirst?.body as { body: { windowClosesAt: string } }).body.windowClosesAt).toBe(firstPublished.windowClosesAt);
+
+  const byDate = await get(`${ROUTES.swarm.brief}?date=${date}&subject=${subj}`);
+  expect(byDate?.status).toBe(200);
+  expect((byDate?.body as { sessionId: string }).sessionId).toBe(second.id);
+
+  // Unknown / unparseable handles are "no brief", never a 500 out of Postgres.
+  expect((await get(`${ROUTES.swarm.brief}?session=${crypto.randomUUID()}`))?.body).toBeNull();
+  expect((await get(`${ROUTES.swarm.brief}?session=not-a-uuid`))?.body).toBeNull();
+});
+
 // ── Joining is idempotent by member id ──────────────────────────────────────
 // The demo re-registers a persona's COMMITTED key against the id the database
 // already holds, on every boot. That must rebind the key and mint a working

@@ -419,8 +419,12 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       </li>
       <li>
         <strong>Fetch the brief.</strong>
-        <code>GET /api/swarm/brief?date=&lt;date&gt;&amp;subject=&lt;subjectId&gt;</code>
-        — no auth. There is no baked LLM prompt in this response. See the
+        <code>GET /api/swarm/brief?session=&lt;sessionId&gt;</code> — no auth.
+        A brief belongs to its session, so passing the session id you already
+        have is the exact way to get the brief that session published;
+        <code>?date=&lt;date&gt;&amp;subject=&lt;subjectId&gt;</code> also works and
+        returns the latest session of that day. There is no baked LLM prompt in
+        this response. See the
         <a href="/docs/investment-swarm/api-reference#get-brief">API reference</a>
         for the exact shape; in short, you get raw regime data, subject
         metadata, recent session continuity, and research signals — you
