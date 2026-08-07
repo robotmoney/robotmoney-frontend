@@ -240,8 +240,20 @@ export function checkArmedSchedules(
   return { ok: true, reason: notes.join(", ") };
 }
 
+// Probes the SAME authenticated submission gate `waitForApi` checks at boot
+// (ROUTES.analytics.readiness, Bearer cfg.token) — not the unauthenticated
+// ROUTES.health, which only proves the API can reach its own database and
+// says nothing about whether THIS producer's credential still works. A
+// producer whose token has been rotated/revoked would otherwise beat happily
+// forever while every real submission 401s. Any non-ok response (down server,
+// 401, 403, ...) reads as unreachable; the ongoing loop only needs a boolean,
+// unlike waitForApi's boot-time distinction between "down" and "credential
+// rejected" (which throws to fail the boot loudly).
 async function apiReachable(cfg: AnalyticsApiConfig, timeoutMs: number): Promise<boolean> {
-  return fetch(`${cfg.baseUrl}${ROUTES.health}`, { signal: AbortSignal.timeout(timeoutMs) })
+  return fetch(`${cfg.baseUrl}${ROUTES.analytics.readiness}`, {
+    headers: { Authorization: `Bearer ${cfg.token}` },
+    signal: AbortSignal.timeout(timeoutMs),
+  })
     .then((r) => r.ok)
     .catch(() => false);
 }

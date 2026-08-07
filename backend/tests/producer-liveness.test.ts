@@ -154,6 +154,85 @@ test("a brief API outage is tolerated; a sustained one withholds the heartbeat",
   // for several checks is not making progress, and says so.
 });
 
+// The two tests below exercise the REAL (un-stubbed) `reachable` default —
+// every other case in this file injects `deps.reachable` directly, which
+// means none of them would have caught apiReachable() probing the wrong
+// endpoint. A real Bun.serve fixture (same style as
+// producer-boundary.test.ts's "serve validates the credential" case) proves
+// the ongoing liveness loop actually hits the authenticated
+// /api/analytics/readiness gate — not the unauthenticated /health route,
+// which would answer 200 the whole time regardless of the credential.
+function readinessFixture(expectedToken: string): { server: ReturnType<typeof Bun.serve>; requests: string[] } {
+  const requests: string[] = [];
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url);
+      requests.push(url.pathname);
+      if (url.pathname === "/health") return Response.json({ status: "ok" });
+      if (url.pathname === "/api/analytics/readiness") {
+        return req.headers.get("authorization") === `Bearer ${expectedToken}`
+          ? Response.json({ ok: true, role: "analytics-provider" })
+          : Response.json({ error: "analytics-provider role required" }, { status: 403 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+  return { server, requests };
+}
+
+test("the real reachability probe hits the authenticated readiness gate and beats when the credential is accepted", async () => {
+  const { server, requests } = readinessFixture("good-token");
+  const beats: unknown[] = [];
+  try {
+    await runProducerLiveness(
+      { baseUrl: `http://127.0.0.1:${server.port}`, token: "good-token" },
+      {
+        env: {},
+        schedules: schedules({ regime: {}, research: {} }),
+        now: () => NOW,
+        sleep: async () => {},
+        beat: async (rec) => { beats.push(rec); },
+        ticks: 2,
+      },
+    );
+  } finally {
+    server.stop(true);
+  }
+
+  expect(requests).toContain("/api/analytics/readiness");
+  expect(beats.length).toBe(2);
+});
+
+test("a credential rejected at the readiness gate withholds the heartbeat — even though the unauthenticated /health route is up the whole time", async () => {
+  const { server, requests } = readinessFixture("good-token");
+  const beats: unknown[] = [];
+  try {
+    await runProducerLiveness(
+      { baseUrl: `http://127.0.0.1:${server.port}`, token: "wrong-token" },
+      {
+        // Tolerance 1: the very first rejected check already withholds the
+        // beat, so this test doesn't need to wait out the default grace window.
+        env: { PRODUCER_LIVENESS_UNREACHABLE_TICKS: "1" },
+        schedules: schedules({ regime: {}, research: {} }),
+        now: () => NOW,
+        sleep: async () => {},
+        beat: async (rec) => { beats.push(rec); },
+        ticks: 2,
+      },
+    );
+  } finally {
+    server.stop(true);
+  }
+
+  // If apiReachable() were still probing /health, this would beat every tick:
+  // /health answers 200 regardless of the (wrong) producer credential. Only a
+  // readiness-gate probe reflects the rejection.
+  expect(requests).toContain("/api/analytics/readiness");
+  expect(requests).not.toContain("/health");
+  expect(beats.length).toBe(0);
+});
+
 test("the real schedule() registers what the liveness check reads — the two cannot drift apart", async () => {
   // Goes through production startProducerSchedules with the REAL scheduler (only
   // the readiness wait is stubbed, so no network is touched), then judges the

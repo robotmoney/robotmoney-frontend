@@ -30,6 +30,14 @@ let hangGate = gate();
 beforeAll(() => {
   handlers["research.test_heartbeat_hang"] = async () => { await hangGate.opened; return { ok: true }; };
   handlers["research.test_heartbeat_slow"] = async () => { await sleep(600); return { ok: true }; };
+  // Claims cleanly (widening the deadline to BUSY via onClaim), then throws
+  // once the gate opens — standing in for a handler that fails mid-job while
+  // the database is down, so loop.ts's own failure-path UPDATE (its catch
+  // block, itself unguarded by a nested try) also throws.
+  handlers["research.test_heartbeat_busy_then_dbloss"] = async () => {
+    await hangGate.opened;
+    throw new Error("handler exploded after the database was pulled out from under it");
+  };
 });
 // This file TRUNCATEs job_schedules for isolation; restore the production seed
 // rows so later files sharing this ephemeral Postgres don't see an empty table.
@@ -183,5 +191,59 @@ test("a lane that has LOST ITS DATABASE goes unhealthy — 'process alive' is no
 
   // Recovery proves the process never died — it was up and failing the whole
   // time, which is exactly the state a process-existence probe would call green.
+  await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 5000, "recovery once the database returns");
+});
+
+test("a DB outage that hits MID-JOB narrows the stale BUSY budget back down instead of leaving it in place", async () => {
+  // Distinct from the idle-outage case above: here the loop is already BUSY —
+  // onClaim (loop.ts) has widened the on-disk deadline to the wide job budget
+  // — when the database disappears. If the drainLoop catch skipped the beat
+  // (the old behavior), that wide budget would sit uncorrected and the lane
+  // would keep reporting healthy for up to the full job budget even though it
+  // is fully stalled. The fix must narrow it back to the idle budget instead.
+  launch({
+    lane: LANES.research, workerId: "midjob-dbloss-research", heartbeatFile: path,
+    ...fastOpts, jobProgressTimeoutMs: 10_000, idleProgressTimeoutMs: 300,
+  });
+  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_busy_then_dbloss', '{}') RETURNING id`;
+
+  // Claimed cleanly (DB is fine at this point) — the loop is now on the WIDE
+  // (10s) budget.
+  await waitFor(async () => (await record()).phase === "busy", 3000, "the lane entering its busy phase");
+  expect((await record()).detail).toContain(`job ${id}`);
+  expect((await record()).staleAfterMs).toBe(10_000);
+
+  // Pull the database out from under the in-flight job. The handler will
+  // throw once released below; loop.ts's own failure-path UPDATE then throws
+  // too (the table is gone), so processOneJob() itself rejects — the exact
+  // path the drainLoop catch branch must handle.
+  await sql`ALTER TABLE jobs RENAME TO jobs_fault_injection`;
+  try {
+    hangGate.open();
+
+    // Give the rejected processOneJob() a moment to propagate into the catch
+    // and write its beat, then wait well past the NARROW (300ms) idle budget
+    // but nowhere near the WIDE (10s) one. Under the pre-fix behavior (no beat
+    // on error) the on-disk record would still be the 10s-budget "busy" write
+    // from above and would report healthy here — this assertion is the one
+    // that closes the gap.
+    await sleep(700);
+    const verdict = await checkHeartbeatFile(path);
+    expect(verdict.healthy).toBe(false);
+    expect(verdict.reason).toContain("no progress");
+    // And it was narrowed, not just eventually-stale on the old wide budget:
+    // the record itself now advertises the idle-sized budget.
+    const rec = await record();
+    expect(rec.staleAfterMs).toBe(300);
+    expect(rec.phase).toBe("faulted");
+  } finally {
+    await sql`ALTER TABLE jobs_fault_injection RENAME TO jobs`;
+  }
+
+  // Recovery: the process stayed alive throughout (the job row itself never
+  // got its failure recorded, since that write is what threw — it is still
+  // owned 'running' by this worker) and the drain loop keeps cycling once the
+  // database returns, so a fresh claim query succeeds and the lane goes
+  // healthy again.
   await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 5000, "recovery once the database returns");
 });

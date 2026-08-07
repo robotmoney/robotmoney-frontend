@@ -61,9 +61,13 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
   //    never flicker red (acceptance: idleness is not failure), while a claim
   //    query wedged on a stuck transaction is reported within a minute.
   //    A lane that has LOST ITS DATABASE also lands here: processOneJob throws,
-  //    the catch logs and sleeps without recording progress, and the lane goes
-  //    unhealthy — the same "alive but not serving" distinction the api's
-  //    /health check makes.
+  //    the catch logs and writes a `faulted` beat back on THIS (IDLE) budget —
+  //    even if the failure happened mid-job, after onClaim had already widened
+  //    the deadline to the 15-minute BUSY budget below — so a lost database is
+  //    always caught within ~60s, never up to 15 minutes late. The beat proves
+  //    the loop isn't deadlocked without claiming the database is up; repeated
+  //    failures still age the record out and the lane goes unhealthy — the
+  //    same "alive but not serving" distinction the api's /health check makes.
   //
   //  - BUSY: one claimed job blocks the drain loop for its whole duration, so
   //    this is a policy statement — no single job may occupy a lane longer than
@@ -101,7 +105,7 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
   // Progress is recorded from INSIDE the drain loop, never from a timer: a
   // detached ticker would keep reporting health for a deadlocked loop, which is
   // the whole failure this signal exists to catch.
-  function beat(phase: "boot" | "idle" | "busy", staleAfterMs: number, detail?: string): Promise<void> {
+  function beat(phase: "boot" | "idle" | "busy" | "faulted", staleAfterMs: number, detail?: string): Promise<void> {
     return writeHeartbeat(
       { phase, staleAfterMs, writer: workerId, detail: detail ?? `lane=${lane.name}` },
       { path: heartbeatFile },
@@ -126,10 +130,20 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
         await beat("idle", idleProgressTimeoutMs);
         if (!did) await sleep(idlePollMs); // nothing to do — back off
       } catch (err) {
-        // No beat: a failing claim/execute cycle is NOT progress. Repeated
-        // failures (lost database, exhausted pool) let the heartbeat go stale
-        // and the lane reports unhealthy, which is the honest reading.
+        // A failing claim/execute cycle is NOT progress on a job — but it IS
+        // proof the loop itself is not deadlocked, and critically it must
+        // NARROW whatever budget is currently on disk. onClaim (loop.ts,
+        // fired before processOneJob's own try/catch) may already have
+        // widened the heartbeat to the 15-minute BUSY budget for the job that
+        // just threw; skipping the beat here would leave that wide budget in
+        // place, so a DB outage mid-job would take up to 15 minutes to report
+        // unhealthy instead of the ~60s this loop otherwise guarantees.
+        // Write a `faulted` beat on the IDLE budget unconditionally — whether
+        // the failure landed while idle or mid-job — so repeated failures
+        // (lost database, exhausted pool) age out within the short budget and
+        // the lane reports unhealthy on the honest, short timeline.
         console.error(`[${workerId}] loop error:`, err);
+        await beat("faulted", idleProgressTimeoutMs, `error: ${err instanceof Error ? err.message : String(err)}`);
         await sleep(idlePollMs);
       }
     }

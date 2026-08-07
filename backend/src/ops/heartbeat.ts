@@ -26,8 +26,12 @@ import { rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 /** What the writer was doing when it last made progress. Free-form label used
- *  only for operator-facing diagnostics in `docker inspect`'s health log. */
-export type HeartbeatPhase = "boot" | "idle" | "busy" | "armed";
+ *  only for operator-facing diagnostics in `docker inspect`'s health log.
+ *  `faulted`: a claim/execute cycle threw (lost DB, exhausted pool, ...) — the
+ *  loop is not deadlocked (it beat), but it is not serving either, so it
+ *  reports on the narrow IDLE-sized budget regardless of whether the error
+ *  landed while idle or mid-job (worker/runtime.ts drainLoop). */
+export type HeartbeatPhase = "boot" | "idle" | "busy" | "armed" | "faulted";
 
 export interface HeartbeatRecord {
   /** Epoch ms at which the writer last completed a unit of work. */
