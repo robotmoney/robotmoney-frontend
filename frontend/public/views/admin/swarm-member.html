@@ -1,6 +1,8 @@
 <!-- Admin — member detail (/admin/swarm/members/:id): activate/deactivate/
-     reactivate/rotate-key/reject with confirm+reason, one-time credential
-     reveal. Never renders token_hash or a bearer token in the detail JSON.
+     reactivate/rotate-key/reject behind a confirm dialog, and a one-time
+     credential reveal. The dialog asks for a reason on every action EXCEPT
+     approve (RM-45) — see REASON_REQUIRED in the factory for why.
+     Never renders token_hash or a bearer token in the detail JSON.
      Issue #159. Buildless — factory registered at boot
      (alpine/views/admin/swarm-member.js).
 
@@ -58,7 +60,7 @@
               <span>New public key (optional — omit to rotate the credential against the existing on-file key)</span>
               <input type="text" x-model="confirm.publicKey" class="adm-input" data-testid="member-action-public-key" />
             </label>
-            <label class="adm-field">
+            <label class="adm-field" x-show="reasonRequired()">
               <span>Reason</span>
               <textarea x-model="confirm.reason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="member-action-reason"></textarea>
             </label>

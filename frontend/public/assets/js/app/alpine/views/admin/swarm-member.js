@@ -19,6 +19,28 @@
 import { api, ROUTES, path } from "../../../lib/api.js";
 import { adminAuthState, fmtUtc, redactForDisplay } from "./shared.js";
 
+// Actions that require the operator to type a reason before the dialog will
+// submit. APPROVE IS DELIBERATELY ABSENT (RM-45).
+//
+// The backend does not read or persist `reason` on ANY of these routes — it is
+// operator-audit context that goes no further than the request body. Requiring
+// it on approve therefore bought nothing: a mandatory 10-500 character field,
+// validated client-side, discarded server-side. That is worse than no audit
+// trail, because the ceremony implies a record that does not exist.
+//
+// The asymmetry is the point rather than an oversight. Approve is already
+// explicit, attributable and ADMIN_TOKEN-gated, and it is the common path — the
+// one an operator runs for every new member. The others are exceptional and
+// destructive-adjacent: rejecting an applicant, deactivating a seated member,
+// or rotating a key that invalidates their credential. A moment's friction
+// there is the friction working. Making the whole set uniform would mean either
+// gating the common path on a field that goes nowhere, or dropping the pause
+// before the actions that warrant one.
+//
+// If we want `reason` to mean something, the fix is to persist it (there is an
+// audit route at ROUTES.swarm.admin.audit), not to validate it harder here.
+const REASON_REQUIRED = new Set(["reject", "deactivate", "reactivate", "rotate-key"]);
+
 export function registerAdminSwarmMember(Alpine) {
   Alpine.data("adminSwarmMember", () => ({
     ...adminAuthState(),
@@ -83,11 +105,15 @@ export function registerAdminSwarmMember(Alpine) {
     },
     cancelConfirm() { this.confirm = null; this.confirmError = null; },
 
+    // Approve does NOT require a reason; every other action does. See
+    // REASON_REQUIRED above for why the asymmetry is deliberate.
+    reasonRequired() { return REASON_REQUIRED.has(this.confirm?.action); },
+
     async submitConfirm() {
       if (!this.confirm) return;
       const { action, publicKey, reason } = this.confirm;
       const trimmedReason = String(reason || "").trim();
-      if (trimmedReason.length < 10 || trimmedReason.length > 500) {
+      if (REASON_REQUIRED.has(action) && (trimmedReason.length < 10 || trimmedReason.length > 500)) {
         this.confirmError = "Reason must be 10–500 characters.";
         return;
       }
@@ -110,9 +136,11 @@ export function registerAdminSwarmMember(Alpine) {
         } else {
           throw new Error(`unknown member action: ${action}`);
         }
-        // `reason` is kept for local operator-audit context (harmless extra
-        // field — the backend does not read or persist it for these routes).
-        body.reason = trimmedReason;
+        // `reason` is local operator-audit context only: the backend does not
+        // read or persist it for any of these routes. Sent when the operator
+        // supplied one, omitted when they did not, rather than shipping an
+        // empty string that reads like a recorded blank.
+        if (trimmedReason) body.reason = trimmedReason;
         const res = await api.adminPost(route, this._token(), body);
         this.confirm = null;
         // Credential-minting actions (manual add / reactivate / rotate-key /
