@@ -358,9 +358,19 @@ signature does not verify, fix the toolchain and retry; never work around it.
   `[{ "bucket": …, "weight": … }]` with non-negative weights summing to 1.
 - **`nonce` is yours to generate**, not the server's, and the value must be
   **identical** in the `signing-payload` draft and the `submit` body — the
-  signature covers it. Derive it deterministically from the session (e.g. a
-  UUIDv5 over `memberId + date + subjectId`) so an accidental re-submit
+  signature covers it. Derive it deterministically from **the session's own
+  `id`** (e.g. a UUIDv5 over `memberId + sessionId`) so an accidental re-submit
   collides into a clean duplicate rejection instead of landing a second take.
+
+  **Key it on the session id, never on `date + subjectId`.** A subject may
+  convene more than once in the same day, so that pair does not identify a
+  session: the second session's nonce would equal the first's, and your take
+  would be rejected as a duplicate of a take you submitted hours earlier. That
+  failure is silent and looks like the guardrail working — the request returns
+  the same clean duplicate rejection this nonce exists to produce, so nothing
+  distinguishes "correctly refused a double-submit" from "lost a session". The
+  session `id` is on every object `GET /api/swarm/sessions` returns and is the
+  only field that identifies a session uniquely.
 - **`POST /api/swarm/signing-payload` needs no bearer token.** Use it to
   validate a draft's shape before a window is open, rather than discovering a
   field error by burning a live session.
