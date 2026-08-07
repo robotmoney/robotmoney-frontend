@@ -13,6 +13,70 @@ import { expect, test } from "@playwright/test";
 
 const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 
+// ── Derived member marks (#560, RM-48) ──────────────────────────────────────
+// Three real-shaped ids: a manifest slug, a funnel UUID, and a second slug.
+const MARK_MEMBERS = [
+  { id: "athena", status: "active", name: "Athena", lens: "quant risk", tagline: null, biases: null, mandate: null },
+  { id: "46bed5c1-f15b-49cf-ae10-29b5fae1a859", status: "active", name: "Woon", lens: "machine economy", tagline: null, biases: null, mandate: null },
+  { id: "robotmoney", status: "active", name: "Robot Money", lens: "institutional treasury", tagline: null, biases: null, mandate: null },
+];
+
+// The covenant, as computed values rather than a comment. Cyan is a LINE in
+// this system (views.css seams it along the avatar's top edge precisely so it
+// never fills a plane) and beacon means loss, which is why subjectDot()
+// already withholds it. Neither may appear in a member's figure.
+const FORBIDDEN_FILLS = ["#00e5ff", "#ff7a29"];
+
+test("swarm index: every member renders a distinct derived mark, none of it cyan or beacon", async ({ page }) => {
+  await page.route("**/api/swarm/members*", (route) => route.fulfill(json({ members: MARK_MEMBERS })));
+  await page.route("**/api/swarm/sessions*", (route) => route.fulfill(json({ sessions: [], nextCursor: null })));
+
+  await page.goto("/swarm");
+  const marks = page.locator(".sv__person-row .sv__avatar--mark svg");
+  await expect(marks).toHaveCount(3);
+
+  // Distinct: three members, three different marks. Compared as markup, since
+  // the whole point is that the shape and hues differ, not just the seed.
+  const shapes = await marks.evaluateAll((els) => els.map((el) => el.innerHTML));
+  expect(new Set(shapes).size).toBe(3);
+
+  const fills = await marks.evaluateAll((els) =>
+    els.flatMap((el) => [...el.querySelectorAll("[fill]")].map((n) => n.getAttribute("fill")!.toLowerCase())));
+  expect(fills.length).toBeGreaterThan(0);
+  for (const forbidden of FORBIDDEN_FILLS) expect(fills).not.toContain(forbidden);
+
+  // The mark is decorative SVG, so the row link would otherwise have no
+  // accessible name at all once the initials it replaced are gone.
+  await expect(page.locator('.sv__person-row .sv__avatar--mark[aria-label="Woon"]')).toHaveCount(1);
+});
+
+test("swarm index: a member's mark is the same on every load", async ({ page }) => {
+  await page.route("**/api/swarm/members*", (route) => route.fulfill(json({ members: MARK_MEMBERS })));
+  await page.route("**/api/swarm/sessions*", (route) => route.fulfill(json({ sessions: [], nextCursor: null })));
+
+  const read = async () => {
+    await page.goto("/swarm");
+    const mark = page.locator('.sv__person-row .sv__avatar--mark[aria-label="Woon"] svg');
+    await expect(mark).toBeVisible();
+    return mark.innerHTML();
+  };
+  expect(await read()).toBe(await read());
+});
+
+// #560's precedence is uploaded art, then the derived mark, then initials.
+// A row with no id at all has no seed, so it falls back rather than rendering
+// an empty box.
+test("swarm index: a member with no seed falls back to initials", async ({ page }) => {
+  await page.route("**/api/swarm/members*", (route) =>
+    route.fulfill(json({ members: [{ id: "", status: "active", name: "Nameless Agent", lens: null, tagline: null, biases: null, mandate: null }] })));
+  await page.route("**/api/swarm/sessions*", (route) => route.fulfill(json({ sessions: [], nextCursor: null })));
+
+  await page.goto("/swarm");
+  const avatar = page.locator(".sv__person-row .sv__avatar--mark").first();
+  await expect(avatar).toHaveText("NA");
+  await expect(avatar.locator("svg")).toHaveCount(0);
+});
+
 test("swarm index renders the regime label for a session carrying regimeSummary, not the state fallback", async ({ page }) => {
   await page.route("**/api/swarm/members*", (route) =>
     route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));

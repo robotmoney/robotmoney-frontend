@@ -395,7 +395,8 @@
               <article class="sv__take sv__take--ported">
                 <header class="sv__take-head">
                   <div class="sv__take-member">
-                    <a class="sv__avatar" :href="`/swarm/members/${t.memberId}`" x-text="initials(t.memberName)"></a>
+                    <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${t.memberId}`" :aria-label="t.memberName"
+                       x-html="memberMark(t.memberId, t.memberName, 40)"></a>
                     <div>
                       <a class="sv__member-link" :href="`/swarm/members/${t.memberId}`" x-text="t.memberName"></a>
                       <div class="sv__take-lens" x-text="memberLens(t.memberId)"></div>

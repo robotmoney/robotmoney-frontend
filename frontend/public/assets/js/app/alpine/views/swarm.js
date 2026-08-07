@@ -10,6 +10,7 @@
 // Alpine factory for the /swarm directory view. Moved verbatim from the
 // monolithic views.js (finding 025).
 import { api, ROUTES } from "../../lib/api.js";
+import { memberMarkOrInitials } from "../../lib/member-mark.js";
 import { subjectDot } from "./shared.js";
 
 export function registerSwarmView(Alpine) {
@@ -109,6 +110,12 @@ export function registerSwarmView(Alpine) {
         .slice(0, 2)
         .map((s) => s[0].toUpperCase())
         .join("") || "SW";
+    },
+    // Derived identity mark (#560); see the twin in static-views.js. x-html is
+    // safe here: memberMark() never interpolates the seed, and initials() is
+    // already stripped to letters and digits.
+    memberMark(seed, name, size = 40) {
+      return memberMarkOrInitials(seed, name, size, (n) => this.initials(n));
     },
     stanceEntries(s) { return Object.entries(s.swarmRecommendation?.stances || {}); },
     quorumText(s) {
