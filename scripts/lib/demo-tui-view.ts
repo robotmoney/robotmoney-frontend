@@ -18,6 +18,7 @@
 // handle, the compose project name, boot uptime, the admin password, the
 // readiness-polling instance) that has no reason to live anywhere else.
 import { color, spinner, truncate, visibleLen } from "./tui.ts";
+import type { ContainerLogLine, ContainerTelemetry } from "./demo-telemetry.ts";
 
 export type Phase = "pending" | "building" | "starting" | "healthy" | "failed";
 export type StepStatus = "pending" | "running" | "done" | "failed";
@@ -77,9 +78,35 @@ export interface DemoState {
   upcoming: UpcomingMember[]; // scheduled future admissions with a countdown
   messages: string[];
   fatal?: FatalState; // set once, by the startup-failure path only
+  // Observed container state, refreshed on a slow timer. Docker's own
+  // `restart: unless-stopped` is the supervisor; these are only its readings.
+  telemetry: ContainerTelemetry[];
+  containerErrors: ContainerLogLine[];
 }
 
 export const ONBOARD_STEPS = ["connect", "discover", "toolchain", "apply", "approve", "claim", "session", "memo", "admitted"];
+
+// The Research pane. Lives here rather than in demo-main for the same reason
+// every other pure renderer does (issue #456): it is a function of the state
+// and the two countdowns, so demo-main passes them rather than closing over
+// its readiness poller.
+export function renderResearchPane(
+  state: DemoState,
+  height: number,
+  nextRegime: string,
+  nextResearch: string,
+): string[] {
+  const out = [
+    color("1", "Research") + color("2", `  next regime ${nextRegime} · research ${nextResearch}`),
+    color("2", "kind                 state    detail"),
+  ];
+  for (const e of state.research.slice(0, Math.max(0, height - 2))) {
+    const stateLbl = e.state === "done" ? color("32", "done ") : e.state === "running" ? color("33", "run  ") : color("2", "queue");
+    out.push(`${ticks(e.state)} ${e.kind.padEnd(17)} ${stateLbl} ${e.note}`);
+  }
+  if (state.research.length === 0) out.push(color("2", "  (waiting for the worker's scheduler to fire…)"));
+  return out;
+}
 
 // ── State transitions ───────────────────────────────────────────────────────
 export function setContainer(state: DemoState, name: string, phase: Phase, detail?: string): void {

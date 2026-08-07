@@ -69,6 +69,7 @@ import {
   memberGlyph,
   onboardGlyph,
   phaseGlyph,
+  renderResearchPane,
   setContainer,
   setFatal,
   setFatalWriters,
@@ -88,6 +89,7 @@ import {
   renderFailurePane,
   selectFailureDetail,
 } from "./demo-failure.ts";
+import { renderTelemetryPane, startTelemetryPolling } from "./demo-telemetry.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..");
@@ -574,6 +576,8 @@ const state: DemoState = {
   onboarded: [],
   upcoming: [],
   messages: [],
+  telemetry: [],
+  containerErrors: [],
 };
 
 // setContainer / setStep / startOnboarding / setOnboardStep (and the
@@ -917,19 +921,9 @@ let frame = 0;
 // closing over it.
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-function renderResearch(height: number): string[] {
-  const out = [
-    color("1", "Research") +
-      color("2", `  next regime ${fmtCountdown(readinessPolling.secsUntilNext("regime.classify"))} · research ${fmtCountdown(readinessPolling.secsUntilNext("research.refresh"))}`),
-  ];
-  out.push(color("2", "kind                 state    detail"));
-  for (const e of state.research.slice(0, Math.max(0, height - 2))) {
-    const stateLbl = e.state === "done" ? color("32", "done ") : e.state === "running" ? color("33", "run  ") : color("2", "queue");
-    out.push(`${ticks(e.state)} ${e.kind.padEnd(17)} ${stateLbl} ${e.note}`);
-  }
-  if (state.research.length === 0) out.push(color("2", "  (waiting for the worker's scheduler to fire…)"));
-  return out;
-}
+const renderResearch = (height: number): string[] =>
+  renderResearchPane(state, height, fmtCountdown(readinessPolling.secsUntilNext("regime.classify")),
+    fmtCountdown(readinessPolling.secsUntilNext("research.refresh")));
 
 function renderSwarm(subjectId: string, height: number): string[] {
   const c = state.swarms[subjectId];
@@ -978,6 +972,7 @@ function render(): string[] {
   lines.push("  " + state.steps.map((s) => `${stepGlyph(s.status, frame)} ${s.name}`).join("   "));
 
   if (state.fatal) lines.push(...renderFailurePane(state.fatal, W, project));
+  lines.push(...renderTelemetryPane(state.telemetry, state.containerErrors, W));
 
   // Onboarding strip (full width): every prospective member keeps its join checklist
   // after admission (status checks stay visible), plus a queue of upcoming members with
@@ -1067,6 +1062,11 @@ async function main(): Promise<void> {
     tui.start();
     patchConsole(); // capture stray console.* (incl. imported e2e.ts) into the log file
   }
+  // Observe from here on, including through a failed boot. Keep the last good
+  // sample: an empty sweep means docker hiccuped, not that the lanes vanished.
+  startTelemetryPolling({ repoRoot, dockerEnv, onSample: ({ samples, errors }) => {
+    if (samples.length > 0) { state.telemetry = samples; state.containerErrors = errors; }
+  } });
 
   // ── The bring-up IS scripts/stack's bring-up (§11.3 E5) ──────────────────
   // build → postgres + wait → migrate → services → /health, in ONE shared

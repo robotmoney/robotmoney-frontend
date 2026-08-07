@@ -223,6 +223,18 @@ services:
         condition: service_healthy
     restart: unless-stopped
     logging: *default-logging
+    # Docker-side health for the ONE service that can answer a meaningful
+    # question about itself. /health probes the database (`SELECT 1`), so this
+    # distinguishes "process alive" from "actually serving" — an api that has
+    # lost its database reports unhealthy instead of quietly failing requests.
+    # `bun` rather than curl: the image is oven/bun and carries no curl.
+    # start_period covers first-boot migration; failures before it do not count.
+    healthcheck:
+      test: ["CMD", "bun", "-e", "process.exit((await fetch('http://127.0.0.1:8787/health')).ok ? 0 : 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   worker-swarm:
     <<: *worker-base
