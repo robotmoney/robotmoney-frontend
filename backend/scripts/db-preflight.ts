@@ -43,7 +43,15 @@
 // cannot be reached or queried at all.
 //
 // Usage: DATABASE_URL=... bun run scripts/db-preflight.ts
+import type postgresTypes from "postgres";
 import { sql, closeDb } from "../src/db/client.ts";
+
+/** The subset of postgres.js's client classifyDatabase/censusSample need —
+ *  narrow enough that a test can pass a throwaway-database connection instead
+ *  of the process-wide singleton, so the EMPTY branch is exercised for real
+ *  (see backend/tests/db-preflight.test.ts) without perturbing the shared,
+ *  already-migrated suite database every other test runs against. */
+export type PreflightDb = postgresTypes.Sql<{}>;
 
 /** Password-redacted target, the only form safe to print. */
 function redactedTarget(raw: string | undefined): string {
@@ -80,8 +88,8 @@ export function parseInitializer(argv: readonly string[]): BootInitializer {
 }
 
 /** The biggest tables by live-row estimate — enough to recognise WHAT this is. */
-async function censusSample(limit = 8): Promise<TableCensus[]> {
-  const rows = (await sql`
+async function censusSample(db: PreflightDb, limit = 8): Promise<TableCensus[]> {
+  const rows = (await db`
     SELECT relname AS table, n_live_tup AS rows
     FROM pg_stat_user_tables
     WHERE schemaname = 'public'
@@ -91,15 +99,17 @@ async function censusSample(limit = 8): Promise<TableCensus[]> {
   return rows.map((r) => ({ table: r.table, rows: Number(r.rows) }));
 }
 
-/** Classify the database. Throws only when it cannot be queried at all. */
-export async function classifyDatabase(initializer: BootInitializer): Promise<PreflightResult> {
-  const [{ count }] = (await sql`
+/** Classify the database. Throws only when it cannot be queried at all.
+ *  `db` defaults to the process-wide pool; a test may pass a throwaway
+ *  connection to exercise the EMPTY branch without touching shared state. */
+export async function classifyDatabase(initializer: BootInitializer, db: PreflightDb = sql): Promise<PreflightResult> {
+  const [{ count }] = (await db`
     SELECT count(*)::int AS count
     FROM information_schema.tables
     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
   `) as unknown as { count: number }[];
   if (count === 0) return { mode: "bootstrap", tables: 0, census: [] };
-  return { mode: initializer === "archive" ? "adopt" : "refuse", tables: count, census: await censusSample() };
+  return { mode: initializer === "archive" ? "adopt" : "refuse", tables: count, census: await censusSample(db) };
 }
 
 /**

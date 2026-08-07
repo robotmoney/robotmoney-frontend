@@ -3,12 +3,40 @@
 //
 // Runs against the suite's ephemeral Postgres (see tests/preload.ts), which is
 // migrated and therefore POPULATED — the adopt/refuse split is exercised for
-// real. The empty case can't be produced on the shared database (dropping
-// public would sabotage every other file), so its coverage is split: the
-// wording via reportLines, the classification via the demo's own smoke boot
-// against a fresh database, which is where it actually matters.
+// real. The EMPTY case cannot be produced on that shared database (dropping
+// public would sabotage every other file), so it gets its OWN throwaway
+// database on the same Postgres instance — no migrations applied, genuinely
+// zero BASE TABLEs in public — mirroring the pattern swarm-claim.test.ts uses
+// for the same reason (a schema state the shared suite database can't hold).
 import { expect, test } from "bun:test";
+import postgres from "postgres";
+import { config } from "../src/config.ts";
 import { classifyDatabase, parseInitializer, reportLines } from "../scripts/db-preflight.ts";
+
+test("empty database → bootstrap, on a genuinely fresh (unmigrated) database", async () => {
+  const base = new URL(config.databaseUrl);
+  const dbName = `tmp_preflight_empty_${crypto.randomUUID().slice(0, 8)}`;
+  const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
+  await admin.unsafe(`CREATE DATABASE ${dbName}`);
+  await admin.end();
+
+  const tmpUrl = new URL(base.toString());
+  tmpUrl.pathname = `/${dbName}`;
+  const db = postgres(tmpUrl.toString(), { max: 1, onnotice: () => {} });
+  try {
+    const r = await classifyDatabase("archive", db);
+    expect(r).toEqual({ mode: "bootstrap", tables: 0, census: [] });
+    // Same result regardless of initializer — EMPTY bootstraps either way,
+    // the adopt/refuse split only matters once tables exist.
+    const r2 = await classifyDatabase("simulation", db);
+    expect(r2).toEqual({ mode: "bootstrap", tables: 0, census: [] });
+  } finally {
+    await db.end();
+    const cleanup = postgres(base.toString(), { max: 1, onnotice: () => {} });
+    await cleanup.unsafe(`DROP DATABASE IF EXISTS ${dbName}`);
+    await cleanup.end();
+  }
+});
 
 test("populated + archive boot → adopt, with a census the operator can recognise", async () => {
   const r = await classifyDatabase("archive");
