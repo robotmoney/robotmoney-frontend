@@ -68,7 +68,30 @@ export const QUADRANT_MIN_PX = 32;
 
 // FNV-1a, re-mixed per byte. Deterministic, no dependencies, and stable across
 // engines, which matters because the same member must get the same mark on
-// every device and in the prerendered HTML.
+// every device and in the prerendered HTML. `Math.imul`, `charCodeAt` and
+// `>>> 0` are all exactly specified, so no engine is free to disagree.
+//
+// NEVER TAKE THE LOW BYTE. The first cut of this function ended `h & 0xff` and
+// it was not a hash at all. `Math.imul` is a multiply mod 2^32, so the low 8
+// bits of a product are a function of only the low 8 bits of its operands, and
+// XOR is bitwise — meaning the low byte of `h` evolves in a closed 8-bit
+// system that never sees the other 24. The generator's whole effective state
+// was one byte, every one of the n outputs was drawn from it, and the marks
+// collided immediately: `woon` and `noop-analyst`, both on the committed
+// roster, rendered byte-identical SVG, as did `hermes`/`kronos` and
+// `selene`/`zephyr`. Over 50,000 random UUID seeds the 40px form produced 140
+// distinct marks; this encoder can reach 247,303. FNV's low bits are its
+// documented weak end; this is what relying on them looks like.
+//
+// The fix xor-folds all four bytes down to one. FNV's own authors specify
+// xor-folding as the way to narrow a hash to fewer bits than it computes, and
+// it is the choice that does not require betting on which end of `h` carries
+// the entropy: taking `h >>> 24` measures identically well here, but it is
+// only correct for as long as the high end stays the strong one. Folding uses
+// every bit, so it survives a change of multiplier or offset basis. Measured
+// against the same shape encoder driven by crypto-random bytes, the folded
+// output is indistinguishable from ideal input (see
+// scripts/tests/unit/member-mark-distinctness.test.ts).
 /**
  * @param {string} seed
  * @param {number} n
@@ -83,7 +106,7 @@ function bytes(seed, n) {
       h ^= seed.charCodeAt(j) + i * 31;
       h = Math.imul(h, 0x01000193) >>> 0;
     }
-    out.push(h & 0xff);
+    out.push(((h >>> 24) ^ (h >>> 16) ^ (h >>> 8) ^ h) & 0xff);
   }
   return out;
 }

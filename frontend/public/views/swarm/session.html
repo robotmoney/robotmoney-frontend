@@ -395,8 +395,17 @@
               <article class="sv__take sv__take--ported">
                 <header class="sv__take-head">
                   <div class="sv__take-member">
+                    <!-- Seeded `fingerprint || id`, the same expression as the
+                         roster row and the profile hero. This site read a bare
+                         `t.memberId`: identical output today, because no
+                         projection carries a fingerprint yet, but the day one
+                         does the roster and hero marks move and the take
+                         attribution does not — splitting one member across two
+                         marks, which is the one thing member-mark.js promises
+                         cannot happen. Locked in step by
+                         scripts/tests/unit/member-mark-distinctness.test.ts. -->
                     <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${t.memberId}`" :aria-label="t.memberName"
-                       x-html="memberMark(t.memberId, t.memberName, 40)"></a>
+                       x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 40)"></a>
                     <div>
                       <a class="sv__member-link" :href="`/swarm/members/${t.memberId}`" x-text="t.memberName"></a>
                       <div class="sv__take-lens" x-text="memberLens(t.memberId)"></div>
