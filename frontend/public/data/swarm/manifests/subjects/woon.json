@@ -19,7 +19,7 @@
   ],
   "source": { "type": "rpc" },
   "recommendation_type": "position_actions",
-  "linked_member_id": "woon",
+  "linked_member_id": "46bed5c1-f15b-49cf-ae10-29b5fae1a859",
   "structural_notes": [
     "holds Robot Money vault shares — Woon's portfolio mechanically contains the basket RM allocates",
     "earns in stables (Bankr trading fees, peaq salary), accumulates in PEAQ and ROBOTMONEY",
