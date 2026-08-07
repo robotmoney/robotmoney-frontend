@@ -5,8 +5,11 @@
 // own test files — this file exercises the orchestration logic that is
 // UNIQUE to prod-bootstrap.ts and not exercised anywhere else: every step
 // always runs (no fail-fast), the v0-seed drift outcome is aggregated into
-// an overall "failing" result, and the edgar step's unreachable-vs-genuine-
-// failure classification (skip vs. hard fail) is correct in both directions.
+// an overall "failing" result, the edgar step's unreachable-vs-genuine-
+// failure classification (skip vs. hard fail) is correct in both directions,
+// and — the only place this is reachable — the step ORDERING a public
+// deployment produces, where migrate() seats the live roster before the
+// archive backfill reads swarm_members (issue #540, last test in this file).
 import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import net from "node:net";
 import { sql } from "../src/db/client.ts";
@@ -46,12 +49,15 @@ async function cleanArchiveRows(): Promise<void> {
 
 const origAnalyticsToken = process.env.ANALYTICS_TOKEN;
 const origAnalyticsApiUrl = process.env.ANALYTICS_API_URL;
+const origSeedRoster = process.env.SWARM_SEED_ROSTER;
 
 function restoreEnv(): void {
   if (origAnalyticsToken === undefined) delete process.env.ANALYTICS_TOKEN;
   else process.env.ANALYTICS_TOKEN = origAnalyticsToken;
   if (origAnalyticsApiUrl === undefined) delete process.env.ANALYTICS_API_URL;
   else process.env.ANALYTICS_API_URL = origAnalyticsApiUrl;
+  if (origSeedRoster === undefined) delete process.env.SWARM_SEED_ROSTER;
+  else process.env.SWARM_SEED_ROSTER = origSeedRoster;
 }
 
 beforeEach(async () => {
@@ -183,4 +189,51 @@ test("edgar step: a REACHABLE API that rejects the credential is classified as F
   } finally {
     server.stop(true);
   }
+});
+
+// ── The public-deployment shape: SWARM_SEED_ROSTER=1 (issue #540) ───────────
+//
+// This is the run that used to exit non-zero for no operator-visible reason.
+// Step 1's migrate() calls seed(), which — on a public deployment, where the
+// gate is on — seats athena and robotmoney from the committed manifests
+// BEFORE step 2's archive backfill ever looks at swarm_members. The two
+// writers then disagreed on those rows (the jsonb avatar column's `.path`,
+// plus the voice_md/submit columns the seeder does not own), step 2 reported
+// member drift, and main() turned that into exit 1 — blocking the production
+// bootstrap path for a cosmetic path difference on rows nobody had edited.
+//
+// The whole run is driven here, through the real orchestrator, with the real
+// gate set: this is the ordering `bun run prod-bootstrap` produces itself, and
+// it is the one no unit-level test of either writer can reach.
+test("SWARM_SEED_ROSTER=1: the roster is seated by step 1, and step 2 still reports 0 drift with nothing failing", async () => {
+  delete process.env.ANALYTICS_TOKEN;
+  process.env.SWARM_SEED_ROSTER = "1";
+
+  const reports = await runProdBootstrap();
+
+  // The seeder really did run first — otherwise this asserts nothing.
+  const seated = await sql<{ id: string }[]>`
+    SELECT id FROM swarm_members WHERE id IN ('athena', 'robotmoney') ORDER BY id`;
+  expect(seated.map((r) => r.id)).toEqual(["athena", "robotmoney"]);
+
+  const v0seed = reportFor(reports, "v0-seed:bootstrap");
+  expect(v0seed.summary).toContain("0 drift");
+  // Only woon is genuinely new; the two seeded rows are completed, not drifted.
+  expect(v0seed.summary.startsWith("1 members, ")).toBe(true);
+  expect(v0seed.status).toBe("success");
+  expect(v0seed.failing).toBe(false);
+
+  // What main() turns into the process exit code.
+  expect(reports.some((r) => r.failing)).toBe(false);
+
+  // All three archive members are present, all on the canonical avatar path.
+  const rows = await sql<{ id: string; avatar: Record<string, unknown> }[]>`
+    SELECT id, avatar FROM swarm_members WHERE id = ANY(${MEMBER_IDS}) ORDER BY id`;
+  expect(rows.length).toBe(3);
+  for (const r of rows) expect(r.avatar.path).toBe(`/avatars/swarm/${r.id}.jpg`);
+
+  // And a second convergence run is still clean, in that same ordering.
+  const second = await runProdBootstrap();
+  expect(reportFor(second, "v0-seed:bootstrap").summary).toContain("0 drift");
+  expect(second.some((r) => r.failing)).toBe(false);
 });
