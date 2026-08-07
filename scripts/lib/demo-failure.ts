@@ -10,11 +10,23 @@ import { color, hr, truncate } from "./tui.ts";
 import type { FatalState, WriterQuiesce } from "./demo-tui-view.ts";
 
 /**
- * Every compose service that WRITES to the database.
+ * Every compose service that WRITES to the database — the set a failed startup
+ * must stop before handing the stack back for inspection.
  *
  * `postgres` is deliberately absent: it IS the database, and under
  * --external-pg there is no such container at all — the server is remote and
  * outlives the boot entirely.
+ *
+ * WHY STOPPING MATTERS. A failed boot used to leave the entire stack running,
+ * so the worker lanes went on polling, enqueueing and writing against a
+ * database whose initialization had just failed part-way — the longer the
+ * operator spent reading the error, the further the data drifted from the state
+ * that produced it. Under --external-pg nothing can undo those writes:
+ * demo:down and demo:clean only ever touch containers and volumes, of which an
+ * external boot has none.
+ *
+ * STOPPED, not removed: `docker compose logs` and `demo:status` must still
+ * work, which is the whole reason a failed boot is left up at all.
  */
 export const DB_WRITER_SERVICES: readonly string[] = Object.freeze([
   "api",
@@ -46,8 +58,14 @@ export function writerQuiesceLine(w: WriterQuiesce): string {
  * `drifted=` only counts when NON-zero — every seeder prints a "drifted=0" tally
  * on the happy path, and matching that would anchor the excerpt on a line that
  * reports nothing wrong.
+ *
+ * REFUS/ABORT earn their place from a live miss: the populated-database guard
+ * prints "[db-preflight] REFUSING to bootstrap: … already has 55 table(s)" and
+ * names the tables underneath, but used none of the other words — so the pane
+ * anchored instead on the demo's own trailing "startup failed" line and showed
+ * the operator a restatement of the exit code rather than the reason.
  */
-const CULPRIT = /inconsistenc|\bWARN\b|\bERROR\b|\bFAIL|drifted=[1-9]/i;
+const CULPRIT = /inconsistenc|\bWARN\b|\bERROR\b|\bFAIL|\bREFUS|\bABORT|drifted=[1-9]/i;
 const MAX_DETAIL_LINES = 6;
 
 /**

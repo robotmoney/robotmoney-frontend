@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
-import { EXTERNAL_PG_FLAG, externalPgOverlayYaml, postgresPhaseNarration, resolveExternalPg } from "./demo-external-pg.ts";
+import { DB_PREFLIGHT_ARGV, DB_PREFLIGHT_STEP, EXTERNAL_PG_FLAG, externalPgOverlayYaml, postgresPhaseNarration, resolveExternalPg } from "./demo-external-pg.ts";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
 import { provisionDemoAnalyticsTokenAfterPreflight, removeDemoAnalyticsToken } from "./demo-secret.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
@@ -563,6 +563,8 @@ const state: DemoState = {
     { name: "worker-research", phase: "pending" },
   ],
   steps: [
+    // Only external boots carry the guard, so only they show its step.
+    ...(externalPg.enabled ? [{ name: "db preflight", status: "pending" as const }] : []),
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
     ...bootstrapStepNames(smokeMode).map((name) => ({ name, status: "pending" as const })),
@@ -821,20 +823,9 @@ function printResumeHint(): void {
   console.log(`[demo]   reclaim demo volumes: bun run demo:clean`);
 }
 
-// Stop the writers after a failed startup, BEFORE handing the stack back for
-// inspection (the decision of WHICH services those are is DB_WRITER_SERVICES).
-//
-// A failed boot used to leave the entire stack running, so the worker lanes
-// went on polling, enqueueing and writing against a database whose
-// initialization had just failed part-way — the longer the operator spent
-// reading the error, the further the data drifted from the state that produced
-// it. Under --external-pg that database is a real remote server, and nothing in
-// `demo:down` or `demo:clean` can undo those writes: both only ever touch
-// containers and volumes, of which an external boot has none.
-//
-// STOPPED, not removed: `docker compose logs` and `demo:status` still work,
-// which is the whole reason a failed boot is left up. Best-effort and
-// non-throwing — raising here would replace the real cause with a teardown error.
+// Wiring only; DB_WRITER_SERVICES carries which services and why. Best-effort
+// and non-throwing — raising from the failure path would replace the real cause
+// with a teardown error.
 function quiesceWriters(): WriterQuiesce {
   try {
     return dockerCompose(["stop", ...DB_WRITER_SERVICES], false).exitCode === 0 ? "stopped" : "failed";
@@ -1169,9 +1160,18 @@ async function main(): Promise<void> {
   // readiness check, and only THEN typed scenario initialization — the order
   // the startup checklist above has always displayed (migrate → api /health →
   // archive restore | simulation seed).
+  // Wiring only; DB_PREFLIGHT_ARGV carries what this is and why.
+  async function refuseIfPopulated(): Promise<void> {
+    setStep(state, DB_PREFLIGHT_STEP, "running");
+    await stack.composeAsync([...DB_PREFLIGHT_ARGV], "external database preflight", { stdout: outFd, stderr: errFd });
+    setStep(state, DB_PREFLIGHT_STEP, "done");
+    log("external database is empty — safe to initialize");
+  }
+
   applyHostPorts(await stack.up({
     migrateEnv: scenario.migrateEnv,
     migrateScriptArgs: [...scenario.migrateScriptArgs],
+    preflight: externalPg.enabled ? refuseIfPopulated : undefined,
     initialize: initializeScenario,
   }));
 

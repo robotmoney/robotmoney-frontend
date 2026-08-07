@@ -45,6 +45,25 @@ export const EPHEMERAL_PG_VOLUME = "pgdata";
 
 export const EXTERNAL_PG_FLAG = "--external-pg";
 
+/**
+ * The populated-database guard, as data.
+ *
+ * ONLY an external database gets it. The ephemeral compose postgres is this
+ * boot's own — created empty moments ago, thrown away by demo:clean — so
+ * refusing to seed a non-empty one would refuse every ordinary `bun demo`
+ * resume. A managed server is the opposite case: if it already holds tables we
+ * assume production or production-alike and abort rather than seed it.
+ *
+ * Runs as a one-off container BEFORE migrate(), which is the first step that
+ * writes (it seeds job schedules, cold-start jobs, wallet backfill and the
+ * allocation framework, not just DDL). `--no-deps` because nothing else needs
+ * to be up to ask the question.
+ */
+export const DB_PREFLIGHT_STEP = "db preflight";
+export const DB_PREFLIGHT_ARGV: readonly string[] = Object.freeze([
+  "run", "--rm", "--no-deps", "api", "bun", "run", "scripts/db-preflight.ts",
+]);
+
 /** What the postgres bring-up phase should say, and which container tile (if
  *  any) it owns. */
 export interface PostgresNarration {

@@ -81,6 +81,24 @@ describe("selectFailureDetail — recovers a cause the orchestrator never sees",
   test("an empty log yields just the pointer, never a crash", () => {
     expect(selectFailureDetail("", "/tmp/d.log")).toEqual(["full log: /tmp/d.log"]);
   });
+
+  // Regression: the populated-database guard uses none of WARN/ERROR/FAIL, so
+  // the pane anchored on the demo's own trailing "startup failed" line and
+  // restated the exit code instead of naming the reason.
+  test("a refusal surfaces the refusal, not the trailing 'startup failed' restatement", () => {
+    const log = [
+      " Container demo-api-run-1 Created",
+      "[db-preflight] REFUSING to bootstrap: db.example.com:25060/defaultdb already has 55 table(s) in public.",
+      "[db-preflight] A populated remote database is assumed to be production or production-alike;",
+      "[db-preflight] largest tables by row estimate:",
+      "[db-preflight]   raw_indicator_history ~116427 rows",
+      "[2026-08-07T03:10:30.833Z] startup failed: external database preflight failed (exit 1)",
+    ].join("\n");
+
+    const joined = selectFailureDetail(log, "/tmp/d.log").join("\n");
+    expect(joined).toContain("REFUSING to bootstrap");
+    expect(joined).toContain("raw_indicator_history");
+  });
 });
 
 describe("renderFailurePane", () => {
