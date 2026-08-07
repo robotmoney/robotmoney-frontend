@@ -8,6 +8,7 @@ import { analyticsApiClient, resolveAnalyticsApiConfig, type AnalyticsApiConfig 
 import { bootstrapEdgarSeed } from "../analytics/edgar-seed-loader.ts";
 import type { AnalyticsPersistence } from "../analytics/persistence.ts";
 import type { AnalyticsDataSource } from "../analytics/access/data-source.ts";
+import { writeHeartbeat } from "../ops/heartbeat.ts";
 
 export type ProducerKind = "regime" | "research";
 
@@ -100,10 +101,39 @@ export async function runProducerCommand(
   });
 }
 
+// What each armed cron currently is, as seen by the process itself. This is the
+// producer's equivalent of the worker's drain-loop position: it is the only
+// in-process fact that distinguishes "waiting for 22:30" from "the timer was
+// lost" or "the 22:30 run has been stuck for six hours". Read by
+// checkProducerProgress below.
+export interface ScheduleState {
+  /** Epoch ms the cron is next due (or was due, while `running`). */
+  nextFireAt: number;
+  running: boolean;
+  /** Epoch ms the in-flight run started. Only meaningful while `running`. */
+  runningSince: number;
+  /** The pending timer, so tests can disarm a schedule they armed for real. */
+  timer?: ReturnType<typeof setTimeout>;
+}
+const armedSchedules = new Map<ProducerKind, ScheduleState>();
+
+/** Read-only view of what this process currently has armed. */
+export function armedScheduleSnapshot(): ReadonlyMap<ProducerKind, ScheduleState> {
+  return new Map(armedSchedules);
+}
+
+/** Test seam: cancel and forget every armed schedule. Without the clearTimeout
+ *  a test that arms a real cron would leave a live timer holding the runner. */
+export function resetProducerSchedules(): void {
+  for (const state of armedSchedules.values()) if (state.timer) clearTimeout(state.timer);
+  armedSchedules.clear();
+}
+
 function schedule(kind: ProducerKind, cron: string): void {
   const arm = () => {
     const next = parser.parseExpression(cron, { tz: "UTC", currentDate: new Date() }).next().toDate();
-    setTimeout(async () => {
+    const timer = setTimeout(async () => {
+      armedSchedules.set(kind, { nextFireAt: next.getTime(), running: true, runningSince: Date.now() });
       try {
         await runProducerOnce(kind, next.toISOString().slice(0, 10));
       } catch (err) {
@@ -112,6 +142,7 @@ function schedule(kind: ProducerKind, cron: string): void {
         arm();
       }
     }, Math.max(0, next.getTime() - Date.now()));
+    armedSchedules.set(kind, { nextFireAt: next.getTime(), running: false, runningSince: 0, timer });
   };
   arm();
 }
@@ -122,13 +153,162 @@ export interface ProducerServeDeps {
   scheduleKind?: (kind: ProducerKind, cron: string) => void;
 }
 
-/** Validate reachability + provider authorization before arming any cron. */
-export async function startProducerSchedules(deps: ProducerServeDeps = {}): Promise<void> {
+/** Validate reachability + provider authorization before arming any cron.
+ *  Returns the resolved config so serve() can hand it straight to the liveness
+ *  loop rather than re-reading the token file. */
+export async function startProducerSchedules(deps: ProducerServeDeps = {}): Promise<AnalyticsApiConfig> {
   const cfg = requireProducerApiConfig(deps.env);
   await (deps.waitUntilReady ?? waitForApi)(cfg);
   const scheduleKind = deps.scheduleKind ?? schedule;
   scheduleKind("regime", deps.env?.PRODUCER_REGIME_CRON || process.env.PRODUCER_REGIME_CRON || "30 22 * * *");
   scheduleKind("research", deps.env?.PRODUCER_RESEARCH_CRON || process.env.PRODUCER_RESEARCH_CRON || "0 23 * * *");
+  return cfg;
+}
+
+// ---------------------------------------------------------------------------
+// Liveness (src/ops/heartbeat.ts)
+//
+// WHY THIS SERVICE NEEDS A DIFFERENT MECHANISM FROM THE WORKER LANES
+// A lane has a drain loop, so "the loop completed a cycle" is a signal that
+// falls out of the work itself. This process has no loop: it arms two cron
+// timers that fire once a day and otherwise sits on an idle event loop. A
+// heartbeat written by the WORK here would tick twice in twenty-four hours,
+// which is not a liveness signal at any threshold worth having.
+//
+// So the producer reports on the two things that actually have to hold for it
+// to do its job at 22:30, and re-establishes both on every tick:
+//
+//   1. BOTH crons are armed, and each is either waiting on a future fire time
+//      or executing a run that has not overrun its budget. A producer whose
+//      timer was lost, or whose nightly run wedged, fails here.
+//   2. The analytics API answers. This process holds no DATABASE_URL — the REST
+//      submission gate is the ONLY channel through which its work can become
+//      durable, so a producer that cannot reach it cannot make progress by
+//      definition.
+//
+// This is a loop, not a `setInterval`, for the same reason the worker's beat
+// lives inside its drain loop: the failure mode is a blocked event loop, and a
+// blocked event loop stops an awaited sleep exactly as it stops a cron timer.
+// The check does real work (a live HTTP round trip to the dependency every
+// submission flows through) rather than asserting its own existence.
+
+const PRODUCER_WRITER = "analytics-producer";
+
+/** Tolerance for a cron whose fire time has just passed but whose callback has
+ *  not been entered yet — timer dispatch is not instantaneous. */
+const FIRE_SLACK_MS = 60_000;
+
+export interface ProducerProgress {
+  ok: boolean;
+  reason: string;
+}
+
+/**
+ * Pure-ish verdict over the armed schedules. Exported for tests: the stall
+ * cases below are the ones that must flip the container red, and they are
+ * unreasonable to provoke through a real 22:30 cron.
+ */
+export function checkArmedSchedules(
+  now: number,
+  runBudgetMs: number,
+  schedules: ReadonlyMap<ProducerKind, ScheduleState> = armedSchedules,
+): ProducerProgress {
+  const kinds: ProducerKind[] = ["regime", "research"];
+  const notes: string[] = [];
+  for (const kind of kinds) {
+    const state = schedules.get(kind);
+    if (!state) return { ok: false, reason: `${kind} cron is not armed` };
+    if (state.running) {
+      const elapsed = now - state.runningSince;
+      if (elapsed > runBudgetMs) {
+        return {
+          ok: false,
+          reason: `${kind} run has been executing ${Math.round(elapsed / 1000)}s (budget ${Math.round(runBudgetMs / 1000)}s) — stalled`,
+        };
+      }
+      notes.push(`${kind} running ${Math.round(elapsed / 1000)}s`);
+      continue;
+    }
+    if (state.nextFireAt < now - FIRE_SLACK_MS) {
+      return {
+        ok: false,
+        reason: `${kind} cron fire time passed ${Math.round((now - state.nextFireAt) / 1000)}s ago and was never re-armed`,
+      };
+    }
+    notes.push(`${kind} due in ${Math.round((state.nextFireAt - now) / 1000)}s`);
+  }
+  return { ok: true, reason: notes.join(", ") };
+}
+
+// Probes the SAME authenticated submission gate `waitForApi` checks at boot
+// (ROUTES.analytics.readiness, Bearer cfg.token) — not the unauthenticated
+// ROUTES.health, which only proves the API can reach its own database and
+// says nothing about whether THIS producer's credential still works. A
+// producer whose token has been rotated/revoked would otherwise beat happily
+// forever while every real submission 401s. Any non-ok response (down server,
+// 401, 403, ...) reads as unreachable; the ongoing loop only needs a boolean,
+// unlike waitForApi's boot-time distinction between "down" and "credential
+// rejected" (which throws to fail the boot loudly).
+async function apiReachable(cfg: AnalyticsApiConfig, timeoutMs: number): Promise<boolean> {
+  return fetch(`${cfg.baseUrl}${ROUTES.analytics.readiness}`, {
+    headers: { Authorization: `Bearer ${cfg.token}` },
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+    .then((r) => r.ok)
+    .catch(() => false);
+}
+
+export interface ProducerLivenessDeps {
+  env?: Record<string, string | undefined>;
+  reachable?: (cfg: AnalyticsApiConfig, timeoutMs: number) => Promise<boolean>;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  beat?: (rec: { phase: "armed"; staleAfterMs: number; writer: string; detail: string }) => Promise<void>;
+  /** Schedules to judge. Defaults to this process's own armed crons. */
+  schedules?: ReadonlyMap<ProducerKind, ScheduleState>;
+  /** Stop after this many ticks. Tests bound the loop; serve() runs forever. */
+  ticks?: number;
+}
+
+export async function runProducerLiveness(cfg: AnalyticsApiConfig, deps: ProducerLivenessDeps = {}): Promise<void> {
+  const env = deps.env ?? process.env;
+  const tickMs = Number(env.PRODUCER_LIVENESS_TICK_MS ?? 30_000);
+  // A nightly research sweep is a long, heavy job (~200 EDGAR requests under
+  // rate limiting, plus regime compute). An hour clears it comfortably; past
+  // that the run is not slow, it is stuck.
+  const runBudgetMs = Number(env.PRODUCER_RUN_PROGRESS_TIMEOUT_MS ?? 3_600_000);
+  const probeTimeoutMs = Number(env.PRODUCER_LIVENESS_PROBE_TIMEOUT_MS ?? 5_000);
+  // The heartbeat has to survive a tick being late; four of them is generous
+  // without letting a genuinely dead loop hide for long.
+  const staleAfterMs = tickMs * 4;
+  // A rolling `api` restart must not paint this container red. Only a dependency
+  // that stays unreachable across several ticks — i.e. long enough that the
+  // producer really could not submit — withholds the beat.
+  const unreachableTolerance = Number(env.PRODUCER_LIVENESS_UNREACHABLE_TICKS ?? 3);
+
+  const sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms));
+  const now = deps.now ?? (() => Date.now());
+  const reachable = deps.reachable ?? apiReachable;
+  const beat = deps.beat ?? ((rec) => writeHeartbeat(rec));
+
+  let consecutiveUnreachable = 0;
+  for (let tick = 0; deps.ticks === undefined || tick < deps.ticks; tick++) {
+    const schedules = checkArmedSchedules(now(), runBudgetMs, deps.schedules ?? armedSchedules);
+    const up = await reachable(cfg, probeTimeoutMs);
+    consecutiveUnreachable = up ? 0 : consecutiveUnreachable + 1;
+
+    if (!schedules.ok) {
+      console.error(`[analytics-producer] not progressing: ${schedules.reason}`);
+    } else if (consecutiveUnreachable >= unreachableTolerance) {
+      console.error(
+        `[analytics-producer] not progressing: ${cfg.baseUrl} unreachable for ${consecutiveUnreachable} consecutive checks — nothing can be submitted`,
+      );
+    } else {
+      if (!up) console.warn(`[analytics-producer] ${cfg.baseUrl} unreachable (${consecutiveUnreachable}/${unreachableTolerance})`);
+      await beat({ phase: "armed", staleAfterMs, writer: PRODUCER_WRITER, detail: schedules.reason });
+    }
+    await sleep(tickMs);
+  }
 }
 
 async function main(): Promise<void> {
@@ -139,8 +319,10 @@ async function main(): Promise<void> {
     return;
   }
   if (command !== "serve") throw new Error(`usage: producer <serve|seed|regime|research> [YYYY-MM-DD]`);
-  await startProducerSchedules();
-  await new Promise<never>(() => {});
+  const cfg = await startProducerSchedules();
+  // Replaces a bare `new Promise<never>(() => {})`: the process still parks
+  // here forever, but now it parks doing the liveness work above.
+  await runProducerLiveness(cfg);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
