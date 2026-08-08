@@ -55,3 +55,9 @@ jobs:
       # silently matched nothing.
       - name: Model selection is registry-sourced, not ambient (D22 rule 1 as amended)
         run: bash scripts/checks/check-model-selection.sh
+      - name: AgentMail secret leak guard
+        run: |
+          if git grep -iE 'agentmail.*(key|token|secret).*['"'"'"][a-zA-Z0-9_-]{20,}['"'"'"]' -- '*.ts' '*.js' '*.json' '*.yml' '*.yaml' '*.toml' '*.sh' '*.md' '.env*' '*/.env*'; then
+            echo "AgentMail API key or secret literal found in committed files" >&2
+            exit 1
+          fi
