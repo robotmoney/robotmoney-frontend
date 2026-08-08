@@ -2151,9 +2151,9 @@ scheduled → collecting → window_closed → aggregated → published   (+ can
 | **Research pipeline** | At least one research signal tool runs (channel-divergence, late-cycle, or future tool) and its output lands in `research_signals`. The brief that members read must include research signal data alongside regime. |
 | **Regime classification** | A regime snapshot is written and readable. If the live provider (`FetcherProvider`) is unavailable, the seeded provider (`seededProvider`) is acceptable for hermetic runs — but the write path (same tables, same domain logic) must match production. |
 | **Open session** | A new session is created with `scheduled` state, assigned a subject from the rotation. |
-| **Publish brief** | Brief is assembled from regime + research signals + subject snapshot + recent session history. Window opens with a `window_closes_at` deadline. |
+| **Publish brief** | Brief is assembled from regime + research signals + subject snapshot + recent session history. Window opens with a `window_closes_at` deadline equal to ONE FULL CADENCE INTERVAL (`scripts/lib/demo-schedule.ts` `swarmWindowMs` = `swarmIntervalMs`; 6 h per subject in production), so this session's cutoff is the next session's convene and there is no interval in which a subject accepts nothing. The host driver waits that deadline out before it enqueues `close_window` (issue #570). |
 | **Collecting (submission window)** | Multiple autonomous agents call the REST API, read regime/brief, sign payloads, and submit. At least one agent no-shows (recorded absent, not fabricated). Out-of-window submissions are rejected. Cross-role writes are denied. |
-| **Close window** | Window transitions to `window_closed`. Submissions after this point are rejected. |
+| **Close window** | Window transitions to `window_closed`, at the advertised deadline rather than when the driver's own in-process agents settle. Submissions are rejected once `window_closes_at` has passed — the TIMESTAMP is the only timing gate; a session's `state` never refuses a take on its own (issue #570). |
 | **Aggregate** | Deterministic rollup: stance counts, mean confidence, absence list, synthesis string. No host-authored takes. |
 | **Publish** | Session is marked publicly visible. |
 

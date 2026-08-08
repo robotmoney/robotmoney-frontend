@@ -11,7 +11,7 @@ import {
   plannedRunAt,
   planSubjectSchedules,
   renderCadenceLine,
-  resolveDemoCadence,
+  resolveDemoCadenceForBoot,
   type SubjectCadencePlan,
 } from "./demo-schedule.ts";
 import {
@@ -149,13 +149,13 @@ if (usedLegacyStageFlag) {
   );
 }
 
-// …and the same argument selects the demo's CADENCE PROFILE (issue #371). A
-// `--static-port` boot is the standing/public demo, so it convenes each subject every
-// 6 h with the subjects phase-offset by 3 h and puts the analytics-producer on a
-// 3-hourly research beat; every other boot (including CI) keeps today's fast
-// ~2-min values. Every number lives in scripts/lib/demo-schedule.ts — this file
-// carries no cadence literal of its own.
-const cadence = resolveDemoCadence({ stage: staticPortMode });
+// …and the same argument selects the demo's CADENCE PROFILE (issue #371) — the
+// swarm interval, the SUBMISSION WINDOW (#570), the subject phase offset and the
+// producer beats. A `--static-port` boot is the standing/public demo (6 h per
+// subject); every other boot, CI included, keeps today's fast ~2-min values.
+// Every number lives in scripts/lib/demo-schedule.ts, which also ASSERTS that
+// the constants resolved here are the ones this invocation claims — fatal if not.
+const cadence = resolveDemoCadenceForBoot({ stage: staticPortMode, env: process.env });
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
@@ -1203,7 +1203,7 @@ async function main(): Promise<void> {
       onboardedHomes: new Map<string, OnboardedMemberHome>(),
       adminToken: adminPassword,
     };
-    await session.runSession(scenario.subjects[0]!, 1, { rail, members, initializer: scenario.initializer });
+    await session.runSession(scenario.subjects[0]!, 1, { rail, members, initializer: scenario.initializer, cadence });
 
     console.log("[demo] smoke: asserting restored subjects, personas, live take and archival history…");
     await run(["bun", "run", "scripts/smoke-e2e-assert.ts"], repoRoot,
@@ -1419,7 +1419,7 @@ async function main(): Promise<void> {
     console.log("");
     // Rendered from the RESOLVED profile, never hardcoded — the banner must
     // state the cadence actually in force for this invocation.
-    console.log(`  ${renderCadenceLine(cadence)}`);
+    console.log(`  ${renderCadenceLine(cadence, scenario.subjects.length)}`);
     console.log("  Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).");
     console.log("  Reclaim stopped demos' data volumes with: bun run demo:clean");
     console.log("");
@@ -1611,7 +1611,7 @@ async function main(): Promise<void> {
       try {
         const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
-          members: sessionMembers,
+          members: sessionMembers, cadence,
           // The STANDING loop needs this as much as the first session does.
           // Omitting it made runSession fall back to "simulation" and write
           // demo fixtures over archive-restored subjects — see session.ts.

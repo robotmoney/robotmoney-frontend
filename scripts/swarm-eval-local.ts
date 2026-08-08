@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { resolveAdmissionEvalModelConfig } from "./onboarding-eval-local.ts";
 import { admin, DEMO_MEMBERS, DEMO_SUBJECTS, runRegimeClassify, runSession } from "./lib/swarm/session.ts";
+import { resolveDemoCadence } from "./lib/demo-schedule.ts";
 import {
   createStack,
   composeArgs,
@@ -177,7 +178,11 @@ export async function runSwarmAuthoringEvalCase(
 
     // Member-container rail (issue #361 Phase 2): the session's members run in
     // their own containers against this eval stack.
-    const sessionRun = await runSession(subject, 1, { rail, members, initializer: "simulation" });
+    // A throwaway eval stack, never the standing demo — so the fast profile, whose
+    // two-minute submission window bounds this run (issue #570).
+    const sessionRun = await runSession(subject, 1, {
+      rail, members, initializer: "simulation", cadence: resolveDemoCadence({ stage: false }),
+    });
     sessionState = sessionRun.pub?.session?.state ?? null;
     const presentMembers = members.filter((m) => m.present);
     authoredCount = sessionRun.pub?.takes?.filter((t: any) => typeof t?.body === "string" && t.body.trim().length > 0).length ?? 0;
