@@ -88,7 +88,7 @@
 // MODEL SELECTION STAYS HERE, AND ONLY HERE. resolveModelConfig() below is the
 // single place an AGENT_MODEL selector becomes a model id and a credential; the
 // primitive takes that record and invents nothing.
-import { buildOnboardingPrompt, path as routePath, ROUTES } from "@robotmoney/contract";
+import { buildOnboardingPrompt, path as routePath, ROUTES, SWARM_ONBOARDING_SKILL_URL } from "@robotmoney/contract";
 import { classifyOutcome, shouldRetry } from "../agent/classify-outcome.ts";
 import { ensureMemberVolume, runMemberAgent } from "../agent/member-agent.ts";
 import { finalAssistantText } from "../agent/transcript.ts";
@@ -141,7 +141,7 @@ export { assistantTextParts, extractAssistantText, finalAssistantText } from "..
 // service; the agent applies over this REST surface (POST /api/swarm/apply)
 // directly, following the swarm-onboarding skill.
 export const DEFAULT_API_URL_INTERNAL = "http://api:8787";
-export const LOCAL_SWARM_ONBOARDING_SKILL_PATH = "/skills/swarm-onboarding/SKILL.md";
+export const LOCAL_SWARM_ONBOARDING_SKILL_PATH = new URL(SWARM_ONBOARDING_SKILL_URL).pathname;
 // Live-verified via a real GitHub Actions e2e run: a vanilla agent doing
 // genuine reasoning (fetching docs, downloading rmpc, generating a key, and
 // — when the linked skill's payload description wasn't quite enough —
