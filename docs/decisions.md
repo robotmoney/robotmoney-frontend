@@ -1607,7 +1607,7 @@ for `preview/*` hosting, unchanged.
   with the raw source tree mounted, none ever would.
 ---
 
-## D31 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)
+## D30 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)
 
 **Decision.** Two questions, resolved together since the vendor choice drives
 the DNS shape.

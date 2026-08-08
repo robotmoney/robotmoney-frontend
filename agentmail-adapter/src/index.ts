@@ -14,6 +14,18 @@ export interface WorkerExecutionContext {
   passThroughOnException(): void;
 }
 
+// Maps the `from` address of this repo's notification contract
+// (SWARM_NOTIFICATION_EMAIL_FROM, see .env.example) to the AgentMail inbox_id
+// that actually sends it, per docs/decisions.md D30: mail leaves from the
+// dedicated delegated subdomain notify.robotmoney.net, never the live
+// robotmoney.net root. A `from` with no entry here is a configuration error
+// and MUST fail loudly (400, no send) — silently sending from a different
+// inbox than the caller asked for is the failure mode this map exists to
+// prevent.
+const FROM_TO_INBOX_ID: Record<string, string> = {
+  "swarm@robotmoney.net": "swarm@notify.robotmoney.net",
+};
+
 export default {
   async fetch(request: Request, env: Env, ctx: WorkerExecutionContext): Promise<Response> {
     if (request.method !== "POST") {
@@ -32,13 +44,22 @@ export default {
       return new Response("Bad request", { status: 400 });
     }
 
-    if (!payload.to || !payload.subject || !payload.text) {
+    if (!payload.from || !payload.to || !payload.subject || !payload.text) {
       return new Response("Missing required fields", { status: 400 });
     }
 
-    const inboxId = "swarm@notify.robotmoney.net";
+    const inboxId = FROM_TO_INBOX_ID[payload.from];
+    if (!inboxId) {
+      return new Response(
+        `Unknown from address ${JSON.stringify(payload.from)}: no AgentMail inbox_id mapping`,
+        { status: 400 },
+      );
+    }
 
-    const agentMailEndpoint = "https://api.agentmail.to/v1/messages";
+    // Documented send endpoint: POST /v0/inboxes/{inbox_id}/messages/send
+    // with inbox_id as a PATH parameter and {to, subject, text} in the body
+    // (https://docs.agentmail.to/api-reference/inboxes/messages/send).
+    const agentMailEndpoint = `https://api.agentmail.to/v0/inboxes/${encodeURIComponent(inboxId)}/messages/send`;
     const agentMailRes = await fetch(agentMailEndpoint, {
       method: "POST",
       headers: {
@@ -46,8 +67,7 @@ export default {
         "Authorization": `Bearer ${env.AGENTMAIL_API_TOKEN}`,
       },
       body: JSON.stringify({
-        inbox_id: inboxId,
-        to: [payload.to],
+        to: payload.to,
         subject: payload.subject,
         text: payload.text,
       }),
