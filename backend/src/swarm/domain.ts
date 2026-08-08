@@ -376,9 +376,21 @@ export async function getBrief(date: string, subjectId: string) {
   // A date no longer identifies ONE brief. Since migration 0022 a subject may
   // convene several times a day, and since 0028 each of those sessions keeps
   // its OWN brief instead of overwriting its predecessor's. This day-scoped
-  // route therefore resolves the same way getSession(date, subject) does — to
-  // the LATEST session of that day — so every existing member client and doc
-  // keeps working and gets the answer it wants: the current brief.
+  // route therefore resolves to the most recent session of that day THAT HAS
+  // PUBLISHED A BRIEF, so every existing member client and doc keeps working
+  // and gets the answer it wants: the current brief.
+  //
+  // "…that has published a brief" is not a hedge — it is the ordinary case.
+  // openSession() convenes a session as 'scheduled' and the brief follows on a
+  // separate cron, so for much of any day the newest session of a subject has
+  // no brief row at all. This query selects FROM swarm_briefs, so such a
+  // session simply is not a candidate; the caller gets the newest brief that
+  // actually exists rather than a null. (Note the asymmetry with
+  // getSession(date, subject), which CAN return that unbriefed newest session:
+  // it selects from sessions. The two are not interchangeable, and since issue
+  // #570 a take submitted now lands on the newest session — which may be newer
+  // than the session whose brief this returns. `sessionId` on the response is
+  // how a caller tells the difference.)
   //
   // The LEFT JOIN (not an inner one) keeps sessionless legacy rows visible:
   // 0028 deliberately preserved v0-archived briefs whose session was never

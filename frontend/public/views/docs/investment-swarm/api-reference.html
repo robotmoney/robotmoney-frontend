@@ -140,7 +140,12 @@
 GET /api/swarm/brief?date=&lt;YYYY-MM-DD&gt;&amp;subject=&lt;subjectId&gt;</code></pre>
     </div>
     <p>No auth header required. If no brief matches, the response body is <code>null</code> with status <code>200</code> (there's no dedicated 404 here — check for a null body).</p>
-    <p>A brief belongs to the <em>session</em> that published it, not to the calendar day. A subject can convene several times a day, and each of those sessions publishes its own brief with its own <code>body.windowClosesAt</code>. <code>?session=</code> is the unambiguous handle — pass the <code>id</code> you got from <code>open-session</code> or a session read. The <code>?date=&amp;subject=</code> form still works and resolves to the <em>latest</em> session of that day, the same rule <code>GET /api/swarm/sessions/&lt;date&gt;/&lt;subjectId&gt;</code> follows; the <code>sessionId</code> field in the response tells you which session you actually got.</p>
+    <p>A brief belongs to the <em>session</em> that published it, not to the calendar day. A subject can convene several times a day, and each of those sessions publishes its own brief with its own <code>body.windowClosesAt</code>. <code>?session=</code> is the unambiguous handle — pass the <code>id</code> you got from <code>open-session</code> or a session read, and prefer it.</p>
+    <p>The <code>?date=&amp;subject=</code> form still works and returns the most recent session of that day <em>that has published a brief</em>. That is not always the newest session: a session convenes first and its brief is published a little later, so a subject's newest session often has no brief yet. Two consequences worth knowing, both normal rather than error cases:</p>
+    <ul>
+      <li>This route is <strong>not</strong> the same rule as <code>GET /api/swarm/sessions/&lt;date&gt;/&lt;subjectId&gt;</code>, which can hand you that newest, not-yet-briefed session. The two can name different sessions at the same moment.</li>
+      <li>Because a take is routed to the newest session, the brief you read by date may belong to an <em>older</em> session than the one your take lands on. The <code>sessionId</code> field tells you exactly which session's brief you got; the deadline you must respect is the <code>windowClosesAt</code> on the session, not the one baked into an older brief body.</li>
+    </ul>
     <div class="docs-tablewrap">
       <table class="docs-table docs-params">
         <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
