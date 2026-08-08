@@ -61,6 +61,18 @@ export function mapJobState(status: string): ResearchEntry["state"] {
   return "done"; // succeeded | failed | dead
 }
 
+// One-shot post-ready probe (issue #553 / D32): has the admin credential been
+// claimed? true ⇒ the per-boot ADMIN_TOKEN is superseded as the operator
+// credential and must never be displayed (TUI Admin-pass line, READY table).
+// Probe failure (an unreachable/unmigrated backend) reports false — fall back
+// to the historical pre-claim display rather than hiding the only way in.
+export async function probeAdminClaimed(backendUrl: string): Promise<boolean> {
+  const body: { claimed?: unknown } | null = await fetch(`${backendUrl}${ROUTES.admin.isClaimed}`)
+    .then((r) => (r.ok ? (r.json() as Promise<{ claimed?: unknown }>) : null))
+    .catch(() => null);
+  return body?.claimed === true;
+}
+
 export function createReadinessPolling(deps: ReadinessPollingDeps) {
   const { repoRoot, dockerEnv, externalPgEnabled, dbUser, dbName, researchKeys, getBackendUrl, state, log } = deps;
 

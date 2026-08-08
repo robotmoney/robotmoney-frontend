@@ -19,6 +19,7 @@ import { decodeCursor, encodeCursor } from "../../admin/cursor.ts";
 import { recordAudit, redactAuditRow } from "../../admin/audit.ts";
 import { getOverviewProjection, PRODUCTION_KINDS } from "../../admin/overview.ts";
 import { isPrivileged } from "../auth.ts";
+import { hashKey } from "../../lib/keys.ts";
 
 // Auth surface for the admin dashboard. Injectable so tests can exercise a
 // prod-mode config (token required, insecure disallowed) against the ephemeral DB.
@@ -165,35 +166,39 @@ export async function handleAdmin(
     return { status: 200, body: { ok: true } };
   }
 
-  // GET /api/admin/is-claimed — returns { claimed: boolean } (publicly visible)
+  // GET /api/admin/is-claimed — public claim-status probe: { claimed: boolean },
+  // booleans only, never the hash (issue #553 / D32). The demo boot
+  // (scripts/lib/demo-main.ts) reads this to decide whether the per-boot token
+  // may still be displayed in the TUI. A DB failure propagates to the router's
+  // sanitized 500 — never a fabricated "unclaimed".
   if (m === "GET" && p === "/api/admin/is-claimed") {
-    try {
-      const res = await sql`SELECT 1 FROM admin_credential WHERE id = 1`;
-      return { status: 200, body: { claimed: res.length > 0 } };
-    } catch (e) {
-      return { status: 200, body: { claimed: false } };
-    }
+    const rows = await sql`SELECT 1 FROM admin_credential WHERE id = 1`;
+    return { status: 200, body: { claimed: rows.length > 0 } };
   }
 
-  // POST /api/admin/claim — sets a persistent admin password
+  // POST /api/admin/claim — one-time claim (issue #553 / D32): the holder of
+  // the current admin credential (the unclaimed TUI-displayed token) sets a
+  // persistent password. Stored ONLY as its sha256 hex (lib/keys.ts hashKey —
+  // the same posture as swarm member access keys), never plaintext, never
+  // logged, never echoed back. The id=1 primary key makes the claim atomic and
+  // one-time: a concurrent or repeat claim loses with 409 until an operator
+  // deletes the row (recovery path in docs/decisions.md D32).
   if (m === "POST" && p === "/api/admin/claim") {
     if (!await isPrivileged(req, cfg)) return FORBIDDEN;
-    const b = await req.json().catch(() => null);
-    if (!b || typeof b !== "object" || typeof (b as any).password !== "string") {
-      return { status: 400, body: { error: "password required" } };
-    }
-    const pass = (b as any).password.trim();
-    if (!pass) return { status: 400, body: { error: "password cannot be empty" } };
-
-    const { createHash } = await import("node:crypto");
-    const pass_hash = createHash("sha256").update(pass).digest("hex");
+    const b = (await req.json().catch(() => null)) as { password?: unknown } | null;
+    const pass = typeof b?.password === "string" ? b.password.trim() : "";
+    if (pass.length < 12) return BAD("password must be at least 12 characters");
     try {
-      await sql`INSERT INTO admin_credential (id, pass_hash) VALUES (1, ${pass_hash})`;
-      return { status: 200, body: { ok: true } };
-    } catch (err: any) {
-      if (err.code === "23505") return { status: 409, body: { error: "admin credential already claimed" } };
+      await sql`INSERT INTO admin_credential (id, pass_hash) VALUES (1, ${hashKey(pass)})`;
+    } catch (err) {
+      if ((err as { code?: string }).code === "23505") {
+        return { status: 409, body: { error: "admin credential already claimed" } };
+      }
       throw err;
     }
+    // Lifecycle audit trail: THAT the claim happened, never any secret material.
+    await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'claim_admin_credential', ${sql.json({})})`;
+    return { status: 200, body: { ok: true } };
   }
 
   // GET /api/admin/overview — health cards + explicit alert feed (issue #155,
