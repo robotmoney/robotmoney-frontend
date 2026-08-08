@@ -493,10 +493,18 @@ async function processTake(
   // lookup so both branches share it.
   const signature = await signMessage(canonicalizeSubmission(submission as never), key);
 
+  // ORDER BY revision ASC LIMIT 1, because migration 0028 relaxed
+  // UNIQUE (session_id, member_id) (issue #573): this lookup is no longer
+  // guaranteed single-row by the schema, and taking an arbitrary [0] from a
+  // multi-row result would compare the archive against whichever row Postgres
+  // happened to return. Revision 1 is the row this importer wrote — archived
+  // sessions are long since aggregated and so can never acquire an amendment —
+  // which is what keeps the drift comparison honest.
   const existing = (
     await sql`
       SELECT stance, confidence, body, nonce, payload, signature, received_at
       FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${take.member_id}
+      ORDER BY revision ASC LIMIT 1
     `
   )[0] as Record<string, unknown> | undefined;
 

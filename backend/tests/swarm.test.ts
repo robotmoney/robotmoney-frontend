@@ -185,7 +185,14 @@ test("submit: signature verify/reject, window, duplicate", async () => {
   );
   expect((tamperedReceiptResult?.body as any).take.verified).toBe(false);
 
-  // same member, same session → 409 (one take per member)
+  // Same member, same session, FRESH nonce → 201, not 409 (issue #573). This
+  // line used to read "same member, same session → 409 (one take per member)".
+  // A member may now amend; the assertions that this is an APPEND (not an edit)
+  // and that reads collapse to the latest live in
+  // backend/tests/swarm-take-revisions.test.ts.
+  expect((await ic.submitRecommendation(m.token, await signed("n2"))).status).toBe(201);
+  // Reusing a nonce is still a replay and is still refused — the constraint
+  // that did NOT move.
   expect((await ic.submitRecommendation(m.token, await signed("n2"))).status).toBe(409);
 
   // tampered signature → 400 (fresh member to avoid the per-member dup guard)
@@ -449,7 +456,7 @@ test("aggregation omits invented prose and weights when no eligible body or vali
   expect(detail?.session.synthesis).toBeNull();
 });
 
-test("restart-safety (issue #208): re-opening the same session is idempotent (one row); a duplicate member take is 409 with exactly one recommendation row", async () => {
+test("restart-safety (issue #208): re-opening the same session is idempotent (one row); a REPLAYED member take is 409 with exactly one recommendation row", async () => {
   // This file's earlier tests accumulate active members toward
   // SWARM_ROSTER_CAP without deactivating them (see the file header
   // comment) — reset so this test's one admission is never a spurious 409.
@@ -475,12 +482,23 @@ test("restart-safety (issue #208): re-opening the same session is idempotent (on
     const s = { ...sub, nonce };
     return { ...s, signature: await signMessage(canonicalizeSubmission(s), m.privateKey) };
   };
-  const ok = await ic.submitRecommendation(m.token, await sign(rid("n")));
+  const nonce = rid("n");
+  const ok = await ic.submitRecommendation(m.token, await sign(nonce));
   expect(ok.status).toBe(201);
-  // Same member, same session, a FRESH nonce (a naive retry) → still 409 (the
-  // one-take-per-member-per-session unique constraint, not just nonce reuse).
-  const dup = await ic.submitRecommendation(m.token, await sign(rid("n")));
-  expect(dup.status).toBe(409);
+  // THE RETRY THIS TEST IS ABOUT. A restarted worker (or an at-most-once cron
+  // retry) replays the SAME signed submission, nonce included — that is what a
+  // retry is. It must not produce a second row.
+  //
+  // This used to retry with a FRESH nonce and assert 409, on the strength of
+  // the `UNIQUE (session_id, member_id)` constraint. Issue #573 relaxed that
+  // constraint so a member can amend, and a fresh nonce is exactly how an
+  // amendment is expressed — so the old form now describes an amendment, not a
+  // retry, and asserting 409 on it would pin the feature shut. Replay
+  // protection on `(member_id, nonce)` is untouched and is what actually makes
+  // a retry idempotent.
+  const replay = await ic.submitRecommendation(m.token, await sign(nonce));
+  expect(replay.status).toBe(409);
+  expect((replay as { error: string }).error).toContain("nonce already used");
   const recRows = await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${first.id} AND member_id = ${m.id}`;
   expect(recRows.length).toBe(1);
 });

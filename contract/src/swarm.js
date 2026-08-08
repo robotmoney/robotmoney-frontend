@@ -19,6 +19,24 @@ export const STANCES = /** @type {const} */ (["bearish", "cautious", "neutral", 
 // literal).
 export const SWARM_ROSTER_CAP = 10;
 
+// Hard ceiling on how many take rows ONE member may file in ONE session —
+// the original plus its amendments (issue #573, ADR D32). It replaces the
+// `UNIQUE (session_id, member_id)` constraint that migration 0028 relaxes:
+// until #573 that constraint was the ONLY server-side bound on a member's
+// write volume, so removing it without a replacement would have left an
+// unattended, LLM-driven agent free to loop.
+//
+// A COUNT, not a rate. `swarm_member_keys` carries no `last_used_at` and no
+// counter, so a time-based throttle would need new per-token state; a count is
+// checkable in the same transaction as the write and bounds TOTAL volume
+// rather than merely sustained rate. With #570's full-cadence window, five
+// filings is generous for genuine new-data amendments and still stops a
+// runaway loop outright.
+//
+// Pinned by backend/tests/swarm-take-revisions.test.ts, always through this
+// constant and never a literal.
+export const SWARM_TAKE_REVISION_CAP = 5;
+
 // Demo no-show rule (issue #122): absence emerges from a RULE (a curated set of
 // habitual no-shows), not a baked boolean — the contrarian member (draco) models
 // an occasional no-show. Kept deterministic (no Math.random / Date) so the

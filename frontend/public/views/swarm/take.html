@@ -19,6 +19,21 @@
           <p class="tk-filed" x-show="take.receivedAt">
             Filed <span x-text="formatDate(take.receivedAt, 'short')"></span>
             <span class="tk-filed__t" x-text="new Date(take.receivedAt).toISOString().slice(11,16) + ' UTC'"></span>
+            <span class="tk-filed__t" x-show="take.revision > 1" x-text="`revision ${take.revision}`"></span>
+          </p>
+          <!-- SUPERSEDED, NOT REPLACED (issue #573, ADR D32). This URL still
+               resolves, still verifies, and still shows the exact bytes that
+               were signed at the time it says they were filed — because the
+               member's amendment is a NEW row at a NEW permalink, never an edit
+               of this one. A receipt shared as proof of participation must
+               never silently change meaning; saying a later revision exists,
+               and linking to it, is how that promise is kept without lying by
+               omission. -->
+          <p class="tk-superseded" x-show="supersededBy" x-cloak>
+            <span>Superseded — this member filed a later revision of this take in the same session.</span>
+            <a :href="`/swarm/takes/${supersededBy?.id}`">
+              Superseded by revision <span x-text="supersededBy?.revision"></span> →
+            </a>
           </p>
           <div class="sv__receipt-status">
             <span class="sv__stance-badge" :style="stanceStyle(take.stance)">
@@ -82,6 +97,14 @@
     .tk-filed { margin: 0.5rem 0 0; font-family: var(--font-mono); font-size: 0.74rem;
                 letter-spacing: 0.06em; color: var(--color-text-muted); }
     .tk-filed__t { color: var(--color-text-dim); margin-left: 0.4rem; }
+    .tk-superseded { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline;
+                     margin: 0.8rem 0 0; padding: 0.6rem 0.8rem;
+                     border: 1px solid var(--color-border); border-left-width: 3px;
+                     font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
+                     color: var(--color-text-muted); }
+    .tk-superseded a { color: var(--color-accent); text-decoration: none;
+                       border-bottom: 1px solid transparent; }
+    .tk-superseded a:hover { border-bottom-color: var(--color-accent); }
     .tk-next { display: flex; flex-wrap: wrap; gap: 1.1rem; margin: 1.6rem 0 0;
                padding-top: 1.1rem; border-top: 1px solid var(--color-border);
                font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em; }

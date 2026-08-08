@@ -156,6 +156,12 @@ export function toTake(row: Row): SwarmTake {
     // that does not select `nonce` report false, which is the safe direction:
     // a live submission is never mislabelled archival.
     archival: isV0ArchiveNonce(row.nonce),
+    // Which revision of this member's take in this session this row is (issue
+    // #573). Defaults to 1 rather than being omitted when the column is not
+    // selected, because "revision 1" is exactly what every row was before
+    // migration 0028 and what every archival row still is — an absent field
+    // here would make a caller guess.
+    revision: row.revision == null ? 1 : Number(row.revision),
     receivedAt: instant(row.received_at) ?? "",
   };
 }

@@ -161,24 +161,41 @@ test("closing the window EARLY no longer rejects takes — the advertised deadli
   expect(res.status).toBe(201);
 });
 
-test("one take per member per session is STILL enforced, by the schema, with no migration", async () => {
-  // UNIQUE (session_id, member_id) in 0004_committee.sql. Deliberately retried
-  // with a FRESH nonce so this exercises the session/member constraint rather
-  // than nonce replay.
+test("a fresh nonce from the same member is an AMENDMENT, not a duplicate — and the schema says so", async () => {
+  // WHAT THIS TEST USED TO ASSERT, and why it changed. It read "one take per
+  // member per session is STILL enforced, by the schema, with no migration",
+  // and it pinned `UNIQUE (session_id, member_id)` from 0004_committee.sql by
+  // grepping pg_indexes. Issue #573 relaxes that constraint on purpose: a
+  // member may amend inside the open window, and a fresh nonce is exactly how
+  // an amendment is expressed. Keeping the old assertion would pin the feature
+  // shut, so it is rewritten to assert the replacement rather than deleted.
   const subj = rid("dup");
   await ic.ensureSubject(subj, "Dup Subject");
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   const m = await activeMember();
-  expect((await submit(m, sessionDate(s), subj, { nonce: rid("first") })).status).toBe(201);
+  const nonce = rid("first");
+  expect((await submit(m, sessionDate(s), subj, { nonce })).status).toBe(201);
+  // Fresh nonce → accepted as revision 2.
   const second = await submit(m, sessionDate(s), subj, { nonce: rid("second") });
-  expect(second.status).toBe(409);
-  expect((second as { error: string }).error).toContain("already submitted");
-  // …and the constraint itself is still declared, so this cannot pass on a
-  // coincidence of ordering.
-  const idx = await sql<{ indexdef: string }[]>`
-    SELECT indexdef FROM pg_indexes WHERE tablename = 'swarm_recommendations'`;
-  expect(idx.map((r) => r.indexdef).join("\n")).toMatch(/UNIQUE.*\(session_id, member_id\)/);
+  expect(second.status).toBe(201);
+  expect((second as { revision?: number }).revision).toBe(2);
+  // Reused nonce → still refused. This is the constraint that did NOT move,
+  // and it is what makes a naive worker retry idempotent.
+  const replayed = await submit(m, sessionDate(s), subj, { nonce });
+  expect(replayed.status).toBe(409);
+  expect((replayed as { error: string }).error).toContain("nonce already used");
+
+  // …and the SCHEMA says both of those things, so neither can pass on a
+  // coincidence of ordering. The old blanket (session_id, member_id) unique is
+  // gone; (session_id, member_id, revision) is what replaced it, and it is
+  // what makes "two rows claiming to be the same revision" impossible.
+  const idx = (await sql<{ indexdef: string }[]>`
+    SELECT indexdef FROM pg_indexes WHERE tablename = 'swarm_recommendations'`)
+    .map((r) => r.indexdef).join("\n");
+  expect(idx).toMatch(/UNIQUE.*\(session_id, member_id, revision\)/);
+  expect(idx).toMatch(/UNIQUE.*\(member_id, nonce\)/);
+  expect(idx).not.toMatch(/UNIQUE.*\(session_id, member_id\)[^,]/);
 });
 
 test("published_at >= window_closes_at — the invariant that was false by -59.9 min for a month", async () => {
