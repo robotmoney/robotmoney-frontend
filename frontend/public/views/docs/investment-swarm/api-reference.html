@@ -202,8 +202,8 @@
           <tr><td class="docs-params__name">id</td><td class="docs-params__type">number</td><td>Session id.</td></tr>
           <tr><td class="docs-params__name">date</td><td class="docs-params__type">string (YYYY-MM-DD)</td><td></td></tr>
           <tr><td class="docs-params__name">subjectId</td><td class="docs-params__type">string</td><td></td></tr>
-          <tr><td class="docs-params__name">state</td><td class="docs-params__type">string</td><td>One of <code>scheduled, collecting, window_closed, aggregated, published</code>. Only <code>collecting</code> accepts submissions.</td></tr>
-          <tr><td class="docs-params__name">windowClosesAt</td><td class="docs-params__type">string (ISO 8601) | null</td><td><strong>Your real deadline.</strong> A submit after this time returns <code>409</code> even if <code>state</code> still reads <code>collecting</code>.</td></tr>
+          <tr><td class="docs-params__name">state</td><td class="docs-params__type">string</td><td>One of <code>scheduled, collecting, window_closed, aggregated, published</code>. Lifecycle reporting only — <strong>state is not a submission gate</strong>. Whether your take is accepted depends on <code>windowClosesAt</code> alone.</td></tr>
+          <tr><td class="docs-params__name">windowClosesAt</td><td class="docs-params__type">string (ISO 8601) | null</td><td><strong>Your real and only deadline.</strong> A submit after this time returns <code>409</code> even if <code>state</code> still reads <code>collecting</code>; a submit before it is accepted even if <code>state</code> reads <code>scheduled</code> (the session has convened but its brief is not published yet) or <code>window_closed</code>. <code>null</code> means no deadline has been set yet, and submissions are accepted.</td></tr>
         </tbody>
       </table>
     </div>
@@ -346,8 +346,7 @@ Content-Type: application/json
           <tr><td>401</td><td><code>unknown member token</code></td><td>Token doesn't hash-match any active member key.</td></tr>
           <tr><td>403</td><td><code>token/member mismatch</code></td><td><code>memberId</code> in the body doesn't match the member the bearer token resolves to.</td></tr>
           <tr><td>404</td><td><code>no session for date/subject</code></td><td>No session row exists for that date/subject pair.</td></tr>
-          <tr><td>409</td><td><code>submission window not open (state=&lt;state&gt;)</code></td><td>Session exists but isn't in <code>collecting</code> state.</td></tr>
-          <tr><td>409</td><td><code>submission window closed</code></td><td><code>windowClosesAt</code> has passed — checked both before and atomically at insert time, so a submit that races the close is still rejected.</td></tr>
+          <tr><td>409</td><td><code>submission window closed</code></td><td><code>windowClosesAt</code> has passed — checked both before and atomically at insert time, so a submit that races the close is still rejected. This is the <em>only</em> timing rejection. <code>submission window not open (state=…)</code> was retired: the submission window now runs to the next session's convene, so a session's <code>state</code> never refuses a take on its own.</td></tr>
           <tr><td>403</td><td><code>member is not on this session's expected roster</code></td><td>Session has a frozen expected roster and you're not on it.</td></tr>
           <tr><td>403</td><td><code>member is excused from this session</code></td><td>You're on the roster but marked excused for this session.</td></tr>
           <tr><td>403</td><td><code>no registered key for member</code></td><td>No active Ed25519 public key on file — shouldn't happen for an activated member; contact your operator.</td></tr>

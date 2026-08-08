@@ -194,12 +194,22 @@ test("submit: signature verify/reject, window, duplicate", async () => {
   const wrongSig = await signMessage(canonicalizeSubmission({ ...s2, stance: "bearish" }), m2.privateKey);
   expect((await ic.submitRecommendation(m2.token, { ...s2, signature: wrongSig })).status).toBe(400);
 
-  // window closed → 409
+  // WINDOW ELAPSED → 409. This used to read "window closed → 409" and simply
+  // called closeWindow, which was a tautology with respect to issue #570: the
+  // driver closed a 60-minute window three minutes in, and this asserted that
+  // the close it had just performed took effect. The deadline is the timestamp
+  // now, so elapsing it is what makes the take late — and closing early does
+  // NOT make it late (backend/tests/swarm-submission-window.test.ts pins that
+  // direction). Rewriting the stored deadline is the suite's only honest lever:
+  // it is compared against Postgres now(), so no fake clock can move it.
   await ic.closeWindow(session.id);
+  await sql`UPDATE swarm_sessions SET window_closes_at = now() - interval '1 second' WHERE id = ${session.id}`;
   const m3 = await activeMember();
   const s3 = { memberId: m3.id, date, subjectId: subj, nonce: "n4", stance: "neutral", confidence: 0.5, body: "z" };
   const sig3 = await signMessage(canonicalizeSubmission(s3), m3.privateKey);
-  expect((await ic.submitRecommendation(m3.token, { ...s3, signature: sig3 })).status).toBe(409);
+  const late = await ic.submitRecommendation(m3.token, { ...s3, signature: sig3 });
+  expect(late.status).toBe(409);
+  expect((late as { error: string }).error).toBe("submission window closed");
 });
 
 // A representative 3-section memo body (what the MCP agent's buildMemo produces).

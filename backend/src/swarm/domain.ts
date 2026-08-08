@@ -393,7 +393,19 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
                              WHERE subject_id = ${sub.subjectId}
                              ORDER BY convened_at DESC LIMIT 1`)[0];
   if (!session) return { ok: false, status: 404, error: "no session for subject" };
-  if (session.state !== "collecting") return { ok: false, status: 409, error: `submission window not open (state=${session.state})` };
+  // THE DEADLINE IS THE TIMESTAMP, NOT THE STATE (issue #570). There used to be
+  // a `session.state !== 'collecting'` gate here returning
+  // `submission window not open (state=<state>)`. It was the dead zone: an agent
+  // polling on its own schedule, which is what every external operator's agent
+  // does, hit it whenever it arrived in the gap between the previous session's
+  // close and the next brief being published — a refusal that had nothing to do
+  // with the deadline it had been given. With the window now equal to one full
+  // cadence interval, a subject always has a session whose advertised window has
+  // not passed, so the two `window_closes_at` comparisons below (this one, and
+  // the INSERT predicate that re-checks it inside the same statement) are the
+  // whole of the timing contract. A take arriving after session N closed and
+  // before session N+1 has published its brief lands on N+1 — the session it
+  // belongs to — because N+1 is the newest row and carries no deadline yet.
   // Signed-date agreement. A stale agent that woke with yesterday's brief must
   // not have its take filed against today's session.
   if (sub.date && day(session.date) !== sub.date) {
@@ -441,16 +453,24 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
 
   try {
     // Close the TOCTOU gap: re-check the window inside the same statement by
-    // gating the INSERT on a SELECT of the session that is still collecting and
-    // not past its close time. If the window closed between our check above and
-    // now, 0 rows insert and we reject.
+    // gating the INSERT on a SELECT of the session whose close time has not
+    // passed. If the window closed between our check above and now, 0 rows
+    // insert and we reject.
+    //
+    // The `s.state = 'collecting'` conjunct is gone with the state gate above
+    // (issue #570) and had to be: leaving it here would have made deleting that
+    // gate a no-op, turning `submission window not open (state=scheduled)` into
+    // `submission window closed` for the same take. The window comparison is
+    // kept, and it is the STRICTER of the two checks — this one runs against
+    // Postgres `now()` while the guard above uses the api process's clock, so a
+    // take that races the boundary is still rejected by the database itself.
     const rows = await sql`
       INSERT INTO swarm_recommendations
         (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified)
       SELECT s.id, ${memberId}, ${sub.subjectId}, ${sub.date}, ${sub.nonce}, ${sub.stance},
              ${sub.confidence}, ${sub.body ?? null}, ${sub.memoUrl ?? null}, ${sql.json(sub as any)}, ${sub.signature}, true
       FROM swarm_sessions s
-      WHERE s.id = ${session.id} AND s.state = 'collecting'
+      WHERE s.id = ${session.id}
         AND (s.window_closes_at IS NULL OR s.window_closes_at > now())
       RETURNING id`;
     if (rows.length === 0) return { ok: false, status: 409, error: "submission window closed" };
@@ -1028,6 +1048,19 @@ export async function ensureDemoSubjectFixtures(subjectId: string, name: string,
  * job cannot convene a second one — but once that session publishes, the next
  * call correctly convenes a new one, however soon after. That is what allows a
  * cadence faster than daily without a session ever overwriting another.
+ *
+ * THIS REFUSAL IS KEPT UNDER THE ONE-INTERVAL WINDOW (issue #570), deliberately.
+ * Now that a session's advertised window is a whole cadence interval, its
+ * `collecting` state lasts the whole epoch, so "there is already an open session
+ * for this subject" is the normal steady state rather than a brief transient.
+ * The refusal is what keeps `submitRecommendation`'s "newest session for this
+ * subject" lookup unambiguous — exactly one session per subject can be accepting
+ * takes — so relaxing it (say, letting an elapsed-but-unclosed session be
+ * overtaken) would orphan that session un-aggregated AND give a subject two rows
+ * that both look open. The reconciliation therefore lives on the CALLER side:
+ * scripts/lib/swarm/session.ts adopts the returned open session instead of
+ * demanding a freshly `scheduled` one, and does not republish a brief over it,
+ * so an advertised deadline is never moved.
  */
 export async function openSession(subjectId: string) {
   const subject = await getSubject(subjectId);

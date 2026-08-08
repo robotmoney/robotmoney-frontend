@@ -670,8 +670,8 @@ console.log(result);</code></pre>
             <td>Use <code>/api/swarm/signing-payload</code> instead of hand-rolling canonicalization; confirm you're signing/encoding with base64, not hex.</td>
           </tr>
           <tr>
-            <td><code>409 no session for date/subject</code> or <code>submission window not open</code></td>
-            <td>You're submitting against a date/subject with no collecting session</td>
+            <td><code>404 no session for subject</code> or <code>409 submission window closed</code></td>
+            <td>The subject has never convened, or the deadline you were given has passed. A session's <code>state</code> is never the reason — only <code>windowClosesAt</code> is.</td>
             <td>Re-check <code>GET /api/swarm/open-session</code> right before you submit — don't cache it from earlier in the loop.</td>
           </tr>
           <tr>

@@ -13,6 +13,8 @@
 import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, railFromEnv } from "./agent.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
+import { resolveDemoCadence, swarmWindowMinutes } from "../demo-schedule.ts";
+import type { DemoCadence } from "../demo-schedule.ts";
 import type { ScenarioInitializer } from "../smoke-mode.ts";
 import { missingSectionLeadIns } from "./inference.ts";
 import { generateKeyPair } from "./crypto.ts";
@@ -353,7 +355,19 @@ export async function waitForSessionState(date: string, subject: string, expecte
  * habit migration 0022 removed. Once this returns, the caller has the real date
  * and every later poll can use the cheaper date-addressed route.
  */
-export async function waitForSubjectSession(subject: string, expectedState: string, timeoutMs = 30_000) {
+export async function waitForSubjectSession(
+  subject: string,
+  expectedState: string | readonly string[],
+  timeoutMs = 30_000,
+) {
+  // A SET of acceptable states, because openSession is idempotent per OPEN
+  // session: it refuses to convene a second session while one is `scheduled` or
+  // `collecting` and returns the existing row instead. With the window now one
+  // full cadence interval long, "already collecting" is the NORMAL state of a
+  // session this driver is re-adopting after a restart — demanding `scheduled`
+  // wedged that subject permanently, one 30-second timeout per slot, for as
+  // long as the (six-hour) window ran. See runSession's adoption branch.
+  const wanted = typeof expectedState === "string" ? [expectedState] : [...expectedState];
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const r = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`);
@@ -362,14 +376,200 @@ export async function waitForSubjectSession(subject: string, expectedState: stri
       // The list is newest-first, so the first row for this subject is the one
       // just convened. Matching on subject alone (not date) is the whole point.
       const s = (data.sessions ?? []).find((x: { subjectId?: string }) => x.subjectId === subject);
-      if (s?.state === expectedState) return { session: s };
+      if (s?.state && wanted.includes(s.state)) return { session: s };
     }
     await sleep(500);
   }
   throw new Error(
-    `no session for subject '${subject}' reached '${expectedState}' within ${timeoutMs}ms ` +
+    `no session for subject '${subject}' reached ${wanted.map((w) => `'${w}'`).join(" or ")} within ${timeoutMs}ms ` +
       `(the worker may still be draining an earlier job — check 'bun run demo:status' or the worker container logs)`,
   );
+}
+
+// ── Waiting out the advertised window (issue #570) ──────────────────────────
+// The driver's own members finishing is NOT the window ending. It used to be
+// treated as though it were: `close_window` was enqueued the moment
+// mapSettledWithConcurrency returned, which is 1-3 minutes after a brief that
+// advertised an hour. That was invisible while the driver owned every member —
+// its agents run inside the process that closes the window, so they always beat
+// it — and became a defect the instant an external member joined the roster.
+//
+// Everything below is built so the DECISION is pure and unit-testable in the
+// required per-PR `unit` job, while the loop that performs it stays a thin
+// wrapper: a six-hour window can never be observed in CI, so the arithmetic has
+// to be executed somewhere a CI clock can reach.
+
+/** Extra time past the advertised instant before the close is enqueued. */
+export const WINDOW_WAIT_GRACE_MS = 1_000;
+/** Longest single sleep; the server clock is re-read at least this often. */
+export const WINDOW_WAIT_POLL_MS = 5_000;
+
+export interface WindowWaitPlan {
+  /** proceed = close it now; sleep = not yet; abort = refuse, loudly. */
+  action: "proceed" | "sleep" | "abort";
+  sleepMs: number;
+  reason: string;
+}
+
+export interface WindowWaitLimits {
+  /**
+   * Ceiling on BOTH the remaining wait and the total elapsed wait. A window
+   * further out than this is not one this driver published, so waiting it out
+   * would hang the caller (in CI, until the job timeout kills it) and closing
+   * early would recreate exactly the defect being fixed — so it aborts instead,
+   * leaving the session `collecting` and still honestly accepting takes.
+   */
+  maxWaitMs: number;
+  graceMs?: number;
+  pollMs?: number;
+}
+
+/**
+ * Default ceiling for a window this driver just published: two windows plus a
+ * minute. Wide enough for clock skew and for a brief that was republished once,
+ * narrow enough that a fast-profile CI run can never wait more than ~5 minutes.
+ */
+export function windowWaitCeilingMs(cadence: DemoCadence): number {
+  return cadence.swarmWindowMs * 2 + 60_000;
+}
+
+/**
+ * PURE. Decide what to do at one instant, given the SERVER's clock rather than
+ * this host's.
+ *
+ * Clock skew is a real hazard here and it is asymmetric: `window_closes_at` is
+ * computed in JavaScript inside the api container (`publishBrief` does
+ * `Date.now() + windowMinutes * 60_000`) while the submit path compares it
+ * against Postgres `now()`. A driver that trusted its OWN clock could enqueue
+ * the close before the database agreed the window had ended, and a take that
+ * arrived in between would be accepted after the aggregate had been computed.
+ * So the caller feeds this the api's own clock (the HTTP `Date` response
+ * header, which is the same host clock Postgres runs on in every deployment
+ * this repo ships) and a grace period covers that header's one-second
+ * resolution.
+ */
+export function planWindowWait(
+  serverNowMs: number,
+  windowClosesAtIso: string | null | undefined,
+  limits: WindowWaitLimits,
+): WindowWaitPlan {
+  const grace = limits.graceMs ?? WINDOW_WAIT_GRACE_MS;
+  const poll = limits.pollMs ?? WINDOW_WAIT_POLL_MS;
+  if (!windowClosesAtIso) {
+    return {
+      action: "abort",
+      sleepMs: 0,
+      reason: "session advertises no windowClosesAt — publish_brief did not land, so there is no deadline to honour",
+    };
+  }
+  const closesAt = Date.parse(windowClosesAtIso);
+  if (!Number.isFinite(closesAt)) {
+    return { action: "abort", sleepMs: 0, reason: `windowClosesAt '${windowClosesAtIso}' is not a parseable instant` };
+  }
+  const remaining = closesAt + grace - serverNowMs;
+  if (remaining <= 0) {
+    return {
+      action: "proceed",
+      sleepMs: 0,
+      reason: `window closed at ${windowClosesAtIso} (${Math.round(-remaining / 1000)}s ago by the server clock)`,
+    };
+  }
+  if (remaining > limits.maxWaitMs) {
+    return {
+      action: "abort",
+      sleepMs: 0,
+      reason:
+        `window closes at ${windowClosesAtIso}, ${Math.round(remaining / 1000)}s away — beyond the ` +
+        `${Math.round(limits.maxWaitMs / 1000)}s ceiling for a window this driver published. Refusing to ` +
+        "wait (it would hang) and refusing to close early (that is the defect this replaced)",
+    };
+  }
+  return {
+    action: "sleep",
+    sleepMs: Math.min(remaining, poll),
+    reason: `window closes at ${windowClosesAtIso}, ${Math.round(remaining / 1000)}s away`,
+  };
+}
+
+export interface SessionWindowReading {
+  windowClosesAt: string | null;
+  /** The API's own clock, from the HTTP `Date` header; null when unreadable. */
+  serverNowMs: number | null;
+}
+
+/** Read the advertised deadline AND the server clock in one round trip. */
+export async function readSessionWindow(date: string, subject: string): Promise<SessionWindowReading> {
+  const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.session, { date, subject })}`);
+  const header = r.headers.get("date");
+  const headerMs = header ? Date.parse(header) : NaN;
+  const serverNowMs = Number.isFinite(headerMs) ? headerMs : null;
+  if (!r.ok) return { windowClosesAt: null, serverNowMs };
+  const data = await responseJson<{ session?: { windowClosesAt?: string | null } }>(r);
+  return { windowClosesAt: data.session?.windowClosesAt ?? null, serverNowMs };
+}
+
+export interface WindowWaitDeps {
+  read?: (date: string, subject: string) => Promise<SessionWindowReading>;
+  wait?: (ms: number) => Promise<void>;
+  now?: () => number;
+  log?: (line: string) => void;
+}
+
+export interface WindowWaitOutcome {
+  waitedMs: number;
+  windowClosesAt: string | null;
+  reason: string;
+  /** Polls where the server clock was unreadable and the host's was used. */
+  clockFallbacks: number;
+}
+
+/**
+ * Block until the session's ADVERTISED window has elapsed, then return. Throws
+ * on any condition where proceeding would be a lie (no deadline, unparseable
+ * deadline, a deadline beyond the ceiling, or the ceiling reached).
+ */
+export async function waitUntilWindowCloses(
+  date: string,
+  subject: string,
+  limits: WindowWaitLimits,
+  deps: WindowWaitDeps = {},
+): Promise<WindowWaitOutcome> {
+  const read = deps.read ?? readSessionWindow;
+  const wait = deps.wait ?? sleep;
+  const now = deps.now ?? Date.now;
+  const log = deps.log ?? ((line: string) => console.log(line));
+  const startedAt = now();
+  let clockFallbacks = 0;
+  let skewWarned = false;
+  for (;;) {
+    const reading = await read(date, subject);
+    const hostNow = now();
+    let serverNow = reading.serverNowMs;
+    if (serverNow === null) {
+      clockFallbacks++;
+      serverNow = hostNow;
+    } else if (!skewWarned && Math.abs(serverNow - hostNow) > 5_000) {
+      skewWarned = true;
+      log(
+        `  [window] host clock differs from the API's by ${Math.round((hostNow - serverNow) / 1000)}s — ` +
+          "the SERVER clock decides when this window closes",
+      );
+    }
+    const plan = planWindowWait(serverNow, reading.windowClosesAt, limits);
+    if (plan.action === "abort") {
+      throw new Error(`window wait for ${date}/${subject} refused: ${plan.reason}`);
+    }
+    if (plan.action === "proceed") {
+      return { waitedMs: hostNow - startedAt, windowClosesAt: reading.windowClosesAt, reason: plan.reason, clockFallbacks };
+    }
+    if (hostNow - startedAt >= limits.maxWaitMs) {
+      throw new Error(
+        `window wait for ${date}/${subject} exceeded its ${Math.round(limits.maxWaitMs / 1000)}s ceiling ` +
+          `without the window closing (last read: ${plan.reason})`,
+      );
+    }
+    await wait(plan.sleepMs);
+  }
 }
 
 export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}, adminToken?: string) {
@@ -470,11 +670,21 @@ export async function runSession(
     // block above says a continuity boot must never do. Stating it is now a
     // compile-time obligation.
     initializer: ScenarioInitializer;
+    // The CADENCE PROFILE this invocation resolved (scripts/lib/demo-schedule.ts).
+    // REQUIRED, for the same reason `initializer` is: the submission window is a
+    // cadence timing, and a default would make the six-hour production value the
+    // thing you get by forgetting the parameter — or, worse, make CI inherit it.
+    // Every caller already knows which invocation it is: demo-main resolved the
+    // profile from `--static-port` at module load, and the standalone CI entry
+    // point below is always the fast profile by definition.
+    cadence: DemoCadence;
   },
 ) {
   const prevOutcome = opts?.prevOutcome;
   const onProgress = opts?.onProgress;
   const rail = opts?.rail ?? railFromEnv();
+  const cadence = opts.cadence;
+  const windowMinutes = swarmWindowMinutes(cadence);
 
   // THE DATE IS NOT AN INPUT. It used to be — the demo passed `today + N days`
   // so repeat runs would not collide on the old UNIQUE(date, subject_id), and
@@ -492,9 +702,26 @@ export async function runSession(
   // violation while the boot still reported READY.
   await admin("subject", subject, rail.adminToken);
   await enqueueLifecycleJob("open_session", { subjectId: subject.id }, rail.adminToken);
-  const opened = await waitForSubjectSession(subject.id, "scheduled");
+  // RECONCILING openSession's "one open session per subject" WITH A WINDOW THAT
+  // IS ONE FULL INTERVAL (issue #570). openSession refuses to convene a second
+  // session while one is `scheduled` or `collecting`, and returns the existing
+  // row instead — that refusal is load-bearing and stays exactly as it is: it is
+  // what makes "the subject's newest session" unambiguous for
+  // submitRecommendation, which is the lookup an unsolicited take resolves
+  // through. What changes is that `collecting` is now the LONG state: a session
+  // sits in it for a whole cadence interval (six hours in production), so a
+  // driver that restarts mid-window meets an open session for its subject on
+  // every slot. Demanding `scheduled` here made that fatal — 30-second timeout,
+  // logged as "swarm session failed", repeated forever — so the driver now
+  // ADOPTS the epoch already in progress instead of demanding a fresh one.
+  const opened = await waitForSubjectSession(subject.id, ["scheduled", "collecting"]);
   const date: string = opened.session.date;
   const sessionId = opened.session.id;
+  // An adopted session already carries an advertised deadline. Re-publishing a
+  // brief over it would push `windowClosesAt` out by another full interval —
+  // moving a deadline external members have already been told, which is the
+  // same class of lie this issue exists to remove.
+  const adopted = opened.session.state === "collecting";
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
   // Session-lifecycle emitter — one call per real state transition below.
@@ -542,10 +769,21 @@ export async function runSession(
 
   emitSession("scheduled", sessionId);
 
-  await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 60, prevOutcome }, rail.adminToken);
-  await waitForSessionState(date, subject.id, "collecting");
+  if (adopted) {
+    console.log(
+      `${tag} session ${sessionId}: ADOPTING an epoch already in progress — its advertised ` +
+        "windowClosesAt is left exactly as published, never extended",
+    );
+  } else {
+    // `windowMinutes` comes from the CADENCE PROFILE, never from a literal and
+    // never from an env var. It was a hardcoded 60 here: an honest hour at the
+    // instant it was written, and a lie by the time this driver closed the
+    // window three minutes later.
+    await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes, prevOutcome }, rail.adminToken);
+    await waitForSessionState(date, subject.id, "collecting");
+    console.log(`${tag} session ${sessionId}: brief published, window open for ${windowMinutes} min`);
+  }
   emitSession("collecting", sessionId);
-  console.log(`${tag} session ${sessionId}: brief published, window open`);
 
   // Enroll the no-show (own container + persistent keystore — the harness
   // never generates a key for it), then run present members, each in its OWN
@@ -588,6 +826,18 @@ export async function runSession(
     console.log(`  ${r.memberId}: ${r.stance} c=${r.confidence} → ${ok}${memo}`);
   }
 
+  // THE DRIVER'S MEMBERS FINISHING IS NOT THE WINDOW ENDING. External members
+  // are on this roster now and they are not in this process; they get the whole
+  // window the brief advertised, and this is where that promise is kept. The
+  // wait is on the SERVER's clock against the SERVER's stored deadline — see
+  // waitUntilWindowCloses — and it throws rather than closing early if the two
+  // cannot be reconciled.
+  const closedWindow = await waitUntilWindowCloses(date, subject.id, {
+    maxWaitMs: windowWaitCeilingMs(cadence),
+  });
+  console.log(
+    `${tag} window elapsed after ${Math.round(closedWindow.waitedMs / 1000)}s — ${closedWindow.reason}`,
+  );
   await enqueueLifecycleJob("close_window", { sessionId }, rail.adminToken);
   await waitForSessionState(date, subject.id, "window_closed");
   emitSession("window_closed", sessionId);
@@ -645,6 +895,14 @@ async function main() {
   // once from this process's environment — the demo readiness gate hands this
   // entry point the stack's exact compose env.
   const rail = railFromEnv();
+  // This entry point IS the CI/e2e path (`bun run scripts/lib/swarm/session.ts`,
+  // spawned by the demo readiness gate) and a plain local run. Neither is the
+  // standing/public demo, so the profile is the fast one — resolved explicitly
+  // rather than defaulted, so the window this run advertises is a stated
+  // decision. Its window is two minutes, which is what keeps the e2e step's
+  // two sessions inside `timeout-minutes: 105`.
+  const cadence = resolveDemoCadence({ stage: false });
+  console.log(`  cadence profile: ${cadence.profile}; submission window ${swarmWindowMinutes(cadence)} min`);
   const subjects = DEMO_SUBJECTS.map((subject) => ({ ...subject }));
   const members: SessionMember[] = DEMO_MEMBERS.map((member) => ({ ...member }));
 
@@ -657,7 +915,7 @@ async function main() {
   await admin("subject", subjects[0], rail.adminToken);
 
   // Session 1: today's subject
-  const s1 = await runSession(subjects[0], 1, { rail, members, initializer: "simulation" });
+  const s1 = await runSession(subjects[0], 1, { rail, members, initializer: "simulation", cadence });
 
   // ── New member added mid-run ──────────────────────────────────────────────
   // Demonstrates a member added AFTER session 1, participating in session 2
@@ -733,7 +991,7 @@ async function main() {
   // 0022 the DATABASE dates a session, so two sittings on one day are simply two
   // rows with different convened_at rather than one row relabelled to a day that
   // has not happened. The rotation this proves is the real one.
-  await runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members, initializer: "simulation" });
+  await runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members, initializer: "simulation", cadence });
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`).then((r) => r.json());

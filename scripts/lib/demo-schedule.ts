@@ -14,10 +14,18 @@
 //   realistic (--stage) — the standing/public demo behind
 //                         stage.robotmoney-labs.dev. A real investment swarm
 //                         does not sit every two minutes: each subject convenes
-//                         every 6 h, the two subjects are phase-offset by 3 h so
-//                         a session lands about every 3 h overall, and the
+//                         every 6 h, the subjects are phase-offset by
+//                         6 h / subjectCount so a session lands that often
+//                         overall (four smoke subjects → ~90 min), and the
 //                         analytics-producer refreshes research every 3 h with
 //                         regime on the same beat offset by 30 min.
+//
+// The SUBMISSION WINDOW is one of these timings and lives here for the same
+// reason (issue #570): it equals the subject's own full cadence interval, so
+// session N's advertised cutoff is session N+1's convene and an agent that
+// polls on its own schedule is never told "no window is open". It is selected
+// by the same one invocation argument — never by SWARM_WINDOW_MINUTES, which
+// already exists and means the api container's seed-time cron payload.
 //
 // Every consumer derives its timings from here: scripts/lib/demo-main.ts (the
 // orchestrator that drives sessions and admissions) and scripts/demo-live-smoke.ts
@@ -33,8 +41,16 @@
 // DECISION lives here where the required per-PR `unit` workflow executes it
 // directly (scripts/tests/unit/demo-schedule.test.ts).
 
-/** The standing demo convenes exactly these subjects (swarm/session.ts SUBJECTS). */
-export const DEMO_SUBJECT_COUNT = 2;
+// THE SUBJECT COUNT IS NOT A CONSTANT. It used to be (`DEMO_SUBJECT_COUNT = 2`,
+// "the standing demo convenes exactly these subjects"), and REALISTIC derived
+// its declared stagger from it. That was false the moment the production-shaped
+// smoke boot landed: scripts/lib/smoke-mode.ts seats FOUR subjects
+// (SMOKE_SUBJECTS) while the simulation demo seats two (DEMO_SUBJECTS), so one
+// number could not be right for both — and the READY banner printed "2 subjects
+// staggered → one lands about every ~3 h" on a stack that was actually landing
+// one every ~90 min. The count is a property of the SCENARIO, so every consumer
+// now passes the count it is actually running (see swarmStaggerMsFor and
+// renderCadenceLine, both of which require it).
 
 /**
  * Promptness bound: whichever profile is in force, EVERY subject's first
@@ -51,11 +67,34 @@ export interface DemoCadence {
   /** Steady-state interval between swarm sessions for ONE subject. */
   swarmIntervalMs: number;
   /**
-   * Steady-state phase offset between consecutive subjects, i.e. how long after
-   * one subject's slot the next subject's slot lands. For the demo's
-   * DEMO_SUBJECT_COUNT subjects this is swarmIntervalMs / DEMO_SUBJECT_COUNT.
+   * How long a session's submission window stays open — the value the brief
+   * ADVERTISES as `windowClosesAt` and the backend enforces against submitters.
+   *
+   * IT EQUALS `swarmIntervalMs`, ALWAYS, AND THAT IS THE WHOLE POINT (issue
+   * #570). The cutoff of session N is then exactly the convene time of session
+   * N+1 for that subject, so there is no interval in which a subject has no
+   * session accepting takes — the dead zone is removed by arithmetic rather
+   * than by an epoch table. Before this the driver advertised a flat 60 minutes
+   * and then closed the window as soon as its own in-process agents settled, so
+   * every live session promised an hour and ended in 1-3 minutes; the committed
+   * goldens carry `publishedAt` ~59.9 minutes BEFORE `windowClosesAt` on every
+   * row.
+   *
+   * Consequences of making it the FULL interval, accepted deliberately: under
+   * the realistic profile a subject's session sits in `collecting` for ~6 h
+   * before it aggregates, and one session per subject is open at a time (four
+   * subjects ⇒ ~4 concurrent open sessions). Under the fast profile it is 2
+   * minutes, so a CI run adds at most one window per session it drives.
+   *
+   * It is a property of the CADENCE PROFILE — selected by the `--static-port`
+   * invocation argument like every other timing here — and NEVER of an env var.
+   * `SWARM_WINDOW_MINUTES` already exists (backend/src/config.ts) and means
+   * something else: it is the window carried on the seed-time
+   * `swarm.publish_brief` CRON payload inside the api container. Reusing that
+   * name here would give one variable two meanings and let a stale export in an
+   * operator's shell silently change production behaviour.
    */
-  swarmStaggerMs: number;
+  swarmWindowMs: number;
   /**
    * Gap between subjects' FIRST sessions at boot. Deliberately independent of
    * the steady-state stagger: under the realistic profile the phase offset is
@@ -84,11 +123,19 @@ export const COMMITTED_RESEARCH_CRON = "0 23 * * *";
 
 const HOUR_MS = 3_600_000;
 
+const FAST_INTERVAL_MS = 120_000;
+const REALISTIC_INTERVAL_MS = 6 * HOUR_MS;
+
 /** Today's values — `bun run demo` and CI. Changing these changes CI. */
 const FAST: DemoCadence = {
   profile: "fast",
-  swarmIntervalMs: 120_000,
-  swarmStaggerMs: 60_000,
+  swarmIntervalMs: FAST_INTERVAL_MS,
+  // One full interval — see DemoCadence.swarmWindowMs. Two minutes, so a CI e2e
+  // run that drives two sessions back to back adds at most ~4 minutes of pure
+  // waiting to a step whose ceiling is 105 minutes and whose current wall clock
+  // is ~14 minutes. Agents author DURING the window, so the true addition is
+  // `max(0, window - agent time)` per session, not the window itself.
+  swarmWindowMs: FAST_INTERVAL_MS,
   swarmBootstrapStaggerMs: 60_000,
   onboardingFirstMs: 60_000,
   onboardingIntervalMs: 300_000,
@@ -99,8 +146,11 @@ const FAST: DemoCadence = {
 /** The standing/public demo — `bun run demo -- --stage`. */
 const REALISTIC: DemoCadence = {
   profile: "realistic",
-  swarmIntervalMs: 6 * HOUR_MS,
-  swarmStaggerMs: (6 * HOUR_MS) / DEMO_SUBJECT_COUNT,
+  swarmIntervalMs: REALISTIC_INTERVAL_MS,
+  // One full interval — six hours per subject. The ~90-minute spacing an
+  // outside observer sees on the public demo is FOUR subjects phase-offset on
+  // that six-hour grid, not the per-subject period.
+  swarmWindowMs: REALISTIC_INTERVAL_MS,
   // Bring-up promptness: both subjects' first sessions land inside two minutes.
   swarmBootstrapStaggerMs: 30_000,
   // The first admission stays prompt (a visitor sees onboarding on the first
@@ -117,6 +167,182 @@ const REALISTIC: DemoCadence = {
  */
 export function resolveDemoCadence(opts: { stage?: boolean } = {}): DemoCadence {
   return opts.stage ? REALISTIC : FAST;
+}
+
+/**
+ * Steady-state phase offset between consecutive subjects for a scenario that
+ * seats `subjectCount` of them: how long after one subject's slot the next
+ * subject's slot lands, and therefore how often a session lands OVERALL.
+ *
+ * A function, not a profile field. It used to be `swarmStaggerMs`, frozen into
+ * both profiles from a `DEMO_SUBJECT_COUNT = 2` that the four-subject smoke
+ * scenario made wrong. planSubjectSchedules already derived the real offset
+ * from the real count, so the field was a second, drifting statement of the
+ * same rule — with nothing but the READY banner reading it, wrongly.
+ */
+export function swarmStaggerMsFor(cadence: DemoCadence, subjectCount: number): number {
+  if (!Number.isInteger(subjectCount) || subjectCount < 1) {
+    throw new Error(`swarmStaggerMsFor needs at least one subject, got ${subjectCount}`);
+  }
+  return cadence.swarmIntervalMs / subjectCount;
+}
+
+/**
+ * The submission window in MINUTES — the unit the `swarm.publish_brief` job
+ * payload and backend/src/swarm/domain.ts publishBrief() speak. Throws rather
+ * than rounding: a window that is not a whole positive number of minutes cannot
+ * be advertised faithfully through that payload, and silently truncating it is
+ * how a brief comes to promise something the close path will not honour.
+ */
+export function swarmWindowMinutes(cadence: DemoCadence): number {
+  const minutes = cadence.swarmWindowMs / 60_000;
+  if (!Number.isInteger(minutes) || minutes <= 0) {
+    throw new Error(
+      `cadence profile '${cadence.profile}' has swarmWindowMs=${cadence.swarmWindowMs}, ` +
+        "which is not a whole positive number of minutes — publish_brief cannot advertise it faithfully",
+    );
+  }
+  return minutes;
+}
+
+// ── Production constants assertion (issue #570) ─────────────────────────────
+// The gap this closes is NOT "CI runs an accelerated clock" — it should. The
+// gap is that NOTHING checked production was running production constants. The
+// repo has no pre-flight that asserts a single config value: prod-bootstrap.ts
+// drift-checks DATA (v0-seed-bootstrap compares seeded rows against the
+// committed archive) and asserts no config at all, and the check that looks
+// most like a production check — demo-live-smoke.ts's deadline — is pinned to
+// the FAST profile by construction and documented as never deriving from the
+// cadence actually running. A green CI result therefore cannot distinguish
+// "the driver honours the window" from "the window is two minutes".
+//
+// So the intended production values are stated HERE as literals, independently
+// of the profile objects above. A check derived from the thing it is checking
+// is a tautology; these are written out so that changing REALISTIC without
+// meaning to is fatal at boot rather than invisible for a month.
+export interface ProductionCadenceIntent {
+  profile: DemoCadenceProfile;
+  swarmIntervalMs: number;
+  swarmWindowMs: number;
+  /**
+   * The backend's swarm CRON master switch. It must be OFF in production: the
+   * shipped crons are subject-blind (resolveSwarmSchedules emits no subjectId,
+   * so the handler calls openSession("") and hits a foreign-key violation) and
+   * the host driver is the real scheduler. docker-compose.demo.yml pins "0";
+   * this asserts nobody exported a "1" into the boot that would have been
+   * passed through had the overlay not pinned it.
+   */
+  swarmSchedulesEnabled: "0";
+}
+
+export const PRODUCTION_CADENCE_INTENT: Readonly<ProductionCadenceIntent> = Object.freeze({
+  profile: "realistic",
+  swarmIntervalMs: 21_600_000, // 6 h per subject
+  swarmWindowMs: 21_600_000, // …and the window IS that interval
+  swarmSchedulesEnabled: "0",
+});
+
+/**
+ * PURE. Returns every way this boot's constants disagree with what it claims to
+ * be; empty means they agree.
+ *
+ * `production` is the `--static-port` boot — the one cloudflared points at.
+ * Both branches assert, and they assert OPPOSITE things, which is what makes
+ * this unsatisfiable by a CI run on an accelerated clock: a fast-profile boot
+ * cannot pass the production branch, it is required to fail it. The production
+ * branch is reachable only from an invocation that actually selected the
+ * realistic profile.
+ */
+export function productionConstantMismatches(
+  cadence: DemoCadence,
+  env: Record<string, string | undefined>,
+  opts: { production: boolean },
+): string[] {
+  const problems: string[] = [];
+  const schedules = env.SWARM_SCHEDULES_ENABLED;
+  if (opts.production) {
+    if (cadence.profile !== PRODUCTION_CADENCE_INTENT.profile) {
+      problems.push(
+        `resolved cadence profile is '${cadence.profile}', production intends ` +
+          `'${PRODUCTION_CADENCE_INTENT.profile}'`,
+      );
+    }
+    if (cadence.swarmIntervalMs !== PRODUCTION_CADENCE_INTENT.swarmIntervalMs) {
+      problems.push(
+        `swarmIntervalMs is ${cadence.swarmIntervalMs}, production intends ` +
+          `${PRODUCTION_CADENCE_INTENT.swarmIntervalMs}`,
+      );
+    }
+    if (cadence.swarmWindowMs !== PRODUCTION_CADENCE_INTENT.swarmWindowMs) {
+      problems.push(
+        `swarmWindowMs is ${cadence.swarmWindowMs}, production intends ` +
+          `${PRODUCTION_CADENCE_INTENT.swarmWindowMs}`,
+      );
+    }
+    if (schedules !== undefined && schedules !== "" && schedules !== PRODUCTION_CADENCE_INTENT.swarmSchedulesEnabled) {
+      problems.push(
+        `SWARM_SCHEDULES_ENABLED='${schedules}' is exported into a production boot; production intends ` +
+          `'${PRODUCTION_CADENCE_INTENT.swarmSchedulesEnabled}' (the host driver is the scheduler)`,
+      );
+    }
+  } else {
+    // A non-production boot must be the fast profile. Stated as an assertion,
+    // not an assumption: it is what stops a `--static-port`-less invocation
+    // from quietly inheriting a six-hour window and hanging its own gate.
+    if (cadence.profile !== "fast") {
+      problems.push(`a non-production boot resolved the '${cadence.profile}' profile; only 'fast' is allowed`);
+    }
+    if (cadence.swarmWindowMs !== FAST_INTERVAL_MS) {
+      problems.push(`a non-production boot has swarmWindowMs=${cadence.swarmWindowMs}, expected ${FAST_INTERVAL_MS}`);
+    }
+  }
+  // Holds in BOTH branches: the dead-zone fix is this equality and nothing else.
+  if (cadence.swarmWindowMs !== cadence.swarmIntervalMs) {
+    problems.push(
+      `swarmWindowMs (${cadence.swarmWindowMs}) must equal swarmIntervalMs (${cadence.swarmIntervalMs}) — ` +
+        "the window is one full cadence interval so session N's cutoff is session N+1's convene",
+    );
+  }
+  return problems;
+}
+
+/** Loudly fatal wrapper for productionConstantMismatches — called at demo boot. */
+export function assertProductionConstants(
+  cadence: DemoCadence,
+  env: Record<string, string | undefined>,
+  opts: { production: boolean },
+): void {
+  const problems = productionConstantMismatches(cadence, env, opts);
+  if (problems.length === 0) return;
+  throw new Error(
+    `[demo] REFUSING TO BOOT — the constants in force are not the ones this invocation claims ` +
+      `(${opts.production ? "production/--static-port" : "non-production"}):\n` +
+      problems.map((p) => `  - ${p}`).join("\n"),
+  );
+}
+
+/**
+ * The BOOT resolver: resolve the profile for one invocation and assert it is
+ * the one that invocation claims to be, in a single step that cannot be half
+ * performed.
+ *
+ * Deliberately not two calls. A separate `assertProductionConstants(...)` line
+ * next to the resolve is a line anyone can delete, reorder, or forget to add to
+ * a new entry point — and the whole point of this check is that the constants
+ * cannot silently drift from intent. Fusing them makes "resolved the cadence"
+ * and "proved the cadence" the same event. `resolveDemoCadence` stays exported
+ * and pure for tests and for demo-live-smoke.ts, which deliberately pins itself
+ * to the FAST profile rather than to whatever is running.
+ *
+ * Throws — the boot dies here rather than serving a swarm whose cadence, window
+ * or scheduler ownership is not what the invocation claims.
+ */
+export function resolveDemoCadenceForBoot(
+  opts: { stage: boolean; env: Record<string, string | undefined> },
+): DemoCadence {
+  const cadence = resolveDemoCadence({ stage: opts.stage });
+  assertProductionConstants(cadence, opts.env, { production: opts.stage });
+  return cadence;
 }
 
 export interface SubjectCadencePlan {
@@ -221,15 +447,14 @@ export function describeCron(cron: string): string {
  * than hardcoded — the banner and the docs must state the cadence actually in
  * force. Pure, so scripts/tests/unit/demo-schedule.test.ts executes it directly.
  */
-export function renderCadenceLine(
-  cadence: DemoCadence,
-  subjectCount: number = DEMO_SUBJECT_COUNT,
-): string {
+export function renderCadenceLine(cadence: DemoCadence, subjectCount: number): string {
   const perSubject = formatCadenceDuration(cadence.swarmIntervalMs);
-  const overall = formatCadenceDuration(cadence.swarmIntervalMs / subjectCount);
+  const overall = formatCadenceDuration(swarmStaggerMsFor(cadence, subjectCount));
+  const window = formatCadenceDuration(cadence.swarmWindowMs);
   return (
     `Demo actions: a swarm session per subject every ~${perSubject} ` +
     `(${subjectCount} subjects staggered → one lands about every ~${overall}); ` +
+    `submission window ${window} (one full interval, so no gap between sessions); ` +
     `research ${describeCron(cadence.researchCron)}, regime ${describeCron(cadence.regimeCron)}.`
   );
 }
