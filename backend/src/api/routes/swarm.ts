@@ -180,7 +180,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // the unauthenticated identity-takeover / state-drive holes. Proper
   // per-member onboarding + OAuth is the IC-remainder work.
   // Role definitions + the fail-closed rule live in api/auth.ts (issue #106).
-  const privileged = () => isPrivileged(req);
+  const privileged = async () => await isPrivileged(req);
 
   // PUBLIC onboarding (§11 R1-R6, setup-gated apply): a prospective member
   // submits {name, contact, lens?, publicKey, signature} — an rmpc signature
@@ -248,7 +248,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // bearer token in one shot (apply + activate combined). Kept for the demo/E2E
   // harness. Privileged because it can rotate/replace an existing member's key.
   if (m === "POST" && p === C.register) {
-    if (!privileged()) return { status: 403, body: { error: "onboarding requires admin authorization" } };
+    if (!(await privileged())) return { status: 403, body: { error: "onboarding requires admin authorization" } };
     const b = parseManualMember(await readJsonObject(req));
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
@@ -273,7 +273,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
 
   // Admin lifecycle. Drives a session for demos/E2E.
   if (m === "POST" && p.startsWith(ADMIN_PREFIX)) {
-    if (!privileged()) return { status: 403, body: { error: "admin authorization required" } };
+    if (!(await privileged())) return { status: 403, body: { error: "admin authorization required" } };
     const action = p.split("/").pop();
     const b = await readJsonObject(req) ?? {};
     switch (action) {

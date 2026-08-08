@@ -82,6 +82,7 @@ export interface DemoState {
   // `restart: unless-stopped` is the supervisor; these are only its readings.
   telemetry: ContainerTelemetry[];
   containerErrors: ContainerLogLine[];
+  adminClaimed?: boolean;
 }
 
 export const ONBOARD_STEPS = ["connect", "discover", "toolchain", "apply", "approve", "claim", "session", "memo", "admitted"];

@@ -16,6 +16,7 @@
 // analytics-provider credential (distinct comparisons against distinct secrets).
 import { createHash, timingSafeEqual } from "node:crypto";
 import { config } from "../config.ts";
+import { sql } from "../db/client.ts";
 
 export function bearer(req: Request): string | null {
   const h = req.headers.get("Authorization") ?? "";
@@ -31,8 +32,25 @@ export function secretEq(presented: string | null, expected: string): boolean {
 }
 
 // host/admin role: ADMIN_TOKEN presented as X-Admin-Token.
-export function isPrivileged(req: Request, cfg: Pick<typeof config, "adminToken" | "allowInsecure"> = config): boolean {
-  return cfg.adminToken ? secretEq(req.headers.get("X-Admin-Token"), cfg.adminToken) : cfg.allowInsecure;
+export async function isPrivileged(req: Request, cfg: Pick<typeof config, "adminToken" | "allowInsecure"> = config): Promise<boolean> {
+  const presented = req.headers.get("X-Admin-Token");
+  
+  try {
+    const res = await sql`SELECT pass_hash FROM admin_credential WHERE id = 1`;
+    if (res.length > 0) {
+      const expectedHashHex = res[0].pass_hash;
+      const presentedHash = createHash("sha256").update(presented ?? "").digest();
+      const expectedHash = Buffer.from(expectedHashHex, "hex");
+      if (expectedHash.length === presentedHash.length) {
+        return timingSafeEqual(presentedHash, expectedHash);
+      }
+      return false;
+    }
+  } catch (err) {
+    // Table might not exist during early boot or tests without DB
+  }
+
+  return cfg.adminToken ? secretEq(presented, cfg.adminToken) : cfg.allowInsecure;
 }
 
 // analytics-provider role: ANALYTICS_TOKEN presented as a Bearer token.

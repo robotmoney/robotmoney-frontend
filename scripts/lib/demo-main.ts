@@ -964,7 +964,9 @@ function render(): string[] {
   // The admin dashboard password — shown ONLY here in the interactive TUI (never
   // logged, never in demo-state.json, never in the plain READY block). Sign in at
   // the /admin URL above with this value.
-  lines.push(`  ${color("33", "Admin pass".padEnd(10))} ${color("1;33", adminPassword)}`);
+  if (!state.adminClaimed) {
+    lines.push(`  ${color("33", "Admin pass".padEnd(10))} ${color("1;33", adminPassword)}`);
+  }
 
   // Startup pane
   lines.push(hr(W, readinessPolling.isHealthChecking() ? `Startup ${spinner(frame)}` : "Startup"));
@@ -1404,6 +1406,10 @@ async function main(): Promise<void> {
   // Phase A: persist the state file so demo:down/demo:status can rebuild the env.
   writeStateFile();
 
+  const isClaimedReq = await fetch(`${backendUrl}/api/admin/is-claimed`).catch(() => null);
+  const isClaimed = isClaimedReq?.ok ? (await isClaimedReq.json()).claimed : false;
+  state.adminClaimed = isClaimed;
+
   // Non-TUI keeps the exact plain READY table; TUI shows it in the Services pane.
   if (!tuiActive) {
     console.log("\n" + "── Robot Money demo — READY ──".padEnd(68, "─"));
@@ -1411,8 +1417,11 @@ async function main(): Promise<void> {
     console.log(`  Regime:     ${backendUrl}/regime`);
     console.log(`  Swarm:  ${backendUrl}/swarm`);
     for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
-    // URL only — the admin password is shown in the interactive TUI, never here.
-    console.log(`  Admin:      ${backendUrl}/admin  (password shown in the interactive TUI only)`);
+    if (isClaimed) {
+      console.log(`  Admin:      ${backendUrl}/admin  (claimed credential)`);
+    } else {
+      console.log(`  Admin:      ${backendUrl}/admin  (password shown in the interactive TUI only)`);
+    }
     console.log(`  State file: ${stateFile}`);
     console.log(`  Log file:   ${logFile}`);
     console.log(`  PG data:    ${pgDataDir ? `--pg-data ${pgDataDir} (bind; resumable)` : `volume ${project}_pgdata (fresh-per-run; kept on teardown)`}`);

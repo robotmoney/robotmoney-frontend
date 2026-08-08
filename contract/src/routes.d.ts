@@ -106,6 +106,8 @@ export const ROUTES: {
   };
   admin: {
     auth: string;
+    isClaimed: string;
+    claim: string;
     overview: string;
     jobs: string;
     job: string;

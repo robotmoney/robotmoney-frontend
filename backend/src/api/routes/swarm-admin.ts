@@ -61,7 +61,7 @@ export async function handleSwarmAdmin(
   if (!ownsPath(p)) return null;
 
   // Auth FIRST — before any body parsing or DB query (AC7).
-  if (!isPrivileged(req, cfg)) return FORBIDDEN;
+  if (!await isPrivileged(req, cfg)) return FORBIDDEN;
 
   const rest = p.slice(PREFIX.length);
   const segs = rest.split("/").filter(Boolean);

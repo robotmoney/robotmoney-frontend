@@ -1762,3 +1762,16 @@ and still survives. No credential column and neither `applied_at` nor
 - **Exempt `avatar` from the drift comparison.** It would stop reporting a
   real corruption of a real column in order to hide one known-benign
   difference.
+
+---
+
+## D32 — One-time claim for the admin credential (issue #553)
+
+**Decision.** The single admin credential (initially generated dynamically and shown via the TUI) can now be permanently claimed. Once claimed via `POST /api/admin/claim` with the original credential, a new password's SHA-256 hash is persisted in the `admin_credential` table. 
+
+**Why.** The previous behavior generated a new token on every `bun run demo` (or docker compose restart), which silently locked out existing sessions, automated runbooks, and integrations.
+
+**Implementation.**
+- **Hashing Scheme:** SHA-256 (via `node:crypto`), matching the length and constant-time-compare requirements in `auth.ts`.
+- **Claim Mechanism:** `POST /api/admin/claim` endpoint to persist the hash if unclaimed. 
+- **Recovery Path:** Since there is no automated email recovery for the single demo admin, a forgotten password requires manual database intervention (`DELETE FROM admin_credential;` via `psql` or `bun run demo:clean` for a complete wipe). This is acceptable for a standing demo/ephemeral setup.
