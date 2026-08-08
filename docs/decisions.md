@@ -1762,3 +1762,56 @@ and still survives. No credential column and neither `applied_at` nor
 - **Exempt `avatar` from the drift comparison.** It would stop reporting a
   real corruption of a real column in order to hide one known-benign
   difference.
+
+---
+
+## D32 — One-time claim makes the admin credential durable; the per-boot token is superseded, not revoked (issue #553)
+
+**Decision.** The admin credential can be claimed exactly once:
+`POST /api/admin/claim`, authorized by the *current* admin credential (on a
+first-ever boot, the per-boot token the interactive TUI displays), persists
+the sha256 hex of an operator-chosen password (≥ 12 characters) into the new
+one-row `admin_credential` table (migration
+`backend/migrations/0028_admin_credential.sql`). While that row exists,
+`backend/src/api/auth.ts`'s `isPrivileged()` treats the stored hash as the
+durable operator credential: it survives every restart, so `bun run demo` /
+`bun run demo:stage` re-boots stop rotating the operator out — the lockout
+this issue is about. A public boolean probe, `GET /api/admin/is-claimed`,
+lets the demo boot decide whether the TUI may display the per-boot token.
+
+**Superseded, not revoked.** After a claim, the per-boot `ADMIN_TOKEN` env
+mint *remains valid* — but only as the stack-internal automation credential,
+and it is never displayed again (the TUI shows the `Admin pass` line only
+once the post-ready probe confirms *unclaimed*). This is deliberate, and is
+the refinement of the issue's "stop minting" sketch: the demo's own drivers
+(swarm session runner, onboarding driver, e2e children) authenticate against
+`X-Admin-Token`-guarded routes with the per-boot token threaded through
+in-process, and the server holds only a *hash* of the claimed password, so it
+cannot hand the claimed secret to that automation. Revoking the env token on
+claim would kill the standing demo's core loops on the next boot. The issue's
+test plan anticipates exactly this shape ("or is superseded, per the chosen
+design").
+
+**`RM_ALLOW_INSECURE` stops opening the gate once claimed.** A claim is an
+explicit security opt-in; after it, only the claimed password or the current
+boot's own token authorizes — never the insecure-mode bypass.
+
+**Hashing scheme.** sha256 hex via the existing `hashKey()`
+(`backend/src/lib/keys.ts`) — the same never-plaintext posture already used
+for swarm member access keys — compared constant-time (`timingSafeEqual`),
+like every other credential in `auth.ts`. Not argon2/bcrypt: `isPrivileged()`
+runs on every admin/swarm-admin request (the dashboard polls), a KDF per
+request is a hot-path cost, and the credential is bearer-token-shaped
+(`X-Admin-Token`), with the 12-character minimum bounding the offline-crack
+exposure. The migration also `REVOKE`s the queue worker role's default grant
+on the table so a worker-role compromise cannot read the hash at all.
+
+**Fail closed and loud.** A database failure inside `isPrivileged()`
+propagates to the router's sanitized 500 — it never silently falls back to
+the env token while a claim might exist.
+
+**Recovery path.** There is no self-serve reset for the single demo admin. A
+forgotten claimed password is an explicit operator action against the
+database — `DELETE FROM admin_credential;` (or `bun run demo:clean` for a
+full wipe) — which re-arms the first-boot one-time-claim state, restoring
+today's "restart shows a fresh TUI token" behaviour.
