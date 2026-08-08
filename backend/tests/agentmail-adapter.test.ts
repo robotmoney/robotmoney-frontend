@@ -5,7 +5,7 @@ describe("AgentMail Adapter Worker", () => {
   test("successful send", async () => {
     const env = {
       ADAPTER_SECRET: "test-secret",
-      AGENTMAIL_API_TOKEN: "test-agentmail-token",
+      AGENTMAIL_API_TOKEN: "unit-fake-tok",
     };
 
     let fetchCallArgs: any;
@@ -40,7 +40,7 @@ describe("AgentMail Adapter Worker", () => {
       expect(fetchCallArgs).toBeDefined();
       expect(fetchCallArgs.input).toBe("https://api.agentmail.to/v1/messages");
       expect(fetchCallArgs.init.method).toBe("POST");
-      expect(fetchCallArgs.init.headers["Authorization"]).toBe("Bearer test-agentmail-token");
+      expect(fetchCallArgs.init.headers["Authorization"]).toBe("Bearer unit-fake-tok");
 
       const body = JSON.parse(fetchCallArgs.init.body);
       expect(body.inbox_id).toBe("swarm@notify.robotmoney.net");
@@ -55,7 +55,7 @@ describe("AgentMail Adapter Worker", () => {
   test("rejects unauthorized", async () => {
     const env = {
       ADAPTER_SECRET: "test-secret",
-      AGENTMAIL_API_TOKEN: "test-agentmail-token",
+      AGENTMAIL_API_TOKEN: "unit-fake-tok",
     };
 
     const req = new Request("http://localhost", {

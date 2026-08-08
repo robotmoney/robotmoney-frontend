@@ -3,8 +3,19 @@ export interface Env {
   AGENTMAIL_API_TOKEN: string;
 }
 
+// Minimal structural stand-in for Cloudflare Workers' `ExecutionContext`
+// global. This module is typechecked by backend/tsconfig.json (bun-types, no
+// Workers lib) via backend/tests/agentmail-adapter.test.ts, and the adapter's
+// own node_modules is never installed in CI, so the global type is not
+// available there. The adapter never uses the context; the structural type is
+// assignment-compatible with the real one under `wrangler deploy`.
+export interface WorkerExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
+  passThroughOnException(): void;
+}
+
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: WorkerExecutionContext): Promise<Response> {
     if (request.method !== "POST") {
       return new Response("Method not allowed", { status: 405 });
     }
