@@ -212,6 +212,54 @@ test("snapshots and briefs carry real content, not empty rows", async () => {
   expect(Object.keys(brief.body).length).toBeGreaterThan(0);
 });
 
+// ── Briefs land on their SESSION (issue #574, migration 0028) ───────────────
+//
+// The importer's brief natural key was `(date, subject_id)` — the same day key
+// 0028 removed from the schema — and this script is replayed on EVERY
+// production boot via prod-bootstrap. It has to write session_id or the archive
+// re-imports as 73 sessionless rows on a database whose briefs are keyed on the
+// session, and the second boot's drift check has nothing stable to match.
+//
+// v0 kept a brief for some days whose session it never exported, so a subset of
+// the archive genuinely has no session to attach to. Those import with
+// session_id NULL rather than being dropped — 0028 allows exactly that — and
+// the import must stay idempotent for them too.
+test("v0 briefs attach to their own archived session, and sessionless archive days import as NULL rather than being dropped", async () => {
+  const { payload, manifest } = await loadV0Archive();
+  const sessionDays = new Set(payload.sessions.map((s) => `${s.subject_id}/${s.date}`));
+  const expectedAttached = payload.briefs.filter((b) => sessionDays.has(`${b.subject_id}/${b.date}`)).length;
+  const expectedSessionless = payload.briefs.length - expectedAttached;
+  // The archive must actually carry BOTH shapes or this test proves nothing.
+  expect(expectedAttached).toBeGreaterThan(0);
+  expect(expectedSessionless).toBeGreaterThan(0);
+
+  await runV0SeedBootstrap();
+
+  const rows = await sql<{ session_id: string | null; date: Date; subject_id: string }[]>`
+    SELECT b.session_id, b.date, b.subject_id FROM swarm_briefs b
+    WHERE b.subject_id = ANY(${SUBJECT_IDS})`;
+  expect(rows.length).toBe(manifest.counts.briefs);
+  expect(rows.filter((r) => r.session_id !== null).length).toBe(expectedAttached);
+  expect(rows.filter((r) => r.session_id === null).length).toBe(expectedSessionless);
+
+  // Every attached brief points at the session of its OWN subject and day —
+  // never at some other day's session that happened to be handy.
+  const [{ n: mismatched }] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM swarm_briefs b
+    JOIN swarm_sessions s ON s.id = b.session_id
+    WHERE b.subject_id = ANY(${SUBJECT_IDS}) AND (s.subject_id <> b.subject_id OR s.date <> b.date)`;
+  expect(mismatched).toBe(0);
+
+  // Replay (what prod-bootstrap does on every boot): all 73 read as unchanged,
+  // both shapes, with nothing inserted twice and no drift reported.
+  const second = await runV0SeedBootstrap();
+  expect(second.briefs).toEqual({ inserted: 0, unchanged: manifest.counts.briefs, drifted: 0, total: manifest.counts.briefs });
+  expect(second.drifts).toEqual([]);
+  const [{ n: after }] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM swarm_briefs WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  expect(after).toBe(manifest.counts.briefs);
+});
+
 // ── Provenance (review-data-integrity F1) ───────────────────────────────────
 //
 // swarm_recommendations.received_at is NOT NULL DEFAULT now(), so an INSERT

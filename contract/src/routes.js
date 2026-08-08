@@ -124,7 +124,14 @@ export const ROUTES = {
     take: "/api/swarm/takes/:id", // GET — public read-time-verified receipt
     takePermalink: "/swarm/takes/:id", // rendered public verification receipt
     openSession: "/api/swarm/open-session", // GET → session currently collecting, if any
-    brief: "/api/swarm/brief", // GET ?date=&subject=
+    // GET the brief a session published. `?session=<sessionId>` is the
+    // unambiguous handle — since migration 0028 a brief is keyed on its session
+    // rather than its day, so every session of a multi-session day keeps its own
+    // brief and its own advertised `windowClosesAt`. `?date=&subject=` remains
+    // supported and resolves to the most recent session of that day THAT HAS
+    // PUBLISHED A BRIEF — which is not always the newest session, since a
+    // session convenes as 'scheduled' and its brief follows on a separate cron.
+    brief: "/api/swarm/brief", // GET ?session= | ?date=&subject=
     signingPayload: "/api/swarm/signing-payload", // POST → canonical bytes a member must sign
     memos: "/api/swarm/memos", // POST (member bearer) — publish a long-form memo
     memo: "/api/swarm/memos/:id", // GET — public memo read

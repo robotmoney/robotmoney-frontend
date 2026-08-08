@@ -1060,7 +1060,9 @@ state; `cancelled` is the terminal escape hatch.)
 
 - `swarm.open_session` (cron) — pick the rotation subject, create the session.
 - `swarm.publish_brief` — assemble the brief (regime + subject snapshot + recent
-  sessions); open the submission window.
+  sessions); open the submission window. A brief is keyed on its **session**
+  (migration 0028), not on the day: a subject convening several times a day
+  keeps one brief — and one advertised `windowClosesAt` — per session.
 - *window:* members submit via the REST `submit` endpoint, calling the same
   **domain handler**, not the worker.
 - `swarm.close_window` (cron at deadline) — stop accepting submissions. For a
@@ -2188,7 +2190,7 @@ must be demonstrated exercising the same domain code:
 - `POST /api/swarm/regime` (role-gated analytics write)
 - `GET /api/swarm/members`
 - `GET /api/swarm/sessions` / `GET /api/swarm/sessions/:date/:subject`
-- `GET /api/swarm/brief?date=&subject=`
+- `GET /api/swarm/brief?session=` / `GET /api/swarm/brief?date=&subject=`
 - `GET /api/dashboards/regime-snapshots`
 - `GET /api/dashboards/research-signals/:key`
 

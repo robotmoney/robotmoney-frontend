@@ -190,6 +190,11 @@ export function toBrief(row: Row): SwarmBrief {
     id: row.id,
     date: day(row.date),
     subjectId: row.subject_id,
+    // Which session this brief belongs to (migration 0028). Null only for
+    // pre-0028 rows whose session was never archived — see the migration's
+    // backfill note. Exposing it is what lets a caller that read a day-scoped
+    // brief tell WHICH of the day's sessions it actually got.
+    sessionId: row.session_id ?? null,
     body: row.body ?? null,
     createdAt: instant(row.created_at) ?? "",
   };

@@ -357,9 +357,50 @@ export async function getTakeReceipt(id: string) {
   };
 }
 
+/**
+ * One brief BY ITS SESSION — the unambiguous handle, exactly as
+ * `getSessionById` is to `getSession(date, subject)`. Since migration 0028 a
+ * brief is keyed on its session, so every session of a multi-session day has
+ * its own brief (and its own advertised `windowClosesAt`) reachable here.
+ */
+export async function getBriefBySession(sessionId: string) {
+  // `session_id` is a uuid column, so a non-uuid handle would make Postgres
+  // throw rather than return no rows; screen it here (mirrors getSessionById).
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return null;
+  const r = await sql`SELECT id, date, subject_id, session_id, body, created_at FROM swarm_briefs
+                      WHERE session_id = ${sessionId} LIMIT 1`;
+  return r[0] ? toBrief(r[0]) : null;
+}
+
 export async function getBrief(date: string, subjectId: string) {
-  const r = await sql`SELECT id, date, subject_id, body, created_at FROM swarm_briefs
-                      WHERE date = ${date} AND subject_id = ${subjectId} ORDER BY created_at DESC LIMIT 1`;
+  // A date no longer identifies ONE brief. Since migration 0022 a subject may
+  // convene several times a day, and since 0028 each of those sessions keeps
+  // its OWN brief instead of overwriting its predecessor's. This day-scoped
+  // route therefore resolves to the most recent session of that day THAT HAS
+  // PUBLISHED A BRIEF, so every existing member client and doc keeps working
+  // and gets the answer it wants: the current brief.
+  //
+  // "…that has published a brief" is not a hedge — it is the ordinary case.
+  // openSession() convenes a session as 'scheduled' and the brief follows on a
+  // separate cron, so for much of any day the newest session of a subject has
+  // no brief row at all. This query selects FROM swarm_briefs, so such a
+  // session simply is not a candidate; the caller gets the newest brief that
+  // actually exists rather than a null. (Note the asymmetry with
+  // getSession(date, subject), which CAN return that unbriefed newest session:
+  // it selects from sessions. The two are not interchangeable, and since issue
+  // #570 a take submitted now lands on the newest session — which may be newer
+  // than the session whose brief this returns. `sessionId` on the response is
+  // how a caller tells the difference.)
+  //
+  // The LEFT JOIN (not an inner one) keeps sessionless legacy rows visible:
+  // 0028 deliberately preserved v0-archived briefs whose session was never
+  // archived, and an inner join would silently hide them. `NULLS LAST` ranks a
+  // real session's brief above such a row when both exist for a day.
+  const r = await sql`SELECT b.id, b.date, b.subject_id, b.session_id, b.body, b.created_at
+                      FROM swarm_briefs b
+                      LEFT JOIN swarm_sessions s ON s.id = b.session_id
+                      WHERE b.date = ${date} AND b.subject_id = ${subjectId}
+                      ORDER BY s.convened_at DESC NULLS LAST, b.created_at DESC LIMIT 1`;
   return r[0] ? toBrief(r[0]) : null;
 }
 
@@ -1113,8 +1154,15 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     },
     windowClosesAt,
   };
-  await sql`INSERT INTO swarm_briefs (date, subject_id, body) VALUES (${s.date}, ${s.subject_id}, ${sql.json(jsonValue(body))})
-            ON CONFLICT (date, subject_id) DO UPDATE SET body = EXCLUDED.body`;
+  // Keyed on the SESSION (migration 0028), not the day. The old
+  // `ON CONFLICT (date, subject_id)` made every session after the first of a
+  // day overwrite its predecessor's brief — destroying the `windowClosesAt`
+  // that session had already advertised to its members. Re-publishing the SAME
+  // session still updates in place (the brief driver may retry), but a second
+  // session on the same day now INSERTs its own row.
+  await sql`INSERT INTO swarm_briefs (session_id, date, subject_id, body)
+            VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${sql.json(jsonValue(body))})
+            ON CONFLICT (session_id) DO UPDATE SET body = EXCLUDED.body`;
   await sql`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
   return { sessionId, state: "collecting", windowClosesAt };
 }
