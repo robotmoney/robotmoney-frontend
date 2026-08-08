@@ -1607,7 +1607,7 @@ for `preview/*` hosting, unchanged.
   with the raw source tree mounted, none ever would.
 ---
 
-## D30 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)
+## D31 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)
 
 **Decision.** Two questions, resolved together since the vendor choice drives
 the DNS shape.
@@ -1625,8 +1625,7 @@ root DNS is live production and is not touched: MX `smtp.google.com`, SPF
 `v=spf1 include:_spf.google.com ~all`, a live `google._domainkey.robotmoney.net`
 DKIM selector, DMARC `p=none`, NS on Cloudflare
 (`veda.ns.cloudflare.com` / `cash.ns.cloudflare.com`). AgentMail instead sends
-from a dedicated subdomain (exact name TBD at implementation, e.g.
-`notify.robotmoney.net` or `swarm.robotmoney.net`) with its own MX/SPF/DKIM/
+from a dedicated subdomain (`notify.robotmoney.net`) mapping `SWARM_NOTIFICATION_EMAIL_FROM` to the AgentMail `inbox_id` `swarm@notify.robotmoney.net`, with its own MX/SPF/DKIM/
 DMARC. That subdomain zone is handed off with a **single one-time NS
 delegation record** in the primary Cloudflare account (the one holding
 `robotmoney.net`'s zone) pointing at a **separate, secondary Cloudflare
