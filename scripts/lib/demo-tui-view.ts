@@ -82,6 +82,11 @@ export interface DemoState {
   // `restart: unless-stopped` is the supervisor; these are only its readings.
   telemetry: ContainerTelemetry[];
   containerErrors: ContainerLogLine[];
+  // Tri-state claim status for the admin credential (issue #553 / D32):
+  // undefined = not yet probed (display nothing), false = confirmed unclaimed
+  // (the per-boot token is the operator credential — display it), true =
+  // claimed (the per-boot token is superseded — never display it).
+  adminClaimed?: boolean;
 }
 
 export const ONBOARD_STEPS = ["connect", "discover", "toolchain", "apply", "approve", "claim", "session", "memo", "admitted"];

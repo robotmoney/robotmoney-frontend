@@ -83,7 +83,7 @@ import {
   type UpcomingMember,
   type WriterQuiesce,
 } from "./demo-tui-view.ts";
-import { createReadinessPolling } from "./demo-readiness-polling.ts";
+import { createReadinessPolling, probeAdminClaimed } from "./demo-readiness-polling.ts";
 import {
   DB_WRITER_SERVICES,
   renderFailurePane,
@@ -962,9 +962,8 @@ function render(): string[] {
   lines.push(hr(W, "Services"));
   for (const s of state.services) lines.push(`  ${color("36", s.name.padEnd(10))} ${s.url}`);
   // The admin dashboard password — shown ONLY here in the interactive TUI (never
-  // logged, never in demo-state.json, never in the plain READY block). Sign in at
-  // the /admin URL above with this value.
-  lines.push(`  ${color("33", "Admin pass".padEnd(10))} ${color("1;33", adminPassword)}`);
+  // logged/persisted), and only once probed CONFIRMED-unclaimed (#553/D32).
+  if (state.adminClaimed === false) lines.push(`  ${color("33", "Admin pass".padEnd(10))} ${color("1;33", adminPassword)}`);
 
   // Startup pane
   lines.push(hr(W, readinessPolling.isHealthChecking() ? `Startup ${spinner(frame)}` : "Startup"));
@@ -1404,6 +1403,8 @@ async function main(): Promise<void> {
   // Phase A: persist the state file so demo:down/demo:status can rebuild the env.
   writeStateFile();
 
+  state.adminClaimed = await probeAdminClaimed(backendUrl); // #553/D32: claimed ⇒ never display the per-boot token
+
   // Non-TUI keeps the exact plain READY table; TUI shows it in the Services pane.
   if (!tuiActive) {
     console.log("\n" + "── Robot Money demo — READY ──".padEnd(68, "─"));
@@ -1411,8 +1412,7 @@ async function main(): Promise<void> {
     console.log(`  Regime:     ${backendUrl}/regime`);
     console.log(`  Swarm:  ${backendUrl}/swarm`);
     for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
-    // URL only — the admin password is shown in the interactive TUI, never here.
-    console.log(`  Admin:      ${backendUrl}/admin  (password shown in the interactive TUI only)`);
+    console.log(`  Admin:      ${backendUrl}/admin  ${state.adminClaimed ? "(claimed credential — D32)" : "(password shown in the interactive TUI only)"}`);
     console.log(`  State file: ${stateFile}`);
     console.log(`  Log file:   ${logFile}`);
     console.log(`  PG data:    ${pgDataDir ? `--pg-data ${pgDataDir} (bind; resumable)` : `volume ${project}_pgdata (fresh-per-run; kept on teardown)`}`);

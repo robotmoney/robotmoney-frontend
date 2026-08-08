@@ -1,0 +1,6 @@
+name = "agentmail-adapter"
+main = "src/index.ts"
+compatibility_date = "2023-01-01"
+
+[vars]
+# AGENTMAIL_API_TOKEN will be provided as a secret
