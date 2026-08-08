@@ -20,6 +20,13 @@
 //   C. A brief with NO session for its day (19 of the 73 briefs in the
 //      committed v0 archive are this shape) → KEPT with session_id NULL, not
 //      deleted.
+//   D. A day whose NEWEST session is still 'scheduled' — i.e. convened but not
+//      yet briefed — over an older session that did publish. The brief must
+//      attach to the PUBLISHED one. This is the ordinary steady state, not an
+//      edge case: openSession() inserts every session as 'scheduled' and the
+//      brief follows on a separate cron, so for most of any given day the
+//      newest session has no brief. Shapes A-C all seeded 'published' sessions
+//      and so could never have caught it.
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -45,9 +52,12 @@ let db: postgres.Sql<{}>;
 let earlySessionId: string;  // shape A, first session of the day
 let lateSessionId: string;   // shape A, second session of the same day
 let soloSessionId: string;   // shape B
+let publishedSessionId: string; // shape D, older session that DID publish a brief
+let scheduledSessionId: string; // shape D, newer session convened but not yet briefed
 let dupBriefId: string;      // shape A's single surviving brief row
 let soloBriefId: string;     // shape B's brief
 let orphanBriefId: string;   // shape C, sessionless
+let pendingBriefId: string;  // shape D's brief
 
 // Whether the PRE-0028 schema really rejected a second same-day brief. Proving
 // this is what makes the rest of the file a migration test rather than a
@@ -57,6 +67,7 @@ let preMigrationRejectedSecondSameDayBrief = false;
 const DUP_DAY = "2026-05-20";
 const SOLO_DAY = "2026-05-21";
 const ORPHAN_DAY = "2026-05-22";
+const PENDING_DAY = "2026-05-23";
 const SUBJECT = "briefs-migration-subject";
 
 // postgres.js tagged-template results are lazy "PendingQuery" thenables, not
@@ -164,6 +175,27 @@ beforeAll(async () => {
     RETURNING id`;
   orphanBriefId = orphan.id;
 
+  // Shape D: the ordinary steady state. An older session that published its
+  // brief, and a NEWER one convened by openSession() but not yet briefed —
+  // still 'scheduled', and carrying a pre-set window_closes_at exactly the way
+  // swarm/admin.ts inserts one, so that column cannot be used to tell the two
+  // apart. The brief belongs to the PUBLISHED session.
+  const [published] = await db<{ id: string }[]>`
+    INSERT INTO swarm_sessions (subject_id, convened_at, subject_name, state, window_closes_at)
+    VALUES (${SUBJECT}, ${`${PENDING_DAY}T07:00:00Z`}, 'Briefs Migration Subject', 'published', ${`${PENDING_DAY}T08:00:00Z`})
+    RETURNING id`;
+  publishedSessionId = published.id;
+  const [scheduled] = await db<{ id: string }[]>`
+    INSERT INTO swarm_sessions (subject_id, convened_at, subject_name, state, window_closes_at)
+    VALUES (${SUBJECT}, ${`${PENDING_DAY}T14:00:00Z`}, 'Briefs Migration Subject', 'scheduled', ${`${PENDING_DAY}T15:00:00Z`})
+    RETURNING id`;
+  scheduledSessionId = scheduled.id;
+  const [pending] = await db<{ id: string }[]>`
+    INSERT INTO swarm_briefs (date, subject_id, body)
+    VALUES (${PENDING_DAY}, ${SUBJECT}, ${db.json({ windowClosesAt: `${PENDING_DAY}T08:00:00.000Z`, marker: "published-session-body" })})
+    RETURNING id`;
+  pendingBriefId = pending.id;
+
   // ── Apply 0028, then apply it a second time verbatim ──────────────────────
   const ddl = await readFile(join(migrationsDir, MIGRATION), "utf8");
   await db.begin(async (tx) => { await tx.unsafe(ddl); });
@@ -182,7 +214,7 @@ test("pre-0028 the day key is what made a second same-day brief impossible", () 
 });
 
 test("applying 0028 preserves EVERY existing brief row — nothing is dropped", async () => {
-  expect(afterFirstApply.map((r) => r.id).sort()).toEqual([dupBriefId, soloBriefId, orphanBriefId].sort());
+  expect(afterFirstApply.map((r) => r.id).sort()).toEqual([dupBriefId, soloBriefId, orphanBriefId, pendingBriefId].sort());
   // Bodies are untouched: this migration re-keys, it does not rewrite content.
   const dup = afterFirstApply.find((r) => r.id === dupBriefId)!;
   expect((dup.body as { marker: string }).marker).toBe("late-session-body");
@@ -204,6 +236,37 @@ test("backfill: the earlier session of that day gets NO brief — its body was d
 
 test("backfill: a single-session day attaches to its one session", () => {
   expect(afterFirstApply.find((r) => r.id === soloBriefId)!.session_id).toBe(soloSessionId);
+});
+
+// THE BLOCKER THIS SHAPE EXISTS FOR. openSession() inserts every session as
+// 'scheduled' and the brief follows on a separate cron, so for most of any given
+// day the newest session of a subject has not been briefed yet. A backfill that
+// took the newest session unconditionally would hand the day's real brief to
+// that unbriefed session — which would then advertise a windowClosesAt it never
+// promised, and destroy the real body on its own ON CONFLICT (session_id) DO
+// UPDATE the moment it published. One-shot, no rollback.
+//
+// RED CONTROL: drop `AND s.state <> 'scheduled'` from the migration's backfill
+// subquery and this test fails with session_id = the scheduled session.
+test("backfill: a day whose NEWEST session is still 'scheduled' attaches its brief to the PUBLISHED older session", () => {
+  const pending = afterFirstApply.find((r) => r.id === pendingBriefId)!;
+  expect(pending.session_id).toBe(publishedSessionId);
+  expect(pending.session_id).not.toBe(scheduledSessionId);
+  // The unbriefed session owns nothing at all.
+  expect(afterFirstApply.filter((r) => r.session_id === scheduledSessionId).length).toBe(0);
+  // …and the body that survived is the published session's own.
+  expect((pending.body as { marker: string }).marker).toBe("published-session-body");
+});
+
+test("backfill: `window_closes_at` could not have discriminated — both shape-D sessions carry one", async () => {
+  // Pinning WHY the filter is on `state`, not on window_closes_at: swarm/admin.ts
+  // pre-sets that column on sessions it inserts as 'scheduled', so a
+  // `window_closes_at IS NOT NULL` predicate would have selected the unbriefed
+  // session just as happily.
+  const [{ n }] = await db<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM swarm_sessions
+    WHERE id = ANY(${[publishedSessionId, scheduledSessionId]}) AND window_closes_at IS NOT NULL`;
+  expect(n).toBe(2);
 });
 
 test("backfill: a brief with no session for its day is KEPT with session_id NULL (the v0-archive shape)", () => {
@@ -233,6 +296,61 @@ test("after 0028 the day key is gone and the session key is enforced", async () 
     SELECT count(*)::int AS n FROM pg_constraint
     WHERE conname = 'swarm_briefs_session_fk' AND contype = 'f' AND confdeltype = 'c'`;
   expect(fk).toBe(1);
+});
+
+// A unique index on a nullable column constrains NOTHING about its NULL rows —
+// Postgres treats every NULL as distinct, so swarm_briefs_session_key alone
+// would let sessionless briefs multiply per day, losing the guarantee the
+// dropped UNIQUE (date, subject_id) used to give them. The partial index is
+// what actually holds that line.
+test("sessionless briefs really are one-per-day — the partial unique index, not the nullable one, enforces it", async () => {
+  const [{ n: partial }] = await db<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM pg_indexes
+    WHERE schemaname = 'public' AND indexname = 'swarm_briefs_sessionless_day_key' AND indexdef LIKE '%UNIQUE%'`;
+  expect(partial).toBe(1);
+
+  // A SECOND sessionless brief for a (subject, date) that already has one is
+  // rejected. Without the partial index this INSERT succeeds.
+  expect(
+    await rejected(
+      db`INSERT INTO swarm_briefs (date, subject_id, body)
+         VALUES (${ORPHAN_DAY}, ${SUBJECT}, ${db.json({ marker: "second-sessionless" })})` as unknown as Promise<unknown>,
+    ),
+  ).toBe(true);
+
+  // A sessionless brief on a DIFFERENT day is still fine — the index scopes to
+  // (date, subject_id), it does not forbid sessionless rows outright.
+  await db`INSERT INTO swarm_briefs (date, subject_id, body)
+           VALUES ('2026-05-30', ${SUBJECT}, ${db.json({ marker: "other-day-sessionless" })})`;
+  await db`DELETE FROM swarm_briefs WHERE date = '2026-05-30' AND subject_id = ${SUBJECT}`;
+});
+
+// The re-run shape the NOT EXISTS guard exists for: an orphan day that later
+// gains a session which ALREADY carries its own brief. Re-resolving the orphan
+// onto that session would collide on swarm_briefs_session_key and abort the
+// whole migration. migrate.ts never re-applies a recorded file, so this was
+// never a merge blocker — but "idempotent" should be true, not nearly true.
+test("re-applying 0028 after an orphan day gains an already-briefed session does not abort", async () => {
+  const [late] = await db<{ id: string }[]>`
+    INSERT INTO swarm_sessions (subject_id, convened_at, subject_name, state)
+    VALUES (${SUBJECT}, ${`${ORPHAN_DAY}T12:00:00Z`}, 'Briefs Migration Subject', 'published') RETURNING id`;
+  await db`INSERT INTO swarm_briefs (session_id, date, subject_id, body)
+           VALUES (${late.id}, ${ORPHAN_DAY}, ${SUBJECT}, ${db.json({ marker: "its-own-brief" })})`;
+
+  const ddl = await readFile(join(migrationsDir, MIGRATION), "utf8");
+  await db.begin(async (tx) => { await tx.unsafe(ddl); });
+
+  // The orphan stays sessionless rather than colliding, and the newer session
+  // keeps the brief it already had.
+  const [orphan] = await db<{ session_id: string | null }[]>`
+    SELECT session_id FROM swarm_briefs WHERE id = ${orphanBriefId}`;
+  expect(orphan.session_id).toBeNull();
+  const [{ n }] = await db<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM swarm_briefs WHERE session_id = ${late.id}`;
+  expect(n).toBe(1);
+
+  await db`DELETE FROM swarm_briefs WHERE session_id = ${late.id}`;
+  await db`DELETE FROM swarm_sessions WHERE id = ${late.id}`;
 });
 
 test("after 0028 the EARLIER session of a day can be given its own brief; a session can never have two", async () => {
