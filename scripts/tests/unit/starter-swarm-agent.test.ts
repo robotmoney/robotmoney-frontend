@@ -53,6 +53,13 @@ describe("starter swarm agent canonical signing", () => {
       id: "11",
       date: session.date,
       subjectId: session.subjectId,
+      // A brief belongs to the session that published it (migration 0028), and
+      // this fixture models a LIVE brief — so it carries the session's own id
+      // rather than the null reserved for pre-0028 archived rows. Stringified
+      // because StarterSession deliberately widens `id` to `string | number`
+      // (it tolerates a loose client's numeric id) while the brief's
+      // `sessionId` is the contract's `string | null`.
+      sessionId: String(session.id),
       body: null,
       createdAt: "2026-07-21T00:00:00.000Z",
     };
