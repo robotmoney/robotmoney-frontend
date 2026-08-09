@@ -119,4 +119,21 @@ test.describe("preview smoke (bun run preview URL space)", () => {
       .toBe("/allocation");
     expect(page.url()).toContain("#/allocation");
   });
+
+  test("crawler policy (robots.txt) is served", async ({ page }) => {
+    const robotsResponse = await page.request.get(`${baseUrl}/robots.txt`);
+    expect(robotsResponse.ok()).toBe(true);
+    const robots = await robotsResponse.text();
+    expect(robots).toContain("User-agent: GPTBot");
+    expect(robots).toContain("Allow: /");
+  });
+
+  test("nested-route content is served (SPA fallback)", async ({ page }) => {
+    // Nested route without extension should fallback to the wrapper index.html
+    const nestedResponse = await page.request.get(`${baseUrl}/swarm/apply`);
+    expect(nestedResponse.ok()).toBe(true);
+    const nested = await nestedResponse.text();
+    expect(nested).toContain("<html");
+    expect(nested).toContain("PREVIEW");
+  });
 });

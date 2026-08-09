@@ -149,6 +149,7 @@ describe("prerendered STATIC_DIR served by the api process", () => {
     expect(routes.length).toBeGreaterThan(0);
 
     const wrong: string[] = [];
+    const emptyFragment: string[] = [];
     for (const route of routes) {
       const html = await (await fetch(`${baseUrl}${route}`)).text();
       const m = metaFor(route);
@@ -161,8 +162,15 @@ describe("prerendered STATIC_DIR served by the api process", () => {
       ) {
         wrong.push(route);
       }
+
+      // Check substantive initial HTML (fragment injection)
+      const fragmentMatch = html.match(/<main[^>]*id="view"[^>]*>([\s\S]*?)<\/main>/);
+      if (!fragmentMatch || !/\S/.test(fragmentMatch[1])) {
+        emptyFragment.push(route);
+      }
     }
     expect(wrong).toEqual([]);
+    expect(emptyFragment).toEqual([]);
   }, 120_000);
 
   it("still answers a client route that is not in the sitemap with the home-page shell", async () => {

@@ -1,4 +1,5 @@
 import { metaFor } from "../frontend/public/assets/js/app/seo.js";
+import { viewFor, routeMetaFor } from "../frontend/public/assets/js/app/routes.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
@@ -47,7 +48,30 @@ for (const route of routes) {
   const m = metaFor(normalizedRoute);
   const url = ORIGIN + (normalizedRoute === "/" ? "/" : normalizedRoute);
 
+  let fragmentHtml = "";
+  const fragmentPath = viewFor(normalizedRoute);
+  if (fragmentPath) {
+    const fullPath = join(repoRoot, "frontend/public", fragmentPath);
+    if (await Bun.file(fullPath).exists()) {
+      fragmentHtml = await Bun.file(fullPath).text();
+    }
+    const meta = routeMetaFor(normalizedRoute);
+    if (meta?.layout) {
+      const layoutPath = join(repoRoot, "frontend/public", meta.layout);
+      if (await Bun.file(layoutPath).exists()) {
+        const layoutHtml = await Bun.file(layoutPath).text();
+        // Avoid `$` replacement issues by using a function
+        fragmentHtml = layoutHtml.replace(/(<main[^>]*data-outlet[^>]*>)([\s\S]*?)(<\/main>)/, (_, open, _inner, close) => {
+          return `${open}\n${fragmentHtml}\n${close}`;
+        });
+      }
+    }
+  }
+
   let html = shell
+    .replace(/(<main id="view">)([\s\S]*?)(<\/main>)/, (_, open, _inner, close) => {
+      return `${open}\n${fragmentHtml}\n${close}`;
+    })
     .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(m.title)}</title>`)
     .replace(/(<meta name="description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
     .replace(/(<link rel="canonical" href=")[^"]*(")/, `$1${url}$2`)

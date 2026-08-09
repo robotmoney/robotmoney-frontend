@@ -25,6 +25,14 @@ const server = Bun.serve({
       file = Bun.file(join(root, "frontend/public", path.slice(1)));
     }
     if (await file.exists()) return new Response(file);
+
+    // Fallback for nested SPA routes (e.g., /swarm/apply)
+    // Cloudflare Pages uses _redirects (`/* /index.html 200`) for this.
+    // The preview environment wrapper is frontend/preview/index.html.
+    if (!path.includes(".") && !path.startsWith("/api/")) {
+      return new Response(Bun.file(join(root, "frontend/preview/index.html")));
+    }
+
     return new Response(Bun.file(join(root, "frontend/preview/404.html")), {
       status: 404,
       headers: { "content-type": "text/html" },
