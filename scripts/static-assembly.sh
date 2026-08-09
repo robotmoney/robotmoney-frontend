@@ -30,3 +30,12 @@ find "$OUT" -mindepth 1 -delete
 cp -R frontend/public/. "$OUT"/
 
 PRERENDER_DIR="$OUT" bun scripts/prerender.ts
+
+# Post-deploy verification (issue #548): check live parity
+if [ "${VERIFY_LIVE_ASSEMBLY:-}" = "true" ]; then
+  echo "Verifying live SKILL.md against assembled copy..."
+  curl -fsSL "https://robotmoney.net/skills/swarm-onboarding/SKILL.md" | cmp - "$OUT/skills/swarm-onboarding/SKILL.md" || {
+    echo "ERROR: live/tree mismatch on SKILL.md" >&2
+    exit 1
+  }
+fi
