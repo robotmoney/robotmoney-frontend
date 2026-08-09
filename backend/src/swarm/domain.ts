@@ -1,7 +1,7 @@
 // Swarm domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { canonicalizeApplication, classifyRegime, SWARM_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import { canonicalizeApplication, classifyRegime, SWARM_ROSTER_CAP, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { config, resolveSwarmNotificationEmailFrom } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -52,6 +52,13 @@ async function publicKeyFor(memberId: string): Promise<string | null> {
 // so backend/tests/swarm-roster-cap.test.ts (which pins its assertions to
 // this constant, never a literal) keeps reading it from the domain layer.
 export { SWARM_ROSTER_CAP };
+
+// Per-member-per-session take cap (issue #573). Re-exported from the domain
+// layer for the same reason as SWARM_ROSTER_CAP above: the tests that pin it
+// read it from here, never from a literal. Enforced in submitRecommendation,
+// twice — once as a cheap refusal ahead of the Ed25519 verify, and once as a
+// conjunct on the INSERT itself so a race cannot slip past the read.
+export { SWARM_TAKE_REVISION_CAP };
 
 // ── Reads ─────────────────────────────────────────────────────────────────
 export async function getMembers() {
@@ -240,18 +247,28 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
 // working), newest first.
 export async function getMemberTakes(memberId: string, limit?: number) {
   const cappedLimit = parseSessionsLimit(limit);
+  // LATEST-PER-SESSION (issue #573). Already scoped to one member, so the
+  // latest-per-member rule collapses to "the highest revision in each session".
+  // A member that amended twice must contribute ONE row to its own record page,
+  // not three — and the LIMIT is a count of sessions, so without this it would
+  // silently start returning fewer sessions than asked for.
   const rows = await sql`
-    SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.payload, r.signature, r.received_at, r.nonce,
-           s.date AS session_date, s.subject_id, s.subject_name, s.state AS session_state,
-           (SELECT k.public_key FROM swarm_member_keys k
-            WHERE k.member_id = r.member_id AND k.active
-            ORDER BY k.created_at DESC LIMIT 1) AS public_key
-    FROM swarm_recommendations r
-    JOIN swarm_sessions s ON s.id = r.session_id
-    JOIN swarm_members m ON m.id = r.member_id
-    WHERE r.member_id = ${memberId}
-    ORDER BY s.date DESC, s.generated_at DESC
+    SELECT * FROM (
+      SELECT DISTINCT ON (r.session_id)
+             r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+             r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
+             s.date AS session_date, s.generated_at AS session_generated_at,
+             s.subject_id, s.subject_name, s.state AS session_state,
+             (SELECT k.public_key FROM swarm_member_keys k
+              WHERE k.member_id = r.member_id AND k.active
+              ORDER BY k.created_at DESC LIMIT 1) AS public_key
+      FROM swarm_recommendations r
+      JOIN swarm_sessions s ON s.id = r.session_id
+      JOIN swarm_members m ON m.id = r.member_id
+      WHERE r.member_id = ${memberId}
+      ORDER BY r.session_id, r.revision DESC
+    ) latest
+    ORDER BY latest.session_date DESC, latest.session_generated_at DESC
     LIMIT ${cappedLimit}`;
   const takes = await Promise.all(rows.map(async (row) => ({
     sessionDate: day(row.session_date),
@@ -305,16 +322,32 @@ export async function getSessionById(
 }
 
 // The shared body of both lookups above: a session row plus its verified takes.
+//
+// LATEST-PER-MEMBER (issue #573). A member may now file several revisions in one
+// session (migration 0028 relaxed `UNIQUE (session_id, member_id)`), each its own
+// immutable signed row. This is a session's CURRENT reading, so it resolves to
+// exactly one take per member — the highest revision. Without the `DISTINCT ON`
+// the session page would render one card per revision, and its stance/confidence
+// table would count one member several times.
+//
+// Superseded revisions are not lost and are not hidden: each keeps its own
+// permalink and its own verification receipt (getTakeReceipt below), which is
+// the whole point of the append-only model. They are simply not what "the
+// session's takes" means.
 async function withTakes(s: Record<string, unknown>) {
   const takes = await sql`
-    SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.payload, r.signature, r.received_at, r.nonce,
-           (SELECT k.public_key FROM swarm_member_keys k
-            WHERE k.member_id = r.member_id AND k.active
-            ORDER BY k.created_at DESC LIMIT 1) AS public_key
-    FROM swarm_recommendations r
-    JOIN swarm_members m ON m.id = r.member_id
-    WHERE r.session_id = ${s.id as string} ORDER BY r.received_at`;
+    SELECT * FROM (
+      SELECT DISTINCT ON (r.member_id)
+             r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+             r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
+             (SELECT k.public_key FROM swarm_member_keys k
+              WHERE k.member_id = r.member_id AND k.active
+              ORDER BY k.created_at DESC LIMIT 1) AS public_key
+      FROM swarm_recommendations r
+      JOIN swarm_members m ON m.id = r.member_id
+      WHERE r.session_id = ${s.id as string}
+      ORDER BY r.member_id, r.revision DESC
+    ) latest ORDER BY latest.received_at`;
   return { session: toSession(s), takes: await Promise.all(takes.map(toVerifiedTake)) };
 }
 
@@ -332,8 +365,8 @@ function hostedMemoId(memoUrl: string | null): number | null {
 
 export async function getTakeReceipt(id: string) {
   const row = (await sql`
-    SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.payload, r.signature, r.received_at, r.nonce,
+    SELECT r.id, r.session_id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+           r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
            (SELECT k.public_key FROM swarm_member_keys k
             WHERE k.member_id = r.member_id AND k.active
             ORDER BY k.created_at DESC LIMIT 1) AS public_key
@@ -342,11 +375,31 @@ export async function getTakeReceipt(id: string) {
     WHERE r.id = ${id} LIMIT 1`)[0];
   if (!row) return null;
 
+  // THE PERMALINK NEVER MOVES AND NEVER SUBSTITUTES (issue #573, ADR D32).
+  // `/swarm/takes/:id` addresses ONE immutable signed row. A member that amends
+  // does not rewrite this row — it files a new one at a new URL — so a link
+  // already shared as proof of participation (runbook.html: "share that
+  // permalink as proof of participation") keeps resolving, keeps verifying, and
+  // keeps showing the exact bytes that were signed at the time it says they
+  // were filed. What it gains is a forward pointer: the reader is told a later
+  // revision exists and can follow it. This is the alternative to the in-place
+  // model, where the same URL would have silently started serving different
+  // prose under an unchanged (or lying) `Filed <time>`.
+  const superseding = (await sql<{ id: string; revision: number; received_at: unknown }[]>`
+    SELECT id, revision, received_at FROM swarm_recommendations
+    WHERE session_id = ${row.session_id as string}
+      AND member_id = ${row.member_id as string}
+      AND revision > ${Number(row.revision ?? 1)}
+    ORDER BY revision DESC LIMIT 1`)[0];
+
   const take = await toVerifiedTake(row);
   const memoId = hostedMemoId(take.memoUrl ?? null);
   return {
     take,
     memo: memoId == null ? null : await getMemo(memoId),
+    supersededBy: superseding
+      ? { id: superseding.id, revision: Number(superseding.revision), receivedAt: instant(superseding.received_at) ?? "" }
+      : null,
     signer: {
       id: row.member_id,
       name: row.member_name,
@@ -477,6 +530,80 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     if (mine.status === "excused") return { ok: false, status: 403, error: "member is excused from this session" };
   }
 
+  // ── CHEAP REFUSALS, BEFORE THE ED25519 VERIFY (issue #573) ───────────────
+  //
+  // THIS ORDERING IS A REQUIREMENT, NOT AN OPTIMISATION. Until #573 the only
+  // refusal of a repeat submit was the `UNIQUE (session_id, member_id)`
+  // violation raised by the INSERT at the very bottom of this function — so a
+  // looping agent paid for a token lookup, a session lookup, two roster
+  // queries, `publicKeyFor` AND a full signature verification on every single
+  // rejected call. Relaxing that constraint (migration 0028) removes the only
+  // server-side bound there was on a member's write volume, and the members
+  // are unattended LLM-driven agents shipped with a `while :; do … done` poll
+  // loop. Both checks below are single indexed lookups, and both sit ABOVE
+  // `publicKeyFor` and `verifySubmissionSignature` so a runaway loop is cheap
+  // to refuse. Anything added between here and the verify must stay cheap.
+  //
+  // Pinned by backend/tests/swarm-take-revisions.test.ts, which proves the
+  // ordering behaviourally rather than by reading this comment: it submits an
+  // INVALID signature over the cap and asserts the cap's 409 (not the
+  // signature's 400) AND that no `rejected_signature` agent-health event — the
+  // observable side effect of the verify branch below — was ever written.
+  const priorRow = (await sql<{ n: number; latest: number }[]>`
+    SELECT count(*)::int AS n, coalesce(max(revision), 0)::int AS latest
+    FROM swarm_recommendations
+    WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
+  const priorCount = priorRow?.n ?? 0;
+  const latestRevision = priorRow?.latest ?? 0;
+
+  if (priorCount > 0) {
+    // AMENDMENT-ONLY GATE — deliberately not applied to a first take.
+    //
+    // `aggregateSession` copies take prose VERBATIM into
+    // `swarm_recommendation.disagreements[].positions[].view` and is never
+    // recomputed (`publishSession` is an unconditional UPDATE that does not
+    // re-aggregate). So an amendment landing after aggregation yields a
+    // published session quoting a body the member's current take no longer
+    // carries. Confining amendment to the pre-aggregation window is what
+    // avoids that without making aggregation re-entrant.
+    //
+    // It is amendment-only because #570 made the advertised deadline the whole
+    // of the timing contract for a FIRST take: `closeWindow` may flip a
+    // session to window_closed/aggregated before its advertised
+    // `window_closes_at`, and a member promised that deadline still gets its
+    // take in. That contract is unchanged here — pinned by
+    // backend/tests/swarm-submission-window.test.ts ("closing the window EARLY
+    // no longer rejects takes"). An amendment is the strictly newer ask, so it
+    // is the one that yields.
+    if (session.state === "aggregated" || session.state === "published") {
+      return {
+        ok: false,
+        status: 409,
+        error: `amendment window closed (session already ${session.state}); the take on file stands`,
+      };
+    }
+    if (priorCount >= SWARM_TAKE_REVISION_CAP) {
+      return {
+        ok: false,
+        status: 409,
+        error: `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`,
+      };
+    }
+  }
+
+  // Nonce replay, refused here rather than by the `UNIQUE (member_id, nonce)`
+  // violation at the bottom. That constraint is untouched and still the
+  // authority; this is the same answer, one indexed lookup earlier, and it is
+  // now DISTINGUISHABLE from the amendment refusals above — the old text
+  // ("already submitted (member/nonce or session/member)") named two causes
+  // because one 409 covered both, and neither cause exists in that form now.
+  const replayed = await sql<{ one: number }[]>`
+    SELECT 1 AS one FROM swarm_recommendations
+    WHERE member_id = ${memberId} AND nonce = ${sub.nonce} LIMIT 1`;
+  if (replayed.length > 0) {
+    return { ok: false, status: 409, error: "nonce already used by this member (replay); mint a fresh nonce to amend" };
+  }
+
   const pub = await publicKeyFor(memberId);
   if (!pub) return { ok: false, status: 403, error: "no registered key for member" };
   const verified = await verifySubmissionSignature(sub, sub.signature, pub);
@@ -505,21 +632,60 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // kept, and it is the STRICTER of the two checks — this one runs against
     // Postgres `now()` while the guard above uses the api process's clock, so a
     // take that races the boundary is still rejected by the database itself.
+    // REVISION IS COMPUTED IN SQL, not from the `latestRevision` read above, so
+    // two racing submits cannot both file "revision 2" off the same stale read.
+    // Under READ COMMITTED that is still not sufficient on its own — which is
+    // exactly what `UNIQUE (session_id, member_id, revision)` (migration 0028)
+    // is for: one of the two racers loses on the constraint and is answered
+    // with a 409 in the catch below, and NO in-place edit of the winner's row
+    // ever happens.
+    //
+    // The cap is re-checked here as a conjunct for the same reason — the count
+    // above is a read, this is the write. `latestRevision` is used only to make
+    // the two-statement path explainable in the audit row.
     const rows = await sql`
       INSERT INTO swarm_recommendations
-        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified)
+        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision)
       SELECT s.id, ${memberId}, ${sub.subjectId}, ${sub.date}, ${sub.nonce}, ${sub.stance},
-             ${sub.confidence}, ${sub.body ?? null}, ${sub.memoUrl ?? null}, ${sql.json(sub as any)}, ${sub.signature}, true
+             ${sub.confidence}, ${sub.body ?? null}, ${sub.memoUrl ?? null}, ${sql.json(sub as any)}, ${sub.signature}, true,
+             (SELECT coalesce(max(r.revision), 0) + 1 FROM swarm_recommendations r
+              WHERE r.session_id = s.id AND r.member_id = ${memberId})
       FROM swarm_sessions s
       WHERE s.id = ${session.id}
         AND (s.window_closes_at IS NULL OR s.window_closes_at > now())
-      RETURNING id`;
-    if (rows.length === 0) return { ok: false, status: 409, error: "submission window closed" };
-    await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'submit_recommendation', ${sql.json({ sessionId: session.id })})`;
-    return { ok: true, status: 201, recommendationId: rows[0].id, verified: true };
+        AND (SELECT count(*) FROM swarm_recommendations r
+             WHERE r.session_id = s.id AND r.member_id = ${memberId}) < ${SWARM_TAKE_REVISION_CAP}
+      RETURNING id, revision`;
+    if (rows.length === 0) {
+      // Two conjuncts can zero this out, and they are not the same answer to an
+      // agent: one says "you are too late", the other says "stop". Re-read the
+      // count to say which — only on the failure path, so the happy path stays
+      // one statement.
+      const after = (await sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM swarm_recommendations
+        WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
+      if ((after?.n ?? 0) >= SWARM_TAKE_REVISION_CAP) {
+        return {
+          ok: false,
+          status: 409,
+          error: `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`,
+        };
+      }
+      return { ok: false, status: 409, error: "submission window closed" };
+    }
+    const revision = Number(rows[0].revision);
+    await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, ${revision > 1 ? "amend_recommendation" : "submit_recommendation"}, ${sql.json({ sessionId: session.id, revision, supersedes: revision > 1 ? latestRevision : null })})`;
+    return { ok: true, status: 201, recommendationId: rows[0].id, verified: true, revision };
   } catch (e: any) {
-    if (String(e?.message ?? e).includes("duplicate") || e?.code === "23505")
-      return { ok: false, status: 409, error: "already submitted (member/nonce or session/member)" };
+    const message = String(e?.message ?? e);
+    if (message.includes("duplicate") || e?.code === "23505") {
+      // Which constraint lost tells the agent what to do next, and the two
+      // answers are opposite: re-mint a nonce, or simply retry.
+      const constraint = String(e?.constraint_name ?? e?.constraint ?? "") + " " + message;
+      if (constraint.includes("member_id_nonce"))
+        return { ok: false, status: 409, error: "nonce already used by this member (replay); mint a fresh nonce to amend" };
+      return { ok: false, status: 409, error: "a concurrent submission from this member won the same revision; retry" };
+    }
     throw e;
   }
 }
@@ -1442,10 +1608,23 @@ function buildSynthesis(
 
 export async function aggregateSession(sessionId: string) {
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  // LATEST-PER-MEMBER (issue #573), for the same reason as withTakes above and
+  // one more that is specific to this function: aggregation copies take prose
+  // VERBATIM into `swarm_recommendation.disagreements[].positions[].view`. A
+  // superseded body reaching that snapshot would publish, permanently, a
+  // sentence the member has already withdrawn.
+  // The outer `ORDER BY received_at` is the ordering this query has always had
+  // and the tie-break the disagreement ladder below sorts on top of; only the
+  // row SET changes here.
   const takeRows = await sql`
-    SELECT r.member_id, r.stance, r.confidence, r.body, r.payload, m.name AS member_name
-    FROM swarm_recommendations r JOIN swarm_members m ON m.id = r.member_id
-    WHERE r.session_id = ${sessionId} ORDER BY r.received_at`;
+    SELECT * FROM (
+      SELECT DISTINCT ON (r.member_id)
+             r.member_id, r.stance, r.confidence, r.body, r.payload, r.revision,
+             r.received_at, m.name AS member_name
+      FROM swarm_recommendations r JOIN swarm_members m ON m.id = r.member_id
+      WHERE r.session_id = ${sessionId}
+      ORDER BY r.member_id, r.revision DESC
+    ) latest ORDER BY latest.received_at`;
   // Denominator (issue #152, AC6): prefer the session's FROZEN roster
   // (swarm_session_members, non-excused rows) over live swarm_members
   // so a member added/removed AFTER the session was created never rewrites an
@@ -1464,6 +1643,16 @@ export async function aggregateSession(sessionId: string) {
     : takeRows;
   const submitted = new Set(takes.map((t: any) => t.member_id));
   const absent = activeMembers.map((m: any) => m.id).filter((id: string) => !submitted.has(id));
+  // QUORUM COUNTS MEMBERS, NOT ROWS (issue #573). Every figure below that used
+  // to read `takes.length` now reads `submittedCount`. The query above already
+  // returns one row per member, so today the two are equal — and that is
+  // precisely why this must be written in terms of DISTINCT MEMBERS rather than
+  // rows: `takes.length` was only ever correct because a schema constraint made
+  // it so, and migration 0028 removed that constraint. A latest-per-member
+  // regression anywhere upstream would otherwise reappear here as a
+  // participation figure above 100%, published, in the session snapshot.
+  // Pinned by backend/tests/swarm-take-revisions.test.ts.
+  const submittedCount = submitted.size;
 
   const byStance: Record<string, number> = {};
   let confSum = 0;
@@ -1471,8 +1660,8 @@ export async function aggregateSession(sessionId: string) {
     byStance[t.stance] = (byStance[t.stance] ?? 0) + 1;
     confSum += Number(t.confidence ?? 0);
   }
-  const participation = activeMembers.length ? takes.length / activeMembers.length : 0;
-  const meanConfidence = takes.length ? confSum / takes.length : null;
+  const participation = activeMembers.length ? submittedCount / activeMembers.length : 0;
+  const meanConfidence = submittedCount ? confSum / submittedCount : null;
 
   const sessionDate = typeof s.date === "string" ? s.date : new Date(s.date).toISOString().slice(0, 10);
   const regimeSummary = await buildRegimeSummary(sessionDate);
@@ -1494,7 +1683,7 @@ export async function aggregateSession(sessionId: string) {
 
   // Consensus: discrete one-line points derived from quorum/stance/confidence/
   // regime data — never a take body (issue #323).
-  const consensus = buildConsensus(activeMembers.length, takes.length, participation, byStance, meanConfidence, regimeSummary);
+  const consensus = buildConsensus(activeMembers.length, submittedCount, participation, byStance, meanConfidence, regimeSummary);
 
   // Disagreements: synthesize from the stance spread. When at least two distinct
   // stances were submitted, contrast the most- and least-constructive members.
@@ -1522,7 +1711,7 @@ export async function aggregateSession(sessionId: string) {
   // authored a body — same gate as before, no editorial prose is invented
   // when there is nothing to report on.
   const rationale = authoredTakes.length
-    ? buildRationale(subjectLabel, byStance, takes.length, meanConfidence, regimeSummary)
+    ? buildRationale(subjectLabel, byStance, submittedCount, meanConfidence, regimeSummary)
     : undefined;
   const actions = recType === "position_actions" ? [
     { token: "USDC", action: "rotate", rationale: "Route the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor." },
@@ -1530,7 +1719,7 @@ export async function aggregateSession(sessionId: string) {
   ] : undefined;
   const weights = recType === "bucket_weights" ? meanTakeWeights(takes) : undefined;
 
-  const quorum = { active: activeMembers.length, submitted: takes.length, absent: absent.length, participation };
+  const quorum = { active: activeMembers.length, submitted: submittedCount, absent: absent.length, participation };
   const rec: Record<string, unknown> = {
     quorum,
     stances: byStance,
@@ -1545,7 +1734,7 @@ export async function aggregateSession(sessionId: string) {
   if (weights) rec.weights = weights;
 
   const synthesis = authoredTakes.length
-    ? buildSynthesis(subjectLabel, activeMembers.length, takes.length, participation, byStance, disagreements[0]?.topic)
+    ? buildSynthesis(subjectLabel, activeMembers.length, submittedCount, participation, byStance, disagreements[0]?.topic)
     : null;
 
   await sql`UPDATE swarm_sessions SET

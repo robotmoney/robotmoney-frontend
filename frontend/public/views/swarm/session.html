@@ -380,7 +380,17 @@
             <table class="sv__data-table">
               <thead><tr><th>Member</th><th>Stance</th><th class="sv__num">Confidence</th></tr></thead>
               <tbody>
-                <template x-for="t in takes" :key="t.id || t.memberId">
+                <!-- KEYED ON THE MEMBER, not the row id (issue #573). A member
+                     may now file several revisions of its take in one session,
+                     each an immutable row with its own uuid; keying on `t.id`
+                     would render one line per revision the moment a
+                     latest-per-member read path regressed. The member is what
+                     this table has one row of, so the member is the key. The
+                     server already resolves latest-per-member (domain.ts
+                     withTakes) — this is the second, independent guarantee, and
+                     an Alpine duplicate-key error if the first ever breaks is
+                     the loud failure we want. -->
+                <template x-for="t in takes" :key="t.memberId || t.id">
                   <tr><td x-text="t.memberName"></td><td x-text="t.stance"></td><td class="sv__num" x-text="fmtPct(t.confidence)"></td></tr>
                 </template>
               </tbody>
@@ -391,7 +401,9 @@
         <section class="sv__takes-section">
           <p class="sv__panel-label">Member takes</p>
           <div class="sv__takes sv__takes--ported">
-            <template x-for="t in takes" :key="t.id || t.memberId">
+            <!-- One card per MEMBER, not per revision — see the submissions
+                 table above for why the key is the member id. -->
+            <template x-for="t in takes" :key="t.memberId || t.id">
               <article class="sv__take sv__take--ported">
                 <header class="sv__take-head">
                   <div class="sv__take-member">

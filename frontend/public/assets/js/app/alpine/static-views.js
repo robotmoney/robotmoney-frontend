@@ -158,6 +158,11 @@ export function camelTake(raw) {
     body: raw.body || "",
     model: raw.model,
     memoUrl: raw.memoUrl || raw.memo_url,
+    // Which revision of this member's take in this session (issue #573). The
+    // shipped static archive JSON predates the field and every row in it is an
+    // original, so absent reads as 1 — the same default the server projection
+    // applies (backend/src/swarm/projections.ts).
+    revision: Number(raw.revision ?? 1) || 1,
     verified: raw.verified,
     // v0 pre-launch archive content, not a member submission — see the
     // verification badge below for why this is NOT the same thing as
@@ -520,6 +525,10 @@ export function registerStaticViews(Alpine) {
     take: null,
     memo: null,
     signer: null,
+    // Set when a LATER revision of this member's take exists in the same
+    // session (issue #573). The receipt itself never changes — see take.html
+    // for why a superseded permalink resolves rather than 404s or substitutes.
+    supersededBy: null,
     async init() {
       const match = location.pathname.match(/^\/swarm\/takes\/([^/]+)\/?$/);
       if (!match) {
@@ -532,6 +541,7 @@ export function registerStaticViews(Alpine) {
         this.take = camelTake(receipt.take);
         this.memo = receipt.memo;
         this.signer = receipt.signer;
+        this.supersededBy = receipt.supersededBy ?? null;
       } catch (e) {
         this.error = e.message || "Take not found";
       } finally {

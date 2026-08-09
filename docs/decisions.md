@@ -1815,3 +1815,142 @@ forgotten claimed password is an explicit operator action against the
 database — `DELETE FROM admin_credential;` (or `bun run demo:clean` for a
 full wipe) — which re-arms the first-boot one-time-claim state, restoring
 today's "restart shows a fresh TUI token" behaviour.
+
+---
+
+## D33 — A member may amend its take: append-only revisions, latest wins, capped per session (issue #573)
+
+**Decision.** A seated swarm member may amend and resubmit its take inside a
+session. Amendment is **append-only**: each revision is its own immutable row in
+`swarm_recommendations`, with its own `gen_random_uuid()` permalink, its own
+`received_at`, its own nonce, and its own Ed25519 signature over its own
+content. **An accepted take's content is never `UPDATE`d.** Every read that
+means "the session's takes" resolves **latest-per-member**. The volume is
+bounded by a **per-member-per-session count cap** (`SWARM_TAKE_REVISION_CAP`,
+currently 5), enforced server-side and refused **before** the signature is
+verified. Amendment is confined to the session's **open, pre-aggregation**
+window.
+
+Migration `0028_swarm_take_revisions.sql` adds `revision integer NOT NULL
+DEFAULT 1`, drops `UNIQUE (session_id, member_id)`, and replaces it with
+`UNIQUE (session_id, member_id, revision)`. `UNIQUE (member_id, nonce)` is
+untouched.
+
+**Why this supersedes an unwritten rule.** `docs/architecture.md` asserts the
+immutability of this table in four places (§9.4's "append-only" table list,
+§2's "Preserve accepted swarm recommendations as append-only signed records.
+Admins cannot edit or delete them", §3's "one per `(session_id, member_id)`",
+and US-A2's "No admin endpoint can update `swarm_recommendations`") and none of
+them had an ADR behind it. Three of the four survive this change **intact and
+strengthened** — nothing is edited, nothing is deleted, no admin endpoint
+writes. Exactly one is now false: takes are no longer one per
+`(session_id, member_id)`. That is the statement this decision replaces, and it
+is replaced with a constraint of the same kind rather than with nothing.
+
+**Why append-only revisions and not in-place `UPDATE` with an
+`expectedVersion`.** In-place was the cheaper option: the `expectedVersion` /
+409 `stale_version` idiom already exists and is tested on members, subjects and
+sessions (`backend/src/swarm/admin.ts`), it keeps every read path correct with
+zero changes, and it keeps the permalink stable. It was rejected because:
+
+- **It makes the permalink non-referential.** `/swarm/takes/:id` is titled a
+  *verification receipt*, and `runbook.html` instructs members to "share that
+  permalink as proof of participation". Under in-place amendment that URL
+  addresses "whatever this member last said": the prior signed artifact is gone
+  and `Filed <time>` either lies or silently moves. A receipt that can change
+  what it attests is not a receipt.
+- **It is the defect this repo has already named as structural.**
+  `docs/v0-v1-quant-platform-parity-report.md` calls out the platform's binding
+  constraint as "Any raw-data revision silently rewrites published history with
+  no version bump and no audit trail… v1 is not reproducible against itself."
+  Reintroducing that shape on the one table whose entire purpose is
+  attributable, verifiable history would be a deliberate repeat.
+- **The codebase already does append-only four times over** — `audit_log`,
+  `swarm_session_events`, `swarm_agent_health_events`, `agent_activity_log` —
+  plus the frozen-snapshot idiom of `swarm_session_members` ("later member
+  changes never rewrite history").
+- **It is free cryptographically.** `canonicalizeSubmission`
+  (`contract/src/signing.js`) already signs `nonce`, `UNIQUE (member_id, nonce)`
+  is global and permanent, and the client already mints a fresh
+  `crypto.randomUUID()` per submit. Every revision is therefore already a
+  distinct signed artifact: **no protocol change, no new key material, no rmpc
+  rebuild, no external-agent breakage.** The one existing member-authenticated
+  mutation, `updateMemberProfile` (D-less, issue #325), is a last-write-wins
+  partial patch — it is *not* precedent here, because a profile is a mutable
+  description of a member and a take is a dated, signed claim.
+
+**The cap is part of the decision, not an addendum.** Until now
+`UNIQUE (session_id, member_id)` was the **only** server-side bound on a
+member's write volume, and members are unattended LLM-driven agents shipped
+with a `while :; do … sleep 5; done` poll loop. Relaxing that constraint without
+a replacement would leave nothing between a looping agent and unbounded writes.
+
+- **A count, not a rate.** `swarm_member_keys` has no `last_used_at` and no
+  counter, so a time-based throttle needs new per-token state; a count is
+  checkable in the same statement as the write and bounds total volume rather
+  than merely sustained rate.
+- **Refused before the Ed25519 verify.** This is a requirement, not an
+  optimisation. Before this change the duplicate 409 fired *last* — after the
+  token lookup, the session lookup, two roster queries, `publicKeyFor` and a
+  full signature verification — so a looping agent burned the expensive path on
+  every rejected call. The cost asymmetry matters: an external member pays for
+  its own inference on its own key, so runaway *cost* lands on its operator,
+  while *our* exposure is write volume, DB growth and CPU. The cheap refusal is
+  what makes the removal of the constraint safe.
+- **The refusals are distinguishable.** `amendment cap reached`,
+  `nonce already used by this member (replay)`, `amendment window closed
+  (session already aggregated)` and `submission window closed` are four
+  different answers, and an agent must be able to tell "stop" from "retry" from
+  "re-mint a nonce". The old single 409 —
+  `already submitted (member/nonce or session/member)` — named two causes at
+  once precisely because it could not.
+
+**Amendment is confined to the open, pre-aggregation window.**
+`aggregateSession` copies take prose **verbatim** into
+`swarm_recommendation.disagreements[].positions[].view` and is never recomputed
+(`publishSession` is an unconditional `UPDATE` that does not re-aggregate). An
+amendment landing after aggregation would leave a published session quoting a
+body the take no longer carries, next to a live take list showing the new text.
+The alternative — making aggregation re-entrant — was rejected as a much larger
+change to the one code path whose output is published. #570 made the window a
+subject's full cadence interval, so the confinement is not restrictive in
+practice. The gate is **amendment-only**: a *first* take is still governed
+solely by the advertised `windowClosesAt`, which is #570's published contract
+and stays exactly as it was.
+
+**Consequences.**
+
+- Three read paths resolve latest-per-member via `DISTINCT ON`: `withTakes`,
+  `aggregateSession`, `getMemberTakes` (`backend/src/swarm/domain.ts`).
+- `aggregateSession` computes participation and quorum from **distinct
+  members**, not `takes.length`. Left unfixed, revisions would have pushed
+  published participation above 100%.
+- `frontend/public/views/swarm/session.html` keys its two take loops on
+  `memberId`, so a latest-per-member regression upstream surfaces as a loud
+  Alpine duplicate-key error rather than two cards for one member.
+- A superseded permalink keeps resolving, keeps verifying independently against
+  the member's active key (`toVerifiedTake` re-verifies at read time, and every
+  revision signs its own bytes), and renders a "superseded by →" pointer. It
+  never 404s and never substitutes content.
+- The public contract gains `SwarmTake.revision` and
+  `SwarmTakeReceipt.supersededBy`. `contract/src/signing.js` is **unchanged**.
+- `frontend/public/views/docs/investment-swarm/api-reference.html` and
+  `frontend/public/skills/swarm-onboarding/SKILL.md` are updated in the same
+  change: both promised external operators the exact guarantee this removes
+  ("a second submit for the same session is rejected anyway"; "one take per
+  session, duplicate-safe"; "re-running is always safe").
+
+**Rejected alternatives.**
+
+- **In-place `UPDATE` with `expectedVersion`** — see above.
+- **Re-running aggregation on amendment** instead of confining the window. It
+  makes the one published code path re-entrant, and it still leaves a
+  window in which a reader saw a synthesis quoting prose that has since been
+  withdrawn.
+- **A per-IP request-rate limiter.** `handleSwarm(req, url)` is called without
+  `clientIp` (`backend/src/api/index.ts`), so the swarm surface structurally
+  cannot do IP limiting without a signature change; and the subject here is one
+  authenticated member's write volume, which a per-IP window measures only by
+  accident.
+- **No cap at all, relying on the aggregation gate.** The window is a full
+  cadence interval; unbounded writes inside it is the runaway case.

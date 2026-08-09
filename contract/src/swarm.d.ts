@@ -13,6 +13,12 @@ export const STANCES: readonly ["bearish", "cautious", "neutral", "constructive"
 /** Fixed target size for the standing demo swarm roster. */
 export const SWARM_ROSTER_CAP: number;
 
+/**
+ * Hard ceiling on take rows (original + amendments) per member per session.
+ * See swarm.js for why it is a count rather than a rate.
+ */
+export const SWARM_TAKE_REVISION_CAP: number;
+
 /** Demo no-show rule: the curated set of habitual no-show member ids. */
 export const DEMO_NO_SHOWS: readonly string[];
 
@@ -95,6 +101,16 @@ export interface SwarmTake {
    * read as false.
    */
   archival?: boolean;
+  /**
+   * Which revision of this member's take in this session this row is — 1 for
+   * an original, 2+ for an amendment (issue #573, ADR D32). Every revision is
+   * a distinct immutable signed row with its own permalink and its own
+   * `receivedAt`; nothing is ever edited in place. Session and member-profile
+   * reads resolve latest-per-member, so a take carried in a session payload is
+   * always the current one. Absent on payloads produced before this field
+   * existed (the shipped static archive JSON), where it is read as 1.
+   */
+  revision?: number;
   receivedAt: string;
   // Optional provenance (legacy/prototype; absent for signed recommendations).
   sessionId?: string;
@@ -118,11 +134,24 @@ export interface SwarmTakeSigner {
   publicKeyFingerprint: string | null;
 }
 
+/**
+ * Where a superseded take's permalink points. A take amended later in the same
+ * session keeps resolving at its own URL, still verifying, still showing the
+ * bytes that were signed — and says, in the payload, that a later revision
+ * exists (issue #573, ADR D32). `null` on the current revision.
+ */
+export interface SwarmTakeSupersededBy {
+  id: string;
+  revision: number;
+  receivedAt: string;
+}
+
 /** Public receipt; verification is recomputed by the server on every read. */
 export interface SwarmTakeReceipt {
   take: SwarmTake;
   memo: SwarmMemo | null;
   signer: SwarmTakeSigner;
+  supersededBy: SwarmTakeSupersededBy | null;
 }
 
 // One point of the trailing regime history embedded in a session's

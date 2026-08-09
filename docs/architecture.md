@@ -1044,7 +1044,11 @@ A swarm migration extends §6 with append-only, audit-flavored tables:
 `swarm_members`, `swarm_member_keys` (public-key + access-key-hash
 registry), `swarm_subjects`, `swarm_sessions`, `swarm_briefs`,
 **`swarm_recommendations`** (append-only — payload + signature + nonce +
-`verified`; the canonical store behind a take/submission),
+`revision` + `verified`; the canonical store behind a take/submission. A member
+may file several REVISIONS of its take in one session and reads resolve
+latest-per-member, but nothing is ever edited in place: each revision is its own
+immutable signed row with its own permalink — see
+[D32](./decisions.md#d32--a-member-may-amend-its-take-append-only-revisions-latest-wins-capped-per-session-issue-573)),
 `swarm_subject_snapshots`, and `audit_log` (actor, action, scope, ts). Regime
 data is written by the analytics provider (§9.6).
 
@@ -2970,7 +2974,10 @@ These decisions are not open implementation questions:
 - Keep the Postgres queue as the executor. Admin requests enqueue lifecycle and
   research work; the browser never runs domain operations itself.
 - Preserve accepted swarm recommendations as append-only signed records.
-  Admins cannot edit or delete them.
+  Admins cannot edit or delete them. This survives
+  [D32](./decisions.md#d32--a-member-may-amend-its-take-append-only-revisions-latest-wins-capped-per-session-issue-573)
+  unchanged: a member amending its take appends a new signed row, it does not
+  rewrite the one on file.
 - “Remove member” means deactivate. No swarm member is hard-deleted.
 - “Topic” is the UI term; `swarm_subjects` remains the database and API
   domain term.
@@ -3018,8 +3025,14 @@ The implementation must extend, not replace, these pieces:
 - The current swarm domain supports public reads, applications, activation,
   signed submissions, memos, subject creation, and the five-state lifecycle.
   Several lifecycle functions currently lack state guards; this plan adds them.
-- Canonical accepted takes live in `swarm_recommendations`, one per
-  `(session_id, member_id)`, with replay protection on `(member_id, nonce)`.
+- Canonical accepted takes live in `swarm_recommendations`. **Superseded by
+  [D32](./decisions.md#d32--a-member-may-amend-its-take-append-only-revisions-latest-wins-capped-per-session-issue-573)**:
+  they are no longer one per `(session_id, member_id)`. A member may amend
+  inside the session's open, pre-aggregation window, capped at
+  `SWARM_TAKE_REVISION_CAP` rows per member per session; uniqueness is now
+  `(session_id, member_id, revision)`, and every read that means "the session's
+  takes" resolves latest-per-member. Replay protection on `(member_id, nonce)`
+  is unchanged and is what makes each revision a distinct signed artifact.
   Invalid signatures are rejected before insert and are not retained. The admin
   UI therefore shows accepted submissions only; rejected submission-attempt
   forensics are out of scope.
@@ -3278,7 +3291,11 @@ Acceptance:
 - The aggregate view shows stance counts, mean confidence, expected/submitted/
   absent counts, consensus, disagreements, actions or weights, and the source
   recommendation ids used.
-- No admin endpoint can update `swarm_recommendations`.
+- No admin endpoint can update `swarm_recommendations`. Unchanged by
+  [D32](./decisions.md#d32--a-member-may-amend-its-take-append-only-revisions-latest-wins-capped-per-session-issue-573):
+  amendment is a member-authenticated INSERT on the ordinary submit route, not
+  an admin edit, and no code path anywhere UPDATEs an accepted take's
+  content.
 
 ### US-A3 — Inspect audit history
 
