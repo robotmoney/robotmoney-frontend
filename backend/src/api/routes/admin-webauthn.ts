@@ -103,23 +103,23 @@ export async function handleAdminWebauthn(
     if (verification.verified && verification.registrationInfo) {
       const { credential } = verification.registrationInfo;
       const { id, publicKey, counter, transports } = credential;
-      
+
       await sql`
         INSERT INTO admin_passkey (id, public_key, counter, transports)
         VALUES (${id}, ${Buffer.from(publicKey)}, ${counter}, ${transports || []})
       `;
 
       await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'register_passkey', ${sql.json({ id })})`;
-      
+
       return { status: 200, body: { verified: true } };
     }
-    
+
     return BAD("verification failed");
   }
 
   if (m === "GET" && p === "/api/admin/webauthn/auth/options") {
     const passkeys = await sql<{ id: string, transports: string[] }[]>`SELECT id, transports FROM admin_passkey`;
-    
+
     const options = await generateAuthenticationOptions({
       rpID,
       allowCredentials: passkeys.map(pk => ({
@@ -174,15 +174,15 @@ export async function handleAdminWebauthn(
     if (verification.verified && verification.authenticationInfo) {
       const { newCounter } = verification.authenticationInfo;
       await sql`UPDATE admin_passkey SET counter = ${newCounter}, last_used_at = now() WHERE id = ${pk.id}`;
-      
+
       const sessionToken = randomBytes(32).toString("base64url");
       await sql`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(sessionToken)}, now() + interval '1 day')`;
-      
+
       await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'login_passkey', ${sql.json({ id: pk.id })})`;
 
       return { status: 200, body: { verified: true, token: sessionToken } };
     }
-    
+
     return BAD("verification failed");
   }
 
