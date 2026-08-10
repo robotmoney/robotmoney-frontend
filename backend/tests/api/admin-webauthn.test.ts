@@ -70,7 +70,7 @@ async function call(method: string, path: string, body?: unknown, token?: string
   return handleAdminWebauthn(req, new URL(req.url), ADMIN);
 }
 
-test("WebAuthn registration and authentication verify an ES256 passkey", async () => {
+test("WebAuthn zero-counter registration and authentication verify an ES256 passkey", async () => {
   const credentialID = randomBytes(32);
   const credentialID64 = base64url(credentialID);
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
@@ -100,15 +100,17 @@ test("WebAuthn registration and authentication verify an ES256 passkey", async (
   expect(registered).toEqual({ status: 200, body: { verified: true } });
   expect(Array.from(await sql`SELECT id, counter FROM admin_passkey WHERE id = ${credentialID64}`)).toEqual([{ id: credentialID64, counter: "0" }]);
 
-  // A real signed assertion advances the counter, creates a bearer session,
-  // and that session authorizes the existing privileged gate.
+  // A real signed zero-counter assertion creates a bearer session, updates
+  // last_used_at, and authorizes the existing privileged gate. Some valid
+  // authenticators never increment their signature counter, so this exercises
+  // the endpoint's exact zero-to-zero exception rather than a mocked verifier.
   const authenticationOptions = await call("GET", "/api/admin/webauthn/auth/options");
   expect(authenticationOptions?.status).toBe(200);
   const authenticationChallenge = (authenticationOptions?.body as { challenge: string; allowCredentials: Array<{ id: string }> }).challenge;
   expect((authenticationOptions?.body as { allowCredentials: Array<{ id: string }> }).allowCredentials.map((credential) => credential.id)).toContain(credentialID64);
 
   const authenticationClientData = clientData("webauthn.get", authenticationChallenge);
-  const assertionData = authenticatorData(credentialID, undefined, 1);
+  const assertionData = authenticatorData(credentialID, undefined, 0);
   const signedData = concat(assertionData, createHash("sha256").update(authenticationClientData).digest());
   const signer = createSign("SHA256");
   signer.update(signedData);
@@ -128,7 +130,9 @@ test("WebAuthn registration and authentication verify an ES256 passkey", async (
   const sessionToken = (authenticated?.body as { verified: boolean; token: string }).token;
   expect(sessionToken).toHaveLength(43);
   expect(await isPrivileged(request("GET", "/api/admin/overview", undefined, sessionToken), ADMIN)).toBe(true);
-  expect(Array.from(await sql`SELECT counter FROM admin_passkey WHERE id = ${credentialID64}`)).toEqual([{ counter: "1" }]);
+  expect(Array.from(await sql`SELECT counter, last_used_at FROM admin_passkey WHERE id = ${credentialID64}`)).toEqual([
+    { counter: "0", last_used_at: expect.any(Date) },
+  ]);
 
   // Challenges are consumed by the first verification, so a replay is rejected.
   const replay = await call("POST", "/api/admin/webauthn/auth/verify", {

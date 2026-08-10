@@ -219,11 +219,15 @@ export async function handleAdminWebauthn(
         // Verification uses the counter observed above, but a second valid
         // assertion can finish first. Compare-and-swap makes the stored
         // counter monotonic and prevents the late assertion from regressing
-        // it (or minting a session after its credential was revoked).
+        // it (or minting a session after its credential was revoked). Some
+        // authenticators deliberately always report a zero signature counter:
+        // accept only that exact zero-to-zero case. Challenge consumption is
+        // still single-use, so it does not weaken assertion replay defense.
         const updated = await tx`
           UPDATE admin_passkey
           SET counter = ${newCounter}, last_used_at = now()
-          WHERE id = ${pk.id} AND counter < ${newCounter}
+          WHERE id = ${pk.id}
+            AND (counter < ${newCounter} OR (counter = 0 AND ${newCounter} = 0))
           RETURNING id
         `;
         if (!updated.length) return false;
