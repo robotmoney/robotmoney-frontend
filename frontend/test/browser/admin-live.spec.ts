@@ -70,10 +70,21 @@ test.beforeAll(async ({ request }) => {
   expect(auth.ok()).toBe(true);
 });
 
+// The demo harness deliberately uses 127.0.0.1 for its health checks because
+// that avoids a localhost/::1 resolution ambiguity. Chromium's virtual
+// authenticator, however, does not complete ceremonies for an IP-address RP
+// ID. Keep the production harness unchanged and make this browser-only proof
+// use the equivalent loopback hostname, which is a valid WebAuthn RP ID.
+const WEBAUTHN_LOOPBACK_ORIGIN = (() => {
+  const origin = new URL(BACKEND_URL);
+  if (origin.hostname === "127.0.0.1") origin.hostname = "localhost";
+  return origin.origin;
+})();
+
 /** Sign into the real /admin shell with the claimed durable password. Every
- * script and admin request reaches the live same-origin backend. */
-async function login(page: Page): Promise<void> {
-  await page.goto("/admin");
+ * admin request reaches the live same-origin backend. */
+async function login(page: Page, origin?: string): Promise<void> {
+  await page.goto(origin ? `${origin}/admin` : "/admin");
 
   // A live demo backend boots unclaimed; the first test to run must claim it,
   // and subsequent tests (or a manually claimed backend) just sign in.
@@ -131,7 +142,7 @@ test("admin-live: the pinned local WebAuthn module completes real registration a
     const localBundle = page.waitForResponse(
       (res) => new URL(res.url()).pathname === "/assets/js/vendor/simplewebauthn-browser-13.3.0.umd.min.js",
     );
-    await login(page);
+    await login(page, WEBAUTHN_LOOPBACK_ORIGIN);
     const bundle = await localBundle;
     expect(bundle.ok()).toBe(true);
     expect(await bundle.text()).toContain("@simplewebauthn/browser@13.3.0");

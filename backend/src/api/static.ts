@@ -10,9 +10,13 @@ const ASSET_CACHE_CONTROL = "public, max-age=300";
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
+  // The design system has long loaded its non-executable font stylesheet from
+  // Google Fonts. Keep that existing presentation dependency explicit so the
+  // CSP neither emits a browser error on every route nor changes all visual
+  // baselines; executable assets remain same-origin only.
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "img-src 'self' data: https:",
-  "font-src 'self' data:",
+  "font-src 'self' data: https://fonts.gstatic.com",
   "connect-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",

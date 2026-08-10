@@ -59,6 +59,8 @@ test("serveStatic gives SPA documents a same-origin script policy and enables We
   expect(policy).toContain("default-src 'self'");
   expect(policy).toContain("script-src 'self' 'unsafe-eval'");
   expect(policy?.match(/script-src ([^;]+)/)?.[1]).not.toContain("https:");
+  expect(policy).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
+  expect(policy).toContain("font-src 'self' data: https://fonts.gstatic.com");
   expect(res?.headers.get("Permissions-Policy")).toBe(
     "publickey-credentials-get=(self), publickey-credentials-create=(self)",
   );
