@@ -12,8 +12,13 @@
     <h2 class="adm-login__title">Sign in</h2>
     <p x-show="sessionExpired" x-text="'Session expired — sign in again.'" class="rm-error adm-msg"></p>
     <form @submit.prevent="loginAndLoad(() => load())" class="adm-login__form">
-      <input type="password" x-model="password" class="adm-input" placeholder="Admin password" aria-label="Admin password" />
+      <input type="password" x-model="password" class="adm-input" placeholder="Admin password"
+        autocomplete="current-password" aria-label="Admin password" />
       <button type="submit" class="adm-btn">Sign in</button>
+      <button type="button" class="adm-btn adm-btn--ghost" @click="loginWithPasskeyAndLoad(() => load())" :disabled="passkeyLoading">
+        <span x-show="!passkeyLoading">Sign in with Passkey</span>
+        <span x-show="passkeyLoading" class="rm-loading">Waiting for passkey…</span>
+      </button>
     </form>
     <p x-show="loginError" x-text="loginError" class="rm-error adm-msg" x-cloak></p>
   </div>

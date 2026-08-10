@@ -19,6 +19,7 @@
 // shell: schedule enable/disable lives inside the existing Queue section, and
 // audit gets its own top-level nav section.
 import { api, ROUTES, path } from "../../lib/api.js";
+import { startRegistration, startAuthentication } from "https://esm.sh/@simplewebauthn/browser@13.3.0";
 
 const ADMIN_TOKEN_KEY = "rm_admin_token";
 
@@ -26,6 +27,7 @@ function sectionFromPath(pathname) {
   if (pathname.startsWith("/admin/research")) return "research";
   if (pathname.startsWith("/admin/queue")) return "queue";
   if (pathname.startsWith("/admin/audit")) return "audit";
+  if (pathname.startsWith("/admin/security")) return "security";
   return "overview";
 }
 
@@ -46,6 +48,9 @@ export function registerAdminSurfaceView(Alpine) {
     claimError: null,
     claimResult: null,
     claimSubmitting: false,
+    passkeyLoading: false,
+    passkeyError: null,
+    passkeySuccess: null,
 
     // ── password recovery ────────────────────────────────────────────────
     recoveryMode: false,
@@ -195,6 +200,28 @@ export function registerAdminSurfaceView(Alpine) {
       }
     },
 
+    async loginWithPasskey() {
+      this.loginError = null;
+      this.passkeyLoading = true;
+      try {
+        const options = await api.adminGet(ROUTES.admin.webauthnAuthOptions);
+        const asseResp = await startAuthentication({ optionsJSON: options });
+        const verifyRes = await api.adminPost(ROUTES.admin.webauthnAuthVerify, null, asseResp);
+        if (verifyRes.verified && verifyRes.token) {
+          sessionStorage.setItem(ADMIN_TOKEN_KEY, verifyRes.token);
+          this.authed = true;
+          await this.loadSection();
+          this.startPolling();
+        } else {
+          this.loginError = "Passkey verification failed.";
+        }
+      } catch (e) {
+        this.loginError = e.name === "NotAllowedError" ? "Passkey interaction cancelled." : e.message;
+      } finally {
+        this.passkeyLoading = false;
+      }
+    },
+
     logout() {
       this._forgetToken();
       this.password = "";
@@ -285,6 +312,7 @@ export function registerAdminSurfaceView(Alpine) {
       if (this.section === "overview") return this.loadOverview();
       if (this.section === "queue") return this.loadQueue();
       if (this.section === "audit") return this.loadAudit();
+      if (this.section === "security") return; // No load action needed for security section
       if (this.section === "research") {
         if (this.selectedResearchRunId) return this.openResearchRun(this.selectedResearchRunId, { pushUrl: false });
         return this.loadResearchRuns();
@@ -516,6 +544,30 @@ export function registerAdminSurfaceView(Alpine) {
         if (!this._handleError(e)) this.rerunError = e.message;
       } finally {
         this.rerunSubmitting = false;
+      }
+    },
+
+    // ── security (US-S1 passkeys) ────────────────────────────────────────
+    async registerPasskey() {
+      this.passkeyError = null;
+      this.passkeySuccess = null;
+      this.passkeyLoading = true;
+      try {
+        const options = await api.adminGet(ROUTES.admin.webauthnRegisterOptions, this._token());
+        const attResp = await startRegistration({ optionsJSON: options });
+        const verifyRes = await api.adminPost(ROUTES.admin.webauthnRegisterVerify, this._token(), attResp);
+
+        if (verifyRes.verified) {
+          this.passkeySuccess = "Passkey registered successfully.";
+        } else {
+          this.passkeyError = "Passkey registration failed.";
+        }
+      } catch (e) {
+        if (!this._handleError(e)) {
+          this.passkeyError = e.name === "NotAllowedError" ? "Passkey interaction cancelled." : e.message;
+        }
+      } finally {
+        this.passkeyLoading = false;
       }
     },
 

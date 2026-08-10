@@ -20,6 +20,7 @@
 // (`...createDashGateState()`) so the dashboard gate follows the identical
 // convention.
 import { api, ROUTES } from "../../lib/api.js";
+import { startAuthentication } from "https://esm.sh/@simplewebauthn/browser@13.3.0";
 
 export const ADMIN_TOKEN_KEY = "rm_admin_token";
 
@@ -33,6 +34,7 @@ export function createDashGateState() {
     verifying: true,
     password: "",
     showPassword: false,
+    passkeyLoading: false,
     loginError: null,
 
     // POST /api/admin/auth doubles as a stateless "is this token still
@@ -77,6 +79,26 @@ export function createDashGateState() {
         this.loginError = e.status === 403 ? "Incorrect access key." : e.message || "Sign-in failed.";
       } finally {
         this.verifying = false;
+      }
+    },
+
+    async loginWithPasskey() {
+      this.loginError = null;
+      this.passkeyLoading = true;
+      try {
+        const options = await api.adminGet(ROUTES.admin.webauthnAuthOptions);
+        const asseResp = await startAuthentication({ optionsJSON: options });
+        const verifyRes = await api.adminPost(ROUTES.admin.webauthnAuthVerify, null, asseResp);
+        if (verifyRes.verified && verifyRes.token) {
+          sessionStorage.setItem("rm_admin_token", verifyRes.token);
+          this.authed = true;
+        } else {
+          this.loginError = "PASSKEY VERIFICATION FAILED";
+        }
+      } catch (e) {
+        this.loginError = e.name === "NotAllowedError" ? "PASSKEY INTERACTION CANCELLED" : e.message;
+      } finally {
+        this.passkeyLoading = false;
       }
     },
 

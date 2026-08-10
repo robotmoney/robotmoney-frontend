@@ -70,6 +70,10 @@
           <input type="password" x-model="password" class="adm-input" placeholder="Admin password"
             autocomplete="current-password" aria-label="Admin password" />
           <button type="submit" class="adm-btn">Sign in</button>
+          <button type="button" class="adm-btn adm-btn--ghost" @click="loginWithPasskey()" :disabled="passkeyLoading">
+            <span x-show="!passkeyLoading">Sign in with Passkey</span>
+            <span x-show="passkeyLoading" class="rm-loading">Waiting for passkey…</span>
+          </button>
         </form>
         <button type="button" class="adm-btn adm-btn--ghost" @click="recoveryMode = true" style="margin-top: 1rem">Lost password? Use recovery code</button>
         <p x-show="loginError" x-text="loginError" class="rm-error adm-msg" x-cloak></p>
@@ -118,6 +122,8 @@
         @click="goSection('queue')">Queue</button>
       <button type="button" class="adm-nav__link" :class="section === 'audit' && 'adm-nav__link--active'"
         @click="goSection('audit')">Audit</button>
+      <button type="button" class="adm-nav__link" :class="section === 'security' && 'adm-nav__link--active'"
+        @click="goSection('security')">Security</button>
       <a href="/admin/swarm" class="adm-nav__link">Swarm</a>
     </nav>
 
@@ -560,6 +566,26 @@
         <div class="adm-pager" x-show="auditNextCursor">
           <button type="button" class="adm-btn adm-btn--ghost" @click="loadMoreAudit()">Load more audit events</button>
         </div>
+      </div>
+    </template>
+
+    <!-- ── Security ─────────────────────────────────────────────────────── -->
+    <template x-if="section === 'security'">
+      <div>
+        <h2 class="adm-h2 adm-h2--flush">Passkeys</h2>
+        <p class="adm-lede">
+          Register a passkey to sign in without typing the admin password.
+        </p>
+
+        <div style="margin-top: 1rem;">
+          <button type="button" class="adm-btn" @click="registerPasskey()" :disabled="passkeyLoading">
+            <span x-show="!passkeyLoading">Register new Passkey</span>
+            <span x-show="passkeyLoading" class="rm-loading">Waiting for authenticator…</span>
+          </button>
+        </div>
+
+        <p x-show="passkeyError" x-text="passkeyError" class="rm-error adm-msg" style="margin-top: 1rem;"></p>
+        <p x-show="passkeySuccess" x-text="passkeySuccess" class="adm-success" style="margin-top: 1rem;"></p>
       </div>
     </template>
 
