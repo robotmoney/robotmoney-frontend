@@ -108,26 +108,25 @@ describe("the process.env.ADMIN_TOKEN global mutation is gone (issue #456)", () 
     expect(offenders).toEqual([]);
   });
 
-  test("the admin token is threaded explicitly instead: sessionRail carries adminToken, and every consumer accepts it as a parameter", () => {
-    expect(demoMain).toContain("adminToken: adminPassword");
+  test("the automation token is threaded explicitly to every stack-internal driver", () => {
+    expect(demoMain).toContain("automationToken,");
     // swarm/session.ts: the in-process consumers the demo's dynamically
     // imported driver calls now take an explicit token rather than reading
     // the (removed) global mutation off process.env in this same process.
     const session = readFileSync(join(libDir, "swarm", "session.ts"), "utf8");
-    expect(session).toContain("getAdminHeaders(token?: string)");
-    expect(session).toMatch(/export async function admin\(action: string, body: unknown = \{\}, adminToken\?: string\)/);
-    expect(session).toContain("rosterMembers(targetUrl: string = backendUrl(), adminToken?: string)");
-    expect(session).toContain("existingMemberNames(targetUrl: string = backendUrl(), adminToken?: string)");
+    expect(session).toContain("getAutomationHeaders(token?: string)");
+    expect(session).toMatch(/export async function admin\(action: string, body: unknown = \{\}, automationToken\?: string\)/);
+    expect(session).toContain("rosterMembers(targetUrl: string = backendUrl(), automationToken?: string)");
+    expect(session).toContain("existingMemberNames(targetUrl: string = backendUrl(), automationToken?: string)");
   });
 
-  test("every child-process spawn that needs ADMIN_TOKEN gets it as an explicit env entry, not an inherited mutation", () => {
+  test("demo keeps human setup and automation credentials distinct", () => {
     // Each of these previously relied on `...process.env` already carrying a
     // value this SAME process had mutated onto itself; each now gets it
     // explicitly in its own spawn env object.
-    const explicitCount = (demoMain.match(/ADMIN_TOKEN: adminPassword/g) ?? []).length;
-    // sessionRail, starterEnv, the CI swarm-session driver, the browser
-    // checks step, and the rmpc-release-e2e driver.
-    expect(explicitCount).toBeGreaterThanOrEqual(5);
+    expect(demoMain).toContain("const automationToken = credentials.automationToken;");
+    expect(demoMain).not.toContain("AUTOMATION_TOKEN: adminPassword");
+    expect((demoMain.match(/AUTOMATION_TOKEN: automationToken/g) ?? []).length).toBeGreaterThanOrEqual(4);
   });
 });
 

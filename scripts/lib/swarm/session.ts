@@ -214,17 +214,13 @@ export const DEMO_SUBJECTS: readonly SessionSubject[] = Object.freeze([
 // (SWARM_ROSTER_CAP) — the mirror this module used to carry is gone;
 // consumers (scripts/lib/demo-main.ts, backend domain) import the contract.
 
-// Issue #456: `token` lets an in-process caller (the demo's dynamically
-// imported swarm driver) pass its admin credential explicitly instead of
-// relying on a process.env.ADMIN_TOKEN mutation shared across the same
-// process. The process.env fallback stays for this module's own standalone
-// entry point (main(), below), which genuinely runs as its own child process
-// with ADMIN_TOKEN set on its own environment at spawn time — reading that is
-// normal env inheritance, not the global-mutation antipattern the token
-// parameter replaces.
-export function getAdminHeaders(token?: string): Record<string, string> {
-  const t = token ?? process.env.ADMIN_TOKEN;
-  return t ? { "X-Admin-Token": t } : {};
+// `token` lets an in-process caller pass the dedicated automation credential
+// explicitly instead of relying on a process.env mutation shared across the
+// same process. The fallback stays for this module's standalone entry point,
+// which runs as its own child process with AUTOMATION_TOKEN in its spawn env.
+export function getAutomationHeaders(token?: string): Record<string, string> {
+  const automationToken = token ?? process.env.AUTOMATION_TOKEN;
+  return automationToken ? { "X-Automation-Token": automationToken } : {};
 }
 
 async function responseJson<T = any>(response: Response): Promise<T> {
@@ -240,9 +236,9 @@ export type SessionEvent =
   | { type: "member"; memberId: string; stage: AgentStage | "absent"; stance?: string; confidence?: number };
 export type SessionProgress = (ev: SessionEvent) => void;
 
-export async function admin(action: string, body: unknown = {}, adminToken?: string) {
+export async function admin(action: string, body: unknown = {}, automationToken?: string) {
   const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.admin.action, { action })}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...getAdminHeaders(adminToken) }, body: JSON.stringify(body),
+    method: "POST", headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) }, body: JSON.stringify(body),
   });
   return responseJson(r);
 }
@@ -298,9 +294,9 @@ export interface RosterMember {
 }
 
 /** The full roster (every status), or null when it cannot be read. */
-export async function rosterMembers(targetUrl: string = backendUrl(), adminToken?: string): Promise<RosterMember[] | null> {
+export async function rosterMembers(targetUrl: string = backendUrl(), automationToken?: string): Promise<RosterMember[] | null> {
   try {
-    const r = await fetch(`${targetUrl}${ROUTES.swarm.admin.members}`, { headers: getAdminHeaders(adminToken) });
+    const r = await fetch(`${targetUrl}${ROUTES.swarm.admin.members}`, { headers: getAutomationHeaders(automationToken) });
     if (!r.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${r.status}`);
     const body = await responseJson(r) as { members?: { id?: string; name?: string; lens?: string | null; status?: string }[] };
     if (!Array.isArray(body.members)) throw new Error("admin members response has no members array");
@@ -314,8 +310,8 @@ export async function rosterMembers(targetUrl: string = backendUrl(), adminToken
 }
 
 /** Lower-cased names on the roster, or null when the roster cannot be read. */
-export async function existingMemberNames(targetUrl: string = backendUrl(), adminToken?: string): Promise<Set<string> | null> {
-  const members = await rosterMembers(targetUrl, adminToken);
+export async function existingMemberNames(targetUrl: string = backendUrl(), automationToken?: string): Promise<Set<string> | null> {
+  const members = await rosterMembers(targetUrl, automationToken);
   if (members === null) {
     console.error(
       "[e2e] existingMemberNames: roster unreadable — cannot prove a newcomer name is unused; " +
@@ -572,8 +568,8 @@ export async function waitUntilWindowCloses(
   }
 }
 
-export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}, adminToken?: string) {
-  const result = await admin("enqueue-job", { action, ...payload }, adminToken);
+export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}, automationToken?: string) {
+  const result = await admin("enqueue-job", { action, ...payload }, automationToken);
   console.log(`  enqueued ${result.kind} (job #${result.jobId})`);
   return result;
 }
@@ -700,8 +696,8 @@ export async function runSession(
   // cannot run until the session exists. Ordering them the other way round is
   // what made a clean database fail its first two sessions with a foreign-key
   // violation while the boot still reported READY.
-  await admin("subject", subject, rail.adminToken);
-  await enqueueLifecycleJob("open_session", { subjectId: subject.id }, rail.adminToken);
+  await admin("subject", subject, rail.automationToken);
+  await enqueueLifecycleJob("open_session", { subjectId: subject.id }, rail.automationToken);
   // RECONCILING openSession's "one open session per subject" WITH A WINDOW THAT
   // IS ONE FULL INTERVAL (issue #570). openSession refuses to convene a second
   // session while one is `scheduled` or `collecting`, and returns the existing
@@ -764,7 +760,7 @@ export async function runSession(
   // subjects' own ids. A restored subject already carries its snapshot, so
   // there is nothing to seed (issue #537).
   if (opts.initializer === "simulation") {
-    await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.adminToken);
+    await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.automationToken);
   }
 
   emitSession("scheduled", sessionId);
@@ -779,7 +775,7 @@ export async function runSession(
     // never from an env var. It was a hardcoded 60 here: an honest hour at the
     // instant it was written, and a lie by the time this driver closed the
     // window three minutes later.
-    await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes, prevOutcome }, rail.adminToken);
+    await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes, prevOutcome }, rail.automationToken);
     await waitForSessionState(date, subject.id, "collecting");
     console.log(`${tag} session ${sessionId}: brief published, window open for ${windowMinutes} min`);
   }
@@ -838,15 +834,15 @@ export async function runSession(
   console.log(
     `${tag} window elapsed after ${Math.round(closedWindow.waitedMs / 1000)}s — ${closedWindow.reason}`,
   );
-  await enqueueLifecycleJob("close_window", { sessionId }, rail.adminToken);
+  await enqueueLifecycleJob("close_window", { sessionId }, rail.automationToken);
   await waitForSessionState(date, subject.id, "window_closed");
   emitSession("window_closed", sessionId);
 
-  await enqueueLifecycleJob("aggregate", { sessionId }, rail.adminToken);
+  await enqueueLifecycleJob("aggregate", { sessionId }, rail.automationToken);
   await waitForSessionState(date, subject.id, "aggregated");
   emitSession("aggregated", sessionId);
 
-  await enqueueLifecycleJob("publish", { sessionId }, rail.adminToken);
+  await enqueueLifecycleJob("publish", { sessionId }, rail.automationToken);
   await waitForSessionState(date, subject.id, "published");
   emitSession("published", sessionId);
 
@@ -912,7 +908,7 @@ async function main() {
   // along with the endpoint behind it — an ephemeral database is deleted or
   // inspected whole, and no bring-up may TRUNCATE rows it did not create.
   await runRegimeClassify(today, rail);
-  await admin("subject", subjects[0], rail.adminToken);
+  await admin("subject", subjects[0], rail.automationToken);
 
   // Session 1: today's subject
   const s1 = await runSession(subjects[0], 1, { rail, members, initializer: "simulation", cadence });
@@ -935,7 +931,7 @@ async function main() {
   // gates on regime write (analyticsProvider) and admin lifecycle (privileged)
   // are open — the identity-layer submit checks are the universal enforcement.
   const testReg = await fetch(`${backendUrl()}${ROUTES.swarm.register}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...getAdminHeaders() },
+    method: "POST", headers: { "Content-Type": "application/json", ...getAutomationHeaders() },
     body: JSON.stringify({ memberId: "cross-role-test", name: "Cross Role Test", publicKey: (await generateKeyPair()).publicKeyB64 }),
   }).then(responseJson);
   const testToken: string = testReg.token;

@@ -157,11 +157,13 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
       DEMO_PROJECT: "rm_ci_stack_y",
       COMPOSE_FILE: "docker-compose.yml:docker-compose.demo.yml",
       AGENT_MODEL: "free",
+      AUTOMATION_TOKEN: "automation-token",
       UNDEF: undefined,
     });
     expect(rail.composeProject).toBe("rm_ci_stack_y");
     expect(rail.composeFiles).toEqual(["docker-compose.yml", "docker-compose.demo.yml"]);
     expect("UNDEF" in rail.composeSpawnEnv).toBe(false);
+    expect(rail.automationToken).toBe("automation-token");
     // Keyless selection resolves with no credential.
     expect(rail.modelConfig.apiKeyEnv).toBeNull();
   });

@@ -1,14 +1,11 @@
-// Regression guard for a FAIL finding on issue #461's own PR (#463): issue
-// #461 retired swarm/agent.ts's env-reading getAdminHeaders() fallback,
-// so every SessionRail passed to enroll() must now carry `adminToken`
-// explicitly (agent.ts reads `rail.adminToken` directly — see
-// demo-main-split.test.ts's "sessionRail carries adminToken" suite for the
-// sibling in-process driver).
+// Regression guard for the #584 role split: every SessionRail passed to
+// enroll() must carry `automationToken` explicitly (see demo-main-split's
+// dedicated automation-token suite for the sibling in-process driver).
 //
 // scripts/swarm-eval-local.ts's runSwarmAuthoringEvalCase() builds
 // its own rail literal rather than importing one, and the compliance review
-// caught it missing `adminToken` — `process.env.ADMIN_TOKEN =
-// credentials.adminToken` at the top of that function used to paper over
+// caught it missing `automationToken` — `process.env.AUTOMATION_TOKEN =
+// credentials.automationToken` at the top of that function used to paper over
 // the gap via agent.ts's now-removed env fallback, so the omission never
 // failed until that fallback was deleted. This is a static, source-text
 // check (importing the module is safe — runSwarmAuthoringEvalCase only
@@ -22,15 +19,15 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const src = readFileSync(join(repoRoot, "scripts", "swarm-eval-local.ts"), "utf8");
 
-describe("swarm-eval-local.ts's rail carries adminToken (issue #461 PR #463 finding)", () => {
-  test("the rail literal built for runSwarmAuthoringEvalCase's session includes adminToken", () => {
+describe("swarm-eval-local.ts's rail carries automationToken", () => {
+  test("the rail literal built for runSwarmAuthoringEvalCase's session includes automationToken", () => {
     const railLiteralMatch = src.match(/const rail = \{[\s\S]*?\n\s*\};/);
     expect(railLiteralMatch, "expected a `const rail = { ... };` literal in swarm-eval-local.ts").not.toBeNull();
     const railLiteral = railLiteralMatch![0];
-    expect(railLiteral).toContain("adminToken: credentials.adminToken");
+    expect(railLiteral).toContain("automationToken: credentials.automationToken");
   });
 
-  test("credentials.adminToken is defined before the rail literal references it", () => {
+  test("credentials.automationToken is defined before the rail literal references it", () => {
     const credentialsAt = src.indexOf("const credentials = generateStackCredentials();");
     const railAt = src.indexOf("const rail = {");
     expect(credentialsAt).toBeGreaterThan(-1);

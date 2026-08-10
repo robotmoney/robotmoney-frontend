@@ -3,14 +3,13 @@
 // the preload THROWS, so this file fails loudly rather than silently skipping
 // (test-coverage policy).
 //
-// Design under test ("superseded, not revoked" — see docs/decisions.md D32):
+// Design under test (strict setup-token revocation — issue #584):
 //  • unclaimed: the per-boot ADMIN_TOKEN env credential (or allowInsecure)
 //    authorizes exactly as before;
 //  • claim: the token holder persists a password — stored ONLY as sha256 hex;
 //  • claimed: the stored hash is the durable operator credential and survives
-//    any restart (a restart = a NEW random adminToken in cfg); the per-boot
-//    env token remains valid as the stack-internal automation credential, but
-//    allowInsecure no longer opens the gate;
+//    any restart (a restart = a NEW random adminToken in cfg); every setup
+//    ADMIN_TOKEN is revoked, and allowInsecure no longer opens the gate;
 //  • the claim is one-time: a second claim is 409 until an operator deletes
 //    the row.
 import { test, expect, describe, beforeEach, afterAll } from "bun:test";
@@ -46,7 +45,7 @@ describe("admin credential claim lifecycle (issue #553 / D32)", () => {
     await sql`DELETE FROM audit_log WHERE action = 'claim_admin_credential'`;
   });
 
-  test("full lifecycle: unclaimed env token → claim → durable credential survives restart", async () => {
+  test("full lifecycle: unclaimed setup token → claim → durable credential survives restart", async () => {
     // Unclaimed: probe says so, and the env token authorizes (pre-claim behaviour).
     expect(await call(isClaimedReq())).toEqual({ status: 200, body: { claimed: false } });
     expect((await call(authReq(CFG.adminToken)))?.status).toBe(200);
@@ -69,18 +68,17 @@ describe("admin credential claim lifecycle (issue #553 / D32)", () => {
     // The claimed credential authenticates.
     expect((await call(authReq(PASSWORD)))?.status).toBe(200);
 
-    // The per-boot env token is SUPERSEDED as the operator credential but stays
-    // valid for stack-internal automation (D32) — the demo's own swarm
-    // session/onboarding drivers authenticate with it in-process.
-    expect((await call(authReq(CFG.adminToken)))?.status).toBe(200);
+    // A claim revokes the one-time setup token. Stack automation has a distinct
+    // AUTOMATION_TOKEN and cannot use the human login endpoint as a substitute.
+    expect((await call(authReq(CFG.adminToken)))?.status).toBe(403);
 
     // Simulated restart: a fresh boot mints an unrelated random token. The
     // claimed credential MUST keep working (the lockout this issue fixes)…
     const restarted = { adminToken: "brand-new-boot-token-123", allowInsecure: false };
     expect((await call(authReq(PASSWORD), restarted))?.status).toBe(200);
-    // …the new boot's own token works for its automation…
-    expect((await call(authReq(restarted.adminToken), restarted))?.status).toBe(200);
-    // …and the PREVIOUS boot's token is gone with its process.
+    // No future setup token can authenticate a claimed human-admin surface.
+    expect((await call(authReq(restarted.adminToken), restarted))?.status).toBe(403);
+    // The previous boot's token remains revoked too.
     expect((await call(authReq(CFG.adminToken), restarted))?.status).toBe(403);
   });
 

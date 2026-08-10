@@ -424,7 +424,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Admin-Token": stackCredentials!.adminToken,
+            "X-Automation-Token": stackCredentials!.automationToken,
           },
           body: JSON.stringify({ decision: "approve" }),
         });
@@ -494,7 +494,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
-                  "X-Admin-Token": stackCredentials!.adminToken,
+                  "X-Automation-Token": stackCredentials!.automationToken,
                 },
                 body: JSON.stringify(input),
               },
@@ -672,7 +672,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         composeSpawnEnv: stack!.spawnEnv,
         modelConfig: keyless,
         backendUrl: stack!.backendUrl,
-        adminToken: stackCredentials!.adminToken,
+        automationToken: stackCredentials!.automationToken,
       };
       const identity = await ensureMemberIdentity(rail, { memberId, name: "Rails Check", lens: "infra" });
       expect(typeof identity.freshToken).toBe("string");

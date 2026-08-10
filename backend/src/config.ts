@@ -480,6 +480,7 @@ export const config = {
   // lifecycle). If set, callers must present it as `X-Admin-Token`. If unset,
   // those endpoints are allowed only outside prod (demo/ephemeral convenience).
   adminToken: process.env.ADMIN_TOKEN || null,
+  automationToken: process.env.AUTOMATION_TOKEN || null,
   // Credential for the analytics-provider role. Only this role may write the
   // regime via POST /api/swarm/regime. Presented as a Bearer token. If set,
   // it is required (every env); if unset, the role is allowed only outside prod

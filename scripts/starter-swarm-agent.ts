@@ -247,10 +247,13 @@ function parseTransport(argv: string[]): StarterTransport {
   return "rest";
 }
 
-async function adminJson<T>(backendUrl: string, adminToken: string, action: string, body: unknown): Promise<T> {
+async function adminJson<T>(backendUrl: string, automationToken: string, action: string, body: unknown): Promise<T> {
   return restJson<T>(backendUrl, routePath(ROUTES.swarm.admin.action, { action }), `starter e2e ${action}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Automation-Token": automationToken,
+    },
     body: JSON.stringify(body),
   });
 }
@@ -258,7 +261,7 @@ async function adminJson<T>(backendUrl: string, adminToken: string, action: stri
 async function e2eCredentials(
   transport: StarterTransport,
   backendUrl: string,
-  adminToken: string,
+  automationToken: string,
 ): Promise<StarterCredentials> {
   const memberId = `starter-${transport}`;
   const keys = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
@@ -269,7 +272,10 @@ async function e2eCredentials(
     `register ${memberId}`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Automation-Token": automationToken,
+      },
       body: JSON.stringify({
         memberId,
         name: `Starter ${transport.toUpperCase()}`,
@@ -282,7 +288,7 @@ async function e2eCredentials(
   return { memberId, memberToken: registered.token, privateKey: keys.privateKey };
 }
 
-async function ensureE2eOpenSession(backendUrl: string, adminToken: string): Promise<void> {
+async function ensureE2eOpenSession(backendUrl: string, automationToken: string): Promise<void> {
   const open = await restJson<StarterSession | null>(
     backendUrl,
     ROUTES.swarm.openSession,
@@ -292,13 +298,13 @@ async function ensureE2eOpenSession(backendUrl: string, adminToken: string): Pro
 
   const date = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
   const subject = { id: "starter-agent", name: "Starter Agent Exercise" };
-  await adminJson(backendUrl, adminToken, "subject_fixtures", { ...subject, date });
-  const scheduled = await adminJson<{ id?: string | number }>(backendUrl, adminToken, "open", {
+  await adminJson(backendUrl, automationToken, "subject_fixtures", { ...subject, date });
+  const scheduled = await adminJson<{ id?: string | number }>(backendUrl, automationToken, "open", {
     date,
     subjectId: subject.id,
   });
   if (scheduled.id === undefined) throw new Error("starter e2e open returned no session id");
-  await adminJson(backendUrl, adminToken, "brief", {
+  await adminJson(backendUrl, automationToken, "brief", {
     sessionId: String(scheduled.id),
     windowMinutes: 60,
   });
@@ -311,9 +317,9 @@ async function main(): Promise<void> {
 
   let credentials: StarterCredentials;
   if (e2e) {
-    const adminToken = requiredEnv("ADMIN_TOKEN");
-    await ensureE2eOpenSession(backendUrl, adminToken);
-    credentials = await e2eCredentials(transport, backendUrl, adminToken);
+    const automationToken = requiredEnv("AUTOMATION_TOKEN");
+    await ensureE2eOpenSession(backendUrl, automationToken);
+    credentials = await e2eCredentials(transport, backendUrl, automationToken);
   } else {
     credentials = {
       memberId: requiredEnv("SWARM_MEMBER_ID"),

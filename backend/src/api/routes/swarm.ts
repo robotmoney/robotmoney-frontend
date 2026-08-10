@@ -8,7 +8,7 @@ import { isPlausibleKey } from "../../lib/keys.ts";
 import { isValidEd25519PublicKey } from "../../lib/signing.ts";
 import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
 import { parseSnapshots } from "./analytics.ts";
-import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
+import { bearer, hasAnalyticsProviderRole, isPrivileged, hasAutomationRole } from "../auth.ts";
 import { jsonValue, sql } from "../../db/client.ts";
 import {
   CONTACT_EMAIL_RE,
@@ -180,7 +180,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // the unauthenticated identity-takeover / state-drive holes. Proper
   // per-member onboarding + OAuth is the IC-remainder work.
   // Role definitions + the fail-closed rule live in api/auth.ts (issue #106).
-  const privileged = async () => await isPrivileged(req);
+  const privileged = async () => await isPrivileged(req) || hasAutomationRole(req);
 
   // PUBLIC onboarding (§11 R1-R6, setup-gated apply): a prospective member
   // submits {name, contact, lens?, publicKey, signature} — an rmpc signature

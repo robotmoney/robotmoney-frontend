@@ -369,11 +369,8 @@ if (pgDataDir) {
 // it up implicitly off the global — the exact "module-level or process.env
 // global mutable state" shape the 2026-07-14 maintainability review flagged.
 // It is now threaded EXPLICITLY instead: every in-process consumer takes an
-// `adminToken` parameter (sessionRail.adminToken below, and the two
-// runOnboardingEvalWithRetry call sites), and every genuine CHILD PROCESS
-// that needs it (the CI swarm-session driver, the browser checks, the
-// rmpc-release-e2e driver, the starter-swarm-agent exerciser) gets it as
-// an explicit `ADMIN_TOKEN: adminPassword` entry in that spawn's own env
+// `automationToken` parameter (sessionRail.automationToken below), and every
+// genuine child process gets an explicit `AUTOMATION_TOKEN: automationToken` entry
 // object — never via `...process.env` inheriting a value this process
 // happened to have mutated onto itself. It is printed ONLY to the
 // interactive TUI (see render()): never passed to log(), never serialized by
@@ -383,6 +380,7 @@ if (pgDataDir) {
 // demo and every other consumer of the stack mint them identically.
 const credentials = generateStackCredentials();
 const adminPassword = credentials.adminToken;
+const automationToken = credentials.automationToken;
 
 // Analytics-provider bearer credential (issue #106). The worker's analytics
 // updater jobs submit computed outputs through the authenticated
@@ -472,10 +470,10 @@ const dockerEnv: Record<string, string> = {
   [ENV_CLASS_COMPOSE_VAR]: stackEnvironment.class,
   [ENV_HASH_COMPOSE_VAR]: stackEnvironment.hash,
   DATABASE_URL: databaseUrl,
-  // Guards the /admin task-queue dashboard (X-Admin-Token). Passed to the api
-  // container via docker-compose's `ADMIN_TOKEN: ${ADMIN_TOKEN:-}` line. Random
+  // Guards the human /admin task-queue dashboard. Random
   // per launch; the value is shown ONLY in the interactive TUI (render()).
   ADMIN_TOKEN: adminPassword,
+  AUTOMATION_TOKEN: automationToken,
   // Only the path crosses the host/compose environment. Docker mounts the
   // secret into API (verifier) + analytics-producer; no other process receives
   // the credential value in its environment.
@@ -1189,7 +1187,7 @@ async function main(): Promise<void> {
     console.log("\n[demo] smoke: running one live swarm session with the restored personas…");
     process.env.BACKEND_URL = backendUrl;
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
-    const roster = await session.rosterMembers(undefined, adminPassword);
+    const roster = await session.rosterMembers(undefined, automationToken);
     if (roster === null) throw new Error("smoke initializer restored no readable IC roster");
     const members = adoptRestoredRoster(scenario, roster);
     const rail = {
@@ -1200,7 +1198,7 @@ async function main(): Promise<void> {
       backendUrl,
       modelConfig: resolveModelConfig(process.env),
       onboardedHomes: new Map<string, OnboardedMemberHome>(),
-      adminToken: adminPassword,
+      automationToken,
     };
     await session.runSession(scenario.subjects[0]!, 1, { rail, members, initializer: scenario.initializer, cadence });
 
@@ -1229,7 +1227,7 @@ async function main(): Promise<void> {
     // same compose model this boot created, or the volume-hash check prompts
     // to recreate live data (see scripts/agent/member-agent.ts).
     await run(["bun", "run", "scripts/lib/swarm/session.ts"], repoRoot,
-      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "swarm session");
+      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, AUTOMATION_TOKEN: automationToken, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "swarm session");
 
     // Issue #209: exercise the repo-native single-member starter against this
     // required per-PR live stack. Its --e2e mode only provisions isolated
@@ -1240,7 +1238,7 @@ async function main(): Promise<void> {
     const starterEnv = {
       ...process.env,
       BACKEND_URL: backendUrl,
-      ADMIN_TOKEN: adminPassword,
+      AUTOMATION_TOKEN: automationToken,
     } as Record<string, string>;
     const { BACKEND_URL: _missingBackend, ...withoutBackendUrl } = starterEnv;
     await expectRunFailure(
@@ -1249,12 +1247,12 @@ async function main(): Promise<void> {
       withoutBackendUrl,
       "starter swarm agent missing BACKEND_URL guard",
     );
-    const { ADMIN_TOKEN: _missingAdmin, ...withoutAdminToken } = starterEnv;
+    const { AUTOMATION_TOKEN: _missingAutomation, ...withoutAutomationToken } = starterEnv;
     await expectRunFailure(
       ["bun", "run", "scripts/starter-swarm-agent.ts", "--transport=rest", "--e2e"],
       repoRoot,
-      withoutAdminToken,
-      "starter swarm agent missing ADMIN_TOKEN guard",
+      withoutAutomationToken,
+      "starter swarm agent missing AUTOMATION_TOKEN guard",
     );
     await run(
       ["bun", "run", "scripts/starter-swarm-agent.ts", "--transport=rest", "--e2e"],
@@ -1287,7 +1285,7 @@ async function main(): Promise<void> {
     if (process.env.RMPC_RELEASE_E2E === "1") {
       console.log("\n[demo] running rmpc release e2e driver…");
       await run(["bun", "run", "scripts/rmpc-release-e2e.ts"], repoRoot,
-        { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword } as Record<string, string>, "rmpc release e2e");
+      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, AUTOMATION_TOKEN: automationToken } as Record<string, string>, "rmpc release e2e");
     }
 
     // Additive, env-gated (Stage 7, §11 R8, docs/plans/onboarding-ic-workflow.md):
@@ -1353,7 +1351,7 @@ async function main(): Promise<void> {
             composeProject: project,
             composeFiles: composeFilesRun.split(":"),
             backendUrl,
-            adminToken: adminPassword,
+            automationToken,
             composeSpawnEnv: stack.spawnEnv,
             env: { ...process.env, AGENT_MODEL: model },
             onEvent: (msg) => console.log(`[demo] onboarding-real-eval[${model}]: ${msg}`),
@@ -1541,7 +1539,7 @@ async function main(): Promise<void> {
   // Both scenarios reconnect database identities through one helper. It returns
   // a fresh array so a previous run can never contaminate this run's seats.
   if (smokeMode) log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
-  const dbRoster = await e2e.rosterMembers(undefined, adminPassword);
+  const dbRoster = await e2e.rosterMembers(undefined, automationToken);
   if (dbRoster === null) {
     if (smokeMode) throw new Error("smoke initializer restored no readable IC roster");
     log("roster unreadable at boot — continuing with this run's simulation members");
@@ -1573,18 +1571,14 @@ async function main(): Promise<void> {
   // runMemberAgent() primitive; this process only opens/closes session windows
   // and observes. resolveModelConfig() was already validated at boot.
   //
-  // adminToken (issue #456): threaded explicitly instead of relying on the
-  // now-removed process.env.ADMIN_TOKEN mutation. session.ts's runSession()
-  // (via getAdminHeaders(adminToken)) and agent.ts's enroll() (via
-  // rail.adminToken directly — issue #461 retired agent.ts's own
-  // env-reading getAdminHeaders()) both take this token as an explicit
-  // parameter, so this is what makes the dynamically-imported (same-process)
-  // swarm session driver still authenticate correctly.
+  // AUTOMATION_TOKEN is threaded explicitly. session.ts's runSession() and
+  // agent.ts's enroll() both take this value from the rail, so the dynamically
+  // imported same-process swarm driver has no setup-token fallback.
   const sessionRail = {
     ...producerRail,
     modelConfig: resolveModelConfig(process.env),
     onboardedHomes,
-    adminToken: adminPassword,
+    automationToken,
   };
 
 
@@ -1705,7 +1699,7 @@ async function main(): Promise<void> {
       // taken while this one sleeps — so this only ever skips work early, never
       // admits anything it should not.
       const upNext = plannedNewcomer(n);
-      if (upNext && !decideAdmission(upNext.identity.name, await e2e.existingMemberNames(undefined, adminPassword)).admit) {
+      if (upNext && !decideAdmission(upNext.identity.name, await e2e.existingMemberNames(undefined, automationToken)).admit) {
         log(`onboarding ${upNext.identity.name} skipped — already on the roster (this database has been onboarded before)`);
         continue;
       }
@@ -1735,7 +1729,7 @@ async function main(): Promise<void> {
       // Checked here, immediately before admitting, rather than once at start-up:
       // an admission takes minutes, and a name can be taken by an operator (or by
       // a second stack) in the meantime.
-      const decision = decideAdmission(identity.name, await e2e.existingMemberNames(undefined, adminPassword));
+      const decision = decideAdmission(identity.name, await e2e.existingMemberNames(undefined, automationToken));
       if (!decision.admit) {
         state.upcoming = [];
         log(
@@ -1782,7 +1776,7 @@ async function main(): Promise<void> {
           composeProject: project,
           composeFiles: composeFilesRun.split(":"),
           backendUrl,
-          adminToken: adminPassword,
+          automationToken,
           composeSpawnEnv: stack.spawnEnv,
           identity,
           // Identity continuity (Phase 3): persistent per-attempt HOME volume

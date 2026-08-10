@@ -50,7 +50,7 @@ function cfg(overrides: Partial<StackConfig> = {}): StackConfig {
     profile: "core",
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
-    credentials: { adminToken: "cfg-admin", analyticsToken: "cfg-analytics" },
+    credentials: { adminToken: "cfg-admin", automationToken: "cfg-automation", analyticsToken: "cfg-analytics" },
     environment: ENVIRONMENT,
     ...overrides,
   };
@@ -95,6 +95,7 @@ describe("buildComposeEnv", () => {
       "ADMIN_TOKEN",
       "ANALYTICS_TOKEN",
       "ANALYTICS_TOKEN_FILE_HOST",
+      "AUTOMATION_TOKEN",
       "DATABASE_URL",
       "DEMO_PROJECT",
       "POSTGRES_DB",
@@ -107,6 +108,7 @@ describe("buildComposeEnv", () => {
     ]);
     expect(env.RM_STACK_ENV_CLASS).toBe("local");
     expect(env.RM_STACK_ENV_HASH).toBe("0123456789");
+    expect(env.AUTOMATION_TOKEN).toBe("cfg-automation");
     expect(env.COMPOSE_FILE).toBeUndefined();
     expect(env.COMPOSE_PROJECT_NAME).toBeUndefined();
   });
@@ -152,19 +154,19 @@ describe("full-stack producer credential preflight", () => {
       );
       expect(() => assertFullStackProducerCredential(cfg({
         profile: "full",
-        credentials: { adminToken: "a", analyticsToken: "b", analyticsTokenFile: join(dir, "missing") },
+        credentials: { adminToken: "a", automationToken: "automation", analyticsToken: "b", analyticsTokenFile: join(dir, "missing") },
       }))).toThrow("is not readable");
       const empty = join(dir, "empty");
       writeFileSync(empty, "\n", { mode: 0o600 });
       expect(() => assertFullStackProducerCredential(cfg({
         profile: "full",
-        credentials: { adminToken: "a", analyticsToken: "b", analyticsTokenFile: empty },
+        credentials: { adminToken: "a", automationToken: "automation", analyticsToken: "b", analyticsTokenFile: empty },
       }))).toThrow("is empty");
       const valid = join(dir, "valid");
       writeFileSync(valid, "bearer\n", { mode: 0o600 });
       expect(() => assertFullStackProducerCredential(cfg({
         profile: "full",
-        credentials: { adminToken: "a", analyticsToken: "b", analyticsTokenFile: valid },
+        credentials: { adminToken: "a", automationToken: "automation", analyticsToken: "b", analyticsTokenFile: valid },
       }))).not.toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -243,9 +245,13 @@ describe("urls and credentials", () => {
     const a = generateStackCredentials();
     const b = generateStackCredentials();
     expect(a.adminToken.length).toBeGreaterThan(0);
+    expect(a.automationToken.length).toBeGreaterThan(0);
     expect(a.analyticsToken.length).toBeGreaterThan(0);
     expect(a.adminToken).not.toBe(a.analyticsToken);
+    expect(a.adminToken).not.toBe(a.automationToken);
+    expect(a.automationToken).not.toBe(a.analyticsToken);
     expect(a.adminToken).not.toBe(b.adminToken);
+    expect(a.automationToken).not.toBe(b.automationToken);
     expect(a.analyticsToken).not.toBe(b.analyticsToken);
   });
 });

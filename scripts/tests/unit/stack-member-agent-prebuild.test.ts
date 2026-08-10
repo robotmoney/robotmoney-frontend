@@ -49,6 +49,7 @@ describe("shared full-stack member-agent prebuild", () => {
         database: { ...DEFAULT_STACK_DATABASE, url: "postgres://managed.example/db" },
         credentials: {
           adminToken: "admin",
+          automationToken: "automation",
           analyticsToken: "analytics",
           analyticsTokenFile: tokenPath,
         },

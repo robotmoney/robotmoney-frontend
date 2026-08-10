@@ -122,14 +122,10 @@ export interface SessionRail {
   /** REST base the HARNESS reaches for the one-time public-key registration
    *  (default: BACKEND_URL env, then http://localhost:8787). */
   backendUrl?: string;
-  /** Admin token for that registration. The in-process demo driver
-   *  (scripts/lib/demo-main.ts) threads its own adminPassword explicitly here
-   *  (issue #456); railFromEnv() below is the only legitimate place this
-   *  still falls back to reading ADMIN_TOKEN off process.env, for the
-   *  standalone session.ts entry point that genuinely runs as its own
-   *  child process with ADMIN_TOKEN set on its own environment at spawn
-   *  time. */
-  adminToken?: string;
+  /** Automation token for that registration. The in-process demo driver
+   *  threads it explicitly; railFromEnv() is the only legitimate place this
+   *  standalone entry point reads AUTOMATION_TOKEN from its child environment. */
+  automationToken?: string;
   /** Per-member homes for members onboarded through the real §11 flow. */
   onboardedHomes?: Map<string, OnboardedMemberHome>;
 }
@@ -157,14 +153,14 @@ export function railFromEnv(env: Record<string, string | undefined> = process.en
     composeFiles: env.COMPOSE_FILE ? env.COMPOSE_FILE.split(":") : [...DEFAULT_COMPOSE_FILES],
     composeSpawnEnv,
     modelConfig: resolveModelConfig(env),
-    // Issue #461: this is the ONE place agent.ts still reads ADMIN_TOKEN from
+    // This is the ONE place agent.ts reads AUTOMATION_TOKEN from
     // an environment object rather than taking it as an explicit argument —
     // and it is legitimate env inheritance, not the retired global-mutation
     // antipattern: railFromEnv() is only ever called by (or defaulted for)
     // the standalone session.ts entry point, which runs as its own child
-    // process with ADMIN_TOKEN set on its own spawn env. Every other rail
-    // (e.g. demo-main.ts's in-process sessionRail) sets adminToken directly.
-    adminToken: env.ADMIN_TOKEN,
+    // process with AUTOMATION_TOKEN set on its own spawn env. Every other rail
+    // (e.g. demo-main.ts's in-process sessionRail) sets it directly.
+    automationToken: env.AUTOMATION_TOKEN,
   };
 }
 
@@ -361,16 +357,16 @@ async function ensureMemberIdentityUncached(
 
   // The ONE privileged step, performed by the harness AS the RM operator
   // seeding the demo roster: register the container-generated PUBLIC key.
-  // The private key never left the member's volume. rail.adminToken is the
-  // only source (issue #461) — no local env-reading fallback lives here;
+  // The private key never left the member's volume. rail.automationToken is
+  // the only source — no local env-reading fallback lives here;
   // the legitimate standalone-entry-point fallback already happened once,
   // at railFromEnv() construction time, above.
-  const adminHeaders: Record<string, string> = rail.adminToken
-    ? { "X-Admin-Token": rail.adminToken }
+  const automationHeaders: Record<string, string> = rail.automationToken
+    ? { "X-Automation-Token": rail.automationToken }
     : {};
   const res = await fetch(`${rail.backendUrl ?? backendUrl()}${ROUTES.swarm.register}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...adminHeaders },
+    headers: { "Content-Type": "application/json", ...automationHeaders },
     body: JSON.stringify({ memberId: m.memberId, name: m.name, lens: m.lens, publicKey: enroll.publicKey }),
   });
   const body = (await res.json()) as { token?: string; error?: string };

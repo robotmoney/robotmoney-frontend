@@ -4,7 +4,9 @@
 //
 // Roles (docs/architecture.md §9.8):
 //  • host/admin         — isPrivileged() (claimed admin_credential hash or
-//    ADMIN_TOKEN as X-Admin-Token, or non-prod; see D32 / issue #553).
+//    ADMIN_TOKEN as X-Admin-Token before setup is claimed; see D32 / issue #584).
+//  • automation         — hasAutomationRole() (AUTOMATION_TOKEN as
+//    X-Automation-Token), for stack-internal drivers only.
 //  • analytics-provider — hasAnalyticsProviderRole() (ANALYTICS_TOKEN bearer). The
 //    ONLY role that may write analytics data (regime recompute + /api/analytics/*).
 //  • member             — swarm_member_keys bearer (checked in the swarm
@@ -38,14 +40,10 @@ export function secretEq(presented: string | null, expected: string): boolean {
 // Two-tier credential:
 //  • CLAIMED (admin_credential row present): the persisted hash is the durable
 //    operator credential — it survives restarts, so the per-boot mint can no
-//    longer rotate the operator out. The per-boot ADMIN_TOKEN env value STAYS
-//    valid as the stack-internal automation credential (the demo's swarm
-//    session/onboarding drivers authenticate with it in-process; the server
-//    only ever holds a hash of the claimed secret, so it cannot hand the
-//    claimed value to automation). It is superseded as the operator-facing
-//    credential — never displayed once claimed — not revoked. allowInsecure
-//    stops opening this gate once a claim exists: a claim is an explicit
-//    security opt-in.
+//    longer rotate the operator out. The per-boot ADMIN_TOKEN setup value is
+//    revoked unconditionally; stack-internal drivers use the separate
+//    AUTOMATION_TOKEN role. allowInsecure stops opening this gate once a claim
+//    exists: a claim is an explicit security opt-in.
 //  • UNCLAIMED (no row): exactly the historical behaviour — ADMIN_TOKEN if
 //    configured, else allowInsecure.
 //
@@ -59,9 +57,18 @@ export async function isPrivileged(req: Request, cfg: Pick<typeof config, "admin
     const expected = Buffer.from(claimed[0].pass_hash, "hex");
     const got = Buffer.from(hashKey(presented ?? ""), "hex");
     if (expected.length === got.length && timingSafeEqual(got, expected)) return true;
-    return cfg.adminToken ? secretEq(presented, cfg.adminToken) : false;
+    return false;
   }
   return cfg.adminToken ? secretEq(presented, cfg.adminToken) : cfg.allowInsecure;
+}
+
+// automation role: AUTOMATION_TOKEN presented as X-Automation-Token or Bearer.
+export function hasAutomationRole(
+  req: Request,
+  cfg: Pick<typeof config, "allowInsecure"> & { automationToken?: string | null } = config,
+): boolean {
+  const presented = req.headers.get("X-Automation-Token") ?? bearer(req);
+  return cfg.automationToken ? secretEq(presented, cfg.automationToken) : cfg.allowInsecure;
 }
 
 // analytics-provider role: ANALYTICS_TOKEN presented as a Bearer token.

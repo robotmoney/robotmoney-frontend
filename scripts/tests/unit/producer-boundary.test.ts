@@ -26,7 +26,7 @@ describe("issue #361 independent producer credential boundary", () => {
     const cfg: StackConfig = {
       repoRoot: "/repo", project: "p", profile: "full", composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
-      credentials: { adminToken: "admin", analyticsToken: "must-not-leak", analyticsTokenFile: "/run/private/token" },
+      credentials: { adminToken: "admin", automationToken: "automation", analyticsToken: "must-not-leak", analyticsTokenFile: "/run/private/token" },
       environment: { class: "local", hash: "0123456789" },
     };
     const env = buildComposeEnv(cfg);
