@@ -228,6 +228,11 @@ export async function handleAdmin(
          WHERE id = 1 AND pass_hash = ${hashKey(curr)}
          RETURNING id`;
       if (!rows.length) return false;
+      // A password rotation is a full admin-credential rotation. Delete both
+      // the passkeys and their bearer sessions in this same transaction so a
+      // passkey added during a compromise cannot survive the recovery path.
+      await tx`DELETE FROM admin_passkey`;
+      await tx`DELETE FROM admin_session`;
       await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'change_admin_password', ${tx.json({})})`;
       return true;
     });
@@ -253,6 +258,10 @@ export async function handleAdmin(
         WHERE id = 1 AND recovery_hash = ${hashKey(code)}
         RETURNING id`;
       if (!rows.length) return false;
+      // Keep credential rotation and revocation indivisible: if auditing
+      // fails, neither the new password nor passkey/session revocation commits.
+      await tx`DELETE FROM admin_passkey`;
+      await tx`DELETE FROM admin_session`;
       // Returning the replacement code commits only with its audit record. If
       // auditing fails, the old code remains usable rather than being consumed
       // without a successor the operator can see.

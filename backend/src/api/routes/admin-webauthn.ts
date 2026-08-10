@@ -6,6 +6,14 @@ import { hashKey } from "../../lib/keys.ts";
 
 const FORBIDDEN = { status: 403, body: { error: "admin authorization required" } } as const;
 const BAD = (error: string) => ({ status: 400, body: { error } }) as const;
+// Authentication options are public so the login surface can discover a
+// passkey before it has a session. Keep the one-time challenge store bounded:
+// a caller can make us evict old pending ceremonies, but cannot grow a table
+// indefinitely. The transaction advisory lock makes the cap hold even when
+// many unauthenticated requests arrive at once.
+const MAX_PUBLIC_AUTH_CHALLENGES = 32;
+const CHALLENGE_TTL = "5 minutes";
+const CHALLENGE_ISSUE_LOCK = 587001;
 
 type AdminAuthConfig = { adminToken: string | null; allowInsecure: boolean };
 
@@ -39,6 +47,32 @@ async function consumeChallenge(flow: "registration" | "authentication", challen
   return rows[0]?.challenge ?? null;
 }
 
+async function storeChallenge(flow: "registration" | "authentication", challenge: string): Promise<void> {
+  await sql.begin(async (tx) => {
+    // Serialize issuance, including the cleanup/retention pass, so concurrent
+    // public option requests cannot briefly exceed the configured cap.
+    await tx`SELECT pg_advisory_xact_lock(${CHALLENGE_ISSUE_LOCK})`;
+    await tx`DELETE FROM admin_webauthn_challenge WHERE expires_at <= now()`;
+    await tx`
+      INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
+      VALUES (${flow}, ${challenge}, now() + ${CHALLENGE_TTL}::interval)
+    `;
+    if (flow === "authentication") {
+      await tx`
+        DELETE FROM admin_webauthn_challenge
+        WHERE flow = 'authentication'
+          AND challenge IN (
+            SELECT challenge
+            FROM admin_webauthn_challenge
+            WHERE flow = 'authentication'
+            ORDER BY expires_at DESC, challenge DESC
+            OFFSET ${MAX_PUBLIC_AUTH_CHALLENGES}
+          )
+      `;
+    }
+  });
+}
+
 export async function handleAdminWebauthn(
   req: Request,
   url: URL,
@@ -70,10 +104,7 @@ export async function handleAdminWebauthn(
       },
     });
 
-    await sql`
-      INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
-      VALUES ('registration', ${options.challenge}, now() + interval '5 minutes')
-    `;
+    await storeChallenge("registration", options.challenge);
 
     return { status: 200, body: options };
   }
@@ -104,12 +135,21 @@ export async function handleAdminWebauthn(
       const { credential } = verification.registrationInfo;
       const { id, publicKey, counter, transports } = credential;
 
-      await sql`
-        INSERT INTO admin_passkey (id, public_key, counter, transports)
-        VALUES (${id}, ${Buffer.from(publicKey)}, ${counter}, ${transports || []})
-      `;
-
-      await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'register_passkey', ${sql.json({ id })})`;
+      const registered = await sql.begin(async (tx) => {
+        // Pair the authorization re-check with a credential row lock. If a
+        // password rotation wins, its transaction deletes the passkeys first
+        // and this second check rejects the now-revoked caller. If this wins,
+        // rotation waits and then deletes this new passkey before returning.
+        await tx`SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`;
+        if (!await isPrivileged(req, authConfig)) return false;
+        await tx`
+          INSERT INTO admin_passkey (id, public_key, counter, transports)
+          VALUES (${id}, ${Buffer.from(publicKey)}, ${counter}, ${transports || []})
+        `;
+        await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'register_passkey', ${tx.json({ id })})`;
+        return true;
+      });
+      if (!registered) return FORBIDDEN;
 
       return { status: 200, body: { verified: true } };
     }
@@ -130,10 +170,7 @@ export async function handleAdminWebauthn(
       userVerification: "preferred",
     });
 
-    await sql`
-      INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
-      VALUES ('authentication', ${options.challenge}, now() + interval '5 minutes')
-    `;
+    await storeChallenge("authentication", options.challenge);
 
     return { status: 200, body: options };
   }
@@ -173,12 +210,28 @@ export async function handleAdminWebauthn(
 
     if (verification.verified && verification.authenticationInfo) {
       const { newCounter } = verification.authenticationInfo;
-      await sql`UPDATE admin_passkey SET counter = ${newCounter}, last_used_at = now() WHERE id = ${pk.id}`;
-
       const sessionToken = randomBytes(32).toString("base64url");
-      await sql`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(sessionToken)}, now() + interval '1 day')`;
-
-      await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'login_passkey', ${sql.json({ id: pk.id })})`;
+      const advanced = await sql.begin(async (tx) => {
+        // Serialize session issuance with credential rotation. A rotation
+        // that follows this lock removes the just-created session; one that
+        // precedes it removes the passkey so the CAS below cannot succeed.
+        await tx`SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`;
+        // Verification uses the counter observed above, but a second valid
+        // assertion can finish first. Compare-and-swap makes the stored
+        // counter monotonic and prevents the late assertion from regressing
+        // it (or minting a session after its credential was revoked).
+        const updated = await tx`
+          UPDATE admin_passkey
+          SET counter = ${newCounter}, last_used_at = now()
+          WHERE id = ${pk.id} AND counter < ${newCounter}
+          RETURNING id
+        `;
+        if (!updated.length) return false;
+        await tx`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(sessionToken)}, now() + interval '1 day')`;
+        await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'login_passkey', ${tx.json({ id: pk.id })})`;
+        return true;
+      });
+      if (!advanced) return BAD("passkey counter did not advance");
 
       return { status: 200, body: { verified: true, token: sessionToken } };
     }

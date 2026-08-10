@@ -16,6 +16,8 @@ import { test, expect, describe, beforeEach, afterAll } from "bun:test";
 import { createHash } from "node:crypto";
 import { sql } from "../../src/db/client.ts";
 import { handleAdmin, type AdminAuthConfig } from "../../src/api/routes/admin.ts";
+import { handleAdminWebauthn } from "../../src/api/routes/admin-webauthn.ts";
+import { isPrivileged } from "../../src/api/auth.ts";
 import { hashKey } from "../../src/lib/keys.ts";
 
 const CFG: AdminAuthConfig = { adminToken: "s3cret-admin-token", allowInsecure: false };
@@ -50,11 +52,17 @@ const isClaimedReq = () => new Request("http://localhost/api/admin/is-claimed", 
 describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   beforeEach(async () => {
     await sql`DELETE FROM admin_credential`;
+    await sql`DELETE FROM admin_passkey`;
+    await sql`DELETE FROM admin_session`;
+    await sql`DELETE FROM admin_webauthn_challenge`;
     await sql`DELETE FROM audit_log WHERE action IN ('claim_admin_credential', 'change_admin_password', 'recover_admin_password')`;
   });
 
   afterAll(async () => {
     await sql`DELETE FROM admin_credential`;
+    await sql`DELETE FROM admin_passkey`;
+    await sql`DELETE FROM admin_session`;
+    await sql`DELETE FROM admin_webauthn_challenge`;
     await sql`DELETE FROM audit_log WHERE action IN ('claim_admin_credential', 'change_admin_password', 'recover_admin_password')`;
   });
 
@@ -361,6 +369,54 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     const recovered = await call(passwordRecoverReq(recoveryCode, "audit-rollback-password"));
     expect(recovered?.status).toBe(200);
     expect((await call(authReq("audit-rollback-password")))?.status).toBe(200);
+  });
+
+  test("password rotation revokes rogue passkeys and their sessions before either change or recovery returns", async () => {
+    const claimed = await call(claimReq(PASSWORD, CFG.adminToken));
+    const initialRecoveryCode = (claimed?.body as { recoveryCode: string }).recoveryCode;
+    const rogueId = "rogue-passkey";
+    const rogueSession = "rogue-passkey-session";
+
+    const seedRogueCredential = async (challenge: string) => {
+      await sql`
+        INSERT INTO admin_passkey (id, public_key, counter, transports)
+        VALUES (${rogueId}, ${Buffer.from("not-used-before-lookup")}, 0, '{}')
+      `;
+      await sql`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(rogueSession)}, now() + interval '1 day')`;
+      await sql`
+        INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
+        VALUES ('authentication', ${challenge}, now() + interval '5 minutes')
+      `;
+    };
+    const assertRogueRejected = async (challenge: string) => {
+      const clientDataJSON = Buffer.from(JSON.stringify({ challenge })).toString("base64url");
+      const req = new Request("http://localhost/api/admin/webauthn/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: rogueId, response: { clientDataJSON } }),
+      });
+      expect(await handleAdminWebauthn(req, new URL(req.url), CFG)).toEqual({ status: 400, body: { error: "passkey not found" } });
+      expect(await isPrivileged(new Request("http://localhost/api/admin/overview", {
+        headers: { "X-Admin-Token": rogueSession },
+      }), CFG)).toBe(false);
+      expect(await sql`SELECT id FROM admin_passkey WHERE id = ${rogueId}`).toHaveLength(0);
+      expect(await sql`SELECT token FROM admin_session WHERE token = ${hashKey(rogueSession)}`).toHaveLength(0);
+    };
+
+    await seedRogueCredential("rogue-before-change");
+    const changed = await call(passwordChangeReq(PASSWORD, "changed-password-1234", PASSWORD));
+    expect(changed?.status).toBe(200);
+    await assertRogueRejected("rogue-before-change");
+
+    // Password change issued a successor recovery code. Seed another rogue
+    // credential, then prove the public recovery path has the same atomic
+    // revocation behavior.
+    const recoveryCode = (changed?.body as { recoveryCode: string }).recoveryCode;
+    expect(recoveryCode).not.toBe(initialRecoveryCode);
+    await seedRogueCredential("rogue-before-recovery");
+    const recovered = await call(passwordRecoverReq(recoveryCode, "recovered-password-1234"));
+    expect(recovered?.status).toBe(200);
+    await assertRogueRejected("rogue-before-recovery");
   });
 
 });

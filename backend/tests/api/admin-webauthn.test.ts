@@ -147,3 +147,114 @@ test("WebAuthn registration and authentication verify an ES256 passkey", async (
   await sql`DELETE FROM admin_session WHERE token = ${hashKey(sessionToken)}`;
   await sql`DELETE FROM admin_passkey WHERE id = ${credentialID64}`;
 });
+
+test("concurrent out-of-order assertions never regress a passkey counter", async () => {
+  const credentialID = randomBytes(32);
+  const credentialID64 = base64url(credentialID);
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const jwk = publicKey.export({ format: "jwk" });
+  if (!jwk.x || !jwk.y) throw new Error("P-256 fixture did not export public coordinates");
+  const publicKeyCOSE = cbor([[1, 2], [3, -7], [-1, 1], [-2, Buffer.from(jwk.x, "base64url")], [-3, Buffer.from(jwk.y, "base64url")]]);
+
+  const registrationOptions = await call("GET", "/api/admin/webauthn/register/options", undefined, ADMIN.adminToken);
+  const registrationChallenge = (registrationOptions?.body as { challenge: string }).challenge;
+  const attestationObject = cbor([
+    ["fmt", "none"],
+    ["authData", authenticatorData(credentialID, publicKeyCOSE)],
+    ["attStmt", []],
+  ]);
+  expect((await call("POST", "/api/admin/webauthn/register/verify", {
+    id: credentialID64,
+    rawId: credentialID64,
+    type: "public-key",
+    response: {
+      clientDataJSON: base64url(clientData("webauthn.create", registrationChallenge)),
+      attestationObject: base64url(attestationObject),
+    },
+  }, ADMIN.adminToken))?.status).toBe(200);
+
+  const makeAssertion = (challenge: string, counter: number) => {
+    const data = clientData("webauthn.get", challenge);
+    const authData = authenticatorData(credentialID, undefined, counter);
+    const signer = createSign("SHA256");
+    signer.update(concat(authData, createHash("sha256").update(data).digest()));
+    return {
+      id: credentialID64,
+      rawId: credentialID64,
+      type: "public-key",
+      response: {
+        clientDataJSON: base64url(data),
+        authenticatorData: base64url(authData),
+        signature: base64url(signer.sign(privateKey)),
+        userHandle: null,
+      },
+    };
+  };
+  const lowOptions = await call("GET", "/api/admin/webauthn/auth/options");
+  const highOptions = await call("GET", "/api/admin/webauthn/auth/options");
+  const lowAssertion = makeAssertion((lowOptions?.body as { challenge: string }).challenge, 1);
+  const highAssertion = makeAssertion((highOptions?.body as { challenge: string }).challenge, 2);
+
+  // Start a lower-counter verification, hold it at body parsing, then let a
+  // higher-counter assertion finish first. This reproduces two in-flight
+  // browser assertions whose completions arrive out of order.
+  let releaseLowBody!: () => void;
+  const lowBodyReady = new Promise<void>((resolve) => { releaseLowBody = resolve; });
+  let bodySent = false;
+  const delayedLowRequest = new Request(`${ORIGIN}/api/admin/webauthn/auth/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (bodySent) return;
+        bodySent = true;
+        await lowBodyReady;
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(lowAssertion)));
+        controller.close();
+      },
+    }),
+  });
+  const lowResult = handleAdminWebauthn(delayedLowRequest, new URL(delayedLowRequest.url), ADMIN);
+  const highResult = await call("POST", "/api/admin/webauthn/auth/verify", highAssertion);
+  releaseLowBody();
+  const lateLowResult = await lowResult;
+
+  expect(highResult?.status).toBe(200);
+  // simplewebauthn re-reads the credential immediately before verification,
+  // so this late assertion is rejected at verification rather than reaching
+  // our CAS. The CAS is the second line of defense for an assertion that read
+  // the old value before another request committed.
+  expect(lateLowResult).toEqual({ status: 400, body: { error: "passkey verification failed" } });
+  expect(Array.from(await sql`SELECT counter FROM admin_passkey WHERE id = ${credentialID64}`)).toEqual([{ counter: "2" }]);
+  expect(await sql`SELECT token FROM admin_session`).toHaveLength(1);
+
+  await sql`DELETE FROM admin_session`;
+  await sql`DELETE FROM admin_webauthn_challenge`;
+  await sql`DELETE FROM admin_passkey WHERE id = ${credentialID64}`;
+});
+
+test("public authentication options clean expiry and retain a bounded challenge set", async () => {
+  const prefix = `challenge-cap-${randomBytes(12).toString("hex")}`;
+  const expired = `${prefix}-expired`;
+  const oldestLive = `${prefix}-oldest-live`;
+  await sql`
+    INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
+    VALUES ('authentication', ${expired}, now() - interval '1 minute'),
+           ('authentication', ${oldestLive}, now() + interval '1 minute')
+  `;
+  for (let index = 0; index < 31; index++) {
+    await sql`
+      INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
+      VALUES ('authentication', ${`${prefix}-live-${index}`}, now() + interval '2 minutes')
+    `;
+  }
+
+  const options = await call("GET", "/api/admin/webauthn/auth/options");
+  expect(options?.status).toBe(200);
+  const issued = (options?.body as { challenge: string }).challenge;
+  expect(await sql`SELECT challenge FROM admin_webauthn_challenge WHERE challenge = ${expired}`).toHaveLength(0);
+  expect(await sql`SELECT challenge FROM admin_webauthn_challenge WHERE challenge = ${oldestLive}`).toHaveLength(0);
+  expect(Array.from(await sql<{ count: string }[]>`SELECT count(*) FROM admin_webauthn_challenge WHERE flow = 'authentication'`)).toEqual([{ count: "32" }]);
+
+  await sql`DELETE FROM admin_webauthn_challenge WHERE challenge LIKE ${`${prefix}%`} OR challenge = ${issued}`;
+});
