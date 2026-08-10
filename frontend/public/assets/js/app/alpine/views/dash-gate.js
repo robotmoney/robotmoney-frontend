@@ -20,7 +20,7 @@
 // (`...createDashGateState()`) so the dashboard gate follows the identical
 // convention.
 import { api, ROUTES } from "../../lib/api.js";
-import { startAuthentication } from "https://esm.sh/@simplewebauthn/browser@13.3.0";
+import { startAuthentication } from "../../lib/webauthn-client.js";
 
 export const ADMIN_TOKEN_KEY = "rm_admin_token";
 

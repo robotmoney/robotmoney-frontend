@@ -19,7 +19,7 @@
 // shell: schedule enable/disable lives inside the existing Queue section, and
 // audit gets its own top-level nav section.
 import { api, ROUTES, path } from "../../lib/api.js";
-import { startRegistration, startAuthentication } from "https://esm.sh/@simplewebauthn/browser@13.3.0";
+import { startRegistration, startAuthentication } from "../../lib/webauthn-client.js";
 
 const ADMIN_TOKEN_KEY = "rm_admin_token";
 

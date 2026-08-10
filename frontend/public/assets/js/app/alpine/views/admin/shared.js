@@ -9,7 +9,7 @@
 // session-expired message.") without forcing every page through one giant
 // Alpine component.
 import { ROUTES } from "../../../lib/api.js";
-import { startAuthentication } from "https://esm.sh/@simplewebauthn/browser@13.3.0";
+import { startAuthentication } from "../../../lib/webauthn-client.js";
 
 export const ADMIN_TOKEN_KEY = "rm_admin_token";
 

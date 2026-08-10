@@ -3,40 +3,40 @@ import { join } from "node:path";
 import { mockVendorScripts } from "./vendor-scripts.ts";
 
 const ADMIN_PASSWORD = "demo-password";
-const WEBAUTHN_BROWSER_URL = "https://esm.sh/@simplewebauthn/browser@13.3.0";
+const WEBAUTHN_BROWSER_URL = "**/assets/js/vendor/simplewebauthn-browser-13.3.0.umd.min.js";
 
-// The production surface imports SimpleWebAuthn directly from esm.sh. Browser
-// coverage must drive that adapter boundary (rather than calling component
-// methods directly), while a deterministic browser-side authenticator keeps
-// this UI contract test independent of physical security hardware.
+// These are deterministic unit-level UI tests. The required live suite uses a
+// Chromium virtual authenticator against the un-intercepted pinned artifact.
 async function mockWebAuthnBrowser(page: Page): Promise<void> {
   await page.route(WEBAUTHN_BROWSER_URL, (route) => route.fulfill({
     contentType: "application/javascript",
     body: `
       const calls = window.__rmWebAuthnCalls ||= [];
-      export async function startRegistration({ optionsJSON }) {
-        calls.push({ kind: "registration", options: optionsJSON });
-        return {
-          id: "browser-registration-credential",
-          rawId: "browser-registration-credential",
-          type: "public-key",
-          response: { clientDataJSON: "registration-client-data", attestationObject: "browser-attestation" },
-        };
-      }
-      export async function startAuthentication({ optionsJSON }) {
-        calls.push({ kind: "authentication", options: optionsJSON });
-        return {
-          id: "browser-authentication-credential",
-          rawId: "browser-authentication-credential",
-          type: "public-key",
-          response: {
-            clientDataJSON: "authentication-client-data",
-            authenticatorData: "browser-authenticator-data",
-            signature: "browser-signature",
-            userHandle: null,
-          },
-        };
-      }
+      window.SimpleWebAuthnBrowser = {
+        async startRegistration({ optionsJSON }) {
+          calls.push({ kind: "registration", options: optionsJSON });
+          return {
+            id: "browser-registration-credential",
+            rawId: "browser-registration-credential",
+            type: "public-key",
+            response: { clientDataJSON: "registration-client-data", attestationObject: "browser-attestation" },
+          };
+        },
+        async startAuthentication({ optionsJSON }) {
+          calls.push({ kind: "authentication", options: optionsJSON });
+          return {
+            id: "browser-authentication-credential",
+            rawId: "browser-authentication-credential",
+            type: "public-key",
+            response: {
+              clientDataJSON: "authentication-client-data",
+              authenticatorData: "browser-authenticator-data",
+              signature: "browser-signature",
+              userHandle: null,
+            },
+          };
+        },
+      };
     `,
   }));
 }

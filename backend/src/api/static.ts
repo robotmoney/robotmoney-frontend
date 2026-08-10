@@ -3,9 +3,30 @@ import { join, normalize } from "node:path";
 const VIEW_MOUNT = '<main id="view"></main>';
 const SHELL_CACHE_CONTROL = "no-cache";
 const ASSET_CACHE_CONTROL = "public, max-age=300";
+// The SPA needs Alpine's expression evaluator, but all executable code is
+// shipped from this origin. In particular, this closes the privileged-admin
+// supply-chain boundary: a page that can read rm_admin_token never imports a
+// WebAuthn client from a third-party host.
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+].join("; ");
 
 function shellResponse(body: BodyInit, contentType?: string): Response {
-  const headers: Record<string, string> = { "Cache-Control": SHELL_CACHE_CONTROL };
+  const headers: Record<string, string> = {
+    "Cache-Control": SHELL_CACHE_CONTROL,
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "Permissions-Policy": "publickey-credentials-get=(self), publickey-credentials-create=(self)",
+    "X-Content-Type-Options": "nosniff",
+  };
   if (contentType) headers["Content-Type"] = contentType;
   return new Response(body, { headers });
 }

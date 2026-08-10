@@ -52,6 +52,19 @@ test("serveStatic sets Cache-Control: no-cache for root path /", async () => {
   expect(res?.headers.get("Cache-Control")).toBe("no-cache");
 });
 
+test("serveStatic gives SPA documents a same-origin script policy and enables WebAuthn", async () => {
+  const res = await serveStatic("/admin", tempDir);
+  const policy = res?.headers.get("Content-Security-Policy");
+
+  expect(policy).toContain("default-src 'self'");
+  expect(policy).toContain("script-src 'self' 'unsafe-eval'");
+  expect(policy?.match(/script-src ([^;]+)/)?.[1]).not.toContain("https:");
+  expect(res?.headers.get("Permissions-Policy")).toBe(
+    "publickey-credentials-get=(self), publickey-credentials-create=(self)",
+  );
+  expect(res?.headers.get("X-Content-Type-Options")).toBe("nosniff");
+});
+
 test("serveStatic sets Cache-Control: no-cache for SPA client route fallback", async () => {
   const res = await serveStatic("/swarm/2026-07-30/subject", tempDir);
   expect(res).not.toBeNull();

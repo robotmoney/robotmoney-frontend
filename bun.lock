@@ -5,7 +5,7 @@
     "": {
       "name": "robotmoney-frontend-monorepo",
       "dependencies": {
-        "@simplewebauthn/browser": "^13.3.0",
+        "@simplewebauthn/browser": "13.3.0",
         "libsodium-wrappers": "^0.8.4",
       },
       "devDependencies": {

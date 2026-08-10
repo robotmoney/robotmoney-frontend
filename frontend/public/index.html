@@ -106,31 +106,18 @@
     <!-- Per-environment public config (API origin). No secrets. -->
     <script src="/config.js"></script>
 
-    <!-- Google tag (gtag.js). `send_page_view: false` is the ONE deliberate
-         edit to the issued snippet: this is a client-rendered SPA, so the
-         automatic pageview would fire once on the shell and never again as the
-         router swaps routes through the history API. assets/js/app/analytics.js
-         sends every pageview instead, including the first, on the router's
-         `rm:view-changed` event — the moment the title and URL are the ones a
-         reader sees. -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-4JV7T715NY"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
+    <!-- All executable dependencies are pinned, version-labelled artifacts in
+         this deployment. The WebAuthn bundle loads synchronously before the
+         module graph so the session-bearing admin views cannot fall back to a
+         remote module. -->
+    <script src="/assets/js/vendor/simplewebauthn-browser-13.3.0.umd.min.js"></script>
 
-      gtag('config', 'G-4JV7T715NY', { send_page_view: false });
-    </script>
-
-    <!-- No build, browser-native. Document order = execution order:
-         1) main.js (module) registers Alpine.data factories + boots the router;
-            its alpine:init listener is in place before Alpine starts.
-         2) p5 (global) for the hero substrate sketch.
-         3) Alpine starts and processes the light DOM. -->
+    <!-- main.js registers Alpine factories before Alpine starts and then boots
+         the client router. Keep its position ahead of the deferred globals. -->
     <script type="module" src="/assets/js/app/main.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/p5@1.11.2/lib/p5.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+    <script defer src="/assets/js/vendor/p5-1.11.2.min.js"></script>
+    <script defer src="/assets/js/vendor/chart-4.5.1.umd.min.js"></script>
+    <script defer src="/assets/js/vendor/alpinejs-3.14.9.min.js"></script>
   </head>
   <body>
     <!-- ── Nav (inline; the SPA shell renders it once) ── -->
