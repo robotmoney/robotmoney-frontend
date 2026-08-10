@@ -312,12 +312,12 @@ test("admin view: logged-out passkey sign-in stores its session and enters the p
   await expect(page.locator(".adm-nav")).toBeVisible();
   await expect(page.getByRole("button", { name: "Security", exact: true })).toBeVisible();
   expect(await page.evaluate(() => sessionStorage.getItem("rm_admin_token"))).toBe("passkey-session-token");
-  // The existing admin helper always materializes its optional token header;
-  // the unauthenticated ceremony routes must nevertheless accept this browser
-  // request before the verified session exists.
+  // Authentication options still exercise the admin GET helper's undefined
+  // header value, while verification deliberately omits the optional header
+  // until the ceremony has issued a verified session token.
   expect(optionRequest).toEqual({ method: "GET", token: "undefined" });
   expect(verificationRequest).toEqual({
-    token: "null",
+    token: undefined,
     body: {
       id: "browser-authentication-credential",
       rawId: "browser-authentication-credential",
