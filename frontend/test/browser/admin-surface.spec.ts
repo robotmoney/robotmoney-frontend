@@ -102,9 +102,9 @@ test("admin auth: probes is-claimed and shows claim form if false", async ({ pag
   ]);
 
   expect(claimRequest.method()).toBe("POST");
-  const body = claimRequest.postDataJSON() as { token: string; password: string };
-  expect(body.token).toBe("my-setup-token");
+  const body = claimRequest.postDataJSON() as { password: string };
   expect(body.password).toBe("my-new-password");
+  expect(claimRequest.headers()["x-admin-token"]).toBe("my-setup-token");
 
   // Claim success triggers login() in the component, bringing up the nav.
   await expect(page.locator(".adm-nav")).toBeVisible();

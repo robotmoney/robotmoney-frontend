@@ -126,8 +126,10 @@ export function registerAdminSurfaceView(Alpine) {
       }
       this.claimSubmitting = true;
       try {
-        await api.post(ROUTES.admin.claim, {
-          token: this.claimToken.trim(),
+        // The setup token authorizes the one-time claim exactly like the
+        // existing admin APIs: it travels only in X-Admin-Token, never in a
+        // JSON body that could be logged by request middleware.
+        await api.adminPost(ROUTES.admin.claim, this.claimToken.trim(), {
           password: this.newPassword.trim(),
         });
         this.isClaimed = true;
