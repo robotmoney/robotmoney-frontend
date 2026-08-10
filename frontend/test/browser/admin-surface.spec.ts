@@ -70,7 +70,7 @@ function mockAdminApi(page: Page): void {
     if (method === "GET" && p === "/api/admin/is-claimed") return route.fulfill(jsonReply({ claimed: true }));
     if (method === "POST" && p === "/api/admin/claim") return route.fulfill(jsonReply({ recoveryCode: "claim-recovery-code" }));
     if (method === "POST" && p === "/api/admin/auth") return route.fulfill(jsonReply({ ok: true }));
-    if (method === "POST" && p === "/api/admin/password-change") return route.fulfill(jsonReply({ ok: true }));
+    if (method === "POST" && p === "/api/admin/password-change") return route.fulfill(jsonReply({ ok: true, recoveryCode: "changed-recovery-code" }));
     if (method === "POST" && p === "/api/admin/password-recover") return route.fulfill(jsonReply({ recoveryCode: "replacement-recovery-code" }));
     if (method === "GET" && p === "/api/admin/overview") return route.fulfill(jsonReply(OVERVIEW_FIXTURE));
     if (method === "GET" && p === "/api/admin/jobs") return route.fulfill(jsonReply(JOBS_FIXTURE));
@@ -130,7 +130,10 @@ test("admin password change posts the new credential, confirms success, and surf
     currentPassword: ADMIN_PASSWORD,
     newPassword: "a durable replacement password",
   });
-  await expect(page.getByText("Password changed successfully.", { exact: true })).toBeVisible();
+  const changeNotice = page.getByTestId("change-recovery-code");
+  await expect(changeNotice).toContainText("Password changed successfully.");
+  await expect(changeNotice).toContainText("changed-recovery-code");
+  await expect(changeNotice).toContainText("It will not be shown again.");
   expect(await page.evaluate(() => sessionStorage.getItem("rm_admin_token"))).toBe("a durable replacement password");
 
   await page.route("**/api/admin/password-change", (route) =>

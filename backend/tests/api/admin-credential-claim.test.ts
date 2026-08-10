@@ -16,6 +16,7 @@ import { test, expect, describe, beforeEach, afterAll } from "bun:test";
 import { createHash } from "node:crypto";
 import { sql } from "../../src/db/client.ts";
 import { handleAdmin, type AdminAuthConfig } from "../../src/api/routes/admin.ts";
+import { hashKey } from "../../src/lib/keys.ts";
 
 const CFG: AdminAuthConfig = { adminToken: "s3cret-admin-token", allowInsecure: false };
 const PASSWORD = "operator-chosen-password"; // ≥ 12 chars
@@ -176,10 +177,9 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     });
 
     // Successful change
-    expect(await call(passwordChangeReq(PASSWORD, "new-password-1234", PASSWORD))).toEqual({
-      status: 200,
-      body: { ok: true },
-    });
+    const changed = await call(passwordChangeReq(PASSWORD, "new-password-1234", PASSWORD));
+    expect(changed?.status).toBe(200);
+    expect(typeof (changed?.body as { recoveryCode: string }).recoveryCode).toBe("string");
 
     // Old password no longer works
     expect((await call(authReq(PASSWORD)))?.status).toBe(403);
@@ -188,6 +188,61 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
 
     const audit = await sql`SELECT 1 FROM audit_log WHERE action = 'change_admin_password'`;
     expect(audit.length).toBe(1);
+  });
+
+  test("password change initializes recovery for a legacy claimed credential with no recovery hash", async () => {
+    // This is the state produced when migration 0029 is applied to an already
+    // claimed installation. It cannot safely receive a generated code in SQL,
+    // because there would be no one-time response in which to disclose it.
+    await sql`
+      INSERT INTO admin_credential (id, pass_hash, recovery_hash)
+      VALUES (1, ${hashKey(PASSWORD)}, NULL)`;
+
+    const changed = await call(passwordChangeReq(PASSWORD, "legacy-upgraded-password", PASSWORD));
+    expect(changed?.status).toBe(200);
+    const recoveryCode = (changed?.body as { recoveryCode: string }).recoveryCode;
+    expect(typeof recoveryCode).toBe("string");
+    expect((await call(authReq("legacy-upgraded-password")))?.status).toBe(200);
+
+    // The disclosed bootstrap code is immediately a viable self-service
+    // recovery credential, not merely a non-null migration marker.
+    expect((await call(passwordRecoverReq(recoveryCode, "legacy-recovered-password")))?.status).toBe(200);
+    expect((await call(authReq("legacy-recovered-password")))?.status).toBe(200);
+  });
+
+  test("a change authenticated before recovery cannot overwrite the recovered password", async () => {
+    const claimRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    const recoveryCode = (claimRes?.body as { recoveryCode: string }).recoveryCode;
+    const interleaving = { recovery: null as { status: number; body: unknown } | null };
+    let sent = false;
+
+    // Request bodies are not read until after isPrivileged has accepted the
+    // current password. Run recovery from the body's first pull, placing it
+    // deterministically between that authorization and the conditional UPDATE.
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (sent) return;
+        sent = true;
+        interleaving.recovery = await call(passwordRecoverReq(recoveryCode, "interleaving-recovered-password"));
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({
+          currentPassword: PASSWORD,
+          newPassword: "stale-change-password",
+        })));
+        controller.close();
+      },
+    });
+    const changed = await call(new Request("http://localhost/api/admin/password-change", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Token": PASSWORD },
+      body,
+    }));
+
+    expect(interleaving.recovery?.status).toBe(200);
+    expect(changed).toEqual({ status: 403, body: { error: "invalid current password" } });
+    expect((await call(authReq("interleaving-recovered-password")))?.status).toBe(200);
+    expect((await call(authReq("stale-change-password")))?.status).toBe(403);
+    const replacement = (interleaving.recovery?.body as { recoveryCode: string }).recoveryCode;
+    expect((await call(passwordRecoverReq(replacement, "post-interleaving-password")))?.status).toBe(200);
   });
 
   test("password recovery uses recovery code, updates hash, and issues new recovery code", async () => {
@@ -245,6 +300,35 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
 
     const audit = await sql`SELECT 1 FROM audit_log WHERE action = 'recover_admin_password'`;
     expect(audit.length).toBe(2);
+  });
+
+  test("recovery rolls back code consumption when its audit insert fails", async () => {
+    const claimRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    const recoveryCode = (claimRes?.body as { recoveryCode: string }).recoveryCode;
+    const trigger = "rmtest_recovery_audit_failure";
+    const fn = "rmtest_recovery_audit_failure_fn";
+    await sql.unsafe(`
+      CREATE FUNCTION ${fn}() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.action = 'recover_admin_password' THEN
+          RAISE EXCEPTION 'forced recovery audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`);
+    await sql.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+    try {
+      await expect(call(passwordRecoverReq(recoveryCode, "audit-failure-password"))).rejects.toThrow("forced recovery audit failure");
+    } finally {
+      await sql.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
+      await sql.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+    }
+
+    // The failed request disclosed no successor. Its predecessor must still
+    // work, proving the credential update and audit write shared one commit.
+    const recovered = await call(passwordRecoverReq(recoveryCode, "audit-rollback-password"));
+    expect(recovered?.status).toBe(200);
+    expect((await call(authReq("audit-rollback-password")))?.status).toBe(200);
   });
 
 });

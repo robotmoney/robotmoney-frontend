@@ -193,7 +193,13 @@
               </div>
               <button type="submit" class="adm-btn">Change Password</button>
               <p x-show="changeError" x-text="changeError" class="rm-error"></p>
-              <p x-show="changeResult" x-text="changeResult" class="adm-success"></p>
+              <template x-if="changeResult">
+                <div class="adm-success adm-msg" data-testid="change-recovery-code">
+                  <p>Password changed successfully. Your new recovery code is:</p>
+                  <p><code x-text="changeResult?.recoveryCode"></code></p>
+                  <p>Save this code immediately. It will not be shown again.</p>
+                </div>
+              </template>
             </form>
           </div>
         </template>

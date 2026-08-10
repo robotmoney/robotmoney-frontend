@@ -257,8 +257,8 @@ export function registerAdminSurfaceView(Alpine) {
         return;
       }
       try {
-        await api.adminPost(ROUTES.admin.passwordChange, this._token(), { currentPassword: curr, newPassword: next });
-        this.changeResult = "Password changed successfully.";
+        const res = await api.adminPost(ROUTES.admin.passwordChange, this._token(), { currentPassword: curr, newPassword: next });
+        this.changeResult = res;
         this.changeCurrentPassword = "";
         this.changeNewPassword = "";
         sessionStorage.setItem(ADMIN_TOKEN_KEY, next);
