@@ -3,6 +3,43 @@ import { join } from "node:path";
 import { mockVendorScripts } from "./vendor-scripts.ts";
 
 const ADMIN_PASSWORD = "demo-password";
+const WEBAUTHN_BROWSER_URL = "https://esm.sh/@simplewebauthn/browser@13.3.0";
+
+// The production surface imports SimpleWebAuthn directly from esm.sh. Browser
+// coverage must drive that adapter boundary (rather than calling component
+// methods directly), while a deterministic browser-side authenticator keeps
+// this UI contract test independent of physical security hardware.
+async function mockWebAuthnBrowser(page: Page): Promise<void> {
+  await page.route(WEBAUTHN_BROWSER_URL, (route) => route.fulfill({
+    contentType: "application/javascript",
+    body: `
+      const calls = window.__rmWebAuthnCalls ||= [];
+      export async function startRegistration({ optionsJSON }) {
+        calls.push({ kind: "registration", options: optionsJSON });
+        return {
+          id: "browser-registration-credential",
+          rawId: "browser-registration-credential",
+          type: "public-key",
+          response: { clientDataJSON: "registration-client-data", attestationObject: "browser-attestation" },
+        };
+      }
+      export async function startAuthentication({ optionsJSON }) {
+        calls.push({ kind: "authentication", options: optionsJSON });
+        return {
+          id: "browser-authentication-credential",
+          rawId: "browser-authentication-credential",
+          type: "public-key",
+          response: {
+            clientDataJSON: "authentication-client-data",
+            authenticatorData: "browser-authenticator-data",
+            signature: "browser-signature",
+            userHandle: null,
+          },
+        };
+      }
+    `,
+  }));
+}
 
 // ── Fixture payloads for the mocked admin API (issue #157 / docs/plan-admin-
 // surface.md §6.3). The real backend routes are delivered by issue #155; these
@@ -196,6 +233,107 @@ test("admin view: login persists rm_admin_token and sends X-Admin-Token on every
   // The literal password/token value never appears in rendered page content.
   const bodyText = await page.locator("body").innerText();
   expect(bodyText).not.toContain(ADMIN_PASSWORD);
+});
+
+test("admin view: Security registers a passkey through the browser WebAuthn adapter", async ({ page }) => {
+  await mockWebAuthnBrowser(page);
+  mockAdminApi(page);
+
+  const registrationOptions = {
+    challenge: "register-browser-challenge",
+    rp: { id: "localhost", name: "Robot Money" },
+    user: { id: "admin", name: "admin", displayName: "Admin" },
+    pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+  };
+  let optionRequest: { method: string; token?: string } | null = null;
+  let verificationRequest: { token?: string; body: unknown } | null = null;
+
+  await page.route("**/api/admin/webauthn/register/options", (route) => {
+    optionRequest = { method: route.request().method(), token: route.request().headers()["x-admin-token"] };
+    return route.fulfill(jsonReply(registrationOptions));
+  });
+  await page.route("**/api/admin/webauthn/register/verify", (route) => {
+    verificationRequest = {
+      token: route.request().headers()["x-admin-token"],
+      body: route.request().postDataJSON(),
+    };
+    return route.fulfill(jsonReply({ verified: true }));
+  });
+
+  await login(page);
+  await page.getByRole("button", { name: "Security", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Passkeys", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Register new Passkey", exact: true }).click();
+
+  await expect(page.getByText("Passkey registered successfully.", { exact: true })).toBeVisible();
+  expect(optionRequest).toEqual({ method: "GET", token: ADMIN_PASSWORD });
+  expect(verificationRequest).toEqual({
+    token: ADMIN_PASSWORD,
+    body: {
+      id: "browser-registration-credential",
+      rawId: "browser-registration-credential",
+      type: "public-key",
+      response: { clientDataJSON: "registration-client-data", attestationObject: "browser-attestation" },
+    },
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).__rmWebAuthnCalls)).toEqual([
+    { kind: "registration", options: registrationOptions },
+  ]);
+});
+
+test("admin view: logged-out passkey sign-in stores its session and enters the protected surface", async ({ page }) => {
+  await mockWebAuthnBrowser(page);
+  const { seenTokens } = mockAdminApi(page);
+
+  const authenticationOptions = {
+    challenge: "authenticate-browser-challenge",
+    rpId: "localhost",
+    allowCredentials: [{ id: "browser-authentication-credential", type: "public-key" }],
+  };
+  let optionRequest: { method: string; token?: string } | null = null;
+  let verificationRequest: { token?: string; body: unknown } | null = null;
+
+  await page.route("**/api/admin/webauthn/auth/options", (route) => {
+    optionRequest = { method: route.request().method(), token: route.request().headers()["x-admin-token"] };
+    return route.fulfill(jsonReply(authenticationOptions));
+  });
+  await page.route("**/api/admin/webauthn/auth/verify", (route) => {
+    verificationRequest = {
+      token: route.request().headers()["x-admin-token"],
+      body: route.request().postDataJSON(),
+    };
+    return route.fulfill(jsonReply({ verified: true, token: "passkey-session-token" }));
+  });
+
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Sign in with Passkey", exact: true }).click();
+
+  await expect(page.locator(".adm-nav")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Security", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => sessionStorage.getItem("rm_admin_token"))).toBe("passkey-session-token");
+  // The existing admin helper always materializes its optional token header;
+  // the unauthenticated ceremony routes must nevertheless accept this browser
+  // request before the verified session exists.
+  expect(optionRequest).toEqual({ method: "GET", token: "undefined" });
+  expect(verificationRequest).toEqual({
+    token: "null",
+    body: {
+      id: "browser-authentication-credential",
+      rawId: "browser-authentication-credential",
+      type: "public-key",
+      response: {
+        clientDataJSON: "authentication-client-data",
+        authenticatorData: "browser-authenticator-data",
+        signature: "browser-signature",
+        userHandle: null,
+      },
+    },
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).__rmWebAuthnCalls)).toEqual([
+    { kind: "authentication", options: authenticationOptions },
+  ]);
+  expect(seenTokens).toContain("passkey-session-token");
 });
 
 test("admin view: overview alerts, tiles, and next-schedule table render from mocked data", async ({ page }) => {
