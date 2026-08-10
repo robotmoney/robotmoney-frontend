@@ -31,23 +31,34 @@
   </header>
 
   <!-- Claim gate -->
-  <div x-show="isClaimed === false" class="adm-login" x-cloak>
-    <h2 class="adm-login__title">Claim Admin</h2>
-    <p class="adm-login__hint">
-      Provide the setup token to claim this instance and set a durable admin password.
-    </p>
-    <form @submit.prevent="submitClaim()" class="adm-login__form">
-      <input type="text" x-model="claimToken" class="adm-input" placeholder="Setup token" aria-label="Setup token" autocomplete="off" />
-      <input type="password" x-model="newPassword" class="adm-input" placeholder="New durable password" aria-label="New durable password" autocomplete="new-password" />
-      <button type="submit" class="adm-btn" :disabled="claimSubmitting">Claim</button>
-    </form>
-    <p x-show="claimError" x-text="claimError" class="rm-error adm-msg" x-cloak></p>
+  <div x-show="isClaimed === false || claimResult" class="adm-login" x-cloak>
+    <template x-if="!claimResult">
+      <div>
+        <h2 class="adm-login__title">Claim Admin</h2>
+        <p class="adm-login__hint">
+          Provide the setup token to claim this instance and set a durable admin password.
+        </p>
+        <form @submit.prevent="submitClaim()" class="adm-login__form">
+          <input type="text" x-model="claimToken" class="adm-input" placeholder="Setup token" aria-label="Setup token" autocomplete="off" />
+          <input type="password" x-model="newPassword" class="adm-input" placeholder="New durable password" aria-label="New durable password" autocomplete="new-password" />
+          <button type="submit" class="adm-btn" :disabled="claimSubmitting">Claim</button>
+        </form>
+        <p x-show="claimError" x-text="claimError" class="rm-error adm-msg" x-cloak></p>
+      </div>
+    </template>
+    <template x-if="claimResult">
+      <div class="adm-success adm-msg" data-testid="claim-recovery-code">
+        <h2 class="adm-login__title">Admin claimed</h2>
+        <p>Your recovery code is:</p>
+        <p><code x-text="claimResult?.recoveryCode"></code></p>
+        <p>Save this code immediately. It will not be shown again.</p>
+        <button type="button" class="adm-btn" @click="finishClaim()">Continue to sign in</button>
+      </div>
+    </template>
   </div>
 
-  <!-- Login and recovery gate: available only after the instance is claimed. -->
-  <div x-show="!authed && isClaimed === true" class="adm-login" x-cloak>
-  <!-- Login gate -->
-  <div x-show="!authed" class="adm-login" x-cloak>
+  <!-- Login and recovery gate -->
+  <div x-show="!authed && isClaimed === true && !claimResult" class="adm-login" x-cloak>
     <template x-if="!recoveryMode">
       <div>
         <h2 class="adm-login__title">Sign in</h2>

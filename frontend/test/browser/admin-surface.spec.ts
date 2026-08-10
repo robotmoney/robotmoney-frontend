@@ -57,6 +57,10 @@ function mockAdminApi(page: Page): void {
   for (const [url, file] of Object.entries(vendorScripts)) {
     page.route(url, (route) => route.fulfill({ path: join(process.cwd(), file), contentType: "application/javascript" }));
   }
+  page.route("**/config.js", (route) => route.fulfill({
+    contentType: "application/javascript",
+    body: "window.RM_CONFIG = { API_BASE_URL: '' };",
+  }));
   page.route("**/api/admin/**", async (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -64,8 +68,10 @@ function mockAdminApi(page: Page): void {
     const method = req.method();
 
     if (method === "GET" && p === "/api/admin/is-claimed") return route.fulfill(jsonReply({ claimed: true }));
-    if (method === "POST" && p === "/api/admin/claim") return route.fulfill(jsonReply({ ok: true }));
+    if (method === "POST" && p === "/api/admin/claim") return route.fulfill(jsonReply({ recoveryCode: "claim-recovery-code" }));
     if (method === "POST" && p === "/api/admin/auth") return route.fulfill(jsonReply({ ok: true }));
+    if (method === "POST" && p === "/api/admin/password-change") return route.fulfill(jsonReply({ ok: true }));
+    if (method === "POST" && p === "/api/admin/password-recover") return route.fulfill(jsonReply({ recoveryCode: "replacement-recovery-code" }));
     if (method === "GET" && p === "/api/admin/overview") return route.fulfill(jsonReply(OVERVIEW_FIXTURE));
     if (method === "GET" && p === "/api/admin/jobs") return route.fulfill(jsonReply(JOBS_FIXTURE));
     if (method === "GET" && p === "/api/admin/runs") return route.fulfill(jsonReply({ runs: [] }));
@@ -85,14 +91,12 @@ async function login(page: Page): Promise<void> {
   await expect(page.locator(".adm-nav")).toBeVisible();
 }
 
-test("admin auth: probes is-claimed and shows claim form if false", async ({ page }) => {
+test("admin auth: claim displays the one-time recovery code before continuing to sign in", async ({ page }) => {
   mockAdminApi(page);
-  // Override to simulate unclaimed state
   await page.route("**/api/admin/is-claimed", (route) => route.fulfill(jsonReply({ claimed: false })));
 
   await page.goto("/admin");
   await expect(page.getByRole("heading", { name: "Claim Admin", exact: true })).toBeVisible();
-  
   await page.getByLabel("Setup token").fill("my-setup-token");
   await page.getByLabel("New durable password").fill("my-new-password");
 
@@ -100,14 +104,69 @@ test("admin auth: probes is-claimed and shows claim form if false", async ({ pag
     page.waitForRequest("**/api/admin/claim"),
     page.getByRole("button", { name: "Claim", exact: true }).click(),
   ]);
-
   expect(claimRequest.method()).toBe("POST");
-  const body = claimRequest.postDataJSON() as { password: string };
-  expect(body.password).toBe("my-new-password");
+  expect(claimRequest.postDataJSON()).toEqual({ password: "my-new-password" });
   expect(claimRequest.headers()["x-admin-token"]).toBe("my-setup-token");
 
-  // Claim success triggers login() in the component, bringing up the nav.
-  await expect(page.locator(".adm-nav")).toBeVisible();
+  const recoveryNotice = page.getByTestId("claim-recovery-code");
+  await expect(recoveryNotice).toContainText("claim-recovery-code");
+  await expect(recoveryNotice).toContainText("It will not be shown again.");
+  await page.getByRole("button", { name: "Continue to sign in", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+});
+
+test("admin password change posts the new credential, confirms success, and surfaces an error", async ({ page }) => {
+  mockAdminApi(page);
+  await login(page);
+
+  await page.getByLabel("Current Password").fill(ADMIN_PASSWORD);
+  await page.getByLabel("New Password").fill("a durable replacement password");
+  const [changeRequest] = await Promise.all([
+    page.waitForRequest("**/api/admin/password-change"),
+    page.getByRole("button", { name: "Change Password", exact: true }).click(),
+  ]);
+  expect(changeRequest.headers()["x-admin-token"]).toBe(ADMIN_PASSWORD);
+  expect(changeRequest.postDataJSON()).toEqual({
+    currentPassword: ADMIN_PASSWORD,
+    newPassword: "a durable replacement password",
+  });
+  await expect(page.getByText("Password changed successfully.", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => sessionStorage.getItem("rm_admin_token"))).toBe("a durable replacement password");
+
+  await page.route("**/api/admin/password-change", (route) =>
+    route.fulfill({ status: 403, contentType: "application/json", body: "Current password is incorrect." }));
+  await page.getByLabel("Current Password").fill("wrong password");
+  await page.getByLabel("New Password").fill("another durable password");
+  await page.getByRole("button", { name: "Change Password", exact: true }).click();
+  await expect(page.getByText("API 403: Current password is incorrect.", { exact: true })).toBeVisible();
+});
+
+test("admin password recovery posts code and password, confirms success, and surfaces an error", async ({ page }) => {
+  mockAdminApi(page);
+  await page.goto("/admin");
+  await page.getByRole("button", { name: "Lost password? Use recovery code", exact: true }).click();
+  await page.getByLabel("Recovery code").fill("initial-recovery-code");
+  await page.getByLabel("New password").fill("a recovered durable password");
+  const [recoveryRequest] = await Promise.all([
+    page.waitForRequest("**/api/admin/password-recover"),
+    page.getByRole("button", { name: "Reset password", exact: true }).click(),
+  ]);
+  expect(recoveryRequest.headers()["x-admin-token"]).toBeUndefined();
+  expect(recoveryRequest.postDataJSON()).toEqual({
+    recoveryCode: "initial-recovery-code",
+    newPassword: "a recovered durable password",
+  });
+  await expect(page.getByText("replacement-recovery-code", { exact: true })).toBeVisible();
+  await expect(page.getByText("Save this code immediately. It will not be shown again.", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Back to sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Lost password? Use recovery code", exact: true }).click();
+  await page.route("**/api/admin/password-recover", (route) =>
+    route.fulfill({ status: 400, contentType: "application/json", body: "Recovery code is invalid." }));
+  await page.getByLabel("Recovery code").fill("invalid-recovery-code");
+  await page.getByLabel("New password").fill("another recovered password");
+  await page.getByRole("button", { name: "Reset password", exact: true }).click();
+  await expect(page.getByText("API 400: Recovery code is invalid.", { exact: true })).toBeVisible();
 });
 
 test("admin schedules: toggle button is hidden for swarm demo rows and PATCHes for analytics rows", async ({ page }) => {

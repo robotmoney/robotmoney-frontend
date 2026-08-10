@@ -44,6 +44,7 @@ export function registerAdminSurfaceView(Alpine) {
     claimToken: "",
     newPassword: "",
     claimError: null,
+    claimResult: null,
     claimSubmitting: false,
 
     // ── password recovery ────────────────────────────────────────────────
@@ -127,32 +128,36 @@ export function registerAdminSurfaceView(Alpine) {
         const res = await api.get(ROUTES.admin.isClaimed);
         this.isClaimed = res.claimed === true;
       } catch (e) {
-        this.isClaimed = true; // fail closed into login on error
+        this.isClaimed = true; // fail closed into the normal login gate on error
       }
     },
 
     async submitClaim() {
       this.claimError = null;
-      if (!this.claimToken.trim() || !this.newPassword.trim()) {
+      this.claimResult = null;
+      const setupToken = this.claimToken.trim();
+      const password = this.newPassword.trim();
+      if (!setupToken || !password) {
         this.claimError = "Setup token and durable password are required.";
         return;
       }
       this.claimSubmitting = true;
       try {
-        // The setup token authorizes the one-time claim exactly like the
-        // existing admin APIs: it travels only in X-Admin-Token, never in a
-        // JSON body that could be logged by request middleware.
-        await api.adminPost(ROUTES.admin.claim, this.claimToken.trim(), {
-          password: this.newPassword.trim(),
-        });
+        // The setup token authorizes this one-time claim in the request header,
+        // so it is not included in a JSON body that request middleware may log.
+        this.claimResult = await api.adminPost(ROUTES.admin.claim, setupToken, { password });
         this.isClaimed = true;
-        this.password = this.newPassword.trim();
-        await this.login();
       } catch (e) {
         this.claimError = e.message;
       } finally {
         this.claimSubmitting = false;
       }
+    },
+
+    finishClaim() {
+      this.claimToken = "";
+      this.newPassword = "";
+      this.claimResult = null;
     },
 
     _forgetToken() {
@@ -208,6 +213,11 @@ export function registerAdminSurfaceView(Alpine) {
       this.auditItems = [];
       this.auditNextCursor = null;
       this.auditError = null;
+      this.claimToken = "";
+      this.newPassword = "";
+      this.claimError = null;
+      this.claimResult = null;
+      this.claimSubmitting = false;
       this.recoveryMode = false;
       this.recoveryCode = "";
       this.recoveryNewPassword = "";
