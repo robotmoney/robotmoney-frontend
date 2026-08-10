@@ -150,6 +150,7 @@ export interface StackCredentials {
   // Guards the /admin task-queue dashboard (X-Admin-Token) and every swarm
   // admin route. Fresh per stack.
   adminToken: string;
+  automationToken: string;
   // Analytics-provider bearer (issue #106): the api verifies it, the worker
   // submits with it. Fresh per stack, never printed anywhere.
   analyticsToken: string;
@@ -161,6 +162,7 @@ export interface StackCredentials {
 export function generateStackCredentials(): StackCredentials {
   return {
     adminToken: crypto.randomUUID().replace(/-/g, "").slice(0, 20),
+    automationToken: crypto.randomUUID().replace(/-/g, "").slice(0, 20),
     analyticsToken: crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, ""),
   };
 }
@@ -215,6 +217,7 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     [ENV_HASH_COMPOSE_VAR]: cfg.environment.hash,
     DATABASE_URL: internalDatabaseUrl(cfg.database),
     ADMIN_TOKEN: cfg.credentials.adminToken,
+    AUTOMATION_TOKEN: cfg.credentials.automationToken,
     ANALYTICS_TOKEN: cfg.credentials.analyticsTokenFile ? "" : cfg.credentials.analyticsToken,
     ANALYTICS_TOKEN_FILE_HOST: cfg.credentials.analyticsTokenFile ?? "/dev/null",
     // No WEB_PORT / POSTGRES_PORT. They were compose interpolation OUTPUTS

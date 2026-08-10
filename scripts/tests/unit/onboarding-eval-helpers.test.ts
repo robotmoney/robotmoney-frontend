@@ -581,7 +581,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: FUNDED_ENV,
       backoffMsSchedule: [0],
       runOnce: async () => {
@@ -599,7 +599,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: FUNDED_ENV,
       backoffMsSchedule: [0],
       runOnce: async () => {
@@ -617,7 +617,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: FUNDED_ENV,
       backoffMsSchedule: [0],
       runOnce: async () => {
@@ -636,7 +636,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: FUNDED_ENV,
       maxAttempts: 3,
       backoffMsSchedule: [0, 0],
@@ -655,7 +655,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: FUNDED_ENV,
       backoffMsSchedule: [0],
       identity: generateIdentity("first-attempt"),
@@ -689,7 +689,7 @@ describe("runOnboardingEvalWithRetry", () => {
         repoRoot: "/tmp",
         composeProject: "p",
         backendUrl: "http://x",
-        adminToken: "t",
+        automationToken: "t",
         env,
         backoffMsSchedule: [0],
         runOnce: async () => {
@@ -708,7 +708,7 @@ describe("runOnboardingEvalWithRetry", () => {
         repoRoot: "/tmp",
         composeProject: "p",
         backendUrl: "http://x",
-        adminToken: "t",
+        automationToken: "t",
         env,
         backoffMsSchedule: [0],
         runOnce: async () => {
@@ -735,7 +735,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: FUNDED_ENV, // retried on a FUNDED model too: a declination is never weather
       backoffMsSchedule: [0],
       runOnce: async () => {
@@ -755,7 +755,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: FUNDED_ENV,
       backoffMsSchedule: [0],
       runOnce: async () => {
@@ -773,7 +773,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: KEYLESS_ENV, // a tier whose bare timeouts ARE retried — this still is not
       backoffMsSchedule: [0],
       runOnce: async () => {
@@ -794,7 +794,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: FUNDED_ENV,
       backoffMsSchedule: [0],
       runOnce: async () => {
@@ -816,7 +816,7 @@ describe("runOnboardingEvalWithRetry", () => {
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
-      adminToken: "t",
+      automationToken: "t",
       env: FUNDED_ENV,
       backoffMsSchedule: [0],
       identity: planned,
@@ -850,7 +850,7 @@ describe("runOnboardingEvalWithRetry", () => {
         repoRoot: "/tmp",
         composeProject: "p",
         backendUrl: "http://x",
-        adminToken: "t",
+        automationToken: "t",
         env: { AGENT_MODEL: "notafamily", OPENCODE_API_KEY: "sk-zen" },
         backoffMsSchedule: [0],
         runOnce: async () => {

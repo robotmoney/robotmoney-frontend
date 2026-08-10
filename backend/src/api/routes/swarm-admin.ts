@@ -8,7 +8,7 @@
 import * as admin from "../../swarm/admin.ts";
 import { getAgentHealthEvents } from "../../swarm/domain.ts";
 import { config as globalConfig } from "../../config.ts";
-import { isPrivileged } from "../auth.ts";
+import { isPrivileged, hasAutomationRole } from "../auth.ts";
 import {
   parseExpectedVersion,
   parseManualMember,
@@ -43,6 +43,7 @@ function fromResult(r: { status: number; [k: string]: unknown }) {
 
 export interface AdminAuthConfig {
   adminToken: string | null;
+  automationToken?: string | null;
   allowInsecure: boolean;
 }
 
@@ -61,7 +62,7 @@ export async function handleSwarmAdmin(
   if (!ownsPath(p)) return null;
 
   // Auth FIRST — before any body parsing or DB query (AC7).
-  if (!await isPrivileged(req, cfg)) return FORBIDDEN;
+  if (!(await isPrivileged(req, cfg) || hasAutomationRole(req, cfg))) return FORBIDDEN;
 
   const rest = p.slice(PREFIX.length);
   const segs = rest.split("/").filter(Boolean);

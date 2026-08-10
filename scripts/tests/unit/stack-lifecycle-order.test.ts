@@ -26,7 +26,7 @@ const config: StackConfig = {
   profile: "core",
   composeFiles: ["docker-compose.yml"],
   database: { user: "u", password: "p", name: "d" },
-  credentials: { adminToken: "admin", analyticsToken: "analytics" },
+  credentials: { adminToken: "admin", automationToken: "automation", analyticsToken: "analytics" },
   environment: { class: "ci", hash: "0123456789" },
 };
 

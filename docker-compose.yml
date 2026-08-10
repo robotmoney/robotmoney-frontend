@@ -177,6 +177,7 @@ services:
       # (X-Admin-Token). The api process is the one that authenticates HTTP; the
       # demo sets a random per-launch value (worker doesn't serve the API).
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      AUTOMATION_TOKEN: ${AUTOMATION_TOKEN:-}
       # Analytics-provider bearer credential (issue #106): the api VERIFIES it on
       # POST /api/swarm/regime + every /api/analytics/* route. Fail-closed:
       # unset locks those routes except under RM_ALLOW_INSECURE/ephemeral.

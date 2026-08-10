@@ -147,7 +147,7 @@ export async function runSwarmAuthoringEvalCase(
   try {
     await stack.up();
     process.env.BACKEND_URL = stack.backendUrl;
-    process.env.ADMIN_TOKEN = credentials.adminToken;
+    process.env.AUTOMATION_TOKEN = credentials.automationToken;
 
     await stack.waitForHttp(`${stack.backendUrl}${ROUTES.swarm.members}`, 30_000);
 
@@ -160,13 +160,13 @@ export async function runSwarmAuthoringEvalCase(
       backendUrl: stack.backendUrl,
       modelConfig,
       // Threaded explicitly (issue #461 finding): agent.ts's enroll() reads
-      // rail.adminToken directly now that its own env-reading
-      // getAdminHeaders() fallback is retired. Without this, the
-      // X-Admin-Token header this eval's registration call sends is silently
-      // empty even though process.env.ADMIN_TOKEN is set above — that env
+      // rail.automationToken directly now that its own env-reading
+      // automation-header fallback is retired. Without this, the
+      // X-Automation-Token header this eval's registration call sends is silently
+      // empty even though process.env.AUTOMATION_TOKEN is set above — that env
       // var is for session.ts's standalone child-process entry point, not
       // this in-process rail.
-      adminToken: credentials.adminToken,
+      automationToken: credentials.automationToken,
     };
     // No admin("reset") here either: the endpoint is gone. This eval runs on a
     // stack it created, so there is no prior history to clear — and if it is

@@ -252,7 +252,7 @@ describe("red controls: the order grader must REPORT a regression", () => {
   test("it catches the close being moved back ahead of the wait", () => {
     const broken = sessionSrc.replace(
       /const closedWindow = await waitUntilWindowCloses\(/,
-      'await enqueueLifecycleJob("close_window", { sessionId }, rail.adminToken);\n  const closedWindow = await waitUntilWindowCloses(',
+      'await enqueueLifecycleJob("close_window", { sessionId }, rail.automationToken);\n  const closedWindow = await waitUntilWindowCloses(',
     );
     const o = lifecycleOrder(broken);
     expect(o.close).toBeLessThan(o.windowWait);

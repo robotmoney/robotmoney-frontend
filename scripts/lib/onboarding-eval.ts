@@ -333,8 +333,8 @@ export function isFullyOnboarded(observed: ObservedApplication & { claimedAt: st
 }
 
 // ── External observation (public status route + admin roster) ───────────────
-async function findMemberIdByContact(backendUrl: string, adminToken: string, contact: string): Promise<string | null> {
-  const res = await fetch(`${backendUrl}${ROUTES.swarm.admin.members}`, { headers: { "X-Admin-Token": adminToken } });
+async function findMemberIdByContact(backendUrl: string, automationToken: string, contact: string): Promise<string | null> {
+  const res = await fetch(`${backendUrl}${ROUTES.swarm.admin.members}`, { headers: { "X-Automation-Token": automationToken } });
   if (!res.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${res.status}`);
   const body = (await res.json()) as { members: Array<{ id: string; contactEmail: string | null }> };
   return body.members.find((m) => m.contactEmail === contact)?.id ?? null;
@@ -404,7 +404,7 @@ export function createObserverPollTracker(log: (message: string) => void): Obser
 // per-admission eval.
 export function scheduleAutoApprove(
   backendUrl: string,
-  adminToken: string,
+  automationToken: string,
   memberId: string,
   delayMs: number = DEFAULT_AUTO_APPROVE_DELAY_MS,
   onEvent: (msg: string) => void = () => {},
@@ -412,7 +412,7 @@ export function scheduleAutoApprove(
   setTimeout(() => {
     fetch(`${backendUrl}${ROUTES.swarm.admin.activate}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
+      headers: { "Content-Type": "application/json", "X-Automation-Token": automationToken },
       body: JSON.stringify({ memberId }),
     })
       .then(async (res) => {
@@ -430,7 +430,7 @@ export interface RunOnboardingEvalOptions {
   composeFiles?: string[];
   backendUrl: string; // host-published backend URL for THIS harness's own polling
   apiUrlInternal?: string; // the swarm REST API base the CONTAINER reaches over the compose network
-  adminToken: string;
+  automationToken: string;
   env?: Record<string, string | undefined>; // resolveModelConfig source; default process.env
   timeoutMs?: number;
   pollIntervalMs?: number;
@@ -626,7 +626,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 
         if (!memberId) {
           const observedMember = await observer.poll("admin.members", () =>
-            findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact),
+            findMemberIdByContact(opts.backendUrl, opts.automationToken, identity.contact),
           );
           if (observedMember.ok) memberId = observedMember.value;
           if (observedMember.ok && memberId) {
@@ -650,7 +650,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
           if (applyState === "applied" && approveScheduledForMemberId !== memberId) {
             approveScheduledForMemberId = memberId;
             log(`application ${memberId} applied — auto-approving in ${autoApproveDelayMs}ms (§11 R7)`);
-            scheduleAutoApprove(opts.backendUrl, opts.adminToken, memberId, autoApproveDelayMs, log);
+            scheduleAutoApprove(opts.backendUrl, opts.automationToken, memberId, autoApproveDelayMs, log);
           }
           const observedRoster = await observer.poll("swarm.members", () =>
             isOnActiveRoster(opts.backendUrl, memberId!),

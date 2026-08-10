@@ -46,8 +46,10 @@ import { DEFAULT_COMPOSE_FILES } from "./stack/config.ts";
 export { resolveRmpcAsset, missingCommitteeIdentitySubcommands };
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8787";
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
-const adminHeaders: Record<string, string> = ADMIN_TOKEN ? { "X-Admin-Token": ADMIN_TOKEN } : {};
+const AUTOMATION_TOKEN = process.env.AUTOMATION_TOKEN;
+const adminHeaders: Record<string, string> = {
+  ...(AUTOMATION_TOKEN ? { "X-Automation-Token": AUTOMATION_TOKEN } : {})
+};
 
 // Distinctly namespaced identity + subject (issue #104) so this driver never
 // collides with the demo's own built-in onboarding loop / swarm roster /

@@ -195,7 +195,7 @@ try {
     composeProject: project,
     composeFiles: DEFAULT_COMPOSE_FILES,
     backendUrl: stack.backendUrl,
-    adminToken: credentials.adminToken,
+    automationToken: credentials.automationToken,
     composeSpawnEnv: stack.spawnEnv,
     identity,
     env,
