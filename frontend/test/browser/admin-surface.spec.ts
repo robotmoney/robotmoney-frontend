@@ -63,6 +63,8 @@ function mockAdminApi(page: Page): void {
     const p = url.pathname;
     const method = req.method();
 
+    if (method === "GET" && p === "/api/admin/is-claimed") return route.fulfill(jsonReply({ claimed: true }));
+    if (method === "POST" && p === "/api/admin/claim") return route.fulfill(jsonReply({ ok: true }));
     if (method === "POST" && p === "/api/admin/auth") return route.fulfill(jsonReply({ ok: true }));
     if (method === "GET" && p === "/api/admin/overview") return route.fulfill(jsonReply(OVERVIEW_FIXTURE));
     if (method === "GET" && p === "/api/admin/jobs") return route.fulfill(jsonReply(JOBS_FIXTURE));
@@ -82,6 +84,31 @@ async function login(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator(".adm-nav")).toBeVisible();
 }
+
+test("admin auth: probes is-claimed and shows claim form if false", async ({ page }) => {
+  mockAdminApi(page);
+  // Override to simulate unclaimed state
+  await page.route("**/api/admin/is-claimed", (route) => route.fulfill(jsonReply({ claimed: false })));
+
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: "Claim Admin", exact: true })).toBeVisible();
+  
+  await page.getByLabel("Setup token").fill("my-setup-token");
+  await page.getByLabel("New durable password").fill("my-new-password");
+
+  const [claimRequest] = await Promise.all([
+    page.waitForRequest("**/api/admin/claim"),
+    page.getByRole("button", { name: "Claim", exact: true }).click(),
+  ]);
+
+  expect(claimRequest.method()).toBe("POST");
+  const body = claimRequest.postDataJSON() as { token: string; password: string };
+  expect(body.token).toBe("my-setup-token");
+  expect(body.password).toBe("my-new-password");
+
+  // Claim success triggers login() in the component, bringing up the nav.
+  await expect(page.locator(".adm-nav")).toBeVisible();
+});
 
 test("admin schedules: toggle button is hidden for swarm demo rows and PATCHes for analytics rows", async ({ page }) => {
   mockAdminApi(page);
