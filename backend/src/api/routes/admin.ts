@@ -227,15 +227,18 @@ export async function handleAdmin(
     const next = typeof b?.newPassword === "string" ? b.newPassword.trim() : "";
     if (next.length < 12) return BAD("new password must be at least 12 characters");
 
-    const rows = await sql`SELECT recovery_hash FROM admin_credential WHERE id = 1`;
-    if (!rows.length || !rows[0].recovery_hash) {
-      return { status: 403, body: { error: "recovery unavailable" } };
-    }
-    if (rows[0].recovery_hash !== hashKey(code)) {
+    // Consume the submitted code as part of the update predicate. A prior
+    // read followed by an unconditional update lets concurrent recoveries
+    // both validate one code and race to replace the credential.
+    const newRecoveryCode = randomUUID();
+    const consumed = await sql`
+      UPDATE admin_credential
+      SET pass_hash = ${hashKey(next)}, recovery_hash = ${hashKey(newRecoveryCode)}
+      WHERE id = 1 AND recovery_hash = ${hashKey(code)}
+      RETURNING id`;
+    if (!consumed.length) {
       return { status: 403, body: { error: "invalid recovery code" } };
     }
-    const newRecoveryCode = randomUUID();
-    await sql`UPDATE admin_credential SET pass_hash = ${hashKey(next)}, recovery_hash = ${hashKey(newRecoveryCode)} WHERE id = 1`;
     await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'recover_admin_password', ${sql.json({})})`;
     return { status: 200, body: { ok: true, recoveryCode: newRecoveryCode } };
   }

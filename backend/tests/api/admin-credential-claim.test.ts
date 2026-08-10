@@ -49,12 +49,12 @@ const isClaimedReq = () => new Request("http://localhost/api/admin/is-claimed", 
 describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   beforeEach(async () => {
     await sql`DELETE FROM admin_credential`;
-    await sql`DELETE FROM audit_log WHERE action = 'claim_admin_credential'`;
+    await sql`DELETE FROM audit_log WHERE action IN ('claim_admin_credential', 'change_admin_password', 'recover_admin_password')`;
   });
 
   afterAll(async () => {
     await sql`DELETE FROM admin_credential`;
-    await sql`DELETE FROM audit_log WHERE action = 'claim_admin_credential'`;
+    await sql`DELETE FROM audit_log WHERE action IN ('claim_admin_credential', 'change_admin_password', 'recover_admin_password')`;
   });
 
   test("full lifecycle: unclaimed setup token → claim → durable credential survives restart", async () => {
@@ -218,6 +218,33 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
 
     const audit = await sql`SELECT 1 FROM audit_log WHERE action = 'recover_admin_password'`;
     expect(audit.length).toBe(1);
+  });
+
+  test("concurrent recoveries consume one recovery code exactly once", async () => {
+    const claimRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    const { recoveryCode } = claimRes?.body as { recoveryCode: string };
+    const candidates = ["concurrent-winner-password", "concurrent-loser-password"];
+
+    const results = await Promise.all(candidates.map((password) =>
+      call(passwordRecoverReq(recoveryCode, password)),
+    ));
+    const winnerIndex = results.findIndex((result) => result?.status === 200);
+    const loserIndex = results.findIndex((result) => result?.status === 403);
+    expect(winnerIndex).toBeGreaterThanOrEqual(0);
+    expect(loserIndex).toBeGreaterThanOrEqual(0);
+    expect(results.filter((result) => result?.status === 200)).toHaveLength(1);
+    expect(results.filter((result) => result?.status === 403)).toHaveLength(1);
+
+    const winner = results[winnerIndex];
+    expect(winner?.body).toMatchObject({ ok: true });
+    const winningRecoveryCode = (winner?.body as { recoveryCode: string }).recoveryCode;
+    expect(typeof winningRecoveryCode).toBe("string");
+    expect((await call(authReq(candidates[winnerIndex])))?.status).toBe(200);
+    expect((await call(authReq(candidates[loserIndex])))?.status).toBe(403);
+    expect((await call(passwordRecoverReq(winningRecoveryCode, "post-concurrency-password")))?.status).toBe(200);
+
+    const audit = await sql`SELECT 1 FROM audit_log WHERE action = 'recover_admin_password'`;
+    expect(audit.length).toBe(2);
   });
 
 });
