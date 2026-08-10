@@ -188,8 +188,9 @@ export async function handleAdmin(
     const b = (await req.json().catch(() => null)) as { password?: unknown } | null;
     const pass = typeof b?.password === "string" ? b.password.trim() : "";
     if (pass.length < 12) return BAD("password must be at least 12 characters");
+    const recoveryCode = randomUUID();
     try {
-      await sql`INSERT INTO admin_credential (id, pass_hash) VALUES (1, ${hashKey(pass)})`;
+      await sql`INSERT INTO admin_credential (id, pass_hash, recovery_hash) VALUES (1, ${hashKey(pass)}, ${hashKey(recoveryCode)})`;
     } catch (err) {
       if ((err as { code?: string }).code === "23505") {
         return { status: 409, body: { error: "admin credential already claimed" } };
@@ -198,7 +199,45 @@ export async function handleAdmin(
     }
     // Lifecycle audit trail: THAT the claim happened, never any secret material.
     await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'claim_admin_credential', ${sql.json({})})`;
+    return { status: 200, body: { ok: true, recoveryCode } };
+  }
+
+  // POST /api/admin/password-change — explicitly change the password
+  if (m === "POST" && p === "/api/admin/password-change") {
+    if (!await isPrivileged(req, cfg)) return FORBIDDEN;
+    const b = (await req.json().catch(() => null)) as { currentPassword?: unknown; newPassword?: unknown } | null;
+    const curr = typeof b?.currentPassword === "string" ? b.currentPassword.trim() : "";
+    const next = typeof b?.newPassword === "string" ? b.newPassword.trim() : "";
+    if (next.length < 12) return BAD("new password must be at least 12 characters");
+
+    const rows = await sql`SELECT pass_hash FROM admin_credential WHERE id = 1`;
+    if (!rows.length) return BAD("admin credential not claimed");
+    if (rows[0].pass_hash !== hashKey(curr)) {
+      return { status: 403, body: { error: "invalid current password" } };
+    }
+    await sql`UPDATE admin_credential SET pass_hash = ${hashKey(next)} WHERE id = 1`;
+    await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'change_admin_password', ${sql.json({})})`;
     return { status: 200, body: { ok: true } };
+  }
+
+  // POST /api/admin/password-recover — use recovery code to set a new password
+  if (m === "POST" && p === "/api/admin/password-recover") {
+    const b = (await req.json().catch(() => null)) as { recoveryCode?: unknown; newPassword?: unknown } | null;
+    const code = typeof b?.recoveryCode === "string" ? b.recoveryCode.trim() : "";
+    const next = typeof b?.newPassword === "string" ? b.newPassword.trim() : "";
+    if (next.length < 12) return BAD("new password must be at least 12 characters");
+
+    const rows = await sql`SELECT recovery_hash FROM admin_credential WHERE id = 1`;
+    if (!rows.length || !rows[0].recovery_hash) {
+      return { status: 403, body: { error: "recovery unavailable" } };
+    }
+    if (rows[0].recovery_hash !== hashKey(code)) {
+      return { status: 403, body: { error: "invalid recovery code" } };
+    }
+    const newRecoveryCode = randomUUID();
+    await sql`UPDATE admin_credential SET pass_hash = ${hashKey(next)}, recovery_hash = ${hashKey(newRecoveryCode)} WHERE id = 1`;
+    await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'recover_admin_password', ${sql.json({})})`;
+    return { status: 200, body: { ok: true, recoveryCode: newRecoveryCode } };
   }
 
   // GET /api/admin/overview — health cards + explicit alert feed (issue #155,

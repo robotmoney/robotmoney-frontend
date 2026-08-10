@@ -32,6 +32,18 @@ const claimReq = (password: unknown, token?: string | null) =>
     headers: { "Content-Type": "application/json", ...(token ? { "X-Admin-Token": token } : {}) },
     body: JSON.stringify({ password }),
   });
+const passwordChangeReq = (currentPassword: unknown, newPassword: unknown, token?: string | null) =>
+  new Request("http://localhost/api/admin/password-change", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(token ? { "X-Admin-Token": token } : {}) },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+const passwordRecoverReq = (recoveryCode: unknown, newPassword: unknown) =>
+  new Request("http://localhost/api/admin/password-recover", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recoveryCode, newPassword }),
+  });
 const isClaimedReq = () => new Request("http://localhost/api/admin/is-claimed", { method: "GET" });
 
 describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
@@ -51,9 +63,13 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     expect((await call(authReq(CFG.adminToken)))?.status).toBe(200);
     expect((await call(authReq("wrong")))?.status).toBe(403);
 
-    // Claim with the current credential. The response echoes NOTHING secret.
-    const claimed = await call(claimReq(PASSWORD, CFG.adminToken));
-    expect(claimed).toEqual({ status: 200, body: { ok: true } });
+    // Claim with the current credential. The response echoes NOTHING secret except the one-time recovery code.
+    const claimedRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    expect(claimedRes?.status).toBe(200);
+    const claimedBody = claimedRes?.body as { ok: boolean; recoveryCode: string };
+    expect(claimedBody.ok).toBe(true);
+    expect(typeof claimedBody.recoveryCode).toBe("string");
+    const initialRecoveryCode = claimedBody.recoveryCode;
 
     // Probe flips; boolean only — no hash, no secret in the body.
     const probe = await call(isClaimedReq());
@@ -142,4 +158,66 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     expect(audit.length).toBe(1);
     expect(JSON.stringify(audit[0])).not.toContain(PASSWORD);
   });
+
+  test("password change requires valid current password and updates hash", async () => {
+    // First, claim it
+    await call(claimReq(PASSWORD, CFG.adminToken));
+    
+    // Attempt change with wrong current password
+    expect(await call(passwordChangeReq("wrong-password", "new-password-1234", PASSWORD))).toEqual({
+      status: 403,
+      body: { error: "invalid current password" },
+    });
+
+    // Attempt change with short new password
+    expect(await call(passwordChangeReq(PASSWORD, "short", PASSWORD))).toEqual({
+      status: 400,
+      body: { error: "new password must be at least 12 characters" },
+    });
+
+    // Successful change
+    expect(await call(passwordChangeReq(PASSWORD, "new-password-1234", PASSWORD))).toEqual({
+      status: 200,
+      body: { ok: true },
+    });
+
+    // Old password no longer works
+    expect((await call(authReq(PASSWORD)))?.status).toBe(403);
+    // New password works
+    expect((await call(authReq("new-password-1234")))?.status).toBe(200);
+
+    const audit = await sql`SELECT 1 FROM audit_log WHERE action = 'change_admin_password'`;
+    expect(audit.length).toBe(1);
+  });
+
+  test("password recovery uses recovery code, updates hash, and issues new recovery code", async () => {
+    // First, claim it and get recovery code
+    const claimRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    const { recoveryCode } = claimRes?.body as any;
+
+    // Attempt recovery with wrong code
+    expect(await call(passwordRecoverReq("wrong-code", "recovered-password-1"))).toEqual({
+      status: 403,
+      body: { error: "invalid recovery code" },
+    });
+
+    // Successful recovery
+    const recoverRes = await call(passwordRecoverReq(recoveryCode, "recovered-password-1"));
+    expect(recoverRes?.status).toBe(200);
+    const newRecoveryCode = (recoverRes?.body as any).recoveryCode;
+    expect(typeof newRecoveryCode).toBe("string");
+    expect(newRecoveryCode).not.toBe(recoveryCode);
+
+    // Old password no longer works
+    expect((await call(authReq(PASSWORD)))?.status).toBe(403);
+    // New password works
+    expect((await call(authReq("recovered-password-1")))?.status).toBe(200);
+
+    // Old recovery code is invalidated
+    expect((await call(passwordRecoverReq(recoveryCode, "another-password")))?.status).toBe(403);
+
+    const audit = await sql`SELECT 1 FROM audit_log WHERE action = 'recover_admin_password'`;
+    expect(audit.length).toBe(1);
+  });
+
 });

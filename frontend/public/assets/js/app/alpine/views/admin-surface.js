@@ -46,6 +46,19 @@ export function registerAdminSurfaceView(Alpine) {
     claimError: null,
     claimSubmitting: false,
 
+    // ── password recovery ────────────────────────────────────────────────
+    recoveryMode: false,
+    recoveryCode: "",
+    recoveryNewPassword: "",
+    recoveryError: null,
+    recoveryResult: null,
+
+    // ── password change ──────────────────────────────────────────────────
+    changeCurrentPassword: "",
+    changeNewPassword: "",
+    changeError: null,
+    changeResult: null,
+
     // ── shell ─────────────────────────────────────────────────────────────
     section: sectionFromPath(location.pathname),
     paused: false,
@@ -195,6 +208,54 @@ export function registerAdminSurfaceView(Alpine) {
       this.auditItems = [];
       this.auditNextCursor = null;
       this.auditError = null;
+      this.recoveryMode = false;
+      this.recoveryCode = "";
+      this.recoveryNewPassword = "";
+      this.recoveryResult = null;
+      this.recoveryError = null;
+      this.changeCurrentPassword = "";
+      this.changeNewPassword = "";
+      this.changeResult = null;
+      this.changeError = null;
+    },
+
+    // ── password management ──────────────────────────────────────────────
+    async recoverPassword() {
+      this.recoveryError = null;
+      this.recoveryResult = null;
+      const code = this.recoveryCode.trim();
+      const pass = this.recoveryNewPassword.trim();
+      if (!code || pass.length < 12) {
+        this.recoveryError = "Code required, and new password must be at least 12 characters.";
+        return;
+      }
+      try {
+        const res = await api.adminPost(ROUTES.admin.passwordRecover, null, { recoveryCode: code, newPassword: pass });
+        this.recoveryResult = res;
+      } catch (e) {
+        this.recoveryError = e.message;
+      }
+    },
+
+    async changePassword() {
+      this.changeError = null;
+      this.changeResult = null;
+      const curr = this.changeCurrentPassword.trim();
+      const next = this.changeNewPassword.trim();
+      if (next.length < 12) {
+        this.changeError = "New password must be at least 12 characters.";
+        return;
+      }
+      try {
+        await api.adminPost(ROUTES.admin.passwordChange, this._token(), { currentPassword: curr, newPassword: next });
+        this.changeResult = "Password changed successfully.";
+        this.changeCurrentPassword = "";
+        this.changeNewPassword = "";
+        sessionStorage.setItem(ADMIN_TOKEN_KEY, next);
+        this.password = next;
+      } catch (e) {
+        this.changeError = e.message;
+      }
     },
 
     // ── navigation ───────────────────────────────────────────────────────
