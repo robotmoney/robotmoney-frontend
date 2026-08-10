@@ -190,15 +190,19 @@ export async function handleAdmin(
     if (pass.length < 12) return BAD("password must be at least 12 characters");
     const recoveryCode = randomUUID();
     try {
-      await sql`INSERT INTO admin_credential (id, pass_hash, recovery_hash) VALUES (1, ${hashKey(pass)}, ${hashKey(recoveryCode)})`;
+      await sql.begin(async (tx) => {
+        await tx`INSERT INTO admin_credential (id, pass_hash, recovery_hash) VALUES (1, ${hashKey(pass)}, ${hashKey(recoveryCode)})`;
+        // The credential is not considered claimed unless its required lifecycle
+        // audit event commits too. This keeps an audit failure retryable rather
+        // than permanently revoking the setup token without an audit record.
+        await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'claim_admin_credential', ${tx.json({})})`;
+      });
     } catch (err) {
       if ((err as { code?: string }).code === "23505") {
         return { status: 409, body: { error: "admin credential already claimed" } };
       }
       throw err;
     }
-    // Lifecycle audit trail: THAT the claim happened, never any secret material.
-    await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'claim_admin_credential', ${sql.json({})})`;
     return { status: 200, body: { ok: true, recoveryCode } };
   }
 

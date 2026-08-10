@@ -160,6 +160,38 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     expect(JSON.stringify(audit[0])).not.toContain(PASSWORD);
   });
 
+  test("claim rolls back the credential when its required audit insert fails, then retries cleanly", async () => {
+    const trigger = "rmtest_claim_audit_failure";
+    const fn = "rmtest_claim_audit_failure_fn";
+    await sql.unsafe(`
+      CREATE FUNCTION ${fn}() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.action = 'claim_admin_credential' THEN
+          RAISE EXCEPTION 'forced claim audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`);
+    await sql.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+    try {
+      await expect(call(claimReq(PASSWORD, CFG.adminToken))).rejects.toThrow("forced claim audit failure");
+    } finally {
+      await sql.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
+      await sql.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+    }
+
+    // A failed claim is entirely absent: neither the credential nor its audit
+    // event is committed, so the original setup credential may retry safely.
+    expect(await sql`SELECT 1 FROM admin_credential WHERE id = 1`).toHaveLength(0);
+    expect(await sql`SELECT 1 FROM audit_log WHERE action = 'claim_admin_credential'`).toHaveLength(0);
+    expect((await call(authReq(CFG.adminToken)))?.status).toBe(200);
+
+    const retried = await call(claimReq(PASSWORD, CFG.adminToken));
+    expect(retried?.status).toBe(200);
+    expect(await sql`SELECT 1 FROM admin_credential WHERE id = 1`).toHaveLength(1);
+    expect(await sql`SELECT 1 FROM audit_log WHERE action = 'claim_admin_credential'`).toHaveLength(1);
+  });
+
   test("password change requires valid current password and updates hash", async () => {
     // First, claim it
     await call(claimReq(PASSWORD, CFG.adminToken));
