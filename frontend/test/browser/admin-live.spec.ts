@@ -44,9 +44,37 @@ if (!BACKEND_URL || !ADMIN_TOKEN) {
   );
 }
 
-const ADMIN_PASSWORD = ADMIN_TOKEN;
+// The demo starts unclaimed so the test itself performs its one-time setup
+// claim. Keep the durable credential distinct from the ephemeral setup token:
+// that is the real lifecycle this spec is meant to exercise, and it means the
+// subsequent live UI requests prove the claimed-password path rather than the
+// legacy per-boot token fallback.
+const ADMIN_PASSWORD = "admin-live-durable-password";
 
-/** Sign into the real /admin shell with the real ADMIN_TOKEN. Only vendor CDN
+test.beforeAll(async ({ request }) => {
+  const status = await request.get("/api/admin/is-claimed");
+  expect(status.ok()).toBe(true);
+  const { claimed } = await status.json();
+
+  if (!claimed) {
+    const claim = await request.post("/api/admin/claim", {
+      headers: { "X-Admin-Token": ADMIN_TOKEN },
+      data: { password: ADMIN_PASSWORD },
+    });
+    expect(claim.ok()).toBe(true);
+  }
+
+  // `beforeAll` also runs on a Playwright retry. The claim is deliberately
+  // idempotent at the test-fixture level: once the first attempt claimed the
+  // demo, retries authenticate with the known durable password instead of
+  // trying to spend the one-time setup token again.
+  const auth = await request.post("/api/admin/auth", {
+    headers: { "X-Admin-Token": ADMIN_PASSWORD },
+  });
+  expect(auth.ok()).toBe(true);
+});
+
+/** Sign into the real /admin shell with the claimed durable password. Only vendor CDN
  * scripts are intercepted — every admin request reaches the live backend. */
 async function login(page: Page): Promise<void> {
   await mockVendorScripts(page);

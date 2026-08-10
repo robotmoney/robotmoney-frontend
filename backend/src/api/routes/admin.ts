@@ -188,17 +188,81 @@ export async function handleAdmin(
     const b = (await req.json().catch(() => null)) as { password?: unknown } | null;
     const pass = typeof b?.password === "string" ? b.password.trim() : "";
     if (pass.length < 12) return BAD("password must be at least 12 characters");
+    const recoveryCode = randomUUID();
     try {
-      await sql`INSERT INTO admin_credential (id, pass_hash) VALUES (1, ${hashKey(pass)})`;
+      await sql.begin(async (tx) => {
+        await tx`INSERT INTO admin_credential (id, pass_hash, recovery_hash) VALUES (1, ${hashKey(pass)}, ${hashKey(recoveryCode)})`;
+        // The credential is not considered claimed unless its required lifecycle
+        // audit event commits too. This keeps an audit failure retryable rather
+        // than permanently revoking the setup token without an audit record.
+        await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'claim_admin_credential', ${tx.json({})})`;
+      });
     } catch (err) {
       if ((err as { code?: string }).code === "23505") {
         return { status: 409, body: { error: "admin credential already claimed" } };
       }
       throw err;
     }
-    // Lifecycle audit trail: THAT the claim happened, never any secret material.
-    await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'claim_admin_credential', ${sql.json({})})`;
-    return { status: 200, body: { ok: true } };
+    return { status: 200, body: { ok: true, recoveryCode } };
+  }
+
+  // POST /api/admin/password-change — explicitly change the password
+  if (m === "POST" && p === "/api/admin/password-change") {
+    if (!await isPrivileged(req, cfg)) return FORBIDDEN;
+    const b = (await req.json().catch(() => null)) as { currentPassword?: unknown; newPassword?: unknown } | null;
+    const curr = typeof b?.currentPassword === "string" ? b.currentPassword.trim() : "";
+    const next = typeof b?.newPassword === "string" ? b.newPassword.trim() : "";
+    if (next.length < 12) return BAD("new password must be at least 12 characters");
+
+    // isPrivileged above authenticates the presented password, but a recovery
+    // can rotate it before this mutation executes. Keep the comparison in the
+    // UPDATE predicate so an old-password holder cannot overwrite that recovery.
+    // Password changes also initialize (or rotate) the recovery code. This is
+    // the only safe self-service upgrade for legacy claimed rows that predate
+    // migration 0029 and therefore have no recoverable secret to disclose.
+    const recoveryCode = randomUUID();
+    const changed = await sql.begin(async (tx) => {
+      const rows = await tx`
+        UPDATE admin_credential
+           SET pass_hash = ${hashKey(next)}, recovery_hash = ${hashKey(recoveryCode)}
+         WHERE id = 1 AND pass_hash = ${hashKey(curr)}
+         RETURNING id`;
+      if (!rows.length) return false;
+      await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'change_admin_password', ${tx.json({})})`;
+      return true;
+    });
+    if (!changed) return { status: 403, body: { error: "invalid current password" } };
+    return { status: 200, body: { ok: true, recoveryCode } };
+  }
+
+  // POST /api/admin/password-recover — use recovery code to set a new password
+  if (m === "POST" && p === "/api/admin/password-recover") {
+    const b = (await req.json().catch(() => null)) as { recoveryCode?: unknown; newPassword?: unknown } | null;
+    const code = typeof b?.recoveryCode === "string" ? b.recoveryCode.trim() : "";
+    const next = typeof b?.newPassword === "string" ? b.newPassword.trim() : "";
+    if (next.length < 12) return BAD("new password must be at least 12 characters");
+
+    // Consume the submitted code as part of the update predicate. A prior
+    // read followed by an unconditional update lets concurrent recoveries
+    // both validate one code and race to replace the credential.
+    const newRecoveryCode = randomUUID();
+    const consumed = await sql.begin(async (tx) => {
+      const rows = await tx`
+        UPDATE admin_credential
+        SET pass_hash = ${hashKey(next)}, recovery_hash = ${hashKey(newRecoveryCode)}
+        WHERE id = 1 AND recovery_hash = ${hashKey(code)}
+        RETURNING id`;
+      if (!rows.length) return false;
+      // Returning the replacement code commits only with its audit record. If
+      // auditing fails, the old code remains usable rather than being consumed
+      // without a successor the operator can see.
+      await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'recover_admin_password', ${tx.json({})})`;
+      return true;
+    });
+    if (!consumed) {
+      return { status: 403, body: { error: "invalid recovery code" } };
+    }
+    return { status: 200, body: { ok: true, recoveryCode: newRecoveryCode } };
   }
 
   // GET /api/admin/overview — health cards + explicit alert feed (issue #155,

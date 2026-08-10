@@ -51,6 +51,9 @@ export const api = {
   // Admin dashboard helpers: send the operator password as X-Admin-Token (the
   // same header the backend admin routes constant-time compare against ADMIN_TOKEN).
   adminGet: (route, token, query) => request("GET", route, { query, headers: { "X-Admin-Token": token } }),
-  adminPost: (route, token, body) => request("POST", route, { body, headers: { "X-Admin-Token": token } }),
+  adminPost: (route, token, body) => request("POST", route, {
+    body,
+    headers: token == null ? undefined : { "X-Admin-Token": token },
+  }),
   adminPatch: (route, token, body) => request("PATCH", route, { body, headers: { "X-Admin-Token": token } }),
 };

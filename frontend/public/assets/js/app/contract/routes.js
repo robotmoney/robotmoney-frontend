@@ -226,6 +226,8 @@ export const ROUTES = {
     auth: "/api/admin/auth", // POST — verify the admin password → { ok: true }
     isClaimed: "/api/admin/is-claimed", // GET — check if admin credential is claimed
     claim: "/api/admin/claim", // POST — claim the admin credential
+    passwordChange: "/api/admin/password-change", // POST — change admin password
+    passwordRecover: "/api/admin/password-recover", // POST — use recovery code to set new password
     // GET — health cards + alert feed (queue counts, last success/failure by
     // kind, stale research signals, next enabled schedules). See
     // docs/architecture.md US-A2. Route shape fixed here so the #157

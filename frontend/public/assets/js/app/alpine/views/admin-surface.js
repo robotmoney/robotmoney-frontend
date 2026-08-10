@@ -44,7 +44,21 @@ export function registerAdminSurfaceView(Alpine) {
     claimToken: "",
     newPassword: "",
     claimError: null,
+    claimResult: null,
     claimSubmitting: false,
+
+    // ── password recovery ────────────────────────────────────────────────
+    recoveryMode: false,
+    recoveryCode: "",
+    recoveryNewPassword: "",
+    recoveryError: null,
+    recoveryResult: null,
+
+    // ── password change ──────────────────────────────────────────────────
+    changeCurrentPassword: "",
+    changeNewPassword: "",
+    changeError: null,
+    changeResult: null,
 
     // ── shell ─────────────────────────────────────────────────────────────
     section: sectionFromPath(location.pathname),
@@ -114,32 +128,36 @@ export function registerAdminSurfaceView(Alpine) {
         const res = await api.get(ROUTES.admin.isClaimed);
         this.isClaimed = res.claimed === true;
       } catch (e) {
-        this.isClaimed = true; // fail closed into login on error
+        this.isClaimed = true; // fail closed into the normal login gate on error
       }
     },
 
     async submitClaim() {
       this.claimError = null;
-      if (!this.claimToken.trim() || !this.newPassword.trim()) {
+      this.claimResult = null;
+      const setupToken = this.claimToken.trim();
+      const password = this.newPassword.trim();
+      if (!setupToken || !password) {
         this.claimError = "Setup token and durable password are required.";
         return;
       }
       this.claimSubmitting = true;
       try {
-        // The setup token authorizes the one-time claim exactly like the
-        // existing admin APIs: it travels only in X-Admin-Token, never in a
-        // JSON body that could be logged by request middleware.
-        await api.adminPost(ROUTES.admin.claim, this.claimToken.trim(), {
-          password: this.newPassword.trim(),
-        });
+        // The setup token authorizes this one-time claim in the request header,
+        // so it is not included in a JSON body that request middleware may log.
+        this.claimResult = await api.adminPost(ROUTES.admin.claim, setupToken, { password });
         this.isClaimed = true;
-        this.password = this.newPassword.trim();
-        await this.login();
       } catch (e) {
         this.claimError = e.message;
       } finally {
         this.claimSubmitting = false;
       }
+    },
+
+    finishClaim() {
+      this.claimToken = "";
+      this.newPassword = "";
+      this.claimResult = null;
     },
 
     _forgetToken() {
@@ -195,6 +213,59 @@ export function registerAdminSurfaceView(Alpine) {
       this.auditItems = [];
       this.auditNextCursor = null;
       this.auditError = null;
+      this.claimToken = "";
+      this.newPassword = "";
+      this.claimError = null;
+      this.claimResult = null;
+      this.claimSubmitting = false;
+      this.recoveryMode = false;
+      this.recoveryCode = "";
+      this.recoveryNewPassword = "";
+      this.recoveryResult = null;
+      this.recoveryError = null;
+      this.changeCurrentPassword = "";
+      this.changeNewPassword = "";
+      this.changeResult = null;
+      this.changeError = null;
+    },
+
+    // ── password management ──────────────────────────────────────────────
+    async recoverPassword() {
+      this.recoveryError = null;
+      this.recoveryResult = null;
+      const code = this.recoveryCode.trim();
+      const pass = this.recoveryNewPassword.trim();
+      if (!code || pass.length < 12) {
+        this.recoveryError = "Code required, and new password must be at least 12 characters.";
+        return;
+      }
+      try {
+        const res = await api.adminPost(ROUTES.admin.passwordRecover, null, { recoveryCode: code, newPassword: pass });
+        this.recoveryResult = res;
+      } catch (e) {
+        this.recoveryError = e.message;
+      }
+    },
+
+    async changePassword() {
+      this.changeError = null;
+      this.changeResult = null;
+      const curr = this.changeCurrentPassword.trim();
+      const next = this.changeNewPassword.trim();
+      if (next.length < 12) {
+        this.changeError = "New password must be at least 12 characters.";
+        return;
+      }
+      try {
+        const res = await api.adminPost(ROUTES.admin.passwordChange, this._token(), { currentPassword: curr, newPassword: next });
+        this.changeResult = res;
+        this.changeCurrentPassword = "";
+        this.changeNewPassword = "";
+        sessionStorage.setItem(ADMIN_TOKEN_KEY, next);
+        this.password = next;
+      } catch (e) {
+        this.changeError = e.message;
+      }
     },
 
     // ── navigation ───────────────────────────────────────────────────────
