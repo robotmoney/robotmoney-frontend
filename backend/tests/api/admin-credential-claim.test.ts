@@ -34,7 +34,7 @@ const claimReq = (password: unknown, token?: string | null) =>
   });
 const isClaimedReq = () => new Request("http://localhost/api/admin/is-claimed", { method: "GET" });
 
-describe("admin credential claim lifecycle (issue #553 / D32)", () => {
+describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   beforeEach(async () => {
     await sql`DELETE FROM admin_credential`;
     await sql`DELETE FROM audit_log WHERE action = 'claim_admin_credential'`;
