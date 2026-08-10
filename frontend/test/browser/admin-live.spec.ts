@@ -51,9 +51,24 @@ const ADMIN_PASSWORD = ADMIN_TOKEN;
 async function login(page: Page): Promise<void> {
   await mockVendorScripts(page);
   await page.goto("/admin");
-  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
-  await page.getByLabel("Admin password").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+
+  // A live demo backend boots unclaimed; the first test to run must claim it,
+  // and subsequent tests (or a manually claimed backend) just sign in.
+  const claimHeading = page.getByRole("heading", { name: "Claim Admin", exact: true });
+  const signInHeading = page.getByRole("heading", { name: "Sign in", exact: true });
+  await expect.poll(async () => (
+    await claimHeading.isVisible() || await signInHeading.isVisible()
+  )).toBe(true);
+
+  if (await claimHeading.isVisible()) {
+    await page.getByLabel("Setup token").fill(ADMIN_PASSWORD);
+    await page.getByLabel("New durable password").fill(ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Claim", exact: true }).click();
+  } else {
+    await page.getByLabel("Admin password").fill(ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  }
+
   await expect(page.locator(".adm-nav")).toBeVisible();
 
   // admin-surface.js's startPolling() begins re-fetching the active section

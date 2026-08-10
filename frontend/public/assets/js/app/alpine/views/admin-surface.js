@@ -40,6 +40,11 @@ export function registerAdminSurfaceView(Alpine) {
     authed: false,
     password: sessionStorage.getItem(ADMIN_TOKEN_KEY) || "",
     loginError: null,
+    isClaimed: null, // null = probing, true = claimed, false = unclaimed
+    claimToken: "",
+    newPassword: "",
+    claimError: null,
+    claimSubmitting: false,
 
     // ── shell ─────────────────────────────────────────────────────────────
     section: sectionFromPath(location.pathname),
@@ -91,7 +96,8 @@ export function registerAdminSurfaceView(Alpine) {
     // A stored token (from a prior login this tab) → try to load straight into
     // the current section; a 403 there clears it and drops back to the login gate.
     async init() {
-      if (this.password) {
+      await this.probeClaim();
+      if (this.password && this.isClaimed) {
         try {
           await this.loadSection();
           this.authed = true;
@@ -102,6 +108,39 @@ export function registerAdminSurfaceView(Alpine) {
       }
     },
     destroy() { this.stopPolling(); },
+
+    async probeClaim() {
+      try {
+        const res = await api.get(ROUTES.admin.isClaimed);
+        this.isClaimed = res.claimed === true;
+      } catch (e) {
+        this.isClaimed = true; // fail closed into login on error
+      }
+    },
+
+    async submitClaim() {
+      this.claimError = null;
+      if (!this.claimToken.trim() || !this.newPassword.trim()) {
+        this.claimError = "Setup token and durable password are required.";
+        return;
+      }
+      this.claimSubmitting = true;
+      try {
+        // The setup token authorizes the one-time claim exactly like the
+        // existing admin APIs: it travels only in X-Admin-Token, never in a
+        // JSON body that could be logged by request middleware.
+        await api.adminPost(ROUTES.admin.claim, this.claimToken.trim(), {
+          password: this.newPassword.trim(),
+        });
+        this.isClaimed = true;
+        this.password = this.newPassword.trim();
+        await this.login();
+      } catch (e) {
+        this.claimError = e.message;
+      } finally {
+        this.claimSubmitting = false;
+      }
+    },
 
     _forgetToken() {
       sessionStorage.removeItem(ADMIN_TOKEN_KEY);

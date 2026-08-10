@@ -30,8 +30,22 @@
     </p>
   </header>
 
+  <!-- Claim gate -->
+  <div x-show="isClaimed === false" class="adm-login" x-cloak>
+    <h2 class="adm-login__title">Claim Admin</h2>
+    <p class="adm-login__hint">
+      Provide the setup token to claim this instance and set a durable admin password.
+    </p>
+    <form @submit.prevent="submitClaim()" class="adm-login__form">
+      <input type="text" x-model="claimToken" class="adm-input" placeholder="Setup token" aria-label="Setup token" autocomplete="off" />
+      <input type="password" x-model="newPassword" class="adm-input" placeholder="New durable password" aria-label="New durable password" autocomplete="new-password" />
+      <button type="submit" class="adm-btn" :disabled="claimSubmitting">Claim</button>
+    </form>
+    <p x-show="claimError" x-text="claimError" class="rm-error adm-msg" x-cloak></p>
+  </div>
+
   <!-- Login gate -->
-  <div x-show="!authed" class="adm-login" x-cloak>
+  <div x-show="!authed && isClaimed === true" class="adm-login" x-cloak>
     <h2 class="adm-login__title">Sign in</h2>
     <p class="adm-login__hint">
       Enter the admin password. In the demo it is printed to the interactive TUI

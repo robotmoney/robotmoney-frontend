@@ -144,27 +144,33 @@ afterAll(() => {
   } catch {}
   compose(["down", "-v"], composeEnv());
   makeDockerRunner(composeEnv())(["volume", "rm", "-f", pgVolume]);
-});
+}, 30_000);
 
-function waitPgReady(env: Record<string, string>, timeoutMs = 60_000): void {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const r = Bun.spawnSync(
-      ["docker", "compose", ...BASE, "exec", "-T", "postgres", "pg_isready", "-U", "robotmoney", "-d", "robotmoney"],
-      { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
-    );
-    if (r.exitCode === 0) return;
-    Bun.sleepSync(1000);
-  }
-  throw new Error("postgres did not become ready within the deadline");
-}
-
-function psql(env: Record<string, string>, sql: string): { code: number; out: string } {
+function psql(env: Record<string, string>, sql: string): { code: number; out: string; err: string } {
   const r = Bun.spawnSync(
     ["docker", "compose", ...BASE, "exec", "-T", "postgres", "psql", "-U", "robotmoney", "-d", "robotmoney", "-tAc", sql],
     { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
   );
-  return { code: r.exitCode ?? -1, out: new TextDecoder().decode(r.stdout).trim() };
+  return {
+    code: r.exitCode ?? -1,
+    out: new TextDecoder().decode(r.stdout).trim(),
+    err: new TextDecoder().decode(r.stderr).trim(),
+  };
+}
+
+function waitPgReady(env: Record<string, string>, timeoutMs = 60_000): void {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    // pg_isready accepts the entrypoint's temporary server before its configured
+    // database is queryable. Prove the actual database is ready, so a busy CI
+    // runner cannot race initdb and then fail the very next statement.
+    const r = psql(env, "SELECT 1;");
+    if (r.code === 0 && r.out === "1") return;
+    lastError = r.err || r.out || `exit ${r.code}`;
+    Bun.sleepSync(1000);
+  }
+  throw new Error(`postgres did not accept a query within the deadline: ${lastError}`);
 }
 
 describe("teardown keeps the volume; resume converges; demo:clean reclaims it (executed)", () => {

@@ -134,9 +134,13 @@ function mockAdminApi(page: Page, overrides: { overview?: unknown; jobRetryStatu
     const url = new URL(req.url());
     const p = url.pathname;
     const method = req.method();
-    seenTokens.push(req.headers()["x-admin-token"] ?? "");
+    // The claim probe is unauthenticated; do not assert its X-Admin-Token presence.
+    if (p !== "/api/admin/is-claimed") {
+      seenTokens.push(req.headers()["x-admin-token"] ?? "");
+    }
     requestedPaths.push(`${method} ${p}${url.search}`);
 
+    if (method === "GET" && p === "/api/admin/is-claimed") return route.fulfill(jsonReply({ claimed: true }));
     if (method === "POST" && p === "/api/admin/auth") return route.fulfill(jsonReply({ ok: true }));
     if (method === "GET" && p === "/api/admin/overview") {
       return route.fulfill(jsonReply(overrides.overview ?? OVERVIEW_FIXTURE));
