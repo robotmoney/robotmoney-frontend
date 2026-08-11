@@ -224,6 +224,12 @@ export const ROUTES = {
 
   admin: {
     auth: "/api/admin/auth", // POST — verify the admin password → { ok: true }
+    // WebAuthn ceremonies (issue #587). Registration remains behind the
+    // existing admin gate; authentication yields a short-lived admin session.
+    webauthnRegisterOptions: "/api/admin/webauthn/register/options", // GET
+    webauthnRegisterVerify: "/api/admin/webauthn/register/verify", // POST
+    webauthnAuthOptions: "/api/admin/webauthn/auth/options", // GET
+    webauthnAuthVerify: "/api/admin/webauthn/auth/verify", // POST
     isClaimed: "/api/admin/is-claimed", // GET — check if admin credential is claimed
     claim: "/api/admin/claim", // POST — claim the admin credential
     passwordChange: "/api/admin/password-change", // POST — change admin password

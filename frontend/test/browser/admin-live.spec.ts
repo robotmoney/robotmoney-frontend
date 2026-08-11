@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mockVendorScripts } from "./vendor-scripts.ts";
 
 // ── Live-backend admin contract check (issue #185) ──────────────────────────
 //
@@ -11,12 +10,9 @@ import { mockVendorScripts } from "./vendor-scripts.ts";
 // own header comment: "topics/members list envelopes are keyed `subjects`/
 // `members` (not `items`)"). This spec drives the real admin UI against the
 // LIVE demo backend the required e2e job already boots (scripts/lib/
-// demo-main.ts), with ZERO page.route mocking of any admin endpoint — only
-// the vendor CDN scripts (Alpine/Chart/p5) are intercepted, via the
-// mockVendorScripts() helper shared with admin-view.spec.ts (./vendor-
-// scripts.ts), which is unrelated to backend contract fidelity. It lives in
-// its own plain module (not a *.spec.ts file) because Playwright refuses to
-// let one discovered test file import another.
+// demo-main.ts), with ZERO page.route mocking of any admin endpoint or
+// executable asset. It lives in its own plain module (not a *.spec.ts file)
+// because Playwright refuses to let one discovered test file import another.
 //
 // It intentionally does NOT modify, replace, or duplicate the existing mocked
 // admin-view.spec.ts / admin-surface.spec.ts suites (those stay the fast,
@@ -74,11 +70,21 @@ test.beforeAll(async ({ request }) => {
   expect(auth.ok()).toBe(true);
 });
 
-/** Sign into the real /admin shell with the claimed durable password. Only vendor CDN
- * scripts are intercepted — every admin request reaches the live backend. */
-async function login(page: Page): Promise<void> {
-  await mockVendorScripts(page);
-  await page.goto("/admin");
+// The demo harness deliberately uses 127.0.0.1 for its health checks because
+// that avoids a localhost/::1 resolution ambiguity. Chromium's virtual
+// authenticator, however, does not complete ceremonies for an IP-address RP
+// ID. Keep the production harness unchanged and make this browser-only proof
+// use the equivalent loopback hostname, which is a valid WebAuthn RP ID.
+const WEBAUTHN_LOOPBACK_ORIGIN = (() => {
+  const origin = new URL(BACKEND_URL);
+  if (origin.hostname === "127.0.0.1") origin.hostname = "localhost";
+  return origin.origin;
+})();
+
+/** Sign into the real /admin shell with the claimed durable password. Every
+ * admin request reaches the live same-origin backend. */
+async function login(page: Page, origin?: string): Promise<void> {
+  await page.goto(origin ? `${origin}/admin` : "/admin");
 
   // A live demo backend boots unclaimed; the first test to run must claim it,
   // and subsequent tests (or a manually claimed backend) just sign in.
@@ -113,6 +119,61 @@ async function login(page: Page): Promise<void> {
   // response it captured.
   await page.getByRole("button", { name: "Pause polling", exact: true }).click();
 }
+
+async function attachVirtualAuthenticator(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("WebAuthn.enable");
+  const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
+    options: {
+      protocol: "ctap2",
+      transport: "internal",
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+    },
+  });
+  await cdp.send("WebAuthn.setAutomaticPresenceSimulation", { authenticatorId, enabled: true });
+  return { cdp, authenticatorId };
+}
+
+test("admin-live: the pinned local WebAuthn module completes real registration and passkey sign-in", async ({ page }) => {
+  const { cdp, authenticatorId } = await attachVirtualAuthenticator(page);
+  try {
+    const localBundle = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === "/assets/js/vendor/simplewebauthn-browser-13.3.0.umd.min.js",
+    );
+    await login(page, WEBAUTHN_LOOPBACK_ORIGIN);
+    const bundle = await localBundle;
+    expect(bundle.ok()).toBe(true);
+    expect(await bundle.text()).toContain("@simplewebauthn/browser@13.3.0");
+    expect(await page.evaluate(() => {
+      const browser = window as typeof window & { SimpleWebAuthnBrowser?: { startRegistration?: unknown } };
+      return typeof browser.SimpleWebAuthnBrowser?.startRegistration;
+    })).toBe("function");
+
+    await page.getByRole("button", { name: "Security", exact: true }).click();
+    const registration = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === "/api/admin/webauthn/register/verify" && res.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Register new Passkey", exact: true }).click();
+    expect((await registration).ok()).toBe(true);
+    await expect(page.getByText("Passkey registered successfully.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+    const authentication = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === "/api/admin/webauthn/auth/verify" && res.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Sign in with Passkey", exact: true }).click();
+    expect((await authentication).ok()).toBe(true);
+    await expect(page.locator(".adm-nav")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Security", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem("rm_admin_token"))).toBeTruthy();
+  } finally {
+    await cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId });
+    await cdp.send("WebAuthn.disable");
+  }
+});
 
 test("admin-live: overview loads the real GET /api/admin/overview envelope (queueCounts/alerts/enabledAnalyticsSchedules)", async ({ page }) => {
   const overviewResponsePromise = page.waitForResponse(

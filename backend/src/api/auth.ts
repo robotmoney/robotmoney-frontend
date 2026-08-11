@@ -52,6 +52,10 @@ export function secretEq(presented: string | null, expected: string): boolean {
 // might exist.
 export async function isPrivileged(req: Request, cfg: Pick<typeof config, "adminToken" | "allowInsecure"> = config): Promise<boolean> {
   const presented = req.headers.get("X-Admin-Token");
+  if (presented) {
+    const session = await sql`SELECT 1 FROM admin_session WHERE token = ${hashKey(presented)} AND expires_at > now()`;
+    if (session.length > 0) return true;
+  }
   const claimed = await sql<{ pass_hash: string }[]>`SELECT pass_hash FROM admin_credential WHERE id = 1`;
   if (claimed.length > 0) {
     const expected = Buffer.from(claimed[0].pass_hash, "hex");

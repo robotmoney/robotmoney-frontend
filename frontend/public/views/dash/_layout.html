@@ -69,6 +69,10 @@
           <button type="submit" class="a3-gate__submit" :disabled="!password.trim() || verifying" data-dash-submit>
             <span x-text="verifying ? 'VERIFYING...' : 'ACCESS DASHBOARD'"></span>
           </button>
+          <button type="button" class="a3-gate__submit a3-gate__submit--ghost" @click="loginWithPasskey()" :disabled="verifying || passkeyLoading" style="margin-top: 0.5rem;">
+            <span x-show="!passkeyLoading">SIGN IN WITH PASSKEY</span>
+            <span x-show="passkeyLoading">WAITING FOR PASSKEY...</span>
+          </button>
         </form>
 
         <a href="/submit" class="a3-gate__link" data-dash-submit-link>

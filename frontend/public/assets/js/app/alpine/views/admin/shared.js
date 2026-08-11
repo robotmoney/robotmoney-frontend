@@ -9,6 +9,7 @@
 // session-expired message.") without forcing every page through one giant
 // Alpine component.
 import { ROUTES } from "../../../lib/api.js";
+import { startAuthentication } from "../../../lib/webauthn-client.js";
 
 export const ADMIN_TOKEN_KEY = "rm_admin_token";
 
@@ -26,6 +27,7 @@ export function adminAuthState() {
     authed: false,
     password: getStoredAdminToken(),
     loginError: null,
+    passkeyLoading: false,
     sessionExpired: false,
 
     _token() {
@@ -48,6 +50,29 @@ export function adminAuthState() {
         await loadFn();
       } catch (e) {
         this.loginError = e.status === 403 ? "Incorrect admin password." : e.message;
+      }
+    },
+
+    async loginWithPasskeyAndLoad(loadFn) {
+      this.loginError = null;
+      this.sessionExpired = false;
+      this.passkeyLoading = true;
+      const { api } = await import("../../../lib/api.js");
+      try {
+        const options = await api.adminGet(ROUTES.admin.webauthnAuthOptions);
+        const asseResp = await startAuthentication({ optionsJSON: options });
+        const verifyRes = await api.adminPost(ROUTES.admin.webauthnAuthVerify, null, asseResp);
+        if (verifyRes.verified && verifyRes.token) {
+          sessionStorage.setItem(ADMIN_TOKEN_KEY, verifyRes.token);
+          this.authed = true;
+          await loadFn();
+        } else {
+          this.loginError = "Passkey verification failed.";
+        }
+      } catch (e) {
+        this.loginError = e.name === "NotAllowedError" ? "Passkey interaction cancelled." : e.message;
+      } finally {
+        this.passkeyLoading = false;
       }
     },
 

@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@robotmoney/contract": "file:../contract",
+    "@simplewebauthn/server": "^13.3.2",
     "cron-parser": "^4.9.0",
     "postgres": "^3.4.0"
   },

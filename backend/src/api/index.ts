@@ -10,6 +10,7 @@ import { createSubmission } from "./routes/submissions.ts";
 import { getProjectDetail, getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleSwarm } from "./routes/swarm.ts";
 import { handleAdmin } from "./routes/admin.ts";
+import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { serveStatic } from "./static.ts";
 
@@ -231,6 +232,11 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     }
 
     // Admin task-queue dashboard (read-only over jobs/job_schedules/job_runs).
+    if (pathname.startsWith("/api/admin/webauthn/")) {
+      const r = await handleAdminWebauthn(req, url);
+      if (r) return json(r.body, r.status);
+    }
+
     if (pathname.startsWith("/api/admin/")) {
       const r = await handleAdmin(req, url);
       if (r) return json(r.body, r.status);
