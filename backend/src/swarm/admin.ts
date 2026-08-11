@@ -37,6 +37,8 @@ async function audit(actor: Actor, action: string, scope: Record<string, unknown
 function toSubjectAdmin(row: Record<string, any>) {
   return {
     id: row.id,
+    memberUuid: row.member_uuid == null ? null : String(row.member_uuid),
+    handle: row.handle ?? row.id,
     status: row.status,
     version: Number(row.version),
     name: row.name,
@@ -265,6 +267,7 @@ export async function reviewApplicationAdmin(
 // api/validation.ts, which is the only thing allowed to construct one of these
 // from an untrusted body.
 export interface MemberAdminPatch {
+  handle?: string;
   name?: string;
   lens?: string | null;
   contactEmail?: string | null;
@@ -298,6 +301,10 @@ export async function updateMemberAdmin(
     const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
+    if (patch.handle !== undefined) {
+      const collision = (await tx`SELECT 1 FROM swarm_members WHERE handle = ${patch.handle} AND id <> ${memberId} LIMIT 1`)[0];
+      if (collision) return err(409, "handle already registered");
+    }
 
     // `!== undefined`, NOT `??`. An explicit null is a CLEAR, and `??` reads it
     // as "absent" and keeps the old value while returning 200 — a success the
@@ -306,6 +313,7 @@ export async function updateMemberAdmin(
     // change does not also move the topic form's client-side guard.
     const keep = <T>(next: T | undefined, current: T): T => (next !== undefined ? next : current);
     const merged = {
+      handle: patch.handle ?? row.handle ?? row.id,
       name: keep(patch.name, row.name),
       lens: keep(patch.lens, row.lens),
       contact_email: keep(patch.contactEmail, row.contact_email),
@@ -320,7 +328,7 @@ export async function updateMemberAdmin(
 
     const upd = await tx`
       UPDATE swarm_members SET
-        name = ${merged.name}, lens = ${merged.lens},
+        handle = ${merged.handle}, name = ${merged.name}, lens = ${merged.lens},
         contact_email = ${merged.contact_email}, tagline = ${merged.tagline},
         mandate = ${merged.mandate}, biases = ${tx.json(merged.biases as any)},
         voice_md = ${merged.voice_md}, mode = ${merged.mode}, operator = ${merged.operator},

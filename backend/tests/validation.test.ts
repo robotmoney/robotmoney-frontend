@@ -125,6 +125,7 @@ test("admin member patch owns name/lens/contactEmail, which self-service profile
 
 test("admin member patch accepts every editable field in one body, normalized", () => {
   const res = validateMemberAdminPatch({
+    handle: "noop-analyst",
     name: "  Woon  ",
     lens: "machine economy, first person",
     contactEmail: "woon@peaq.test",
@@ -139,6 +140,7 @@ test("admin member patch accepts every editable field in one body, normalized", 
   expect(res.ok).toBe(true);
   if (!res.ok) return;
   expect(res.data).toEqual({
+    handle: "noop-analyst",
     name: "Woon",
     lens: "machine economy, first person",
     contactEmail: "woon@peaq.test",
@@ -172,17 +174,14 @@ test("admin member patch: explicit null is a CLEAR on every nullable field, and 
   if (!nameNull.ok) expect(nameNull.error).toBe("name must be a non-empty string up to 200 chars");
 });
 
-test("admin member patch rejects an unknown field, an empty body, and a null body", () => {
+test("admin member patch validates handle format and rejects unknown/empty/null bodies", () => {
   const unknown = validateMemberAdminPatch({ status: "active" });
   expect(unknown.ok).toBe(false);
   if (!unknown.ok) expect(unknown.error).toBe("unknown field: status");
 
-  // slug is NOT accepted yet — swarm_members has no slug column until #562's
-  // migration lands. It must fail as an unknown field rather than silently
-  // reaching an UPDATE that names a column Postgres does not have.
-  const slug = validateMemberAdminPatch({ slug: "woon" });
-  expect(slug.ok).toBe(false);
-  if (!slug.ok) expect(slug.error).toBe("unknown field: slug");
+  expect(validateMemberAdminPatch({ handle: "Noop Analyst" }).ok).toBe(false);
+  expect(validateMemberAdminPatch({ handle: "noop_analyst" }).ok).toBe(false);
+  expect(validateMemberAdminPatch({ handle: "noop-analyst" }).ok).toBe(true);
 
   const empty = validateMemberAdminPatch({});
   expect(empty.ok).toBe(false);

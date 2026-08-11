@@ -65,6 +65,12 @@
              only changed fields are sent. -->
         <form x-show="editing" x-cloak @submit.prevent="submitEdit()" class="adm-form" data-testid="member-edit-form">
           <label class="adm-field">
+            <span>Handle</span>
+            <input type="text" x-model="editForm.handle" class="adm-input" data-testid="edit-member-handle" />
+            <span class="adm-dim">Lowercase kebab-case. Members cannot edit it; administrators can.</span>
+            <span x-show="editErrors.handle" x-text="editErrors.handle" class="rm-error"></span>
+          </label>
+          <label class="adm-field">
             <span>Name</span>
             <input type="text" x-model="editForm.name" class="adm-input" data-testid="edit-member-name" />
             <span x-show="editErrors.name" x-text="editErrors.name" class="rm-error"></span>

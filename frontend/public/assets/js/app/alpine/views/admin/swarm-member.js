@@ -47,11 +47,8 @@ const REASON_REQUIRED = new Set(["reject", "deactivate", "reactivate", "rotate-k
 // member row always has a display name, so its empty case is a validation
 // error rather than a clear.
 //
-// `slug` is deliberately absent too. It shipped in neither half: swarm_members
-// has no slug column, so backend validateMemberAdminPatch()'s MEMBER_ADMIN_KEYS
-// omits it and the route answers `unknown field: slug`. It arrives with #562's
-// migration, and the form grows the input then — offering it now would render
-// an edit that 400s.
+// The public handle is intentionally separate from the display name. Members
+// cannot edit it after registration; administrators can change it here.
 const NULLABLE_TEXT = ["lens", "contactEmail", "tagline", "mandate", "mode", "operator"];
 
 // Mirrors the server's own shapes so the operator is corrected before the
@@ -139,6 +136,7 @@ export function registerAdminSwarmMember(Alpine) {
     startEdit() {
       const m = this.member;
       this.editForm = {
+        handle: m.handle || m.id || "",
         name: m.name || "",
         lens: m.lens || "",
         contactEmail: m.contactEmail || "",
@@ -163,6 +161,8 @@ export function registerAdminSwarmMember(Alpine) {
     buildPatch() {
       const patch = {};
       const f = this.editForm;
+      const handle = f.handle.trim();
+      if (handle !== (this.member.handle || this.member.id || "")) patch.handle = handle;
       const name = f.name.trim();
       if (name !== (this.member.name || "")) patch.name = name;
       for (const key of NULLABLE_TEXT) {
@@ -180,6 +180,9 @@ export function registerAdminSwarmMember(Alpine) {
     validateEdit(patch) {
       const errors = {};
       const f = this.editForm;
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(f.handle.trim())) {
+        errors.handle = "Use lowercase kebab-case, for example noop-analyst.";
+      }
       if (!f.name.trim()) errors.name = "Name is required.";
       if (f.contactEmail.trim() && !EMAIL_RE.test(f.contactEmail.trim())) {
         errors.contactEmail = "Enter a valid email address, or leave it empty to clear it.";
@@ -219,7 +222,7 @@ export function registerAdminSwarmMember(Alpine) {
           // sentence — telling someone to reload past a conflict a reload
           // cannot clear sends them round a loop that has no end. The branch
           // is defensive, not speculative contract: it costs one comparison
-          // and keeps a future uniqueness conflict (#562's slug) from
+          // and keeps a future uniqueness conflict on the handle from
           // inheriting the wrong advice.
           this.editErrors.form = message === "stale_version"
             ? "This member changed since you loaded it (stale version) — reload and try again."

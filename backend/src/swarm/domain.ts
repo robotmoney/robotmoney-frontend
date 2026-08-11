@@ -117,7 +117,7 @@ export async function assertRosterCapacity(
   return { ok: true };
 }
 export async function getMember(id: string) {
-  const row = (await sql`SELECT * FROM swarm_members WHERE id = ${id}`)[0];
+  const row = (await sql`SELECT * FROM swarm_members WHERE handle = ${id} OR id = ${id} LIMIT 1`)[0];
   return row ? toMember(row) : null;
 }
 export async function getSubject(id: string) {
@@ -255,7 +255,7 @@ export async function getMemberTakes(memberId: string, limit?: number) {
   const rows = await sql`
     SELECT * FROM (
       SELECT DISTINCT ON (r.session_id)
-             r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+             r.id, r.member_id, m.handle AS member_handle, m.name AS member_name, r.stance, r.confidence, r.body,
              r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
              s.date AS session_date, s.generated_at AS session_generated_at,
              s.subject_id, s.subject_name, s.state AS session_state,
@@ -265,7 +265,7 @@ export async function getMemberTakes(memberId: string, limit?: number) {
       FROM swarm_recommendations r
       JOIN swarm_sessions s ON s.id = r.session_id
       JOIN swarm_members m ON m.id = r.member_id
-      WHERE r.member_id = ${memberId}
+      WHERE m.handle = ${memberId} OR m.id = ${memberId}
       ORDER BY r.session_id, r.revision DESC
     ) latest
     ORDER BY latest.session_date DESC, latest.session_generated_at DESC
@@ -338,7 +338,7 @@ async function withTakes(s: Record<string, unknown>) {
   const takes = await sql`
     SELECT * FROM (
       SELECT DISTINCT ON (r.member_id)
-             r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+             r.id, r.member_id, m.handle AS member_handle, m.name AS member_name, r.stance, r.confidence, r.body,
              r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
              (SELECT k.public_key FROM swarm_member_keys k
               WHERE k.member_id = r.member_id AND k.active
@@ -365,7 +365,7 @@ function hostedMemoId(memoUrl: string | null): number | null {
 
 export async function getTakeReceipt(id: string) {
   const row = (await sql`
-    SELECT r.id, r.session_id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+    SELECT r.id, r.session_id, r.member_id, m.handle AS member_handle, m.name AS member_name, r.stance, r.confidence, r.body,
            r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
            (SELECT k.public_key FROM swarm_member_keys k
             WHERE k.member_id = r.member_id AND k.active
@@ -402,6 +402,7 @@ export async function getTakeReceipt(id: string) {
       : null,
     signer: {
       id: row.member_id,
+      handle: row.member_handle ?? row.member_id,
       name: row.member_name,
       publicKeyFingerprint: typeof row.public_key === "string"
         ? await fingerprintPublicKey(row.public_key)
@@ -1773,8 +1774,11 @@ export async function postMemo(token: string, input: { sessionId: string; title?
 }
 
 export async function getMemo(id: number) {
-  const r = (await sql`SELECT id, member_id, session_id, title, body, created_at
-                       FROM swarm_memos WHERE id = ${id}`)[0] ?? null;
+  const r = (await sql`SELECT m.id, m.member_id, sm.handle AS member_handle,
+                              m.session_id, m.title, m.body, m.created_at
+                       FROM swarm_memos m
+                       JOIN swarm_members sm ON sm.id = m.member_id
+                       WHERE m.id = ${id}`)[0] ?? null;
   if (!r) return null;
   return toMemo(r);
 }

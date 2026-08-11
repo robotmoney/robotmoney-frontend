@@ -324,7 +324,7 @@
                   <ul>
                     <template x-for="p in d.positions" :key="`${d.topic}-${p.member_id}`">
                       <li>
-                        <a :href="`/swarm/members/${p.member_id}`" x-text="memberById(p.member_id)?.name || p.member_id"></a>
+                        <a :href="`/swarm/members/${encodeURIComponent(memberById(p.member_id)?.handle || p.member_id)}`" x-text="memberById(p.member_id)?.name || p.member_id"></a>
                         <!-- The stance spread IS the disagreement — it is what the
                              aggregator sorted on to pick these two members, and it
                              is stated nowhere else in this panel. When the view is
@@ -416,10 +416,10 @@
                          marks, which is the one thing member-mark.js promises
                          cannot happen. Locked in step by
                          scripts/tests/unit/member-mark-distinctness.test.ts. -->
-                    <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${t.memberId}`" :aria-label="t.memberName"
+                    <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${encodeURIComponent(memberById(t.memberId)?.handle || t.memberId)}`" :aria-label="t.memberName"
                        x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 40)"></a>
                     <div>
-                      <a class="sv__member-link" :href="`/swarm/members/${t.memberId}`" x-text="t.memberName"></a>
+                      <a class="sv__member-link" :href="`/swarm/members/${encodeURIComponent(memberById(t.memberId)?.handle || t.memberId)}`" x-text="t.memberName"></a>
                       <div class="sv__take-lens" x-text="memberLens(t.memberId)"></div>
                     </div>
                   </div>

@@ -1635,10 +1635,10 @@ export function registerStaticViews(Alpine) {
       this.allocationFramework = framework;
     },
     memberLens(memberId) {
-      return this.members.find((m) => m.id === memberId)?.lens || "swarm member";
+      return this.members.find((m) => m.id === memberId || m.handle === memberId)?.lens || "swarm member";
     },
     memberById(memberId) {
-      return this.members.find((m) => m.id === memberId) || null;
+      return this.members.find((m) => m.id === memberId || m.handle === memberId) || null;
     },
     // `absent` is a list of member IDs, printed raw — a reader got
     // "absent: draco, 88efd6b9-e865-417d-afe1-45d84510338b". Resolve what we

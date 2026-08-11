@@ -418,16 +418,15 @@ export function parseMemberProfile(body: JsonObject | null): MemberProfilePatch 
 // - Every optional field accepts `null` to CLEAR it. A member filling in a
 //   blank profile never needs a clear; an admin undoing a bad value does.
 //
-// `slug` is deliberately absent: swarm_members has no slug column yet (it
-// arrives with issue #562's migration), and the issue explicitly allows the
-// slug lines to be dropped from a first cut until that lands.
+// The public handle is editable only through this administrator path; member
+// self-service deliberately cannot include it.
 //
 // Exported so routes/swarm.ts's apply handler and this route agree on what an
 // address is — apply used to carry its own copy of this literal inline.
 export const CONTACT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const MEMBER_ADMIN_KEYS = new Set([
-  "name", "lens", "contactEmail", "tagline", "mandate",
+  "handle", "name", "lens", "contactEmail", "tagline", "mandate",
   "biases", "voiceMd", "mode", "operator", "avatar",
 ]);
 
@@ -454,6 +453,14 @@ export function validateMemberAdminPatch(body: JsonObject | null): ValidationRes
   if (Object.keys(body).length === 0) return { ok: false, error: "at least one field required" };
 
   const patch: MemberAdminPatch = {};
+
+  if (body.handle !== undefined) {
+    const handle = requiredString(body, "handle", 80);
+    if (!handle || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(handle)) {
+      return { ok: false, error: "handle must be lowercase kebab-case (for example noop-analyst)" };
+    }
+    patch.handle = handle;
+  }
 
   // name is the one field with no null: a member row always has a display name
   // (swarm_members.name is NOT NULL).

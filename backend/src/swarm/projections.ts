@@ -25,6 +25,8 @@ export const instant = (value: unknown): string | null =>
 export function toMember(row: Row): SwarmMember {
   return {
     id: row.id,
+    memberUuid: row.member_uuid == null ? undefined : String(row.member_uuid),
+    handle: row.handle ?? row.id,
     status: row.status,
     name: row.name,
     tagline: row.tagline ?? null,
@@ -133,7 +135,7 @@ export function toSessionListItem(row: Row): SwarmSessionListItem {
 export function toTake(row: Row): SwarmTake {
   return {
     id: row.id,
-    memberId: row.member_id,
+    memberId: row.member_handle ?? row.member_id,
     memberName: row.member_name,
     stance: row.stance ?? null,
     confidence: row.confidence == null ? null : Number(row.confidence),
@@ -221,7 +223,7 @@ export function toSnapshot(row: Row): SubjectSnapshot {
 export function toMemo(row: Row) {
   return {
     id: row.id,
-    memberId: row.member_id,
+    memberId: row.member_handle ?? row.member_id,
     sessionId: row.session_id,
     title: row.title,
     body: row.body,

@@ -46,6 +46,10 @@ export interface SwarmWaitlistEntry {
 
 export interface SwarmMember {
   id: string;
+  /** Immutable database identity, exposed for diagnostics and admin tooling. */
+  memberUuid?: string;
+  /** Public, lowercase handle used by member URLs. */
+  handle?: string;
   status: MemberStatus;
   name: string;
   tagline: string | null;
@@ -130,6 +134,7 @@ export interface SwarmMemo {
 
 export interface SwarmTakeSigner {
   id: string;
+  handle?: string;
   name: string;
   publicKeyFingerprint: string | null;
 }

@@ -159,7 +159,10 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     const id = decodeURIComponent(p.split("/")[4] ?? "");
     const res = validateMemberProfile(await readJsonObject(req));
     if (!res.ok) return { status: 400, body: { error: res.error } };
-    const updated = await ic.updateMemberProfile(token, id, res.data);
+    // Public profile routes use the editable handle; the bearer still
+    // authenticates against the immutable legacy/signing id.
+    const member = await ic.getMember(id);
+    const updated = await ic.updateMemberProfile(token, member?.id ?? id, res.data);
     return { status: updated.status, body: updated };
   }
 

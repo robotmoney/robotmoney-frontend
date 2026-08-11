@@ -272,6 +272,8 @@ export type ApplicationStatus = "pending" | "approved" | "rejected";
 /** Private admin member projection — backend toMemberAdmin()'s exact shape. */
 export interface AdminMember {
   id: string;
+  memberUuid?: string | null;
+  handle: string;
   status: AdminMemberStatus;
   version: number;
   name: string;
