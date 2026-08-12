@@ -11,7 +11,13 @@
 import { expect, test } from "bun:test";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
-import { classifyDatabase, parseInitializer, reportLines } from "../scripts/db-preflight.ts";
+import { sql } from "../src/db/client.ts";
+import {
+  classifyDatabase,
+  handleNamespaceConflicts,
+  parseInitializer,
+  reportLines,
+} from "../scripts/db-preflight.ts";
 
 test("empty database → bootstrap, on a genuinely fresh (unmigrated) database", async () => {
   const base = new URL(config.databaseUrl);
@@ -25,11 +31,15 @@ test("empty database → bootstrap, on a genuinely fresh (unmigrated) database",
   const db = postgres(tmpUrl.toString(), { max: 1, onnotice: () => {} });
   try {
     const r = await classifyDatabase("archive", db);
-    expect(r).toEqual({ mode: "bootstrap", tables: 0, census: [] });
+    expect(r).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [] });
     // Same result regardless of initializer — EMPTY bootstraps either way,
     // the adopt/refuse split only matters once tables exist.
     const r2 = await classifyDatabase("simulation", db);
-    expect(r2).toEqual({ mode: "bootstrap", tables: 0, census: [] });
+    expect(r2).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [] });
+    // And the invariant re-check is silent on a database whose schema does not
+    // have swarm_members yet — this step runs BEFORE migrate, so "the table is
+    // missing" is a migration's business, not an integrity violation.
+    expect(await handleNamespaceConflicts(db)).toEqual([]);
   } finally {
     await db.end();
     const cleanup = postgres(base.toString(), { max: 1, onnotice: () => {} });
@@ -51,6 +61,77 @@ test("populated + simulation boot → refuse: demo fixtures overwrite by design"
   expect(r.tables).toBeGreaterThan(0);
 });
 
+// ── The invariant re-check restored data has to pass (issue #597) ───────────
+//
+// Migration 0031's DO block refuses to INSTALL over a colliding pair, but it
+// runs exactly once: a dump taken from a post-0031 database already carries
+// 0031 in schema_migrations, so migrate.ts skips it and nothing re-validates.
+// A plain pg_dump also emits CREATE TRIGGER post-data, so the COPY that loads
+// the rows precedes the trigger. This step is the only thing standing in front
+// of a restored violation, and it runs before the boot's first write.
+
+test("the migrated database passes the handle/id namespace re-check", async () => {
+  // The REAL migrated schema, not a hand-built table: if 0031 or 0030 ever
+  // renames a column this query reads, this is where it goes red.
+  expect(await handleNamespaceConflicts()).toEqual([]);
+  const r = await classifyDatabase("archive");
+  expect(r.handleNamespaceConflicts).toEqual([]);
+});
+
+test("a restored violation is DETECTED and the boot is refused, with both members named", async () => {
+  // Built inside a transaction that is always rolled back, so the shared suite
+  // database never actually holds the pair. DISABLE TRIGGER is itself
+  // transactional, which is what makes this containable — and it is restored
+  // with ENABLE ALWAYS, matching what 0031 installs.
+  let conflicts: string[] = [];
+  const holder = `pf-holder-${crypto.randomUUID().slice(0, 8)}`;
+  const shadowed = `pf-shadowed-${crypto.randomUUID().slice(0, 8)}`;
+  const rollback = new Error("rollback");
+  try {
+    await sql.begin(async (tx) => {
+      await tx`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
+      await tx`INSERT INTO swarm_members (id, status, name, handle)
+               VALUES (${shadowed}, 'active', 'Shadowed', ${`${shadowed}-h`})`;
+      await tx`INSERT INTO swarm_members (id, status, name, handle)
+               VALUES (${holder}, 'active', 'Holder', ${shadowed})`;
+      await tx`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
+      conflicts = await handleNamespaceConflicts(tx);
+      throw rollback;
+    });
+  } catch (e) {
+    if (e !== rollback) throw e;
+  }
+
+  expect(conflicts).toHaveLength(1);
+  // Both rows named: the pair is the only thing an operator needs, and knowing
+  // WHICH id is being shadowed is what says which row has to move.
+  expect(conflicts[0]).toContain(holder);
+  expect(conflicts[0]).toContain(shadowed);
+
+  // The report is a refusal that says nothing has been written, and it names
+  // the pair underneath the header — demo-failure.ts anchors on the first
+  // refusal line and reads FORWARD, so the order is load-bearing.
+  const lines = reportLines("db:5432/x", {
+    mode: "adopt",
+    tables: 55,
+    census: [{ table: "swarm_members", rows: 12 }],
+    handleNamespaceConflicts: conflicts,
+  });
+  const refusalAt = lines.findIndex((l) => l.includes("REFUSING the boot"));
+  expect(refusalAt).toBeGreaterThanOrEqual(0);
+  const block = lines.slice(refusalAt).join("\n");
+  expect(block).toContain(holder);
+  expect(block).toContain(shadowed);
+  expect(block).toContain("addresses two members");
+  expect(block).toContain("Nothing has been written");
+
+  // …and the rollback really did undo it, trigger state included.
+  expect(await handleNamespaceConflicts()).toEqual([]);
+  const [trg] = await sql<{ tgenabled: string }[]>`
+    SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger'`;
+  expect(trg!.tgenabled).toBe("A");
+});
+
 test("parseInitializer fails closed — only an explicit archive flag can adopt", () => {
   expect(parseInitializer(["--initializer=archive"])).toBe("archive");
   expect(parseInitializer(["--initializer=simulation"])).toBe("simulation");
@@ -63,7 +144,9 @@ test("parseInitializer fails closed — only an explicit archive flag can adopt"
 });
 
 test("the three reports say what will happen, not just what was found", () => {
-  const bootstrap = reportLines("db:5432/x", { mode: "bootstrap", tables: 0, census: [] }).join("\n");
+  const bootstrap = reportLines("db:5432/x", {
+    mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [],
+  }).join("\n");
   expect(bootstrap).toContain("empty");
   expect(bootstrap).toContain("migrate + seed + archive restore");
 
@@ -71,6 +154,7 @@ test("the three reports say what will happen, not just what was found", () => {
     mode: "adopt",
     tables: 55,
     census: [{ table: "raw_indicator_history", rows: 116427 }],
+    handleNamespaceConflicts: [],
   }).join("\n");
   expect(adopt).toContain("adopting as existing production data");
   expect(adopt).toContain("idempotent and deduplicated");
@@ -84,6 +168,7 @@ test("the three reports say what will happen, not just what was found", () => {
     mode: "refuse",
     tables: 55,
     census: [{ table: "raw_indicator_history", rows: 116427 }],
+    handleNamespaceConflicts: [],
   }).join("\n");
   expect(refuse).toContain("REFUSING a simulation boot");
   expect(refuse).toContain("bun smoke");

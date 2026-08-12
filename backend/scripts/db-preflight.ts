@@ -38,20 +38,39 @@
 // assume simulation, so the strict branch is the one a forgotten parameter
 // lands in — the same fail-closed shape session.ts uses for the same reason.
 //
-// Read-only by construction: it issues SELECTs against the catalog and nothing
-// else. Exit 0 = classified (either mode); non-zero only when the database
-// cannot be reached or queried at all.
+// WHAT ELSE THIS STEP HAS TO ANSWER. Adopting a restored database means
+// trusting data no migration in this repo wrote. Migration 0031 refuses to
+// INSTALL over a swarm_members pair that violates the handle/id namespace
+// invariant, but that DO block runs exactly once: a dump taken from a
+// post-0031 database already carries `0031_swarm_member_handle_namespace.sql`
+// in `schema_migrations`, so src/db/migrate.ts skips the file and nothing
+// re-validates. A plain pg_dump also emits CREATE TRIGGER in the post-data
+// section, so the COPY that loads the rows runs before the trigger exists.
+// Restored data is therefore the one population path 0031's trigger cannot
+// stand in front of — so the same detection query runs HERE, on every boot,
+// before the boot's first write, and refuses. See issue #597.
+//
+// Read-only by construction: it issues SELECTs against the catalog and against
+// swarm_members, and nothing else. Exit 0 = classified (either mode); non-zero
+// when the database cannot be reached or queried at all, when a simulation boot
+// meets a populated database, or when the adopted data violates an invariant
+// the schema is supposed to guarantee.
 //
 // Usage: DATABASE_URL=... bun run scripts/db-preflight.ts
 import type postgresTypes from "postgres";
 import { sql, closeDb } from "../src/db/client.ts";
 
-/** The subset of postgres.js's client classifyDatabase/censusSample need —
- *  narrow enough that a test can pass a throwaway-database connection instead
- *  of the process-wide singleton, so the EMPTY branch is exercised for real
- *  (see backend/tests/db-preflight.test.ts) without perturbing the shared,
- *  already-migrated suite database every other test runs against. */
-export type PreflightDb = postgresTypes.Sql<{}>;
+/** The subset of postgres.js's client classifyDatabase/censusSample/
+ *  handleNamespaceConflicts need — narrow enough that a test can pass a
+ *  throwaway-database connection instead of the process-wide singleton, so the
+ *  EMPTY branch is exercised for real (see backend/tests/db-preflight.test.ts)
+ *  without perturbing the shared, already-migrated suite database every other
+ *  test runs against. A TRANSACTION is accepted for the same reason: the
+ *  restored-violation case is built and rolled back inside one, so the suite
+ *  database never actually holds a pair the schema forbids. Every function here
+ *  issues plain tagged-template queries and nothing else, which is all a
+ *  transaction handle offers. */
+export type PreflightDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
 
 /** Password-redacted target, the only form safe to print. */
 function redactedTarget(raw: string | undefined): string {
@@ -76,6 +95,10 @@ export interface PreflightResult {
   mode: "bootstrap" | "adopt" | "refuse";
   tables: number;
   census: TableCensus[];
+  /** Violations of the handle/id namespace invariant found in the data being
+   *  adopted, one operator-readable sentence each. Empty on a clean database
+   *  and on one whose schema predates the `handle` column. */
+  handleNamespaceConflicts: string[];
 }
 
 /** Parse --initializer=… out of argv. Missing or unrecognised ⇒ simulation —
@@ -99,6 +122,41 @@ async function censusSample(db: PreflightDb, limit = 8): Promise<TableCensus[]> 
   return rows.map((r) => ({ table: r.table, rows: Number(r.rows) }));
 }
 
+/**
+ * Re-validate the handle/id namespace invariant against the data actually
+ * present — the check migration 0031 can only make at install time.
+ *
+ * This is deliberately the SAME relation as 0031's pre-flight DO block
+ * (`b.id = a.handle AND b.id <> a.id`, which iterates all ordered pairs and so
+ * covers both directions of the trigger's predicate). Keep them in agreement:
+ * this one is the only thing standing in front of a restore.
+ *
+ * Returns `[]` — not an error — when swarm_members or its `handle` column does
+ * not exist yet. A database mid-way through 0030 is a migration's problem, not
+ * an integrity violation, and this step runs BEFORE migrate.
+ */
+export async function handleNamespaceConflicts(db: PreflightDb = sql): Promise<string[]> {
+  const [{ ready }] = (await db`
+    SELECT (
+      to_regclass('public.swarm_members') IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'swarm_members' AND column_name = 'handle'
+      )
+    ) AS ready
+  `) as unknown as { ready: boolean }[];
+  if (!ready) return [];
+  const rows = (await db`
+    SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
+    FROM swarm_members a
+    JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id
+    ORDER BY a.id
+  `) as unknown as { holder: string; handle: string; shadowed: string }[];
+  return rows.map(
+    (r) => `member '${r.holder}' has handle '${r.handle}', which is member '${r.shadowed}'s id`,
+  );
+}
+
 /** Classify the database. Throws only when it cannot be queried at all.
  *  `db` defaults to the process-wide pool; a test may pass a throwaway
  *  connection to exercise the EMPTY branch without touching shared state. */
@@ -108,8 +166,13 @@ export async function classifyDatabase(initializer: BootInitializer, db: Preflig
     FROM information_schema.tables
     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
   `) as unknown as { count: number }[];
-  if (count === 0) return { mode: "bootstrap", tables: 0, census: [] };
-  return { mode: initializer === "archive" ? "adopt" : "refuse", tables: count, census: await censusSample(db) };
+  if (count === 0) return { mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [] };
+  return {
+    mode: initializer === "archive" ? "adopt" : "refuse",
+    tables: count,
+    census: await censusSample(db),
+    handleNamespaceConflicts: await handleNamespaceConflicts(db),
+  };
 }
 
 /**
@@ -142,15 +205,34 @@ export function reportLines(target: string, r: PreflightResult): string[] {
   } else {
     lines.push(`[db-preflight] all ${r.tables} table(s) are empty — schema present, no rows.`);
   }
+  // LAST, and it is a block: demo-failure.ts anchors on the first refusal line
+  // and reads FORWARD, so the header has to precede the pairs it names.
+  if (r.handleNamespaceConflicts.length > 0) {
+    lines.push(
+      `[db-preflight] REFUSING the boot: ${r.handleNamespaceConflicts.length} swarm_members row(s) violate the handle/id namespace invariant.`,
+      `[db-preflight] One member's handle is another member's id, so /swarm/members/<that name> addresses two members:`,
+    );
+    for (const c of r.handleNamespaceConflicts) lines.push(`[db-preflight]   ${c}`);
+    lines.push(
+      `[db-preflight] Migration 0031 refuses to INSTALL over this, but it is already recorded in`,
+      `[db-preflight] schema_migrations here, so restored data reached this database unchecked.`,
+      `[db-preflight] Change one of the two public names (UPDATE swarm_members SET handle = ...) and re-boot.`,
+      `[db-preflight] Nothing has been written.`,
+    );
+  }
   return lines;
 }
 
 export async function main(): Promise<void> {
   const target = redactedTarget(process.env.DATABASE_URL);
   const result = await classifyDatabase(parseInitializer(process.argv.slice(2)));
-  const emit = result.mode === "refuse" ? console.error : console.log;
+  // An adopted database that already violates the invariant is refused too: the
+  // boot's next step is migrate + seed, and every writer past this point would
+  // be writing on top of a public reference that addresses two members.
+  const refused = result.mode === "refuse" || result.handleNamespaceConflicts.length > 0;
+  const emit = refused ? console.error : console.log;
   for (const line of reportLines(target, result)) emit(line);
-  if (result.mode === "refuse") process.exitCode = 1;
+  if (refused) process.exitCode = 1;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
