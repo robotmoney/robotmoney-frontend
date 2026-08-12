@@ -1635,10 +1635,21 @@ export function registerStaticViews(Alpine) {
       this.allocationFramework = framework;
     },
     memberLens(memberId) {
-      return this.members.find((m) => m.id === memberId)?.lens || "swarm member";
+      return this.memberById(memberId)?.lens || "swarm member";
     },
+    // Accepts EITHER name (issue #593). A session payload carries the immutable
+    // `memberId` its takes were signed under, while the roster this page also
+    // holds carries the public `handle`; the two are the same string for every
+    // member nobody has renamed, and this lookup has to keep resolving for the
+    // ones who have been.
     memberById(memberId) {
-      return this.members.find((m) => m.id === memberId) || null;
+      return this.members.find((m) => m.id === memberId || m.handle === memberId) || null;
+    },
+    // Where to LINK for a member reference, preferring the public handle and
+    // falling back to whatever the payload carried when the roster holds no
+    // record for it — a link to a legacy id still resolves server-side.
+    memberHref(memberId) {
+      return `/swarm/members/${encodeURIComponent(this.memberById(memberId)?.handle || memberId)}`;
     },
     // `absent` is a list of member IDs, printed raw — a reader got
     // "absent: draco, 88efd6b9-e865-417d-afe1-45d84510338b". Resolve what we

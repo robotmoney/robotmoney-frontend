@@ -61,7 +61,12 @@ function toSubjectAdmin(row: Record<string, any>) {
 // no key material: key_hash/token_hash/public_key are never projected here.
 function toMemberAdmin(row: Record<string, any>) {
   return {
+    // Both names, always (issue #593): `id` is what every child row and every
+    // signature is keyed on and is NOT editable here; `handle` is the public
+    // one the form below may rewrite. An admin page that showed only one of
+    // them could not tell an operator which is which.
     id: row.id,
+    handle: row.handle ?? row.id,
     status: row.status,
     version: Number(row.version),
     name: row.name,
@@ -265,6 +270,8 @@ export async function reviewApplicationAdmin(
 // api/validation.ts, which is the only thing allowed to construct one of these
 // from an untrusted body.
 export interface MemberAdminPatch {
+  /** Public URL segment (issue #593). Never null — a member always has one. */
+  handle?: string;
   name?: string;
   lens?: string | null;
   contactEmail?: string | null;
@@ -299,6 +306,22 @@ export async function updateMemberAdmin(
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
 
+    // UNIQUENESS, and it is deliberately checked against BOTH names of every
+    // other member (issue #593). A handle equal to another member's `handle` is
+    // the obvious collision — swarm_members_handle_key would raise a 500 out of
+    // the UPDATE below rather than an answer an operator can act on. A handle
+    // equal to another member's legacy `id` is the subtle one: no index forbids
+    // it, and it would make /swarm/members/:ref ambiguous, quietly stealing a
+    // URL that has been published for someone else. Both are refused with the
+    // same 409 the rest of this surface uses for a lost race.
+    if (patch.handle !== undefined && patch.handle !== row.handle) {
+      const taken = (await tx`
+        SELECT 1 FROM swarm_members
+        WHERE (handle = ${patch.handle} OR id = ${patch.handle}) AND id <> ${memberId}
+        LIMIT 1`)[0];
+      if (taken) return err(409, "handle already taken");
+    }
+
     // `!== undefined`, NOT `??`. An explicit null is a CLEAR, and `??` reads it
     // as "absent" and keeps the old value while returning 200 — a success the
     // database did not perform. updateSubjectAdmin still has exactly that bug
@@ -306,6 +329,7 @@ export async function updateMemberAdmin(
     // change does not also move the topic form's client-side guard.
     const keep = <T>(next: T | undefined, current: T): T => (next !== undefined ? next : current);
     const merged = {
+      handle: keep(patch.handle, row.handle ?? row.id),
       name: keep(patch.name, row.name),
       lens: keep(patch.lens, row.lens),
       contact_email: keep(patch.contactEmail, row.contact_email),
@@ -320,7 +344,7 @@ export async function updateMemberAdmin(
 
     const upd = await tx`
       UPDATE swarm_members SET
-        name = ${merged.name}, lens = ${merged.lens},
+        handle = ${merged.handle}, name = ${merged.name}, lens = ${merged.lens},
         contact_email = ${merged.contact_email}, tagline = ${merged.tagline},
         mandate = ${merged.mandate}, biases = ${tx.json(merged.biases as any)},
         voice_md = ${merged.voice_md}, mode = ${merged.mode}, operator = ${merged.operator},
@@ -333,9 +357,16 @@ export async function updateMemberAdmin(
     // `reason` is PERSISTED here rather than discarded (#561's closing note).
     // The scope also names the fields that changed, so the trail says what was
     // edited and not only that an edit happened.
+    // A handle change is the one edit here that moves a PUBLIC URL, so the
+    // trail records the old and new value, not just the field name: "handle was
+    // in the fields list" cannot answer "what was this member called when that
+    // link was shared?" months later.
     await audit(actor, "member_update", {
       memberId,
       fields: Object.keys(patch),
+      ...(patch.handle !== undefined
+        ? { handleFrom: (row.handle ?? row.id) as string, handleTo: patch.handle }
+        : {}),
       ...(reason ? { reason } : {}),
     }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]) };

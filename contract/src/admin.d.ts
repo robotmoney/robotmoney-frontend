@@ -271,7 +271,10 @@ export type ApplicationStatus = "pending" | "approved" | "rejected";
 
 /** Private admin member projection — backend toMemberAdmin()'s exact shape. */
 export interface AdminMember {
+  /** Immutable identity — never editable through the admin surface. */
   id: string;
+  /** Public, administrator-editable URL segment (issue #593). */
+  handle: string;
   status: AdminMemberStatus;
   version: number;
   name: string;

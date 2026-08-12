@@ -47,11 +47,12 @@ const REASON_REQUIRED = new Set(["reject", "deactivate", "reactivate", "rotate-k
 // member row always has a display name, so its empty case is a validation
 // error rather than a clear.
 //
-// `slug` is deliberately absent too. It shipped in neither half: swarm_members
-// has no slug column, so backend validateMemberAdminPatch()'s MEMBER_ADMIN_KEYS
-// omits it and the route answers `unknown field: slug`. It arrives with #562's
-// migration, and the form grows the input then — offering it now would render
-// an edit that 400s.
+// `handle` is absent from it for the same reason as `name` and one more: it is
+// the member's PUBLIC URL segment (issue #593), so an empty one would leave the
+// member unaddressable. It is the only field on this form that changes what a
+// visitor's link points at, which is why the server audits its before/after
+// value and why this form spells the rule out beside the input. The immutable
+// `id` — what signatures and child rows are keyed on — is never editable here.
 const NULLABLE_TEXT = ["lens", "contactEmail", "tagline", "mandate", "mode", "operator"];
 
 // Mirrors the server's own shapes so the operator is corrected before the
@@ -59,6 +60,8 @@ const NULLABLE_TEXT = ["lens", "contactEmail", "tagline", "mandate", "mode", "op
 // the authority, they are the faster copy of it. Both constants are the
 // backend's: CONTACT_EMAIL_RE and MAX_BIASES in api/validation.ts.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// MEMBER_HANDLE_RE in api/validation.ts.
+const HANDLE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_BIASES = 20;
 const MAX_BIAS_LEN = 200;
 
@@ -139,6 +142,7 @@ export function registerAdminSwarmMember(Alpine) {
     startEdit() {
       const m = this.member;
       this.editForm = {
+        handle: m.handle || m.id || "",
         name: m.name || "",
         lens: m.lens || "",
         contactEmail: m.contactEmail || "",
@@ -163,6 +167,8 @@ export function registerAdminSwarmMember(Alpine) {
     buildPatch() {
       const patch = {};
       const f = this.editForm;
+      const handle = f.handle.trim();
+      if (handle !== (this.member.handle || this.member.id || "")) patch.handle = handle;
       const name = f.name.trim();
       if (name !== (this.member.name || "")) patch.name = name;
       for (const key of NULLABLE_TEXT) {
@@ -180,6 +186,9 @@ export function registerAdminSwarmMember(Alpine) {
     validateEdit(patch) {
       const errors = {};
       const f = this.editForm;
+      if (!HANDLE_RE.test(f.handle.trim())) {
+        errors.handle = "Use lowercase kebab-case, for example noop-analyst.";
+      }
       if (!f.name.trim()) errors.name = "Name is required.";
       if (f.contactEmail.trim() && !EMAIL_RE.test(f.contactEmail.trim())) {
         errors.contactEmail = "Enter a valid email address, or leave it empty to clear it.";
@@ -218,9 +227,10 @@ export function registerAdminSwarmMember(Alpine) {
           // other 409 is passed through verbatim rather than given that
           // sentence — telling someone to reload past a conflict a reload
           // cannot clear sends them round a loop that has no end. The branch
-          // is defensive, not speculative contract: it costs one comparison
-          // and keeps a future uniqueness conflict (#562's slug) from
-          // inheriting the wrong advice.
+          // is defensive, not speculative contract: it costs one comparison,
+          // and it is what keeps `handle already taken` (issue #593's
+          // uniqueness conflict, which a reload cannot clear) from inheriting
+          // the wrong advice.
           this.editErrors.form = message === "stale_version"
             ? "This member changed since you loaded it (stale version) — reload and try again."
             : message;

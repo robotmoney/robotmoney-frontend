@@ -358,6 +358,17 @@ function optionalAvatar(body: JsonObject): Record<string, unknown> | null | unde
 export function validateMemberProfile(body: JsonObject | null): ValidationResult<MemberProfilePatch> {
   if (!body) return { ok: false, error: "invalid profile" };
 
+  // `handle` is named EXPLICITLY rather than left to the unknown-key sweep
+  // below (issue #593). It is the one field a member has an obvious motive to
+  // try — it is the member's own public URL, it is visible on its own profile
+  // response, and "unknown field: handle" reads like a typo rather than a
+  // refusal. Self-service must never move it: a handle is a public namespace
+  // any member could otherwise squat on or swap out from under a published
+  // link. Administrators change it, through validateMemberAdminPatch.
+  if (body.handle !== undefined) {
+    return { ok: false, error: "handle is administrator-managed and cannot be set from a member profile update" };
+  }
+
   const unknown = Object.keys(body).filter((k) => !PROFILE_KEYS.has(k));
   if (unknown.length) return { ok: false, error: `unknown field: ${unknown.join(", ")}` };
   if (Object.keys(body).length === 0) return { ok: false, error: "at least one profile field required" };
@@ -418,16 +429,24 @@ export function parseMemberProfile(body: JsonObject | null): MemberProfilePatch 
 // - Every optional field accepts `null` to CLEAR it. A member filling in a
 //   blank profile never needs a clear; an admin undoing a bad value does.
 //
-// `slug` is deliberately absent: swarm_members has no slug column yet (it
-// arrives with issue #562's migration), and the issue explicitly allows the
-// slug lines to be dropped from a first cut until that lands.
+// - `handle` (issue #593) is here and NOWHERE else. It is the public URL
+//   segment of /swarm/members/:handle, separated from the immutable `id` that
+//   signatures and child foreign keys are made over, so an operator can rename
+//   a persona in public without invalidating a single historical signature.
+//   Self-service refuses it outright (validateMemberProfile above).
 //
 // Exported so routes/swarm.ts's apply handler and this route agree on what an
 // address is — apply used to carry its own copy of this literal inline.
 export const CONTACT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// A handle is a bare URL path segment: lowercase kebab-case, no leading,
+// trailing or doubled hyphen, nothing needing percent-encoding. Deliberately
+// stricter than the legacy ids it has to coexist with — new public names are
+// held to the shape, old ones keep resolving because nothing rewrites them.
+export const MEMBER_HANDLE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 const MEMBER_ADMIN_KEYS = new Set([
-  "name", "lens", "contactEmail", "tagline", "mandate",
+  "handle", "name", "lens", "contactEmail", "tagline", "mandate",
   "biases", "voiceMd", "mode", "operator", "avatar",
 ]);
 
@@ -454,6 +473,18 @@ export function validateMemberAdminPatch(body: JsonObject | null): ValidationRes
   if (Object.keys(body).length === 0) return { ok: false, error: "at least one field required" };
 
   const patch: MemberAdminPatch = {};
+
+  // handle has no null either, and for a stronger reason than name: clearing it
+  // would leave a member with no public address at all. swarm_members.handle is
+  // NOT NULL and UNIQUE (migration 0030); the uniqueness half is enforced in
+  // swarm/admin.ts, which is the only place that can see the other rows.
+  if (body.handle !== undefined) {
+    const v = requiredString(body, "handle", 80);
+    if (!v || !MEMBER_HANDLE_RE.test(v)) {
+      return { ok: false, error: "handle must be lowercase kebab-case, up to 80 chars (for example noop-analyst)" };
+    }
+    patch.handle = v;
+  }
 
   // name is the one field with no null: a member row always has a display name
   // (swarm_members.name is NOT NULL).

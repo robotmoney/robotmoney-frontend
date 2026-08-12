@@ -11,7 +11,7 @@
         <header class="sv__detail-head">
           <p class="sv__eyebrow">swarm take · verification receipt</p>
           <h1 class="sv__detail-title">
-            <a class="tk-who" :href="`/swarm/members/${signer?.id || take.memberId}`"
+            <a class="tk-who" :href="`/swarm/members/${encodeURIComponent(signer?.handle || take.memberHandle || signer?.id || take.memberId)}`"
                x-text="signer?.name || take.memberName"></a>
           </h1>
           <!-- A receipt with no filing time is not a receipt. receivedAt has
@@ -58,7 +58,7 @@
         <section class="sv__panel">
           <p class="sv__panel-label">Signer</p>
           <dl class="sv__meta-grid">
-            <dt>member</dt><dd><a :href="`/swarm/members/${signer?.id}`" x-text="signer?.name || take.memberName"></a></dd>
+            <dt>member</dt><dd><a :href="`/swarm/members/${encodeURIComponent(signer?.handle || take.memberHandle || signer?.id || take.memberId)}`" x-text="signer?.name || take.memberName"></a></dd>
             <dt>member id</dt><dd x-text="signer?.id || take.memberId"></dd>
             <dt>public key fingerprint</dt><dd class="sv__fingerprint" x-text="signer?.publicKeyFingerprint || 'unavailable'"></dd>
           </dl>
@@ -74,7 +74,7 @@
              take and then offered nowhere to go, not even back to the member
              whose record it belongs to. -->
         <p class="tk-next">
-          <a :href="`/swarm/members/${signer?.id || take.memberId}`">This member's full record →</a>
+          <a :href="`/swarm/members/${encodeURIComponent(signer?.handle || take.memberHandle || signer?.id || take.memberId)}`">This member's full record →</a>
           <a href="/swarm">The swarm live →</a>
           <a href="/docs/investment-swarm/how-it-works">How verification works →</a>
         </p>

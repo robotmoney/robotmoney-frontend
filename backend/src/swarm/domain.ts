@@ -116,8 +116,23 @@ export async function assertRosterCapacity(
     return { ok: false, status: 409, error: `swarm roster full (${n}/${SWARM_ROSTER_CAP})` };
   return { ok: true };
 }
+/**
+ * Resolve a PUBLIC member reference — a handle or a legacy id (issue #593).
+ *
+ * Migration 0030 backfilled `handle = id`, so both names address the same row
+ * for every member nobody has renamed, and a member renamed since then is still
+ * reachable by the id its old links carry. The handle is preferred when both
+ * match, which the admin uniqueness guard (swarm/admin.ts) already makes
+ * unreachable — it refuses a handle that collides with ANY other member's
+ * handle OR id — but ORDER BY makes the resolution deterministic regardless of
+ * how the rows were seeded rather than leaving it to physical row order.
+ */
 export async function getMember(id: string) {
-  const row = (await sql`SELECT * FROM swarm_members WHERE id = ${id}`)[0];
+  const row = (await sql`
+    SELECT * FROM swarm_members
+    WHERE handle = ${id} OR id = ${id}
+    ORDER BY (handle = ${id}) DESC
+    LIMIT 1`)[0];
   return row ? toMember(row) : null;
 }
 export async function getSubject(id: string) {
@@ -255,7 +270,8 @@ export async function getMemberTakes(memberId: string, limit?: number) {
   const rows = await sql`
     SELECT * FROM (
       SELECT DISTINCT ON (r.session_id)
-             r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+             r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
+             r.stance, r.confidence, r.body,
              r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
              s.date AS session_date, s.generated_at AS session_generated_at,
              s.subject_id, s.subject_name, s.state AS session_state,
@@ -265,7 +281,9 @@ export async function getMemberTakes(memberId: string, limit?: number) {
       FROM swarm_recommendations r
       JOIN swarm_sessions s ON s.id = r.session_id
       JOIN swarm_members m ON m.id = r.member_id
-      WHERE r.member_id = ${memberId}
+      -- Handle OR legacy id (issue #593): /swarm/members/:id/takes is a public
+      -- route, so it must answer to the name a reader actually has.
+      WHERE m.handle = ${memberId} OR m.id = ${memberId}
       ORDER BY r.session_id, r.revision DESC
     ) latest
     ORDER BY latest.session_date DESC, latest.session_generated_at DESC
@@ -338,7 +356,8 @@ async function withTakes(s: Record<string, unknown>) {
   const takes = await sql`
     SELECT * FROM (
       SELECT DISTINCT ON (r.member_id)
-             r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+             r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
+             r.stance, r.confidence, r.body,
              r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
              (SELECT k.public_key FROM swarm_member_keys k
               WHERE k.member_id = r.member_id AND k.active
@@ -365,7 +384,8 @@ function hostedMemoId(memoUrl: string | null): number | null {
 
 export async function getTakeReceipt(id: string) {
   const row = (await sql`
-    SELECT r.id, r.session_id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+    SELECT r.id, r.session_id, r.member_id, m.handle AS member_handle, m.name AS member_name,
+           r.stance, r.confidence, r.body,
            r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
            (SELECT k.public_key FROM swarm_member_keys k
             WHERE k.member_id = r.member_id AND k.active
@@ -401,7 +421,10 @@ export async function getTakeReceipt(id: string) {
       ? { id: superseding.id, revision: Number(superseding.revision), receivedAt: instant(superseding.received_at) ?? "" }
       : null,
     signer: {
+      // `id` is the SIGNING identity — the exact string the payload was signed
+      // over — and never moves. `handle` is only where to link the reader.
       id: row.member_id,
+      handle: (row.member_handle as string | null) ?? (row.member_id as string),
       name: row.member_name,
       publicKeyFingerprint: typeof row.public_key === "string"
         ? await fingerprintPublicKey(row.public_key)
@@ -1801,13 +1824,23 @@ export interface MemberProfilePatch {
   avatar?: unknown;
 }
 
-export async function updateMemberProfile(token: string, memberId: string, patch: MemberProfilePatch) {
+export async function updateMemberProfile(token: string, memberRef: string, patch: MemberProfilePatch) {
   const tokenMemberId = await memberIdForToken(token);
   if (!tokenMemberId) return { ok: false, status: 401, error: "unknown member token" };
-  if (tokenMemberId !== memberId) return { ok: false, status: 403, error: "token/member mismatch" };
 
-  const row = (await sql`SELECT * FROM swarm_members WHERE id = ${memberId}`)[0];
+  // The path segment is a PUBLIC reference (issue #593): a member that reads
+  // its own handle off /api/swarm/members must be able to post its profile back
+  // to the same URL. Resolve it to the immutable id FIRST, then compare — the
+  // token still authorises exactly one row, so this widens what a member may
+  // call itself, never whose profile it may write.
+  const row = (await sql`
+    SELECT * FROM swarm_members
+    WHERE handle = ${memberRef} OR id = ${memberRef}
+    ORDER BY (handle = ${memberRef}) DESC
+    LIMIT 1`)[0];
   if (!row) return { ok: false, status: 404, error: "member not found" };
+  const memberId = row.id as string;
+  if (tokenMemberId !== memberId) return { ok: false, status: 403, error: "token/member mismatch" };
 
   const merged = {
     tagline: patch.tagline !== undefined ? patch.tagline : row.tagline,
