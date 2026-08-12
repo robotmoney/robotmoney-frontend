@@ -112,6 +112,39 @@ const takeReceiptRoute = (id: string) => {
   return handleSwarm(new Request(`http://localhost${p}`), new URL(`http://localhost${p}`));
 };
 
+// The API's outermost handler turns ANY escaped exception into a sanitized
+// `500 {"error":"internal error"}` (backend/src/api/index.ts) — that is the
+// literal thing issue #596 is about, so reproduce the mapping here instead of
+// letting a raised 23505 blow the test up with a stack trace. A regression then
+// reads as `expected 409, received 500`: the operator-visible failure.
+async function callSwarm(req: Request): Promise<{ status: number; body: any }> {
+  try {
+    return (await handleSwarm(req, new URL(req.url))) ?? { status: 404, body: null };
+  } catch {
+    return { status: 500, body: { error: "internal error" } };
+  }
+}
+
+const postJson = (path: string, body: unknown) =>
+  new Request(`http://localhost${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+/** POST /api/swarm/admin/members — the admin manual-add create path. */
+const adminAddMemberRoute = (body: unknown) => callSwarm(postJson(ROUTES.swarm.admin.members, body));
+/** POST /api/swarm/register — the privileged apply+activate create path. */
+const registerRoute = (body: unknown) => callSwarm(postJson(ROUTES.swarm.register, body));
+
+const CONTENDED = "noop-analyst";
+const HANDLE_CONFLICT = "memberId already in use as another member's public handle";
+
+async function memberCount(): Promise<number> {
+  const [row] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM swarm_members`;
+  return row!.n;
+}
+
 // ── 1. Every member starts with handle === id ───────────────────────────────
 
 test("a newly admitted member's handle IS its id — migration 0030's default, so no published URL changes on deploy", async () => {
@@ -317,4 +350,120 @@ test("POST /api/swarm/members/:ref/profile refuses a handle (400) but accepts th
   const wrongOwner = await postProfileRoute("noop-analyst", other.token, { tagline: "not yours" });
   expect(wrongOwner!.status).toBe(403);
   expect((await ic.getMember(m.id))!.tagline).toBe("filed under the new handle");
+});
+
+// ── 7. The CREATE paths honour the same 409 the rename does (issue #596) ────
+//
+// Migration 0030's BEFORE INSERT trigger defaults `handle := id`, so a member
+// created under a name another member already publishes as its handle trips
+// swarm_members_handle_key INSIDE the admission transaction. Before this fix
+// the exception escaped to api/index.ts and came back as `500 internal error`,
+// which tells an operator nothing about a conflict the update path had been
+// describing precisely for two releases. These tests go over the REAL HTTP
+// routes, because a 500 is a transport-level outcome: exercising the domain
+// function directly would only ever show you an exception.
+
+test("POST /api/swarm/admin/members: a memberId already published as another member's handle is a 409, not a 500", async () => {
+  const a = await activeMember();
+  expect((await admin.updateMemberAdmin(a.id, await versionOf(a.id), { handle: CONTENDED })).status).toBe(200);
+
+  const { publicKeyB64 } = await generateKeyPair();
+  const clash = await adminAddMemberRoute({ memberId: CONTENDED, name: "Impostor", publicKey: publicKeyB64 });
+
+  // THE ASSERTION. `500` here is the pre-fix behaviour, and it is what an
+  // operator saw for a perfectly ordinary naming mistake.
+  expect(clash.status).toBe(409);
+  expect(clash.body.error).toBe(HANDLE_CONFLICT);
+
+  // Refused, not half-written: no second row, and the contended name still
+  // resolves to the member that actually holds it.
+  expect(await memberCount()).toBe(1);
+  expect(((await getMemberRoute(CONTENDED))!.body as any).id).toBe(a.id);
+
+  // The id-namespace collision keeps its OWN words. The two 409s ask the
+  // operator for different things — pick another id, versus rename the member
+  // currently published under this name — so they must not collapse into one
+  // message just because both are uniqueness failures.
+  const dup = await adminAddMemberRoute({ memberId: a.id, name: "Impostor", publicKey: publicKeyB64 });
+  expect(dup.status).toBe(409);
+  expect(dup.body.error).toBe("memberId already registered");
+});
+
+test("POST /api/swarm/register: the same conflict, answered the same way — ON CONFLICT (id) never covered the handle index", async () => {
+  const a = await activeMember();
+  expect((await admin.updateMemberAdmin(a.id, await versionOf(a.id), { handle: CONTENDED })).status).toBe(200);
+
+  const { publicKeyB64 } = await generateKeyPair();
+  const clash = await registerRoute({ memberId: CONTENDED, name: "Impostor", publicKey: publicKeyB64 });
+
+  // registerMember has NO pre-probe at all: its upsert arbitrates the PRIMARY
+  // KEY and nothing else, so this 409 is produced ENTIRELY by the SQLSTATE
+  // 23505 → swarm_members_handle_key mapping. This test is the race mapping's
+  // direct, non-timing-dependent coverage.
+  expect(clash.status).toBe(409);
+  expect(clash.body.error).toBe(HANDLE_CONFLICT);
+  expect(await memberCount()).toBe(1);
+
+  // …and the idempotent re-registration the upsert exists for is untouched:
+  // re-registering the SAME id still succeeds, and does not reset the handle an
+  // administrator moved.
+  const again = await registerRoute({ memberId: a.id, name: a.id, publicKey: publicKeyB64 });
+  expect(again.status).toBe(201);
+  expect(again.body.memberId).toBe(a.id);
+  expect((await ic.getMember(a.id))!.handle).toBe(CONTENDED);
+  expect(await memberCount()).toBe(1);
+});
+
+// Block until the manual-add INSERT is genuinely waiting on a lock, which is
+// the only proof that the create passed its probe and reached the unique index.
+// Times out LOUDLY: a silent give-up here would turn the race test into a test
+// of the probe, which the test above already covers.
+async function waitUntilManualAddBlocks(): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const [row] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM pg_stat_activity
+      WHERE wait_event_type = 'Lock' AND query ILIKE '%INSERT INTO swarm_members%'`;
+    if ((row?.n ?? 0) > 0) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(
+    "the manual-add INSERT never blocked on swarm_members_handle_key — the probe→INSERT race was NOT reproduced, so this test proved nothing",
+  );
+}
+
+test("the race a probe cannot close — a rename committing between probe and INSERT — is still a 409, never a 500", async () => {
+  const a = await activeMember();
+  const { publicKeyB64 } = await generateKeyPair();
+
+  // Hold an UNCOMMITTED rename of `a` to the contended name. Under READ
+  // COMMITTED the create's probe cannot see it, which is exactly the window a
+  // probe can never close: widening the SELECT fixes the common case and this
+  // one still needs the 23505 mapping underneath it.
+  let renameApplied!: () => void;
+  let commitRename!: () => void;
+  const renameLanded = new Promise<void>((resolve) => { renameApplied = resolve; });
+  const renameHeld = new Promise<void>((resolve) => { commitRename = resolve; });
+  const renamer = sql.begin(async (tx) => {
+    await tx`UPDATE swarm_members SET handle = ${CONTENDED} WHERE id = ${a.id}`;
+    renameApplied();
+    await renameHeld;
+  });
+  await renameLanded;
+
+  const create = adminAddMemberRoute({ memberId: CONTENDED, name: "Racer", publicKey: publicKeyB64 });
+  // Deterministic, not a sleep: the create is provably past its probe and
+  // parked on the handle index before the rename is allowed to commit.
+  await waitUntilManualAddBlocks();
+  commitRename();
+  await renamer;
+
+  const raced = await create;
+  expect(raced.status).toBe(409);
+  expect(raced.body.error).toBe(HANDLE_CONFLICT);
+
+  // The loser wrote nothing; the winner owns the name.
+  expect(await memberCount()).toBe(1);
+  expect((await ic.getMember(a.id))!.handle).toBe(CONTENDED);
+  expect(((await getMemberRoute(CONTENDED))!.body as any).id).toBe(a.id);
 });

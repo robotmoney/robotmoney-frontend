@@ -1057,6 +1057,27 @@ export async function claimMemberToken(input: TokenClaimInput) {
   });
 }
 
+// ── Handle-namespace conflicts on the CREATE paths (issue #596) ─────────────
+// Migration 0030's BEFORE INSERT trigger defaults `handle := id`, so creating a
+// member whose id is already held as ANOTHER member's handle raises SQLSTATE
+// 23505 on `swarm_members_handle_key` from inside the admission transaction —
+// and an escaped exception is sanitized to `500 internal error` by
+// api/index.ts, which tells the operator nothing. Both create paths
+// (addMemberAdmin, registerMember) answer that conflict with this 409, which is
+// the same actionable shape updateMemberAdmin already returns for the rename.
+export const HANDLE_NAMESPACE_CONFLICT =
+  "memberId already in use as another member's public handle";
+
+// Keyed on the ONE constraint that guards the public handle namespace, never on
+// "any unique violation": swarm_members_pkey and swarm_member_keys' indexes
+// raise 23505 too, and answering those with a handle message would describe the
+// wrong conflict and hide a real bug behind a plausible sentence.
+export function isHandleUniqueViolation(e: unknown): boolean {
+  const pg = e as { code?: string; constraint_name?: string; constraint?: string } | null;
+  if (pg?.code !== "23505") return false;
+  return String(pg.constraint_name ?? pg.constraint ?? "") === "swarm_members_handle_key";
+}
+
 // ── Demo onboarding ─────────────────────────────────────────────────────────
 // A member generates its own keypair and registers its PUBLIC key here, getting
 // a bearer token in one shot. This is the PRIVILEGED admin shortcut (apply +
@@ -1068,17 +1089,27 @@ export async function registerMember(input: { memberId: string; name: string; le
   // Exempt this id: re-registering an ALREADY-active member is idempotent
   // (ON CONFLICT DO UPDATE, same slot) and must not trip the cap; only a NET-NEW
   // active member counts against SWARM_ROSTER_CAP.
-  return await sql.begin(async (tx) => {
-    const cap = await assertRosterCapacity(tx, input.memberId);
-    if (!cap.ok) return cap;
-    await tx`INSERT INTO swarm_members (id, status, name, lens)
-             VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null})
-             ON CONFLICT (id) DO UPDATE SET status = 'active', name = EXCLUDED.name, lens = EXCLUDED.lens`;
-    await tx`DELETE FROM swarm_member_keys WHERE member_id = ${input.memberId}`;
-    await tx`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
-             VALUES (${input.memberId}, ${input.publicKey}, ${hashKey(token)})`;
-    return { memberId: input.memberId, token };
-  });
+  try {
+    return await sql.begin(async (tx) => {
+      const cap = await assertRosterCapacity(tx, input.memberId);
+      if (!cap.ok) return cap;
+      await tx`INSERT INTO swarm_members (id, status, name, lens)
+               VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null})
+               ON CONFLICT (id) DO UPDATE SET status = 'active', name = EXCLUDED.name, lens = EXCLUDED.lens`;
+      await tx`DELETE FROM swarm_member_keys WHERE member_id = ${input.memberId}`;
+      await tx`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
+               VALUES (${input.memberId}, ${input.publicKey}, ${hashKey(token)})`;
+      return { memberId: input.memberId, token };
+    });
+  } catch (e) {
+    // `ON CONFLICT (id)` arbitrates the PRIMARY KEY index and nothing else — it
+    // does not cover swarm_members_handle_key, so the idempotent re-register it
+    // exists for is untouched by this catch while the handle collision it never
+    // saw stops escaping as a 500. Caught OUTSIDE sql.begin on purpose: the
+    // transaction is already aborted and rolled back by the time we answer.
+    if (isHandleUniqueViolation(e)) return { ok: false, status: 409, error: HANDLE_NAMESPACE_CONFLICT };
+    throw e;
+  }
 }
 
 // resetSessions() is REMOVED. It was a dev-only
