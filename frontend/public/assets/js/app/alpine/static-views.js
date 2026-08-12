@@ -1383,8 +1383,33 @@ export function registerStaticViews(Alpine) {
     async init() {
       const memberId = location.pathname.split("/").filter(Boolean).pop();
       try {
-        this.member = await loadArchiveMember(memberId).catch(() => null);
-        if (!this.member) this.member = await api.get(path(ROUTES.swarm.member, { id: memberId })).then(camelMember);
+        // LIVE FIRST, archive only as the fallback (issue #595) — the same
+        // precedence subjectProfile.init() above and swarmSessionDetail below
+        // already use, and for the same reason: the static manifests under
+        // /data/swarm/manifests/members are a backendless checkout's fallback,
+        // never a competing source of truth for a record the database holds.
+        //
+        // Reading the archive first meant a RENAMED member served two
+        // contradictory public profiles: /swarm/members/<handle> missed the
+        // archive and rendered the live row, while /swarm/members/<legacy-id>
+        // HIT one of the four shipped manifests (athena, robotmoney,
+        // noop-analyst, woon — two of them live seated members) and rendered
+        // the pre-rename name/tagline forever, with no `handle` field at all.
+        // Both returned 200, so nothing alerted. Migration 0030 keeps the
+        // legacy id resolving on purpose ("no URL that has ever been published
+        // stops working"), which makes that address a first-class public one
+        // and its staleness a stated-requirement gap, not a cosmetic lag.
+        //
+        // The backendless path costs no NEW class of request here: loadRows()
+        // on the very next line already calls the member-takes endpoint
+        // unconditionally, so a checkout with no backend was always going to
+        // issue (and lose) a swarm API call on this page.
+        this.member = await api.get(path(ROUTES.swarm.member, { id: memberId })).then(camelMember)
+          .catch(() => loadArchiveMember(memberId).catch(() => null));
+        // Both sources missed. Raise it rather than falling through to a blank
+        // page: the old ordering surfaced the API's own error here, and
+        // subjectProfile.init() throws the same way for the same reason.
+        if (!this.member) throw new Error("Member not found");
         // Route-level SEO titleizes the last URL segment, which here is a raw
         // UUID ("D6e430f5 D706 4325…"). This is the page onboarding hands a new
         // operator, so name the tab after the member once it is known.
