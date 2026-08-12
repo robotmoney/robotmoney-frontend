@@ -45,7 +45,19 @@ export interface SwarmWaitlistEntry {
 }
 
 export interface SwarmMember {
+  /**
+   * Immutable identity (issue #593): the primary key, the target of every child
+   * table's member_id, and the string historical signatures were made over. It
+   * never changes, and it is NOT the public name — see `handle`.
+   */
   id: string;
+  /**
+   * Public, administrator-editable URL segment. Backfilled to `id` by migration
+   * 0030, so it equals the id for every member nobody has renamed, and public
+   * member routes resolve BOTH. Optional only for payloads produced before this
+   * field existed (the shipped static archive JSON), where `id` is the handle.
+   */
+  handle?: string;
   status: MemberStatus;
   name: string;
   tagline: string | null;
@@ -84,7 +96,15 @@ export interface SwarmSubject {
 // current getSession; `verified` reflects server-side signature verification.
 export interface SwarmTake {
   id: string;
+  /** The SIGNING identity this take's signature was made over. Never moves. */
   memberId: string;
+  /**
+   * The member's public handle — where to link a reader (issue #593). Equals
+   * `memberId` unless an administrator has renamed the member. Absent on
+   * payloads produced before this field existed (the shipped static archive
+   * JSON), where `memberId` is the handle.
+   */
+  memberHandle?: string;
   memberName: string;
   stance: string | null;
   confidence: number | null;
@@ -129,7 +149,10 @@ export interface SwarmMemo {
 }
 
 export interface SwarmTakeSigner {
+  /** Signing identity, shown verbatim on the receipt. */
   id: string;
+  /** Public handle to link to (issue #593); equals `id` unless renamed. */
+  handle?: string;
   name: string;
   publicKeyFingerprint: string | null;
 }

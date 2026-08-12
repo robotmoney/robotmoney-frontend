@@ -27,11 +27,11 @@
                   <!-- aria-label because the mark is decorative SVG: without
                        it this link loses the accessible name the initials
                        used to give it. -->
-                  <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${m.id}`" :aria-label="m.name"
+                  <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" :aria-label="m.name"
                      x-html="memberMark(m.keyFingerprint || m.id, m.name, 40)"></a>
                   <div class="sv__row-main">
                     <div class="sv__row-titleline">
-                      <a class="sv__row-title" :href="`/swarm/members/${m.id}`" x-text="m.name"></a>
+                      <a class="sv__row-title" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" x-text="m.name"></a>
                       <span class="sv__tag" x-text="m.lens || 'swarm member'"></span>
                     </div>
                     <p class="sv__row-copy" x-text="memberTagline(m)"></p>

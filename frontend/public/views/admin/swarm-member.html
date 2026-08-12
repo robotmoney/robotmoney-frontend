@@ -42,6 +42,13 @@
     <template x-if="member">
       <div>
         <dl class="adm-meta-grid" x-show="!editing">
+          <!-- Both names, and labelled so an operator can tell them apart
+               (issue #593): the id is what signatures and child rows are keyed
+               on and can never move; the handle is the public URL segment and
+               is the one thing on this page that changes where a visitor's
+               existing link points. -->
+          <dt>Id (immutable)</dt><dd x-text="member.id" data-testid="member-id"></dd>
+          <dt>Handle</dt><dd x-text="member.handle || member.id" data-testid="member-handle"></dd>
           <dt>Name</dt><dd x-text="member.name"></dd>
           <dt>Status</dt><dd x-text="member.status"></dd>
           <dt>Application</dt><dd x-text="pendingApplication ? pendingApplication.status : '—'"></dd>
@@ -69,6 +76,12 @@
              through the funnel. An empty field is a CLEAR, not a no-op, and
              only changed fields are sent. -->
         <form x-show="editing" x-cloak @submit.prevent="submitEdit()" class="adm-form" data-testid="member-edit-form">
+          <label class="adm-field">
+            <span>Handle</span>
+            <input type="text" x-model="editForm.handle" class="adm-input" data-testid="edit-member-handle" />
+            <span class="adm-dim">Public URL segment (/swarm/members/&lt;handle&gt;). Lowercase kebab-case. Members cannot change it; the immutable id keeps resolving after a rename.</span>
+            <span x-show="editErrors.handle" x-text="editErrors.handle" class="rm-error"></span>
+          </label>
           <label class="adm-field">
             <span>Name</span>
             <input type="text" x-model="editForm.name" class="adm-input" data-testid="edit-member-name" />

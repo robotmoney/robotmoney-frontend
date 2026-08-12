@@ -516,14 +516,15 @@ const MEMBER_APPLIED = {
 const NOVA_APPLICATION = { id: 1, member_id: "nova", status: "pending", created_at: "2026-07-10T00:00:00.000Z", reviewed_at: null };
 
 // Carries the fields #567 added to toMemberAdmin (biases/voiceMd/mode/
-// operator/avatar) — the edit form cannot prefill what the projection omits.
-// This is toMemberAdmin()'s shipped key set exactly: NO `slug`. swarm_members
-// has no slug column, so the projection cannot return one and the admin patch
-// validator answers `unknown field: slug`. Inventing one here would let the
-// form's slug affordance test green against a backend that has neither the
-// column nor the key.
+// operator/avatar) plus #593's `handle` — the edit form cannot prefill what the
+// projection omits. This is toMemberAdmin()'s shipped key set exactly: NO
+// `slug`. swarm_members has no slug column, so the projection cannot return one
+// and the admin patch validator answers `unknown field: slug`. Inventing one
+// here would let the form's slug affordance test green against a backend that
+// has neither the column nor the key. `handle` starts EQUAL to the id, which is
+// what migration 0030 backfills for every existing member.
 const MEMBER_ACTIVE = {
-  id: "athena", status: "active", version: 2, name: "Athena", tagline: "macro lens", lens: "macro",
+  id: "athena", handle: "athena", status: "active", version: 2, name: "Athena", tagline: "macro lens", lens: "macro",
   mandate: null, biases: ["pro-diversification", "anti-reflexivity"], voiceMd: null, mode: null,
   operator: null, avatar: null, contactEmail: "athena@example.com",
   appliedAt: "2026-06-01T00:00:00.000Z", activatedAt: "2026-06-02T00:00:00.000Z", updatedAt: "2026-06-02T00:00:00.000Z",
@@ -535,7 +536,7 @@ const MEMBER_ACTIVE = {
 // Third member state (inactive) — exercises the "Inactive" filter tab and the
 // reactivate action, neither of which the applied/active fixtures above cover.
 const MEMBER_INACTIVE = {
-  id: "cleo", status: "inactive", version: 1, name: "Cleo", tagline: null, lens: "yield",
+  id: "cleo", handle: "cleo", status: "inactive", version: 1, name: "Cleo", tagline: null, lens: "yield",
   mandate: null, contactEmail: "cleo@example.com",
   appliedAt: "2026-05-01T00:00:00.000Z", activatedAt: "2026-05-02T00:00:00.000Z", updatedAt: "2026-06-15T00:00:00.000Z",
 };
@@ -1009,6 +1010,45 @@ test("swarm admin: member profile edit offers no slug field the backend would re
   await page.getByTestId("edit-member-submit").click();
   await expect(page.getByTestId("member-edit-form")).not.toBeVisible();
   expect(captured).toEqual({ expectedVersion: 2, name: "Athena Renamed" });
+});
+
+// AC (#593): the handle is the one field on this form that moves a PUBLIC URL.
+// It must be offered (an operator with no input cannot rename a persona at
+// all), it must be validated locally against the server's own shape, and the
+// immutable id must be shown beside it and never be editable.
+test("swarm admin: member profile edit renames the public handle and never the immutable id", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/members/athena");
+  await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
+
+  // Both names are readable before editing, so the operator can tell which is
+  // which. The id is display-only — there is no input for it.
+  await expect(page.getByTestId("member-id")).toHaveText("athena");
+  await expect(page.getByTestId("member-handle")).toHaveText("athena");
+
+  let posts = 0;
+  let captured: unknown = null;
+  await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, async (route) => {
+    posts += 1;
+    captured = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_ACTIVE, handle: "noop-analyst", version: 3 } }));
+  });
+
+  await page.getByTestId("member-edit-toggle").click();
+  await expect(page.getByTestId("edit-member-id")).toHaveCount(0);
+
+  // A malformed handle is caught before the round-trip, exactly like the email.
+  await page.getByTestId("edit-member-handle").fill("Noop Analyst");
+  await page.getByTestId("edit-member-submit").click();
+  await expect(page.getByText(/lowercase kebab-case/)).toBeVisible();
+  expect(posts).toBe(0);
+
+  await page.getByTestId("edit-member-handle").fill("noop-analyst");
+  await page.getByTestId("edit-member-submit").click();
+  await expect(page.getByTestId("member-edit-form")).not.toBeVisible();
+  // ONLY the handle is sent — the id is not in the patch at any point.
+  expect(captured).toEqual({ expectedVersion: 2, handle: "noop-analyst" });
+  expect(posts).toBe(1);
 });
 
 test("swarm admin: member filters, one-time credential reveal, and redacted detail JSON", async ({ page }) => {

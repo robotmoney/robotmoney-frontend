@@ -125,6 +125,7 @@ test("admin member patch owns name/lens/contactEmail, which self-service profile
 
 test("admin member patch accepts every editable field in one body, normalized", () => {
   const res = validateMemberAdminPatch({
+    handle: "noop-analyst",
     name: "  Woon  ",
     lens: "machine economy, first person",
     contactEmail: "woon@peaq.test",
@@ -139,6 +140,7 @@ test("admin member patch accepts every editable field in one body, normalized", 
   expect(res.ok).toBe(true);
   if (!res.ok) return;
   expect(res.data).toEqual({
+    handle: "noop-analyst",
     name: "Woon",
     lens: "machine economy, first person",
     contactEmail: "woon@peaq.test",
@@ -177,9 +179,10 @@ test("admin member patch rejects an unknown field, an empty body, and a null bod
   expect(unknown.ok).toBe(false);
   if (!unknown.ok) expect(unknown.error).toBe("unknown field: status");
 
-  // slug is NOT accepted yet — swarm_members has no slug column until #562's
-  // migration lands. It must fail as an unknown field rather than silently
-  // reaching an UPDATE that names a column Postgres does not have.
+  // `slug` was the name this field went by before it existed. It is NOT a
+  // column and never became one — the public name is `handle` (issue #593) —
+  // so it must still fail as an unknown field rather than silently reaching an
+  // UPDATE that names a column Postgres does not have.
   const slug = validateMemberAdminPatch({ slug: "woon" });
   expect(slug.ok).toBe(false);
   if (!slug.ok) expect(slug.error).toBe("unknown field: slug");
@@ -191,6 +194,72 @@ test("admin member patch rejects an unknown field, an empty body, and a null bod
   const nullBody = validateMemberAdminPatch(null);
   expect(nullBody.ok).toBe(false);
   if (!nullBody.ok) expect(nullBody.error).toBe("invalid member patch");
+});
+
+// ── Public handle vs immutable id (issue #593) ──────────────────────────────
+// The whole separation is only worth anything if the two validators disagree
+// about `handle` — the admin one owns it, the member's own route refuses it.
+// Both halves are asserted here, in one file, so neither can drift alone.
+
+test("admin member patch accepts a well-formed handle and rejects every malformed shape", () => {
+  for (const good of ["noop-analyst", "woon", "a", "member-7", "x1-y2-z3"]) {
+    const res = validateMemberAdminPatch({ handle: good });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.handle).toBe(good);
+  }
+
+  // Each of these would either need percent-encoding in a URL, collide with a
+  // visually identical sibling, or read as a display name rather than an
+  // address.
+  const bad = [
+    "Noop Analyst",   // spaces
+    "NoopAnalyst",    // uppercase
+    "noop_analyst",   // underscore
+    "-noop",          // leading hyphen
+    "noop-",          // trailing hyphen
+    "noop--analyst",  // doubled hyphen
+    "noop/analyst",   // path separator
+    "noop.analyst",   // dot
+    "",               // empty
+    "   ",            // whitespace only
+    "a".repeat(81),   // over the 80-char bound
+  ];
+  for (const value of bad) {
+    const res = validateMemberAdminPatch({ handle: value });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("handle must be lowercase kebab-case, up to 80 chars (for example noop-analyst)");
+    }
+  }
+});
+
+test("admin member patch refuses to CLEAR the handle — a member with no public address is unreachable", () => {
+  // Every other optional field takes null as a clear. This one cannot: it is
+  // the URL segment, and swarm_members.handle is NOT NULL (migration 0030).
+  const res = validateMemberAdminPatch({ handle: null });
+  expect(res.ok).toBe(false);
+  if (!res.ok) {
+    expect(res.error).toBe("handle must be lowercase kebab-case, up to 80 chars (for example noop-analyst)");
+  }
+});
+
+test("self-service profile REFUSES handle by name, not as an accidental unknown key", () => {
+  // The refusal is explicit (api/validation.ts names `handle` before the
+  // unknown-key sweep) because the generic "unknown field: handle" reads like a
+  // typo, and a member trying to rename its own public URL is not making one.
+  const res = validateMemberProfile({ handle: "stolen-name" });
+  expect(res.ok).toBe(false);
+  if (!res.ok) {
+    expect(res.error).toBe("handle is administrator-managed and cannot be set from a member profile update");
+  }
+
+  // …and it refuses even when smuggled alongside fields the member DOES own,
+  // rather than quietly applying those and dropping the handle.
+  const mixed = validateMemberProfile({ tagline: "a legitimate edit", handle: "stolen-name" });
+  expect(mixed.ok).toBe(false);
+  if (!mixed.ok) {
+    expect(mixed.error).toBe("handle is administrator-managed and cannot be set from a member profile update");
+  }
 });
 
 test("admin member patch rejects a malformed email, keeping apply and the admin route on one regex", () => {

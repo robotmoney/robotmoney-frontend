@@ -25,6 +25,10 @@ export const instant = (value: unknown): string | null =>
 export function toMember(row: Row): SwarmMember {
   return {
     id: row.id,
+    // Migration 0030 backfilled `handle = id`, so the `?? row.id` fallback is
+    // for rows read by a query that did not select the column, not for rows
+    // that lack a value.
+    handle: row.handle ?? row.id,
     status: row.status,
     name: row.name,
     tagline: row.tagline ?? null,
@@ -133,7 +137,12 @@ export function toSessionListItem(row: Row): SwarmSessionListItem {
 export function toTake(row: Row): SwarmTake {
   return {
     id: row.id,
+    // `memberId` STAYS the immutable signing id — it is the string this row's
+    // signature was made over, and rewriting it to the handle would make the
+    // rendered receipt disagree with the bytes it verifies. `memberHandle` is
+    // the separate, public name to LINK to (issue #593).
     memberId: row.member_id,
+    memberHandle: row.member_handle ?? row.member_id,
     memberName: row.member_name,
     stance: row.stance ?? null,
     confidence: row.confidence == null ? null : Number(row.confidence),

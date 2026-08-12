@@ -151,6 +151,13 @@ export function camelTake(raw) {
     // 404. Only a real take id gets a permalink.
     permalinkId: raw.id ?? null,
     memberId: raw.memberId || raw.member_id,
+    // The member's PUBLIC address (issue #593), kept beside the immutable
+    // `memberId` the take was signed under rather than replacing it: the id is
+    // what the signature covers, the handle is only where a reader is sent.
+    // Absent from the shipped static archive JSON (those takes predate the
+    // column), so archived sessions read `undefined` here and every consumer
+    // falls back to the legacy id — which still resolves server-side.
+    memberHandle: raw.memberHandle || raw.member_handle,
     memberName: raw.memberName || raw.member_name,
     mode: raw.mode || "submit",
     stance: raw.stance,
@@ -175,10 +182,21 @@ export function camelTake(raw) {
   };
 }
 
-function camelMember(raw) {
+// Exported for the same reason camelTake is: so
+// scripts/tests/unit/frontend-routes.test.ts can assert the raw->camel field
+// mapping directly, in particular `handle` — the field whose omission made
+// swarmSessionDetail's memberById()/memberHref() handle branch unreachable.
+export function camelMember(raw) {
   if (!raw) return null;
   return {
     id: raw.id,
+    // The member's public URL segment (issue #593). The API always serves it
+    // (backend/src/swarm/projections.ts backfills `handle ?? id`), but the
+    // shipped static member manifests under
+    // /data/swarm/manifests/members/*.json predate the field, so an archived
+    // member normalizes to `undefined` and every link falls back to the
+    // legacy id exactly as before.
+    handle: raw.handle,
     status: raw.status,
     name: raw.name,
     tagline: raw.tagline,
@@ -1635,10 +1653,21 @@ export function registerStaticViews(Alpine) {
       this.allocationFramework = framework;
     },
     memberLens(memberId) {
-      return this.members.find((m) => m.id === memberId)?.lens || "swarm member";
+      return this.memberById(memberId)?.lens || "swarm member";
     },
+    // Accepts EITHER name (issue #593). A session payload carries the immutable
+    // `memberId` its takes were signed under, while the roster this page also
+    // holds carries the public `handle`; the two are the same string for every
+    // member nobody has renamed, and this lookup has to keep resolving for the
+    // ones who have been.
     memberById(memberId) {
-      return this.members.find((m) => m.id === memberId) || null;
+      return this.members.find((m) => m.id === memberId || m.handle === memberId) || null;
+    },
+    // Where to LINK for a member reference, preferring the public handle and
+    // falling back to whatever the payload carried when the roster holds no
+    // record for it — a link to a legacy id still resolves server-side.
+    memberHref(memberId) {
+      return `/swarm/members/${encodeURIComponent(this.memberById(memberId)?.handle || memberId)}`;
     },
     // `absent` is a list of member IDs, printed raw — a reader got
     // "absent: draco, 88efd6b9-e865-417d-afe1-45d84510338b". Resolve what we

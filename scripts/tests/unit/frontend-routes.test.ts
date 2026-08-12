@@ -8,6 +8,7 @@ import { DASH_LAYOUT_VIEW, routeMetaFor, viewFor } from "../../../frontend/publi
 // to import was a dead duplicate normalizer never loaded by main.js's import
 // graph (review-maintainability-026) and has been deleted.
 import {
+  camelMember,
   camelSubject,
   camelTake,
   helpers,
@@ -633,6 +634,51 @@ describe("frontend route resolution", () => {
     const good = camelTake({ id: "t3", member_id: "athena", stance: "hold", verified: true });
     expect(helpers.verifyLabel(good.verified, good.archival)).toBe("verified");
     expect(helpers.verifyTip(good.verified, good.archival)).toContain("key only they hold");
+  });
+
+  // Issue #593 / review-data-integrity DI-594-001. The two normalizers every
+  // session-page payload passes through dropped the member's public address:
+  // camelMember() mapped no `handle` and camelTake() mapped no `memberHandle`,
+  // so swarmSessionDetail's `memberById()` could only ever match on `m.id` and
+  // `memberHref()` always fell through to the immutable id — while /swarm,
+  // which reads the UN-camelized roster, linked the handle. One member, two
+  // published addresses. The render-level assertion is in
+  // frontend/test/browser/swarm-session.spec.ts; these pin the mappers.
+  test("camelMember carries the public handle, and a manifest without one degrades to the legacy id", async () => {
+    // A RENAMED member: handle !== id is the case that was never exercised.
+    const renamed = camelMember({ id: "athena", handle: "macro-desk", status: "active", name: "Athena" });
+    if (!renamed) throw new Error("camelMember normalized a real member row to null");
+    expect(renamed.id).toBe("athena");
+    expect(renamed.handle).toBe("macro-desk");
+    // The id is what takes are signed under and must survive the rename
+    // untouched — the handle is only where a reader is sent.
+    expect(renamed.id).not.toBe(renamed.handle);
+
+    // The shipped static member manifests predate the column entirely. They
+    // must keep normalizing (no handle at all), so an archived page's links
+    // fall back to the id exactly as they did before migration 0030.
+    const archived = await loadArchiveMember("athena");
+    if (!archived) throw new Error("the shipped athena manifest normalized to null");
+    expect(archived.id).toBe("athena");
+    expect(archived.handle).toBeUndefined();
+
+    expect(camelMember(null)).toBeNull();
+  });
+
+  test("camelTake carries memberHandle beside the immutable signed memberId", () => {
+    // The API's shape after migration 0030 (snake_case over the wire).
+    const live = camelTake({ id: "t9", member_id: "athena", member_handle: "macro-desk", stance: "hold" });
+    expect(live.memberId).toBe("athena");
+    expect(live.memberHandle).toBe("macro-desk");
+    // camelCase producers (the admin/receipt projections) read too, matching
+    // the tolerant style of every other key in this mapper.
+    expect(camelTake({ id: "t9", memberId: "athena", memberHandle: "macro-desk" }).memberHandle).toBe("macro-desk");
+
+    // The shipped archive's takes carry neither field: `t.memberHandle ||
+    // t.memberId` in views/swarm/session.html must land on the legacy id.
+    const archived = camelTake({ member_id: "athena", stance: "hold" });
+    expect(archived.memberHandle).toBeUndefined();
+    expect(archived.memberId).toBe("athena");
   });
 
   test("the shipped static archive's takes are archival, so the fallback path cannot claim a failed check either", async () => {
