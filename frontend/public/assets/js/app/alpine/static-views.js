@@ -151,6 +151,13 @@ export function camelTake(raw) {
     // 404. Only a real take id gets a permalink.
     permalinkId: raw.id ?? null,
     memberId: raw.memberId || raw.member_id,
+    // The member's PUBLIC address (issue #593), kept beside the immutable
+    // `memberId` the take was signed under rather than replacing it: the id is
+    // what the signature covers, the handle is only where a reader is sent.
+    // Absent from the shipped static archive JSON (those takes predate the
+    // column), so archived sessions read `undefined` here and every consumer
+    // falls back to the legacy id — which still resolves server-side.
+    memberHandle: raw.memberHandle || raw.member_handle,
     memberName: raw.memberName || raw.member_name,
     mode: raw.mode || "submit",
     stance: raw.stance,
@@ -175,10 +182,21 @@ export function camelTake(raw) {
   };
 }
 
-function camelMember(raw) {
+// Exported for the same reason camelTake is: so
+// scripts/tests/unit/frontend-routes.test.ts can assert the raw->camel field
+// mapping directly, in particular `handle` — the field whose omission made
+// swarmSessionDetail's memberById()/memberHref() handle branch unreachable.
+export function camelMember(raw) {
   if (!raw) return null;
   return {
     id: raw.id,
+    // The member's public URL segment (issue #593). The API always serves it
+    // (backend/src/swarm/projections.ts backfills `handle ?? id`), but the
+    // shipped static member manifests under
+    // /data/swarm/manifests/members/*.json predate the field, so an archived
+    // member normalizes to `undefined` and every link falls back to the
+    // legacy id exactly as before.
+    handle: raw.handle,
     status: raw.status,
     name: raw.name,
     tagline: raw.tagline,

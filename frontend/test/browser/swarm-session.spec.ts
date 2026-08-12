@@ -74,6 +74,28 @@ const FAILED_TAKES = [
   { id: "take-athena", member_id: "athena", member_name: "Athena", stance: "hold", confidence: 0.7, body: "LIVE SUBMISSION MARKER — athena take body.", verified: false, archival: false },
 ];
 
+// Issue #593 — a RENAMED member. `handle` is the public URL segment; `id` is
+// the immutable name the take was signed under and is deliberately never
+// rewritten, so after a rename the two differ. Every other roster fixture in
+// this file (and in swarm-index.spec.ts) has an implicit handle equal to its
+// id, which is exactly why camelMember/camelTake could drop the two fields
+// entirely and still ship green: only the fallback branch was ever exercised.
+// Draco is kept unrenamed here so both branches render in one page.
+const RENAMED_MEMBERS = {
+  members: [
+    { id: "athena", handle: "macro-desk", status: "active", name: "Athena", lens: "macro" },
+    { id: "draco", handle: "draco", status: "active", name: "Draco", lens: "risk" },
+  ],
+};
+
+// Shaped like the API's session-detail takes after migration 0030: the signed
+// `member_id` is untouched and `member_handle` rides beside it
+// (backend/src/swarm/projections.ts).
+const RENAMED_TAKES = [
+  { id: "take-athena", member_id: "athena", member_handle: "macro-desk", member_name: "Athena", stance: "hold", confidence: 0.7, body: "RENAME MARKER — athena take body.", verified: true, archival: false },
+  { id: "take-draco", member_id: "draco", member_handle: "draco", member_name: "Draco", stance: "trim", confidence: 0.55, body: "RENAME MARKER — draco take body.", verified: true, archival: false },
+];
+
 // The published framework /api/dashboards/allocation serves. Note the spelling:
 // "Conservative DeFi Yield" has an inner capital that humanize() of the bucket
 // id `conservative_defi_yield` cannot reproduce — the two sides are matched on
@@ -141,11 +163,11 @@ function positionSession(date: string, subjectId: string, subjectName: string) {
 // "not found" test below.
 async function mockSessionApi(
   page: Page,
-  opts: { session: unknown; takes?: unknown[]; allocation?: unknown | null; snapshots?: unknown[] },
+  opts: { session: unknown; takes?: unknown[]; allocation?: unknown | null; snapshots?: unknown[]; members?: unknown },
 ): Promise<void> {
   await page.route("**/api/**", (route) => {
     const pathname = new URL(route.request().url()).pathname;
-    if (pathname === "/api/swarm/members") return route.fulfill(json(MEMBERS));
+    if (pathname === "/api/swarm/members") return route.fulfill(json(opts.members ?? MEMBERS));
     if (/^\/api\/swarm\/sessions\/\d{4}-\d{2}-\d{2}\/[^/]+$/.test(pathname)) {
       return route.fulfill(json({ session: opts.session, takes: opts.takes ?? TAKES }));
     }
@@ -483,4 +505,67 @@ test("a date the static archive DOES cover is read from the API, not from the ch
   // the page did not fall back to the archive.
   await expect(page.locator("[data-take-permalink]").first()).toBeVisible();
   await expect(page.locator("[data-take-permalink]").first()).toHaveAttribute("href", "/swarm/takes/take-athena");
+});
+
+// Issue #593 / review-data-integrity DI-594-001. The roster page (/swarm) links
+// members at their public `handle`; this page linked them at the immutable id,
+// because camelTake() dropped `member_handle` and camelMember() dropped
+// `handle` — so `t.memberHandle` was always undefined and memberById()'s
+// `m.handle === ref` branch was unreachable. Two public surfaces derived from
+// the same API then published two different addresses for one member.
+//
+// This is the only test in the tree whose fixture has handle !== id, which is
+// what makes it an assertion about the handle rather than about the fallback.
+// Both link sources are covered in one render:
+//   - the take byline/avatar, fed by camelTake's `memberHandle`;
+//   - the disagreement panel, whose positions carry ONLY the signed
+//     `member_id`, so it can resolve to the handle solely through the roster —
+//     i.e. through camelMember's `handle`.
+test("a renamed member's session links address the public handle, never the id the take was signed under", async ({ page }) => {
+  const base = positionSession("2026-06-26", "robotmoney-vault", "Robot Money Vault");
+  const session = {
+    ...base,
+    swarm_recommendation: {
+      ...base.swarm_recommendation,
+      disagreements: [
+        {
+          topic: "duration risk",
+          positions: [
+            { member_id: "athena", view: "The long end is where this breaks." },
+            { member_id: "draco", view: "Trim the tail first." },
+          ],
+        },
+      ],
+    },
+  };
+  await mockSessionApi(page, {
+    session,
+    takes: RENAMED_TAKES,
+    members: RENAMED_MEMBERS,
+    allocation: ALLOCATION,
+  });
+
+  await page.goto("/swarm/2026-06-26/robotmoney-vault");
+
+  await expect(page.locator(".sv__error")).toBeHidden();
+  await expect(page.locator(".sv__take")).toHaveCount(2);
+
+  // Take byline + avatar: the handle, not `athena`.
+  const athenaTake = page.locator(".sv__take").filter({ hasText: "RENAME MARKER — athena take body." });
+  await expect(athenaTake.locator(".sv__member-link")).toHaveAttribute("href", "/swarm/members/macro-desk");
+  await expect(athenaTake.locator(".sv__avatar--mark")).toHaveAttribute("href", "/swarm/members/macro-desk");
+
+  // The disagreement panel holds no handle of its own — only the signed
+  // member_id — so a handle here proves the ROSTER carried it through
+  // camelMember. This link was /swarm/members/athena before the fix.
+  const athenaPosition = page.locator(".sv__disagreement li").filter({ hasText: "Athena" });
+  await expect(athenaPosition.locator("a").first()).toHaveAttribute("href", "/swarm/members/macro-desk");
+
+  // An unrenamed member (handle === id) is unaffected: the same address as
+  // before migration 0030, which is what keeps every published link alive.
+  const dracoTake = page.locator(".sv__take").filter({ hasText: "RENAME MARKER — draco take body." });
+  await expect(dracoTake.locator(".sv__member-link")).toHaveAttribute("href", "/swarm/members/draco");
+
+  // Nothing on the page still points at the legacy id for the renamed member.
+  await expect(page.locator('a[href="/swarm/members/athena"]')).toHaveCount(0);
 });
