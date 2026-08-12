@@ -255,6 +255,10 @@ test("members: update writes every editable field, bumps version, and the projec
   const member = (res!.body as any).member;
   expect(member).toEqual({
     id,
+    // The public handle is projected beside the immutable id (issue #593) and
+    // still equals it here: this patch never touched it, and migration 0030
+    // backfills handle = id for every member nobody has renamed.
+    handle: id,
     status: "active",
     version: 2,
     name: "Woon",
