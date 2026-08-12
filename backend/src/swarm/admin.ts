@@ -11,7 +11,15 @@
 // rollup), it composes those functions rather than duplicating them.
 import { sql, type DbHandle } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
-import { activateMember, aggregateSession as domainAggregateSession, assertRosterCapacity, SWARM_ROSTER_CAP, countActiveMembersTx } from "./domain.ts";
+import {
+  activateMember,
+  aggregateSession as domainAggregateSession,
+  assertRosterCapacity,
+  HANDLE_NAMESPACE_CONFLICT,
+  isHandleUniqueViolation,
+  SWARM_ROSTER_CAP,
+  countActiveMembersTx,
+} from "./domain.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 
 type Actor = string;
@@ -211,22 +219,46 @@ export interface ManualMemberInput {
 // token in a single transaction, bypassing the public apply/activate flow.
 // The token is returned ONLY in this response — never persisted or re-readable.
 export async function addMemberAdmin(input: ManualMemberInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
-  const existing = (await sql`SELECT id FROM swarm_members WHERE id = ${input.memberId}`)[0];
-  if (existing) return err(409, "memberId already registered");
+  // UNIQUENESS, probed across BOTH namespaces (issue #596), for the same reason
+  // updateMemberAdmin checks both: since migration 0030 a new member's id is
+  // ALSO its default handle, so an id equal to another member's handle trips
+  // swarm_members_handle_key inside the transaction below and escapes as a
+  // sanitized 500. The two collisions get two different sentences because they
+  // ask the operator for two different things — pick another id, or rename the
+  // member currently published under this name.
+  const existing = (await sql<{ id: string }[]>`
+    SELECT id FROM swarm_members
+    WHERE id = ${input.memberId} OR handle = ${input.memberId}
+    ORDER BY (id = ${input.memberId}) DESC
+    LIMIT 1`)[0];
+  if (existing) {
+    return existing.id === input.memberId
+      ? err(409, "memberId already registered")
+      : err(409, HANDLE_NAMESPACE_CONFLICT);
+  }
   const token = `tok_${input.memberId}_${crypto.randomUUID()}`;
-  return sql.begin(async (tx) => {
-    // Capacity gate: a brand-new active member must fit under SWARM_ROSTER_CAP.
-    const cap = await assertRosterCapacity(tx);
-    if (!cap.ok) return err(cap.status, cap.error);
-    const rows = await tx`
-      INSERT INTO swarm_members (id, status, name, lens, contact_email, applied_at, activated_at)
-      VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now(), now())
-      RETURNING *`;
-    await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash)
-             VALUES (${input.memberId}, ${input.publicKey}, true, ${hashKey(token)})`;
-    await audit(actor, "member_manual_add", { memberId: input.memberId }, tx);
-    return { ok: true, status: 201, member: toMemberAdmin(rows[0]), token };
-  });
+  try {
+    return await sql.begin(async (tx) => {
+      // Capacity gate: a brand-new active member must fit under SWARM_ROSTER_CAP.
+      const cap = await assertRosterCapacity(tx);
+      if (!cap.ok) return err(cap.status, cap.error);
+      const rows = await tx`
+        INSERT INTO swarm_members (id, status, name, lens, contact_email, applied_at, activated_at)
+        VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now(), now())
+        RETURNING *`;
+      await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash)
+               VALUES (${input.memberId}, ${input.publicKey}, true, ${hashKey(token)})`;
+      await audit(actor, "member_manual_add", { memberId: input.memberId }, tx);
+      return { ok: true, status: 201, member: toMemberAdmin(rows[0]), token };
+    });
+  } catch (e) {
+    // The probe above is a READ COMMITTED snapshot, so it cannot see a rename
+    // or an admission that commits between it and the INSERT. That surviving
+    // race is a real 409, not a 500: the loser is told the same thing the
+    // probe would have told it. Anything else rethrows untouched.
+    if (isHandleUniqueViolation(e)) return err(409, HANDLE_NAMESPACE_CONFLICT);
+    throw e;
+  }
 }
 
 export async function reviewApplicationAdmin(
