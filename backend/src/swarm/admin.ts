@@ -333,6 +333,27 @@ export async function updateMemberAdmin(
   actor: Actor = ADMIN_ACTOR,
   reason?: string,
 ): Promise<AdminResult> {
+  try {
+    return await updateMemberAdminTx(memberId, expectedVersion, patch, actor, reason);
+  } catch (e) {
+    // The probe inside the transaction is a READ COMMITTED snapshot, so it
+    // cannot see a rename that commits between it and the UPDATE. Since #597
+    // the database refuses that write too (0030's unique index for handle vs
+    // handle, 0031's trigger for handle vs another member's id), and the loser
+    // of the race deserves the same actionable answer the probe gives rather
+    // than the `500 internal error` an escaped exception is sanitized to.
+    if (isHandleUniqueViolation(e)) return err(409, "handle already taken");
+    throw e;
+  }
+}
+
+async function updateMemberAdminTx(
+  memberId: string,
+  expectedVersion: number,
+  patch: MemberAdminPatch,
+  actor: Actor,
+  reason?: string,
+): Promise<AdminResult> {
   return sql.begin(async (tx) => {
     const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "member not found");

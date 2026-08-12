@@ -467,3 +467,111 @@ test("the race a probe cannot close — a rename committing between probe and IN
   expect((await ic.getMember(a.id))!.handle).toBe(CONTENDED);
   expect(((await getMemberRoute(CONTENDED))!.body as any).id).toBe(a.id);
 });
+
+// ── 8. One reference, one member — in BOTH read paths (issue #597) ──────────
+//
+// 0030's unique index constrains handle against handle. It never constrained a
+// handle against another member's `id`, and `id` is a public URL segment too:
+// getMember and getMemberTakes both resolve `handle = $ref OR id = $ref`, which
+// is what keeps every pre-rename link alive. So the pair A(id='a1',
+// handle='woon') / B(id='woon', handle='b1') made /swarm/members/woon
+// ambiguous, and the two read paths disagreed about it: getMember masked the
+// collision with `ORDER BY (handle = $ref) DESC LIMIT 1`, while getMemberTakes
+// matched BOTH rows and let `DISTINCT ON (r.session_id) … ORDER BY r.revision
+// DESC` pick a per-session winner across two different members — A's identity,
+// name and lens rendered over B's signed take, on a page whose whole premise is
+// verifiable attribution.
+//
+// The state is NOT reachable through any public write path (every INSERT in the
+// tree names no handle, and the admin probe refuses the rename), which is why
+// these tests reach past the application and use SQL directly. A test that
+// cannot create the collision proves nothing about how it is read.
+
+test("the DATABASE refuses a handle equal to another member's id, not only the application probe", async () => {
+  const a = await activeMember();
+  const b = await activeMember();
+
+  // Same refusal as the probe's, but with the probe out of the picture: this
+  // statement never runs updateMemberAdmin. Pre-0031 it committed silently.
+  let refusal: any;
+  try {
+    await sql`UPDATE swarm_members SET handle = ${b.id} WHERE id = ${a.id}`;
+  } catch (e) { refusal = e; }
+  expect(refusal).toBeDefined();
+  expect(refusal.code).toBe("23505");
+  expect(refusal.constraint_name ?? refusal.constraint).toBe("swarm_members_handle_namespace");
+  expect((await ic.getMember(a.id))!.handle).toBe(a.id);
+
+  // The mirror direction — a member CREATED under a name another member already
+  // publishes — is refused by the same trigger, so the invariant does not depend
+  // on which of the two rows is written second.
+  await admin.updateMemberAdmin(a.id, await versionOf(a.id), { handle: CONTENDED });
+  let insertRefusal: any;
+  try {
+    await sql`INSERT INTO swarm_members (id, status, name, handle)
+              VALUES (${CONTENDED}, 'inactive', 'Impostor', 'impostor-handle')`;
+  } catch (e) { insertRefusal = e; }
+  expect(insertRefusal).toBeDefined();
+  expect(insertRefusal.code).toBe("23505");
+  expect(insertRefusal.constraint_name ?? insertRefusal.constraint).toBe("swarm_members_handle_namespace");
+});
+
+test("getMemberTakes cannot merge two members' takes into one reference", async () => {
+  // Two members, both taking in ONE session — the shape that made the merge
+  // visible: DISTINCT ON collapses per session, so a merged match returns the
+  // wrong member's row rather than an obviously-too-long list.
+  const shared = await openCollectingSession("ns-collision");
+  const a = await activeMember();
+  const b = await activeMember();
+  expect((await submit(a, shared.date, shared.subj)).status).toBe(201);
+  expect((await submit(b, shared.date, shared.subj)).status).toBe(201);
+  // B's take is the higher revision, so a merged query picks B deterministically
+  // — without this the pre-fix result would depend on physical row order and the
+  // test would prove nothing on a good day.
+  await sql`UPDATE swarm_recommendations SET revision = 2 WHERE member_id = ${b.id}`;
+
+  // A second session only B takes in, so a merged query also returns a take from
+  // a session A never sat in.
+  const solo = await openCollectingSession("ns-collision-solo");
+  expect((await submit(b, solo.date, solo.subj)).status).toBe(201);
+
+  // B is renamed first — the ordinary edit 0030 exists for, and also what frees
+  // `b.id` in the handle namespace so that 0030's unique index has nothing to
+  // say about A taking it. This is the failure scenario verbatim:
+  // A(id=a, handle=b.id) / B(id=b.id, handle=b-renamed).
+  expect((await admin.updateMemberAdmin(b.id, await versionOf(b.id), { handle: `${b.id}-renamed` })).status)
+    .toBe(200);
+
+  // FORCE THE COLLISION. Unreachable through the API (that is #597's first
+  // half), so disable the trigger for exactly one statement.
+  await sql`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
+  try {
+    await sql`UPDATE swarm_members SET handle = ${b.id} WHERE id = ${a.id}`;
+  } finally {
+    await sql`ALTER TABLE swarm_members ENABLE TRIGGER swarm_members_handle_namespace_trigger`;
+  }
+
+  // getMember's answer for this reference: A, because the handle is preferred.
+  const resolved = await ic.getMember(b.id);
+  expect(resolved!.id).toBe(a.id);
+
+  // THE ASSERTION. Pre-fix this returned two takes, BOTH of them B's — one of
+  // them attributed to A on the profile page. The two read paths must agree on
+  // WHO the reference names before anything is attributed to them.
+  const { takes } = await ic.getMemberTakes(b.id, 50);
+  expect(takes.every((t: any) => t.take.memberId === resolved!.id)).toBe(true);
+  expect(takes).toHaveLength(1);
+  expect(takes[0]!.subjectId).toBe(shared.subj);
+
+  // Over the real public route too — the profile page is what actually reads
+  // this, and it is where the misattribution would have been visible.
+  const viaRoute = (await getMemberTakesRoute(b.id))!.body as any;
+  expect(viaRoute.takes).toHaveLength(1);
+  expect(viaRoute.takes[0].take.memberId).toBe(a.id);
+
+  // Resolving the reference first adds a "nobody holds this name" branch that
+  // did not exist when the takes query matched two namespaces itself. It must
+  // still be an empty record, not a 500 and not somebody else's takes.
+  const nobody = (await getMemberTakesRoute(`${b.id}-nobody`))!.body as any;
+  expect(nobody.takes).toHaveLength(0);
+});

@@ -262,6 +262,21 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
 // working), newest first.
 export async function getMemberTakes(memberId: string, limit?: number) {
   const cappedLimit = parseSessionsLimit(limit);
+  // RESOLVE THE PUBLIC REFERENCE FIRST (issue #597). This used to match both
+  // namespaces inside the takes join — `WHERE m.handle = $ref OR m.id = $ref` —
+  // which is the SAME predicate getMember uses but WITHOUT its
+  // `ORDER BY (handle = $ref) DESC LIMIT 1`. If a handle ever equalled another
+  // member's id, the two read paths for one URL disagreed: getMember picked one
+  // row, this query matched BOTH, and `DISTINCT ON (r.session_id) … ORDER BY
+  // r.revision DESC` then chose a per-session winner across two different
+  // members — so /swarm/members/:ref rendered one member's identity over
+  // another member's signed take. Migration 0031 now refuses to create that
+  // state, but a read path must not depend on a write path for its own
+  // coherence: resolving through getMember here means there is exactly ONE
+  // reference-resolution rule in the codebase, and the takes query keys on the
+  // immutable id, which is also what every child row's member_id holds.
+  const member = await getMember(memberId);
+  if (!member) return { takes: [] };
   // LATEST-PER-SESSION (issue #573). Already scoped to one member, so the
   // latest-per-member rule collapses to "the highest revision in each session".
   // A member that amended twice must contribute ONE row to its own record page,
@@ -281,9 +296,9 @@ export async function getMemberTakes(memberId: string, limit?: number) {
       FROM swarm_recommendations r
       JOIN swarm_sessions s ON s.id = r.session_id
       JOIN swarm_members m ON m.id = r.member_id
-      -- Handle OR legacy id (issue #593): /swarm/members/:id/takes is a public
-      -- route, so it must answer to the name a reader actually has.
-      WHERE m.handle = ${memberId} OR m.id = ${memberId}
+      -- One member, by the immutable id getMember resolved the caller's public
+      -- reference to (handle OR legacy id — issue #593 keeps both addressable).
+      WHERE r.member_id = ${member.id}
       ORDER BY r.session_id, r.revision DESC
     ) latest
     ORDER BY latest.session_date DESC, latest.session_generated_at DESC
@@ -1068,14 +1083,27 @@ export async function claimMemberToken(input: TokenClaimInput) {
 export const HANDLE_NAMESPACE_CONFLICT =
   "memberId already in use as another member's public handle";
 
-// Keyed on the ONE constraint that guards the public handle namespace, never on
+// Keyed on the constraints that guard the public handle namespace, never on
 // "any unique violation": swarm_members_pkey and swarm_member_keys' indexes
 // raise 23505 too, and answering those with a handle message would describe the
 // wrong conflict and hide a real bug behind a plausible sentence.
+//
+//   swarm_members_handle_key        — 0030's unique index, handle vs handle.
+//   swarm_members_handle_namespace  — 0031's trigger, handle vs another
+//                                     member's id and vice versa (issue #597).
+//                                     Raised as 23505 WITH a constraint name
+//                                     precisely so it lands here.
+//
+// Both mean the same thing to a caller — the public name it asked for already
+// addresses somebody else — so both map to the same 409.
+const HANDLE_NAMESPACE_CONSTRAINTS = new Set([
+  "swarm_members_handle_key",
+  "swarm_members_handle_namespace",
+]);
 export function isHandleUniqueViolation(e: unknown): boolean {
   const pg = e as { code?: string; constraint_name?: string; constraint?: string } | null;
   if (pg?.code !== "23505") return false;
-  return String(pg.constraint_name ?? pg.constraint ?? "") === "swarm_members_handle_key";
+  return HANDLE_NAMESPACE_CONSTRAINTS.has(String(pg.constraint_name ?? pg.constraint ?? ""));
 }
 
 // ── Demo onboarding ─────────────────────────────────────────────────────────
