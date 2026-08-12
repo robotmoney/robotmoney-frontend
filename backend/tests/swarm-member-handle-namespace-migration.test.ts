@@ -302,12 +302,115 @@ test("the trigger refuses only collisions: legitimate renames and unrelated edit
   await db`UPDATE swarm_members SET handle = ${A} WHERE id = ${A}`;
 });
 
+// ── THE WRITE PATHS THAT DO NOT GO THROUGH A CLIENT SESSION ────────────────
+
+test("session_replication_role = replica does not bypass the trigger — a restore cannot install the pair", async () => {
+  // `pg_restore --disable-triggers` and a logical-replication apply worker both
+  // run under this role, and it skips triggers whose pg_trigger.tgenabled is
+  // 'O' — the value CREATE TRIGGER gives them. Observed on a real server before
+  // 0031 carried `ALTER TABLE ... ENABLE ALWAYS TRIGGER`: the forbidden pair
+  // went in with `INSERT 0 1` and no refusal, and nothing downstream re-checked
+  // it, because migrate.ts never re-runs a file already in schema_migrations.
+  //
+  // Asserted BEHAVIOURALLY first and on the catalogue second: with the ALTER
+  // removed from 0031 both rejection() calls below fail with "expected the
+  // write to be refused, but it succeeded", which is the finding itself rather
+  // than a restatement of the DDL.
+
+  // Direction 1, under the replica role: a handle moving onto another member's id.
+  const renameErr = await rejection(() =>
+    db.begin(async (tx) => {
+      await tx`SET LOCAL session_replication_role = replica`;
+      await tx`UPDATE swarm_members SET handle = ${B} WHERE id = ${A}`;
+    }));
+  expect(renameErr.code).toBe("23505");
+  expect(renameErr.constraint_name ?? renameErr.constraint).toBe("swarm_members_handle_namespace");
+
+  // Direction 2, under the replica role: the reviewer's observed bypass verbatim
+  // — a row arriving with an id that is already another member's handle. 0030's
+  // default-handle trigger is still ORIGIN-only, so the handle is supplied
+  // explicitly here, exactly as a restore's COPY/INSERT would supply it.
+  const insertErr = await rejection(() =>
+    db.begin(async (tx) => {
+      await tx`SET LOCAL session_replication_role = replica`;
+      await tx`INSERT INTO swarm_members (id, status, name, handle)
+               VALUES (${B_HANDLE}, 'inactive', 'Bypasser', 'ns-bypass')`;
+    }));
+  expect(insertErr.code).toBe("23505");
+  expect(insertErr.constraint_name ?? insertErr.constraint).toBe("swarm_members_handle_namespace");
+
+  // Refused, not merely logged: neither write landed.
+  const [{ n }] = await db<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM swarm_members WHERE id = ${B_HANDLE}`;
+  expect(n).toBe(0);
+  const [a] = await db<{ handle: string }[]>`SELECT handle FROM swarm_members WHERE id = ${A}`;
+  expect(a!.handle).toBe(A);
+
+  // And the mechanism, so a future edit that reverts the ALTER is named rather
+  // than merely observed: 'A' = ALWAYS, 'O' = ORIGIN (what CREATE TRIGGER gives).
+  const [trg] = await db<{ tgenabled: string }[]>`
+    SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger'`;
+  expect(trg!.tgenabled).toBe("A");
+});
+
+// ── THE COLLIDED STATE IS REPAIRABLE, AND FROM THE RIGHT ROW ────────────────
+
+test("in a collided state the hijacked member can still rename itself, and the repair is the OTHER row", async () => {
+  // The pair is unreachable through the trigger — that is the point of the file
+  // — so force it for exactly one statement. Restored with ENABLE ALWAYS, not a
+  // plain ENABLE: the latter silently downgrades tgenabled from 'A' back to 'O'
+  // and would hand every later test the bypass this migration just closed.
+  await db`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
+  try {
+    await db`UPDATE swarm_members SET handle = ${B} WHERE id = ${A}`;
+  } finally {
+    await db`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
+  }
+  const [{ tgenabled }] = await db<{ tgenabled: string }[]>`
+    SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger'`;
+  expect(tgenabled).toBe("A");
+
+  // B is the VICTIM: A publishes under B's id. Renaming B's own handle to a name
+  // nobody holds under either namespace introduces no collision and must be
+  // allowed. Before the `id_arrives` gate the `m.handle = NEW.id` clause refused
+  // it — and every other candidate handle identically, since it depends only on
+  // NEW.id, which never moves — while the admin surface reported that as
+  // `409 handle already taken`, naming a handle nobody held and pointing at the
+  // wrong row.
+  await db`UPDATE swarm_members SET handle = 'ns-b-renamed' WHERE id = ${B}`;
+  const [victim] = await db<{ handle: string }[]>`SELECT handle FROM swarm_members WHERE id = ${B}`;
+  expect(victim!.handle).toBe("ns-b-renamed");
+
+  // Unrelated edits on the victim keep working too (the early return).
+  await db`UPDATE swarm_members SET status = 'inactive' WHERE id = ${B}`;
+
+  // The write that WOULD deepen the collision is still refused while it lasts:
+  // a third member cannot also take B's id.
+  const third = await rejection(() =>
+    db`INSERT INTO swarm_members (id, status, name, handle) VALUES ('ns-third', 'inactive', 'Third', ${B})`);
+  expect(third.code).toBe("23505");
+
+  // THE REPAIR — move A's handle off B's id. That is the row that has to change,
+  // and the refusal message says so by naming the other member.
+  await db`UPDATE swarm_members SET handle = ${A} WHERE id = ${A}`;
+  const err = await rejection(() => db`UPDATE swarm_members SET handle = ${B} WHERE id = ${A}`);
+  expect(err.code).toBe("23505");
+  expect(String(err.message)).toContain(B);
+
+  await db`UPDATE swarm_members SET status = 'active', handle = ${B_HANDLE} WHERE id = ${B}`;
+});
+
 test("re-applying 0031 verbatim is a no-op — the runner may replay it on any boot", async () => {
   await applyMigration();
   const [{ n }] = await db<{ n: number }[]>`
     SELECT count(*)::int AS n FROM pg_trigger
     WHERE tgname = 'swarm_members_handle_namespace_trigger'`;
   expect(n).toBe(1);
+  // Including the ALWAYS state: a replay must not leave the trigger back at
+  // ORIGIN, or the replica-role bypass silently reopens on the next boot.
+  const [{ tgenabled }] = await db<{ tgenabled: string }[]>`
+    SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger'`;
+  expect(tgenabled).toBe("A");
   const err = await rejection(() => db`UPDATE swarm_members SET handle = ${B} WHERE id = ${A}`);
   expect(err.code).toBe("23505");
 });

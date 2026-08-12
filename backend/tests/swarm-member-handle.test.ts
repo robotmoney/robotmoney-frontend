@@ -414,21 +414,25 @@ test("POST /api/swarm/register: the same conflict, answered the same way — ON 
   expect(await memberCount()).toBe(1);
 });
 
-// Block until the manual-add INSERT is genuinely waiting on a lock, which is
-// the only proof that the create passed its probe and reached the unique index.
-// Times out LOUDLY: a silent give-up here would turn the race test into a test
-// of the probe, which the test above already covers.
-async function waitUntilManualAddBlocks(): Promise<void> {
+// Block until a statement matching `fragment` is genuinely waiting on a lock,
+// which is the only proof that the write passed its probe and reached the
+// index. Times out LOUDLY: a silent give-up here would turn a race test into a
+// test of the probe, which the non-racing tests already cover.
+//
+// `wait_event_type = 'Lock'` is what discriminates. The other transaction in
+// each of these tests is parked in idle-in-transaction with a matching `query`
+// text, but it is waiting on the Client, not on a Lock.
+async function waitUntilBlockedOn(fragment: string, whatItProves: string): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     const [row] = await sql<{ n: number }[]>`
       SELECT count(*)::int AS n FROM pg_stat_activity
-      WHERE wait_event_type = 'Lock' AND query ILIKE '%INSERT INTO swarm_members%'`;
+      WHERE wait_event_type = 'Lock' AND query ILIKE ${`%${fragment}%`}`;
     if ((row?.n ?? 0) > 0) return;
     await new Promise((r) => setTimeout(r, 25));
   }
   throw new Error(
-    "the manual-add INSERT never blocked on swarm_members_handle_key — the probe→INSERT race was NOT reproduced, so this test proved nothing",
+    `no statement matching ${fragment} ever blocked on swarm_members_handle_key — ${whatItProves} was NOT reproduced, so this test proved nothing`,
   );
 }
 
@@ -454,7 +458,7 @@ test("the race a probe cannot close — a rename committing between probe and IN
   const create = adminAddMemberRoute({ memberId: CONTENDED, name: "Racer", publicKey: publicKeyB64 });
   // Deterministic, not a sleep: the create is provably past its probe and
   // parked on the handle index before the rename is allowed to commit.
-  await waitUntilManualAddBlocks();
+  await waitUntilBlockedOn("INSERT INTO swarm_members", "the probe→INSERT race");
   commitRename();
   await renamer;
 
@@ -466,6 +470,64 @@ test("the race a probe cannot close — a rename committing between probe and IN
   expect(await memberCount()).toBe(1);
   expect((await ic.getMember(a.id))!.handle).toBe(CONTENDED);
   expect(((await getMemberRoute(CONTENDED))!.body as any).id).toBe(a.id);
+});
+
+test("the SAME race on the RENAME path — two administrators, one free handle — is a 409, never a 500", async () => {
+  // The update path's 23505 mapping (admin.ts's catch around updateMemberAdminTx)
+  // is what stops this PR turning a lost race into a `500 internal error`, and
+  // it is the ONE branch no other test can reach: every other 409 asserted
+  // against updateMemberAdmin is produced by the in-transaction probe, which
+  // returns before the database is ever asked. This test drives the update to
+  // the point where the DATABASE refuses it.
+  const a = await activeMember();
+  const b = await activeMember();
+  const bVersion = await versionOf(b.id);
+  // A handle nobody holds under EITHER namespace, so both administrators' probes
+  // legitimately pass. This is the ordinary way two operators collide: not a
+  // hijack, just the same good name chosen twice.
+  const free = rid("contended-rename");
+  expect(await ic.getMember(free)).toBeNull();
+
+  // Administrator 1's rename, applied but UNCOMMITTED. Under READ COMMITTED
+  // administrator 2's probe cannot see it — the window a probe can never close.
+  let renameApplied!: () => void;
+  let commitRename!: () => void;
+  const renameLanded = new Promise<void>((resolve) => { renameApplied = resolve; });
+  const renameHeld = new Promise<void>((resolve) => { commitRename = resolve; });
+  const renamer = sql.begin(async (tx) => {
+    await tx`UPDATE swarm_members SET handle = ${free}, version = version + 1 WHERE id = ${a.id}`;
+    renameApplied();
+    await renameHeld;
+  });
+  await renameLanded;
+
+  // Administrator 2 renames a DIFFERENT member to the same free handle.
+  const loser = admin.updateMemberAdmin(b.id, bVersion, { handle: free });
+  // Deterministic, not a sleep: administrator 2 is provably past its probe and
+  // parked on swarm_members_handle_key before administrator 1 is allowed to
+  // commit. Without this the test could pass on the probe alone and prove
+  // nothing about the mapping.
+  await waitUntilBlockedOn("UPDATE swarm_members SET", "the probe→UPDATE rename race");
+  commitRename();
+  await renamer;
+
+  // THE ASSERTION. `500` here is what an escaped 23505 is sanitized to by
+  // api/index.ts, and it is what this surface did before the catch existed.
+  const raced = await loser;
+  expect(raced.status).toBe(409);
+  expect(raced.error).toBe("handle already taken");
+
+  // The loser wrote nothing — not the handle, and not the version bump that
+  // would have made an operator's next optimistic update fail for a second,
+  // unrelated reason.
+  const [row] = await sql<{ handle: string; version: number }[]>`
+    SELECT handle, version FROM swarm_members WHERE id = ${b.id}`;
+  expect(row!.handle).toBe(b.id);
+  expect(Number(row!.version)).toBe(bVersion);
+
+  // The winner owns the name, and the public reference resolves to it.
+  expect((await ic.getMember(a.id))!.handle).toBe(free);
+  expect((await ic.getMember(free))!.id).toBe(a.id);
 });
 
 // ── 8. One reference, one member — in BOTH read paths (issue #597) ──────────
@@ -544,12 +606,21 @@ test("getMemberTakes cannot merge two members' takes into one reference", async 
 
   // FORCE THE COLLISION. Unreachable through the API (that is #597's first
   // half), so disable the trigger for exactly one statement.
+  //
+  // ENABLE ALWAYS, not ENABLE, in the finally: 0031 installs this trigger with
+  // tgenabled = 'A' so that `session_replication_role = replica` (pg_restore
+  // --disable-triggers, logical replication) cannot bypass it, and a plain
+  // ENABLE silently downgrades it to 'O' for the rest of the suite — reopening
+  // the exact hole the migration closes, in the shared database, invisibly.
   await sql`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
   try {
     await sql`UPDATE swarm_members SET handle = ${b.id} WHERE id = ${a.id}`;
   } finally {
-    await sql`ALTER TABLE swarm_members ENABLE TRIGGER swarm_members_handle_namespace_trigger`;
+    await sql`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
   }
+  const [trg] = await sql<{ tgenabled: string }[]>`
+    SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger'`;
+  expect(trg!.tgenabled).toBe("A");
 
   // getMember's answer for this reference: A, because the handle is preferred.
   const resolved = await ic.getMember(b.id);
@@ -574,4 +645,14 @@ test("getMemberTakes cannot merge two members' takes into one reference", async 
   // still be an empty record, not a 500 and not somebody else's takes.
   const nobody = (await getMemberTakesRoute(`${b.id}-nobody`))!.body as any;
   expect(nobody.takes).toHaveLength(0);
+
+  // REPAIR, before leaving. This is the only place in the tree that installs a
+  // pair the schema forbids, and `beforeEach` only truncates for THIS file — so
+  // without this the shared suite database ends the file in violation, and
+  // db-preflight.test.ts's "the migrated database is clean" assertion would be
+  // asserting the previous file's luck. The repair is the one 0031's message
+  // names: move A's handle off B's id (see the migration test's collided-state
+  // case for why the victim's own row is the wrong one to change).
+  await sql`UPDATE swarm_members SET handle = ${`${a.id}-repaired`} WHERE id = ${a.id}`;
+  expect((await ic.getMember(b.id))!.id).toBe(b.id);
 });

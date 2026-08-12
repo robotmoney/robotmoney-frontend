@@ -117,22 +117,35 @@ export async function assertRosterCapacity(
   return { ok: true };
 }
 /**
- * Resolve a PUBLIC member reference — a handle or a legacy id (issue #593).
+ * Resolve a PUBLIC member reference — a handle or a legacy id (issue #593) —
+ * to its raw row. THE ONLY implementation of that rule in this codebase; every
+ * caller goes through here rather than re-spelling the predicate (issue #597:
+ * two copies of a resolver are two answers to "who does this URL name", and the
+ * bug that issue was filed about was exactly that disagreement). Callers that
+ * need the projected member call getMember; callers that need columns the
+ * projection drops (updateMemberProfile merges raw ones) take the row.
  *
  * Migration 0030 backfilled `handle = id`, so both names address the same row
  * for every member nobody has renamed, and a member renamed since then is still
  * reachable by the id its old links carry. The handle is preferred when both
- * match, which the admin uniqueness guard (swarm/admin.ts) already makes
- * unreachable — it refuses a handle that collides with ANY other member's
- * handle OR id — but ORDER BY makes the resolution deterministic regardless of
- * how the rows were seeded rather than leaving it to physical row order.
+ * match — which migration 0031's trigger now makes unreachable rather than
+ * merely improbable — but ORDER BY makes the resolution deterministic
+ * regardless of how the rows were seeded rather than leaving it to physical row
+ * order.
+ *
+ * NOT the same question as swarm/admin.ts's create-path probe, which orders
+ * `(id = $ref) DESC`: that one asks "is this proposed NAME already spoken for",
+ * and it deliberately prefers the id namespace to tell the two 409s apart.
  */
-export async function getMember(id: string) {
-  const row = (await sql`
+async function resolveMemberRow(ref: string) {
+  return (await sql`
     SELECT * FROM swarm_members
-    WHERE handle = ${id} OR id = ${id}
-    ORDER BY (handle = ${id}) DESC
+    WHERE handle = ${ref} OR id = ${ref}
+    ORDER BY (handle = ${ref}) DESC
     LIMIT 1`)[0];
+}
+export async function getMember(id: string) {
+  const row = await resolveMemberRow(id);
   return row ? toMember(row) : null;
 }
 export async function getSubject(id: string) {
@@ -272,9 +285,14 @@ export async function getMemberTakes(memberId: string, limit?: number) {
   // members — so /swarm/members/:ref rendered one member's identity over
   // another member's signed take. Migration 0031 now refuses to create that
   // state, but a read path must not depend on a write path for its own
-  // coherence: resolving through getMember here means there is exactly ONE
-  // reference-resolution rule in the codebase, and the takes query keys on the
+  // coherence: resolving through getMember here means every path that turns a
+  // public reference into a member row goes through the ONE shared resolver,
+  // resolveMemberRow — getMember, this function, and updateMemberProfile since
+  // #597 — instead of re-spelling the predicate, and the takes query keys on the
   // immutable id, which is also what every child row's member_id holds.
+  // (swarm/admin.ts's two probes ask a different question — "is this proposed
+  // NAME already spoken for" — with a deliberately different namespace
+  // preference; see resolveMemberRow's note.)
   const member = await getMember(memberId);
   if (!member) return { takes: [] };
   // LATEST-PER-SESSION (issue #573). Already scoped to one member, so the
@@ -1892,11 +1910,13 @@ export async function updateMemberProfile(token: string, memberRef: string, patc
   // to the same URL. Resolve it to the immutable id FIRST, then compare — the
   // token still authorises exactly one row, so this widens what a member may
   // call itself, never whose profile it may write.
-  const row = (await sql`
-    SELECT * FROM swarm_members
-    WHERE handle = ${memberRef} OR id = ${memberRef}
-    ORDER BY (handle = ${memberRef}) DESC
-    LIMIT 1`)[0];
+  //
+  // Through the SHARED resolver (issue #597), not a second inline copy of the
+  // same predicate. The raw row is what this needs: the merge below reads
+  // tagline/mandate/biases/voice_md/mode/operator/avatar off it, which the
+  // SwarmMember projection renames and partly drops. Authorization is unchanged
+  // — it still compares the token against `row.id`, the immutable key.
+  const row = await resolveMemberRow(memberRef);
   if (!row) return { ok: false, status: 404, error: "member not found" };
   const memberId = row.id as string;
   if (tokenMemberId !== memberId) return { ok: false, status: 403, error: "token/member mismatch" };

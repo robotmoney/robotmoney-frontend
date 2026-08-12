@@ -39,9 +39,30 @@
 -- advisory lock keyed on the reference, or a single unique index over a union
 -- of both names, which would mean writing a second table or a generated
 -- column). What this trigger buys is that the invariant no longer depends on
--- one call site in swarm/admin.ts remembering to probe: EVERY writer — a
--- migration, an operator's manual UPDATE, a restore, a future writer that names
--- `handle` explicitly — is now refused by the database. See issue #597.
+-- one call site in swarm/admin.ts remembering to probe: every writer that goes
+-- through an ordinary client session — a migration, an operator's manual
+-- UPDATE, a future writer that names `handle` explicitly — is now refused by
+-- the database. See issue #597.
+--
+-- WHAT A RESTORE IS AND IS NOT COVERED BY. `pg_restore --disable-triggers` and
+-- a logical-replication apply worker both run under
+-- `session_replication_role = replica`, which skips ORIGIN triggers entirely —
+-- observed, not assumed: the forbidden pair installed with `INSERT 0 1` and no
+-- refusal. The `ALTER TABLE ... ENABLE ALWAYS TRIGGER` at the bottom of this
+-- file is what closes that, and it is why the trigger is created and then
+-- altered rather than created enabled-always in one statement (there is no such
+-- CREATE TRIGGER syntax).
+--
+-- It does NOT cover an ordinary full `pg_dump`/`pg_restore`: that emits
+-- CREATE TRIGGER in the post-data section, so the COPY that loads the rows runs
+-- before this trigger exists and no trigger state can help. Nor does the
+-- pre-flight DO block below cover it — a dump taken from a post-0031 database
+-- already carries this file's name in `schema_migrations`, so src/db/migrate.ts
+-- skips it and the block never re-runs. The thing that catches a RESTORED
+-- violation is therefore not in this file at all: the same detection query
+-- lives in backend/scripts/db-preflight.ts, which runs on every external-pg
+-- boot, before the boot's first write, and refuses one that is already in
+-- violation. Keep the two queries in agreement.
 
 -- ── Existing data ───────────────────────────────────────────────────────────
 -- A trigger only inspects rows that are written after it exists, so a database
@@ -67,31 +88,75 @@ BEGIN
   END IF;
 END $$;
 
+-- Both RAISEs below use 23505 WITH a constraint name, i.e. the same shape
+-- swarm_members_handle_key raises, so swarm/domain.ts isHandleUniqueViolation
+-- recognises it and the API answers 409 rather than 500. A distinct name
+-- because this is a distinct rule, and an operator reading a log should be able
+-- to tell which one refused the write — and each message names the OTHER member
+-- id, because "which two rows" is the only question the log has to answer.
 CREATE OR REPLACE FUNCTION swarm_members_assert_handle_namespace() RETURNS trigger
 LANGUAGE plpgsql AS $$
+DECLARE
+  -- Is this write PLACING an id? True on INSERT, and on the (never used by this
+  -- application, but expressible) UPDATE that moves a primary key. See
+  -- direction 2 for why the distinction is load-bearing.
+  id_arrives boolean := true;
+  colliding text;
 BEGIN
-  -- An UPDATE that moves neither public name cannot create a collision, and
-  -- must not be refused because of one that already exists on the row (see the
-  -- deploy note above): status flips, version bumps and profile edits stay
-  -- writable either way.
-  IF TG_OP = 'UPDATE'
-     AND NEW.handle IS NOT DISTINCT FROM OLD.handle
-     AND NEW.id IS NOT DISTINCT FROM OLD.id THEN
-    RETURN NEW;
+  IF TG_OP = 'UPDATE' THEN
+    -- An UPDATE that moves neither public name cannot create a collision, and
+    -- must not be refused because of one that already exists on the row (see
+    -- the deploy note above): status flips, version bumps and profile edits
+    -- stay writable either way.
+    IF NEW.handle IS NOT DISTINCT FROM OLD.handle
+       AND NEW.id IS NOT DISTINCT FROM OLD.id THEN
+      RETURN NEW;
+    END IF;
+    id_arrives := NEW.id IS DISTINCT FROM OLD.id;
   END IF;
 
-  IF EXISTS (
-    SELECT 1 FROM swarm_members m
-    WHERE m.id <> NEW.id AND (m.id = NEW.handle OR m.handle = NEW.id)
-  ) THEN
-    -- 23505 with a constraint name, i.e. the same shape swarm_members_handle_key
-    -- raises, so swarm/domain.ts isHandleUniqueViolation recognises it and the
-    -- API answers 409 "handle already taken" rather than 500. A distinct name
-    -- because this is a distinct rule, and an operator reading a log should be
-    -- able to tell which one refused the write.
+  -- DIRECTION 1 — the handle this write places is already another member's id.
+  -- Checked on every write that moves either name. This is the ONLY direction a
+  -- handle-only rename can create: a forbidden pair exists exactly when some
+  -- row's handle equals some other row's id, so the write that MOVES that
+  -- handle is refused here, whichever of the two rows is written second and
+  -- however many rows one UPDATE statement touches.
+  SELECT m.id INTO colliding
+    FROM swarm_members m
+    WHERE m.id <> NEW.id AND m.id = NEW.handle
+    LIMIT 1;
+  IF colliding IS NOT NULL THEN
     RAISE EXCEPTION
-      'handle % / id % would address more than one swarm member', NEW.handle, NEW.id
+      'handle % is already member %''s id, so it would address more than one swarm member',
+      NEW.handle, colliding
       USING ERRCODE = '23505', CONSTRAINT = 'swarm_members_handle_namespace';
+  END IF;
+
+  -- DIRECTION 2 — the id this write places is already another member's handle.
+  -- This is what makes the check symmetric on INSERT: without it, the pair is
+  -- creatable by publishing A(handle='woon') first and inserting B(id='woon')
+  -- second, because that INSERT never looks at anyone else's handle.
+  --
+  -- Gated on `id_arrives` deliberately. `NEW.id` does not move on a rename, and
+  -- neither does any other row's handle, so on a handle-only UPDATE this clause
+  -- can only ever report a collision the write did not create — the same reason
+  -- the early return above exists. Ungated it froze the HIJACKED member out of
+  -- the handle namespace entirely: with A(id='a1', handle='woon') and
+  -- B(id='woon', handle='b1'), every rename B attempted was refused, including
+  -- to names nobody held, and the admin surface reported that as
+  -- "handle already taken" — false, and pointing at the wrong row. The repair
+  -- is to move A's handle, and B's own edits must stay writable meanwhile.
+  IF id_arrives THEN
+    SELECT m.id INTO colliding
+      FROM swarm_members m
+      WHERE m.id <> NEW.id AND m.handle = NEW.id
+      LIMIT 1;
+    IF colliding IS NOT NULL THEN
+      RAISE EXCEPTION
+        'id % is already member %''s handle, so it would address more than one swarm member',
+        NEW.id, colliding
+        USING ERRCODE = '23505', CONSTRAINT = 'swarm_members_handle_namespace';
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -108,3 +173,14 @@ DROP TRIGGER IF EXISTS swarm_members_handle_namespace_trigger ON swarm_members;
 CREATE TRIGGER swarm_members_handle_namespace_trigger
 BEFORE INSERT OR UPDATE ON swarm_members
 FOR EACH ROW EXECUTE FUNCTION swarm_members_assert_handle_namespace();
+
+-- ALWAYS, not the default ORIGIN. A trigger created the ordinary way has
+-- pg_trigger.tgenabled = 'O' and is skipped whenever the session sets
+-- `session_replication_role = replica` — which is precisely what
+-- `pg_restore --disable-triggers` and a logical-replication apply worker do.
+-- Observed on a real server before this line existed: the forbidden pair went
+-- in with `INSERT 0 1` and no refusal. 'A' makes it fire under both roles.
+-- Idempotent, so the runner may replay this file on any boot; and a
+-- DISABLE/ENABLE cycle in a test must restore it with ENABLE ALWAYS, since a
+-- plain ENABLE silently downgrades it back to 'O'.
+ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger;
