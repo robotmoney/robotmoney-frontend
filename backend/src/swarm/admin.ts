@@ -21,6 +21,10 @@ import {
   countActiveMembersTx,
 } from "./domain.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
+// The published shape of this module's member projection. Imported for the
+// `: AdminMember` return annotation on toMemberAdmin() below — see the comment
+// there (issue #572).
+import type { AdminMember } from "@robotmoney/contract";
 
 type Actor = string;
 export const ADMIN_ACTOR = "admin";
@@ -67,7 +71,18 @@ function toSubjectAdmin(row: Record<string, any>) {
 // Every editable column is projected (issue #567): the admin edit form cannot
 // prefill — and the admin page cannot diff — what this does not return. Still
 // no key material: key_hash/token_hash/public_key are never projected here.
-function toMemberAdmin(row: Record<string, any>) {
+//
+// The `: AdminMember` annotation is load-bearing (issue #572). Without it,
+// #571 widened this literal by five fields while contract/src/admin.d.ts kept
+// declaring twelve, and nothing anywhere went red — the contract is a `.d.ts`,
+// which `skipLibCheck: true` excuses from every typecheck in the repo. With it,
+// the returned object literal is contextually typed, so TypeScript's
+// excess-property check fails backend.yml's typecheck on the next undeclared
+// field. That check is path-gated on `backend/**` and is a typecheck rather
+// than a test, so it is the SECOND line only; the enforcing guard is
+// scripts/tests/unit/admin-member-contract-parity.test.ts, which runs
+// unconditionally on every PR.
+function toMemberAdmin(row: Record<string, any>): AdminMember {
   return {
     // Both names, always (issue #593): `id` is what every child row and every
     // signature is keyed on and is NOT editable here; `handle` is the public

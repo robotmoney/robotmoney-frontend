@@ -265,6 +265,24 @@ export interface AdminTopicListResponse {
 // swarm-admin.ts `members`/`applications` routes exactly. The backend has
 // no admin read for active-key metadata (activeKeyId/activeKeyCreatedAt) or
 // cross-session participation history — those fields do not exist on this DTO.
+//
+// "Exactly" is now MECHANICALLY ENFORCED, not asserted by this comment
+// (issue #572). Nothing typechecks this file — it is a `.d.ts`, so both
+// tsconfigs' `skipLibCheck: true` skip it, and neither `include` covers
+// `contract/**` in the first place — which is how #571 widened
+// toMemberAdmin() by five fields (`biases`, `voiceMd`, `mode`, `operator`,
+// `avatar`) with nothing going red. Two guards now hold the two sides
+// together:
+//   1. scripts/tests/unit/admin-member-contract-parity.test.ts parses both
+//      source regions and fails on ANY key-set difference. It lives in the
+//      unit tier deliberately: unit.yml carries no paths filter, so it runs
+//      on a contract-only PR (which skips backend.yml) AND on a backend-only
+//      PR (which skips contract.yml). A guard on either side alone would be
+//      skipped by exactly the PR shape it exists to catch.
+//   2. toMemberAdmin() is annotated `: AdminMember`, so TypeScript's
+//      excess-property check on its returned literal fails backend.yml's
+//      typecheck too. Belt-and-braces only — a typecheck is not a test, and
+//      that one IS path-gated on `backend/**`.
 
 export type AdminMemberStatus = "applied" | "active" | "inactive";
 export type ApplicationStatus = "pending" | "approved" | "rejected";
@@ -281,6 +299,22 @@ export interface AdminMember {
   tagline: string | null;
   lens: string | null;
   mandate: string | null;
+  /** jsonb. Both writers agree on a string array: roster-seed.ts seeds one and
+   * validateMemberAdminPatch()/optionalBiases() rejects anything that is not
+   * 1-20 non-empty strings. MemberAdminPatch declares the same `string[]`. */
+  biases: string[] | null;
+  voiceMd: string | null;
+  mode: string | null;
+  operator: string | null;
+  /** jsonb, and deliberately NOT structured. Its writers disagree on the
+   * shape: roster-seed.ts writes `{path, source_url, credit}`, while
+   * validateMemberAdminPatch()/optionalAvatar() accepts ANY bounded plain JSON
+   * object, and backend/tests/api/admin-swarm.test.ts round-trips a bare
+   * `{path}`. A structured type here would be NARROWER than what the column
+   * actually holds — an assertion the data does not guarantee, which is the
+   * same class of untrue claim this whole issue is about. `MemberAdminPatch`
+   * already declares this exact type for the write side. */
+  avatar: Record<string, unknown> | null;
   contactEmail: string | null;
   appliedAt: string | null;
   activatedAt: string | null;
