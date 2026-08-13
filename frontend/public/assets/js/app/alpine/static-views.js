@@ -1688,11 +1688,36 @@ export function registerStaticViews(Alpine) {
     memberById(memberId) {
       return this.members.find((m) => m.id === memberId || m.handle === memberId) || null;
     },
+    // THE PUBLIC HANDLE FOR A MEMBER REFERENCE, from either source this page
+    // already holds (issue #598). The roster is only the ACTIVE roster —
+    // GET /api/swarm/members filters `status = 'active'`
+    // (backend/src/swarm/domain.ts) — so a member deactivated after a rename is
+    // simply not in `this.members`, and every reference resolved through the
+    // roster alone fell back to the signed id. The takes on this same page each
+    // carry their own author's `member_handle` (domain.ts withTakes joins
+    // swarm_members with NO status filter, so a deactivated author keeps it), so
+    // the page holds the public address of every member who submitted here even
+    // when the roster does not. Consulting both is what stops one page from
+    // publishing two different addresses for one member: the take byline read
+    // the take, the disagreement panel read the roster, and after a
+    // rename-then-deactivate they disagreed.
+    //
+    // Returns null when neither source knows the reference — the caller decides
+    // what to fall back to.
+    memberHandleOf(memberId) {
+      const rosterHandle = this.memberById(memberId)?.handle;
+      if (rosterHandle) return rosterHandle;
+      const take = (this.takes || []).find((t) => t.memberId === memberId || t.memberHandle === memberId);
+      return take?.memberHandle || null;
+    },
     // Where to LINK for a member reference, preferring the public handle and
-    // falling back to whatever the payload carried when the roster holds no
-    // record for it — a link to a legacy id still resolves server-side.
+    // falling back to whatever the payload carried when neither the roster nor
+    // this session's takes hold a handle for it — a link to a legacy id still
+    // resolves server-side (domain.ts resolveMemberRow matches handle OR id).
+    // That fallback is what the shipped static archive takes when read from a
+    // backendless checkout: those rows predate the `handle` column entirely.
     memberHref(memberId) {
-      return `/swarm/members/${encodeURIComponent(this.memberById(memberId)?.handle || memberId)}`;
+      return `/swarm/members/${encodeURIComponent(this.memberHandleOf(memberId) || memberId)}`;
     },
     // `absent` is a list of member IDs, printed raw — a reader got
     // "absent: draco, 88efd6b9-e865-417d-afe1-45d84510338b". Resolve what we

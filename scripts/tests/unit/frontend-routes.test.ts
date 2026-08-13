@@ -674,8 +674,10 @@ describe("frontend route resolution", () => {
     // the tolerant style of every other key in this mapper.
     expect(camelTake({ id: "t9", memberId: "athena", memberHandle: "macro-desk" }).memberHandle).toBe("macro-desk");
 
-    // The shipped archive's takes carry neither field: `t.memberHandle ||
-    // t.memberId` in views/swarm/session.html must land on the legacy id.
+    // The shipped archive's takes carry neither field, so the session page's
+    // memberHandleOf() finds a handle in neither of the two sources it reads —
+    // the roster and this session's takes (issue #598) — and memberHref() lands
+    // on the legacy id, which is still a resolvable public address.
     const archived = camelTake({ member_id: "athena", stance: "hold" });
     expect(archived.memberHandle).toBeUndefined();
     expect(archived.memberId).toBe("athena");
