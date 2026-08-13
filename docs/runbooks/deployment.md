@@ -138,14 +138,31 @@ trigger rather than reasoned about:
 Nothing repairs it automatically: each statement repoints a live published URL,
 and only an operator can choose the new name.
 
+**The same two rules apply if it is the MIGRATION that refuses.** On a
+first-time install of `0031_swarm_member_handle_namespace.sql` over already
+restored violating rows (a brand-new database seeded from an old dump, then
+migrated), the migration's own `DO` block raises before the trigger is created
+and the message says *"Change one of the two public names"*. That wording
+predates the correction above and is wrong in the same way: **update the
+holder** — the member whose *handle* is the offending value — not the shadowed
+one, and run one update per pair reported. The migration file is deliberately
+left as-is: `backend/src/db/migrate.ts` tracks applied migrations by filename,
+so editing an applied file changes nothing anywhere it already ran, and this
+repo treats applied migrations as frozen artefacts.
+
 **Getting a SQL session to run it in.** The runbook's own two topologies:
 
 ```bash
 # bundled Postgres (docker-compose.yml). Its host port is Docker-assigned by
-# design, so go in through the container rather than guessing a port:
-docker compose exec postgres psql -U "$POSTGRES_USER" "$POSTGRES_DB"
+# design, so go in through the container rather than guessing a port. The
+# variables are expanded INSIDE the container by `sh -lc` on purpose: compose
+# sets them on the postgres service, but your own shell has never seen them
+# (their defaults live in docker-compose.yml's `${POSTGRES_USER:-robotmoney}`
+# interpolation and in .env), so an unquoted paste would run `psql -U "" ""`.
+docker compose exec postgres sh -lc 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"'
 
-# managed Postgres (§4.3):
+# managed Postgres (§4.3). $DATABASE_URL here IS a variable of your own shell —
+# export it, or paste the url literally:
 psql "$DATABASE_URL"
 ```
 
@@ -178,12 +195,31 @@ guard ran; that field is.** The status code stays 200 in every case on purpose:
 the compose healthcheck keys on `.ok`, and failing it because Postgres was slow
 at boot would trade a wrong-attribution risk for a restart loop.
 
+`handle_namespace` is readable whenever `/health` answers, which is every case
+except one: against a **black-holed** database (packets dropped, no RST — a
+firewall-rule mismatch or a managed-Postgres failover), `/health`'s own
+`SELECT 1` on the shared pool is unbounded and Bun closes the connection at its
+10s idle timeout, so `curl` gets an empty reply and you see neither `db` nor
+`handle_namespace`. That is a pre-existing property of `/health` — it predates
+this guard and is not changed by it; a database that *rejects* connections
+answers 200 immediately. In that one state the `[api]` log line above is the
+only signal, so **read the container log (`docker compose logs api | grep
+'namespace guard'`) when `/health` does not answer at all.**
+
 **Bounded.** The guard cannot delay the boot by more than its wall-clock budget
-(`PG_NAMESPACE_GUARD_TIMEOUT_MS`, default **8s**) for *any* database state —
-down, slow, black-holed, or with `swarm_members` held under an `ACCESS
-EXCLUSIVE` lock by a migration replay, `REINDEX` or `VACUUM FULL`. It runs on
-its own connection with server-side `statement_timeout`, `lock_timeout` and
-`connect_timeout`, and each attempt races the time remaining.
+(`PG_NAMESPACE_GUARD_TIMEOUT_MS`, an integer count of **milliseconds**, default
+`8000`) for *any* database state — down, slow, black-holed, or with
+`swarm_members` held under an `ACCESS EXCLUSIVE` lock by a migration replay,
+`REINDEX` or `VACUUM FULL`. It runs on its own connection with server-side
+`statement_timeout`, `lock_timeout` and `connect_timeout`, and each attempt
+races the time remaining.
+
+Write that value as **milliseconds only** — `PG_NAMESPACE_GUARD_TIMEOUT_MS=15000`,
+never `15s`. A value that is not a positive number is **ignored**: the api logs
+`[api] PG_NAMESPACE_GUARD_TIMEOUT_MS="15s" is not a positive number of
+MILLISECONDS — IGNORING it and using 8000ms` and boots on the default. It never
+runs unbounded and never refuses the boot over a typo, but you did not get the
+budget you asked for, so grep for that line after changing it.
 
 **It is a boot-time snapshot, not a standing guarantee.** The check runs once,
 at process start; there is no periodic re-check and no request-path re-entry.

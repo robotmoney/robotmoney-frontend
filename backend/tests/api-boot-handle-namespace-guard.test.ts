@@ -30,7 +30,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
-import { handleNamespaceConflicts } from "../src/db/handle-namespace.ts";
+import {
+  checkHandleNamespace,
+  handleNamespaceConflicts,
+  NAMESPACE_GUARD_BUDGET_MS,
+  NAMESPACE_GUARD_DEFAULT_BUDGET_MS,
+  parseGuardBudgetMs,
+  type NamespaceDb,
+} from "../src/db/handle-namespace.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const backendDir = join(here, "..");
@@ -103,10 +110,15 @@ interface Booted {
   port: number;
 }
 
-function spawnApi(dbUrl: string, port: number, capture: boolean): ReturnType<typeof Bun.spawn> {
+function spawnApi(
+  dbUrl: string,
+  port: number,
+  capture: boolean,
+  extraEnv: Record<string, string> = {},
+): ReturnType<typeof Bun.spawn> {
   return Bun.spawn(["bun", "run", "src/api/index.ts"], {
     cwd: backendDir,
-    env: { ...process.env, DATABASE_URL: dbUrl, API_PORT: String(port) },
+    env: { ...process.env, DATABASE_URL: dbUrl, API_PORT: String(port), ...extraEnv },
     stdout: capture ? "pipe" : "ignore",
     stderr: "pipe",
   });
@@ -114,9 +126,12 @@ function spawnApi(dbUrl: string, port: number, capture: boolean): ReturnType<typ
 
 /** Boot the api and wait until /health answers — the proof it reached serving
  *  traffic. Fails loudly (never silently passes) if the process exits first. */
-async function bootAndServe(dbUrl: string): Promise<Booted> {
+async function bootAndServe(
+  dbUrl: string,
+  extraEnv: Record<string, string> = {},
+): Promise<Booted> {
   const port = await freePort();
-  const proc = spawnApi(dbUrl, port, false);
+  const proc = spawnApi(dbUrl, port, false, extraEnv);
   const deadline = Date.now() + 60_000;
   for (;;) {
     if (proc.exitCode !== null) {
@@ -255,6 +270,93 @@ test(
   120_000,
 );
 
+test(
+  "a MALFORMED PG_NAMESPACE_GUARD_TIMEOUT_MS ('8s') does not disable the bound: the api still boots, and says it ignored the value",
+  async () => {
+    // The knob that bounds the guard must not be the way to unbound it. With
+    // `Number("8s")` → NaN, every deadline comparison in checkHandleNamespace is
+    // a comparison against NaN — all false — so the retry loop never returns,
+    // Bun.serve is never reached, no port is bound and NOTHING is logged. That
+    // is the same total silent outage the guard exists to prevent, reached
+    // through the guard's own configuration, and "8s" is exactly the shape an
+    // operator writes. Measured against this database url on the unvalidated
+    // version: no port bound after 30s and not one [api] line.
+    //
+    // "8s" over a random string on purpose: a duration suffix is the plausible
+    // typo, not a nonsense word.
+    const booted = await bootAndServe("postgres://unused:unused@127.0.0.1:1/unused", {
+      PG_NAMESPACE_GUARD_TIMEOUT_MS: "8s",
+    });
+    const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
+    expect(health.status).toBe(200);
+    // The guard still ran and still concluded — on the fallback budget, not on
+    // a nonexistent one.
+    expect((await health.json()).handle_namespace).toBe("unchecked");
+
+    booted.proc.kill();
+    await booted.proc.exited;
+    const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
+    // Degrading to the default is only safe if it is LOUD: an operator who set
+    // a budget and silently did not get it is worse off than one who is told.
+    expect(stderr).toContain("PG_NAMESPACE_GUARD_TIMEOUT_MS");
+    expect(stderr).toContain("IGNORING");
+    expect(stderr).toContain(`${NAMESPACE_GUARD_DEFAULT_BUDGET_MS}ms`);
+    // …and the check itself still reported its own outcome, so the fallback did
+    // not quietly swallow the boot guard along with the bad value.
+    expect(stderr).toContain("handle/id namespace guard could NOT run");
+  },
+  120_000,
+);
+
+test("parseGuardBudgetMs takes every positive finite value and refuses the rest, loudly", () => {
+  // The table the boot test cannot enumerate one process at a time.
+  const lines: string[] = [];
+  const parse = (raw: string | undefined) => parseGuardBudgetMs(raw, (l) => lines.push(l));
+
+  // Honoured.
+  expect(parse("15000")).toBe(15_000);
+  expect(parse(" 15000 ")).toBe(15_000);
+  expect(parse("2.5e4")).toBe(25_000);
+  // Absent means default, and is NOT an operator error — no line.
+  expect(parse(undefined)).toBe(NAMESPACE_GUARD_DEFAULT_BUDGET_MS);
+  expect(parse("")).toBe(NAMESPACE_GUARD_DEFAULT_BUDGET_MS);
+  expect(lines).toHaveLength(0);
+
+  // Refused — each falls back to the default rather than to NaN, and each says so.
+  for (const bad of ["8s", "eight", "0", "-1", "NaN", "Infinity", "8 000"]) {
+    expect(parse(bad)).toBe(NAMESPACE_GUARD_DEFAULT_BUDGET_MS);
+  }
+  expect(lines).toHaveLength(7);
+  for (const line of lines) {
+    expect(line).toContain("[api]");
+    expect(line).toContain("PG_NAMESPACE_GUARD_TIMEOUT_MS");
+    expect(line).toContain("IGNORING");
+  }
+  // The rejected value is named, so the operator can find it in their env.
+  expect(lines[0]).toContain('"8s"');
+});
+
+test("checkHandleNamespace cannot spin on a non-positive or NaN budget", async () => {
+  // The structural half of the fix: even if a budget of NaN reached this
+  // function from somewhere parseGuardBudgetMs does not sit in front of, the
+  // loop returns rather than retrying forever. `sql` is never touched, because
+  // the first guard fires before any query — asserted by passing a client that
+  // would throw if it were used.
+  const explode = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("checkHandleNamespace queried the database on an expired budget");
+      },
+    },
+  ) as unknown as NamespaceDb;
+  for (const budget of [Number.NaN, 0, -5]) {
+    const result = await checkHandleNamespace(explode, budget);
+    expect(result.status).toBe("unavailable");
+    expect(result.conflicts).toEqual([]);
+  }
+});
+
 // ── The guard must be BOUNDED, not merely retried (OPS-610-001) ─────────────
 
 test(
@@ -305,9 +407,16 @@ test(
       // went away, which is the one way it could be green for the wrong reason.
       expect(lockHeld).toBe(true);
       expect(lockSettled).toBe(false);
-      // Bounded: the guard's budget is 8s, so a boot that took tens of seconds
-      // — or bootAndServe's own 60s deadline — means the bound is not real.
-      expect(elapsed).toBeLessThan(30_000);
+      // Bounded — and bounded by THE BUDGET, not by a round number that happens
+      // to be larger. A hard-coded 30s here catches only the unbounded
+      // regression; a silent loosening of the budget to 25s would stay green
+      // while every claim about "8s" quietly stopped being true. Asserting
+      // against the constant makes the assertion track the claim. The allowance
+      // is process spawn + bun startup + the poll interval, not slack in the
+      // bound itself.
+      const allowance = NAMESPACE_GUARD_BUDGET_MS + 7_000;
+      expect(NAMESPACE_GUARD_BUDGET_MS).toBe(8_000); // the documented default
+      expect(elapsed).toBeLessThan(allowance);
 
       // …and the outcome is DETECTABLE, not merely logged: /health still
       // answers 200 (failing it on a slow database would trade this outage for

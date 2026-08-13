@@ -145,10 +145,55 @@ export interface NamespaceCheck {
   detail?: string;
 }
 
+/** The env var that overrides the guard's wall-clock budget, in MILLISECONDS. */
+export const NAMESPACE_GUARD_BUDGET_ENV = "PG_NAMESPACE_GUARD_TIMEOUT_MS";
+
+/** The budget used when the env var is unset — or set to something this module
+ *  refuses to trust. */
+export const NAMESPACE_GUARD_DEFAULT_BUDGET_MS = 8_000;
+
+/**
+ * Turn the operator's `PG_NAMESPACE_GUARD_TIMEOUT_MS` into a budget the guard
+ * can actually be bounded by.
+ *
+ * WHY THIS IS NOT `Number(env ?? 8_000)`. This value is the ONLY bound standing
+ * in front of `Bun.serve`, and `Number("8s")` is `NaN`. Every deadline
+ * comparison downstream is then a comparison against `NaN`, which is `false` —
+ * so `remaining <= 0` never fires, `Date.now() >= deadline` never fires, and
+ * `setTimeout(NaN)` degrades to 1ms: the retry loop spins forever, no port is
+ * bound and nothing is logged. That is precisely the silent total outage this
+ * guard was written to prevent, reachable through the guard's own knob, and
+ * `"8s"` is the literal string the runbook used to print for it. A bad value
+ * must degrade to the default, loudly — never to an unbounded boot.
+ *
+ * It also must not become a NEW way to fail the boot, so this never throws: an
+ * unparseable budget is an operator typo, and refusing to start over a typo
+ * trades one outage for another.
+ *
+ * The sibling idiom in src/db/worker-client.ts:28 can stay `Number(...)` because
+ * a `NaN` there reaches Postgres as a startup parameter and fails loudly at
+ * connect. Here nothing downstream ever notices.
+ */
+export function parseGuardBudgetMs(
+  raw: string | undefined,
+  warn: (line: string) => void = (line) => console.error(line),
+): number {
+  if (raw === undefined || raw.trim() === "") return NAMESPACE_GUARD_DEFAULT_BUDGET_MS;
+  const parsed = Number(raw);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  warn(
+    `[api] ${NAMESPACE_GUARD_BUDGET_ENV}=${JSON.stringify(raw)} is not a positive number of ` +
+      `MILLISECONDS — IGNORING it and using ${NAMESPACE_GUARD_DEFAULT_BUDGET_MS}ms. Write it as ` +
+      `a plain integer count of milliseconds ("8000"), not as a duration ("8s").`,
+  );
+  return NAMESPACE_GUARD_DEFAULT_BUDGET_MS;
+}
+
 /** The api guard's WALL-CLOCK budget: the most time the whole check may add to
- *  the boot, whatever the database does. Overridable per deployment. */
-export const NAMESPACE_GUARD_BUDGET_MS = Number(
-  process.env.PG_NAMESPACE_GUARD_TIMEOUT_MS ?? 8_000,
+ *  the boot, whatever the database does. Overridable per deployment via
+ *  PG_NAMESPACE_GUARD_TIMEOUT_MS — validated, see parseGuardBudgetMs. */
+export const NAMESPACE_GUARD_BUDGET_MS = parseGuardBudgetMs(
+  process.env[NAMESPACE_GUARD_BUDGET_ENV],
 );
 
 /** Thrown when the wall-clock budget expires with a query still in flight. It
@@ -265,7 +310,12 @@ export async function checkHandleNamespace(
 
   for (let attempt = 1; ; attempt++) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) return unavailable("budget exhausted before the check could answer");
+    // Negated-positive rather than `remaining <= 0`: a NaN budget (a
+    // misconfigured PG_NAMESPACE_GUARD_TIMEOUT_MS, or any future caller passing
+    // one) makes EVERY ordinary comparison false, and this loop is in front of
+    // Bun.serve. parseGuardBudgetMs already rejects such a value; this keeps the
+    // loop structurally unable to spin even if something else supplies one.
+    if (!(remaining > 0)) return unavailable("budget exhausted before the check could answer");
     const bound = expireAfter(remaining);
     try {
       // Promise.race attaches a handler to BOTH, so an attempt abandoned at the
@@ -275,7 +325,9 @@ export async function checkHandleNamespace(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (!(err instanceof NamespaceGuardBudgetExpired)) lastDbError = message;
-      if (Date.now() >= deadline) return unavailable(message);
+      // Same negated-positive shape, same reason: `>=` against a NaN deadline is
+      // false, which would retry forever instead of giving up.
+      if (!(Date.now() < deadline)) return unavailable(message);
       await new Promise((r) => setTimeout(r, Math.min(1000, 100 * attempt)));
     } finally {
       bound.cancel();
@@ -316,7 +368,8 @@ export function handleNamespaceGuardOutcome(): HandleNamespaceGuardOutcome {
  * (createNamespaceGuardClient) whose statement, lock and connect timeouts are
  * set at the server, and the check as a whole is capped at
  * NAMESPACE_GUARD_BUDGET_MS of wall clock. So the worst case this adds to a
- * boot is that budget — 8s by default — for ANY database state: down, slow,
+ * boot is that budget — 8000ms by default, and the default is what a malformed
+ * PG_NAMESPACE_GUARD_TIMEOUT_MS falls back to — for ANY database state: down, slow,
  * black-holed, or holding swarm_members under ACCESS EXCLUSIVE. Asserted, not
  * claimed: tests/api-boot-handle-namespace-guard.test.ts boots the real
  * entrypoint against a locked table and against an unreachable host.

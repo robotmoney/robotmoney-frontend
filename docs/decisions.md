@@ -1964,10 +1964,18 @@ and stays exactly as it was.
 three explicit properties, each of which is a choice rather than an omission:
 
 - **Bounded.** The check may add at most a wall-clock budget
-  (`PG_NAMESPACE_GUARD_TIMEOUT_MS`, default 8s) to the boot, for any database
-  state. It runs on its own connection with server-side `statement_timeout`,
-  `lock_timeout` and `connect_timeout` (the mechanism `src/db/worker-client.ts`
-  already uses), and each retry races the time remaining.
+  (`PG_NAMESPACE_GUARD_TIMEOUT_MS`, milliseconds, default `8000`) to the boot,
+  for any database state **and any value of that variable**. It runs on its own
+  connection with server-side `statement_timeout`, `lock_timeout` and
+  `connect_timeout` (the mechanism `src/db/worker-client.ts` already uses), and
+  each retry races the time remaining. The budget is *validated*, not
+  `Number()`-coerced: a non-finite or non-positive value is ignored with a loud
+  `[api]` line and the default is used. `Number("8s")` is `NaN`, and a `NaN`
+  budget makes every deadline comparison false — the retry loop would spin
+  forever in front of `Bun.serve`, which is the same silent total outage the
+  gate exists to prevent, reached through the gate's own knob. A bad env var
+  degrades to the default rather than throwing, because refusing the boot over
+  an operator typo trades one outage for another.
 - **Observable without changing the status code.** `/health` reports
   `handle_namespace: "clean" | "unchecked" | "overridden"` and keeps answering
   **200** in all three cases.
@@ -1984,9 +1992,12 @@ table. A retry loop that consults its deadline only after a rejection bounds a
 database that *rejects* and bounds nothing about one that *blocks*: the process
 would hang with no port bound and not one log line written, and
 `restart: unless-stopped` does not restart a process that hangs instead of
-exiting. Measured before the fix: still unsettled 25s into an 8s "budget".
+exiting. Asserted rather than measured by hand:
 `backend/tests/api-boot-handle-namespace-guard.test.ts` boots the real
-entrypoint against a locked table and asserts it serves.
+entrypoint against a `swarm_members` held under `ACCESS EXCLUSIVE` for the whole
+boot, and asserts it serves `/health` inside the budget with the lock still
+held — a test the pre-fix loop cannot pass, because it never reaches
+`Bun.serve` at all.
 
 **Why the status code does not move.** An "unchecked" boot is a real risk, but
 making `/health` non-200 for it would fail the compose healthcheck (which keys

@@ -46,7 +46,9 @@ assertNoVaultAddressCollision();
 //
 // BOUNDED, because this now sits between the process and its port: the check
 // runs on its own connection with server-side statement/lock/connect timeouts
-// and a hard wall-clock budget (NAMESPACE_GUARD_BUDGET_MS, 8s), so the worst
+// and a hard wall-clock budget (NAMESPACE_GUARD_BUDGET_MS, 8000ms by default,
+// validated so a malformed PG_NAMESPACE_GUARD_TIMEOUT_MS cannot un-bound it),
+// so the worst
 // case it can add to a boot is that budget — including against a database that
 // accepts the connection and then blocks, which is what an ACCESS EXCLUSIVE
 // lock on swarm_members does. An unbounded version of this line would be a
