@@ -130,6 +130,31 @@ const META = {
     title: "Channel Divergence — Is the Macro-to-Crypto Channel Breaking?",
     description: "Three transmission indicators that measure whether risk-on macro conditions are still reaching crypto: BTC beta to risk appetite, BTC/Nasdaq relative strength, and the stablecoin flow proxy.",
   },
+  // Placeholder stubs kept alive so links out of /changelog do not 404
+  // (views/{flow-field,regime_2panel,tech-proposal-march-16}.html). They are
+  // already out of sitemap.xml, but that only stops us ADVERTISING them; with
+  // no entry here they fell through to the shell's own metadata, so all three
+  // served the home page's title, description and `index, follow` at three
+  // more URLs. Three routes claiming to be the home page is the duplicate
+  // content RM-41 is about, arriving from the opposite direction to the old
+  // site's soft 404s. `follow` (not `nofollow`, unlike the styleguide below)
+  // because each stub's only links are /changelog and /, both real indexed
+  // pages whose value should carry.
+  "/flow-field": {
+    title: "Flow Field (in progress) — Robot Money",
+    description: "Placeholder for an experimental flow-field visualization of capital movement across the Robot Money vault's strategies. Not yet released.",
+    robots: "noindex, follow",
+  },
+  "/regime_2panel": {
+    title: "Regime Classifier, 2-panel reference — Robot Money",
+    description: "The original two-panel regime classifier, macro and on-chain indicators only, preserved for reference. The current three-panel composite lives at /regime.",
+    robots: "noindex, follow",
+  },
+  "/tech-proposal-march-16": {
+    title: "Technical Proposal, March 16 (archived) — Robot Money",
+    description: "An archived technical proposal documenting an early Robot Money protocol design decision. Kept addressable for historical links; the text is being ported into the docs.",
+    robots: "noindex, follow",
+  },
   // Dev/test fixture only (issue #379's dash.css/dash-ui.js styleguide),
   // unlinked from nav and out of sitemap.xml — noindexed like every other
   // analytics-dashboard route ahead of the go-live cutover
