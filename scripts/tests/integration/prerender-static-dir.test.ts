@@ -84,8 +84,13 @@ describe("prerendered STATIC_DIR served by the api process", () => {
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
-        // No database is reached: /health degrades to db:"down" and the static
-        // path never touches SQL. config.ts still REQUIRES the var to exist.
+        // No database is reachable here: /health degrades to db:"down" and the
+        // static path never touches SQL. config.ts still REQUIRES the var to
+        // exist. Since #602 the entrypoint's handle/id namespace guard DOES try
+        // to query it before binding — it waits out the postgres init-phase race
+        // (checkHandleNamespace's few seconds), then logs "guard could NOT run"
+        // and serves anyway, which is why this boot still reaches the static
+        // assertions below and why readListeningPort's budget allows for it.
         DATABASE_URL: "postgres://unused:unused@127.0.0.1:1/unused",
         RM_ENV: "ephemeral",
         API_PORT: "0",
@@ -94,7 +99,7 @@ describe("prerendered STATIC_DIR served by the api process", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    baseUrl = `http://127.0.0.1:${await readListeningPort(api, 30_000)}`;
+    baseUrl = `http://127.0.0.1:${await readListeningPort(api, 45_000)}`;
   }, 120_000);
 
   afterAll(() => {

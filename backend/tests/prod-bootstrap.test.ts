@@ -90,7 +90,16 @@ test("cold DB: all three steps run, v0-seed inserts the archive's full manifest 
   delete process.env.ANALYTICS_TOKEN;
 
   const reports = await runProdBootstrap();
-  expect(reports.map((r) => r.name)).toEqual(["migrations", "v0-seed:bootstrap", "edgar-seed:bootstrap"]);
+  expect(reports.map((r) => r.name)).toEqual([
+    "handle-namespace",
+    "migrations",
+    "v0-seed:bootstrap",
+    "edgar-seed:bootstrap",
+  ]);
+
+  const namespace = reportFor(reports, "handle-namespace");
+  expect(namespace.status).toBe("success");
+  expect(namespace.failing).toBe(false);
 
   const migrations = reportFor(reports, "migrations");
   expect(migrations.status).toBe("success");
@@ -131,7 +140,12 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
 
   const reports = await runProdBootstrap();
   // No fail-fast: migrations and the edgar step still ran even though v0-seed drifted.
-  expect(reports.map((r) => r.name)).toEqual(["migrations", "v0-seed:bootstrap", "edgar-seed:bootstrap"]);
+  expect(reports.map((r) => r.name)).toEqual([
+    "handle-namespace",
+    "migrations",
+    "v0-seed:bootstrap",
+    "edgar-seed:bootstrap",
+  ]);
 
   const v0seed = reportFor(reports, "v0-seed:bootstrap");
   expect(v0seed.status).toBe("warning");
@@ -195,6 +209,71 @@ test("edgar step: a REACHABLE API that rejects the credential is classified as F
   } finally {
     server.stop(true);
   }
+});
+
+// ── Step 0: the handle/id namespace precheck (issue #602) ───────────────────
+//
+// prod-bootstrap.ts is the OTHER production path this orchestrator has to
+// refuse on — its own header documents adopting "a working production database
+// (manually restored from a .dump…)", and every step after the precheck is a
+// write against that database. This is also the one place in this file where
+// fail-fast is correct, so the assertion is that the later steps did NOT run.
+
+test("a restored namespace violation halts the run before ANY write, with both members named", async () => {
+  delete process.env.ANALYTICS_TOKEN;
+  const holder = "pb-holder";
+  const shadowed = "pb-shadowed";
+
+  // Unreachable through the trigger by design (0031 is ENABLE ALWAYS, so even
+  // session_replication_role = replica is refused), so it is disabled for the
+  // two inserts and restored with ENABLE ALWAYS — never a plain ENABLE, which
+  // downgrades tgenabled from 'A' to 'O' and would leave every later test in
+  // the shared suite running with the bypass 0031 exists to close.
+  await sql`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
+  try {
+    await sql`INSERT INTO swarm_members (id, status, name, handle)
+              VALUES (${shadowed}, 'active', 'Shadowed', ${`${shadowed}-h`})`;
+    await sql`INSERT INTO swarm_members (id, status, name, handle)
+              VALUES (${holder}, 'active', 'Holder', ${shadowed})`;
+  } finally {
+    await sql`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
+  }
+
+  try {
+    const reports = await runProdBootstrap();
+    // Halted: migrate/seed never ran, so nothing was written on top of a public
+    // reference that addresses two members.
+    expect(reports.map((r) => r.name)).toEqual(["handle-namespace"]);
+    const step = reportFor(reports, "handle-namespace");
+    expect(step.status).toBe("failed");
+    expect(step.failing).toBe(true);
+    expect(step.summary).toContain("handle/id namespace violation");
+    // What main() turns into a non-zero process exit code.
+    expect(reports.some((r) => r.failing)).toBe(true);
+    // The archive members are the proof nothing was written: they are deleted
+    // before each test and a completed run always reinstates all three.
+    const [{ n }] = await sql<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
+    expect(n).toBe(0);
+  } finally {
+    await sql`DELETE FROM swarm_members WHERE id = ANY(${[holder, shadowed]})`;
+  }
+
+  // The repaired database runs to completion through the same entrypoint.
+  const repaired = await runProdBootstrap();
+  expect(reportFor(repaired, "handle-namespace").status).toBe("success");
+  expect(repaired.map((r) => r.name)).toEqual([
+    "handle-namespace",
+    "migrations",
+    "v0-seed:bootstrap",
+    "edgar-seed:bootstrap",
+  ]);
+  expect(repaired.some((r) => r.failing)).toBe(false);
+
+  // …and the trigger is back at ALWAYS for every test that follows.
+  const [{ tgenabled }] = await sql<{ tgenabled: string }[]>`
+    SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger'`;
+  expect(tgenabled).toBe("A");
 });
 
 // ── The public-deployment shape: SWARM_SEED_ROSTER=1 (issue #540) ───────────

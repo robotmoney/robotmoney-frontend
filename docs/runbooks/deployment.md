@@ -106,6 +106,22 @@ read-only at `/srv/frontend`.
   runs the real assembly, boots the real `backend/src/api/index.ts` against it,
   and fails red if any sitemap route answers with the home-page shell's metadata.
 
+**The api refuses to start against a handle/id namespace violation** (issue
+#602). `docker compose up -d` runs neither `migrate` nor
+`backend/scripts/db-preflight.ts`, so `backend/src/api/index.ts` re-checks the
+one invariant a restore can get in behind — one member's handle being another
+member's id, which makes `/swarm/members/<name>` address two members — before it
+binds a port. On a violation the container exits non-zero with
+`[api] REFUSING the boot: …`, naming both members; with `restart:
+unless-stopped` it will restart-loop until repaired. **The repair is manual and
+must be**: `UPDATE swarm_members SET handle = … ` on one of the two rows, chosen
+by which published URL you are willing to move. Nothing repairs it
+automatically, because either choice silently repoints a live URL. An empty
+database, a pre-0030 schema, and a database the api cannot query at all all boot
+normally — the last of those logs `handle/id namespace guard could NOT run` and
+serves UNCHECKED, so that line is the thing to grep for after a deploy where
+Postgres was slow to come up.
+
 ---
 
 ## 3. Cloudflare credentials

@@ -59,10 +59,19 @@
 -- pre-flight DO block below cover it — a dump taken from a post-0031 database
 -- already carries this file's name in `schema_migrations`, so src/db/migrate.ts
 -- skips it and the block never re-runs. The thing that catches a RESTORED
--- violation is therefore not in this file at all: the same detection query
--- lives in backend/scripts/db-preflight.ts, which runs on every external-pg
--- boot, before the boot's first write, and refuses one that is already in
--- violation. Keep the two queries in agreement.
+-- violation is therefore not in this file at all: the same detection relation
+-- lives in backend/src/db/handle-namespace.ts, and is run by the api entrypoint
+-- before it binds a port, by scripts/prod-bootstrap.ts before it migrates, and
+-- by scripts/db-preflight.ts on an --external-pg boot (issue #602 — for two
+-- releases only the last of those existed, so the production bring-up ran no
+-- re-check at all).
+--
+-- The two must agree, and that is no longer left to this sentence: the DO
+-- block's `FROM swarm_members a JOIN swarm_members b ON ...` relation below is
+-- extracted from THIS FILE by
+-- backend/tests/handle-namespace-predicate-parity.test.ts, compared against
+-- HANDLE_NAMESPACE_CONFLICT_RELATION, and both are executed against the same
+-- seeded rows. A narrowing edit to either one turns that test red.
 
 -- ── Existing data ───────────────────────────────────────────────────────────
 -- A trigger only inspects rows that are written after it exists, so a database

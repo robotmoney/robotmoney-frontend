@@ -1722,9 +1722,11 @@ who is seated now. The backfill never overwrites an existing row — it reports
 the difference as drift, and `bun run prod-bootstrap` exits non-zero on any
 drift. So on a deployment where both had run, a cosmetic path difference on
 rows nobody had edited blocked the entire production bootstrap path. That is
-also the ordering `prod-bootstrap` produces by itself: its step 1 is
-`migrate()`, which calls `seed()`, which seats the roster before step 2's
-backfill ever reads `swarm_members`.
+also the ordering `prod-bootstrap` produces by itself: its migrations step runs
+`migrate()`, which calls `seed()`, which seats the roster before the v0-seed
+backfill step ever reads `swarm_members`. (Since #602 a read-only handle/id
+namespace precheck runs ahead of both — it writes nothing and does not change
+this ordering.)
 
 **Second half of the same fix: an empty column is filled, not called drift.**
 `seedLiveRoster()` owns only the profile columns the manifests carry, so the

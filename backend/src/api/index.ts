@@ -4,6 +4,7 @@
 import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { assertHandleNamespaceClean } from "../db/handle-namespace.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
@@ -27,6 +28,22 @@ function json(data: unknown, status = 200): Response {
 // vault share. Fail-closed at startup — a misconfiguration must never serve a
 // live-looking double-counted number.
 assertNoVaultAddressCollision();
+
+// Data-time namespace guard (issue #602): refuse to serve a database in which
+// one member's handle is another member's id, because /swarm/members/<name>
+// then addresses two members. Migration 0031's trigger blocks every WRITE that
+// would create the pair, but a pg_restore loads rows before the trigger exists
+// and re-running the migration's install-time check is impossible once 0031 is
+// already in schema_migrations — so a restored violation can only be caught
+// here. THIS is the process `docker compose up -d` starts (docker-compose.yml's
+// api service runs `bun run src/api/index.ts`); it invokes neither migrate nor
+// scripts/db-preflight.ts, which is why placing the guard in either of those
+// alone would have missed the documented bring-up entirely.
+//
+// Runs BEFORE Bun.serve, so a refused boot binds no port. Fail-closed on a
+// violation only: an empty database, one whose schema predates 0030, and one
+// with no swarm_members table all pass (handleNamespaceConflicts returns []).
+await assertHandleNamespaceClean();
 
 const server = Bun.serve({
   port: config.apiPort,

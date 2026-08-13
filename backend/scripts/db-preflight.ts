@@ -47,8 +47,22 @@
 // re-validates. A plain pg_dump also emits CREATE TRIGGER in the post-data
 // section, so the COPY that loads the rows runs before the trigger exists.
 // Restored data is therefore the one population path 0031's trigger cannot
-// stand in front of — so the same detection query runs HERE, on every boot,
-// before the boot's first write, and refuses. See issue #597.
+// stand in front of, and the re-check below is what catches it. See #597.
+//
+// WHERE THAT RE-CHECK ACTUALLY RUNS — not only here. This file used to claim
+// the detection query ran "HERE, on every boot". It did not: this script is a
+// step of the `--external-pg` demo boot (scripts/lib/demo-external-pg.ts) and
+// nothing else invoked it, so on the documented production bring-up
+// (`docker compose up -d`, which runs neither migrate nor this script) a
+// restored violation reached serving traffic unchecked. That was issue #602.
+// The query now lives in src/db/handle-namespace.ts and has three callers:
+//   - this script, before an `--external-pg` boot's first write;
+//   - src/api/index.ts, before Bun.serve binds a port;
+//   - scripts/prod-bootstrap.ts, as its first step, before migrate().
+// The api guard is the one that covers the compose path, and it is deliberately
+// not absolute: a database that stays unqueryable through its wait is logged
+// loudly and served anyway (see assertHandleNamespaceClean). "The api is up"
+// therefore does not by itself prove the check ran — its log line does.
 //
 // Read-only by construction: it issues SELECTs against the catalog and against
 // swarm_members, and nothing else. Exit 0 = classified (either mode); non-zero
@@ -57,8 +71,14 @@
 // the schema is supposed to guarantee.
 //
 // Usage: DATABASE_URL=... bun run scripts/db-preflight.ts
-import type postgresTypes from "postgres";
 import { sql, closeDb } from "../src/db/client.ts";
+import {
+  handleNamespaceConflicts,
+  handleNamespaceRefusalLines,
+  type NamespaceDb,
+} from "../src/db/handle-namespace.ts";
+
+export { handleNamespaceConflicts };
 
 /** The subset of postgres.js's client classifyDatabase/censusSample/
  *  handleNamespaceConflicts need — narrow enough that a test can pass a
@@ -70,7 +90,7 @@ import { sql, closeDb } from "../src/db/client.ts";
  *  database never actually holds a pair the schema forbids. Every function here
  *  issues plain tagged-template queries and nothing else, which is all a
  *  transaction handle offers. */
-export type PreflightDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
+export type PreflightDb = NamespaceDb;
 
 /** Password-redacted target, the only form safe to print. */
 function redactedTarget(raw: string | undefined): string {
@@ -120,41 +140,6 @@ async function censusSample(db: PreflightDb, limit = 8): Promise<TableCensus[]> 
     LIMIT ${limit}
   `) as unknown as { table: string; rows: number }[];
   return rows.map((r) => ({ table: r.table, rows: Number(r.rows) }));
-}
-
-/**
- * Re-validate the handle/id namespace invariant against the data actually
- * present — the check migration 0031 can only make at install time.
- *
- * This is deliberately the SAME relation as 0031's pre-flight DO block
- * (`b.id = a.handle AND b.id <> a.id`, which iterates all ordered pairs and so
- * covers both directions of the trigger's predicate). Keep them in agreement:
- * this one is the only thing standing in front of a restore.
- *
- * Returns `[]` — not an error — when swarm_members or its `handle` column does
- * not exist yet. A database mid-way through 0030 is a migration's problem, not
- * an integrity violation, and this step runs BEFORE migrate.
- */
-export async function handleNamespaceConflicts(db: PreflightDb = sql): Promise<string[]> {
-  const [{ ready }] = (await db`
-    SELECT (
-      to_regclass('public.swarm_members') IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'swarm_members' AND column_name = 'handle'
-      )
-    ) AS ready
-  `) as unknown as { ready: boolean }[];
-  if (!ready) return [];
-  const rows = (await db`
-    SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
-    FROM swarm_members a
-    JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id
-    ORDER BY a.id
-  `) as unknown as { holder: string; handle: string; shadowed: string }[];
-  return rows.map(
-    (r) => `member '${r.holder}' has handle '${r.handle}', which is member '${r.shadowed}'s id`,
-  );
 }
 
 /** Classify the database. Throws only when it cannot be queried at all.
@@ -208,17 +193,11 @@ export function reportLines(target: string, r: PreflightResult): string[] {
   // LAST, and it is a block: demo-failure.ts anchors on the first refusal line
   // and reads FORWARD, so the header has to precede the pairs it names.
   if (r.handleNamespaceConflicts.length > 0) {
-    lines.push(
-      `[db-preflight] REFUSING the boot: ${r.handleNamespaceConflicts.length} swarm_members row(s) violate the handle/id namespace invariant.`,
-      `[db-preflight] One member's handle is another member's id, so /swarm/members/<that name> addresses two members:`,
-    );
-    for (const c of r.handleNamespaceConflicts) lines.push(`[db-preflight]   ${c}`);
-    lines.push(
-      `[db-preflight] Migration 0031 refuses to INSTALL over this, but it is already recorded in`,
-      `[db-preflight] schema_migrations here, so restored data reached this database unchecked.`,
-      `[db-preflight] Change one of the two public names (UPDATE swarm_members SET handle = ...) and re-boot.`,
-      `[db-preflight] Nothing has been written.`,
-    );
+    // Shared with the api and prod-bootstrap guards (src/db/handle-namespace.ts)
+    // so all three refusals read identically; only the closing line, which says
+    // what THIS caller did not do, is local.
+    lines.push(...handleNamespaceRefusalLines(r.handleNamespaceConflicts, "[db-preflight]"));
+    lines.push(`[db-preflight] Nothing has been written.`);
   }
   return lines;
 }
