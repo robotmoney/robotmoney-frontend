@@ -88,9 +88,27 @@ const RENAMED_MEMBERS = {
   ],
 };
 
+// Issue #598 — the SAME renamed member, now DEACTIVATED. `GET /api/swarm/members`
+// serves the ACTIVE roster and nothing else (backend/src/swarm/domain.ts:
+// `SELECT * FROM swarm_members WHERE status = 'active'`), so a deactivated
+// member is not served with `status: "inactive"` — it is ABSENT from the
+// payload, which is what this fixture reproduces. Draco stays active and
+// unrenamed so the untouched path renders in the same page. This is the fixture
+// the tree did not have: every earlier roster fixture holds every member the
+// session's takes were written by, so the roster-only link path always found
+// its member and the divergence could not appear.
+const DEACTIVATED_ROSTER = {
+  members: [
+    { id: "draco", handle: "draco", status: "active", name: "Draco", lens: "risk" },
+  ],
+};
+
 // Shaped like the API's session-detail takes after migration 0030: the signed
 // `member_id` is untouched and `member_handle` rides beside it
-// (backend/src/swarm/projections.ts).
+// (backend/src/swarm/projections.ts). Deactivating the member does NOT strip it:
+// domain.ts's withTakes joins swarm_members with no status filter, so the take
+// of a deactivated author keeps carrying that author's current public handle —
+// which is why the page can still resolve one when the roster has dropped it.
 const RENAMED_TAKES = [
   { id: "take-athena", member_id: "athena", member_handle: "macro-desk", member_name: "Athena", stance: "hold", confidence: 0.7, body: "RENAME MARKER — athena take body.", verified: true, archival: false },
   { id: "take-draco", member_id: "draco", member_handle: "draco", member_name: "Draco", stance: "trim", confidence: 0.55, body: "RENAME MARKER — draco take body.", verified: true, archival: false },
@@ -152,6 +170,31 @@ function positionSession(date: string, subjectId: string, subjectName: string) {
       actions: [],
     },
     generated_at: `${date}T11:00:00Z`,
+  };
+}
+
+// A session whose Disagreements panel quotes both members. Those positions
+// carry ONLY the signed `member_id` — the payload has no handle in it anywhere —
+// which is what makes the panel the second, independent link path that the two
+// rename tests below compare against the take byline. Shared by both so they
+// differ in exactly one thing: whether the renamed member is still on the
+// active roster.
+function disagreementSession(date: string, subjectId: string, subjectName: string) {
+  const base = positionSession(date, subjectId, subjectName);
+  return {
+    ...base,
+    swarm_recommendation: {
+      ...base.swarm_recommendation,
+      disagreements: [
+        {
+          topic: "duration risk",
+          positions: [
+            { member_id: "athena", view: "The long end is where this breaks." },
+            { member_id: "draco", view: "Trim the tail first." },
+          ],
+        },
+      ],
+    },
   };
 }
 
@@ -514,32 +557,19 @@ test("a date the static archive DOES cover is read from the API, not from the ch
 // `m.handle === ref` branch was unreachable. Two public surfaces derived from
 // the same API then published two different addresses for one member.
 //
-// This is the only test in the tree whose fixture has handle !== id, which is
-// what makes it an assertion about the handle rather than about the fallback.
-// Both link sources are covered in one render:
+// The fixture has handle !== id, which is what makes this an assertion about
+// the handle rather than about the fallback. Both link sources are covered in
+// one render:
 //   - the take byline/avatar, fed by camelTake's `memberHandle`;
 //   - the disagreement panel, whose positions carry ONLY the signed
-//     `member_id`, so it can resolve to the handle solely through the roster —
-//     i.e. through camelMember's `handle`.
+//     `member_id`, so it reaches a handle through camelMember's `handle` on the
+//     roster. Since #598 that panel falls back to this session's takes when the
+//     roster does not hold the member — the case the next test covers — so the
+//     mapper-level guarantee that camelMember carries `handle` at all is pinned
+//     directly in scripts/tests/unit/frontend-routes.test.ts.
 test("a renamed member's session links address the public handle, never the id the take was signed under", async ({ page }) => {
-  const base = positionSession("2026-06-26", "robotmoney-vault", "Robot Money Vault");
-  const session = {
-    ...base,
-    swarm_recommendation: {
-      ...base.swarm_recommendation,
-      disagreements: [
-        {
-          topic: "duration risk",
-          positions: [
-            { member_id: "athena", view: "The long end is where this breaks." },
-            { member_id: "draco", view: "Trim the tail first." },
-          ],
-        },
-      ],
-    },
-  };
   await mockSessionApi(page, {
-    session,
+    session: disagreementSession("2026-06-26", "robotmoney-vault", "Robot Money Vault"),
     takes: RENAMED_TAKES,
     members: RENAMED_MEMBERS,
     allocation: ALLOCATION,
@@ -568,4 +598,68 @@ test("a renamed member's session links address the public handle, never the id t
 
   // Nothing on the page still points at the legacy id for the renamed member.
   await expect(page.locator('a[href="/swarm/members/athena"]')).toHaveCount(0);
+});
+
+// Issue #598 / review-data-integrity DI-594-R2-001. The test above proves both
+// link sites agree WHILE the renamed member is on the active roster. Deactivate
+// that member and they stopped agreeing:
+//
+//   - the take byline carries `member_handle` in the take's own payload, so it
+//     kept linking /swarm/members/macro-desk;
+//   - a disagreement position carries only the signed `member_id`, so it could
+//     reach a handle only through the roster — and `GET /api/swarm/members`
+//     serves active members only, so `memberById()` returned null and the link
+//     fell back to /swarm/members/athena.
+//
+// One page, two public addresses for one member. Neither 404s (the server
+// resolves handle OR legacy id), which is exactly why nothing caught it: the
+// only way to see it is a fixture where the renamed member is ABSENT from the
+// roster, and none existed. memberHandleOf() now reads the roster first and this
+// session's takes second, so both sites resolve through one lookup.
+test("a renamed member that is later DEACTIVATED still gets one address from both link sites", async ({ page }) => {
+  await mockSessionApi(page, {
+    // Same session and same takes as the test above — only the roster differs.
+    session: disagreementSession("2026-06-27", "robotmoney-vault", "Robot Money Vault"),
+    takes: RENAMED_TAKES,
+    members: DEACTIVATED_ROSTER,
+    allocation: ALLOCATION,
+  });
+
+  await page.goto("/swarm/2026-06-27/robotmoney-vault");
+
+  await expect(page.locator(".sv__error")).toBeHidden();
+  await expect(page.locator(".sv__take")).toHaveCount(2);
+
+  const athenaTake = page.locator(".sv__take").filter({ hasText: "RENAME MARKER — athena take body." });
+  // THE FIXTURE IS IN THE DEFECT STATE. The lens line is roster-only data
+  // (memberLens -> memberById), so its fallback wording is a direct assertion
+  // that this page really is rendering a member the roster does not hold — the
+  // condition the assertions below would silently stop testing if a future
+  // fixture edit put Athena back on the roster.
+  await expect(athenaTake.locator(".sv__take-lens")).toHaveText("swarm member");
+
+  // Byline + avatar: the take's own handle.
+  await expect(athenaTake.locator(".sv__member-link")).toHaveAttribute("href", "/swarm/members/macro-desk");
+  await expect(athenaTake.locator(".sv__avatar--mark")).toHaveAttribute("href", "/swarm/members/macro-desk");
+
+  // The disagreement position, found by its view text rather than by a member
+  // name: the panel's label is roster-derived and falls back to the signed id
+  // for a member the roster dropped. The href is what this issue is about.
+  const athenaPosition = page.locator(".sv__disagreement li").filter({ hasText: "The long end is where this breaks." });
+  await expect(athenaPosition.locator("a").first()).toHaveAttribute("href", "/swarm/members/macro-desk");
+
+  // The unrenamed, still-active member is unaffected.
+  const dracoTake = page.locator(".sv__take").filter({ hasText: "RENAME MARKER — draco take body." });
+  await expect(dracoTake.locator(".sv__member-link")).toHaveAttribute("href", "/swarm/members/draco");
+  const dracoPosition = page.locator(".sv__disagreement li").filter({ hasText: "Trim the tail first." });
+  await expect(dracoPosition.locator("a").first()).toHaveAttribute("href", "/swarm/members/draco");
+
+  // ONE ADDRESS PER MEMBER, stated as a set rather than as two separate
+  // equalities: this fails if EITHER link site regresses to the legacy id,
+  // including a regression that moved both sites onto the id together.
+  const addresses = await page
+    .locator(".sv__takes-section, .sv__disagreements")
+    .locator('a[href^="/swarm/members/"]')
+    .evaluateAll((links) => [...new Set(links.map((a) => a.getAttribute("href")))].sort());
+  expect(addresses).toEqual(["/swarm/members/draco", "/swarm/members/macro-desk"]);
 });

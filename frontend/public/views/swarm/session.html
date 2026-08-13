@@ -416,10 +416,19 @@
                          marks, which is the one thing member-mark.js promises
                          cannot happen. Locked in step by
                          scripts/tests/unit/member-mark-distinctness.test.ts. -->
-                    <a class="sv__avatar sv__avatar--mark" :href="memberHref(t.memberHandle || t.memberId)" :aria-label="t.memberName"
+                    <!-- BOTH link sites on this page pass the IMMUTABLE id and
+                         let memberHref resolve the address (issue #598). This
+                         one used to pre-resolve — `memberHandle || memberId` —
+                         while the disagreement panel below passed the signed id
+                         alone, so the two sites shared no resolution step and
+                         agreed only by coincidence: once the member was renamed
+                         AND deactivated, the roster the panel reads no longer
+                         held it and the page published two addresses for one
+                         member. One argument, one resolver, one address. -->
+                    <a class="sv__avatar sv__avatar--mark" :href="memberHref(t.memberId)" :aria-label="t.memberName"
                        x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 40)"></a>
                     <div>
-                      <a class="sv__member-link" :href="memberHref(t.memberHandle || t.memberId)" x-text="t.memberName"></a>
+                      <a class="sv__member-link" :href="memberHref(t.memberId)" x-text="t.memberName"></a>
                       <div class="sv__take-lens" x-text="memberLens(t.memberId)"></div>
                     </div>
                   </div>
