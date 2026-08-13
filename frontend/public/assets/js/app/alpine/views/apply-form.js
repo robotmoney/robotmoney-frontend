@@ -22,7 +22,7 @@ import { forgetApplication, recallApplication } from "../../lib/application-memo
 // The canonical production home. The onboarding skill defaults to this host
 // ("production by default"), so the prompt carries no base URL there — and must
 // carry one anywhere else.
-const CANONICAL_ORIGIN = "https://robotmoney.net";
+const CANONICAL_ORIGIN = "https://robotmoney.network";
 
 // The roster URL the canonical prompt hardcodes, and what it should be.
 //
@@ -54,7 +54,7 @@ const rosterUrlFor = (origin) => `${origin || CANONICAL_ORIGIN}/swarm`;
  *
  * The skill treats production as its default host, so a prompt copied from a
  * tunnel, branch preview, staging, or localhost would otherwise send a tester's
- * agent to apply against robotmoney.net instead of the stack it was handed.
+ * agent to apply against robotmoney.network instead of the stack it was handed.
  * The skill accepts a supplied base URL ("the launch prompt or the operator
  * supplies it"), so naming it here is the sanctioned channel, not a workaround.
  *

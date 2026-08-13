@@ -1,7 +1,7 @@
 // The Investment Swarm disclaimer, as ONE string every swarm surface
 // renders (Alpine factory `swarmDisclaimer`, registered in static-views.js).
 //
-// Why this exists: production robotmoney.net renders this block in the page
+// Why this exists: production robotmoney.network renders this block in the page
 // body, above the footer, on /swarm, on every session page and on every
 // member page. This rebuild carried none of it — a content-parity sweep against
 // production found zero occurrences of "automated content feed", "own research"

@@ -26,7 +26,7 @@ function escapeHtml(str: string): string {
 test("Prerendered per-route HTML matches seo.js metadata and does not fall back to home-page shell metadata", () => {
   const sitemapPath = join(import.meta.dir, "../../../frontend/public/sitemap.xml");
   const sitemapText = readFileSync(sitemapPath, "utf8");
-  const locMatches = Array.from(sitemapText.matchAll(/<loc>https:\/\/robotmoney\.net([^<]*)<\/loc>/g));
+  const locMatches = Array.from(sitemapText.matchAll(/<loc>https:\/\/robotmoney\.network([^<]*)<\/loc>/g));
   const routes = locMatches.map((m) => m[1] || "/");
   
   expect(routes.length).toBeGreaterThan(0);
@@ -36,7 +36,7 @@ test("Prerendered per-route HTML matches seo.js metadata and does not fall back 
   for (const route of routes) {
     const normalizedRoute = !route || route === "/" ? "/" : route.replace(/\/+$/, "") || "/";
     const m = metaFor(normalizedRoute);
-    const url = "https://robotmoney.net" + (normalizedRoute === "/" ? "/" : normalizedRoute);
+    const url = "https://robotmoney.network" + (normalizedRoute === "/" ? "/" : normalizedRoute);
     
     const targetPath = normalizedRoute === "/"
       ? join(import.meta.dir, "../../../_site/index.html")

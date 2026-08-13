@@ -118,7 +118,7 @@ describe("applyForm: roster-full waitlist capture (issue #245 AC2)", () => {
 
 describe("copyablePrompt: the base-URL fact the canonical prompt cannot carry, and the roster-URL rehost (issue #341 AC4)", () => {
   test("canonical production origin (or none) → the prompt is returned verbatim when it carries no roster URL", () => {
-    expect(copyablePrompt("PROMPT", "https://robotmoney.net")).toBe("PROMPT");
+    expect(copyablePrompt("PROMPT", "https://robotmoney.network")).toBe("PROMPT");
     expect(copyablePrompt("PROMPT", undefined as unknown as string)).toBe("PROMPT");
   });
 
@@ -137,11 +137,11 @@ describe("copyablePrompt: the base-URL fact the canonical prompt cannot carry, a
   const FIXTURE = `Read PROMPT. Verify the swarm at ${CANONICAL_ROSTER_URL} before proceeding.`;
 
   test("canonical production origin (or none) → the roster URL rehosts to the canonical origin's /swarm, no base-URL suffix", () => {
-    expect(copyablePrompt(FIXTURE, "https://robotmoney.net")).toBe(
-      "Read PROMPT. Verify the swarm at https://robotmoney.net/swarm before proceeding.",
+    expect(copyablePrompt(FIXTURE, "https://robotmoney.network")).toBe(
+      "Read PROMPT. Verify the swarm at https://robotmoney.network/swarm before proceeding.",
     );
     expect(copyablePrompt(FIXTURE, undefined as unknown as string)).toBe(
-      "Read PROMPT. Verify the swarm at https://robotmoney.net/swarm before proceeding.",
+      "Read PROMPT. Verify the swarm at https://robotmoney.network/swarm before proceeding.",
     );
   });
 
@@ -180,7 +180,7 @@ describe("copyablePrompt fires on the ONBOARDING_PROMPT actually shipped, not ju
   });
 
   test("production origin leaves the shipped prompt byte-identical", () => {
-    expect(copyablePrompt(ONBOARDING_PROMPT, "https://robotmoney.net")).toBe(ONBOARDING_PROMPT);
+    expect(copyablePrompt(ONBOARDING_PROMPT, "https://robotmoney.network")).toBe(ONBOARDING_PROMPT);
   });
 });
 

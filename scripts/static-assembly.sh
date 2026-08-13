@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assemble the api process's STATIC_DIR — the cutover host for robotmoney.net
+# Assemble the api process's STATIC_DIR — the cutover host for robotmoney.network
 # (docs/decisions.md D29, docs/runbooks/deployment.md §5.1).
 #
 # The api co-serves the marketing SPA straight from STATIC_DIR, so whatever
@@ -34,7 +34,7 @@ PRERENDER_DIR="$OUT" bun scripts/prerender.ts
 # Post-deploy verification (issue #548): check live parity
 if [ "${VERIFY_LIVE_ASSEMBLY:-}" = "true" ]; then
   echo "Verifying live SKILL.md against assembled copy..."
-  curl -fsSL "https://robotmoney.net/skills/swarm-onboarding/SKILL.md" | cmp - "$OUT/skills/swarm-onboarding/SKILL.md" || {
+  curl -fsSL "https://robotmoney.network/skills/swarm-onboarding/SKILL.md" | cmp - "$OUT/skills/swarm-onboarding/SKILL.md" || {
     echo "ERROR: live/tree mismatch on SKILL.md" >&2
     exit 1
   }

@@ -1,4 +1,4 @@
-# Robot Money — https://robotmoney.net
+# Robot Money — https://robotmoney.network
 # Autonomous treasury for the agent economy.
 
 User-agent: *
@@ -21,4 +21,4 @@ Allow: /
 User-agent: Google-Extended
 Allow: /
 
-Sitemap: https://robotmoney.net/sitemap.xml
+Sitemap: https://robotmoney.network/sitemap.xml

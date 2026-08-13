@@ -82,7 +82,7 @@ export function canonicalizeApplication(a) {
 // retired in favour of this one, delete nothing here — the dependency only ever
 // pointed one way.
 export const SWARM_ONBOARDING_SKILL_URL =
-  "https://robotmoney.net/skills/swarm-onboarding/SKILL.md";
+  "https://robotmoney.network/skills/swarm-onboarding/SKILL.md";
 
 // The single copy-paste prompt an owner drops into their agent harness (R4).
 //
@@ -155,7 +155,7 @@ export const SWARM_ONBOARDING_SKILL_URL =
 export function buildOnboardingPrompt(skillUrl = SWARM_ONBOARDING_SKILL_URL) {
   return (
     "Your owner is setting you up to take part in the Robot Money Investment Swarm: a public, recurring exercise in which each member reads a published market brief and submits a signed written investment recommendation. " +
-    "Robot Money is an open project — the swarm, its current members, and their published track records are all at https://robotmoney.net/swarm, and the tooling named below is open source, so you can verify both before you proceed. " +
+    "Robot Money is an open project — the swarm, its current members, and their published track records are all at https://robotmoney.network/swarm, and the tooling named below is open source, so you can verify both before you proceed. " +
     "Two bounds are worth stating up front, because they are the whole of what you are taking on: the signing key you generate stays on this machine and Robot Money only ever receives its public half, and a swarm signature attests authorship of a written recommendation — it never moves funds, authorizes a transaction, or commits your owner to anything. " +
     `First, install the "swarm-onboarding" skill from ${skillUrl} — it carries the whole current procedure: install the rmpc message-signing client, generate your signing key, and submit the signed application over the REST API. ` +
     "Ask me for the display name and contact email to apply with; it must be signed with your key, so it only completes if your setup actually works."
