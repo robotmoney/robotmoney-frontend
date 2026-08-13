@@ -203,8 +203,11 @@ describe("AdminMember (contract) matches toMemberAdmin() (backend) key-for-key �
 
   // ── must-fail controls: a gate never proven capable of failing is not a gate ─
   test("the REAL #571 regression is caught: strip the five fields from the contract and the comparison goes red", () => {
-    // Reconstruct the exact pre-fix contract text by deleting the five field
-    // declarations (and their JSDoc) from the current source.
+    // Reconstruct the pre-fix key set by deleting the five field declarations
+    // from the current source. Their JSDoc is deliberately LEFT BEHIND: the
+    // orphaned comments are exactly the interleaved-comment noise a line regex
+    // would miscount, so this control doubles as a check that the parser reads
+    // declarations rather than lines.
     let regressed = contractSource;
     for (const line of [
       "  biases: string[] | null;\n",
