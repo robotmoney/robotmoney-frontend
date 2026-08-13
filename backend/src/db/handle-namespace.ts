@@ -170,9 +170,10 @@ export const NAMESPACE_GUARD_DEFAULT_BUDGET_MS = 8_000;
  * unparseable budget is an operator typo, and refusing to start over a typo
  * trades one outage for another.
  *
- * The sibling idiom in src/db/worker-client.ts:28 can stay `Number(...)` because
- * a `NaN` there reaches Postgres as a startup parameter and fails loudly at
- * connect. Here nothing downstream ever notices.
+ * The sibling idiom in src/db/worker-client.ts:28 can stay `Number(...)`: what a
+ * `NaN` reaches there is a Postgres startup parameter on the WORKER's pool
+ * (`connection.statement_timeout`), in a different process, with no port waiting
+ * behind it. Here it would silently remove the only bound in front of one.
  */
 export function parseGuardBudgetMs(
   raw: string | undefined,
