@@ -61,8 +61,10 @@
 //   - scripts/prod-bootstrap.ts, as its first step, before migrate().
 // The api guard is the one that covers the compose path, and it is deliberately
 // not absolute: a database that stays unqueryable through its wait is logged
-// loudly and served anyway (see assertHandleNamespaceClean). "The api is up"
-// therefore does not by itself prove the check ran — its log line does.
+// loudly and served anyway, it is a boot-time snapshot rather than a standing
+// guarantee, and it can be overridden (all three stated in full at
+// assertHandleNamespaceClean). "The api is up" therefore does not by itself
+// prove the check ran — its log line and /health's `handle_namespace` do.
 //
 // Read-only by construction: it issues SELECTs against the catalog and against
 // swarm_members, and nothing else. Exit 0 = classified (either mode); non-zero

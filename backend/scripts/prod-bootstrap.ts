@@ -87,6 +87,11 @@ async function runHandleNamespaceStep(): Promise<StepResult> {
   // 30s, matching migrate()'s waitForDb — the budget this step displaces. The
   // api's guard uses a much shorter one because it is holding up serving; this
   // is a batch job whose next step would have waited that long anyway.
+  //
+  // It is a WALL-CLOCK budget, not a retry budget: each attempt races the time
+  // remaining, so a database that accepts the connection and then blocks (a
+  // lock on swarm_members) fails this step in 30s rather than hanging the
+  // deploy script with no output. See checkHandleNamespace.
   const result = await checkHandleNamespace(sql, 30_000);
   if (result.status === "violation") {
     for (const line of handleNamespaceRefusalLines(result.conflicts, "[prod-bootstrap]")) {

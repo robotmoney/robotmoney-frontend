@@ -23,7 +23,12 @@
 //      and must return the same pairs, and that set is pinned to an
 //      independently-stated expectation. Catches a semantic drift that
 //      normalisation would have forgiven, and catches both sides drifting
-//      together.
+//      together — but only for a drift the FIXTURE can distinguish, which is
+//      why the fixture has to cover the narrowings an author would actually
+//      write. It covers: self-handle rows, case-differing near-misses, both
+//      directions of a mutual collision, and a non-`active` holder (the last
+//      because `AND status = 'active'` applied to both predicates is the
+//      realistic drift here, and every row being 'active' would hide it).
 //
 // Runs against the suite's ephemeral Postgres (tests/preload.ts), which throws
 // rather than skips when Docker is absent. The forbidden rows are built inside a
@@ -86,6 +91,7 @@ test("layer 2 (behavioural): both relations flag exactly the same pairs, over ro
   const v = `pp-v-${tag}`;
   const z = `pp-z-${tag}`;
   const w = `pp-w-${tag}`;
+  const i = `pp-i-${tag}`;
 
   const pairsOf = (rows: { holder: string; shadowed: string }[]) =>
     rows.map((r) => `${r.holder}->${r.shadowed}`).sort();
@@ -119,6 +125,21 @@ test("layer 2 (behavioural): both relations flag exactly the same pairs, over ro
       // NOT a violation: a handle that differs from an id only by case. The
       // predicate is an exact string match and both sides must agree that it is.
       await tx`INSERT INTO swarm_members (id, status, name, handle) VALUES (${w}, 'active', 'W', ${x.toUpperCase()})`;
+      // VIOLATION, and the row that makes the layer-2 expectation load-bearing:
+      // an INACTIVE holder shadowing an ACTIVE member's id. Neither predicate
+      // filters on status, and that has to STAY true — resolveMemberRow
+      // (swarm/domain.ts:141-146) carries no status filter either, so a
+      // deactivated member keeps its public URL and `ORDER BY (handle = ref)
+      // DESC` actively PREFERS the handle holder. With every fixture row
+      // 'active', the one drift this codebase would plausibly produce — adding
+      // `AND a.status = 'active'` to both predicates, since `WHERE status =
+      // 'active'` is the dominant member-read idiom (domain.ts:65,74,109,113)
+      // and members really are deactivated (admin.ts:455) — passes layer 1 by
+      // construction and layer 2 by producing no change over the rows. This row
+      // turns that whole class of narrowing red.
+      // (It shadows w rather than x because x's id is already published as y's
+      // handle, and swarm_members_handle_key forbids two rows sharing one.)
+      await tx`INSERT INTO swarm_members (id, status, name, handle) VALUES (${i}, 'inactive', 'I', ${w})`;
 
       await tx`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
 
@@ -145,12 +166,16 @@ test("layer 2 (behavioural): both relations flag exactly the same pairs, over ro
   }
 
   // Stated independently of either query, so both sides drifting the same way
-  // is still caught.
-  const expected = [`${y}->${x}`, `${u}->${v}`, `${v}->${u}`].sort();
+  // is still caught — including a `status`-narrowing drift, which is what the
+  // inactive holder in the fixture is there to make visible.
+  const expected = [`${y}->${x}`, `${u}->${v}`, `${v}->${u}`, `${i}->${w}`].sort();
   expect(fromMigration).toEqual(expected);
   expect(fromRuntime).toEqual(expected);
   expect(fromRuntime).toEqual(fromMigration);
-  expect(sentences).toHaveLength(3);
+  expect(sentences).toHaveLength(4);
+  // The inactive holder is named by the real exported function too, not only by
+  // the raw relations — that function is what the api guard calls.
+  expect(sentences.some((s) => s.includes(i))).toBe(true);
 
   // The rollback really did undo it, trigger state included ('A' = ALWAYS).
   expect((await handleNamespaceConflicts()).filter((s) => s.includes(tag))).toEqual([]);

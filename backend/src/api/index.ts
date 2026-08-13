@@ -4,7 +4,7 @@
 import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
-import { assertHandleNamespaceClean } from "../db/handle-namespace.ts";
+import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
@@ -43,6 +43,17 @@ assertNoVaultAddressCollision();
 // Runs BEFORE Bun.serve, so a refused boot binds no port. Fail-closed on a
 // violation only: an empty database, one whose schema predates 0030, and one
 // with no swarm_members table all pass (handleNamespaceConflicts returns []).
+//
+// BOUNDED, because this now sits between the process and its port: the check
+// runs on its own connection with server-side statement/lock/connect timeouts
+// and a hard wall-clock budget (NAMESPACE_GUARD_BUDGET_MS, 8s), so the worst
+// case it can add to a boot is that budget — including against a database that
+// accepts the connection and then blocks, which is what an ACCESS EXCLUSIVE
+// lock on swarm_members does. An unbounded version of this line would be a
+// silent total outage: this process serves the static frontend too, and
+// `restart: unless-stopped` does not restart a process that hangs rather than
+// exits. Its outcome is reported at /health (`handle_namespace`), and
+// RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1 turns the refusal into a loud warning.
 await assertHandleNamespaceClean();
 
 const server = Bun.serve({
@@ -80,7 +91,14 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     if (pathname === ROUTES.health) {
       let db = "down";
       try { await sql`SELECT 1`; db = "up"; } catch { db = "down"; }
-      return json({ status: "ok", env: config.env, db });
+      // handle_namespace reports what the BOOT guard concluded, so an
+      // "unchecked" boot (database unqueryable through the guard's budget) or
+      // an overridden one is machine-readable and not merely a log line that
+      // rotates away — nothing in this deployment scrapes container logs. The
+      // STATUS CODE stays 200 in every case on purpose: the compose healthcheck
+      // keys on `.ok`, and failing it because a database was slow at boot would
+      // trade a wrong-attribution risk for a restart loop.
+      return json({ status: "ok", env: config.env, db, handle_namespace: handleNamespaceGuardOutcome() });
     }
 
     if (pathname === ROUTES.comments.list && req.method === "GET") {

@@ -1956,3 +1956,73 @@ and stays exactly as it was.
   accident.
 - **No cap at all, relying on the aggregation gate.** The window is a full
   cadence interval; unbounded writes inside it is the runaway case.
+
+## D34 — The api's handle/id namespace boot gate is fail-closed, bounded, observable, and overridable (issue #602)
+
+**Decision.** `backend/src/api/index.ts` refuses to bind a port when
+`swarm_members` holds a handle/id namespace violation, and that refusal carries
+three explicit properties, each of which is a choice rather than an omission:
+
+- **Bounded.** The check may add at most a wall-clock budget
+  (`PG_NAMESPACE_GUARD_TIMEOUT_MS`, default 8s) to the boot, for any database
+  state. It runs on its own connection with server-side `statement_timeout`,
+  `lock_timeout` and `connect_timeout` (the mechanism `src/db/worker-client.ts`
+  already uses), and each retry races the time remaining.
+- **Observable without changing the status code.** `/health` reports
+  `handle_namespace: "clean" | "unchecked" | "overridden"` and keeps answering
+  **200** in all three cases.
+- **Overridable, loudly.** `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1` downgrades
+  the refusal to a warning, logged at boot and visible at `/health` for the
+  life of the process.
+
+**Why bounded is not optional.** This is the only database round trip that has
+ever stood between this process and its port, and the process also serves the
+entire static frontend (D29). An `ACCESS EXCLUSIVE` lock on `swarm_members` — an
+ordinary deploy-window event — blocks the detection SELECT while the guard's
+readiness probe returns immediately, because catalog reads take no lock on the
+table. A retry loop that consults its deadline only after a rejection bounds a
+database that *rejects* and bounds nothing about one that *blocks*: the process
+would hang with no port bound and not one log line written, and
+`restart: unless-stopped` does not restart a process that hangs instead of
+exiting. Measured before the fix: still unsettled 25s into an 8s "budget".
+`backend/tests/api-boot-handle-namespace-guard.test.ts` boots the real
+entrypoint against a locked table and asserts it serves.
+
+**Why the status code does not move.** An "unchecked" boot is a real risk, but
+making `/health` non-200 for it would fail the compose healthcheck (which keys
+on `.ok`) whenever Postgres is slow to come up — trading a wrong-attribution
+risk for a restart loop on the whole site. The field is the signal; the code
+stays 200.
+
+**Why an override exists at all.** The sibling fail-closed boot guard,
+`assertNoVaultAddressCollision()`, fails on **configuration**, which an operator
+fixes by editing `.env` and redeploying with the tooling they already have. This
+one fails on **data**, and its repair needs an interactive SQL session against
+production. A data gate with no way out is an operational hazard: if it ever
+misfires, or if the repair itself needs the site up, the only remaining move is
+to ship different code during an outage. The override is deliberately noisy
+rather than quiet, because the failure mode of an escape hatch is that someone
+leaves it on.
+
+**Consequences.**
+
+- `docs/runbooks/deployment.md` §2.1 carries the operator surface: the exact
+  repair statement (one per refusal line, always the holder's handle), how to
+  get a `psql` session in both topologies, the override, the rollback pointer,
+  and the `/health` field.
+- The guard is a **boot-time snapshot**. There is no periodic re-check, so a
+  `pg_restore` into a live database is not re-validated until the api restarts;
+  the runbook and `src/db/handle-namespace.ts` both say so rather than leaving
+  the limit implied.
+
+**Rejected alternatives.**
+
+- **Periodic or request-path re-checking.** It would close the restore-into-a-
+  live-stack window, but it puts a database read on a hot path and needs its own
+  failure semantics; the documented restart is the smaller correct answer for
+  now.
+- **Failing `/health` on an unchecked boot.** See above — a worse outage than
+  the one being guarded.
+- **No override ("fail-closed means fail-closed").** Defensible for a
+  configuration gate; not for a data gate whose repair path runs through the
+  database the operator may not be able to reach.

@@ -113,14 +113,84 @@ one invariant a restore can get in behind — one member's handle being another
 member's id, which makes `/swarm/members/<name>` address two members — before it
 binds a port. On a violation the container exits non-zero with
 `[api] REFUSING the boot: …`, naming both members; with `restart:
-unless-stopped` it will restart-loop until repaired. **The repair is manual and
-must be**: `UPDATE swarm_members SET handle = … ` on one of the two rows, chosen
-by which published URL you are willing to move. Nothing repairs it
-automatically, because either choice silently repoints a live URL. An empty
-database, a pre-0030 schema, and a database the api cannot query at all all boot
-normally — the last of those logs `handle/id namespace guard could NOT run` and
-serves UNCHECKED, so that line is the thing to grep for after a deploy where
-Postgres was slow to come up.
+unless-stopped` it will restart-loop until repaired.
+
+**The repair, exactly.** Every refusal line ends with the statement that fixes
+that line:
+
+```
+member 'a1' has handle 'woon', which is member 'woon's id
+  — repair: UPDATE swarm_members SET handle = '<a name nobody else holds>' WHERE id = 'a1';
+```
+
+Run **one statement per line printed, all of them**, then restart the api.
+Two rules, both verified against a real Postgres carrying migration 0031's
+trigger rather than reasoned about:
+
+- The statement moves the **holder**'s handle — the member named *first* on that
+  line, whose handle is the offending value. Updating the **shadowed** member's
+  handle instead reports `UPDATE 1`, raises no trigger error and leaves the
+  violation exactly in place; restarting then produces the identical refusal.
+- A **mutual** collision (A's handle is B's id *and* B's handle is A's id) prints
+  **two** lines and needs **two** updates. After the first, one violation
+  remains and the boot is still refused.
+
+Nothing repairs it automatically: each statement repoints a live published URL,
+and only an operator can choose the new name.
+
+**Getting a SQL session to run it in.** The runbook's own two topologies:
+
+```bash
+# bundled Postgres (docker-compose.yml). Its host port is Docker-assigned by
+# design, so go in through the container rather than guessing a port:
+docker compose exec postgres psql -U "$POSTGRES_USER" "$POSTGRES_DB"
+
+# managed Postgres (§4.3):
+psql "$DATABASE_URL"
+```
+
+**If the guard is wrong, or the site must come up before the data can be fixed.**
+Set **`RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1`** in the api's environment and
+redeploy: the api then logs the same block plus an `OVERRIDE:` line, serves
+anyway, and reports `handle_namespace: "overridden"` at `/health` for the whole
+life of the process. It is not silent and it is not sticky — unset it once the
+rows are repaired. Rolling the whole release back instead means redeploying the
+previous image tag (`docker compose pull && docker compose up -d` against the
+prior tag, §4.4); the guard is boot-time only, so a rollback removes it
+immediately.
+
+**What still boots, and how to tell.** An empty database, a pre-0030 schema, and
+a database the api cannot query all boot normally. The last of those logs
+`handle/id namespace guard could NOT run` — the greppable line — and serves
+**UNCHECKED**. Because container logs are not scraped anywhere and the api's
+json-file buffer rotates (`x-logging`: 10MB × 3), that line is not a durable
+signal, so the same outcome is also readable at **`/health`**:
+
+```bash
+curl -s http://127.0.0.1:8787/health
+# {"status":"ok","env":"…","db":"up","handle_namespace":"clean"}
+```
+
+`handle_namespace` is `clean` (the check ran and found nothing), `unchecked`
+(the database was not queryable within the guard's budget — this boot proves
+nothing) or `overridden`. **A 200 from `/health` is not by itself evidence the
+guard ran; that field is.** The status code stays 200 in every case on purpose:
+the compose healthcheck keys on `.ok`, and failing it because Postgres was slow
+at boot would trade a wrong-attribution risk for a restart loop.
+
+**Bounded.** The guard cannot delay the boot by more than its wall-clock budget
+(`PG_NAMESPACE_GUARD_TIMEOUT_MS`, default **8s**) for *any* database state —
+down, slow, black-holed, or with `swarm_members` held under an `ACCESS
+EXCLUSIVE` lock by a migration replay, `REINDEX` or `VACUUM FULL`. It runs on
+its own connection with server-side `statement_timeout`, `lock_timeout` and
+`connect_timeout`, and each attempt races the time remaining.
+
+**It is a boot-time snapshot, not a standing guarantee.** The check runs once,
+at process start; there is no periodic re-check and no request-path re-entry.
+**After any `pg_restore` (or manual bulk load) into a database a running stack
+is already connected to, restart the api** — `docker compose restart api` —
+because nothing re-validates a database that changed underneath a live process,
+and a restore is precisely the population path this guard exists for.
 
 ---
 
