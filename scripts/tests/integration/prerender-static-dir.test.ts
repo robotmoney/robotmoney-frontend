@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { metaFor } from "../../../frontend/public/assets/js/app/seo.js";
 
 const repoRoot = join(import.meta.dir, "../../..");
-const ORIGIN = "https://robotmoney.net";
+const ORIGIN = "https://robotmoney.network";
 
 // AC2's named case: the exact route measured as broken on the live origin.
 const ROUTE = "/research/late-cycle-signals";
@@ -104,7 +104,7 @@ describe("prerendered STATIC_DIR served by the api process", () => {
 
   it("assembles a per-route index.html into STATIC_DIR for every route in sitemap.xml", () => {
     const sitemap = readFileSync(join(repoRoot, "frontend/public/sitemap.xml"), "utf8");
-    const routes = Array.from(sitemap.matchAll(/<loc>https:\/\/robotmoney\.net([^<]*)<\/loc>/g), (m) => m[1] || "/");
+    const routes = Array.from(sitemap.matchAll(/<loc>https:\/\/robotmoney\.network([^<]*)<\/loc>/g), (m) => m[1] || "/");
     // Zero routes collected is a FAILURE, not a vacuous pass.
     expect(routes.length).toBeGreaterThan(0);
 
@@ -139,7 +139,7 @@ describe("prerendered STATIC_DIR served by the api process", () => {
 
   it("serves every sitemap route's own metadata, not just the measured one", async () => {
     const sitemap = readFileSync(join(repoRoot, "frontend/public/sitemap.xml"), "utf8");
-    const routes = Array.from(sitemap.matchAll(/<loc>https:\/\/robotmoney\.net([^<]*)<\/loc>/g), (m) => m[1] || "/")
+    const routes = Array.from(sitemap.matchAll(/<loc>https:\/\/robotmoney\.network([^<]*)<\/loc>/g), (m) => m[1] || "/")
       .map((r) => (!r || r === "/" ? "/" : r.replace(/\/+$/, "") || "/"));
     expect(routes.length).toBeGreaterThan(0);
 

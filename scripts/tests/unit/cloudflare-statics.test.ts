@@ -31,7 +31,7 @@ describe("cloudflare-statics.sh", () => {
     expect(headers).toContain("Cache-Control: public, max-age=300, must-revalidate");
 
     const redirects = readFileSync(join(site, "_redirects"), "utf8");
-    expect(redirects).toContain("https://www.robotmoney.net/*  https://robotmoney.net/:splat  301!");
+    expect(redirects).toContain("https://www.robotmoney.network/*  https://robotmoney.network/:splat  301!");
     expect(redirects).toContain("/*                            /index.html                     200");
 
     // Check prerendered routes
@@ -43,7 +43,7 @@ describe("cloudflare-statics.sh", () => {
       const m = metaFor(route);
       expect(html).toContain(`<title>${escapeHtml(m.title)}</title>`);
       expect(html).toContain(`content="${escapeAttr(m.description)}"`);
-      expect(html).toContain(`href="https://robotmoney.net${route}"`);
+      expect(html).toContain(`href="https://robotmoney.network${route}"`);
     }
   });
 

@@ -13,7 +13,7 @@
 // half of that story and the single source of per-route copy the prerender can
 // reuse.
 
-const ORIGIN = "https://robotmoney.net";
+const ORIGIN = "https://robotmoney.network";
 const SITE_NAME = "Robot Money";
 const OG_IMAGE = ORIGIN + "/assets/og-image.png";
 

@@ -2,7 +2,7 @@ import { metaFor } from "../frontend/public/assets/js/app/seo.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
-const ORIGIN = "https://robotmoney.net";
+const ORIGIN = "https://robotmoney.network";
 
 const repoRoot = join(import.meta.dir, "..");
 const sitemapPath = join(repoRoot, "frontend/public/sitemap.xml");
@@ -22,7 +22,13 @@ if (!(await Bun.file(shellPath).exists())) {
 }
 
 const sitemapText = await Bun.file(sitemapPath).text();
-const locMatches = sitemapText.matchAll(/<loc>https:\/\/robotmoney\.net([^<]*)<\/loc>/g);
+// Derived from ORIGIN rather than spelled out again: a hardcoded host here
+// silently half-matched when the site moved to .network — `robotmoney.net`
+// matched inside `robotmoney.network` and captured `work/…` as the route,
+// so every page prerendered into an `ork/` directory and the real routes
+// were never written.
+const ORIGIN_PATTERN = ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const locMatches = sitemapText.matchAll(new RegExp(`<loc>${ORIGIN_PATTERN}([^<]*)</loc>`, "g"));
 const routes = Array.from(locMatches, (m) => m[1] || "/");
 
 const shell = await Bun.file(shellPath).text();

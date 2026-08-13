@@ -152,7 +152,7 @@ const ROUTES = {
   "/performance": PERFORMANCE_VIEW,
   "/allocation2": PERFORMANCE_VIEW, // legacy redirect
   "/projects": PROJECTS_VIEW,
-  // Legacy article URL, still live on robotmoney.net and still linked from the
+  // Legacy article URL, still live on robotmoney.network and still linked from the
   // synthesis prose of twenty archived swarm sessions (they cite
   // "/articles/treasury-allocation" inline, and rewriting archived session text
   // is not an option). Same treatment as /allocation2 above: resolve the old
@@ -217,7 +217,7 @@ export function viewFor(pathname) {
     return `${VIEW_DIR}/swarm/member.html`;
   }
   // Public subject profile. The admin tree has had a subject detail page since
-  // #159; this is the reader-facing counterpart, and production robotmoney.net
+  // #159; this is the reader-facing counterpart, and production robotmoney.network
   // has published one per subject all along. Checked here (not by the catch-all)
   // because /swarm/subjects/<id> would otherwise resolve to a per-id
   // fragment that does not exist and 404.

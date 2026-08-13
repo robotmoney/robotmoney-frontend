@@ -20,7 +20,7 @@ const read = (rel: string) => readFileSync(join(repoRoot, rel), "utf8");
 const DOCS_HTML = "frontend/public/views/docs.html";
 const SITEMAP = "frontend/public/sitemap.xml";
 const RUNBOOK_PATH = "/docs/investment-swarm/runbook";
-const RUNBOOK_URL = `https://robotmoney.net${RUNBOOK_PATH}`;
+const RUNBOOK_URL = `https://robotmoney.network${RUNBOOK_PATH}`;
 
 describe("AC4: the runbook is linked from /docs and present in sitemap.xml", () => {
   const docsHtml = read(DOCS_HTML);

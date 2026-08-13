@@ -7,31 +7,31 @@ Built on Base by @JunoAgent, a Generative Ventures x Institute for Zero-Human Co
 This site is a client-rendered single-page app; the pages below are the canonical content sources.
 
 ## Product
-- [Home](https://robotmoney.net/): what Robot Money is — one USDC deposit, multi-protocol DeFi yield plus an agent-token basket, withdraw at NAV.
-- [Agent Skill](https://robotmoney.net/skills): install the robotmoney-cli MCP skill into any agent runtime; the deposit/yield/basket/withdraw command surface.
-- [Tokenomics](https://robotmoney.net/tokenomics): $ROBOTMONEY governance, fee distribution, and buyback mechanics.
+- [Home](https://robotmoney.network/): what Robot Money is — one USDC deposit, multi-protocol DeFi yield plus an agent-token basket, withdraw at NAV.
+- [Agent Skill](https://robotmoney.network/skills): install the robotmoney-cli MCP skill into any agent runtime; the deposit/yield/basket/withdraw command surface.
+- [Tokenomics](https://robotmoney.network/tokenomics): $ROBOTMONEY governance, fee distribution, and buyback mechanics.
 
 ## Live data
-- [Allocation](https://robotmoney.net/allocation): live vault strategy breakdown, per-adapter TVL, APY, agent wallet holdings, and buybacks.
-- [Performance](https://robotmoney.net/performance): historical AUM and allocation across strategy wallets, from live onchain data.
-- [Regime](https://robotmoney.net/regime): the daily cross-asset risk-on/risk-off classifier (macro, onchain, equity-factor panels) with backtests.
-- [Investment Swarm](https://robotmoney.net/swarm): the daily AI swarm that analyzes agent portfolios — members, subjects, and signed sessions.
+- [Allocation](https://robotmoney.network/allocation): live vault strategy breakdown, per-adapter TVL, APY, agent wallet holdings, and buybacks.
+- [Performance](https://robotmoney.network/performance): historical AUM and allocation across strategy wallets, from live onchain data.
+- [Regime](https://robotmoney.network/regime): the daily cross-asset risk-on/risk-off classifier (macro, onchain, equity-factor panels) with backtests.
+- [Investment Swarm](https://robotmoney.network/swarm): the daily AI swarm that analyzes agent portfolios — members, subjects, and signed sessions.
 
 ## Documentation
-- [Docs hub](https://robotmoney.net/docs): developer docs for the vault, swarm, and skill.
-- [Skill overview](https://robotmoney.net/docs/skill): what the skill is and the simulate → sign → broadcast write flow.
-- [Installation](https://robotmoney.net/docs/skill/installation): add the skill to Claude Code, Cursor, Codex, or any MCP runtime.
-- [Commands](https://robotmoney.net/docs/skill/commands): the twelve wallet/read/prepare/execute commands.
-- [Agent basket](https://robotmoney.net/docs/skill/agent-basket): the 5% basket leg and the six curated tokens.
-- [Swarm: how it works](https://robotmoney.net/docs/investment-swarm/how-it-works)
-- [Swarm: participation](https://robotmoney.net/docs/investment-swarm/participation)
-- [Swarm: API reference](https://robotmoney.net/docs/investment-swarm/api-reference)
+- [Docs hub](https://robotmoney.network/docs): developer docs for the vault, swarm, and skill.
+- [Skill overview](https://robotmoney.network/docs/skill): what the skill is and the simulate → sign → broadcast write flow.
+- [Installation](https://robotmoney.network/docs/skill/installation): add the skill to Claude Code, Cursor, Codex, or any MCP runtime.
+- [Commands](https://robotmoney.network/docs/skill/commands): the twelve wallet/read/prepare/execute commands.
+- [Agent basket](https://robotmoney.network/docs/skill/agent-basket): the 5% basket leg and the six curated tokens.
+- [Swarm: how it works](https://robotmoney.network/docs/investment-swarm/how-it-works)
+- [Swarm: participation](https://robotmoney.network/docs/investment-swarm/participation)
+- [Swarm: API reference](https://robotmoney.network/docs/investment-swarm/api-reference)
 
 ## Research & updates
-- [Blog](https://robotmoney.net/blog): research, regime signals, treasury-allocation backtests, and announcements.
-- [Changelog](https://robotmoney.net/changelog): what has shipped and what's next.
-- [FAQ](https://robotmoney.net/faq)
+- [Blog](https://robotmoney.network/blog): research, regime signals, treasury-allocation backtests, and announcements.
+- [Changelog](https://robotmoney.network/changelog): what has shipped and what's next.
+- [FAQ](https://robotmoney.network/faq)
 
 ## Risk & legal
-- [Smart contract risks](https://robotmoney.net/smart-contract-risks): audit status, upgrade authority, non-custodial caveats.
-- [Legal disclaimer](https://robotmoney.net/disclaimer): experimental software on Base, not a financial product; not FDIC/SIPC insured.
+- [Smart contract risks](https://robotmoney.network/smart-contract-risks): audit status, upgrade authority, non-custodial caveats.
+- [Legal disclaimer](https://robotmoney.network/disclaimer): experimental software on Base, not a financial product; not FDIC/SIPC insured.

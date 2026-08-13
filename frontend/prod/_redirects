@@ -1,3 +1,25 @@
-# canonical host + SPA fallback
-https://www.robotmoney.net/*  https://robotmoney.net/:splat  301!
+# INERT. NOTHING READS THIS FILE. Do not add rules here (RM-41).
+#
+# This is Netlify / Cloudflare Pages syntax. We serve the site from a Bun
+# process behind a cloudflared tunnel (backend/src/api/static.ts), and nothing
+# in that path parses `_redirects`. Both rules below are dead, and measurably
+# so rather than theoretically:
+#
+#   - the www rule: https://www.robotmoney.network/ answers 200 today, not a
+#     301. So does https://www.robotmoney.net/.
+#   - the SPA fallback: it is also the policy that turns every unknown path
+#     into a 200 home page, which is why ~100 retired old-site URLs register
+#     as soft 404s in Search Console.
+#
+# The domain string below is kept current with the rest of this change so the
+# file does not document a host policy we have abandoned. That is the only
+# reason it was touched; it does not make the rule fire.
+#
+# Real redirects belong in the Bun server or in Cloudflare rules. The full
+# old-site redirect map and the soft-404 fix are specified on RM-41, and the
+# .net -> .network layer has to be added on top of that map.
+#
+# Kept rather than deleted only because it documents the intended host policy.
+# If it ever starts reading as live config again, delete it.
+https://www.robotmoney.network/*  https://robotmoney.network/:splat  301!
 /*                            /index.html                     200

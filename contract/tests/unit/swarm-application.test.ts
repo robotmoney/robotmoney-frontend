@@ -227,16 +227,16 @@ describe("ONBOARDING_PROMPT — canonical copy-paste prompt (R4)", () => {
 describe("ONBOARDING_PROMPT — bounds that answer the measured refusals (§11.3 E7)", () => {
   test("answers the 'unknown repository' objection with a checkable provenance claim (E7)", () => {
     expect(ONBOARDING_PROMPT).toContain(
-      "the swarm, its current members, and their published track records are all at https://robotmoney.net/swarm",
+      "the swarm, its current members, and their published track records are all at https://robotmoney.network/swarm",
     );
     // The claim is checkable in two independent ways: a public roster URL, and
     // open-source tooling the agent can read before running it.
-    expect(ONBOARDING_PROMPT).toContain("https://robotmoney.net/swarm");
+    expect(ONBOARDING_PROMPT).toContain("https://robotmoney.network/swarm");
     expect(ONBOARDING_PROMPT).toContain("the tooling named below is open source");
     expect(ONBOARDING_PROMPT).toMatch(/so you can verify both before you proceed/);
 
     // Provenance must precede the install ask, not trail it.
-    expect(ONBOARDING_PROMPT.indexOf("https://robotmoney.net/swarm")).toBeLessThan(
+    expect(ONBOARDING_PROMPT.indexOf("https://robotmoney.network/swarm")).toBeLessThan(
       ONBOARDING_PROMPT.indexOf('install the "swarm-onboarding" skill'),
     );
   });
@@ -322,7 +322,7 @@ describe("SWARM_ONBOARDING_SKILL_URL", () => {
   // deliberately outside this (network-free) directory but runs in the SAME
   // required `contract` job (issue #484 — before that it ran in no job at all).
   test("is served from our own origin, not a third-party repo host", () => {
-    expect(new URL(SWARM_ONBOARDING_SKILL_URL).origin).toBe("https://robotmoney.net");
+    expect(new URL(SWARM_ONBOARDING_SKILL_URL).origin).toBe("https://robotmoney.network");
     expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("raw.githubusercontent.com");
   });
 
