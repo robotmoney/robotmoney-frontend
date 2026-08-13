@@ -277,6 +277,7 @@ test(
     let releaseLock!: () => void;
     const released = new Promise<void>((r) => (releaseLock = r));
     let lockHeld = false;
+    let lockSettled = false;
     let lockTxn: Promise<unknown> | undefined;
     try {
       await applyAllMigrations(db);
@@ -289,16 +290,21 @@ test(
         lockTaken();
         await released; // held for the whole boot, released in `finally`
       });
-      lockTxn.catch(() => {});
+      lockTxn.then(
+        () => (lockSettled = true),
+        () => (lockSettled = true),
+      );
       await taken;
 
       const startedAt = Date.now();
       const booted = await bootAndServe(urlFor(dbName));
       const elapsed = Date.now() - startedAt;
 
-      // The lock was never released underneath the boot, so serving really did
-      // happen against a blocked swarm_members.
+      // The lock was taken AND was still held when /health answered — without
+      // the second assertion this test would also pass on a lock that quietly
+      // went away, which is the one way it could be green for the wrong reason.
       expect(lockHeld).toBe(true);
+      expect(lockSettled).toBe(false);
       // Bounded: the guard's budget is 8s, so a boot that took tens of seconds
       // — or bootAndServe's own 60s deadline — means the bound is not real.
       expect(elapsed).toBeLessThan(30_000);
