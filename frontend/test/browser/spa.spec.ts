@@ -242,6 +242,43 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
   await expectNoBrowserErrors(errors);
 });
 
+// RM-41. These three routes resolve to placeholder stubs that exist only so
+// links out of /changelog do not 404. They are out of sitemap.xml, which stops
+// us advertising them but does nothing to stop indexing — and with no seo.js
+// entry they inherited the shell's own metadata, so each one served the HOME
+// PAGE's title and `index, follow` at a second URL. Assert the override, not
+// just the absence from the sitemap, because the sitemap was never the thing
+// keeping them out of the index.
+const NOINDEX_STUB_ROUTES = [
+  { path: "/flow-field", title: "Flow Field (in progress) — Robot Money" },
+  { path: "/regime_2panel", title: "Regime Classifier, 2-panel reference — Robot Money" },
+  { path: "/tech-proposal-march-16", title: "Technical Proposal, March 16 (archived) — Robot Money" },
+];
+
+for (const { path, title } of NOINDEX_STUB_ROUTES) {
+  test(`${path} resolves to its stub and is noindexed, not the home page`, async ({ page }) => {
+    const errors = failOnBrowserErrors(page);
+    await page.goto("/");
+    await navigate(page, path);
+
+    await expect(page.locator("h1.stub__title")).toBeVisible();
+    await expect(page).toHaveTitle(title);
+    // `follow`, not `nofollow`: each stub's only links are /changelog and /,
+    // both real indexed pages whose value should carry.
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex, follow");
+
+    await expectNoBrowserErrors(errors);
+  });
+}
+
+test("the noindex override does not leak onto the next route", async ({ page }) => {
+  await page.goto("/");
+  await navigate(page, "/flow-field");
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex, follow");
+  await navigate(page, "/faq");
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /^index, follow/);
+});
+
 declare global {
   interface Window {
     Chart?: {
