@@ -90,9 +90,18 @@ f51a8fe feat: admin auth: segregate automation and strict setup token           
   §2 Gate A for the decision and §12 for the two procedures that carry it out.
 - **Domain change.** `bc9f20f` (#603) moved the canonical origin to
   `https://robotmoney.network` (`scripts/prerender.ts:5`,
-  `frontend/public/assets/js/app/seo.js:16`). `backend/src/config.ts:438` still
-  defaults to the **old** `https://robotmoney.net`, and nothing can override it
-  in this deployment (§6, §10).
+  `frontend/public/assets/js/app/seo.js:16`). **At `ccf983f` the api did not
+  follow**: `backend/src/config.ts:438` defaulted to the old
+  `https://robotmoney.net`, and nothing can override it in this deployment (§6,
+  §10). ⚠ **Check this before you cut the tag** — commit `969bc2e`, on the same
+  branch as this runbook, moves that default to
+  `SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network"`
+  (`backend/src/config.ts:448`, resolved at `:450-454`). If the tag includes
+  `969bc2e`, §10.2 is not a defect of your release; if it is cut at `ccf983f`
+  exactly, it is. Verify with
+  `git show <tag>:backend/src/config.ts | grep -n 'robotmoney\.net"'` — keep the
+  closing quote, or the pattern also matches `robotmoney.network` and always
+  hits (the same half-match that once broke `scripts/prerender.ts:25-29`).
 - **New identity column with a unique index and two new triggers** on
   `swarm_members` (`0030`, `0031`).
 
@@ -102,35 +111,144 @@ Treat this as a minor release with a manual auth migration attached.
 
 ## 2. Go/no-go gates
 
-Run these **before** touching anything. Each has a single decision. Gate A first
-— it is the only one that can strand you permanently.
+Five gates. **They are printed in execution order, and that order is not the
+alphabet** — the letters are stable names the rest of this document cites,
+nothing more. Each gate needs the section before it to have run, and the admin
+gate is **last**: it is the only one whose remedy is destructive, and the only
+one that requires §5's backup to already exist.
 
-Get a psql session against production first (deployment.md §2.1, "Getting a SQL
-session"):
+| Order | Gate | Cannot be answered until | Where the answer comes from |
+|---|---|---|---|
+| 1 | **Gate B** — pre-flight verdict | §3 (the read-only role) and §4 | `backend/scripts/preflight-upgrade.ts` exit code |
+| 2 | **Gate D** — the `rm_worker` role exists | §4 | the pre-flight's `rm-worker-role` check |
+| 3 | **Gate E** — no long-running transactions | §4 | the pre-flight's `blocking-xacts` check |
+| 4 | **Gate C** — backup proven restorable | §5, including §5.3's restore | §5.3 |
+| 5 | **Gate A** — admin lockout ⛔ | §5's backup exists (it is the undo for Gate A's remedy) | the query in this section |
+
+Gate A is still the one that can strand you permanently. It is last anyway,
+because its only forward path for a lost password is a **write** to
+`admin_credential` (§12.2) and you must not take that write without the backup.
+
+### 2.0 Establish `DATABASE_URL` before any `psql` in this document
+
+⚠ **`DATABASE_URL` is not in your shell, and nothing in this workflow puts it
+there.** `--external-pg` reads it out of the repo-root `.env` **file** —
+`loadEnvFile()` is `readFileSync` (`scripts/lib/demo-external-pg.ts:163-165`),
+called at `:294`, and the value is taken at `:303` — and `process.env` is never
+consulted (§6.5).
+
+So every `psql "$DATABASE_URL"` in this document — Gate A below, §5.4, §8 and
+§11 — expands to `psql ""` unless you load it yourself. **`psql ""` is not an error.**
+libpq falls back to its own defaults (`PGHOST` or the local socket, `PGUSER`,
+database named after the user), so on any host that happens to run a local
+postgres it connects **successfully, to the wrong database**. Gate A then
+reports "unclaimed" about a database that is not production, and every §8 check
+grades the wrong server.
+
+Load it once, then **prove** what you loaded:
 
 ```bash
-psql "$DATABASE_URL"
+cd <checkout>
+export DATABASE_URL="$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2-)"
+[ -n "$DATABASE_URL" ] || { echo "no DATABASE_URL in $PWD/.env — see §6.5"; exit 1; }
+
+# Identity assertion. Run it, read it, do not skip it.
+psql "$DATABASE_URL" -Atc \
+  "SELECT current_database(), current_user, inet_server_addr(), inet_server_port();"
 ```
 
-### Gate A — admin lockout ⛔ THE BLOCKER
+`cut -d= -f2-` keeps `=` characters inside the password. If your `.env` quotes
+the value, strip the quotes — a literal `"` inside the URI breaks it.
+
+The result must name the managed cluster from §3: database `defaultdb`, port
+**25060**. A `127.0.0.1`/`::1` address, or port `5432`, is a local postgres — and
+so is an **empty** address field, which is what `inet_server_addr()` returns over
+a Unix socket, the single most likely wrong answer here. Any of those and **every
+gate below is void**. `DATABASE_URL` does not survive into a new
+terminal — re-export and re-assert in each one, including the shells you use
+for §8 and §11.
+
+### Gate B — pre-flight verdict (order 1)
+
+Run §3, then §4. **`VERDICT: BLOCKED` is a no-go.** Warnings are a go with your
+eyes open.
+
+### Gate D — the `rm_worker` role exists (order 2)
 
 ```sql
-SELECT count(*) AS rows, (recovery_hash IS NULL) AS no_recovery
-FROM admin_credential
-GROUP BY 2;
+SELECT rolname FROM pg_roles WHERE rolname = 'rm_worker';
 ```
 
-If `admin_credential` does not exist yet, that is the **unclaimed** case — treat
-it as `rows = 0`.
+Zero rows is a **no-go until repaired**. `0029_admin_passkey.sql:26-28` is three
+unconditional `REVOKE ALL ON … FROM rm_worker` statements with no existence
+guard, and `REVOKE` against a missing role raises `42704`. Because
+`backend/src/db/migrate.ts:50-53` wraps each file in one transaction, that aborts
+migration `0029_admin_passkey.sql` and the boot fails. Repair:
+
+```sql
+CREATE ROLE rm_worker LOGIN;
+-- then re-apply 0016's grants verbatim (backend/migrations/0016_worker_role.sql:25-42)
+GRANT USAGE ON SCHEMA public TO rm_worker;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rm_worker;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_worker;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO rm_worker;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO rm_worker;
+REVOKE INSERT, UPDATE, DELETE ON raw_indicator_history, regime_snapshots, research_signals FROM rm_worker;
+```
+
+These are **writes**: run them as `doadmin`, not as `rm_readonly`. Then re-run
+§4 so Gate B is green against the repaired cluster.
+
+### Gate E — no long-running transactions (order 3)
+
+Covered by the pre-flight's `blocking-xacts` check (§4). A transaction older than
+60s queues in front of `0030`'s `ACCESS EXCLUSIVE` lock, and every reader
+arriving after that queues behind **both**. This one goes stale: re-run §4's
+pre-flight immediately before §7.3, not only at the top of the window.
+
+### Gate C — backup proven restorable (order 4)
+
+Run §5 including §5.3's verification. **A dump you have not restored is not a
+backup.** No-go until the restore check passes. Gate A's remedy has no undo
+without it.
+
+### Gate A — admin lockout ⛔ THE BLOCKER (order 5, run LAST)
+
+⚠ **Do not name `recovery_hash` in this query.** That column does not exist on
+the database you are about to query: `0029_admin_auth_recovery.sql:4` adds it,
+and that migration is **pending** — it applies during this upgrade (§7.4).
+Against production at `v0.2.1` a query naming it fails with `42703: column
+"recovery_hash" does not exist`. An earlier revision of this runbook printed
+such a query *and* offered a table row that invited you to read the resulting
+error as the "unclaimed" case, so the failure mode was to record **GO** when the
+truth was **STOP**.
+
+The pre-upgrade query is exactly this, and nothing more:
+
+```sql
+SELECT count(*) AS rows FROM admin_credential;
+```
+
+`admin_credential` **does** exist at `v0.2.1`: `0028_admin_credential.sql` is not
+in this delta (§1). So `42P01: relation "admin_credential" does not exist` here
+does **not** mean unclaimed — it means you are pointed at the wrong database.
+Go back to §2.0.
+
+There is no recovery state to branch on before the upgrade, and there will not
+be one afterwards either for a row that already exists: `0029` adds the column
+**nullable and backfills nothing**, deliberately
+(`0029_admin_auth_recovery.sql:1-3` — a migration cannot mint a recovery code
+and disclose it safely). So `rows = 1` always means *claimed, and its
+`recovery_hash` will be NULL after cutover*. The only open question is whether
+anyone can still produce the password.
 
 **Every branch of this gate has a forward path.** None of them is "stop".
 
-| Result | Meaning | Decision |
-|---|---|---|
-| **0 rows** (or table absent) | The one-time claim is **unarmed**. After the upgrade the first party to reach the admin surface takes it. `ADMIN_TOKEN` still works (`auth.ts:66`). | **GO.** Claiming is then a **mandatory** post-cutover step: **§12.1 Procedure A**, executed at §8 verification 10. |
-| **1 row, `no_recovery = false`** | Claimed, and a recovery code exists. | **GO.** Nothing further, provided somebody can produce the password. |
-| **1 row, `no_recovery = true`**, and somebody has the password | Claimed, **no recovery code**. `0029_admin_auth_recovery.sql:1-3` leaves already-claimed rows NULL by design — a migration cannot mint a code and disclose it safely. | **GO.** After cutover, sign in and run `POST /api/admin/password-change` **once** — it is the only thing that mints a `recovery_hash` for a row claimed before `0029` (`backend/src/api/routes/admin.ts:223`, `:227`). It is **not** available before cutover: that route arrives in this delta (`f26dca6`, #590) and does not exist at `v0.2.1`. Note it also deletes every `admin_passkey` and `admin_session` row in the same transaction (`:234-235`). |
-| **1 row, `no_recovery = true`**, and nobody has the password | Claimed, no recovery code, no password. **This is the lockout.** | **GO only after §12.2 Procedure B.** Do it before cutover. |
+| `rows` | Can anyone produce the password? | Meaning | Decision |
+|---|---|---|---|
+| **0** | n/a | The one-time claim is **unarmed**. After the upgrade the first party to reach the admin surface takes it. `ADMIN_TOKEN` still works (`auth.ts:66`). | **GO.** Claiming is then a **mandatory** post-cutover step: **§12.1 Procedure A**, executed at §8 verification 10. |
+| **1** | yes | Claimed. After cutover it has **no recovery code** (`0029` backfills nothing). | **GO.** After cutover, sign in and run `POST /api/admin/password-change` **once** — it is the only thing that mints a `recovery_hash` for a row claimed before `0029` (`backend/src/api/routes/admin.ts:223`, `:227`). It is **not** available before cutover: that route arrives in this delta (`f26dca6`, #590) and does not exist at `v0.2.1`. Note it also deletes every `admin_passkey` and `admin_session` row in the same transaction (`:234-235`). |
+| **1** | no | Claimed, no password, and no recovery code will exist. **This is the lockout.** | **GO only after §12.2 Procedure B**, executed before cutover — with §5's backup already taken, which is why this gate is last. |
 
 **Why the last row is the dangerous one.** After the upgrade, with a claimed row
 present, `auth.ts:59-64` compares the presented `X-Admin-Token` against
@@ -156,50 +274,26 @@ upgrade is what takes it away. That access is not a fix — `v0.2.1` has neither
 `/api/admin/password-change` nor `/api/admin/password-recover` (both arrive in
 this delta) — but it means you are triaging, not stranded. §12.2 is the fix.
 
-### Gate B — pre-flight verdict
-
-Run §4. **`VERDICT: BLOCKED` is a no-go.** Warnings are a go with your eyes open.
-
-### Gate C — backup proven restorable
-
-Run §5 including the verification. **A dump you have not restored is not a
-backup.** No-go until the restore check passes.
-
-### Gate D — the `rm_worker` role exists
-
-```sql
-SELECT rolname FROM pg_roles WHERE rolname = 'rm_worker';
-```
-
-Zero rows is a **no-go until repaired**. `0029_admin_passkey.sql:26-28` is three
-unconditional `REVOKE ALL ON … FROM rm_worker` statements with no existence
-guard, and `REVOKE` against a missing role raises `42704`. Because
-`backend/src/db/migrate.ts:50-53` wraps each file in one transaction, that aborts
-migration `0029_admin_passkey.sql` and the boot fails. Repair:
-
-```sql
-CREATE ROLE rm_worker LOGIN;
--- then re-apply 0016's grants verbatim (backend/migrations/0016_worker_role.sql:25-42)
-GRANT USAGE ON SCHEMA public TO rm_worker;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rm_worker;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_worker;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO rm_worker;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO rm_worker;
-REVOKE INSERT, UPDATE, DELETE ON raw_indicator_history, regime_snapshots, research_signals FROM rm_worker;
-```
-
-### Gate E — no long-running transactions
-
-Covered by the pre-flight's `blocking-xacts` check (§4). A transaction older than
-60s queues in front of `0030`'s `ACCESS EXCLUSIVE` lock, and every reader
-arriving after that queues behind **both**.
-
 ---
 
 ## 3. Provision the read-only role
 
 The pre-flight and the dump must both run as a role that **cannot write**. Do
 this once, as `doadmin`, against the production cluster.
+
+> 🔴 **Restrict the password's alphabet to `[A-Za-z0-9._~-]`.** §4 pastes it
+> into a **URI** —
+> `PREFLIGHT_DATABASE_URL='postgres://rm_readonly:<pw>@<host>:25060/…'` — where
+> `@ : / ? # [ ] %` and space are reserved delimiters, not password characters.
+> A `@` truncates the userinfo and libpq reports a host that does not exist; a
+> `%` starts a percent-escape and either mangles the password silently or errors;
+> `#` and `?` silently truncate the rest of the URI. Those are the unreserved
+> URI characters, so nothing in that set needs escaping anywhere in §3, §4 or
+> §5. Take the length from a longer password, not from a wider alphabet:
+>
+> ```bash
+> LC_ALL=C tr -dc 'A-Za-z0-9._~-' </dev/urandom | head -c 40; echo
+> ```
 
 ```sql
 CREATE ROLE rm_readonly LOGIN PASSWORD '<generate a strong one>';
@@ -264,8 +358,23 @@ PREFLIGHT_DATABASE_URL='postgres://rm_readonly:<pw>@<host>:25060/defaultdb?sslmo
 `backend/migrations/` on disk against `schema_migrations` in the database; run
 from the wrong tag and the pending list is wrong.
 
-`PREFLIGHT_DATABASE_URL` is a deliberately separate variable — the script exits
-`2` if it equals `DATABASE_URL`, and never reads `DATABASE_URL` itself.
+`PREFLIGHT_DATABASE_URL` is a deliberately separate variable. The script reads
+`DATABASE_URL` for exactly one purpose — the equality guard at
+`backend/scripts/preflight-upgrade.ts:673`, `if (process.env.DATABASE_URL &&
+process.env.DATABASE_URL === url)` → exit `2`. It reads it nowhere else, opens
+no pool on it, and never falls back to it (`:666-672` exits `2` when
+`PREFLIGHT_DATABASE_URL` is unset). What it does **not** do is import anything
+from `src/` — that is the point of the file's standalone shape
+(`preflight-upgrade.ts:15-22`).
+
+> **The guard is live or dead depending on where you stand.** It only fires when
+> `DATABASE_URL` is in the process environment. Two things put it there:
+> §2.0's `export`, and **`bun` auto-loading `.env` from the cwd** — so running
+> the script from the repo root rather than from `backend/` makes the guard
+> active off the repo-root `.env` alone. That is the state you want: it is a
+> real safety check. If it exits `2` with *"identical to DATABASE_URL"*, you
+> pasted the application's writer URL — fix the URL, do not unset
+> `DATABASE_URL` to silence it.
 
 ### Exit codes
 
@@ -297,21 +406,48 @@ downgrades the last two to warnings — **do not make that the normal path.**
 Warnings worth stopping to read even though they exit `0`:
 
 - `admin-credential` **WARN** with `no_recovery > 0` — this is Gate A. The
-  pre-flight only warns; **the gate decision is yours.**
+  pre-flight only warns; **the gate decision is yours.** Note this is the one
+  safe way to ask about `recovery_hash` before the upgrade: the script checks
+  `information_schema.columns` first and switches query shape on the answer
+  (`backend/scripts/preflight-upgrade.ts:485-507`), so it never raises `42703`.
+  Your own Gate A query must not name the column at all — see Gate A.
 - `handle-shape` — member ids that are not valid handles. `0030` backfills
   `handle = id` with no `CHECK`, so those handles can never be saved again
   through the admin surface (validated against `MEMBER_HANDLE_RE`,
-  `backend/src/api/validation.ts:446`, 80-char bound at `:481`). Fix after
+  `backend/src/api/validation.ts:446`, 80-char bound at `:482`). Fix after
   cutover, per §8.
 - `swarm-members-size` — above 50 000 rows, `0030` is a stall, not a blip.
 
 ### On the reconciliation
 
-The script was authored at `bc9f20f`. Its inlined namespace relation is
-**byte-identical** to `HANDLE_NAMESPACE_CONFLICT_RELATION`
-(`backend/src/db/handle-namespace.ts:62-63`) and to `0031`'s DO block
-(`0031_swarm_member_handle_namespace.sql:91-92`) — only the *citations* were
-stale, and they have been corrected in place. The relation itself never drifted.
+The script was authored at `bc9f20f`. Its inlined namespace relation
+(`backend/scripts/preflight-upgrade.ts:92`) is byte-identical to
+`HANDLE_NAMESPACE_CONFLICT_RELATION` (`backend/src/db/handle-namespace.ts:63`),
+and both agree with `0031`'s DO block
+(`0031_swarm_member_handle_namespace.sql:91-92`, where the same relation is
+wrapped across two lines).
+
+**Verified today, guarded by nothing — re-grep before each use.** The script
+keeps a **copy, not an import**, on purpose, and its own header says so
+(`preflight-upgrade.ts:39-44`): importing the canonical module would drag in
+`src/config.ts`'s module-load `required("DATABASE_URL")` and the shared pool,
+destroying the standalone/zero-write-risk property this file exists for. The
+executed parity test that does exist
+(`backend/tests/handle-namespace-predicate-parity.test.ts`) parses `0031`'s DO
+block and compares it to the exported constant — it **never reads
+`preflight-upgrade.ts`**. So the migration/runtime pair is guarded and the
+pre-flight's copy is not: nothing in CI fails if it drifts.
+
+```bash
+# The two TypeScript copies must print the identical string.
+grep -n 'FROM swarm_members a JOIN swarm_members b' \
+  backend/src/db/handle-namespace.ts backend/scripts/preflight-upgrade.ts
+# expect handle-namespace.ts:63 and preflight-upgrade.ts:92, same predicate:
+#   FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id
+```
+
+If those two ever disagree, §4's `handle-namespace` check is no longer telling
+you what §7.5's refusal will decide, and a green pre-flight means nothing.
 
 ---
 
@@ -324,25 +460,51 @@ dump as well.
 
 ### 5.1 The dump
 
+> 🔴 **`cd` out of the checkout first.** §4 left you in `<checkout>/backend`, and
+> these commands write to the **current directory**. Writing a plaintext
+> credential dump (§5.2) inside the git checkout puts it where §5.2 forbids: in
+> the tree, and inside `./_static` / repo-root reach of a compose bind mount.
+> Pick a directory outside the repo on a filesystem you control.
+
+> 🔴 **Two roles, two passwords — `PGPASSWORD` does not follow `--username`.**
+> libpq reads `PGPASSWORD` from the process environment for **every**
+> connection, whatever `--username` says. Exporting `rm_readonly`'s password and
+> then running `pg_dumpall --username=doadmin` sends `rm_readonly`'s password as
+> `doadmin`'s: the server rejects it, or — if the terminal is interactive —
+> `pg_dumpall` blocks on a password prompt, which at 3am inside a script reads
+> as a hang. Scope the variable to the one command that needs it (a per-command
+> assignment, never `export`), or put both roles in `~/.pgpass` and set no
+> `PGPASSWORD` at all.
+
 ```bash
+mkdir -p ~/rm-backup-v022 && cd ~/rm-backup-v022   # OUTSIDE the checkout (§5.2)
 set -o pipefail                          # MANDATORY — see the box below
 umask 077                                # the file is a credential store
 
-export PGPASSWORD='<rm_readonly password>'
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
-pg_dump \
+# rm_readonly's password, scoped to THIS command only.
+PGPASSWORD='<rm_readonly password>' pg_dump \
   --host=<host> --port=25060 --username=rm_readonly --dbname=defaultdb \
   --format=custom --compress=9 --no-owner --no-privileges \
   --file="rm-preupgrade-${STAMP}.dump"
 echo "pg_dump exit=$?"
 
-# Roles are NOT in the dump above. This is a separate, required artifact.
-pg_dumpall \
+# Roles are NOT in the dump above. This is a separate, required artifact —
+# and a DIFFERENT role, so a DIFFERENT password.
+PGPASSWORD='<doadmin password>' pg_dumpall \
   --host=<host> --port=25060 --username=doadmin \
   --globals-only --no-role-passwords \
   --file="rm-globals-${STAMP}.sql"
 echo "pg_dumpall exit=$?"
+```
+
+The `~/.pgpass` alternative, if you prefer no secrets on the command line —
+`chmod 600` it or libpq ignores the file silently:
+
+```
+<host>:25060:defaultdb:rm_readonly:<rm_readonly password>
+<host>:25060:*:doadmin:<doadmin password>
 ```
 
 > **`--file=`, not `>`, and `set -o pipefail`.** `pg_dump … | gzip > out.gz`
@@ -389,6 +551,14 @@ bind mount can reach.
 
 A dump you have not restored is a hypothesis.
 
+Every command here is `doadmin`. **Use `doadmin`'s password, not
+`rm_readonly`'s** — §5.1's box explains why the distinction is invisible until
+it hangs. Set it once for this block only:
+
+```bash
+export PGPASSWORD='<doadmin password>'   # unset it again at the end of §5.3
+```
+
 ```bash
 # Scratch database on the SAME cluster (or a local PG of the same major).
 createdb --host=<host> --port=25060 --username=doadmin rm_restore_check
@@ -431,6 +601,36 @@ Run the same three against production and compare. Only then is Gate C green.
 > **DESTRUCTIVE.** Drop the scratch database when done — it is a second
 > plaintext copy of every credential above.
 > `dropdb --host=<host> --port=25060 --username=doadmin rm_restore_check`
+>
+> Then `unset PGPASSWORD` — it is `doadmin`'s, and §5.1's box explains what it
+> does to the next command that meant to use a different role. §5.4 below uses
+> `DATABASE_URL` (§2.0) instead.
+
+### 5.4 🔴 IRREVERSIBLE — capture the swarm schedule rows, which no restore returns
+
+The `.dump` restores them, but **nothing in §9's rollback does**, and the very
+next boot overwrites them again. `seedSwarmSchedules()`
+(`backend/src/db/seed.ts:137-152`) issues an unconditional `UPDATE
+job_schedules SET cron, enabled, payload, timezone WHERE kind = …` for each of
+the five `swarm.*` definitions, and `seed()` is called unconditionally from
+`backend/src/db/migrate.ts:61` on **every** boot — v0.2.2's and, after §9,
+v0.2.1's too. Any operator toggle you have made to those five rows is
+**IRREVERSIBLE** through rollback: rolling the code back rewrites them a second
+time (§9, §6.5).
+
+The prior values are therefore an evidence artifact, not a curiosity. Take it
+now, with the rest of the backup, against production:
+
+```bash
+psql "$DATABASE_URL" -c \
+  "SELECT kind, cron, enabled, timezone, payload FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;" \
+  | tee "rm-swarm-schedules-${STAMP}.txt"
+```
+
+Expect five rows. This file is the **only** record of what the boot is about to
+clobber; restoring those values afterwards is a manual `UPDATE` per row, and you
+cannot write it without this output. Keep it with the dump (it holds no
+credentials, so it does not need §5.2's encryption).
 
 ---
 
@@ -491,11 +691,16 @@ never out of your shell, and even then it cannot rescue the boot. See §7.5.
 
 `.env.example:138` documents it as if it were configurable. It is not.
 
-**Effect in v0.2.2:** the api always computes
-`backend/src/config.ts:438`'s default, `https://robotmoney.net` — the **old**
-domain that `bc9f20f` (#603) just moved away from. Every swarm
-application-receipt and activation email links to the old host. **File an issue;
-do not attempt to fix it during the rollout.** See §10.
+**Effect in v0.2.2:** the api always computes the **compiled-in default**,
+whatever that is in the tag you deploy. At `ccf983f` that is
+`backend/src/config.ts:438`'s `https://robotmoney.net` — the **old** domain that
+`bc9f20f` (#603) just moved away from — so every swarm application-receipt and
+activation email links to the old host. `969bc2e` (on this runbook's own branch)
+changes it to `https://robotmoney.network`
+(`SWARM_PUBLIC_BASE_URL_DEFAULT`, `backend/src/config.ts:448`, resolved at
+`:450-454`). **Confirm which one is in your tag (§1); do not attempt to change
+it during the rollout** — it is unreachable from `.env` and from your shell
+either way. See §10.
 
 ### 6.4 ⚠ `ADMIN_TOKEN` is also minted per boot — read it from the container
 
@@ -532,18 +737,50 @@ cat .env      # must contain, at minimum:
 (`scripts/lib/demo-external-pg.ts:288-305`), not from `process.env`. A missing or
 unreadable `.env` is a fatal exit 1 before anything starts.
 
-Optional, and genuinely honoured because they are in `DEMO_COMPOSE_PASSTHROUGH`:
-`PROJECTS_SOURCE`, `RM_ENV`, `SWARM_SCHEDULES_ENABLED`, `SWARM_*_CRON`,
-`SWARM_WINDOW_MINUTES`, `BASE_RPC_URL`.
+Optional, and genuinely honoured because they are in `DEMO_COMPOSE_PASSTHROUGH`.
+**`scripts/lib/demo-main.ts:427-444` is the authoritative list** — read it there,
+not here, before concluding anything is unconfigurable. Reproduced verbatim at
+`ccf983f`, all sixteen names:
 
-> ⚠ **`SWARM_SCHEDULES_ENABLED` is overridden regardless.**
-> `docker-compose.demo.yml:72` pins it to `"0"`, and `seedSwarmSchedules()`
-> (`backend/src/db/seed.ts:137-151`) rewrites all five `swarm.*` rows'
-> `cron`/`enabled`/`payload`/`timezone` on **every** boot — `seed()` is called
-> unconditionally from `backend/src/db/migrate.ts:61`. So every `bun smoke` boot
-> **disables all five swarm schedules in production**, clobbering any operator
-> toggle. This is a property of running the demo composition; plan for the swarm
-> to be manually driven after cutover.
+```
+BASE_RPC_URL
+SWARM_AGGREGATE_CRON
+SWARM_CLOSE_WINDOW_CRON
+SWARM_NOTIFICATION_EMAIL_FROM
+SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN
+SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL
+SWARM_OPEN_SESSION_CRON
+SWARM_PUBLISH_BRIEF_CRON
+SWARM_PUBLISH_CRON
+SWARM_SCHEDULES_ENABLED
+SWARM_WINDOW_MINUTES
+FETCH_CACHE_DIR
+FLOOR_SEED_PATH
+PROJECTS_SOURCE
+RM_ENV
+WORKER_DATABASE_URL
+```
+
+An earlier revision of this runbook listed six of these and glossed the crons as
+`SWARM_*_CRON`. Read as exhaustive, that omission says swarm **mail transport is
+unconfigurable** on this workflow — it is not: the three
+`SWARM_NOTIFICATION_EMAIL_*` names pass through, and so do `FETCH_CACHE_DIR`,
+`FLOOR_SEED_PATH` and `WORKER_DATABASE_URL`. Values `buildComposeEnv()` owns
+(ports, credentials, `DATABASE_URL`, `POSTGRES_*`, `DEMO_PROJECT`) are
+deliberately **not** on the list and cannot be shadowed (§6.1, §6.2, §6.4).
+Passthrough reads your **shell** environment, and an empty string counts as
+unset (`demoPassthroughEnv`, `:446-453`).
+
+> ⚠ **`SWARM_SCHEDULES_ENABLED` is on the list and still loses.**
+> `docker-compose.demo.yml:72` pins it to `"0"` in the overlay regardless of what
+> you pass, and `seedSwarmSchedules()` (`backend/src/db/seed.ts:137-152`)
+> rewrites all five `swarm.*` rows' `cron`/`enabled`/`payload`/`timezone` on
+> **every** boot — `seed()` is called unconditionally from
+> `backend/src/db/migrate.ts:61`. So every `bun smoke` boot **disables all five
+> swarm schedules in production**, clobbering any operator toggle, and §9's
+> rollback boot does it again. **IRREVERSIBLE** through rollback — §5.4 captures
+> the prior values, and it is the only record of them. Plan for the swarm to be
+> manually driven after cutover.
 
 ---
 
@@ -563,7 +800,20 @@ docker compose ls            # confirm no rm_demo_stack_* project is still up
 ```
 
 If `docker compose ls` shows leftovers from earlier boots, tear each down
-explicitly — `docker compose -p <that project> down` — before continuing. See
+explicitly, **naming the same compose files that boot used** — see the
+`-f`-less-compose box under §11 step 6 for why a bare `docker compose -p …`
+command resolves a different topology than the one running:
+
+```bash
+docker compose -p <that project> \
+  -f docker-compose.yml -f docker-compose.demo.yml \
+  down --remove-orphans
+```
+
+The stakes are lower here than at §11 step 6 — `down` removes by project label,
+so it cannot start anything — but without the overlay Compose does not know the
+demo-only services and leaves them behind as orphans, which is exactly the
+leftover you came here to clear. `--remove-orphans` covers the gap. See
 deployment.md §2.1, "FIRST: find the project name".
 
 ### 7.2 Pull the tag
@@ -576,10 +826,28 @@ git rev-parse HEAD           # MUST print ccf983f…
 
 ### 7.3 The invocation
 
+> 🔴 **IRREVERSIBLE.** This command is not a dry run and there is no "boot and
+> look first" mode. It writes to production three times before you can inspect
+> anything: the four migrations (§7.4), `seed()` rewriting the five `swarm.*`
+> schedule rows (§6.5, §5.4), and the **archive initializer** — `prod-bootstrap.ts`
+> run as `docker compose run --rm … api bun run scripts/prod-bootstrap.ts
+> --already-migrated` (`scripts/lib/demo-main.ts:1136-1140`) — which adopts and
+> writes archive rows into the live database (§8 verification 8). None of it has
+> a down migration (§7 header). Do not run this before Gates B, D, E, C and A
+> are all green.
+
 ```bash
 cd <checkout>
 DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
+BOOT_STATUS=$?                # capture it HERE — §8 verification 1 reads this
+echo "boot exit=$BOOT_STATUS" # MUST be 0
 ```
+
+⚠ **Capture the status on the same line-group as the boot.** `$?` holds only the
+*previous* command's status, and §8 opens with two commands of its own
+(`export RM_PROJECT=…`, `bun run demo:status`) before its first check. By then
+`$?` reports `demo:status`, not the boot. `BOOT_STATUS` survives that; `$?` does
+not.
 
 **Each flag, justified:**
 
@@ -587,8 +855,8 @@ DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
 |---|---|---|
 | `--external-pg` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/demo-external-pg.ts:288-305`). | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §0. |
 | `DEMO_PROJECT=rm_prod` | **MANDATORY.** Pins the compose project name (`scripts/lib/demo-main.ts:261`). Without it the name is `rm_demo_stack_<random>` per boot (`scripts/stack/naming.ts:138`). | Every restart leaves an orphaned project. `docker compose -p …` commands in deployment.md address the wrong stack. Note: `--external-pg` does **not** by itself stabilise the project name — only `DEMO_PROJECT` does. |
-| `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/demo-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Always pass it.** Needing the per-boot `ADMIN_TOKEN` — Gate A row 1, or anyone who took §12.2's re-arm — is *not* a reason to omit it: read the token out of the container instead (§12.0). |
-| **`CI` must be UNSET** | ⛔ With any truthy `CI`, `cleanCiVolume()` runs on **both** the success path (`scripts/lib/demo-main.ts:1393`) and the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/demo-volumes.ts:105`). It also publishes a real swarm session and exits. Harmless to the *data* under `--external-pg` (no volume exists) — but it still publishes and exits, so the site does not stay up. | Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |
+| `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/demo-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Always pass it.** Needing the per-boot `ADMIN_TOKEN` — Gate A row 1 (`rows = 0`), or anyone who took §12.2's re-arm — is *not* a reason to omit it: read the token out of the container instead (§12.0). |
+| **`CI` must be UNSET** | ⛔ With any truthy `CI` the boot runs a bounded scenario and then **tears the whole stack down**. Under smoke the branch taken is `CI && smokeMode` (`scripts/lib/demo-main.ts:1175`): it runs one live swarm session against production and then `scripts/smoke-e2e-assert.ts` (`:1206`). The swarm-session *driver* at `:1212` is the **other** branch, `CI && !smokeMode`, and never runs here. Either way control reaches `if (process.env.CI)` at `:1390`, which calls `cleanup()` — a full `compose down` (`:697`, `:711-715`) — then `cleanCiVolume()` (`:1393`) and `process.exit(0)` (`:1394`). `cleanCiVolume()` also runs on the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/demo-volumes.ts:105`). | The volume removal is harmless under `--external-pg` (no volume exists), but the teardown is not. Success exits `0` (`:1394`) and failure exits `1` (`:1894`) — the exit code still works — yet **either way the stack is torn down**, so the site does not stay up and there is nothing left to inspect or verify in §8. Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |
 
 ```bash
 echo "CI=[$CI]"     # MUST be empty
@@ -596,12 +864,22 @@ echo "CI=[$CI]"     # MUST be empty
 
 ### 7.4 What the boot does, in order
 
-Asserted by `scripts/tests/unit/stack-lifecycle-order.test.ts:83-93`:
-
 ```
 docker preflight → build → postgres → [db preflight, --external-pg only]
   → migrate (scripts/stack/stack.ts:388) → services (:394) → ports → /health → initialize
 ```
+
+⚠ **The bracketed step is the one part of this diagram no test asserts.**
+`scripts/tests/unit/stack-lifecycle-order.test.ts:83-93` asserts the order, but
+the array it compares against is exactly eight elements —
+`docker-preflight, build, postgres, migrate, services, ports, health,
+initialize` — with **no `db preflight` step in it**. The test runs `up()` without
+an `upOpts.preflight` callback, so the `--external-pg` classification hook at
+`scripts/stack/stack.ts:386` is never invoked and its position is uncovered.
+Read from source, not from the test: `up()` calls `preflight()` at `:386`,
+between the postgres phase and `migrate()` at `:388`, with the comment *"Refuse
+before the first write, not after it"*. Everything else in the diagram is
+test-asserted; that element is asserted by reading.
 
 **No service of the new stack starts if `migrate` fails** — services are step 6,
 migrate is step 5. The four new migrations apply here:
@@ -697,16 +975,24 @@ rollback, not the override.
 
 ## 8. Post-cutover verification
 
-Discover the project first — you pinned it, so it is `rm_prod`:
+Discover the project first — you pinned it, so it is `rm_prod`. `DATABASE_URL`
+must be loaded and asserted in **this** shell too, or every `psql` below grades
+the wrong database (§2.0):
 
 ```bash
 export RM_PROJECT=rm_prod
+[ -n "${DATABASE_URL:-}" ] || { echo "re-do §2.0 in this shell"; exit 1; }
+psql "$DATABASE_URL" -Atc "SELECT current_database(), inet_server_addr(), inet_server_port();"
 bun run demo:status
 ```
 
+⚠ Every command in that block overwrites `$?`. Check 1 therefore reads
+`$BOOT_STATUS` — the variable §7.3 captured on the boot's own command line —
+and never `$?`.
+
 | # | Check | Command | Expected |
 |---|---|---|---|
-| 1 | Boot exited clean | `echo $?` right after §7.3 | `0`. On a TTY without `--no-tui` this proves nothing (§7.3). |
+| 1 | Boot exited clean | `echo "$BOOT_STATUS"` — the variable captured on §7.3's own command line. **Not `echo $?`**: by the time you reach §8 that reports `demo:status`, not the boot, and it will read `0` after a failed cutover. | `0`. On a TTY without `--no-tui` this proves nothing (§7.3). If `BOOT_STATUS` is unset you did not capture it; you cannot recover it, so re-run §7.3 (it is idempotent — migrations resume, seed and adopt are idempotent) rather than assume. |
 | 2 | All four migrations recorded | `psql "$DATABASE_URL" -c "SELECT name FROM schema_migrations WHERE name LIKE '0029%' OR name LIKE '003%' ORDER BY 1;"` | four rows: `0029_admin_auth_recovery.sql`, `0029_admin_passkey.sql`, `0030_swarm_member_handle.sql`, `0031_swarm_member_handle_namespace.sql` |
 | 3 | Namespace guard ran and was clean | `curl -s "http://127.0.0.1:$(docker compose -p "$RM_PROJECT" port api 8787 \| cut -d: -f2)/health"` | `"handle_namespace":"clean"`. **`"unchecked"` means the guard could not run — this boot proves nothing.** `"overridden"` means you are serving a violation. |
 | 4 | No violation in the data | `psql "$DATABASE_URL" -c "SELECT a.id, a.handle, b.id FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id;"` | 0 rows |
@@ -714,10 +1000,47 @@ bun run demo:status
 | 6 | Every member has a handle | `psql "$DATABASE_URL" -c "SELECT count(*) FROM swarm_members WHERE handle IS NULL;"` | `0` (`SET NOT NULL` guarantees it; this catches a partial apply) |
 | 7 | Handles are saveable | `psql "$DATABASE_URL" -c "SELECT id, handle FROM swarm_members WHERE handle !~ '^[a-z0-9]+(-[a-z0-9]+)*$' OR length(handle) > 80;"` | 0 rows. Any row here is a member the admin surface can never re-save (§4, `handle-shape`). Fix with `UPDATE swarm_members SET handle = '<kebab-case>' WHERE id = '<id>';` — **move the handle, never the id.** |
 | 8 | Archive data was adopted, not overwritten | `psql "$DATABASE_URL" -c "SELECT count(*) FROM swarm_recommendations;"` | ≥ the pre-upgrade count from §5.3. The archive initializer **adopts**: `classifyDatabase` returns `mode: "adopt"` for the archive initializer on populated data (`backend/scripts/db-preflight.ts:158`) — insert-if-missing, fill only `NULL` columns, else report drift. Existing rows win; the signed `payload`/`signature` columns are never rewritten. |
-| 9 | `admin_credential` untouched by the boot | `psql "$DATABASE_URL" -c "SELECT count(*), (recovery_hash IS NULL) FROM admin_credential GROUP BY 2;"` | identical to Gate A's result. **No seed path ever writes this table.** |
-| 10 | Admin surface reachable, and claimed | If Gate A said unclaimed — or you took §12.2's re-arm — **run §12.1 Procedure A now.** This is a mandatory step, not a spot check: until it runs, the one-time claim is open to whoever reaches the surface first. If Gate A said claimed with `no_recovery = true`, sign in and run `POST /api/admin/password-change` once instead (Gate A, row 3). | `/api/admin/is-claimed` returns `{"claimed":true}` and you hold both the password and a recovery code. |
-| 11 | Site serves prerendered HTML | `curl -s http://127.0.0.1:<port>/swarm/ \| grep -o '<title>[^<]*'` | Not the home page's title. If it is, `bun run static:assemble` did not run (deployment.md §2.1). |
-| 12 | Swarm schedules state | `psql "$DATABASE_URL" -c "SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;"` | five rows, **all `enabled = f`** — expected under the demo composition (§6.5). Drive sessions manually. |
+| 9 | `admin_credential` untouched by the boot | `psql "$DATABASE_URL" -c "SELECT count(*), (recovery_hash IS NULL) FROM admin_credential GROUP BY 2;"` | The **count** must equal Gate A's `rows`. `recovery_hash IS NULL` must be `t` for any row that existed at Gate A — `0029` adds the column and backfills nothing, so the upgrade cannot have minted one. (This is the first point in the runbook where `recovery_hash` is a legal thing to select: the column exists only after `0029` applied. See Gate A.) **No seed path ever writes this table.** |
+| 10 | Admin surface reachable, and claimed | If Gate A returned `rows = 0` (row 1) — or you took §12.2's re-arm — **run §12.1 Procedure A now.** This is a mandatory step, not a spot check: until it runs, the one-time claim is open to whoever reaches the surface first. If Gate A returned `rows = 1` and somebody has the password (row 2), sign in and run `POST /api/admin/password-change` once instead — that is the only way this row ever gets a `recovery_hash`. | `/api/admin/is-claimed` returns `{"claimed":true}` and you hold both the password and a recovery code. |
+| 11 | Site serves prerendered HTML | `curl -s http://127.0.0.1:<port>/swarm/ \| grep -o '<title>[^<]*'` | Not the home page's title. **"Assembly did not run" is not a possible cause here** — see the diagnosis below. |
+| 12 | Swarm schedules state | `psql "$DATABASE_URL" -c "SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;"` | five rows, **all `enabled = f`** — expected under the demo composition (§6.5). Compare against §5.4's capture: the difference is what this boot clobbered, and it is not coming back on its own. Drive sessions manually. |
+
+### Diagnosing check 11
+
+The old remedy — *"`bun run static:assemble` did not run"* — is **unreachable on
+this workflow.** `up()` calls `assembleStaticDir()` at
+`scripts/stack/stack.ts:368`, before `build()` and long before any container
+starts, and it **throws** on a non-zero `scripts/static-assembly.sh`
+(`:287-288`), which aborts the bring-up. A boot that reached §8 at all ran
+assembly successfully. Silently skipping it is not a state this stack has.
+
+Work the real causes instead, in this order:
+
+```bash
+# a. Did the assembled tree actually get the route? (Empty = cause b or c.)
+ls -l _static/swarm/index.html
+docker compose -p "$RM_PROJECT" exec -T api ls -l /srv/frontend/swarm/index.html
+```
+
+- **The api is serving a different `_static`.** `docker-compose.yml:259` binds
+  `./_static:/srv/frontend:ro`, resolved against the **compose project
+  directory** — the repo root of the checkout the boot ran from
+  (`scripts/stack/stack.ts:216`). Present on the host but absent in the
+  container means the container was started from a different directory, or
+  outside §7.3 entirely (§11 step 6 / a hand-run `docker compose up`, where
+  nothing runs assembly and Docker will happily create an **empty** bind
+  directory).
+- **The route is not in the sitemap.** `scripts/prerender.ts:31-32` derives its
+  entire route list from `frontend/public/sitemap.xml`'s `<loc>` entries that
+  match `ORIGIN` (`prerender.ts:5`, `https://robotmoney.network`) and writes
+  `<route>/index.html` for each. A route missing from the sitemap is silently
+  never prerendered, assembly still exits `0`, and the api falls back to the
+  home-page shell. Confirm with
+  `grep -c '<loc>' frontend/public/sitemap.xml` (expect 37 at `ccf983f`) and
+  `grep -o '<loc>[^<]*' frontend/public/sitemap.xml | grep '/swarm'`.
+- **A stale container.** The api container predates this checkout's assembly —
+  `docker compose -p "$RM_PROJECT" ps` and compare `CREATED` against the boot.
+  The fix is §7.3 again, never `docker compose restart` (§11 step 6's box).
 
 ---
 
@@ -727,7 +1050,7 @@ bun run demo:status
 
 - Verification 3 reports `overridden`, or 4 returns rows you cannot repair now.
 - Verification 2 shows fewer than four migrations **and** the boot is failing.
-- The admin surface is unreachable and Gate A said `no_recovery = true`. Roll
+- The admin surface is unreachable and Gate A returned a claimed row (`rows = 1`). Roll
   back to regain access (`v0.2.1` still honours `ADMIN_TOKEN` against a claimed
   credential — see "What rollback does NOT undo" below), then apply §12.2.
 - The api is restart-looping (`docker compose -p rm_prod ps` shows repeated
@@ -750,6 +1073,7 @@ git checkout v0.2.1
 git rev-parse HEAD                     # MUST print 5970f2d…
 echo "CI=[$CI]"                        # MUST be empty
 DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
+BOOT_STATUS=$?; echo "rollback boot exit=$BOOT_STATUS"   # capture it here (§7.3)
 ```
 
 Re-run verification 3, 4 and 11.
@@ -768,8 +1092,13 @@ Re-run verification 3, 4 and 11.
   sign in. It buys triage time; it does not give you a durable v0.2.2
   credential, which still needs §12.2. A rollback is **not** a Gate A remedy:
   at Gate A you are already on `v0.2.1`.
-- **The five `swarm.*` schedules stay disabled.** `seed()` rewrote them on the
-  v0.2.2 boot and rewrites them again on the v0.2.1 boot (§6.5).
+- **The five `swarm.*` schedules stay disabled — IRREVERSIBLE.** `seed()`
+  rewrote them on the v0.2.2 boot and rewrites them again on the v0.2.1 boot
+  (`backend/src/db/seed.ts:137-152`, called from
+  `backend/src/db/migrate.ts:61`, §6.5). Rollback restores **nothing** here.
+  The only route back to the prior `cron`/`enabled`/`timezone`/`payload` values
+  is a manual `UPDATE` per row, written from §5.4's capture — which is why §5.4
+  is part of the backup evidence set and not an optional nicety.
 - **Any handle you edited during triage stays edited** — and each edit repointed
   a published URL.
 - **Data written while v0.2.2 was live stays.** Rolling the code back is not a
@@ -804,13 +1133,29 @@ in `backend/Dockerfile`, they cannot be delivered.
 **Use password auth for the admin surface in v0.2.2.** Passkeys are a
 known-broken feature, not a rollout step.
 
-### 10.2 The api advertises the old domain
+### 10.2 The api advertises the old domain — **only if you tag at `ccf983f`**
 
-`backend/src/config.ts:438` defaults `SWARM_PUBLIC_BASE_URL` to
-`https://robotmoney.net` while the canonical origin is now
+At `ccf983f`, `backend/src/config.ts:438` defaults `SWARM_PUBLIC_BASE_URL` to
+`https://robotmoney.net` while the canonical origin is
 `https://robotmoney.network` (`scripts/prerender.ts:5`,
 `frontend/public/assets/js/app/seo.js:16`). Not overridable — §6.3. Swarm emails
-link to the old host until this is fixed in code.
+then link to the old host.
+
+⚠ **This is already fixed in code, on the branch that carries this runbook.**
+`969bc2e` extracts the default to
+`SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network"`
+(`backend/src/config.ts:448`, resolved at `:450-454`) and pins it with an
+executed test (`backend/tests/swarm-public-base-url.test.ts`). So this entry is
+conditional on the tag, not on the release:
+
+```bash
+git show <the tag you cut>:backend/src/config.ts | grep -n 'robotmoney\.net"'
+# a hit  → this section applies; emails link to the retired host
+# no hit → the default is robotmoney.network; nothing to do
+```
+
+Decide it before cutover and record the answer, because it changes nothing you
+*do* — it changes only what you tell people to expect in their inbox.
 
 **CONTRADICTS deployment.md §2**, whose host table still lists
 `robotmoney.net` / `swarm.robotmoney.net` / `app.robotmoney.net`, and
@@ -838,6 +1183,25 @@ within reach.
 Run this **only** if you restored from §5's dump (or DO PITR) rather than simply
 rolling code back. A restored database is the one population path the schema
 cannot stand in front of.
+
+**Open a session against the restored database first, and prove which one it
+is.** These steps are written as bare SQL, so they need a `psql` session — and
+nothing in this workflow puts `DATABASE_URL` in your shell (§2.0). If you
+restored into a *different* database than production, `.env`'s value is the
+wrong one; use that database's own URI instead.
+
+```bash
+psql "$DATABASE_URL"      # or the explicit URI of the database you restored
+```
+
+Then, at the `psql` prompt, before anything else:
+
+```
+\conninfo
+```
+
+It must name the database you restored. If it names production, or a local
+socket, stop — you are about to "repair" the wrong server.
 
 1. **Roles first — before anything connects.** `pg_dump` does not carry them.
    ```sql
@@ -895,10 +1259,65 @@ cannot stand in front of.
 6. **Restart the api — with `up -d`, not `restart`.** The namespace guard is a
    boot-time snapshot; nothing re-checks a database that changed underneath a
    live process (`backend/src/db/handle-namespace.ts:450-458`).
+
+   > 🔴 **Do NOT run a bare `docker compose -p rm_prod up -d api`.** An earlier
+   > revision of this runbook printed exactly that, and on the post-restore path
+   > it is the worst command in the document.
+   >
+   > A `bun smoke --external-pg` stack is **three** compose files, not one:
+   > `docker-compose.yml` + `docker-compose.demo.yml`
+   > (`scripts/lib/demo-main.ts:284-288`) + a **generated** overlay written to
+   > `.agents/demo-<project>-external-pg.yml` (`:299-304`), which is what removes
+   > the `postgres` service and drops every `depends_on: postgres` so a
+   > dependency edge cannot pull the container back in. Compose learns that list
+   > from `COMPOSE_FILE` in the boot's own environment (`:463`), never from the
+   > project name.
+   >
+   > With no `-f` and no `COMPOSE_FILE`, Compose resolves `docker-compose.yml`
+   > **alone** — where the api still declares `depends_on: postgres: condition:
+   > service_healthy` (`docker-compose.yml:262-264`). So Compose starts a **new
+   > `postgres` container and a fresh `rm_prod_pgdata` volume**, waits for it to
+   > become healthy, and brings the api up against a stack that now contains an
+   > empty database. On the one path in this document where you have just
+   > restored production data and have not yet verified it, that is how you end
+   > up serving an empty site and reporting a successful restore.
+
+   **Re-run the boot.** It is the only form that reconstructs the full topology,
+   and it is the form §12.2's closing warning also requires (the hand-run api
+   gets **no** `ADMIN_TOKEN`, which opens `/api/admin/claim` to anyone who can
+   reach the port):
+
    ```bash
-   docker compose -p rm_prod up -d api
+   cd <checkout>
+   echo "CI=[$CI]"                       # MUST be empty
+   DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
+   BOOT_STATUS=$?; echo "boot exit=$BOOT_STATUS"
    ```
-   Then confirm `"handle_namespace":"clean"` at `/health` (verification 3).
+
+   If you must drive Compose directly, pass the **exact** file list this boot
+   used. `.agents/demo-state.json` does record a `composeFiles` field
+   (`scripts/lib/demo-main.ts:778`) — but ⚠ **do not use it verbatim**: it
+   stores `composeFilesBase`, deliberately **without** the generated
+   `--external-pg` overlay, because `demo:down`/`demo:status` act by project and
+   do not need it (`:752-756`). That value reintroduces the entire defect above.
+   Append the overlay yourself. For this rollout (`DEMO_PROJECT=rm_prod`, no
+   `--stage`) the full list is:
+
+   ```bash
+   cd <checkout>
+   ls -l .agents/demo-rm_prod-external-pg.yml   # must exist — no file, no boot to repair
+   COMPOSE_FILE="docker-compose.yml:docker-compose.demo.yml:.agents/demo-rm_prod-external-pg.yml" \
+     docker compose -p rm_prod up -d api
+   ```
+
+   Cross-check the first two names against `.agents/demo-state.json`'s
+   `composeFiles` before running it; if that field lists a third file
+   (`docker-compose.stage.yml`), keep it and append the overlay after it.
+
+   Then confirm `"handle_namespace":"clean"` at `/health` (verification 3), and
+   `docker compose -p rm_prod ps` shows **no `postgres` service**. One appearing
+   there means the overlay was not applied and the api is on an empty database —
+   tear the stack down and re-run the boot.
 
 7. **Re-run §4's pre-flight** against the restored database. It is the cheapest
    way to find out that something in this list was missed.
@@ -911,11 +1330,12 @@ Two walkable procedures, plus the one command both depend on. They are here at
 the end because they are dispatched *from* the flow rather than read in
 sequence:
 
-- **§12.1 Procedure A — claim the credential.** Dispatched from Gate A row 1
+- **§12.1 Procedure A — claim the credential.** Dispatched from Gate A row 1 (`rows = 0`)
   and executed at **§8 verification 10**, after cutover. Mandatory whenever the
   credential is unclaimed.
 - **§12.2 Procedure B — re-arm a claimed credential whose password is lost.**
-  Dispatched from Gate A row 4 and executed **before cutover**.
+  Dispatched from Gate A row 3 (`rows = 1`, password lost) and executed
+  **before cutover**.
 
 Do not read these as background. Gate A tells you which one you are running.
 
@@ -999,7 +1419,7 @@ not be shown again." (`admin.html:49-56`) and `finishClaim()` clears it from the
 component the moment you press Continue. Only its hash is stored — nothing can
 redisplay it. Store it where §5.2 says to store the dump: offline, encrypted,
 outside the checkout and outside any compose bind mount. Losing it puts you back
-in Gate A row 4 the next time the password goes missing.
+in Gate A row 3 the next time the password goes missing.
 
 **6. Understand what just changed.** From this moment `ADMIN_TOKEN` no longer
 authenticates: `isPrivileged()` takes the claimed branch and returns `false` on
@@ -1010,19 +1430,20 @@ consults `allowInsecure`. Do **not** plan on passkeys as a second factor: they
 are known-broken behind the tunnel (§10.1).
 
 **7. Do not run a password change afterwards.** The claim already minted the
-recovery code. `POST /api/admin/password-change` is for Gate A row 3 — a row
+recovery code. `POST /api/admin/password-change` is for Gate A row 2 — a row
 claimed *before* `0029`, whose `recovery_hash` is NULL. Running it here would
 rotate a working credential for nothing and would delete every `admin_passkey`
 and `admin_session` row (`admin.ts:234-235`).
 
 **8. Verify.** `/api/admin/is-claimed` now returns `{"claimed":true}`; you can
-sign in with the password; and Gate A's query returns one row with
-`no_recovery = false`. Re-running the claim returns `409` — the `id = 1` primary
+sign in with the password; and — now that `0029` has applied, so the column
+exists — `SELECT count(*), (recovery_hash IS NULL) FROM admin_credential GROUP
+BY 2;` returns one row with `false`. Re-running the claim returns `409` — the `id = 1` primary
 key makes it one-time (`0028_admin_credential.sql:3-4`, `admin.ts:201-203`).
 
 ### 12.2 Procedure B — re-arm a claimed credential (password is LOST)
 
-**Run this before cutover.** It is Gate A row 4's forward path. Both remedies
+**Run this before cutover.** It is Gate A row 3's forward path. Both remedies
 below are **writes**, so the §3 `rm_readonly` role cannot perform them — it holds
 `pg_read_all_data` and `default_transaction_read_only = on`. Use `doadmin` on
 port **25060** (§3's port note applies unchanged). Take §5's backup first: it is
@@ -1145,7 +1566,7 @@ instance is unowned until you do.
 **Exception: do not *claim* before cutover.** A claim executed against `v0.2.1`
 writes a row whose `recovery_hash` is NULL, because that column does not exist
 until `0029_admin_auth_recovery.sql` runs during this upgrade. That is precisely
-the Gate A row 3/4 shape you just paid a destructive delete to escape. **Re-arm
+the Gate A row 2/3 shape you just paid a destructive delete to escape. **Re-arm
 or reset before; claim after** (§12.1, at §8 verification 10).
 
 #### Security in the window between the delete and the claim
@@ -1177,6 +1598,8 @@ resolves to empty:
   every request including your own claim — locked out until a proper boot.
 
 **So while the claim is armed, bring the stack up only through §7.3.** In
-particular do not reach for §11 step 6's `docker compose -p rm_prod up -d api`
-during this window. Keep the window minutes long, and keep §10.1 in view: this
+particular do not reach for a hand-run `docker compose … up -d api` during this
+window — §11 step 6 spells out the other half of why that command is wrong here
+(it also starts a rogue postgres), but this half is worse: the api it starts has
+an **empty** `ADMIN_TOKEN`, which is exactly the state described above. Keep the window minutes long, and keep §10.1 in view: this
 surface is reachable through the public tunnel.
