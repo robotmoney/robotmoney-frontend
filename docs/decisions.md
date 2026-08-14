@@ -1969,13 +1969,20 @@ three explicit properties, each of which is a choice rather than an omission:
   connection with server-side `statement_timeout`, `lock_timeout` and
   `connect_timeout` (the mechanism `src/db/worker-client.ts` already uses), and
   each retry races the time remaining. The budget is *validated*, not
-  `Number()`-coerced: a non-finite or non-positive value is ignored with a loud
-  `[api]` line and the default is used. `Number("8s")` is `NaN`, and a `NaN`
-  budget makes every deadline comparison false — the retry loop would spin
-  forever in front of `Bun.serve`, which is the same silent total outage the
-  gate exists to prevent, reached through the gate's own knob. A bad env var
-  degrades to the default rather than throwing, because refusing the boot over
-  an operator typo trades one outage for another.
+  `Number()`-coerced: a non-finite, non-positive, or above-ceiling value is
+  ignored with a loud `[api]` line and the default is used. `Number("8s")` is
+  `NaN`, and a `NaN` budget makes every deadline comparison false — the retry
+  loop would spin forever in front of `Bun.serve`, which is the same silent
+  total outage the gate exists to prevent, reached through the gate's own knob.
+  The ceiling is `2147483647`ms, the largest delay a timer can hold: above it
+  the runtime clamps the delay to 1ms, so every attempt expires instantly and
+  the loop spins the same way — a positive, finite, entirely plausible-looking
+  value with the same effect as `NaN`. It is **rejected rather than clamped**,
+  because clamping would remove the spin but keep a ~24.8-day boot during which
+  no port is bound, and a ten-digit millisecond count is a unit error of the
+  same class as `8s`, not a deliberate multi-week budget. A bad env var degrades
+  to the default rather than throwing, because refusing the boot over an
+  operator typo trades one outage for another.
 - **Observable without changing the status code.** `/health` reports
   `handle_namespace: "clean" | "unchecked" | "overridden"` and keeps answering
   **200** in all three cases.

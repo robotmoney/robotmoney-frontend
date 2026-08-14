@@ -35,6 +35,7 @@ import {
   handleNamespaceConflicts,
   NAMESPACE_GUARD_BUDGET_MS,
   NAMESPACE_GUARD_DEFAULT_BUDGET_MS,
+  NAMESPACE_GUARD_MAX_BUDGET_MS,
   parseGuardBudgetMs,
   type NamespaceDb,
 } from "../src/db/handle-namespace.ts";
@@ -308,7 +309,48 @@ test(
   120_000,
 );
 
-test("parseGuardBudgetMs takes every positive finite value and refuses the rest, loudly", () => {
+test(
+  "an OVER-CEILING PG_NAMESPACE_GUARD_TIMEOUT_MS ('3000000000') does not disable the bound either: the api boots on the default and says why",
+  async () => {
+    // The second way this knob can un-bound the guard, and the one that does NOT
+    // look like a typo: 3000000000 IS a positive finite number of milliseconds,
+    // so validation that only checks `Number.isFinite(x) && x > 0` accepts it —
+    // and then setTimeout, which takes a 32-bit signed delay, clamps it to 1ms.
+    // Every attempt expires instantly, the loop retries on its 1s backoff and
+    // prints a TimeoutOverflowWarning stack each time, and the documented
+    // "could NOT run" line is never reached. Measured on the real entrypoint
+    // against an unreachable database before the ceiling existed: NO port bound
+    // after 35s and not one [api] line — the identical never-binds, never-logs
+    // outage as the "8s" case above.
+    const startedAt = Date.now();
+    const booted = await bootAndServe("postgres://unused:unused@127.0.0.1:1/unused", {
+      PG_NAMESPACE_GUARD_TIMEOUT_MS: "3000000000",
+    });
+    const elapsed = Date.now() - startedAt;
+    const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
+    expect(health.status).toBe(200);
+    expect((await health.json()).handle_namespace).toBe("unchecked");
+    // Bounded by THE DEFAULT, not merely by bootAndServe's own 60s deadline: the
+    // rejected value must fall back to 8000ms, not to some other large budget.
+    // The allowance is process spawn + bun startup + the poll interval.
+    expect(elapsed).toBeLessThan(NAMESPACE_GUARD_DEFAULT_BUDGET_MS + 7_000);
+
+    booted.proc.kill();
+    await booted.proc.exited;
+    const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
+    expect(stderr).toContain("PG_NAMESPACE_GUARD_TIMEOUT_MS");
+    expect(stderr).toContain("IGNORING");
+    expect(stderr).toContain(`${NAMESPACE_GUARD_MAX_BUDGET_MS}ms a timer can hold`);
+    expect(stderr).toContain(`${NAMESPACE_GUARD_DEFAULT_BUDGET_MS}ms`);
+    expect(stderr).toContain("handle/id namespace guard could NOT run");
+    // The specific symptom of the unbounded version, asserted absent rather than
+    // inferred from the port having been bound.
+    expect(stderr).not.toContain("TimeoutOverflowWarning");
+  },
+  120_000,
+);
+
+test("parseGuardBudgetMs takes every budget a timer can hold and refuses the rest, loudly", () => {
   // The table the boot test cannot enumerate one process at a time.
   const lines: string[] = [];
   const parse = (raw: string | undefined) => parseGuardBudgetMs(raw, (l) => lines.push(l));
@@ -322,18 +364,39 @@ test("parseGuardBudgetMs takes every positive finite value and refuses the rest,
   expect(parse("")).toBe(NAMESPACE_GUARD_DEFAULT_BUDGET_MS);
   expect(lines).toHaveLength(0);
 
+  // The ceiling itself is a legitimate budget and stays silent — the rejection
+  // below has to be about the values a timer genuinely cannot hold, not about
+  // "large".
+  expect(parse(String(NAMESPACE_GUARD_MAX_BUDGET_MS))).toBe(NAMESPACE_GUARD_MAX_BUDGET_MS);
+  expect(lines).toHaveLength(0);
+
   // Refused — each falls back to the default rather than to NaN, and each says so.
   for (const bad of ["8s", "eight", "0", "-1", "NaN", "Infinity", "8 000"]) {
     expect(parse(bad)).toBe(NAMESPACE_GUARD_DEFAULT_BUDGET_MS);
   }
-  expect(lines).toHaveLength(7);
+  // …including a value ABOVE what a timer can hold, which is not a long budget
+  // but a 1ms one: setTimeout takes a 32-bit signed delay, and above it the
+  // runtime clamps to 1ms, so every attempt would expire instantly and the loop
+  // would retry once a second in front of Bun.serve — the same never-binds,
+  // never-logs outage as the NaN case, reached through a value that IS a
+  // positive finite number of milliseconds.
+  for (const tooBig of ["2147483648", "3000000000", "1e300"]) {
+    expect(parse(tooBig)).toBe(NAMESPACE_GUARD_DEFAULT_BUDGET_MS);
+  }
+  expect(lines).toHaveLength(10);
   for (const line of lines) {
     expect(line).toContain("[api]");
     expect(line).toContain("PG_NAMESPACE_GUARD_TIMEOUT_MS");
     expect(line).toContain("IGNORING");
+    expect(line).toContain(`${NAMESPACE_GUARD_DEFAULT_BUDGET_MS}ms`);
   }
   // The rejected value is named, so the operator can find it in their env.
   expect(lines[0]).toContain('"8s"');
+  // …and an over-ceiling value is rejected for its own stated reason, with the
+  // ceiling quoted, rather than being called "not a positive number".
+  expect(lines[7]).toContain('"2147483648"');
+  expect(lines[7]).toContain(`larger than the maximum ${NAMESPACE_GUARD_MAX_BUDGET_MS}ms`);
+  expect(lines[7]).not.toContain("is not a positive number");
 });
 
 test("checkHandleNamespace cannot spin on a non-positive or NaN budget", async () => {
@@ -354,6 +417,15 @@ test("checkHandleNamespace cannot spin on a non-positive or NaN budget", async (
     const result = await checkHandleNamespace(explode, budget);
     expect(result.status).toBe("unavailable");
     expect(result.conflicts).toEqual([]);
+    // WHICH guard answered, not merely that something did. There are two
+    // negated-positive comparisons in that loop (the pre-attempt one and the
+    // post-catch one), and asserting only "unavailable" is satisfied by either:
+    // with the pre-attempt guard reverted, the Proxy above IS reached, its throw
+    // is swallowed by the catch, and the post-catch guard returns an identically
+    // shaped result — so the comment above ("sql is never touched") would be
+    // false while the test stayed green. This detail can only come from the
+    // pre-attempt guard, so each site is now independently protected.
+    expect(result.detail).toContain("budget exhausted before the check could answer");
   }
 });
 

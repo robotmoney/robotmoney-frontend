@@ -221,6 +221,14 @@ MILLISECONDS — IGNORING it and using 8000ms` and boots on the default. It neve
 runs unbounded and never refuses the boot over a typo, but you did not get the
 budget you asked for, so grep for that line after changing it.
 
+There is also a **ceiling**: `2147483647` (the largest delay a timer can hold,
+~24.8 days). Above it a bigger number is not a bigger budget — the timer clamps
+to 1ms and the guard would retry once a second in front of the port, binding
+nothing and logging nothing — so such a value is ignored exactly like a typo,
+with its own line (`… is larger than the maximum 2147483647ms a timer can hold —
+IGNORING it and using 8000ms`). In practice a ten-digit value here is a duration
+written in the wrong unit (microseconds or nanoseconds); write milliseconds.
+
 **It is a boot-time snapshot, not a standing guarantee.** The check runs once,
 at process start; there is no periodic re-check and no request-path re-entry.
 **After any `pg_restore` (or manual bulk load) into a database a running stack

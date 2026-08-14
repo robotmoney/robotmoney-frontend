@@ -152,6 +152,13 @@ export const NAMESPACE_GUARD_BUDGET_ENV = "PG_NAMESPACE_GUARD_TIMEOUT_MS";
  *  refuses to trust. */
 export const NAMESPACE_GUARD_DEFAULT_BUDGET_MS = 8_000;
 
+/** The largest budget a timer can actually hold: `setTimeout` takes a 32-bit
+ *  signed delay, and Bun clamps anything larger to **1ms** with a
+ *  `TimeoutOverflowWarning` (verified on Bun 1.3.14: `setTimeout(fn, 3e9)` fired
+ *  after 3ms). A budget above this is therefore not a long budget, it is a
+ *  1ms one — see parseGuardBudgetMs. */
+export const NAMESPACE_GUARD_MAX_BUDGET_MS = 2_147_483_647;
+
 /**
  * Turn the operator's `PG_NAMESPACE_GUARD_TIMEOUT_MS` into a budget the guard
  * can actually be bounded by.
@@ -165,6 +172,20 @@ export const NAMESPACE_GUARD_DEFAULT_BUDGET_MS = 8_000;
  * guard was written to prevent, reachable through the guard's own knob, and
  * `"8s"` is the literal string the runbook used to print for it. A bad value
  * must degrade to the default, loudly — never to an unbounded boot.
+ *
+ * WHY A CEILING, AND WHY IT IS A REJECTION RATHER THAN A CLAMP. `setTimeout`
+ * takes a 32-bit signed delay, so a budget above NAMESPACE_GUARD_MAX_BUDGET_MS
+ * does not produce a long attempt — it produces a 1ms one, after which the loop
+ * retries on its backoff and prints a TimeoutOverflowWarning stack once a
+ * second, never reaching the `could NOT run` line. Executed on the real
+ * entrypoint before this branch existed: `PG_NAMESPACE_GUARD_TIMEOUT_MS=3000000000`
+ * against an unreachable database bound NO port for 35s and logged not one
+ * `[api]` line. Clamping to the ceiling instead would remove the spin but keep a
+ * ~24.8-day silent boot, which is the outage this guard exists to prevent — and
+ * a ten-digit millisecond count is an operator error of the same class as "8s"
+ * (a duration written in the wrong unit), not a deliberate multi-week budget. So
+ * it degrades to the default, loudly, exactly like any other value this module
+ * cannot honour.
  *
  * It also must not become a NEW way to fail the boot, so this never throws: an
  * unparseable budget is an operator typo, and refusing to start over a typo
@@ -181,11 +202,19 @@ export function parseGuardBudgetMs(
 ): number {
   if (raw === undefined || raw.trim() === "") return NAMESPACE_GUARD_DEFAULT_BUDGET_MS;
   const parsed = Number(raw);
-  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  if (Number.isFinite(parsed) && parsed > 0 && parsed <= NAMESPACE_GUARD_MAX_BUDGET_MS) {
+    return parsed;
+  }
   warn(
-    `[api] ${NAMESPACE_GUARD_BUDGET_ENV}=${JSON.stringify(raw)} is not a positive number of ` +
-      `MILLISECONDS — IGNORING it and using ${NAMESPACE_GUARD_DEFAULT_BUDGET_MS}ms. Write it as ` +
-      `a plain integer count of milliseconds ("8000"), not as a duration ("8s").`,
+    Number.isFinite(parsed) && parsed > NAMESPACE_GUARD_MAX_BUDGET_MS
+      ? `[api] ${NAMESPACE_GUARD_BUDGET_ENV}=${JSON.stringify(raw)} is larger than the maximum ` +
+          `${NAMESPACE_GUARD_MAX_BUDGET_MS}ms a timer can hold — IGNORING it and using ` +
+          `${NAMESPACE_GUARD_DEFAULT_BUDGET_MS}ms. Above that a timer clamps to 1ms, so the guard ` +
+          `would retry once a second in front of the port instead of ever giving up. Write it as ` +
+          `a plain integer count of milliseconds ("8000").`
+      : `[api] ${NAMESPACE_GUARD_BUDGET_ENV}=${JSON.stringify(raw)} is not a positive number of ` +
+          `MILLISECONDS — IGNORING it and using ${NAMESPACE_GUARD_DEFAULT_BUDGET_MS}ms. Write it as ` +
+          `a plain integer count of milliseconds ("8000"), not as a duration ("8s").`,
   );
   return NAMESPACE_GUARD_DEFAULT_BUDGET_MS;
 }
@@ -227,10 +256,12 @@ function expireAfter(ms: number): { expiry: Promise<never>; cancel: () => void }
  * replay, a REINDEX, a VACUUM FULL, an ALTER queued behind one
  * idle-in-transaction session) blocks the detection SELECT while the readiness
  * probe above sails through, because catalog reads take no lock on the table.
- * Verified on Postgres 17: the probe returned immediately, the SELECT was still
- * blocked at 12s. The process would then bind no port, log nothing, and never
- * exit — so `restart: unless-stopped` would not restart it, and this process
- * also serves the entire static frontend.
+ * The process would then bind no port, log nothing, and never exit — so
+ * `restart: unless-stopped` would not restart it, and this process also serves
+ * the entire static frontend. That is executed rather than asserted by hand:
+ * tests/api-boot-handle-namespace-guard.test.ts boots this entrypoint against a
+ * `swarm_members` held under ACCESS EXCLUSIVE for the whole boot, and requires
+ * it to serve /health inside NAMESPACE_GUARD_BUDGET_MS with the lock still held.
  *
  * The mechanism is the one src/db/worker-client.ts:31-38 already uses for the
  * same class of hazard: server-side timeouts as startup parameters, so every
