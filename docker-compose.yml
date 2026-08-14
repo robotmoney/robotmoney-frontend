@@ -170,6 +170,19 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       RM_ENV: ${RM_ENV:-demo}
+      # The handle/id namespace boot guard's two operator controls (issue #602):
+      # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS
+      # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here
+      # and backend/Dockerfile sets no ENV, so a variable that is not named here
+      # NEVER reaches the container. Without these two lines the runbook's
+      # emergency override (§2.1) is a silent no-op: the operator sets it in the
+      # droplet env, redeploys, and the api's refusal log still tells them to set
+      # the variable they just set. Blank default = unset inside the container,
+      # so the guard keeps its fail-closed default and its 8000ms budget.
+      # scripts/tests/integration/demo-compose-config.test.ts asserts both keys
+      # resolve here, in every composition, from real `docker compose config`.
+      RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: ${RM_ALLOW_HANDLE_NAMESPACE_VIOLATION:-}
+      PG_NAMESPACE_GUARD_TIMEOUT_MS: ${PG_NAMESPACE_GUARD_TIMEOUT_MS:-}
       # No API_PORT here on purpose — see the `ports:` comment below. The api
       # listens on backend/src/config.ts's 8787 default, which is the single
       # source of truth for the container-internal port.

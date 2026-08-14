@@ -18,6 +18,14 @@
 // (the BLOCKING database, which is not the same failure as a rejecting one),
 // and a violating database under the documented override.
 //
+// WHAT THIS FILE CANNOT PROVE. It spawns the entrypoint directly, so it grades
+// the CODE's handling of RM_ALLOW_HANDLE_NAMESPACE_VIOLATION and
+// PG_NAMESPACE_GUARD_TIMEOUT_MS and says nothing about whether either variable
+// is DELIVERED to the deployed container — compose passes only what
+// docker-compose.yml's api `environment:` allowlist names, and Bun.spawn
+// bypasses that entirely. That half is asserted against real `docker compose
+// config` output in scripts/tests/integration/demo-compose-config.test.ts.
+//
 // The databases are throwaways created on the suite's ephemeral Postgres
 // (tests/preload.ts, which throws rather than skips when Docker is absent):
 // the shared suite database can hold neither a forbidden pair nor a pre-0030
@@ -576,9 +584,87 @@ test(
       // of what is being served wrong.
       expect(stderr).toContain(holder);
       expect(stderr).toContain(shadowed);
+      // …and the guard did NOT also claim to be disarmed: on a violating
+      // database the override is being USED, which is a different state from
+      // the one the next test covers.
+      expect(stderr).not.toContain("DISARMED");
     } finally {
       await db.end();
     }
+  },
+  180_000,
+);
+
+test(
+  "an override left ON over a CLEAN database announces that the guard is DISARMED (OPS-610-007)",
+  async () => {
+    // The end of the documented procedure — set the override, restore service,
+    // repair the rows, restart — leaves the variable set in the deploy
+    // environment while the data is now clean. Without this line that state is
+    // invisible: /health says `clean` (correctly — nothing is being served
+    // wrong right now) and nothing anywhere says the guard will not stop the
+    // NEXT bad restore. An operator must be able to tell a safe system from a
+    // disarmed one.
+    const dbName = await createThrowawayDb("armedclean");
+    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    try {
+      await applyAllMigrations(db);
+      await db`INSERT INTO swarm_members (id, status, name, handle)
+               VALUES ('armed-a', 'active', 'A', 'armed-a-h')`;
+    } finally {
+      await db.end();
+    }
+
+    const booted = await bootAndServe(urlFor(dbName), {
+      RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1",
+    });
+    const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
+    // The outcome stays honest: `overridden` means "a violation IS being
+    // served", and this database holds none. The armed state is reported
+    // separately, not by corrupting this field.
+    expect((await health.json()).handle_namespace).toBe("clean");
+    booted.proc.kill();
+    await booted.proc.exited;
+    const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
+    expect(stderr).toContain("RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1 is set");
+    expect(stderr).toContain("DISARMED");
+    // It is not an override event — no violation was found, and claiming one
+    // would send an operator hunting for rows that do not exist.
+    expect(stderr).not.toContain("OVERRIDE:");
+    expect(stderr).not.toContain("REFUSING");
+  },
+  180_000,
+);
+
+test(
+  "a CLEAN database with the override UNSET says nothing about it — the disarmed line is not boot noise",
+  async () => {
+    // The control for the case above: if that line printed on every boot it
+    // would be ignored on the one boot it matters. Same database shape, one
+    // variable different.
+    const dbName = await createThrowawayDb("unarmedclean");
+    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    try {
+      await applyAllMigrations(db);
+      await db`INSERT INTO swarm_members (id, status, name, handle)
+               VALUES ('unarmed-a', 'active', 'A', 'unarmed-a-h')`;
+    } finally {
+      await db.end();
+    }
+
+    // Explicitly blank rather than merely absent: spawnApi inherits the
+    // caller's environment, and a developer who exported the override in their
+    // shell must not silently turn this control into a copy of the case above.
+    const booted = await bootAndServe(urlFor(dbName), {
+      RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "",
+    });
+    const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
+    expect((await health.json()).handle_namespace).toBe("clean");
+    booted.proc.kill();
+    await booted.proc.exited;
+    const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
+    expect(stderr).not.toContain("DISARMED");
+    expect(stderr).not.toContain("RM_ALLOW_HANDLE_NAMESPACE_VIOLATION");
   },
   180_000,
 );

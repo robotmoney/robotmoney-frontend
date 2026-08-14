@@ -434,8 +434,35 @@ export function handleNamespaceGuardOutcome(): HandleNamespaceGuardOutcome {
  *      restore into a running stack, restart the api (`docker compose restart
  *      api`); docs/runbooks/deployment.md says so too.
  *   3. IT CAN BE TURNED OFF. With RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1 a
- *      violating database serves anyway, loudly (see below).
+ *      violating database serves anyway, loudly (see below). A boot that finds
+ *      nothing to override says so too (warnOverrideArmedWithoutViolation), so
+ *      an override left set after the repair is not invisible — that variable
+ *      reaches the container through docker-compose.yml's api `environment:`
+ *      allowlist, which is the only path into it.
  */
+/**
+ * Say so when the override is ARMED but this boot found nothing to override.
+ *
+ * Without this, the intended usage — set the override, restore service, repair
+ * the rows, restart — ends with the variable still set, `/health` reporting
+ * `clean`, and NOTHING anywhere indicating the guard is disarmed. The next
+ * restore that carries a violation in would then be served, which is the exact
+ * harm this module exists to prevent, reached through its own escape hatch. The
+ * `overridden` outcome cannot carry this: it means "a violation IS being
+ * served", and reporting it on a clean database would be a lie in the other
+ * direction. So the armed state is reported separately, on every boot it is set
+ * and unused — including an `unchecked` one, where "no violation was found" is
+ * itself unproven.
+ */
+function warnOverrideArmedWithoutViolation(): void {
+  if (process.env[HANDLE_NAMESPACE_OVERRIDE_ENV] !== "1") return;
+  console.error(
+    `[api] ${HANDLE_NAMESPACE_OVERRIDE_ENV}=1 is set but this boot found no violation to ` +
+      `override — the guard is DISARMED and the next database that carries one will be SERVED. ` +
+      `Unset ${HANDLE_NAMESPACE_OVERRIDE_ENV} and restart; see docs/runbooks/deployment.md.`,
+  );
+}
+
 export async function assertHandleNamespaceClean(db?: NamespaceDb): Promise<void> {
   // A caller that supplies its own handle (tests, and any future in-process
   // caller) keeps it; the boot path gets the bounded client.
@@ -474,9 +501,11 @@ export async function assertHandleNamespaceClean(db?: NamespaceDb): Promise<void
           `Serving anyway (an unreachable database is not a namespace violation), but this boot is UNCHECKED.`,
       );
       guardOutcome = "unchecked";
+      warnOverrideArmedWithoutViolation();
       return;
     }
     guardOutcome = "clean";
+    warnOverrideArmedWithoutViolation();
   } finally {
     // Closing must never become the delay the timeouts above just removed: the
     // guard's queries are bounded at the server, so an abandoned one dies there

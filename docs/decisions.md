@@ -1988,7 +1988,21 @@ three explicit properties, each of which is a choice rather than an omission:
   **200** in all three cases.
 - **Overridable, loudly.** `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1` downgrades
   the refusal to a warning, logged at boot and visible at `/health` for the
-  life of the process.
+  life of the process. A boot that finds the variable set and **no** violation
+  logs that the guard is DISARMED: `overridden` cannot carry that state (it
+  means a violation *is* being served), so without a separate line an override
+  left on after the repair is indistinguishable from a healthy boot — which is
+  the guard's own harm, reached through its own escape hatch.
+- **Both controls are enumerated in `docker-compose.yml`'s api
+  `environment:`.** That block is an allowlist — no compose file here has an
+  `env_file:` and `backend/Dockerfile` sets no `ENV` — so a control it does not
+  name never reaches the container, and the failure is silent in both
+  directions: the operator sets the variable, and the api's refusal log tells
+  them to set the variable they just set. A documented emergency control that
+  cannot be delivered is worse than none, so the delivery path is asserted
+  against real `docker compose config` output over every composition the repo
+  boots (`scripts/tests/integration/demo-compose-config.test.ts`) — the
+  spawn-based backend tests structurally cannot see it.
 
 **Why bounded is not optional.** This is the only database round trip that has
 ever stood between this process and its port, and the process also serves the

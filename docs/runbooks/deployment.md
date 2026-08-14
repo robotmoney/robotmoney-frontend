@@ -167,14 +167,30 @@ psql "$DATABASE_URL"
 ```
 
 **If the guard is wrong, or the site must come up before the data can be fixed.**
-Set **`RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1`** in the api's environment and
-redeploy: the api then logs the same block plus an `OVERRIDE:` line, serves
-anyway, and reports `handle_namespace: "overridden"` at `/health` for the whole
-life of the process. It is not silent and it is not sticky — unset it once the
-rows are repaired. Rolling the whole release back instead means redeploying the
-previous image tag (`docker compose pull && docker compose up -d` against the
-prior tag, §4.4); the guard is boot-time only, so a rollback removes it
-immediately.
+Set **`RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1`** in the **droplet env** — the same
+place `DATABASE_URL` and the tokens live (§4.4), from where CI's `docker compose
+pull && up -d` interpolates it — and redeploy. **That variable reaches the
+container only because `docker-compose.yml`'s api `environment:` block names
+it**: that block is an allowlist, there is no `env_file:` in any compose file
+here and `backend/Dockerfile` sets no `ENV`, so a variable it does not name is
+simply never delivered and the api's refusal log will still tell you to set the
+variable you just set. (`scripts/tests/integration/demo-compose-config.test.ts`
+asserts both this variable and `PG_NAMESPACE_GUARD_TIMEOUT_MS` resolve into the
+api service in every composition, from real `docker compose config` output, so
+that block cannot lose them silently.)
+
+The api then logs the same block plus an `OVERRIDE:` line, serves anyway, and
+reports `handle_namespace: "overridden"` at `/health` for the whole life of the
+process. It is not silent and it is not sticky **in the process** — but it *is*
+sticky in the deploy environment, and it disarms the guard for every future
+boot, so **unset it and redeploy once the rows are repaired**. A boot that finds
+the variable set and no violation to override says exactly that
+(`… is set but this boot found no violation to override — the guard is
+DISARMED …`), which is the only signal that distinguishes a safe system from a
+disarmed one once the data is clean. Rolling the whole release back instead
+means redeploying the previous image tag (`docker compose pull && docker compose
+up -d` against the prior tag, §4.4); the guard is boot-time only, so a rollback
+removes it immediately.
 
 **What still boots, and how to tell.** An empty database, a pre-0030 schema, and
 a database the api cannot query all boot normally. The last of those logs
@@ -183,14 +199,33 @@ a database the api cannot query all boot normally. The last of those logs
 json-file buffer rotates (`x-logging`: 10MB × 3), that line is not a durable
 signal, so the same outcome is also readable at **`/health`**:
 
+`8787` is the **container-internal** port and is not reachable from the host, for
+the same reason the psql block above refuses to guess Postgres's: this compose
+file publishes the api with the short form `- "8787"`, so the **host** port is
+Docker-assigned. Ask for it rather than guessing, or go in through the container:
+
 ```bash
-curl -s http://127.0.0.1:8787/health
+# bundled compose (docker-compose.yml) — host port assigned by the daemon
+curl -s "http://127.0.0.1:$(docker compose port api 8787 | cut -d: -f2)/health"
+
+# …or from inside the container. NOT curl: the image is oven/bun and carries no
+# curl, which is why the compose healthcheck itself uses `bun -e`.
+docker compose exec api bun -e 'console.log(await (await fetch("http://127.0.0.1:8787/health")).text())'
+
+# pinned-origin host (§3.3): 48787, the one fixed host port in the system
+curl -s http://127.0.0.1:48787/health
+
 # {"status":"ok","env":"…","db":"up","handle_namespace":"clean"}
 ```
 
+(A literal `127.0.0.1:8787` is right in exactly one place — a host-side `bun run`
+of the backend, where `backend/src/config.ts`'s default applies — which is not
+either deployment topology.)
+
 `handle_namespace` is `clean` (the check ran and found nothing), `unchecked`
 (the database was not queryable within the guard's budget — this boot proves
-nothing) or `overridden`. **A 200 from `/health` is not by itself evidence the
+nothing; once the database is queryable again, `docker compose restart api` to
+get a checked boot, since nothing re-checks it in place) or `overridden`. **A 200 from `/health` is not by itself evidence the
 guard ran; that field is.** The status code stays 200 in every case on purpose:
 the compose healthcheck keys on `.ok`, and failing it because Postgres was slow
 at boot would trade a wrong-attribution risk for a restart loop.
@@ -216,8 +251,10 @@ only signal, so **read the container log (`docker compose logs api | grep
 `statement_timeout`, `lock_timeout` and `connect_timeout`, and each attempt
 races the time remaining.
 
-Write that value as **milliseconds only** — `PG_NAMESPACE_GUARD_TIMEOUT_MS=15000`,
-never `15s`. A value that is not a positive number is **ignored**: the api logs
+Set it where the override is set — the droplet env, passed into the container by
+`docker-compose.yml`'s api `environment:` allowlist (see above; a variable that
+block does not name never arrives). Write that value as **milliseconds only** —
+`PG_NAMESPACE_GUARD_TIMEOUT_MS=15000`, never `15s`. A value that is not a positive number is **ignored**: the api logs
 `[api] PG_NAMESPACE_GUARD_TIMEOUT_MS="15s" is not a positive number of
 MILLISECONDS — IGNORING it and using 8000ms` and boots on the default. It never
 runs unbounded and never refuses the boot over a typo, but you did not get the
@@ -230,6 +267,15 @@ nothing and logging nothing — so such a value is ignored exactly like a typo,
 with its own line (`… is larger than the maximum 2147483647ms a timer can hold —
 IGNORING it and using 8000ms`). In practice a ten-digit value here is a duration
 written in the wrong unit (microseconds or nanoseconds); write milliseconds.
+
+**A value at or just under that ceiling is ACCEPTED, silently, and is a budget
+of up to 24.8 days.** Nothing rejects it, because the only defensible ceiling is
+what a timer can hold. While an accepted budget is running against an unqueryable
+database the api has **bound no port and logged nothing** — it is indistinguishable
+from a hung boot, for as long as the budget lasts. So write this value in
+**seconds' worth of milliseconds** (`8000`, `15000`, `30000`), never a count that
+works out to hours or days: nine or ten digits here is always a unit error, and
+the api cannot tell it from an intention.
 
 **It is a boot-time snapshot, not a standing guarantee.** The check runs once,
 at process start; there is no periodic re-check and no request-path re-entry.
