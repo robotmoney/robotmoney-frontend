@@ -1,12 +1,5 @@
 # Data Integrity Review — Macro index discrepancy, v1 0.657 vs v0 0.611 — 2026-08-14
 
-> **Revised same-day after a second-pass adversarial review** that treated
-> neither implementation as the reference. The re-review confirmed the root
-> cause, sharpened the mechanism (§6), closed the weighting residual (§9),
-> **found a latent defect on the v1 side too (D6)**, and grounded the
-> previously under-supported "v1 is correct" claim with 74/74-day executed
-> evidence (§14). Sections carrying revisions are marked.
-
 ## 1. TL;DR
 
 1. **v0 has a real data-fidelity bug:** it persists synthetic, forward-filled
