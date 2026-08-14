@@ -132,10 +132,24 @@ therefore **never in `fetched`**, never overwritten, and the fabricated value
 stands permanently. Each run writes one more day of fill, which the next run
 promotes to fact.
 
-The file header at `update.js:173-180` asserts this design is safe
-("append-only by construction … history accumulates, nothing gets dropped").
-That is true and beside the point: nothing is *dropped*, but fabricated rows are
-*added* and then locked in.
+**This is a composition defect, not a careless one.** Each half of the
+mechanism is individually reasonable and individually documented:
+
+- The *write* side was conceived as a snapshot, not a record — `update.js:135-137`
+  says so explicitly: the CSV is *"what the indicator data looked like at cron
+  time, **not a permanent record**"*. Writing the dense aligned view under that
+  contract is fine.
+- The *read* side (`loadPersistedRaw` + append-only `mergeSeries`) defends
+  against a real, verified problem: sources that only serve a recent window
+  (`NEW_TOKENS` current-day-only; `HY_OAS` trailing ~3y — see D7, which proves
+  this concern legitimate). Treating persisted rows as a floor under that
+  contract is also fine.
+
+The defect is that the same file serves both contracts: the snapshot is read
+back as the floor, which launders forward-fill into observations. The header at
+`update.js:173-180` ("append-only by construction … history accumulates,
+nothing gets dropped") is accurate about what it defends — nothing is
+*dropped* — but the failure mode is rows being *added* and then locked in.
 
 ### Observed effect
 
@@ -152,10 +166,29 @@ That is true and beside the point: nothing is *dropped*, but fabricated rows are
 2026-08-13,ICSA,215000     <- frozen filler
 ```
 
-`215000` appears nowhere in ICSA's recent FRED history (recent prints: 230, 227,
-216, 217, 217, 209, 189, 198, 200, 209 thousand). It is a stale carry frozen
-since 2026-05-24 and re-stamped on every non-publication day since — **92 of the
-1095 days (8.4%)** in the current percentile window.
+No ICSA print since late April 2026 carries the value `215000` (recent prints:
+230, 227, 216, 217, 217, 209, 189, 198, 200, 209 thousand); its most recent
+genuine occurrences are the weeks ending **2026-04-18** and 2025-12-20. It is a
+stale carry frozen since 2026-05-24 and re-stamped on every non-publication day
+since — **92 of the 1095 days (8.4%)** in the current percentile window.
+
+**The structural proof, immune to any revision or vintage explanation** (final
+verification pass, §15): FRED's ICSA has observations **only on Saturdays** —
+867 of 867 observations since 2010 — because it is a weekly week-ending series.
+v0's floor holds ICSA rows on **all seven weekdays** (~449 each). Every
+non-Saturday ICSA row is a date on which FRED has never had, and can never
+have, an observation. The same holds for DXY: `DTWEXBGS` publishes business
+days only; v0's floor has weekend rows. No data-revision story can make those
+rows real. (The filler *values* are traceable to genuine prints — `119.2868`
+is DTWEXBGS's real value for Friday **2026-05-22**, frozen ever since.)
+
+**Why the chain never heals on its own**: both series publish with a lag (ICSA
+on Thursday for the prior week-ending Saturday; DTWEXBGS roughly a week behind).
+So on any given cron day, yesterday's *fabricated* row is always dated later
+than the newest *real* observation — and forward-fill picks the latest-dated
+row. The fabricated value therefore re-propagates daily and the revision
+mechanism (`fetched wins on overlap`) can never reach it, because the fetch
+never returns those dates.
 
 `DXY` (`DTWEXBGS`) shows the identical shape: `119.2868` on every weekend and
 market holiday since 2026-05-22 — 32 days (2.9%) — including 2026-06-19
@@ -174,8 +207,8 @@ fetcher uses, `scripts/regime/fetchers/fred.js:21`):
 
 | Series | Last real observation | v0 reports | v1 reports |
 |---|---|---|---|
-| `ICSA` | 2026-08-08 → **209,000** | `215000` @ `2026-08-13` | `209000` @ `2026-08-08` ✅ |
-| `DTWEXBGS` | 2026-08-07 → **119.0649** | `119.2868` @ `2026-08-13` | `119.0649` @ `2026-08-07` ✅ |
+| `ICSA` | 2026-08-08 → **209,000** | `215000` @ `2026-08-12` (snapshot `raw_date`; floor rows through `2026-08-13`) | `209000` @ `2026-08-08` ✅ |
+| `DTWEXBGS` | 2026-08-07 → **119.0649** | `119.2868` @ `2026-08-12` (same) | `119.0649` @ `2026-08-07` ✅ |
 
 v1 additionally exposes `forward_fill_age_days: 6` on ICSA — it tracks the true
 age of the last real observation, because it persists the **sparse merged real
@@ -593,7 +626,7 @@ artifact of D1.
   measurably change panel weights (§9). Worth a loud freshness/coverage
   assertion of its own.
 
-### 14.5 Scorecard of the first draft's claims
+### 14.5 Scorecard of the first draft's claims (see also §15)
 
 | First-draft claim | Second-pass verdict |
 |---|---|
@@ -603,3 +636,70 @@ artifact of D1.
 | "v1 is the correct side" | **Upheld in effect, was under-supported as stated** — now grounded by the 74/74 executed match, and qualified by D6: v1 is clean in output, not clean by construction |
 | Weight-cap residual "genuine v1-vs-v0 difference, not a second data bug" | **Refined**: attributed to HY_OAS history-span difference (D7) |
 | "v0's HY_OAS floor 1,172 vs 787 fetched — same over-count signature" | **Upheld**, with the added finding that ~77 of those extra days are *unrecoverable real* pre-history, not just filler |
+
+---
+
+## 15. Final verification pass (2026-08-14, third execution)
+
+Run at the review owner's request before the finding is treated as settled:
+every calculation redone from freshly downloaded primary data, with an explicit
+hunt for innocent explanations of v0's behavior. Nothing material changed; two
+presentation errors were corrected and the mechanism was sharpened.
+
+### 15.1 Implementation self-check
+
+Before trusting any number in this document, the review's own percentile
+implementation was validated against v0's production output: computed from
+v0's own floor for the 2026-08-13 snapshot date, it reproduces v0's published
+percentile for **all 8 macro indicators to 9 decimal places** (T10Y2Y 0.657534247,
+DFII10 0.973515982, T5YIE 0.169406393, HY_OAS 0.095433790, DXY 0.115981735,
+ICSA 0.328767123, VIX 0.258904110, COPPER_GOLD 0.372146119). The math used to
+audit v0 is therefore v0's own math.
+
+### 15.2 Innocent explanations, hunted and excluded
+
+| Candidate explanation for v0's values | Outcome |
+|---|---|
+| The filler rows are real observations later revised away | **Excluded structurally.** FRED ICSA observations exist only on Saturdays (867/867 since 2010); v0's floor has ICSA rows on all 7 weekdays. `DTWEXBGS` publishes business days only; v0's floor has weekend rows. Dates without observations cannot be revised — they never existed. |
+| The filler values are fabricated numbers | **No — and this is fairer to v0.** `119.2868` is DTWEXBGS's genuine value for Friday 2026-05-22. `215000` genuinely printed for the weeks ending 2026-04-18 and 2025-12-20. The values are real; only their *dates* are fabricated by the snapshot-read-as-floor loop. |
+| The dense CSV is intended behavior | **Half true, and documented in §6.** The write side is explicitly documented as a snapshot ("not a permanent record", `update.js:135-137`); the read side treats it as an observation floor for legitimate resilience reasons. The defect is the composition, not either half. |
+| v1's agreement with FRED is luck / v1 has its own offsetting bug | **Excluded by execution.** The clean-vs-hybrid discrimination re-run from fresh FRED downloads and the git-sourced seed fixture (`origin/main`, md5-identical to the working tree) again yields **74/74** clean, 0/74 hybrid. |
+| My earlier runs had a transient data vintage | **Excluded.** The floor CSV at `upstream/main` is md5-identical across pulls; the third counterfactual run reproduces every attribution number within live-input noise. |
+
+### 15.3 Numbers, third independent run
+
+| Quantity | This run | First run | Verdict |
+|---|---|---|---|
+| A — v0 as shipped | 0.611550 | 0.610602 | stable (intraday drift ±0.001, VIX/COPPER_GOLD live) |
+| B — clean floor | 0.654571 | 0.653632 | stable |
+| B2 — clean + FRED-servable HY_OAS span | **0.657701** | 0.655668 | now within **0.0005** of v1's 0.657209 |
+| ICSA swap | +0.039923 | +0.039932 | stable |
+| DXY swap | +0.003223 | +0.003224 | stable |
+| ICSA share of gap | **87.4%** | ~87% | confirmed |
+| DXY share of gap | **7.1%** | ~7% | confirmed |
+
+### 15.4 Corrections applied in this pass
+
+1. §6 ground-truth table: v0's snapshot `raw_date` for ICSA/DXY is
+   **2026-08-12**, not 2026-08-13 (the *floor* carries fabricated rows through
+   08-13; the snapshot field reflects the last merged row at cron time). The
+   substance is unchanged.
+2. §6: "215000 appears nowhere in ICSA's recent FRED history" sharpened — it
+   *is* a genuine print for the week ending 2026-04-18; no print since late
+   April carries it. The value is real; the dates are not.
+3. §6: added the Saturday-only structural proof, the value-origin trace, the
+   publication-lag explanation of why the chain never self-heals, and the
+   composition-defect framing.
+
+### 15.5 Standing conclusion
+
+The finding survives adversarial re-verification. Stated with the precision the
+evidence supports: **v0's pipeline output for 2026-08-13/14 attributes to the
+current day a value whose provenance is a forward-fill loop, not a source
+observation; the divergence from v1 is fully attributed (87% ICSA + 7% DXY
+shadowing + ~6% HY_OAS span), and v1's published numbers equal the documented
+methodology computed on source-faithful data.** The defect arises from the
+interaction of two individually sound, individually documented design
+decisions in v0 — a snapshot file also serving as the observation floor — and
+its fix (persist sparse real observations; align at read time) is small and
+does not change v0's methodology.
