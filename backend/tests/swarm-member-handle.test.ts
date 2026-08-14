@@ -44,6 +44,12 @@ beforeEach(async () => {
   await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
 });
 
+// `handle` is read back off the row rather than assumed to equal `id`: since
+// issue #562 registerMember derives the public handle from the member's NAME,
+// so a seated member's starting handle is the slug of `id` (the name this
+// helper passes), not the id itself. Every assertion below that means "this
+// member's handle did not move" compares against THIS value, so it keeps saying
+// that and does not quietly become an assertion about the derivation rule.
 async function activeMember() {
   const id = rid("m");
   const { publicKeyB64, privateKey } = await generateKeyPair();
@@ -51,7 +57,9 @@ async function activeMember() {
   if (!("token" in r) || !r.token) {
     throw new Error(`activeMember(): registerMember failed for ${id}: ${JSON.stringify(r)}`);
   }
-  return { id, token: r.token, privateKey };
+  const [row] = await sql<{ handle: string }[]>`SELECT handle FROM swarm_members WHERE id = ${id}`;
+  if (!row) throw new Error(`activeMember(): no row for ${id}`);
+  return { id, handle: row.handle, token: r.token, privateKey };
 }
 
 type Member = Awaited<ReturnType<typeof activeMember>>;
@@ -145,26 +153,47 @@ async function memberCount(): Promise<number> {
   return row!.n;
 }
 
-// ── 1. Every member starts with handle === id ───────────────────────────────
+// ── 1. A member written with NO handle still falls back to its id ───────────
+//
+// REWRITTEN FOR ISSUE #562, deliberately and not by loosening. The original
+// test here asserted "a newly admitted member's handle IS its id" over
+// registerMember, and #562 changes exactly that: a member admitted through any
+// of the three create/accept paths now gets a handle derived from its NAME, so
+// applicants stop being published at /swarm/members/<uuid>. Asserting the old
+// outcome would assert the bug.
+//
+// What that test was PROTECTING is a different property, and it survives intact
+// — so it is what this test now states directly instead of by implication:
+// migration 0030's BEFORE INSERT default is what guarantees no published URL
+// moved when 0030 deployed, and it is still the last-resort fallback for the
+// writers that supply no handle and go nowhere near the derivation
+// (roster-seed.ts, demo/e2e.ts, scripts/v0-seed-bootstrap.ts — the seeded
+// roster `woon`/`athena`/`robotmoney` among them, which #562 explicitly
+// declined to rename). A raw insert is the honest way to exercise that
+// fallback, because a raw insert is precisely what those three writers do.
+//
+// The derivation itself has its own file: tests/swarm-member-handle-derivation.test.ts.
 
-test("a newly admitted member's handle IS its id — migration 0030's default, so no published URL changes on deploy", async () => {
-  const m = await activeMember();
+test("a member row inserted with NO handle falls back to its id — 0030's default, so a raw-inserting seed writer publishes no URL that moved", async () => {
+  const id = rid("seeded");
+  await sql`INSERT INTO swarm_members (id, status, name) VALUES (${id}, 'active', 'Seeded Persona')`;
 
   // The column really carries the value; it is not a read-time `?? id` fallback
-  // pretending the separation exists.
+  // pretending the separation exists. And it is the ID, not a slug of the name
+  // — nothing derived reaches this writer.
   const [row] = await sql<{ id: string; handle: string }[]>`
-    SELECT id, handle FROM swarm_members WHERE id = ${m.id}`;
-  expect(row!.handle).toBe(m.id);
+    SELECT id, handle FROM swarm_members WHERE id = ${id}`;
+  expect(row!.handle).toBe(id);
 
-  const member = await ic.getMember(m.id);
-  expect(member!.id).toBe(m.id);
-  expect(member!.handle).toBe(m.id);
+  const member = await ic.getMember(id);
+  expect(member!.id).toBe(id);
+  expect(member!.handle).toBe(id);
 
   // The admin projection shows BOTH, which is what lets an operator tell the
   // editable name from the one signatures are keyed on.
   const adminRows = await admin.listMembersAdmin();
-  const adminRow = adminRows.find((r) => r.id === m.id);
-  expect(adminRow!.handle).toBe(m.id);
+  const adminRow = adminRows.find((r) => r.id === id);
+  expect(adminRow!.handle).toBe(id);
 });
 
 // ── 2. The rename moves the handle and NOTHING else ─────────────────────────
@@ -264,7 +293,7 @@ test("a handle already held by another member is refused with 409, and nothing i
   expect(collision.error).toBe("handle already taken");
 
   const untouched = await ic.getMember(b.id);
-  expect(untouched!.handle).toBe(b.id);
+  expect(untouched!.handle).toBe(b.handle); // still the handle it was seated with
   expect(untouched!.tagline).toBeNull(); // the whole patch was refused, not part of it
 });
 
@@ -288,7 +317,7 @@ test("re-submitting a member's OWN current handle is not a self-collision", asyn
   // The guard must compare against OTHER rows only — a form that posts the
   // unchanged handle alongside a real edit is the common case.
   const res = await admin.updateMemberAdmin(m.id, await versionOf(m.id), {
-    handle: m.id,
+    handle: m.handle,
     tagline: "edited alongside an unchanged handle",
   });
   expect(res.status).toBe(200);
@@ -308,7 +337,7 @@ test("a handle edit is audited with its before/after value, not merely as a chan
   expect(entry!.actor).toBe("admin");
   expect(entry!.scope.fields).toEqual(["handle"]);
   // The part a `fields` list cannot give you months later.
-  expect(entry!.scope.handleFrom).toBe(m.id);
+  expect(entry!.scope.handleFrom).toBe(m.handle);
   expect(entry!.scope.handleTo).toBe("noop-analyst");
   expect(entry!.scope.reason).toBe("persona rename");
 
@@ -522,7 +551,7 @@ test("the SAME race on the RENAME path — two administrators, one free handle �
   // unrelated reason.
   const [row] = await sql<{ handle: string; version: number }[]>`
     SELECT handle, version FROM swarm_members WHERE id = ${b.id}`;
-  expect(row!.handle).toBe(b.id);
+  expect(row!.handle).toBe(b.handle);
   expect(Number(row!.version)).toBe(bVersion);
 
   // The winner owns the name, and the public reference resolves to it.
@@ -562,7 +591,7 @@ test("the DATABASE refuses a handle equal to another member's id, not only the a
   expect(refusal).toBeDefined();
   expect(refusal.code).toBe("23505");
   expect(refusal.constraint_name ?? refusal.constraint).toBe("swarm_members_handle_namespace");
-  expect((await ic.getMember(a.id))!.handle).toBe(a.id);
+  expect((await ic.getMember(a.id))!.handle).toBe(a.handle);
 
   // The mirror direction — a member CREATED under a name another member already
   // publishes — is refused by the same trigger, so the invariant does not depend
