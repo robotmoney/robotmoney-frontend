@@ -1,0 +1,177 @@
+{
+  "review": {
+    "repository": "robotmoney/robotmoney-frontend",
+    "pull_request": 620,
+    "reviewed_head_sha": "f5fe64d3dad5cd1c9d5dae0ef42c29f951981eac",
+    "base_sha": "ccf983ffd56ef51856acc06ce3d5cfd39b853902",
+    "captured_on": "2026-08-14"
+  },
+  "upstream_v0": {
+    "repository": "agentjuno/robotmoney",
+    "sha": "2f8cf171a90b31e8fde134b5b1d0a4198f249cfd"
+  },
+  "artifact_scope": {
+    "kind": "documentation evidence with selected extracted rows",
+    "integrity": "the Git commit containing this file pins its exact bytes",
+    "includes": [
+      "source rows needed for the incident-slice merge classification",
+      "source overlaps needed for the full suspect-value classification",
+      "the 40-row polluted incident slice"
+    ],
+    "does_not_include": [
+      "complete raw FRED HTTP responses",
+      "historical live v1 API responses",
+      "the complete v0 floor",
+      "the full counterfactual replay inputs",
+      "an executable test suite"
+    ]
+  },
+  "vendored_floor": {
+    "path": "backend/tests/fixtures/regime/raw-indicator-history.csv.gz",
+    "origin": "v0-derived dense aligned floor already present in the repository",
+    "span": "2018-01-01/2026-06-29",
+    "rows": 75587,
+    "indicators": 26
+  },
+  "captured_sources": {
+    "ICSA": {
+      "provider": "FRED",
+      "series": "ICSA",
+      "rows_kind": "selected extracted observations, not a complete response",
+      "incident_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=ICSA&cosd=2026-06-01",
+      "incident_interval": "2026-06-10/2026-06-29",
+      "incident_rows": [
+        { "date": "2026-06-13", "value": 227000 },
+        { "date": "2026-06-20", "value": 216000 },
+        { "date": "2026-06-27", "value": 217000 }
+      ],
+      "candidate_overlap_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=ICSA&cosd=2019-05-01",
+      "candidate_overlap_interval": "2019-05-18/2026-06-27",
+      "candidate_value": 215000,
+      "candidate_source_overlaps": [
+        { "date": "2019-05-18", "value": 215000 },
+        { "date": "2019-07-06", "value": 215000 },
+        { "date": "2019-08-31", "value": 215000 },
+        { "date": "2019-09-28", "value": 215000 },
+        { "date": "2019-10-12", "value": 215000 },
+        { "date": "2019-10-26", "value": 215000 },
+        { "date": "2020-02-29", "value": 215000 },
+        { "date": "2021-12-18", "value": 215000 },
+        { "date": "2022-08-20", "value": 215000 },
+        { "date": "2023-02-04", "value": 215000 },
+        { "date": "2023-12-02", "value": 215000 },
+        { "date": "2025-12-20", "value": 215000 },
+        { "date": "2026-04-18", "value": 215000 },
+        { "date": "2026-06-20", "value": 216000 },
+        { "date": "2026-06-27", "value": 217000 }
+      ]
+    },
+    "DXY": {
+      "provider": "FRED",
+      "series": "DTWEXBGS",
+      "rows_kind": "selected extracted observations, not a complete response",
+      "incident_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTWEXBGS&cosd=2026-06-10",
+      "incident_interval": "2026-06-10/2026-06-29",
+      "incident_rows": [
+        { "date": "2026-06-10", "value": 119.9134 },
+        { "date": "2026-06-11", "value": 120.1174 },
+        { "date": "2026-06-12", "value": 119.5073 },
+        { "date": "2026-06-15", "value": 119.3158 },
+        { "date": "2026-06-16", "value": 119.256 },
+        { "date": "2026-06-17", "value": 119.3871 },
+        { "date": "2026-06-18", "value": 120.3958 },
+        { "date": "2026-06-22", "value": 120.5463 },
+        { "date": "2026-06-23", "value": 121.0552 },
+        { "date": "2026-06-24", "value": 121.412 },
+        { "date": "2026-06-25", "value": 121.0559 },
+        { "date": "2026-06-26", "value": 120.8866 },
+        { "date": "2026-06-29", "value": 120.9525 }
+      ],
+      "candidate_overlap_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTWEXBGS&cosd=2026-05-20",
+      "candidate_overlap_interval": "2026-05-22/2026-06-29",
+      "candidate_value": 119.2868,
+      "candidate_source_overlaps": [
+        { "date": "2026-05-22", "value": 119.2868 },
+        { "date": "2026-06-29", "value": 120.9525 }
+      ],
+      "captured_source_absent_weekdays": ["2026-05-25", "2026-06-19"]
+    }
+  },
+  "polluted_incident_slice": {
+    "origin": "rows extracted from the vendored v0-derived floor",
+    "interval": "2026-06-10/2026-06-29",
+    "ICSA": [
+      { "date": "2026-06-10", "value": 215000 },
+      { "date": "2026-06-11", "value": 215000 },
+      { "date": "2026-06-12", "value": 215000 },
+      { "date": "2026-06-13", "value": 227000 },
+      { "date": "2026-06-14", "value": 215000 },
+      { "date": "2026-06-15", "value": 215000 },
+      { "date": "2026-06-16", "value": 215000 },
+      { "date": "2026-06-17", "value": 215000 },
+      { "date": "2026-06-18", "value": 215000 },
+      { "date": "2026-06-19", "value": 215000 },
+      { "date": "2026-06-20", "value": 215000 },
+      { "date": "2026-06-21", "value": 215000 },
+      { "date": "2026-06-22", "value": 215000 },
+      { "date": "2026-06-23", "value": 215000 },
+      { "date": "2026-06-24", "value": 215000 },
+      { "date": "2026-06-25", "value": 215000 },
+      { "date": "2026-06-26", "value": 215000 },
+      { "date": "2026-06-27", "value": 215000 },
+      { "date": "2026-06-28", "value": 215000 },
+      { "date": "2026-06-29", "value": 215000 }
+    ],
+    "DXY": [
+      { "date": "2026-06-10", "value": 119.9134 },
+      { "date": "2026-06-11", "value": 120.1174 },
+      { "date": "2026-06-12", "value": 119.5073 },
+      { "date": "2026-06-13", "value": 119.2868 },
+      { "date": "2026-06-14", "value": 119.2868 },
+      { "date": "2026-06-15", "value": 119.3158 },
+      { "date": "2026-06-16", "value": 119.256 },
+      { "date": "2026-06-17", "value": 119.3871 },
+      { "date": "2026-06-18", "value": 120.3958 },
+      { "date": "2026-06-19", "value": 119.2868 },
+      { "date": "2026-06-20", "value": 119.2868 },
+      { "date": "2026-06-21", "value": 119.2868 },
+      { "date": "2026-06-22", "value": 120.5463 },
+      { "date": "2026-06-23", "value": 121.0552 },
+      { "date": "2026-06-24", "value": 121.412 },
+      { "date": "2026-06-25", "value": 121.0559 },
+      { "date": "2026-06-26", "value": 120.8866 },
+      { "date": "2026-06-27", "value": 119.2868 },
+      { "date": "2026-06-28", "value": 119.2868 },
+      { "date": "2026-06-29", "value": 119.2868 }
+    ]
+  },
+  "incident_slice_expected": {
+    "ICSA": { "source_absent_rows": 17, "stale_overlap_rows": 2, "matching_overlap_rows": 1 },
+    "DXY": { "source_absent_rows": 7, "stale_overlap_rows": 1, "matching_overlap_rows": 12 }
+  },
+  "full_fixture_expected": {
+    "ICSA": { "candidate_rows": 125, "source_absent_rows": 110, "stale_overlap_rows": 2, "matching_overlap_rows": 13 },
+    "DXY": { "candidate_rows": 16, "source_absent_rows": 14, "stale_overlap_rows": 1, "matching_overlap_rows": 1 }
+  },
+  "local_db_prototype_observation": {
+    "status": "follow-up coverage; implementation is not part of PR 620",
+    "scope": "representative 40-row ICSA/DXY incident slice",
+    "asof": "2026-06-29",
+    "seed_rows": 40,
+    "incident_slice_source_absent_rows_retained": 24,
+    "stale_overlap_rows_corrected": 3,
+    "surviving_seed_provenance_after_run": "fixture (production equivalent: live)",
+    "identical_rerun": "did not converge because source-absent keys remained",
+    "after_explicit_deletion": "returned to the representative control output",
+    "limitation": "the prototype's non-ICSA/DXY controls were not an independently captured canonical full-panel source, so its macro-index decimals are intentionally omitted"
+  },
+  "semantics": {
+    "overlap": "fresh source wins on an identical (date, indicator) key",
+    "source_absent": "prior-only keys survive merge and every subsequent save",
+    "downstream": "a later real observation can recover the latest raw value, but retained prior-only keys continue to affect rolling windows"
+  },
+  "follow_up": [
+    "commit a hermetic classification suite backed by independently captured canonical source observations",
+    "commit a loud-fail ephemeral-Postgres integration suite for overlap correction, source-absent retention, provenance relabeling, non-convergence, and recovery after explicit deletion"
+  ]
+}

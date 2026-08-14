@@ -3,11 +3,13 @@
 ## 1. TL;DR
 
 1. **v0 has a real data-fidelity bug:** it persists synthetic, forward-filled
-   values as though they were factual raw observations. v1's live-data pipeline
-   does not have this bug.
-2. **The v0.2.1 deployment at `robotmoney.network` appears not to carry the
-   error:** its served snapshots match clean source data, likely because the
-   initial startup migration self-healed the affected floor.
+   values as though they were factual raw observations. v1's sparse live-write
+   path avoids that feedback loop, although its optional seed can import
+   already-polluted keys.
+2. **The sampled v1 production output did not carry the error:** its served
+   snapshots matched the source-date-cleaned ICSA/DXY model in the captured
+   comparison. How production avoided the polluted seed is unresolved; there
+   is no evidence that startup migration fully self-healed it.
 3. **v1 still carries v0-derived sample data for testing:** the fixture must be
    recomputed directly from source data, with no dependency on v0's persisted
    history.
@@ -19,7 +21,7 @@
 
 ## 2. Repo identity — read this before reproducing
 
-`~/robotmoney/robotmoney-site`'s `origin` (`robotmoney/robotmoney-site`) is a
+The `robotmoney/robotmoney-site` origin is a
 **frozen archive fork**, last commit 2026-08-05 (`4c4fcad6`). Live v0 production
 is the **`upstream` remote, `agentjuno/robotmoney`**, whose `Daily Regime Update`
 cron has run successfully every night, most recently 2026-08-13 23:07 UTC.
@@ -38,19 +40,25 @@ they were real source observations. Because the sources never re-publish those
 dates, the fabricated rows can never be corrected, and each run re-seeds the
 next.
 
-Cleaning only the input floor — with v0's own code, v0's own math, unchanged —
-moves v0's macro index from **0.6106 → 0.6536**, landing within **0.0036** of
-v1's 0.6572. **ICSA alone accounts for 87% of the gap.**
+Cleaning only the input floor — with v0's own code and math unchanged — moved
+the macro index from **0.610602 → 0.653632** in the first captured run. In that
+same run, ICSA contributed **+0.039932**, or **85.7%** of the
+`0.657209 - 0.610602 = 0.046607` v1-v0 gap. These are dated observations, not
+stable live constants. The exact live API responses and full counterfactual
+inputs were not retained byte-for-byte, so the committed evidence supports the
+defect mechanism and dated attribution rather than reproducing every historical
+decimal exactly.
 
-**v1's published output is the documented methodology, computed correctly** —
-this is now proven by execution, not assumed: across all 74 days in the trailing
-60-day API history where a clean floor and a polluted floor produce different
-percentiles, v1 matches the clean current-vintage computation on **74/74** and
-the polluted model on **0/74**, to 6 decimals (§14). But v1 is **not** clean by
-construction: its vendored floor-seed fixture embeds v0's fabricated rows and
-its seed-ingestion path would implant them permanently into any freshly seeded
-deployment (**D6**). Production evidently escaped that path; the fixture remains
-armed.
+**The sampled v1 output matches the documented ICSA/DXY methodology**: across
+**74 indicator-day comparisons on 59 unique dates** in the trailing 60-day API
+history where the clean and polluted models differ, v1 matched the
+source-date-cleaned computation on **74/74** and the polluted model on
+**0/74**, to 6 decimals (§14). This does not prove every v1 input is globally
+source-clean: the model retains persisted pre-window history where a source is
+truncated, notably HY_OAS. v1 is also **not** clean by construction: its
+vendored floor-seed fixture contains source-absent ICSA/DXY rows, and its
+DB-rows-win seed path preserves those keys (**D6**). How production avoided or
+removed them remains unresolved.
 
 ## 4. Severity summary
 
@@ -59,12 +67,29 @@ armed.
 | D1 | Forward-filled values persisted as real observations; fabricated rows dated after the newest real print **shadow it** under forward-fill (§6, revised) | **CRITICAL** | v0 |
 | D2 | `SHILLER_CAPE` frozen at 2023-09-01 — multpl scraper dead, datahub fallback ~3y stale | **HIGH** | v0 |
 | D3 | `BTC_MVRV` returns HTTP 404 on every run; on-chain panel silently runs a member short | **HIGH** | v0 |
-| D4 | HY_OAS weight-cap divergence — **attributed** (second pass): caused by the two sides' different HY_OAS history spans, not by a weighting-code difference (§9, revised) | **LOW** | both |
+| D4 | HY_OAS weight-cap divergence — **attributed** to the two sides' different HY_OAS history spans, not to a weighting-code difference (§9) | **LOW** | both |
 | D5 | No cross-implementation reconciliation check; a 0.05 divergence ran undetected | **MEDIUM** | both |
-| D6 | **v1's vendored floor-seed fixture** (`backend/tests/fixtures/regime/raw-indicator-history.csv.gz`) embeds v0's fabricated rows (125 ICSA + 16 DXY filler rows, span → 2026-06-29); the gap-fill seed path (`store/floor-seed.ts`, DB-rows-win) would implant them **permanently** in any freshly seeded deployment — the fetch never returns those dates, so they can never be corrected (§14.2) | **HIGH (latent)** | v1 |
+| D6 | **v1's vendored floor-seed fixture** (`backend/tests/fixtures/regime/raw-indicator-history.csv.gz`) contains 125 ICSA rows with value `215000` and 16 DXY rows with value `119.2868` (span → 2026-06-29), but those value counts are not all fabricated: classification by source key yields ICSA **110 source-absent, 13 genuine, 2 live-overwritten overlaps** and DXY **14 source-absent, 1 genuine, 1 live-overwritten overlap**. The DB-rows-win gap-fill seed path preserves source-absent keys because refresh has no matching key to overwrite (§14.2). | **HIGH (latent)** | v1 |
 | D7 | FRED serves `BAMLH0A0HYM2` (HY_OAS) only as a trailing ~3y window; the `cosd=2010` workaround `fred.js` documents as the fix **does not work for this series**. Both sides' HY_OAS pre-history exists only in their persisted floors and is unrecoverable from source (§14.4) | **MEDIUM** | both |
 
 ## 5. The discrepancy, confirmed four ways
+
+### Evidence provenance
+
+All live-source and API numbers below are historical captures, not claims about
+the value returned today. The machine-readable
+[`20260814-macro-index-discrepancy.json`](evidence/20260814-macro-index-discrepancy.json)
+records the capture date, repository commit SHAs, source URLs and intervals,
+expected classifications, a 40-row polluted incident slice, and the selected
+FRED source rows needed to classify it. Those rows are embedded directly in the
+JSON and pinned by the Git commit containing this review; §13 shows an inline,
+offline classification over them.
+
+The evidence file contains **selected extracted rows, not complete raw HTTP
+responses**. It does not archive the historical live v1 API response, full v0
+floor, full FRED responses, or original counterfactual inputs. Tables based on
+those mutable inputs are retained as dated review observations and should not
+be expected to reproduce exactly.
 
 | Source | As-of | Macro index |
 |---|---|---|
@@ -76,8 +101,8 @@ armed.
 Two confounds are ruled out immediately:
 
 - **Not an as-of offset.** On the *same* date (2026-08-13) the gap is **+0.0560**.
-- **Not a stale artifact.** Executing v0's pipeline live today reproduces
-  **0.6106**, matching its published 2026-08-13 value to 3dp.
+- **Not a stale artifact in the capture.** The captured 2026-08-14 v0 pipeline
+  execution produced **0.6106**, matching its published 2026-08-13 value to 3dp.
 
 Both sides use the identical 8-indicator macro panel, identical signs, identical
 `level` transform, identical 1095-day rolling percentile window, and identical
@@ -142,11 +167,13 @@ nothing gets dropped") is accurate about what it defends — nothing is
 No ICSA print since late April 2026 carries the value `215000` (recent prints:
 230, 227, 216, 217, 217, 209, 189, 198, 200, 209 thousand); its most recent
 genuine occurrences are the weeks ending **2026-04-18** and 2025-12-20. It is a
-stale carry frozen since 2026-05-24 and re-stamped on every non-publication day
-since — **92 of the 1095 days (8.4%)** in the current percentile window.
+stale carry frozen since 2026-05-24 and re-stamped on non-publication days. Do
+not equate repeated-value counts with fabricated rows: in the vendored seed,
+the 125 matching ICSA values classify as **110 source-absent dates, 13 genuine
+observations, and 2 source-overlap rows corrected by live refresh** (§14.1).
 
-**The structural proof, immune to any revision or vintage explanation** (final
-verification pass, §15): FRED's ICSA has observations **only on Saturdays** —
+**The structural proof, immune to any revision or vintage explanation**
+(Appendix A): FRED's ICSA has observations **only on Saturdays** —
 867 of 867 observations since 2010 — because it is a weekly week-ending series.
 v0's floor holds ICSA rows on **all seven weekdays** (~449 each). Every
 non-Saturday ICSA row is a date on which FRED has never had, and can never
@@ -163,9 +190,11 @@ row. The fabricated value therefore re-propagates daily and the revision
 mechanism (`fetched wins on overlap`) can never reach it, because the fetch
 never returns those dates.
 
-`DXY` (`DTWEXBGS`) shows the identical shape: `119.2868` on every weekend and
-market holiday since 2026-05-22 — 32 days (2.9%) — including 2026-06-19
-(Juneteenth) and 2026-07-04.
+`DXY` (`DTWEXBGS`) shows the identical mechanism: its business-daily source has
+no weekend observations, while the floor contains weekend keys. In the seed
+fixture's 16 rows carrying `119.2868`, **14 are source-absent keys, one is the
+genuine 2026-05-22 observation, and one overlaps a source key that live refresh
+corrects**.
 
 Note the real weekly prints survive as **isolated single-day spikes** on their
 own observation date, surrounded by filler. This is the signature of the bug:
@@ -175,8 +204,9 @@ have inherited it.
 
 ### Ground truth
 
-Queried directly at review time, `fredgraph.csv` (the same endpoint v0's own
-fetcher uses, `scripts/regime/fetchers/fred.js:21`):
+In the manual review capture from `fredgraph.csv` (the same endpoint v0's own
+fetcher uses, `scripts/regime/fetchers/fred.js:21`; this August response was not
+retained byte-for-byte):
 
 | Series | Last real observation | v0 reports | v1 reports |
 |---|---|---|---|
@@ -190,13 +220,12 @@ observations** and forward-fills only at read time
 recorded this storage-shape divergence as `DIVERGENT` without recognising it as
 the cause of a live numeric defect).
 
-### Mechanism decomposition (revised in second pass)
+### Mechanism decomposition
 
-The first draft of this review framed the damage as two comparable effects:
-wrong today-value plus a distorted ranking window. The executed decomposition
-shows that framing was wrong — **the shadowing of the newest real print is
-essentially the entire effect**, and the window distortion is second-order and
-currently *opposite-signed*:
+The review tested wrong current value and distorted ranking window as separate
+effects. The executed decomposition shows that **the shadowing of the newest
+real print is essentially the entire effect**, and the window distortion is
+second-order and currently *opposite-signed*:
 
 | ICSA @ 2026-08-14 | Value ranked | Window | Percentile |
 |---|---|---|---|
@@ -208,34 +237,35 @@ currently *opposite-signed*:
 Ranking the filler in a *clean* window reproduces v0's published number to six
 decimals — the fabricated rows dated after 2026-08-08 shadow the real 209,000
 print under forward-fill, and *that value substitution* is the whole error.
-The 92 filler rows inside the window shift the rank of a given value by only
-~0.02, and in the *opposite* direction. (The filler percentile identity
-`(314 + 0.5 × 92) / 1095 = 0.328767` from the first draft still holds for the
-08-13 snapshot.)
+The source-absent rows inside the window shift the rank of a given value by only
+~0.02, and in the *opposite* direction. Separately, the historical identity
+`(314 + 0.5 × 92) / 1095 = 0.328767` holds for the 92 matching-value rows in the
+08-13 snapshot; that value count is not itself a source-key classification.
 
 This matters for the fix: purging the fabricated rows repairs both effects, but
-the *urgent* half — today's published value being a number FRED never printed —
-is repaired the moment the floor stops carrying rows dated after the last real
-observation.
+the *urgent* half — the current snapshot attributing a genuine historical value
+to a date for which FRED did not publish it — is repaired the moment the floor
+stops carrying source-absent rows dated after the last real observation.
 
 ### Executed attribution
 
-`counterfactual.js` runs **v0's own `computeRegime`** over three input floors,
-same live fetch, same axis, same date:
+The dated counterfactual runs **v0's own `computeRegime`** over three input
+floors with the same fetches, axis, and date. Their exact full inputs were not
+committed; §13 supplies the durable, offline source-key classification:
 
 | Run | Macro | Onchain | Composite |
 |---|---|---|---|
 | **A** — v0 as shipped (dense polluted floor ∪ fetch) | **0.610602** | 0.415475 | 0.513038 |
-| **B** — v0 code, clean floor (real observations only) | **0.653632** | 0.415475 | 0.534554 |
+| **B** — source-date-cleaned replay, retaining persisted truncated-source prehistory | **0.653632** | 0.415475 | 0.534554 |
 | v1 live, same date | **0.657209** | 0.396075 | 0.526642 |
 
 Cleaning the floor alone moves v0 **+0.043031**, closing **92%** of the gap to
 v1. Per-indicator, swapping one macro series at a time from A to B:
 
-| Indicator | Δ macro when cleaned | Share of the 0.0466 gap | persisted rows | fetched rows | last real |
+| Indicator | Δ macro in first captured run | Share of the 0.046607 gap | persisted rows | fetched rows | last real |
 |---|---|---|---|---|---|
-| **ICSA** | **+0.039932** | **87%** | 3142 | 867 | 2026-08-08 |
-| **DXY** | +0.003224 | 7% | 3146 | 4133 | 2026-08-07 |
+| **ICSA** | **+0.039932** | **85.7%** | 3142 | 867 | 2026-08-08 |
+| **DXY** | +0.003224 | 6.9% | 3146 | 4133 | 2026-08-07 |
 | HY_OAS | −0.000325 | — | 1172 | 787 | 2026-08-13 |
 | DFII10 | +0.000062 | — | 3146 | 4155 | 2026-08-12 |
 | T5YIE | +0.000030 | — | 3146 | 4156 | 2026-08-13 |
@@ -251,10 +281,11 @@ run log flags it without recognising it as a defect:
 [regime] ICSA: fetch returned only 867 rows vs persisted 3142 — merging both (no history dropped)
 ```
 
-The magnitude ordering follows publication cadence exactly — weekly series
-(ICSA, DXY) are badly affected because 5–6 of every 7 days are fabricated; daily
-series (T10Y2Y, DFII10, T5YIE, VIX) are affected only across weekends, where
-forward-fill is the correct answer anyway.
+The magnitude ordering follows publication cadence: ICSA is weekly, while DXY
+is business-daily and therefore gains source-absent keys mainly on weekends and
+holidays. The other daily series are affected primarily across non-publication
+days, where forward-fill is appropriate as a view but not as a stored source
+observation.
 
 ### Fix
 
@@ -263,11 +294,18 @@ i.e. adopt v1's storage shape. Two call sites: `writeRawHistoryCsv`
 (`update.js:172`) must take `raw`/`merged` rather than `aligned`, and any
 consumer that assumed a dense CSV must align on read.
 
-**This will not self-heal.** The ~92 poisoned ICSA rows and 32 DXY rows are
-already committed to `raw-indicator-history.csv`; they must be purged, or they
-remain inside the trailing 1095-day window for another three years. A purge is
-mechanically simple — drop every row whose `(date, indicator)` pair is not
-present in a fresh full-history fetch from the source.
+**Database recovery is partial, not complete self-healing.** A live refresh can
+correct a seeded row when the source returns the same `(date, indicator)` key,
+and the latest displayed value can therefore recover. It does not delete keys
+for dates the source never emits: repeated refreshes preserve the 110 ICSA and
+14 DXY source-absent seed rows, so their percentile-window distortion remains
+until those keys age out or are explicitly removed. Persisting the merged
+history may also relabel retained seed rows as live, so provenance alone cannot
+reliably locate the contamination afterward. A local database prototype
+recorded in the evidence JSON exercised both the correcting-overlap and
+persistent-source-absence cases on a representative 24-row source-absent
+subset. Committing durable, loud-fail integration coverage is follow-up work,
+not part of this documentation-only PR (§13).
 
 **Downstream:** `data/regime/regime-history.csv` is frozen-vintage
 (`mergeFrozenIntoResult`, `update.js:131`), so every historical row already
@@ -314,10 +352,11 @@ separate question from the macro discrepancy and was not pursued further here.
 
 ## 9. D4 — LOW — HY_OAS weight cap
 
-After D1 is corrected, ~8% of the original gap remains (v1 0.6572 vs clean-floor
-v0 0.6536 = **0.0036**). It is weighting, not data:
+In the first captured run, `0.657209 - 0.653632 = 0.003577` remained after the
+source-date cleanup. This capture-specific residual is explained primarily by
+the different HY_OAS history spans:
 
-| Indicator | v0 weight (prod floor) | v0 weight (clean floor) | v1 weight |
+| Indicator | v0 weight (prod floor) | v0 weight (source-date-cleaned replay) | v1 weight |
 |---|---|---|---|
 | HY_OAS | 0.232010 | 0.232550 | **0.250000** (at cap) |
 | ICSA | 0.206007 | 0.209540 | 0.203768 |
@@ -332,34 +371,37 @@ v0's own weights barely move between floors (max Δ 0.0035), so this is a genuin
 v1-vs-v0 difference downstream of each side's correlation inputs, not a second
 data bug.
 
-**Second-pass attribution — closed.** The cause is the two sides' different
-HY_OAS *history spans*, not their weighting code. FRED serves `BAMLH0A0HYM2`
-only as a trailing ~3y window (D7): today that is 2023-08-15 onward. v0's floor
-additionally holds 2023-05-30 → 2023-08-14 accumulated from earlier fetches —
+The cause is the two sides' different HY_OAS *history spans*, not their
+weighting code. FRED serves `BAMLH0A0HYM2`
+only as a trailing ~3y window (D7): in the review capture that was 2023-08-15
+onward. v0's floor additionally holds 2023-05-30 → 2023-08-14 accumulated from earlier fetches —
 77 extra days a fresh deployment can never obtain. Re-running v0's own
-`computeRegime` on the clean floor but with HY_OAS restricted to what FRED
-serves today (the v1-like span) moves its weight **0.2325 → 0.2467** (≈ the
-0.25 cap, matching v1) and the macro index to **0.6557** — within **0.0016** of
-v1's 0.6572. That residual is at the noise floor of live intraday inputs (run A
-itself drifted 0.6106 → 0.6096 between two executions hours apart, VIX and
-COPPER_GOLD being live). Nothing about the weighting difference is left
-unexplained at material magnitude.
+`computeRegime` on the source-date-cleaned replay but with HY_OAS restricted to
+what FRED served in that capture (the v1-like span) moves its weight
+**0.2325 → 0.2467** (approximately the 0.25 cap, matching v1) and the macro
+index to **0.655668** in that capture. A
+later captured replay produced **0.658833**; mutable VIX and COPPER_GOLD inputs
+make either number unsuitable as a timeless range or a current-value claim.
+The exact values remain capture-specific; the committed evidence embeds the
+source-key classification inputs, not these full-panel replay inputs.
 
 Worth noting for its own sake: **v0's HY_OAS floor holds 1,172 rows against
-~790 fetched** — the same over-count signature as ICSA. The macro effect
+787 fetched** — the same over-count signature as ICSA. The macro effect
 measured at −0.000325 because `HY_OAS` is a daily series, but the floor is
 polluted by the same mechanism.
 
-## 10. D5 — MEDIUM — nothing compares the two implementations against each other
+## 10. D5 — MEDIUM — no source-fidelity or cross-output reconciliation gate
 
 A 0.05 divergence on a published headline number ran undetected. The existing
 assurance is:
 
-- `backend/tests/regime-fidelity.test.ts` — measures v1 against
-  `backend/tests/fixtures/regime/regime-history.csv.gz`, which A1 §F3 already
-  documented as **regenerated from the v1 pipeline itself** by
-  `backend/scripts/regime-goldens-regenerate.ts`. Self-referential; cannot detect
-  this.
+- `backend/tests/regime-fidelity.test.ts` has two kinds of checks. The snapshot
+  and regime-history goldens are generated by the current TS pipeline. The
+  strict multi-day check is algorithmically independent: it compares the TS
+  implementation with the vendored original JS reference and reports zero
+  differences across 3,102 rows. That proves port fidelity, but both sides read
+  the same raw fixture, so shared fixture provenance prevents it from detecting
+  source-absent dates.
 - `backend/tests/regime-staleness.test.ts` and `report/regime-projection.ts` —
   flag staleness at a 3-day threshold, and correctly reported `stale: false` here,
   because v1's data genuinely is fresh. It is v0 that is stale, and nothing on
@@ -375,9 +417,10 @@ Neither side would have caught this. Recommended, cheapest first:
 2. **A reconciliation job** that fetches v0's published snapshot and v1's API for
    the same date and alerts above a threshold (0.005 would have fired here on
    ~2026-05-24, the day the ICSA freeze began).
-3. **Make `writeRawHistoryCsv`'s invariant testable** — assert that every
-   `(date, indicator)` row in the persisted floor is present in a fresh source
-   fetch, for at least one weekly-cadence indicator.
+3. **Make `writeRawHistoryCsv`'s invariant testable** — for an indicator whose
+   source serves the audited interval, assert that every `(date, indicator)` row
+   in the persisted floor is present in the source response. Truncated sources
+   such as HY_OAS need separate provenance and coverage-window assertions.
 
 ## 11. Hypotheses tested, with verdicts
 
@@ -390,10 +433,10 @@ schedules, methodologies, and bugs in either codebase.
 | **Bug, v0 codebase** — same finding; this is a defect, not a design trade-off | **CONFIRMED** | (same) |
 | **Weighting** — HY_OAS at cap in v1 only (D4) | **CONFIRMED — secondary, and now attributed to HY_OAS history-span difference (D7)** | ~5–8% |
 | **Schedules / as-of offsets** | **RULED OUT** | 0 — same-date comparison shows the same gap; v0's cron is healthy and nightly |
-| **Methodology** | **RULED OUT for the macro panel** | 0 — same 8 indicators, signs, transform, window, thresholds; §14.3 additionally proves v1's *output* implements the documented method exactly |
-| **Bug, v1 codebase** | **REVISED**: no error in what v1 currently publishes (74/74-day executed proof, §14.1) — but a **latent CONFIRMED defect** in its seed path (D6) that contributes 0 today |
+| **Methodology** | **RULED OUT for the macro panel** | 0 — same 8 indicators, signs, transform, window, thresholds; §14.3 additionally shows the captured v1 ICSA/DXY output implements the documented method exactly |
+| **Bug, v1 codebase** | **REVISED**: no error in the sampled output across 74 indicator-day comparisons on 59 unique dates (§14.1) — but a **latent CONFIRMED defect** in its seed path (D6) that contributed 0 in that capture |
 | **Data gaps** — SHILLER_CAPE (D2), BTC_MVRV (D3) | **CONFIRMED but out-of-panel** | 0 to macro; material to factor and on-chain |
-| **Frozen-vintage publication** (A1 F3) | **NOT A CONTRIBUTOR TODAY** | 0 — v0 leaves the current day mutable; fresh recompute matched published to 3dp |
+| **Frozen-vintage publication** (A1 F3) | **NOT A CONTRIBUTOR IN THE CAPTURE** | 0 — v0 left the capture date mutable; its replay matched the published value to 3dp |
 | **Capture-vintage / float noise** (R8) | **NOT A CONTRIBUTOR** | ~1e-4 scale, three orders of magnitude too small |
 | **Algorithm port fidelity** (A1) | **NOT A CONTRIBUTOR** | 0 — proven bit-identical, independently corroborated here |
 
@@ -405,16 +448,15 @@ schedules, methodologies, and bugs in either codebase.
   to identify the exact run that seeded each chain. It does not change the
   attribution — the counterfactual measures the effect directly, without needing
   the origin story.
-- ~~The residual 0.0036 after cleaning~~ — **closed in the second pass** (§9):
-  HY_OAS history-span difference; remaining ≤0.0016 is live-input intraday noise.
-- **How production v1 escaped the polluted seed.** The vendored fixture contains
-  the fabricated rows and `applyRawFloorSeed` would have implanted them (DB rows
-  win; the fetch never returns those dates) — yet live output matches the clean
-  model on 74/74 discriminating days. Either production was never seeded through
-  this path, was seeded from a pre-May-2026 vintage of the fixture, or the rows
-  were purged since. Resolving this needs a `SELECT ... WHERE source='seed'`
-  against the production DB — out of reach from this session. The fixture itself
-  is polluted regardless (verified directly), so D6 stands.
+- **The residual after source-date cleanup** is attributed to the HY_OAS
+  history-span difference (§9); exact values depend on the dated live inputs.
+- **How production v1 escaped the polluted seed.** `applyRawFloorSeed` preserves
+  source-absent seed keys, yet the captured output matched the
+  source-date-cleaned model in 74 indicator-day comparisons across 59 unique
+  dates. Whether production skipped this seed, used another vintage, or later
+  removed the keys is unresolved.
+  Resolving it requires production-DB evidence that was unavailable here; do not
+  infer startup self-healing from the clean output.
 - **How far back the published history is contaminated.** D1 has been active on
   DXY since at least 2026-05-22 and on ICSA since at least 2026-05-24, but the
   mechanism is structural and likely predates that. I did not date its onset, and
@@ -423,104 +465,122 @@ schedules, methodologies, and bugs in either codebase.
 - **The on-chain gap** (v0 0.4155 vs v1 0.3961). Out of scope for the macro
   question; D3 is the obvious first suspect, unquantified here.
 - **Whether v1 has a latent equivalent.** v1's storage shape is structurally
-  immune to D1, and its live values match source. I did not audit v1's other
-  persistence paths for the same anti-pattern.
+  immune to the live-write feedback loop, and its sampled values matched the
+  source. I did not audit v1's other persistence paths for the same anti-pattern.
 
 ## 13. Reproduction
 
-```bash
-# v0 — pin to LIVE production, not the frozen fork
-cd robotmoney-site && git fetch upstream
-git worktree add --detach /tmp/v0-check upstream/main
-cd /tmp/v0-check && node scripts/regime/update.js      # -> macro = 0.611
-
-# ground truth
-curl -s 'https://fred.stlouisfed.org/graph/fredgraph.csv?id=ICSA&cosd=2026-06-01' | tail -3
-
-# v1
-curl -s 'https://robotmoney.network/api/dashboards/regime-snapshots?range=5' \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["latest"]["macroIndex"])'
-
-# the filler, visible directly
-grep ',ICSA,' /tmp/v0-check/data/regime/raw-indicator-history.csv | tail -15
-```
-
-The counterfactual harness is `counterfactual.js` in the v0 worktree
-`~/tmp/superfield-worktrees/robotmoney-site/adhoc-20260814-macro-discrepancy`.
-That worktree's `data/` is dirty from the pipeline run and must not be committed.
-
-### Second-pass reproduction (§14 evidence)
+PR #620 is documentation-only. It commits the evidence JSON, but not a test
+suite or a separate forensic fixture. The following offline sample reads only
+committed files and fails if either the 40-row incident classification or the
+full vendored-floor classification differs from the recorded counts:
 
 ```bash
-# D6 — v1's vendored seed fixture contains v0's fabricated rows
-zcat backend/tests/fixtures/regime/raw-indicator-history.csv.gz \
-  | awk -F, '$2=="ICSA" && $3=="215000"' | wc -l          # -> 125
-zcat backend/tests/fixtures/regime/raw-indicator-history.csv.gz \
-  | awk -F, '$2=="DXY" && $3=="119.2868"' | wc -l         # -> 16
-zcat backend/tests/fixtures/regime/raw-indicator-history.csv.gz \
-  | tail -1                                                # -> ...2026-06-29 (cutoff)
+node --input-type=module <<'NODE'
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 
-# D7 — FRED serves BAMLH0A0HYM2 only as a trailing ~3y window; cosd is ignored
-curl -s 'https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLH0A0HYM2&cosd=2010-01-01' \
-  | sed -n '2p'                                            # -> first row 2023-08-15, not 2010
+const path = "docs/code-review/evidence/20260814-macro-index-discrepancy.json";
+const e = JSON.parse(readFileSync(path, "utf8"));
+const classify = (sourceRows, floorRows) => {
+  const source = new Map(sourceRows.map((row) => [row.date, row.value]));
+  return {
+    source_absent_rows: floorRows.filter((row) => !source.has(row.date)).length,
+    stale_overlap_rows: floorRows.filter(
+      (row) => source.has(row.date) && source.get(row.date) !== row.value,
+    ).length,
+    matching_overlap_rows: floorRows.filter(
+      (row) => source.get(row.date) === row.value,
+    ).length,
+  };
+};
+const check = (label, actual, expected) => {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${label}: ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`);
+  }
+  console.log(label, actual);
+};
 
-# 74/74 clean-vs-hybrid discrimination (sketch; full logic in §14.1):
-#  1. pull v1 history:  GET /api/dashboards/regime-snapshots?range=60
-#     (each row's `percentiles` map is SIGNED; raw pct = 1 - p for sign -1)
-#  2. build model B: FRED obs only (ICSA, DTWEXBGS from fredgraph.csv),
-#     forward-filled daily; model C: seed fixture rows <= 2026-06-29 unioned
-#     with FRED obs (FRED wins on overlap), forward-filled daily
-#  3. per day D: pct = (count<x + 0.5*count==x)/1095 over the trailing
-#     1095-day window; keep only days where B != C; compare v1's raw pct
-#  -> ICSA 25/25 days match B, DXY 49/49 match B; 0/74 match C (6dp)
+for (const id of ["ICSA", "DXY"]) {
+  check(
+    `incident ${id}`,
+    classify(e.captured_sources[id].incident_rows, e.polluted_incident_slice[id]),
+    e.incident_slice_expected[id],
+  );
+}
 
-# Decomposition — shadowing is the whole D1 effect (§6):
-#   rank 215000 in the CLEAN window  = 0.329224  (== v0's published pct)
-#   rank 209000 in v0's own window   = 0.118721  (window pollution alone, opposite sign)
-
-# B2 — HY_OAS span experiment (§9): in the v0 worktree,
-node counterfactual.js <path-to-v0-raw-indicator-history.csv>
-#   B  (clean, v0 HY_OAS span)        -> macro ~0.6525-0.6536, HY_OAS w=0.2325
-#   B2 (clean, FRED-servable span)    -> macro ~0.6557,        HY_OAS w=0.2467
+const csv = gunzipSync(readFileSync(e.vendored_floor.path)).toString("utf8");
+const floor = csv.trim().split("\n").slice(1).map((line) => {
+  const [date, indicator, value] = line.split(",");
+  return { date, indicator, value: Number(value) };
+});
+for (const id of ["ICSA", "DXY"]) {
+  const source = e.captured_sources[id];
+  const candidates = floor.filter(
+    (row) => row.indicator === id && row.value === source.candidate_value,
+  );
+  check(
+    `full ${id}`,
+    { candidate_rows: candidates.length, ...classify(source.candidate_source_overlaps, candidates) },
+    e.full_fixture_expected[id],
+  );
+}
+NODE
 ```
+
+This sample proves the source-key classification, not the historical live API
+decimals or database recovery behavior. Durable follow-up coverage should add
+a hermetic canonical-source fixture and a loud-fail ephemeral-Postgres test for
+overlap correction, source-absent retention, provenance relabeling,
+non-convergence on rerun, and recovery after explicit deletion.
 
 ---
 
-## 14. Second-pass adversarial review (2026-08-14, same day)
+## 14. Evidence details
 
-This pass re-examined the review's conclusions under the instruction to trust
-*neither* implementation — in particular the first draft's "v1 is the correct
-side," which had rested on today's raw values matching FRED, a necessary but
-not sufficient condition (a correct raw value ranked in a corrupted window
-still yields a wrong percentile).
+The review treats neither implementation as ground truth. Matching a current
+raw value is necessary but insufficient because a correct value ranked in a
+corrupted window can still yield a wrong percentile; the review therefore
+compares source keys, percentile histories, and both implementations.
 
-### 14.1 v1's floor is provably clean in effect — but was at risk by construction
+### 14.1 Sampled v1 ICSA/DXY output is clean in effect, but the seed is at risk
 
 The threat: A1 finding F1 records that v1's floor seed is **v0's dense aligned
 CSV** — and direct inspection of the vendored fixture
 (`backend/tests/fixtures/regime/raw-indicator-history.csv.gz`, span 2018-01-01 →
-2026-06-29) confirms it contains the fabricated rows: **125 ICSA rows of
-`215000`** and **16 DXY rows of `119.2868`**. Had those rows entered the live
-DB, v1's percentile windows would be polluted through mid-2029 (D6).
+2026-06-29) confirms **125 ICSA rows with value `215000`** and **16 DXY rows
+with value `119.2868`**. Source-key classification separates them as follows:
 
-The test: four models of what each side's effective floor could be were built
-from primary sources only (FRED CSV + the seed fixture + v0's committed floor),
-percentiles computed with the shared mid-rank rule, and compared against 60
-days of v1's live API history. On every day where the clean and seeded-hybrid
-models disagree (ICSA: 25 days; DXY: 49 days — 74 in total):
+| Indicator | Source-absent and retained | Genuine source observation | Source overlap corrected live |
+|---|---:|---:|---:|
+| ICSA | **110** | 13 | 2 |
+| DXY | **14** | 1 | 1 |
+
+Only the 110 and 14 source-absent keys persist indefinitely absent deletion;
+the live write path corrects the two ICSA and one DXY overlap rows. These are
+the full vendored-fixture counts reproduced by the offline §13 sample. The
+embedded 40-row incident slice contains 24 source-absent rows and three stale
+overlaps. A local SQL prototype exercised those cases end to end, but durable
+database coverage is explicitly follow-up work and is not included in PR #620.
+
+The dated manual comparison built four models from FRED rows, seed fixture, and
+v0 floor, computed percentiles with the shared mid-rank rule, and compared them
+with the captured 60-day v1 API history. On every indicator-day where the
+source-date-cleaned and seeded-hybrid models disagree (ICSA: 25 comparisons;
+DXY: 49 comparisons; **74 comparisons across 59 unique dates**):
 
 | Model | ICSA match | DXY match |
 |---|---|---|
-| **B — clean current-vintage forward-fill** | **25/25** | **49/49** |
+| **B — source-date-cleaned ICSA/DXY forward-fill** | **25/25** | **49/49** |
 | C — hybrid (polluted seed ≤ 06-29 + real obs after) | 0/25 | 0/49 |
 
-Matches are exact to 6 decimals. **What v1 publishes is the clean
-current-vintage computation, full stop.** How production avoided the seed's
-pollution is unresolved (§12) — the fixture remains a loaded gun for any fresh
-deployment, demo, or CI environment that seeds through
-`applyRawFloorSeed` (`store/floor-seed.ts:22`), whose DB-rows-win gap-fill
-makes implanted filler rows permanent by the same never-in-the-fetch mechanism
-as D1.
+Matches are exact to 6 decimals. **For these 74 captured ICSA/DXY comparisons,
+v1 publishes the source-date-cleaned computation.** This does not establish a
+globally source-only floor: model B retains persisted pre-window history for
+truncated sources such as HY_OAS. How production avoided the source-absent seed
+keys is unresolved (§12). `applyRawFloorSeed` (`store/floor-seed.ts:22`) uses a
+DB-rows-win gap fill: overlap keys can be corrected by a live write, but
+source-absent keys are not removed by repeated refresh.
 
 ### 14.2 The root cause of the divergence, restated precisely
 
@@ -530,8 +590,9 @@ seed cutoff (2026-06-29):
 
 - **v0** continues to stamp forward-fill as fact daily; its floor carries
   fabricated rows dated *after* the newest real print, which **shadow** that
-  print under forward-fill — so it ranks a value the source never published
-  (`215000` vs FRED's `209000`; `119.2868` vs `119.0649`).
+  print under forward-fill — so it ranks genuine historical values on dates
+  for which the source did not publish them (`215000` instead of the current
+  ICSA print `209000`; `119.2868` instead of `119.0649`).
 - **v1** (in effect) accumulates only real observations post-cutoff and
   forward-fills at read time — so it ranks the true latest print, with an
   honest `forward_fill_age_days`.
@@ -547,7 +608,7 @@ actually promises:
 
 | Methodology | ICSA pct @ 08-14 | DXY pct @ 08-14 | Implemented by |
 |---|---|---|---|
-| **B** — clean current-vintage daily forward-fill | **0.140639** | **0.088584** | **v1 (exactly)** |
+| **B** — source-date-cleaned ICSA/DXY daily forward-fill | **0.140639** | **0.088584** | **v1 capture (exactly)** |
 | A — v0's polluted floor | 0.329224 | 0.116438 | v0 |
 | E — native-cadence (rank prints against prints, no daily fill) | 0.141026 | 0.083893 | neither |
 | PIT — point-in-time release-calendar fill | (differs on 13/13 sampled days from both) | — | neither |
@@ -562,64 +623,59 @@ The product's own documents pin the intent:
   forward-fill explicitly discussed and accepted as the alignment.
 - ICSA's published derivation: *"Published every Thursday for the prior week
   ending Saturday. **We use the raw weekly count.**"* — the published count,
-  which today is 209,000. There is no reading under which `215000` — a number
-  FRED never printed — satisfies this.
+  which was 209,000 in the capture. Although `215000` is a genuine older print,
+  FRED did not publish it for the date/current observation v0 attributed it to.
 - `mergeSeries`' contract (*"fetched wins on overlap so source corrections /
   revisions land"*, `lib/utils.js:343`) commits both sides to **current
   vintage**, ruling out PIT as the documented intent. v0 handles the
   point-in-time concern at the *publication* layer instead (frozen
   `regime-history.csv`), which is a deliberate, documented choice.
 
-**Verdict: the correct calculation is B — clean current-vintage daily
-forward-fill — and v1's published output implements it exactly.** The
+**Verdict: for the audited ICSA/DXY keys, the documented calculation is B —
+source-date-cleaned current-vintage daily forward-fill — and the captured v1
+output implements it exactly.** B is not globally source-only because it
+retains persisted history for truncated sources such as HY_OAS; B2 is the
+separate replay that limits HY_OAS to its currently source-servable span. The
 defensible third option, E (native-cadence ranking), would remove the implicit
 overweighting of stale values that daily forward-fill introduces for weekly
 series; it is statistically reasonable and lands within ~0.005 of B on these
 indicators, but it is not what either dashboard documents, and adopting it
 would be a methodology change requiring a version relock — not a bug fix.
 
-The correct macro index for 2026-08-14 is therefore **≈ 0.656 ± 0.002** (v1's
-0.6572; the clean-floor v0 replay's 0.6536–0.6557 across runs, the spread
-being HY_OAS span + live intraday noise per §9). v0's published 0.611 is the
-artifact of D1.
+The dated 2026-08-14 observations establish the direction and attribution of
+the discrepancy, not a timeless numeric range. The live macro later moved to
+`0.6600156`, and a later B2 replay produced `0.658833`; current values must be
+re-fetched and separately timestamped rather than compared with the historical
+capture as if all inputs shared a vintage.
 
-### 14.4 New findings from this pass
+### 14.4 Seed and source-window findings
 
-- **D6** (HIGH, latent, v1): the vendored seed fixture is polluted and the seed
-  path makes its pollution permanent. Fix: regenerate the fixture from real
-  observations only (`floor-seed-generator.ts` should filter forward-fill
-  duplicates or source from FRED/native APIs), and add a fixture test asserting
-  no indicator has rows on dates its source calendar cannot produce.
+- **D6** (HIGH, latent, v1): the vendored seed fixture contains 110 ICSA and 14
+  DXY source-absent keys that the seed/refresh path retains absent explicit
+  deletion. Regenerate the fixture from source observations, then add the
+  classification and database-boundary tests described in §13. Do not delete
+  rows merely because a value repeats; repeated values can be genuine.
 - **D7** (MEDIUM, both): FRED's `fredgraph.csv` serves `BAMLH0A0HYM2` only as a
   trailing ~3y window; verified directly — `cosd=2010-01-01` returns rows from
-  2023-08-15 (795 rows). The `fred.js` comment claiming `cosd` fixes this
+  2023-08-15 (**787 valid observations** in the captured response). The
+  `fred.js` comment claiming `cosd` fixes this
   truncation is wrong for this series. Consequence: HY_OAS pre-history lives
   only in the persisted floors, its 1095-day percentile window is exactly at
   the edge of what the source can re-serve, and the two sides' different spans
   measurably change panel weights (§9). Worth a loud freshness/coverage
   assertion of its own.
 
-### 14.5 Scorecard of the first draft's claims (see also §15)
-
-| First-draft claim | Second-pass verdict |
-|---|---|
-| Discrepancy real, ~0.05 on same date | **Upheld** |
-| Root cause = v0 persisting forward-fills as observations (D1) | **Upheld**, mechanism sharpened: shadowing of the newest real print is ~100% of the effect; window distortion is second-order and currently opposite-signed |
-| ICSA 87% / DXY 7% attribution | **Upheld** |
-| "v1 is the correct side" | **Upheld in effect, was under-supported as stated** — now grounded by the 74/74 executed match, and qualified by D6: v1 is clean in output, not clean by construction |
-| Weight-cap residual "genuine v1-vs-v0 difference, not a second data bug" | **Refined**: attributed to HY_OAS history-span difference (D7) |
-| "v0's HY_OAS floor 1,172 vs 787 fetched — same over-count signature" | **Upheld**, with the added finding that ~77 of those extra days are *unrecoverable real* pre-history, not just filler |
-
 ---
 
-## 15. Final verification pass (2026-08-14, third execution)
+## Appendix A. Verification history
 
-Run at the review owner's request before the finding is treated as settled:
-every calculation redone from freshly downloaded primary data, with an explicit
-hunt for innocent explanations of v0's behavior. Nothing material changed; two
-presentation errors were corrected and the mechanism was sharpened.
+The review was rerun against separately captured inputs and explicitly tested
+innocent explanations for v0's behavior. The evidence JSON embeds the selected
+source and polluted-floor rows used by §13, while this appendix records the
+other dated checks without presenting the revision chronology as separate
+competing conclusions.
 
-### 15.1 Implementation self-check
+### A.1 Implementation self-check
 
 Before trusting any number in this document, the review's own percentile
 implementation was validated against v0's production output: computed from
@@ -629,49 +685,39 @@ DFII10 0.973515982, T5YIE 0.169406393, HY_OAS 0.095433790, DXY 0.115981735,
 ICSA 0.328767123, VIX 0.258904110, COPPER_GOLD 0.372146119). The math used to
 audit v0 is therefore v0's own math.
 
-### 15.2 Innocent explanations, hunted and excluded
+### A.2 Innocent explanations, hunted and excluded
 
 | Candidate explanation for v0's values | Outcome |
 |---|---|
 | The filler rows are real observations later revised away | **Excluded structurally.** FRED ICSA observations exist only on Saturdays (867/867 since 2010); v0's floor has ICSA rows on all 7 weekdays. `DTWEXBGS` publishes business days only; v0's floor has weekend rows. Dates without observations cannot be revised — they never existed. |
 | The filler values are fabricated numbers | **No — and this is fairer to v0.** `119.2868` is DTWEXBGS's genuine value for Friday 2026-05-22. `215000` genuinely printed for the weeks ending 2026-04-18 and 2025-12-20. The values are real; only their *dates* are fabricated by the snapshot-read-as-floor loop. |
 | The dense CSV is intended behavior | **Half true, and documented in §6.** The write side is explicitly documented as a snapshot ("not a permanent record", `update.js:135-137`); the read side treats it as an observation floor for legitimate resilience reasons. The defect is the composition, not either half. |
-| v1's agreement with FRED is luck / v1 has its own offsetting bug | **Excluded by execution.** The clean-vs-hybrid discrimination re-run from fresh FRED downloads and the git-sourced seed fixture (`origin/main`, md5-identical to the working tree) again yields **74/74** clean, 0/74 hybrid. |
-| My earlier runs had a transient data vintage | **Excluded.** The floor CSV at `upstream/main` is md5-identical across pulls; the third counterfactual run reproduces every attribution number within live-input noise. |
+| v1's agreement with FRED is luck / v1 has its own offsetting bug | **Excluded for the audited indicators and dated manual capture.** The clean-vs-hybrid discrimination yielded 74/74 indicator-day matches across 59 unique dates, and 0/74 polluted-model matches. The historical API inputs were not hash-pinned. |
+| An earlier run used a transient vintage | **Excluded for the embedded source-key classification.** The evidence JSON records the reviewed commits and extracted source rows. The broader live-output decimals remain dated observations because their complete responses were not retained. |
 
-### 15.3 Numbers, third independent run
+### A.3 Capture-to-capture stability
 
 | Quantity | This run | First run | Verdict |
 |---|---|---|---|
 | A — v0 as shipped | 0.611550 | 0.610602 | stable (intraday drift ±0.001, VIX/COPPER_GOLD live) |
-| B — clean floor | 0.654571 | 0.653632 | stable |
-| B2 — clean + FRED-servable HY_OAS span | **0.657701** | 0.655668 | now within **0.0005** of v1's 0.657209 |
+| B — source-date-cleaned replay with retained prehistory | 0.654571 | 0.653632 | stable |
+| B2 — source-date-cleaned + source-servable HY_OAS span | **0.657701** | 0.655668 | capture-specific |
 | ICSA swap | +0.039923 | +0.039932 | stable |
 | DXY swap | +0.003223 | +0.003224 | stable |
-| ICSA share of gap | **87.4%** | ~87% | confirmed |
-| DXY share of gap | **7.1%** | ~7% | confirmed |
 
-### 15.4 Corrections applied in this pass
+The percentages are run-specific: the first capture's ICSA share is 85.7%
+(§6), while the third capture's changed live denominator yields 87.4%. Absolute
+deltas are the more stable attribution evidence.
 
-1. §6 ground-truth table: v0's snapshot `raw_date` for ICSA/DXY is
-   **2026-08-12**, not 2026-08-13 (the *floor* carries fabricated rows through
-   08-13; the snapshot field reflects the last merged row at cron time). The
-   substance is unchanged.
-2. §6: "215000 appears nowhere in ICSA's recent FRED history" sharpened — it
-   *is* a genuine print for the week ending 2026-04-18; no print since late
-   April carries it. The value is real; the dates are not.
-3. §6: added the Saturday-only structural proof, the value-origin trace, the
-   publication-lag explanation of why the chain never self-heals, and the
-   composition-defect framing.
-
-### 15.5 Standing conclusion
+### A.4 Standing conclusion
 
 The finding survives adversarial re-verification. Stated with the precision the
 evidence supports: **v0's pipeline output for 2026-08-13/14 attributes to the
 current day a value whose provenance is a forward-fill loop, not a source
-observation; the divergence from v1 is fully attributed (87% ICSA + 7% DXY
-shadowing + ~6% HY_OAS span), and v1's published numbers equal the documented
-methodology computed on source-faithful data.** The defect arises from the
+observation; the dominant captured deltas are ICSA `+0.039932` and DXY
+`+0.003224`, with the remaining material difference explained by the HY_OAS
+span; and the sampled v1 ICSA/DXY percentiles match the documented
+source-date-cleaned methodology.** The defect arises from the
 interaction of two individually sound, individually documented design
 decisions in v0 — a snapshot file also serving as the observation floor — and
 its fix (persist sparse real observations; align at read time) is small and
