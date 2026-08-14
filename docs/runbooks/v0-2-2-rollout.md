@@ -84,8 +84,10 @@ f51a8fe feat: admin auth: segregate automation and strict setup token           
   `fdfd9ee`) replace the admin auth model. Once `admin_credential` holds a
   claimed row, `isPrivileged()` **stops honouring `ADMIN_TOKEN` entirely** —
   `backend/src/api/auth.ts:59-64` returns `false` from inside the claimed
-  branch rather than falling through to the token check at `:66`. See §2 Gate A;
-  this is the one gate that can make the release unrecoverable.
+  branch rather than falling through to the token check at `:66` — where
+  `v0.2.1` returned the token comparison instead. Claiming the credential is a
+  **mandatory human step of this release**, not an optional hardening pass. See
+  §2 Gate A for the decision and §12 for the two procedures that carry it out.
 - **Domain change.** `bc9f20f` (#603) moved the canonical origin to
   `https://robotmoney.network` (`scripts/prerender.ts:5`,
   `frontend/public/assets/js/app/seo.js:16`). `backend/src/config.ts:438` still
@@ -121,39 +123,38 @@ GROUP BY 2;
 If `admin_credential` does not exist yet, that is the **unclaimed** case — treat
 it as `rows = 0`.
 
+**Every branch of this gate has a forward path.** None of them is "stop".
+
 | Result | Meaning | Decision |
 |---|---|---|
-| **0 rows** (or table absent) | The one-time claim is **unarmed**. After the upgrade the first party to reach the admin surface takes it. `ADMIN_TOKEN` still works (`auth.ts:66`) — but see the trap in §6. | **GO**, and claim the credential immediately after cutover. |
-| **1 row, `no_recovery = false`** | Claimed, and a recovery code exists. | **GO.** |
-| **1 row, `no_recovery = true`** | Claimed, **no recovery code**. `0029_admin_auth_recovery.sql:1-3` leaves already-claimed rows NULL by design — a migration cannot mint a code and disclose it safely. | **STOP unless somebody can produce the durable admin password right now.** |
+| **0 rows** (or table absent) | The one-time claim is **unarmed**. After the upgrade the first party to reach the admin surface takes it. `ADMIN_TOKEN` still works (`auth.ts:66`). | **GO.** Claiming is then a **mandatory** post-cutover step: **§12.1 Procedure A**, executed at §8 verification 10. |
+| **1 row, `no_recovery = false`** | Claimed, and a recovery code exists. | **GO.** Nothing further, provided somebody can produce the password. |
+| **1 row, `no_recovery = true`**, and somebody has the password | Claimed, **no recovery code**. `0029_admin_auth_recovery.sql:1-3` leaves already-claimed rows NULL by design — a migration cannot mint a code and disclose it safely. | **GO.** After cutover, sign in and run `POST /api/admin/password-change` **once** — it is the only thing that mints a `recovery_hash` for a row claimed before `0029` (`backend/src/api/routes/admin.ts:223`, `:227`). It is **not** available before cutover: that route arrives in this delta (`f26dca6`, #590) and does not exist at `v0.2.1`. Note it also deletes every `admin_passkey` and `admin_session` row in the same transaction (`:234-235`). |
+| **1 row, `no_recovery = true`**, and nobody has the password | Claimed, no recovery code, no password. **This is the lockout.** | **GO only after §12.2 Procedure B.** Do it before cutover. |
 
-**Why Gate A is fatal and not merely annoying.** After the upgrade, with a
-claimed row present, `auth.ts:59-64` compares the presented `X-Admin-Token`
-against `admin_credential.pass_hash` and `return false` on mismatch. It never
-reaches the `ADMIN_TOKEN` fallback at `:66`. With `recovery_hash` NULL there is
-no recovery route either. The admin surface is then reachable **only** by
-someone holding the password chosen when the credential was claimed.
+**Why the last row is the dangerous one.** After the upgrade, with a claimed row
+present, `auth.ts:59-64` compares the presented `X-Admin-Token` against
+`admin_credential.pass_hash` and `return false` on mismatch. It never reaches
+the `ADMIN_TOKEN` fallback at `:66`. With `recovery_hash` NULL there is no
+recovery route either. The admin surface is then reachable **only** by someone
+holding the password chosen when the credential was claimed.
 
-**If nobody holds the password, do not upgrade. Re-arm the claim first.**
+**You are not locked out yet, though.** `v0.2.1` — what production is running
+right now — falls back to `ADMIN_TOKEN` from *inside* the claimed branch:
 
-> **DESTRUCTIVE / IRREVERSIBLE.** This deletes the existing admin credential,
-> including any passkeys bound to it. It re-arms the one-time claim, so the next
-> party to reach the admin surface takes ownership — make sure that is you, and
-> that the admin surface is not publicly reachable in the meantime.
-> Documented as the intended recovery at `0028_admin_credential.sql:11-13`.
-
-```sql
--- Take the backup in §5 FIRST. Then:
-BEGIN;
-SELECT * FROM admin_credential;   -- record what you are destroying
-DELETE FROM admin_credential;
-COMMIT;
+```bash
+git show v0.2.1:backend/src/api/auth.ts | sed -n '58,63p'
+#   if (claimed.length > 0) {
+#     …timingSafeEqual… return true;
+#     return cfg.adminToken ? secretEq(presented, cfg.adminToken) : false;   // :62
+#   }
 ```
 
-Then re-claim through the admin surface immediately after cutover, and **change
-the password once** — the authenticated password-change route
-(`backend/src/api/routes/admin.ts:210-241`, rotating `recovery_hash` at `:227`)
-is the only thing that mints a recovery code.
+At `ccf983f` that line is a bare `return false` (`auth.ts:64`). So the current
+boot's `ADMIN_TOKEN` (§12.0) still reaches the admin surface today, and the
+upgrade is what takes it away. That access is not a fix — `v0.2.1` has neither
+`/api/admin/password-change` nor `/api/admin/password-recover` (both arrive in
+this delta) — but it means you are triaging, not stranded. §12.2 is the fix.
 
 ### Gate B — pre-flight verdict
 
@@ -496,22 +497,24 @@ domain that `bc9f20f` (#603) just moved away from. Every swarm
 application-receipt and activation email links to the old host. **File an issue;
 do not attempt to fix it during the rollout.** See §10.
 
-### 6.4 ⚠ `ADMIN_TOKEN` is also minted per boot — and only shown in the TUI
+### 6.4 ⚠ `ADMIN_TOKEN` is also minted per boot — read it from the container
 
 Same mechanism: `buildComposeEnv` sets `ADMIN_TOKEN:
 cfg.credentials.adminToken` (`scripts/stack/config.ts:219`), a fresh random
-20-character value per launch. It is **never logged, never written to
+20-character value per launch (`:164`). It is **never logged, never written to
 `.agents/demo-state.json`, and never printed in the plain non-TUI READY block**
-(`scripts/lib/demo-main.ts:374-378`) — it is rendered only in the interactive
-TUI.
+(`scripts/lib/demo-main.ts:374-378`; the block itself is `:1407-1421`, whose
+Admin line at `:1413` prints only `(password shown in the interactive TUI
+only)`). The TUI renders it at `:964`, and only while the credential is
+unclaimed.
 
-> **The `--no-tui` trap.** §7 recommends `--no-tui` because it is the only way to
-> get a real non-zero exit code. But `--no-tui` also means **you never see the
-> generated `ADMIN_TOKEN`.** That only matters if `admin_credential` is
-> **unclaimed** (Gate A row 1), where the token is your one way into the admin
-> surface to make the claim. If you are in that case, boot **with** the TUI for
-> the cutover, read the token off the pane, and accept that you must read the
-> pane rather than an exit code.
+> **There is no `--no-tui` trap.** An earlier revision of this runbook said
+> `--no-tui` costs you the token and told you to give up the exit code for it.
+> That was wrong, and it contradicted §7.3's own requirement. The value is an
+> ordinary environment variable **inside the running api container** —
+> `docker-compose.yml:192` delivers it as `ADMIN_TOKEN: ${ADMIN_TOKEN:-}` — so
+> it is readable from a boot that has no TUI at all. **§12.0 is the command.**
+> Keep `--no-tui`; you lose nothing.
 
 ### 6.5 ✅ What you actually set, and where
 
@@ -584,7 +587,7 @@ DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
 |---|---|---|
 | `--external-pg` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/demo-external-pg.ts:288-305`). | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §0. |
 | `DEMO_PROJECT=rm_prod` | **MANDATORY.** Pins the compose project name (`scripts/lib/demo-main.ts:261`). Without it the name is `rm_demo_stack_<random>` per boot (`scripts/stack/naming.ts:138`). | Every restart leaves an orphaned project. `docker compose -p …` commands in deployment.md address the wrong stack. Note: `--external-pg` does **not** by itself stabilise the project name — only `DEMO_PROJECT` does. |
-| `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/demo-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Omit this flag only if Gate A left you unclaimed and you need to read `ADMIN_TOKEN` off the pane** (§6.4). |
+| `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/demo-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Always pass it.** Needing the per-boot `ADMIN_TOKEN` — Gate A row 1, or anyone who took §12.2's re-arm — is *not* a reason to omit it: read the token out of the container instead (§12.0). |
 | **`CI` must be UNSET** | ⛔ With any truthy `CI`, `cleanCiVolume()` runs on **both** the success path (`scripts/lib/demo-main.ts:1393`) and the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/demo-volumes.ts:105`). It also publishes a real swarm session and exits. Harmless to the *data* under `--external-pg` (no volume exists) — but it still publishes and exits, so the site does not stay up. | Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |
 
 ```bash
@@ -712,7 +715,7 @@ bun run demo:status
 | 7 | Handles are saveable | `psql "$DATABASE_URL" -c "SELECT id, handle FROM swarm_members WHERE handle !~ '^[a-z0-9]+(-[a-z0-9]+)*$' OR length(handle) > 80;"` | 0 rows. Any row here is a member the admin surface can never re-save (§4, `handle-shape`). Fix with `UPDATE swarm_members SET handle = '<kebab-case>' WHERE id = '<id>';` — **move the handle, never the id.** |
 | 8 | Archive data was adopted, not overwritten | `psql "$DATABASE_URL" -c "SELECT count(*) FROM swarm_recommendations;"` | ≥ the pre-upgrade count from §5.3. The archive initializer **adopts**: `classifyDatabase` returns `mode: "adopt"` for the archive initializer on populated data (`backend/scripts/db-preflight.ts:158`) — insert-if-missing, fill only `NULL` columns, else report drift. Existing rows win; the signed `payload`/`signature` columns are never rewritten. |
 | 9 | `admin_credential` untouched by the boot | `psql "$DATABASE_URL" -c "SELECT count(*), (recovery_hash IS NULL) FROM admin_credential GROUP BY 2;"` | identical to Gate A's result. **No seed path ever writes this table.** |
-| 10 | Admin surface reachable | Sign in. If unclaimed, claim now. | Then **change the password once** — that is the only thing that mints `recovery_hash` (`backend/src/api/routes/admin.ts:227`). |
+| 10 | Admin surface reachable, and claimed | If Gate A said unclaimed — or you took §12.2's re-arm — **run §12.1 Procedure A now.** This is a mandatory step, not a spot check: until it runs, the one-time claim is open to whoever reaches the surface first. If Gate A said claimed with `no_recovery = true`, sign in and run `POST /api/admin/password-change` once instead (Gate A, row 3). | `/api/admin/is-claimed` returns `{"claimed":true}` and you hold both the password and a recovery code. |
 | 11 | Site serves prerendered HTML | `curl -s http://127.0.0.1:<port>/swarm/ \| grep -o '<title>[^<]*'` | Not the home page's title. If it is, `bun run static:assemble` did not run (deployment.md §2.1). |
 | 12 | Swarm schedules state | `psql "$DATABASE_URL" -c "SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;"` | five rows, **all `enabled = f`** — expected under the demo composition (§6.5). Drive sessions manually. |
 
@@ -724,7 +727,9 @@ bun run demo:status
 
 - Verification 3 reports `overridden`, or 4 returns rows you cannot repair now.
 - Verification 2 shows fewer than four migrations **and** the boot is failing.
-- The admin surface is unreachable and Gate A said `no_recovery = true`.
+- The admin surface is unreachable and Gate A said `no_recovery = true`. Roll
+  back to regain access (`v0.2.1` still honours `ADMIN_TOKEN` against a claimed
+  credential — see "What rollback does NOT undo" below), then apply §12.2.
 - The api is restart-looping (`docker compose -p rm_prod ps` shows repeated
   restarts) for any reason you cannot diagnose in 15 minutes.
 
@@ -754,10 +759,15 @@ Re-run verification 3, 4 and 11.
 - **The schema stays at 0031.** There are no down migrations. `recovery_hash`,
   `admin_passkey`, `admin_session`, `admin_webauthn_challenge`,
   `swarm_members.handle`, its unique index and both triggers all remain.
-- **`admin_credential` stays claimed.** If you claimed during v0.2.2, v0.2.1's
-  `isPrivileged()` behaviour differs but the row is still there. Rolling back
-  does not restore `ADMIN_TOKEN` access to a claimed credential; only
-  `DELETE FROM admin_credential` does (§2 Gate A, **DESTRUCTIVE**).
+- **`admin_credential` stays claimed** — but rolling back *does* restore
+  `ADMIN_TOKEN` access to it, non-destructively. `v0.2.1`'s `isPrivileged()`
+  falls back to the env token from inside the claimed branch
+  (`git show v0.2.1:backend/src/api/auth.ts`, line 62); `ccf983f`'s is a bare
+  `return false` (`auth.ts:64`). So a rollback is itself a remedy for an admin
+  lockout discovered after cutover — read the new boot's token with §12.0 and
+  sign in. It buys triage time; it does not give you a durable v0.2.2
+  credential, which still needs §12.2. A rollback is **not** a Gate A remedy:
+  at Gate A you are already on `v0.2.1`.
 - **The five `swarm.*` schedules stay disabled.** `seed()` rewrote them on the
   v0.2.2 boot and rewrites them again on the v0.2.1 boot (§6.5).
 - **Any handle you edited during triage stays edited** — and each edit repointed
@@ -892,3 +902,281 @@ cannot stand in front of.
 
 7. **Re-run §4's pre-flight** against the restored database. It is the cheapest
    way to find out that something in this list was missed.
+
+---
+
+## 12. Admin credential procedures
+
+Two walkable procedures, plus the one command both depend on. They are here at
+the end because they are dispatched *from* the flow rather than read in
+sequence:
+
+- **§12.1 Procedure A — claim the credential.** Dispatched from Gate A row 1
+  and executed at **§8 verification 10**, after cutover. Mandatory whenever the
+  credential is unclaimed.
+- **§12.2 Procedure B — re-arm a claimed credential whose password is lost.**
+  Dispatched from Gate A row 4 and executed **before cutover**.
+
+Do not read these as background. Gate A tells you which one you are running.
+
+### 12.0 Reading the current boot's `ADMIN_TOKEN`
+
+```bash
+export RM_PROJECT=rm_prod
+docker compose -p "$RM_PROJECT" exec -T api printenv ADMIN_TOKEN
+```
+
+Verified against Compose v2.40: exits `0`, prints the 20-character value on one
+line, and resolves the container from the project label alone — the working
+directory does not need a compose file. `-T` suppresses TTY allocation so the
+output is clean enough to assign to a variable.
+
+Why this works: `generateStackCredentials()` mints `adminToken` as
+`crypto.randomUUID()` stripped to 20 characters
+(`scripts/stack/config.ts:164`); `buildComposeEnv` emits it (`:219`);
+`docker-compose.yml:192` declares `ADMIN_TOKEN: ${ADMIN_TOKEN:-}` on the api
+service, and `backend/Dockerfile`'s `oven/bun:1.3.5` base carries `printenv`.
+The same three facts hold at `v0.2.1` (`scripts/stack/config.ts:163`, `:217`;
+`docker-compose.yml:179`), so this also works on a stack you rolled back (§9).
+
+> ⚠ **The token dies at the next boot.** It is minted per launch, so a restart
+> between reading it and using it mints a *different* one and the value you
+> copied is dead. Read it, use it, and if anything restarts, read it again.
+> This is also why an unclaimed credential cannot simply be left for tomorrow:
+> tomorrow's token is not today's.
+
+To use it in the commands below:
+
+```bash
+ADMIN_SETUP_TOKEN="$(docker compose -p "$RM_PROJECT" exec -T api printenv ADMIN_TOKEN | tr -d '\r\n')"
+API_PORT="$(docker compose -p "$RM_PROJECT" port api 8787 | cut -d: -f2)"
+```
+
+### 12.1 Procedure A — claim the credential (production is UNCLAIMED)
+
+**Mandatory. Run it at §8 verification 10, immediately after a clean cutover.**
+Until it runs, the one-time claim is armed and the first party to reach `/admin`
+takes permanent ownership of the instance.
+
+**1. Confirm the state you think you are in.**
+
+```bash
+curl -s "http://127.0.0.1:$API_PORT/api/admin/is-claimed"    # expect {"claimed":false}
+```
+
+That probe is public and returns booleans only, never the hash
+(`backend/src/api/routes/admin.ts:174-177`).
+
+**2. Read this boot's setup token** — §12.0.
+
+**3. Open `/admin`. The claim form is the only thing there.** This is enforced,
+not convention: the claim gate renders on `isClaimed === false`
+(`frontend/public/views/admin.html:34`), the sign-in gate requires
+`isClaimed === true` (`:61`), and the dashboard requires `authed` (`:109`).
+There is no other control to press, and no way to skip the claim.
+
+**4. Fill both fields.** *Setup token* is the §12.0 value; it authorizes the
+claim as `X-Admin-Token` (`admin.ts:187` runs `isPrivileged` before anything
+else). *New durable password* must be **at least 12 characters after trimming**
+(`admin.ts:189-190`). Pick one with no leading or trailing whitespace —
+`hashKey()` trims before hashing (`backend/src/lib/keys.ts:5-7`), so a password
+with edge whitespace is not the password you think you set.
+
+Equivalent, if the browser is awkward at 3am — this prints the recovery code
+straight to the terminal:
+
+```bash
+curl -s -X POST "http://127.0.0.1:$API_PORT/api/admin/claim" \
+  -H "X-Admin-Token: $ADMIN_SETUP_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"password":"<at least 12 characters>"}'
+```
+
+**5. 🔴 RECORD THE RECOVERY CODE. IT IS SHOWN EXACTLY ONCE.** The claim mints it
+and returns it in the same response (`admin.ts:191`, inserted at `:194`,
+returned at `:206`). The UI prints it under "Save this code immediately. It will
+not be shown again." (`admin.html:49-56`) and `finishClaim()` clears it from the
+component the moment you press Continue. Only its hash is stored — nothing can
+redisplay it. Store it where §5.2 says to store the dump: offline, encrypted,
+outside the checkout and outside any compose bind mount. Losing it puts you back
+in Gate A row 4 the next time the password goes missing.
+
+**6. Understand what just changed.** From this moment `ADMIN_TOKEN` no longer
+authenticates: `isPrivileged()` takes the claimed branch and returns `false` on
+a mismatch instead of falling through to the env-token check
+(`backend/src/api/auth.ts:59-64`). The password is the only credential.
+`RM_ALLOW_INSECURE` does not reopen the gate either — the claimed branch never
+consults `allowInsecure`. Do **not** plan on passkeys as a second factor: they
+are known-broken behind the tunnel (§10.1).
+
+**7. Do not run a password change afterwards.** The claim already minted the
+recovery code. `POST /api/admin/password-change` is for Gate A row 3 — a row
+claimed *before* `0029`, whose `recovery_hash` is NULL. Running it here would
+rotate a working credential for nothing and would delete every `admin_passkey`
+and `admin_session` row (`admin.ts:234-235`).
+
+**8. Verify.** `/api/admin/is-claimed` now returns `{"claimed":true}`; you can
+sign in with the password; and Gate A's query returns one row with
+`no_recovery = false`. Re-running the claim returns `409` — the `id = 1` primary
+key makes it one-time (`0028_admin_credential.sql:3-4`, `admin.ts:201-203`).
+
+### 12.2 Procedure B — re-arm a claimed credential (password is LOST)
+
+**Run this before cutover.** It is Gate A row 4's forward path. Both remedies
+below are **writes**, so the §3 `rm_readonly` role cannot perform them — it holds
+`pg_read_all_data` and `default_transaction_read_only = on`. Use `doadmin` on
+port **25060** (§3's port note applies unchanged). Take §5's backup first: it is
+the undo for B1 and the only record of what B2 destroys.
+
+Two remedies, in order of preference. **B1 first.**
+
+#### B1 — reset the hash in place (PREFERRED: reversible, never re-arms the claim)
+
+`hashKey()` is a plain unsalted single-round SHA-256 of the trimmed input
+(`backend/src/lib/keys.ts:5-7`) — the same property §5.2 warns about — so the
+stored credential can be set to a password you choose, in place, without
+deleting the row.
+
+```sql
+BEGIN;
+-- RECORD THIS. The old pass_hash is your undo.
+SELECT id, pass_hash, recovery_hash, claimed_at FROM admin_credential;
+
+UPDATE admin_credential
+   SET pass_hash = encode(sha256(convert_to('<new password, 12+ chars, no edge spaces>', 'UTF8')), 'hex')
+ WHERE id = 1;
+COMMIT;
+```
+
+`sha256(bytea)` is a PostgreSQL 11+ builtin and needs no extension; §4's
+`server-version` check already fails below 11.
+
+Undo, exactly:
+
+```sql
+UPDATE admin_credential SET pass_hash = '<the hex you recorded>' WHERE id = 1;
+```
+
+Then cut over (§7), sign in with that password, and run
+`POST /api/admin/password-change` **once**. That one call is what makes the
+credential whole: in a single transaction it rotates `pass_hash`, mints and
+returns a `recovery_hash` (`admin.ts:223`, `:227`), deletes every
+`admin_passkey` and `admin_session` row (`:234-235`), and writes an audit record
+(`:236`). Record the returned recovery code the same way §12.1 step 5 says to.
+
+> **Honest caveat.** B1 is not the recovery the schema documents — that is B2
+> (`0028_admin_credential.sql:11-13`). B1 hand-writes a credential hash, and it
+> writes no audit row of its own. It is preferred anyway because it never
+> re-arms the one-time claim, so it has no window in which a third party can
+> take ownership of the instance.
+
+#### B2 — delete and re-arm the one-time claim
+
+> **DESTRUCTIVE / IRREVERSIBLE.** It discards the existing credential
+> permanently. There is no undo short of restoring §5's dump. It re-arms the
+> one-time claim, so the next party to reach the admin surface takes ownership —
+> make sure that is you. Documented as the intended recovery at
+> `backend/migrations/0028_admin_credential.sql:11-13`.
+
+**What else is lost — and what is NOT.** Verified against the schema, and it
+corrects what an earlier revision of this runbook asserted: `0029_admin_passkey.sql`
+creates `admin_passkey` (`:2-9`), `admin_webauthn_challenge` (`:13-17`) and
+`admin_session` (`:20-24`) with **no foreign key to `admin_credential` and no
+`ON DELETE` cascade** — the string `REFERENCES admin_credential` does not appear
+anywhere under `backend/migrations/`. Deleting the credential leaves all three
+tables fully intact, and both of the survivors are load-bearing:
+
+- **A surviving `admin_session` row keeps full admin authority.**
+  `isPrivileged()` checks `admin_session` **first** (`backend/src/api/auth.ts:55-57`)
+  and returns `true` on a hit before it ever reads `admin_credential`.
+- **A surviving passkey keeps minting new sessions.**
+  `POST /api/admin/webauthn/auth/verify` requires no prior authorization, and its
+  `SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`
+  (`backend/src/api/routes/admin-webauthn.ts:218`) never asserts that a row came
+  back — `FOR UPDATE` over zero rows is a no-op, not an error — so it proceeds to
+  issue a fresh 24-hour session at `:234`.
+
+That holder could take the re-armed claim instead of you. So **after cutover**,
+delete all four together:
+
+```sql
+-- v0.2.2 schema (0029_admin_passkey.sql applied). Take §5's backup FIRST.
+BEGIN;
+SELECT * FROM admin_credential;                      -- record what you are destroying
+SELECT count(*) AS live_sessions FROM admin_session WHERE expires_at > now();
+SELECT count(*) AS passkeys FROM admin_passkey;
+DELETE FROM admin_session;
+DELETE FROM admin_passkey;
+DELETE FROM admin_webauthn_challenge;
+DELETE FROM admin_credential;
+COMMIT;
+```
+
+**Before cutover, on `v0.2.1`, run the single statement instead.** Only
+`admin_credential` exists there — `0029_admin_passkey.sql` is in this delta
+(`fdfd9ee`, #589) — so the other three `DELETE`s raise `42P01` and abort the
+whole transaction:
+
+```sql
+BEGIN;
+SELECT * FROM admin_credential;
+DELETE FROM admin_credential;
+COMMIT;
+```
+
+**Then run §12.1 Procedure A immediately after cutover.** Not "soon" — the
+instance is unowned until you do.
+
+#### When to run Procedure B
+
+**Before the upgrade, right after Gate C's backup.** Reasoning:
+
+- Gate A is the one gate the cutover makes worse. The migrations are
+  **IRREVERSIBLE** (§7), and while a rollback does restore `ADMIN_TOKEN` access
+  to a claimed credential (§9), spending it costs you the release and a second
+  maintenance window. Settle the credential while that is still a contingency
+  rather than the plan.
+- Neither remedy can conflict with the upgrade. No migration in this delta
+  writes `admin_credential` — `0029_admin_auth_recovery.sql:4` only adds a
+  nullable column — and no seed path touches the table either (§8
+  verification 9).
+- §5's dump is B1's undo, and you want it taken first regardless.
+
+**Exception: do not *claim* before cutover.** A claim executed against `v0.2.1`
+writes a row whose `recovery_hash` is NULL, because that column does not exist
+until `0029_admin_auth_recovery.sql` runs during this upgrade. That is precisely
+the Gate A row 3/4 shape you just paid a destructive delete to escape. **Re-arm
+or reset before; claim after** (§12.1, at §8 verification 10).
+
+#### Security in the window between the delete and the claim
+
+Between B2's `DELETE` and the claim, the per-boot `ADMIN_TOKEN` is the **only**
+gate on `POST /api/admin/claim` (`admin.ts:187`).
+
+It is a real gate, and the demo overlay does **not** widen it. `buildComposeEnv`
+always sets `ADMIN_TOKEN` (`scripts/stack/config.ts:219`), so
+`config.adminToken` is always non-null (`backend/src/config.ts:497`), so
+`isPrivileged()`'s unclaimed branch takes the `secretEq` comparison at
+`auth.ts:66` and **never evaluates `cfg.allowInsecure`**. `RM_ALLOW_INSECURE: "1"`
+from `docker-compose.demo.yml:35` (§0 fact 1) is therefore inert for this gate.
+That is the honest finding; it is not a reassurance about the overlay generally.
+
+It stops being inert the moment `ADMIN_TOKEN` reaches the container **empty**.
+`backend/src/config.ts:497` is `process.env.ADMIN_TOKEN || null`, and an empty
+string is falsy — then `allowInsecure` decides, and it is `true` whenever the
+demo overlay is in the composition (`backend/src/config.ts:485`). In that state
+`/api/admin/claim` accepts **anyone who can reach the port**, with no credential
+at all. You produce it by starting the api outside `bun smoke`, where nothing
+runs `buildComposeEnv` and `docker-compose.yml:192`'s `${ADMIN_TOKEN:-}`
+resolves to empty:
+
+- with the demo overlay (`-f docker-compose.yml -f docker-compose.demo.yml`) →
+  **claim wide open**;
+- without it → `RM_ENV` falls to `demo` (`docker-compose.yml:171`),
+  `allowInsecure` is `false`, `adminToken` is null, and the admin surface `403`s
+  every request including your own claim — locked out until a proper boot.
+
+**So while the claim is armed, bring the stack up only through §7.3.** In
+particular do not reach for §11 step 6's `docker compose -p rm_prod up -d api`
+during this window. Keep the window minutes long, and keep §10.1 in view: this
+surface is reachable through the public tunnel.
