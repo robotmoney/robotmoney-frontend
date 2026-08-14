@@ -4,7 +4,11 @@
 // dependency order, and renders live per-step status with plain ANSI escape
 // codes (no new terminal-UI dependency).
 //
-// Steps (fixed, not a generic pluggable framework — there are exactly three):
+// Steps (fixed, not a generic pluggable framework — there are exactly four):
+//   0. handle-namespace     — src/db/handle-namespace.ts's
+//                              checkHandleNamespace(). Read-only, and the ONE
+//                              step that halts the run: see the fail-fast note
+//                              below.
 //   1. migrations           — src/db/migrate.ts's migrate(). MUST run first:
 //                              the v0 seed step depends on migration 0026
 //                              (swarm_sessions.legacy_takes) having been
@@ -25,6 +29,10 @@
 // Every step is attempted even if an earlier one failed (no fail-fast) — same
 // "attempt everything, decide the outcome at the end" principle
 // runV0SeedBootstrap() itself already follows for its own three entity kinds.
+// The ONE exception is step 0, the handle/id namespace precheck: it exists
+// precisely to keep this orchestrator from writing on top of a public reference
+// that addresses two members, so continuing past its refusal would defeat it.
+// It is marked `haltOnFailure` and nothing else is, deliberately.
 // The final exit code is non-zero only if a step actually FAILED — decided
 // after every step has run. v0-seed DRIFT is deliberately NOT failing here:
 // this orchestrator is the boot path, and a boot may be adopting a working
@@ -40,6 +48,7 @@
 // (wired as `bun run prod-bootstrap` in package.json)
 import { migrate } from "../src/db/migrate.ts";
 import { sql, closeDb } from "../src/db/client.ts";
+import { checkHandleNamespace, handleNamespaceRefusalLines } from "../src/db/handle-namespace.ts";
 import { runV0SeedBootstrap } from "./v0-seed-bootstrap.ts";
 import { bootstrapEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
 import { resolveAnalyticsApiConfig } from "../src/analytics/api-client.ts";
@@ -61,6 +70,47 @@ interface StepResult {
 interface Step {
   name: string;
   run: () => Promise<StepResult>;
+  /** Stop the run when this step is failing, instead of attempting the rest.
+   *  Only the namespace precheck sets it — see the header. */
+  haltOnFailure?: boolean;
+}
+
+// ── Step 0: handle/id namespace precheck ────────────────────────────────────
+//
+// Read-only, and it runs before migrate() so the refusal precedes this
+// orchestrator's first write. Migration 0031's trigger cannot answer this: a
+// restore loads rows before the trigger exists, and 0031's install-time DO
+// block never re-runs once the file is in schema_migrations. See
+// src/db/handle-namespace.ts.
+
+async function runHandleNamespaceStep(): Promise<StepResult> {
+  // 30s, matching migrate()'s waitForDb — the budget this step displaces. The
+  // api's guard uses a much shorter one because it is holding up serving; this
+  // is a batch job whose next step would have waited that long anyway.
+  //
+  // It is a WALL-CLOCK budget, not a retry budget: each attempt races the time
+  // remaining, so a database that accepts the connection and then blocks (a
+  // lock on swarm_members) fails this step in 30s rather than hanging the
+  // deploy script with no output. See checkHandleNamespace.
+  const result = await checkHandleNamespace(sql, 30_000);
+  if (result.status === "violation") {
+    for (const line of handleNamespaceRefusalLines(result.conflicts, "[prod-bootstrap]")) {
+      console.error(line);
+    }
+    console.error(`[prod-bootstrap] Nothing has been written; the remaining steps are not attempted.`);
+    return {
+      status: "failed",
+      summary: `${result.conflicts.length} handle/id namespace violation(s) — refusing to write`,
+      failing: true,
+    };
+  }
+  if (result.status === "unavailable") {
+    // Unlike the api guard, this one refuses: every remaining step is a WRITE
+    // against that same database, so an unqueryable one has nothing to offer
+    // but a later, less legible failure.
+    return { status: "failed", summary: `database not queryable: ${result.detail}`, failing: true };
+  }
+  return { status: "success", summary: "no handle/id namespace violations" };
 }
 
 // ── Step 1: migrations ──────────────────────────────────────────────────────
@@ -211,10 +261,18 @@ export interface ProdBootstrapOptions {
   alreadyMigrated?: boolean;
 }
 
+// The precheck leads BOTH shapes, including the already-migrated one: a caller
+// that migrated in its own lifecycle has still not looked at the restored rows.
+const NAMESPACE_STEP: Step = {
+  name: "handle-namespace",
+  run: runHandleNamespaceStep,
+  haltOnFailure: true,
+};
+
 function stepsFor(options: ProdBootstrapOptions): Step[] {
   return options.alreadyMigrated
-    ? [...initializationSteps]
-    : [{ name: "migrations", run: runMigrationsStep }, ...initializationSteps];
+    ? [NAMESPACE_STEP, ...initializationSteps]
+    : [NAMESPACE_STEP, { name: "migrations", run: runMigrationsStep }, ...initializationSteps];
 }
 
 // ── Status rendering (plain ANSI, no new dependency) ────────────────────────
@@ -318,7 +376,12 @@ export async function runProdBootstrap(options: ProdBootstrapOptions = {}): Prom
   const steps = stepsFor(options);
   const reports: StepReport[] = [];
   for (let i = 0; i < steps.length; i++) {
-    reports.push(await runStepWithStatus(steps[i]!, i + 1, steps.length));
+    const step = steps[i]!;
+    const report = await runStepWithStatus(step, i + 1, steps.length);
+    reports.push(report);
+    // The single fail-fast in this file (see the header): a namespace violation
+    // must stop the writes, not be noted alongside them.
+    if (step.haltOnFailure && report.failing) break;
   }
 
   printSummaryTable(reports);

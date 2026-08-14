@@ -125,8 +125,14 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   // classification for any path below is caught here.
   const CASES: Array<[string, string[]]> = [
     ["backend/src/api/routes.ts", ["backend.yml"]],
-    ["docker-compose.yml", ["backend.yml"]],
-    ["docker-compose.demo.yml", ["backend.yml"]],
+    // Issue #602: a compose file must ALSO select integration.yml. That job
+    // owns scripts/tests/integration/demo-compose-config.test.ts, the only
+    // suite that renders `docker compose config` and asserts what the api
+    // service is handed — so a PR touching nothing but a compose file has to
+    // run it, or the assertions covering that very file are skipped pre-merge.
+    ["docker-compose.yml", ["backend.yml", "integration.yml"]],
+    ["docker-compose.demo.yml", ["backend.yml", "integration.yml"]],
+    ["docker-compose.stage.yml", ["backend.yml", "integration.yml"]],
     ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml"]],
     ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml"]],
     ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml"]],

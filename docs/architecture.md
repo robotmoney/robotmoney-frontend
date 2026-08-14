@@ -4043,7 +4043,21 @@ own same-host API) use CORS.
   Postgres metrics (replication lag, failover, connections).
 - **`/health` JSON contract** (the keystone) — every surface returns the same shape
   and checks its own deps: marketing trivially `200`; IC = Postgres; dapp =
-  `rmpc` alive + gateway + RPC reachable + chain-head lag below threshold.
+  `rmpc` alive + gateway + RPC reachable + chain-head lag below threshold. The api
+  surface adds one field, `handle_namespace` (`clean` / `unchecked` /
+  `overridden`), reporting what its boot-time handle/id namespace guard concluded
+  (D34) — the status code stays `200` in all three cases, because these probes key
+  on `.ok` and failing them for a slow database would cascade a whole-site restart
+  loop. Log lines are **not** a detection path in this deployment: nothing above
+  scrapes container logs, so anything an operator must be able to notice has to be
+  in this payload. The one state this payload cannot report is a **black-holed**
+  database (packets dropped, no RST): `/health`'s own `SELECT 1` runs on the
+  shared pool, which sets no timeouts, so the request is closed by Bun's idle
+  timeout (10s by default, coarsely enforced — measured 8–12s) before it answers
+  at all. That is a pre-existing property of `/health`
+  rather than anything D34 introduced — a database that *rejects* connections
+  answers immediately — and in that state the container log is the only signal
+  (`docs/runbooks/deployment.md` §2.1 says so).
 - **Fail-open** keeps a single failed tier from cascading; the static marketing
   tier in particular stays up independently.
 

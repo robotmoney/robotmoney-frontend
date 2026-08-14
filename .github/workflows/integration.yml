@@ -17,12 +17,19 @@
 #
 # Path-gated (issue #275 addendum): a `pull_request` run whose changed files
 # don't match the `scripts` category (scripts/**, evals/**, .github/**,
-# tsconfig.json, package.json, bun.lock) skips the job body — a REAL
-# dorny/paths-filter skip, not a synthetic outcome. Because it's a job-level
-# `if:` skip (never workflow-level `on.paths`), it reports a real `skipped`
-# conclusion to the Checks API, so requiring this workflow directly carries no
-# deadlock risk. `push` to `main` is never path-filtered (see the job `if:`
-# below), so a merge to main always runs this in full.
+# tsconfig.json, package.json, bun.lock, docker-compose*.yml) skips the job
+# body — a REAL dorny/paths-filter skip, not a synthetic outcome. Because it's
+# a job-level `if:` skip (never workflow-level `on.paths`), it reports a real
+# `skipped` conclusion to the Checks API, so requiring this workflow directly
+# carries no deadlock risk. `push` to `main` is never path-filtered (see the
+# job `if:` below), so a merge to main always runs this in full.
+#
+# `docker-compose*.yml` is in that category (issue #602) because this job owns
+# the compose-layer assertions — scripts/tests/integration/demo-compose-config.test.ts
+# renders real `docker compose config` and asserts what the api service is
+# handed. Without it, a PR that changed ONLY a compose file would skip the one
+# required job able to see the regression it introduced. backend.yml's filter
+# lists it for the same reason.
 name: integration
 env:
   CI_CLASS: system-correctness
@@ -69,6 +76,10 @@ jobs:
               - 'tsconfig.json'
               - 'package.json'
               - 'bun.lock'
+              # Issue #602: demo-compose-config.test.ts asserts the rendered
+              # compose environment, so a compose-only change must select this
+              # job rather than skip the assertions that cover it.
+              - 'docker-compose*.yml'
 
   integration:
     needs: [changes]

@@ -52,6 +52,9 @@ function baseEnv(): Record<string, string> {
       // Cadence knobs (issue #371): only resolveDemoEnv's stage path may set
       // these, so an ambient value must never leak into a case's resolution.
       "PRODUCER_REGIME_CRON", "PRODUCER_RESEARCH_CRON",
+      // Boot-guard operator controls (issue #602): the cases below assert both
+      // the set and the unset resolution, so neither may be inherited.
+      "RM_ALLOW_HANDLE_NAMESPACE_VIOLATION", "PG_NAMESPACE_GUARD_TIMEOUT_MS",
     ].includes(k)) continue;
     env[k] = v;
   }
@@ -440,5 +443,89 @@ describe("every long-running service reports its own health", () => {
     // supervises it as a standing process.
     expect(gated.services["member-agent"]?.restart).toBe("no");
     expect(gated.services["member-agent"]?.profiles).toEqual(["member-agent"]);
+  });
+});
+
+// The handle/id namespace boot guard's two OPERATOR CONTROLS (issue #602): the
+// emergency override RM_ALLOW_HANDLE_NAMESPACE_VIOLATION and the wall-clock
+// budget PG_NAMESPACE_GUARD_TIMEOUT_MS.
+//
+// WHY THIS LIVES HERE AND NOT IN backend/tests. The backend suite spawns the
+// entrypoint with `env: { ..., RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1" }`,
+// which proves the CODE honours the variable and can prove nothing about
+// whether the variable ever ARRIVES: Bun.spawn bypasses compose entirely. The
+// api service's `environment:` block is an ALLOWLIST — no compose file here has
+// an `env_file:` and backend/Dockerfile sets no ENV — so a variable that block
+// does not name is never delivered to the container, and the failure is
+// perfectly silent: an override that was never delivered and one that was never
+// set produce byte-identical output, while docs/runbooks/deployment.md §2.1
+// tells a paged operator to set it and redeploy. That is the gap these cases
+// close, and they close it the only way it can be closed — against the RENDERED
+// compose configuration, over every composition the repo actually boots.
+describe("boot-guard operator controls reach the api container (issue #602)", () => {
+  const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
+    ["base", ["docker-compose.yml"]],
+    ["demo", DEMO_COMPOSE_FILES],
+    ["stage", [...DEMO_COMPOSE_FILES, "docker-compose.stage.yml"]],
+  ];
+  const CONTROLS = ["RM_ALLOW_HANDLE_NAMESPACE_VIOLATION", "PG_NAMESPACE_GUARD_TIMEOUT_MS"] as const;
+
+  for (const [label, files] of COMPOSITIONS) {
+    test(`the ${label} composition DELIVERS both controls to the api when they are set`, () => {
+      const env = serviceEnv(
+        composeConfig(
+          { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1", PG_NAMESPACE_GUARD_TIMEOUT_MS: "15000" },
+          files,
+        ),
+        "api",
+      );
+      // The values, not merely the keys: a `${VAR}` that resolved to the wrong
+      // thing would satisfy a presence check and still lose the override.
+      expect(env.RM_ALLOW_HANDLE_NAMESPACE_VIOLATION).toBe("1");
+      expect(env.PG_NAMESPACE_GUARD_TIMEOUT_MS).toBe("15000");
+    });
+
+    test(`the ${label} composition names both controls even when they are UNSET`, () => {
+      // The allowlist entries must exist unconditionally. If they were only
+      // present when the operator happened to have them exported, the rendered
+      // config would look fine on the box that set them and lose them on the
+      // one that did not.
+      const env = serviceEnv(composeConfig({}, files), "api");
+      for (const key of CONTROLS) {
+        expect(`${label}:${key}:${key in env}`).toBe(`${label}:${key}:true`);
+        // Blank, not a literal — backend/src/db/handle-namespace.ts treats an
+        // empty string as "unset" (parseGuardBudgetMs returns the default
+        // SILENTLY on "", and the override compares strictly against "1"), so a
+        // blank passthrough must not arm anything or log an IGNORING line on
+        // every production boot.
+        expect(`${label}:${key}:${env[key] ?? ""}`).toBe(`${label}:${key}:`);
+      }
+    });
+  }
+
+  test("the controls are scoped to the api — the guard runs on no other service's boot", () => {
+    // assertHandleNamespaceClean has three call sites and only one of them is a
+    // compose service (the api entrypoint); prod-bootstrap and db-preflight are
+    // host-side `bun run`s. Passing the override into a worker lane would widen
+    // the blast radius of a forgotten variable for no benefit.
+    const cfg = composeConfig({ RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1" });
+    for (const [name, svc] of Object.entries(cfg.services ?? {})) {
+      if (name === "api") continue;
+      for (const key of CONTROLS) {
+        expect(`${name}:${key}:${key in (svc.environment ?? {})}`).toBe(`${name}:${key}:false`);
+      }
+    }
+  });
+
+  test("no compose file delivers container environment through an env_file, so the allowlist IS the delivery path", async () => {
+    // The premise the cases above rest on, asserted rather than assumed: if a
+    // future `env_file:` appeared, "not in the allowlist" would stop meaning
+    // "not delivered" and these tests would be guarding the wrong thing.
+    for (const file of ["docker-compose.yml", "docker-compose.demo.yml", "docker-compose.stage.yml"]) {
+      const text = await Bun.file(join(repoRoot, file)).text();
+      expect(`${file}:${/^\s*env_file\s*:/m.test(text)}`).toBe(`${file}:false`);
+    }
+    const dockerfile = await Bun.file(join(repoRoot, "backend/Dockerfile")).text();
+    expect(`Dockerfile:${/^\s*ENV\s/m.test(dockerfile)}`).toBe("Dockerfile:false");
   });
 });

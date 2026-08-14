@@ -1722,9 +1722,11 @@ who is seated now. The backfill never overwrites an existing row — it reports
 the difference as drift, and `bun run prod-bootstrap` exits non-zero on any
 drift. So on a deployment where both had run, a cosmetic path difference on
 rows nobody had edited blocked the entire production bootstrap path. That is
-also the ordering `prod-bootstrap` produces by itself: its step 1 is
-`migrate()`, which calls `seed()`, which seats the roster before step 2's
-backfill ever reads `swarm_members`.
+also the ordering `prod-bootstrap` produces by itself: its migrations step runs
+`migrate()`, which calls `seed()`, which seats the roster before the v0-seed
+backfill step ever reads `swarm_members`. (Since #602 a read-only handle/id
+namespace precheck runs ahead of both — it writes nothing and does not change
+this ordering.)
 
 **Second half of the same fix: an empty column is filled, not called drift.**
 `seedLiveRoster()` owns only the profile columns the manifests carry, so the
@@ -1954,3 +1956,105 @@ and stays exactly as it was.
   accident.
 - **No cap at all, relying on the aggregation gate.** The window is a full
   cadence interval; unbounded writes inside it is the runaway case.
+
+## D34 — The api's handle/id namespace boot gate is fail-closed, bounded, observable, and overridable (issue #602)
+
+**Decision.** `backend/src/api/index.ts` refuses to bind a port when
+`swarm_members` holds a handle/id namespace violation, and that refusal carries
+three explicit properties, each of which is a choice rather than an omission:
+
+- **Bounded.** The check may add at most a wall-clock budget
+  (`PG_NAMESPACE_GUARD_TIMEOUT_MS`, milliseconds, default `8000`) to the boot,
+  for any database state **and any value of that variable**. It runs on its own
+  connection with server-side `statement_timeout`, `lock_timeout` and
+  `connect_timeout` (the mechanism `src/db/worker-client.ts` already uses), and
+  each retry races the time remaining. The budget is *validated*, not
+  `Number()`-coerced: a non-finite, non-positive, or above-ceiling value is
+  ignored with a loud `[api]` line and the default is used. `Number("8s")` is
+  `NaN`, and a `NaN` budget makes every deadline comparison false — the retry
+  loop would spin forever in front of `Bun.serve`, which is the same silent
+  total outage the gate exists to prevent, reached through the gate's own knob.
+  The ceiling is `2147483647`ms, the largest delay a timer can hold: above it
+  the runtime clamps the delay to 1ms, so every attempt expires instantly and
+  the loop spins the same way — a positive, finite, entirely plausible-looking
+  value with the same effect as `NaN`. It is **rejected rather than clamped**,
+  because clamping would remove the spin but keep a ~24.8-day boot during which
+  no port is bound, and a ten-digit millisecond count is a unit error of the
+  same class as `8s`, not a deliberate multi-week budget. A bad env var degrades
+  to the default rather than throwing, because refusing the boot over an
+  operator typo trades one outage for another.
+- **Observable without changing the status code.** `/health` reports
+  `handle_namespace: "clean" | "unchecked" | "overridden"` and keeps answering
+  **200** in all three cases.
+- **Overridable, loudly.** `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1` downgrades
+  the refusal to a warning, logged at boot and visible at `/health` for the
+  life of the process. A boot that finds the variable set and **no** violation
+  logs that the guard is DISARMED: `overridden` cannot carry that state (it
+  means a violation *is* being served), so without a separate line an override
+  left on after the repair is indistinguishable from a healthy boot — which is
+  the guard's own harm, reached through its own escape hatch.
+- **Both controls are enumerated in `docker-compose.yml`'s api
+  `environment:`.** That block is an allowlist — no compose file here has an
+  `env_file:` and `backend/Dockerfile` sets no `ENV` — so a control it does not
+  name never reaches the container, and the failure is silent in both
+  directions: the operator sets the variable, and the api's refusal log tells
+  them to set the variable they just set. A documented emergency control that
+  cannot be delivered is worse than none, so the delivery path is asserted
+  against real `docker compose config` output over every composition the repo
+  boots (`scripts/tests/integration/demo-compose-config.test.ts`) — the
+  spawn-based backend tests structurally cannot see it.
+
+**Why bounded is not optional.** This is the only database round trip that has
+ever stood between this process and its port, and the process also serves the
+entire static frontend (D29). An `ACCESS EXCLUSIVE` lock on `swarm_members` — an
+ordinary deploy-window event — blocks the detection SELECT while the guard's
+readiness probe returns immediately, because catalog reads take no lock on the
+table. A retry loop that consults its deadline only after a rejection bounds a
+database that *rejects* and bounds nothing about one that *blocks*: the process
+would hang with no port bound and not one log line written, and
+`restart: unless-stopped` does not restart a process that hangs instead of
+exiting. Asserted rather than measured by hand:
+`backend/tests/api-boot-handle-namespace-guard.test.ts` boots the real
+entrypoint against a `swarm_members` held under `ACCESS EXCLUSIVE` for the whole
+boot, and asserts it serves `/health` inside the budget with the lock still
+held — a test the pre-fix loop cannot pass, because it never reaches
+`Bun.serve` at all.
+
+**Why the status code does not move.** An "unchecked" boot is a real risk, but
+making `/health` non-200 for it would fail the compose healthcheck (which keys
+on `.ok`) whenever Postgres is slow to come up — trading a wrong-attribution
+risk for a restart loop on the whole site. The field is the signal; the code
+stays 200.
+
+**Why an override exists at all.** The sibling fail-closed boot guard,
+`assertNoVaultAddressCollision()`, fails on **configuration**, which an operator
+fixes by editing `.env` and redeploying with the tooling they already have. This
+one fails on **data**, and its repair needs an interactive SQL session against
+production. A data gate with no way out is an operational hazard: if it ever
+misfires, or if the repair itself needs the site up, the only remaining move is
+to ship different code during an outage. The override is deliberately noisy
+rather than quiet, because the failure mode of an escape hatch is that someone
+leaves it on.
+
+**Consequences.**
+
+- `docs/runbooks/deployment.md` §2.1 carries the operator surface: the exact
+  repair statement (one per refusal line, always the holder's handle), how to
+  get a `psql` session in both topologies, the override, the rollback pointer,
+  and the `/health` field.
+- The guard is a **boot-time snapshot**. There is no periodic re-check, so a
+  `pg_restore` into a live database is not re-validated until the api restarts;
+  the runbook and `src/db/handle-namespace.ts` both say so rather than leaving
+  the limit implied.
+
+**Rejected alternatives.**
+
+- **Periodic or request-path re-checking.** It would close the restore-into-a-
+  live-stack window, but it puts a database read on a hot path and needs its own
+  failure semantics; the documented restart is the smaller correct answer for
+  now.
+- **Failing `/health` on an unchecked boot.** See above — a worse outage than
+  the one being guarded.
+- **No override ("fail-closed means fail-closed").** Defensible for a
+  configuration gate; not for a data gate whose repair path runs through the
+  database the operator may not be able to reach.
