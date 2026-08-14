@@ -160,8 +160,8 @@ async function connectReadOnly(url: string): Promise<{ db: Db; usedStartupParam:
       ...base,
       connection: {
         application_name: "rm-preflight-upgrade",
-        default_transaction_read_only: "on",
-        statement_timeout: "30000",
+        default_transaction_read_only: true,
+        statement_timeout: 30000,
       },
     });
     await db`SELECT 1`;
