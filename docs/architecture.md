@@ -4052,8 +4052,9 @@ own same-host API) use CORS.
   scrapes container logs, so anything an operator must be able to notice has to be
   in this payload. The one state this payload cannot report is a **black-holed**
   database (packets dropped, no RST): `/health`'s own `SELECT 1` runs on the
-  shared pool, which sets no timeouts, so the request is closed by Bun's 10s idle
-  timeout before it answers at all. That is a pre-existing property of `/health`
+  shared pool, which sets no timeouts, so the request is closed by Bun's idle
+  timeout (10s by default, coarsely enforced — measured 8–12s) before it answers
+  at all. That is a pre-existing property of `/health`
   rather than anything D34 introduced — a database that *rejects* connections
   answers immediately — and in that state the container log is the only signal
   (`docs/runbooks/deployment.md` §2.1 says so).

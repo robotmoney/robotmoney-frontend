@@ -198,9 +198,11 @@ at boot would trade a wrong-attribution risk for a restart loop.
 `handle_namespace` is readable whenever `/health` answers, which is every case
 except one: against a **black-holed** database (packets dropped, no RST — a
 firewall-rule mismatch or a managed-Postgres failover), `/health`'s own
-`SELECT 1` on the shared pool is unbounded and Bun closes the connection at its
-10s idle timeout, so `curl` gets an empty reply and you see neither `db` nor
-`handle_namespace`. That is a pre-existing property of `/health` — it predates
+`SELECT 1` on the shared pool is unbounded and Bun closes the connection on its
+idle timeout first (10s by default, and enforced on a coarse timer — measured
+8.0s, 12.0s and 12.0s on three consecutive requests), so `curl` reports an empty
+reply and you see neither `db` nor `handle_namespace`. That is a pre-existing
+property of `/health` — it predates
 this guard and is not changed by it; a database that *rejects* connections
 answers 200 immediately. In that one state the `[api]` log line above is the
 only signal, so **read the container log (`docker compose logs api | grep
