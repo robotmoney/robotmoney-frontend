@@ -230,6 +230,33 @@ asserts both this variable and `PG_NAMESPACE_GUARD_TIMEOUT_MS` resolve into the
 api service in every composition, from real `docker compose config` output, so
 that block cannot lose them silently.)
 
+> ⛔ **The paragraph above describes the CI/droplet topology only — the one
+> where something runs `docker compose … up -d` directly and the ambient
+> environment is compose's interpolation source. It does NOT hold for a
+> hand-run `bun smoke` / `bun run demo` stack.** There, `stack.up()` spawns
+> compose with a **replacement** env map (`scripts/stack/stack.ts:214-232`);
+> `buildSpawnEnv` (`scripts/stack/config.ts:264-271`) keeps only
+> `DOCKER_CLIENT_ENV_ALLOWLIST` (`:241-259`) and overlays `buildComposeEnv`, and
+> neither `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION` nor
+> `PG_NAMESPACE_GUARD_TIMEOUT_MS` is on that allowlist or in
+> `DEMO_COMPOSE_PASSTHROUGH` (`scripts/lib/demo-main.ts:427-444`). **An
+> `export` in your shell is dropped before `docker` is invoked.** The one place
+> that works on that workflow is the **repo-root `.env`**, which compose
+> auto-loads (the child's cwd is the repo root and nothing passes `--env-file`
+> or `--project-directory`). Being named by the api `environment:` block is
+> necessary but not sufficient — the value still has to reach the compose
+> *process*.
+>
+> ⛔ **And on `bun smoke` specifically the override cannot rescue the boot at
+> all**, wherever you set it. Smoke's archive initializer runs
+> `backend/scripts/prod-bootstrap.ts`, whose step 0 re-runs this same check
+> (`:86-113`), leads every step shape (`stepsFor`, `:272-275`), is the only
+> `haltOnFailure` step (`:266-270`), and **reads no environment**: the override
+> is honoured only by the api guard (`backend/src/db/handle-namespace.ts:476`).
+> A failing initializer throws (`scripts/stack/stack.ts:248-251`) and fails the
+> boot. On that workflow the remedy is the repair below, or rollback — not this
+> variable. See docs/runbooks/v0-2-2-rollout.md §7.5.
+
 The api then logs the same block plus an `OVERRIDE:` line, serves anyway, and
 reports `handle_namespace: "overridden"` at `/health` for the whole life of the
 process. It is not silent and it is not sticky **in the process** — but it *is*
@@ -308,7 +335,9 @@ races the time remaining.
 
 Set it where the override is set — the droplet env, passed into the container by
 `docker-compose.yml`'s api `environment:` allowlist (see above; a variable that
-block does not name never arrives). Write that value as **milliseconds only** —
+block does not name never arrives, and on a hand-run `bun smoke`/`bun run demo`
+stack only the repo-root `.env` reaches compose at all). Write that value as
+**milliseconds only** —
 `PG_NAMESPACE_GUARD_TIMEOUT_MS=15000`, never `15s`. A value that is not a positive number is **ignored**: the api logs
 `[api] PG_NAMESPACE_GUARD_TIMEOUT_MS="15s" is not a positive number of
 MILLISECONDS — IGNORING it and using 8000ms` and boots on the default. It never
@@ -351,9 +380,15 @@ always correct.)
 > `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=` — unchanged — and the api prints the
 > identical refusal telling you to set the variable you just set, with no port
 > bound and no `/health` to check. **Whenever you change a variable in this
-> runbook, the follow-up verb is `docker compose -p "$RM_PROJECT" up -d`** (or a
-> full stack restart — `bun run demo`/`bun smoke` again), never `restart`.
-> Tracked as OPS-610-009 in issue #611.
+> runbook, the follow-up verb is `docker compose -p "$RM_PROJECT" up -d`**,
+> never `restart`. Tracked as OPS-610-009 in issue #611.
+>
+> A full `bun run demo` / `bun smoke` re-run also recreates the containers, but
+> it is **not** an equivalent way to apply a changed variable: those two boots
+> filter the environment (see the boxes at the start of this section), so a
+> variable you exported never reaches compose in the first place. Put it in the
+> repo-root `.env` before re-running, and on `bun smoke` expect the namespace
+> override to fail the boot regardless.
 
 ---
 

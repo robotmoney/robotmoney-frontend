@@ -482,7 +482,11 @@ not in `docker-compose.stage.yml`, not in the `x-worker-env` anchor
 (`docker-compose.yml:109-137`). There is no `env_file:` in any compose file and
 `backend/Dockerfile` sets no `ENV`, so an unlisted name is simply never
 delivered — the same allowlist property deployment.md §2.1 documents for
-`RM_ALLOW_HANDLE_NAMESPACE_VIOLATION`.
+`RM_ALLOW_HANDLE_NAMESPACE_VIOLATION`. Note the contrast, because it is easy to
+read that cross-reference the wrong way: `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION`
+**is** named by the api `environment:` block (`docker-compose.yml:184`) and so
+*can* be delivered — but on **this** workflow only out of the repo-root `.env`,
+never out of your shell, and even then it cannot rescue the boot. See §7.5.
 
 `.env.example:138` documents it as if it were configurable. It is not.
 
@@ -622,28 +626,69 @@ re-running after a failure resumes at the file that failed.
 ### 7.5 The new refusal you may hit — #610
 
 `56de8e9` (#610) moved the handle/id namespace re-check out of the
-`--external-pg`-only path. It now runs from **two** places that matter here:
+`--external-pg`-only path. It now runs from **two** places that matter here, in
+this order:
 
-- **`backend/src/api/index.ts`, before `Bun.serve` binds a port.** On a
-  violation the api prints `[api] REFUSING the boot: …` naming both members and
-  calls `process.exit(1)`. Because `docker-compose.yml:265` sets `restart:
-  unless-stopped` on the api — and `docker-compose.demo.yml`'s only `restart:
-  "no"` is on the unrelated `member-agent` service (`:146`) — the container
-  **restart-loops until the data is repaired.**
-- **`backend/scripts/prod-bootstrap.ts:86-113`, before it migrates.** Run under
-  smoke from `scripts/lib/demo-main.ts:1137`. It refuses and writes nothing.
-  ⚠ **This one has no override.** `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION` is
-  honoured by the api guard only (`backend/src/db/handle-namespace.ts:476`);
-  prod-bootstrap's step 0 has no escape hatch. The only remedy is repairing the
-  rows. (Tracked as OPS-610-012 in issue #611.)
+1. **`backend/src/api/index.ts:59`, before `Bun.serve` binds a port.** On a
+   violation the api prints `[api] REFUSING the boot: …` naming both members and
+   calls `process.exit(1)`. Because `docker-compose.yml:265` sets `restart:
+   unless-stopped` on the api — and `docker-compose.demo.yml`'s only `restart:
+   "no"` is on the unrelated `member-agent` service (`:146`) — the container
+   **restart-loops until the data is repaired.**
+2. **`backend/scripts/prod-bootstrap.ts:86-113`, step 0, before it writes
+   anything.** Under smoke this is the archive initializer, run as `docker
+   compose run --rm … api bun run scripts/prod-bootstrap.ts --already-migrated`
+   (`scripts/lib/demo-main.ts:1136-1140`). The precheck leads **both** step
+   shapes, `--already-migrated` included (`stepsFor`, `:272-275`), and is the
+   only step marked `haltOnFailure` (`:266-270`). It refuses and writes nothing.
 
-§4's `handle-namespace` check is what stops you reaching this. If you do reach
-it, follow deployment.md §2.1's repair — **one statement per printed line, all of
-them, each moving the HOLDER** — then re-run §7.3.
+#### ⛔ The §2.1 override CANNOT rescue a `bun smoke` boot
 
-If you must serve before repairing, the api-side override exists
-(deployment.md §2.1). **Set it in the repo-root `.env`, then re-run `bun smoke`
-— `docker compose restart` does not apply environment changes** (OPS-610-009).
+`RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1` is read in exactly one place:
+`backend/src/db/handle-namespace.ts:476`, inside the **api** guard
+(`HANDLE_NAMESPACE_OVERRIDE_ENV`, `:373`). `prod-bootstrap.ts`'s step 0 reads no
+environment at all — it calls `checkHandleNamespace` and returns `failing` on any
+violation. And a failing initializer is a failing boot: `composeAsync` throws on
+a non-zero child (`scripts/stack/stack.ts:248-251`). **There is no value of any
+variable that gets `bun smoke` to completion against a violating database.**
+(Tracked as OPS-610-012 in issue #611.)
+
+Two further traps if you try it anyway:
+
+- **Exporting the variable in your shell is a no-op on this workflow.**
+  `stack.up()` spawns compose with `env: spawnEnv` — a **replacement** map, not a
+  merge (`scripts/stack/stack.ts:214-232`) — and `buildSpawnEnv` copies only
+  `DOCKER_CLIENT_ENV_ALLOWLIST` before overlaying `buildComposeEnv`
+  (`scripts/stack/config.ts:241-271`). Neither
+  `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION` nor `PG_NAMESPACE_GUARD_TIMEOUT_MS` is on
+  that allowlist, in `buildComposeEnv`, or in `DEMO_COMPOSE_PASSTHROUGH`
+  (`scripts/lib/demo-main.ts:427-444`), so the export is dropped before `docker`
+  is invoked. This is the **opposite** of the droplet topology deployment.md §2.1
+  describes, where CI runs `docker compose up -d` directly and the ambient
+  environment *is* the interpolation source. Being in the api `environment:`
+  allowlist (`docker-compose.yml:184-185`) is necessary but not sufficient: the
+  value still has to reach the compose *process*.
+- **The repo-root `.env` does deliver it — and still does not help.** Compose
+  auto-loads `.env` from the project directory, the compose child's cwd is the
+  repo root, and nothing passes `--env-file` or `--project-directory`
+  (`scripts/stack/stack.ts:216`, `:226`; §6.1), so
+  `${RM_ALLOW_HANDLE_NAMESPACE_VIOLATION:-}` at `docker-compose.yml:184` does
+  resolve from it. What that buys is an api container that boots loudly and
+  reports `handle_namespace: "overridden"` at `/health` — and a boot that still
+  exits 1 at the archive initializer. With `CI` unset (which §7.3 requires) the
+  failure path deliberately leaves the stack **up** for inspection
+  (`scripts/lib/demo-main.ts:1897-1909`), so the site answers and looks alive.
+  **That is not a completed cutover:** the archive/EDGAR initializer never ran,
+  smoke's archive-continuity assertion never ran, and you have no evidence the
+  release is good. Do not sign off on it, and do not leave it running as "the
+  new production".
+
+**The only remedy on this workflow is to repair the data.** §4's
+`handle-namespace` check is what stops you reaching this at all; if you skipped
+it, run it now against the same database. Then follow deployment.md §2.1's repair
+— **one statement per printed line, all of them, each moving the HOLDER** — and
+re-run §7.3. If you cannot repair inside your maintenance window, the exit is §9
+rollback, not the override.
 
 ---
 
