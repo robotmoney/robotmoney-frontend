@@ -197,12 +197,13 @@ a database the api cannot query all boot normally. The last of those logs
 `handle/id namespace guard could NOT run` — the greppable line — and serves
 **UNCHECKED**. Because container logs are not scraped anywhere and the api's
 json-file buffer rotates (`x-logging`: 10MB × 3), that line is not a durable
-signal, so the same outcome is also readable at **`/health`**:
+signal, so the same outcome is also readable at **`/health`**.
 
-`8787` is the **container-internal** port and is not reachable from the host, for
-the same reason the psql block above refuses to guess Postgres's: this compose
-file publishes the api with the short form `- "8787"`, so the **host** port is
-Docker-assigned. Ask for it rather than guessing, or go in through the container:
+Reaching `/health` needs the same care the psql block above takes with Postgres:
+`8787` is the **container-internal** port and answers nothing on the host, because
+this compose file publishes the api with the short form `- "8787"` and the daemon
+picks the host port. Ask for it rather than guessing, or go in through the
+container:
 
 ```bash
 # bundled compose (docker-compose.yml) — host port assigned by the daemon
@@ -225,8 +226,8 @@ either deployment topology.)
 `handle_namespace` is `clean` (the check ran and found nothing), `unchecked`
 (the database was not queryable within the guard's budget — this boot proves
 nothing; once the database is queryable again, `docker compose restart api` to
-get a checked boot, since nothing re-checks it in place) or `overridden`. **A 200 from `/health` is not by itself evidence the
-guard ran; that field is.** The status code stays 200 in every case on purpose:
+get a checked boot, since nothing re-checks it in place) or `overridden`.
+**A 200 from `/health` is not by itself evidence the guard ran; that field is.** The status code stays 200 in every case on purpose:
 the compose healthcheck keys on `.ok`, and failing it because Postgres was slow
 at boot would trade a wrong-attribution risk for a restart loop.
 
