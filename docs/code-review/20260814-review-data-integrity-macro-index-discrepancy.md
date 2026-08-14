@@ -7,42 +7,22 @@
 > previously under-supported "v1 is correct" claim with 74/74-day executed
 > evidence (§14). Sections carrying revisions are marked.
 
-## 1. Scope and pinned commits
+## 1. TL;DR
 
-- **Question**: `robotmoney-frontend` (v1) published a Macro index of **0.66** on
-  2026-08-14 while running the research pipeline from `robotmoney-site` (v0) for
-  the same indicator produced **0.61**. Confirm the discrepancy by executing v0's
-  full pipeline, then attribute the gap across data fidelity, data gaps,
-  schedules, methodology, and code defects.
-- **v0 (live production)**: https://github.com/agentjuno/robotmoney @ `2f8cf171`
-  — see §2, the repo identity is a trap.
-- **v1 (under comparison)**: https://github.com/robotmoney/robotmoney-frontend,
-  live API at `https://robotmoney.network`. Doc branch
-  `adhoc/20260814-macro-index-discrepancy` off `main` @ `ccf983f`.
-- **Executed**: 2026-08-14, in worktrees
-  `adhoc-20260814-macro-discrepancy` (v0, detached @ `2f8cf171`) and
-  `adhoc-20260814-macro-index-discrepancy` (v1, this doc).
-- **Method**: live execution, not replay. v0's `scripts/regime/update.js` was run
-  end to end against live sources; v1's number was read from its production API;
-  FRED was queried directly for ground truth. A counterfactual harness
-  (`counterfactual.js`, in the v0 worktree) re-runs **v0's own `computeRegime`**
-  over three different input floors to isolate input pollution from algorithm
-  difference.
-- **Second-pass method** (§14): trust-neither verification. Candidate floor
-  models (clean current-vintage, seeded-hybrid, native-cadence, point-in-time)
-  were rebuilt from primary sources only — FRED CSVs, v1's vendored seed
-  fixture, v0's committed floor — and their percentiles compared against 60
-  days of v1's live API history (`range=60`, per-row `percentiles` map) on
-  every day where the models disagree. The seed fixture was inspected directly
-  for fabricated rows; FRED's serve-window behavior for `BAMLH0A0HYM2` was
-  tested directly; the HY_OAS span hypothesis was tested by re-running v0's
-  `computeRegime` with a span-restricted floor (`counterfactual.js` variant B2).
-- **Relationship to prior work**: extends
-  [`docs/audits/v0-v1-parity/A1-regime-core-procedures.md`](../audits/v0-v1-parity/A1-regime-core-procedures.md)
-  (algorithm parity PROVEN bit-identical) and
-  [`R8-residual-attribution.md`](../audits/v0-v1-parity/R8-residual-attribution.md)
-  (capture-vintage residuals at ~1e-4). This review concerns a **~5e-2** gap,
-  three orders of magnitude larger, and finds a different, structural cause.
+1. **v0 has a real data-fidelity bug:** it persists synthetic, forward-filled
+   values as though they were factual raw observations. v1's live-data pipeline
+   does not have this bug.
+2. **The v0.2.1 deployment at `robotmoney.network` appears not to carry the
+   error:** its served snapshots match clean source data, likely because the
+   initial startup migration self-healed the affected floor.
+3. **v1 still carries v0-derived sample data for testing:** the fixture must be
+   recomputed directly from source data, with no dependency on v0's persisted
+   history.
+4. **A follow-on documentation project should improve agent readability** of the
+   research and regime pipeline, including the distinctions between source data,
+   persisted floors, forward-filled views, and seed data.
+5. **Decide whether to repair v0 or sunset it.** The detailed evidence and
+   remediation considerations follow.
 
 ## 2. Repo identity — read this before reproducing
 
