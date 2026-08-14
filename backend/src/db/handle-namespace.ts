@@ -179,8 +179,8 @@ export const NAMESPACE_GUARD_MAX_BUDGET_MS = 2_147_483_647;
  * retries on its backoff and prints a TimeoutOverflowWarning stack once a
  * second, never reaching the `could NOT run` line. Executed on the real
  * entrypoint before this branch existed: `PG_NAMESPACE_GUARD_TIMEOUT_MS=3000000000`
- * against an unreachable database bound NO port for 35s and logged not one
- * `[api]` line. Clamping to the ceiling instead would remove the spin but keep a
+ * against an unreachable database bound NO port in 36s of observation, logged
+ * not one `[api]` line, and printed 41 TimeoutOverflowWarning stacks. Clamping to the ceiling instead would remove the spin but keep a
  * ~24.8-day silent boot, which is the outage this guard exists to prevent — and
  * a ten-digit millisecond count is an operator error of the same class as "8s"
  * (a duration written in the wrong unit), not a deliberate multi-week budget. So
