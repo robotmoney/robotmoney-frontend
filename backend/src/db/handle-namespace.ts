@@ -389,6 +389,29 @@ export function handleNamespaceGuardOutcome(): HandleNamespaceGuardOutcome {
 }
 
 /**
+ * Say so when the override is ARMED but this boot found nothing to override.
+ *
+ * Without this, the intended usage — set the override, restore service, repair
+ * the rows, restart — ends with the variable still set, `/health` reporting
+ * `clean`, and NOTHING anywhere indicating the guard is disarmed. The next
+ * restore that carries a violation in would then be served, which is the exact
+ * harm this module exists to prevent, reached through its own escape hatch. The
+ * `overridden` outcome cannot carry this: it means "a violation IS being
+ * served", and reporting it on a clean database would be a lie in the other
+ * direction. So the armed state is reported separately, on every boot it is set
+ * and unused — including an `unchecked` one, where "no violation was found" is
+ * itself unproven.
+ */
+function warnOverrideArmedWithoutViolation(): void {
+  if (process.env[HANDLE_NAMESPACE_OVERRIDE_ENV] !== "1") return;
+  console.error(
+    `[api] ${HANDLE_NAMESPACE_OVERRIDE_ENV}=1 is set but this boot found no violation to ` +
+      `override — the guard is DISARMED and the next database that carries one will be SERVED. ` +
+      `Unset ${HANDLE_NAMESPACE_OVERRIDE_ENV} and restart; see docs/runbooks/deployment.md.`,
+  );
+}
+
+/**
  * The api's boot guard: refuse to serve a database that holds the pair.
  *
  * Exits the process rather than throwing so the refusal is the LAST thing in
@@ -440,29 +463,6 @@ export function handleNamespaceGuardOutcome(): HandleNamespaceGuardOutcome {
  *      reaches the container through docker-compose.yml's api `environment:`
  *      allowlist, which is the only path into it.
  */
-/**
- * Say so when the override is ARMED but this boot found nothing to override.
- *
- * Without this, the intended usage — set the override, restore service, repair
- * the rows, restart — ends with the variable still set, `/health` reporting
- * `clean`, and NOTHING anywhere indicating the guard is disarmed. The next
- * restore that carries a violation in would then be served, which is the exact
- * harm this module exists to prevent, reached through its own escape hatch. The
- * `overridden` outcome cannot carry this: it means "a violation IS being
- * served", and reporting it on a clean database would be a lie in the other
- * direction. So the armed state is reported separately, on every boot it is set
- * and unused — including an `unchecked` one, where "no violation was found" is
- * itself unproven.
- */
-function warnOverrideArmedWithoutViolation(): void {
-  if (process.env[HANDLE_NAMESPACE_OVERRIDE_ENV] !== "1") return;
-  console.error(
-    `[api] ${HANDLE_NAMESPACE_OVERRIDE_ENV}=1 is set but this boot found no violation to ` +
-      `override — the guard is DISARMED and the next database that carries one will be SERVED. ` +
-      `Unset ${HANDLE_NAMESPACE_OVERRIDE_ENV} and restart; see docs/runbooks/deployment.md.`,
-  );
-}
-
 export async function assertHandleNamespaceClean(db?: NamespaceDb): Promise<void> {
   // A caller that supplies its own handle (tests, and any future in-process
   // caller) keeps it; the boot path gets the bounded client.
