@@ -60,7 +60,7 @@ async function callSwarm(req: Request): Promise<{ status: number; body: any }> {
   }
 }
 
-async function callAdmin(method: string, path: string, body?: unknown) {
+async function callAdmin(method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> {
   const req = new Request(`http://localhost${path}`, {
     method,
     headers: { "Content-Type": "application/json", "X-Admin-Token": ADMIN_CFG.adminToken },
