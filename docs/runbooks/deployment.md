@@ -10,6 +10,16 @@ The vendor split (D13) keeps this short: **Cloudflare = DNS + observability** (n
 software to deploy), **DigitalOcean = compute + storage** (everything CI builds and
 runs). There is no Worker/`wrangler`, no reverse proxy, and no tunnel by default.
 
+> **⛔ Upgrading production to v0.2.2? Read
+> [the rollout runbook](./v0-2-2-rollout.md) FIRST — before anything below.**
+> This document is the *standing* credential and topology reference;
+> [`v0-2-2-rollout.md`](./v0-2-2-rollout.md) is the *version-specific* procedure
+> for **v0.2.1 → v0.2.2**, and this one is **not sufficient for it**. Two of its
+> go/no-go gates decide the outcome before any instruction here applies: an
+> **admin-lockout gate** that can leave the upgrade unrecoverable, and a
+> **mandatory `--external-pg`** — without it the cutover silently boots an empty
+> database and serves it as production. Neither is decided here.
+
 ---
 
 ## 1. GitOps principle
