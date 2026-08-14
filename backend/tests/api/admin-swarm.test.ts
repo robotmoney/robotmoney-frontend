@@ -201,7 +201,11 @@ test("insecure config (RM_ALLOW_INSECURE/ephemeral) opens the surface without a 
 // member. Every assertion below reads the real row back out of the ephemeral
 // Postgres — a 200 envelope alone has never been proof that a column moved.
 
-async function seatMember(): Promise<string> {
+// Returns the immutable id AND the public handle the create derived from the
+// name (issue #562). The two are no longer the same string, and which one a
+// test means is now a real question: `id` is what every route path and audit
+// row below is keyed on, `handle` is only ever the published URL segment.
+async function seatMember(): Promise<{ id: string; handle: string }> {
   const memberId = rid("emember");
   const { publicKeyB64 } = await generateKeyPair();
   const add = await call(
@@ -210,7 +214,7 @@ async function seatMember(): Promise<string> {
   );
   // Fail loudly rather than let a bogus id flow into a confusing 404 later.
   if (add?.status !== 201) throw new Error(`seatMember(): manual add failed: ${JSON.stringify(add)}`);
-  return memberId;
+  return { id: memberId, handle: (add.body as any).member.handle as string };
 }
 
 const updateMember = (id: string, body: unknown) =>
@@ -220,7 +224,7 @@ const rowOf = async (id: string) =>
   (await sql`SELECT * FROM swarm_members WHERE id = ${id}`)[0] as Record<string, any>;
 
 test("members: update writes every editable field, bumps version, and the projection returns them", async () => {
-  const id = await seatMember();
+  const { id, handle } = await seatMember();
   const res = await updateMember(id, {
     expectedVersion: 1,
     name: "Woon",
@@ -255,10 +259,13 @@ test("members: update writes every editable field, bumps version, and the projec
   const member = (res!.body as any).member;
   expect(member).toEqual({
     id,
-    // The public handle is projected beside the immutable id (issue #593) and
-    // still equals it here: this patch never touched it, and migration 0030
-    // backfills handle = id for every member nobody has renamed.
-    handle: id,
+    // The public handle is projected beside the immutable id (issue #593), and
+    // since issue #562 it is DERIVED from the name the member was created with
+    // ("Before") rather than copied from the id. What this assertion is really
+    // for is that it did not MOVE: the patch above renames the member to
+    // "Woon", and a rename must never repoint a published URL — changing the
+    // handle stays a separate, audited act.
+    handle,
     status: "active",
     version: 2,
     name: "Woon",
@@ -291,7 +298,7 @@ test("members: an explicit null CLEARS the column, and an absent key leaves it a
   // This is the whole reason updateMemberAdmin merges with `!== undefined`
   // instead of `??`: with `??` every assertion below would still see a 200
   // and the OLD value still sitting in the column.
-  const id = await seatMember();
+  const { id } = await seatMember();
   expect((await updateMember(id, {
     expectedVersion: 1,
     lens: "old lens",
@@ -334,7 +341,7 @@ test("members: an explicit null CLEARS the column, and an absent key leaves it a
 });
 
 test("members: a single-field patch leaves every other column untouched", async () => {
-  const id = await seatMember();
+  const { id } = await seatMember();
   expect((await updateMember(id, { expectedVersion: 1, lens: "a lens", tagline: "a tagline" }))?.status).toBe(200);
   expect((await updateMember(id, { expectedVersion: 2, tagline: "a new tagline" }))?.status).toBe(200);
 
@@ -345,7 +352,7 @@ test("members: a single-field patch leaves every other column untouched", async 
 });
 
 test("members: stale expectedVersion → 409 and nothing is written; missing → 400; unknown member → 404", async () => {
-  const id = await seatMember();
+  const { id } = await seatMember();
 
   const stale = await updateMember(id, { expectedVersion: 99, name: "Should Not Land" });
   expect(stale?.status).toBe(409);
@@ -362,7 +369,7 @@ test("members: stale expectedVersion → 409 and nothing is written; missing →
 });
 
 test("members: a rejected patch (unknown key, bad email, bad biases) → 400 and no write", async () => {
-  const id = await seatMember();
+  const { id } = await seatMember();
   const bodies: unknown[] = [
     { expectedVersion: 1, status: "inactive" }, // unknown key — status is not editable here
     { expectedVersion: 1, contactEmail: "not-an-email" },
@@ -381,7 +388,7 @@ test("members: a rejected patch (unknown key, bad email, bad biases) → 400 and
 });
 
 test("members: update records an audit row naming the changed fields and the reason", async () => {
-  const id = await seatMember();
+  const { id } = await seatMember();
   expect((await updateMember(id, {
     expectedVersion: 1,
     lens: "machine economy, first person",
@@ -407,7 +414,7 @@ test("members: update records an audit row naming the changed fields and the rea
 });
 
 test("members: a non-admin caller is refused before any row is read or written", async () => {
-  const id = await seatMember();
+  const { id } = await seatMember();
   for (const token of [undefined, "nope"]) {
     const res = await call(
       req("POST", `/api/swarm/admin/members/${id}/update`, { ...(token === undefined ? {} : { token }), body: { expectedVersion: 1, name: "Escalated" } }),
@@ -421,7 +428,7 @@ test("members: a non-admin caller is refused before any row is read or written",
 });
 
 test("members: the update path is the contract's swarm.admin.memberUpdate template", async () => {
-  const id = await seatMember();
+  const { id } = await seatMember();
   // Guards against the handler and contract drifting onto two different URLs.
   const path = ROUTES.swarm.admin.memberUpdate.replace(":id", id);
   const res = await call(req("POST", path, { token: PROD.adminToken, body: { expectedVersion: 1, tagline: "via contract path" } }), PROD);

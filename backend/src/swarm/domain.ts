@@ -11,6 +11,10 @@ import {
   verifyClaimChallengeSignature,
   verifySubmissionSignature,
 } from "../lib/signing.ts";
+// Issue #562: a new member's public handle comes from its name, not from the
+// UUID applyMember minted for it. Leaf module — imports nothing from here, so
+// admin.ts can call it on the manual-add path too without a cycle.
+import { deriveMemberHandle, handleIsUnset } from "./handle.ts";
 import { enqueueActivationNotification, enqueueApplicationReceivedNotification } from "./notifications.ts";
 import {
   day,
@@ -943,15 +947,37 @@ export async function getApplyStatus(memberId: string): Promise<ApplicationStatu
 // first successful key-proof claim below is the only public path that installs
 // a token hash.
 export async function activateMember(memberId: string) {
+  try {
+    return await activateMemberTx(memberId);
+  } catch (e) {
+    // THIS CATCH IS NEW WITH THE DERIVATION (issue #562), and it is the reason
+    // the two sibling create paths have had one since #596 while this one did
+    // not: until now activateMember never WROTE `handle`, so no constraint that
+    // guards the public namespace could fire on it. It writes one now, and
+    // migration 0031's trigger fires on UPDATE as well as INSERT, so a derived
+    // handle that lost a race to a rename committed between the probe and the
+    // UPDATE would raise 23505 on swarm_members_handle_namespace and escape the
+    // admin approve route as a sanitized `500 internal error`. The loser of
+    // that race gets the same actionable 409 every other handle collision on
+    // this surface gets. Caught OUTSIDE sql.begin: the transaction is already
+    // aborted and rolled back by the time we answer.
+    if (isHandleUniqueViolation(e)) return { ok: false, status: 409, error: "handle already taken" };
+    throw e;
+  }
+}
+
+async function activateMemberTx(memberId: string) {
   return await sql.begin(async (tx) => {
     // `name` rides along on the row we are already locking, because the approval
     // email leads with it: an operator running several members recognises the name
     // they chose and nothing else, least of all a UUID. Adding the column here
     // beats a second select inside the notification module, which would have to
-    // re-find a row this transaction is already holding.
+    // re-find a row this transaction is already holding. `handle` rides along
+    // for the same reason (issue #562): the derivation below needs to know
+    // whether anybody has already set one, and this row is already locked.
     const existing = (await tx`
-      SELECT id, name, contact_email FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0] as
-      | { id: string; name: string; contact_email: string | null }
+      SELECT id, name, handle, contact_email FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0] as
+      | { id: string; name: string; handle: string | null; contact_email: string | null }
       | undefined;
     if (!existing) return { ok: false, status: 404, error: "no such applicant" };
     const key = (await tx`SELECT id FROM swarm_member_keys WHERE member_id = ${memberId} AND active = false ORDER BY created_at DESC LIMIT 1 FOR UPDATE`)[0] as { id: number } | undefined;
@@ -964,12 +990,25 @@ export async function activateMember(memberId: string) {
       UPDATE swarm_member_keys SET active = true, token_hash = NULL
       WHERE id = ${key.id} AND active = false RETURNING id`;
     if (upd.length === 0) return { ok: false, status: 409, error: "activation raced; retry" };
+    // THE DERIVATION (issue #562), and note that it is an UPDATE. Acceptance is
+    // not an INSERT — applyMember already wrote this row at apply time with
+    // `id = crypto.randomUUID()`, and migration 0030's BEFORE INSERT trigger
+    // stamped that UUID as the handle — so 0030 cannot carry this and the write
+    // has to happen here, at the moment the member becomes public.
+    //
+    // Only from 0030's untouched default: an administrator may set a pending
+    // applicant's handle before acceptance (updateMemberAdminTx is not
+    // status-gated), and overwriting that would regress a shipped capability.
+    // See swarm/handle.ts for both rules and why they are what they are.
+    const handle = handleIsUnset(existing)
+      ? await deriveMemberHandle(tx, { memberId, name: existing.name })
+      : existing.handle;
     await tx`
       UPDATE swarm_members
-      SET status = 'active', activated_at = now(), version = version + 1, updated_at = now()
+      SET status = 'active', handle = ${handle}, activated_at = now(), version = version + 1, updated_at = now()
       WHERE id = ${memberId}`;
     await tx`UPDATE swarm_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
-    await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId })})`;
+    await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId, handle })})`;
     const notificationOutboxId = existing.contact_email
       ? await enqueueActivationNotification(tx, memberId, existing.name, existing.contact_email)
       : null;
@@ -977,6 +1016,7 @@ export async function activateMember(memberId: string) {
       ok: true,
       status: 200,
       memberId,
+      handle,
       claimRequired: true,
       notificationQueued: notificationOutboxId !== null,
     };
@@ -1139,9 +1179,27 @@ export async function registerMember(input: { memberId: string; name: string; le
     return await sql.begin(async (tx) => {
       const cap = await assertRosterCapacity(tx, input.memberId);
       if (!cap.ok) return cap;
-      await tx`INSERT INTO swarm_members (id, status, name, lens)
-               VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null})
-               ON CONFLICT (id) DO UPDATE SET status = 'active', name = EXCLUDED.name, lens = EXCLUDED.lens`;
+      // The upsert still names NO handle — 0030's trigger stamps `handle := id`
+      // on a true insert and the conflict branch leaves the existing handle
+      // alone — for the same reason addMemberAdmin does: `handle = id` is what
+      // puts this create inside swarm_members_handle_key, which is the only
+      // thing that physically blocks it against a concurrent, uncommitted
+      // rename to this id (issue #596). The derivation is the UPDATE below.
+      const seated = (await tx<{ id: string; handle: string | null }[]>`
+        INSERT INTO swarm_members (id, status, name, lens)
+        VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null})
+        ON CONFLICT (id) DO UPDATE SET status = 'active', name = EXCLUDED.name, lens = EXCLUDED.lens
+        RETURNING id, handle`)[0]!;
+      // Issue #562: this path admits an ACTIVE member in one shot, so it is its
+      // own derivation point — there is no later acceptance for activateMember
+      // to derive at. Guarded by the same "nobody has set this" test acceptance
+      // uses, which is what makes the idempotent RE-registration this upsert
+      // exists for a no-op on the handle: a member an administrator has renamed
+      // keeps that name however many times the demo harness re-runs.
+      if (handleIsUnset(seated)) {
+        const handle = await deriveMemberHandle(tx, { memberId: input.memberId, name: input.name });
+        await tx`UPDATE swarm_members SET handle = ${handle} WHERE id = ${input.memberId}`;
+      }
       await tx`DELETE FROM swarm_member_keys WHERE member_id = ${input.memberId}`;
       await tx`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
                VALUES (${input.memberId}, ${input.publicKey}, ${hashKey(token)})`;

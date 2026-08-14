@@ -20,6 +20,8 @@ import {
   SWARM_ROSTER_CAP,
   countActiveMembersTx,
 } from "./domain.ts";
+// Issue #562 — the one implementation of "what handle does this name get".
+import { deriveMemberHandle } from "./handle.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
@@ -257,14 +259,35 @@ export async function addMemberAdmin(input: ManualMemberInput, actor: Actor = AD
       // Capacity gate: a brand-new active member must fit under SWARM_ROSTER_CAP.
       const cap = await assertRosterCapacity(tx);
       if (!cap.ok) return err(cap.status, cap.error);
-      const rows = await tx`
+      // The INSERT still names NO handle, so migration 0030's trigger stamps
+      // `handle := id` — and that is DELIBERATE, not an oversight left over
+      // from before issue #562 (the derivation is the UPDATE two statements
+      // below). Inserting the derived handle directly would have removed the
+      // only PHYSICAL guard this path has against the concurrent rename #596
+      // covers: with `handle = id` the create contends for
+      // swarm_members_handle_key against an uncommitted `UPDATE … SET handle =
+      // <this memberId>` and blocks on it, so the loser gets a 409. With a
+      // name-derived handle there is no index conflict at all, 0031's trigger
+      // body is a plain READ COMMITTED SELECT that cannot see the other
+      // transaction, and BOTH writes would commit — creating exactly the
+      // ambiguous handle/id pair 0031 exists to forbid. Closing that window
+      // needs a namespace-wide lock and is explicitly out of scope for #562, so
+      // this path keeps the guard it already had and derives afterwards.
+      await tx`
         INSERT INTO swarm_members (id, status, name, lens, contact_email, applied_at, activated_at)
-        VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now(), now())
-        RETURNING *`;
+        VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now(), now())`;
+      // Issue #562: the manual add seats an ACTIVE member in one shot, so it is
+      // its own derivation point — nothing accepts this member later. The
+      // operator's `memberId` stays the immutable identity and keeps resolving
+      // as a public reference (getMember reads both names); what changes is
+      // that the URL the member is published under now reads like its name.
+      const handle = await deriveMemberHandle(tx, { memberId: input.memberId, name: input.name });
+      const derived = await tx`
+        UPDATE swarm_members SET handle = ${handle} WHERE id = ${input.memberId} RETURNING *`;
       await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash)
                VALUES (${input.memberId}, ${input.publicKey}, true, ${hashKey(token)})`;
-      await audit(actor, "member_manual_add", { memberId: input.memberId }, tx);
-      return { ok: true, status: 201, member: toMemberAdmin(rows[0]), token };
+      await audit(actor, "member_manual_add", { memberId: input.memberId, handle }, tx);
+      return { ok: true, status: 201, member: toMemberAdmin(derived[0]), token };
     });
   } catch (e) {
     // The probe above is a READ COMMITTED snapshot, so it cannot see a rename
