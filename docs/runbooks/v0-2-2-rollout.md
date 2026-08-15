@@ -93,12 +93,13 @@ f51a8fe feat: admin auth: segregate automation and strict setup token           
   `frontend/public/assets/js/app/seo.js:16`). **At `ccf983f` the api did not
   follow**: `backend/src/config.ts:438` defaulted to the old
   `https://robotmoney.net`, and nothing can override it in this deployment (§6,
-  §10). ⚠ **Check this before you cut the tag** — commit `969bc2e`, on the same
-  branch as this runbook, moves that default to
-  `SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network"`
-  (`backend/src/config.ts:448`, resolved at `:450-454`). If the tag includes
-  `969bc2e`, §10.2 is not a defect of your release; if it is cut at `ccf983f`
-  exactly, it is. Verify with
+  §10). ⚠ **Check this before you cut the tag** — commit `969bc2e` moves that
+  default to `SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network"`
+  (`backend/src/config.ts:448`, resolved at `:450-454`), but it is **not on
+  this runbook's branch**: it was extracted out to issue #627 / PR #628 (not
+  yet merged as of this writing). If the tag you cut includes that fix (check
+  #627/#628's status), §10.2 is not a defect of your release; if it is cut
+  without it, it is. Verify with
   `git show <tag>:backend/src/config.ts | grep -n 'robotmoney\.net"'` — keep the
   closing quote, or the pattern also matches `robotmoney.network` and always
   hits (the same half-match that once broke `scripts/prerender.ts:25-29`).
@@ -695,12 +696,13 @@ never out of your shell, and even then it cannot rescue the boot. See §7.5.
 whatever that is in the tag you deploy. At `ccf983f` that is
 `backend/src/config.ts:438`'s `https://robotmoney.net` — the **old** domain that
 `bc9f20f` (#603) just moved away from — so every swarm application-receipt and
-activation email links to the old host. `969bc2e` (on this runbook's own branch)
-changes it to `https://robotmoney.network`
-(`SWARM_PUBLIC_BASE_URL_DEFAULT`, `backend/src/config.ts:448`, resolved at
-`:450-454`). **Confirm which one is in your tag (§1); do not attempt to change
-it during the rollout** — it is unreachable from `.env` and from your shell
-either way. See §10.
+activation email links to the old host. `969bc2e` changes it to
+`https://robotmoney.network` (`SWARM_PUBLIC_BASE_URL_DEFAULT`,
+`backend/src/config.ts:448`, resolved at `:450-454`) — but that commit is
+**not on this runbook's branch**; it is tracked separately as issue #627 / PR
+#628 (not yet merged as of this writing). **Confirm which one is in your tag
+(§1); do not attempt to change it during the rollout** — it is unreachable
+from `.env` and from your shell either way. See §10.
 
 ### 6.4 ⚠ `ADMIN_TOKEN` is also minted per boot — read it from the container
 
@@ -1141,12 +1143,17 @@ At `ccf983f`, `backend/src/config.ts:438` defaults `SWARM_PUBLIC_BASE_URL` to
 `frontend/public/assets/js/app/seo.js:16`). Not overridable — §6.3. Swarm emails
 then link to the old host.
 
-⚠ **This is already fixed in code, on the branch that carries this runbook.**
-`969bc2e` extracts the default to
+⚠ **This fix is NOT carried by this runbook's branch.** It was originally
+bundled here as `969bc2e`, extracting the default to
 `SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network"`
-(`backend/src/config.ts:448`, resolved at `:450-454`) and pins it with an
-executed test (`backend/tests/swarm-public-base-url.test.ts`). So this entry is
-conditional on the tag, not on the release:
+(`backend/src/config.ts:448`, resolved at `:450-454`) and pinning it with a
+new executed test on that PR's branch (a `swarm-public-base-url.test.ts` file
+under `backend/tests/`, not present here). A compliance review found that
+unrelated to the v0.2.2 rollout scope, so it was extracted into its own
+issue/PR (#627 / #628) and reverted out of this branch. Whether this section
+applies to your release depends on whether #627 / #628 have landed on `main`
+by the time you cut the tag — not on anything in this runbook's branch. Check
+their status, then verify empirically regardless:
 
 ```bash
 git show <the tag you cut>:backend/src/config.ts | grep -n 'robotmoney\.net"'
