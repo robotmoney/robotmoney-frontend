@@ -28,8 +28,14 @@ import {
   valueLeg,
   type KeyedAssetRead,
 } from "../../chain/wallet-valuation.ts";
+import { declineReplayedSlot, isReplayedSlot } from "./slot.ts";
 
-export async function sampleWalletBalances(_payload: Record<string, unknown>): Promise<unknown> {
+export async function sampleWalletBalances(payload: Record<string, unknown> = {}): Promise<unknown> {
+  // Class C (NOT_BACKFILLABLE, issue #614): chain balances are read at
+  // "latest" and prices are spot-only, so a catch-up slot replayed after
+  // downtime cannot be honoured — it would silently rewrite today's row with
+  // today's data under a stale key. Decline explicitly instead.
+  if (isReplayedSlot(payload)) return declineReplayedSlot("wallet.sample_balances", payload);
   // Fresh read (bypass the request cache) so the sampler records current chain
   // state, not a value memoized by a recent page load.
   _resetWalletBalancesCacheForTests();
@@ -69,7 +75,8 @@ const SLEEVE_DEFS: SleeveDef[] = [
   { name: "Stablecoin Strategy 2", type: "strategy", symbols: ["GIZA-SS1"] },
 ];
 
-export async function sampleWalletSleeves(_payload: Record<string, unknown>): Promise<unknown> {
+export async function sampleWalletSleeves(payload: Record<string, unknown> = {}): Promise<unknown> {
+  if (isReplayedSlot(payload)) return declineReplayedSlot("wallet.sample_sleeves", payload);
   const source = resolveBaseRpcSource();
   const priceSource = resolvePriceSource();
   const wallets = resolvePropWallets();

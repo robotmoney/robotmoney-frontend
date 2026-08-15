@@ -16,6 +16,7 @@
 // Nothing on the path is fabricated. All writes upsert on natural keys so a
 // re-run never duplicates rows.
 import { sql } from "../../db/worker-client.ts";
+import { declineReplayedSlot, isReplayedSlot } from "./slot.ts";
 import { selectProjectsDataSource } from "../../projects/access/select.ts";
 import type { DiscoveredProject, ProjectsDataSource } from "../../projects/access/data-source.ts";
 import {
@@ -34,7 +35,7 @@ import {
 
 export interface HandlerResult {
   ok: boolean;
-  status: "ok" | "degraded";
+  status: "ok" | "degraded" | "skipped";
   [k: string]: unknown;
 }
 
@@ -421,6 +422,12 @@ export async function syncRevenue(
 // Optional payload.project_ids scopes the snapshot to specific projects (the
 // legacy compute was per-project; prod fires it unscoped for the whole directory).
 export async function snapshotDaily(payload: Record<string, unknown> = {}): Promise<HandlerResult> {
+  // Class C (NOT_BACKFILLABLE, issue #614): this is a rollup of CURRENT
+  // persisted state (lobster_coins, openclaw_agents, tracked_wallets,
+  // agent_vaults) — there is no historical version of those rows to read, so
+  // a replayed slot for a past date would write TODAY's current values under
+  // a stale day-key, fabricating history rather than recording it.
+  if (isReplayedSlot(payload)) return declineReplayedSlot("projects.snapshot_daily", payload);
   const day = today();
   // An explicit empty project_ids:[] must fall back to the whole-directory
   // (unscoped) query, NOT build `IN ()` — that is invalid SQL and would throw.

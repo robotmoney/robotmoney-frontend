@@ -29,6 +29,18 @@ export type ProductionKind = (typeof PRODUCTION_KINDS)[number];
 // the alert feed covered exactly two retired kinds. Worse, an exhausted degrade
 // settles the job 'succeeded' (worker/loop.ts), so a permanently broken
 // discovery run looked healthy forever.
+// issue #614: these five sampler kinds are the ones a frozen scheduler was
+// silently taking down — wallet.sample_balances/sample_sleeves is the
+// AUM-gap incident this issue was filed from, and none of the five were
+// previously monitored at all, so a wedged producer had zero alerting.
+export const SAMPLER_KINDS = [
+  "wallet.sample_balances",
+  "wallet.sample_sleeves",
+  "vault.sample_share_price",
+  "vault.sample_adapters",
+  "buybacks.refresh",
+] as const;
+
 export const MONITORED_KINDS = [
   ...PRODUCTION_KINDS,
   "projects.discover",
@@ -38,8 +50,24 @@ export const MONITORED_KINDS = [
   "projects.snapshot_daily",
   "projects.fetch_vaults",
   "projects.recompute_coverage",
+  ...SAMPLER_KINDS,
 ] as const;
 export type MonitoredKind = (typeof MONITORED_KINDS)[number];
+
+// Cadence-appropriate staleness budget for kinds where "the last run
+// succeeded" is not, on its own, proof the pipeline is current (issue #614).
+// Latest-point-STATUS alone can't catch a scheduler wedge: a job that last ran
+// six weeks ago still reads lastRunStatus 'succeeded' forever. Each budget is
+// a wide multiple of the seeded cron cadence (src/db/seed.ts SCHEDULES) so
+// ordinary tick jitter or a worker restart never flickers the alert — only a
+// genuinely stuck producer does.
+const KIND_STALE_AFTER_MS: Partial<Record<MonitoredKind, number>> = {
+  "wallet.sample_balances": 10 * 60_000, // cron: every minute
+  "wallet.sample_sleeves": 10 * 60_000, // cron: every minute
+  "vault.sample_share_price": 4 * 60 * 60_000, // cron: hourly
+  "vault.sample_adapters": 4 * 60 * 60_000, // cron: hourly
+  "buybacks.refresh": 24 * 60 * 60_000, // cron: every 6h
+};
 
 // The two research-signal natural keys research.refresh persists.
 const RESEARCH_SIGNAL_KEYS = ["channel-divergence", "late-cycle-signals"] as const;
@@ -131,6 +159,17 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     else if (lastRun?.status === "degraded") alert = "degraded";
     else if (lastRun?.status === "succeeded") alert = "healthy";
     else alert = "not_run";
+
+    // A wedged scheduler (issue #614) leaves the LAST run reading 'succeeded'
+    // forever — it just never runs again. Downgrade a healthy last run to
+    // 'stale' once it is older than this kind's cadence-appropriate budget,
+    // so the pipeline going quiet is visible even though nothing ever
+    // actually failed.
+    const staleAfterMs = KIND_STALE_AFTER_MS[kind];
+    if (alert === "healthy" && staleAfterMs != null) {
+      const finishedAt = lastRun?.finished_at ? new Date(lastRun.finished_at).getTime() : null;
+      if (finishedAt == null || Date.now() - finishedAt > staleAfterMs) alert = "stale";
+    }
 
     const health: ProductionKindHealth = {
       kind,

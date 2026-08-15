@@ -60,6 +60,20 @@ export function heartbeatPath(env: Record<string, string | undefined> = process.
   return explicit ? explicit : DEFAULT_HEARTBEAT_PATH;
 }
 
+// A SEPARATE file from the drain-loop heartbeat above (issue #614 AC1). Before
+// this, tickScheduler ran inside worker/runtime.ts's generic `periodic()`
+// helper, which swallows errors and never writes a heartbeat at all — so a
+// frozen scheduler (the exact production incident this issue was filed from:
+// next_run_at wedged in the past, RestartCount=0, container reporting
+// healthy) was invisible to the ONE liveness file that existed, because that
+// file was being kept fresh by the UNRELATED drain loop's own progress.
+// Giving the scheduler its own path/record means its liveness can never be
+// masked by a different loop in the same process still making progress.
+export function schedulerHeartbeatPath(env: Record<string, string | undefined> = process.env): string {
+  const explicit = env.SCHEDULER_HEARTBEAT_FILE?.trim();
+  return explicit ? explicit : `${heartbeatPath(env)}.scheduler`;
+}
+
 // Writes are coalesced: a busy lane runs processOneJob back-to-back with no
 // sleep, which would otherwise mean hundreds of writes a second for no added
 // signal. A PHASE CHANGE always writes through — going idle->busy must be

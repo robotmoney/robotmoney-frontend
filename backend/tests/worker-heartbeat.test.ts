@@ -310,3 +310,57 @@ test("a SUSTAINED database outage stays unhealthy across many failed cycles, not
 
   await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 5000, "recovery once the database returns");
 }, 20_000);
+
+// issue #614 AC1: "A frozen scheduler cannot report green." Before this,
+// tickScheduler ran inside runtime.ts's generic `periodic()` helper, which
+// swallows errors and never writes a heartbeat at all — the container's ONE
+// heartbeat file was kept fresh entirely by the UNRELATED drain loop, so a
+// scheduler wedged on a stuck transaction (or throwing on every tick) was
+// invisible as long as the lane had nothing else to claim. These tests exist
+// against the scheduler's OWN heartbeat file so that scenario can no longer
+// hide.
+test("the scheduler tick keeps its own heartbeat fresh, independent of the drain loop", async () => {
+  const schedulerPath = join(dir, "heartbeat.scheduler");
+  launch({
+    lane: LANES.research, workerId: "sched-research", heartbeatFile: path,
+    schedulerHeartbeatFile: schedulerPath, schedulerProgressTimeoutMs: 500,
+    ...fastOpts, schedulerTickMs: 60, idleProgressTimeoutMs: 60_000,
+  });
+
+  await waitFor(async () => (await checkHeartbeatFile(schedulerPath)).healthy, 3000, "the first healthy scheduler heartbeat");
+  const first = JSON.parse(await Bun.file(schedulerPath).text()) as { ts: number; phase: string };
+  expect(first.phase).toBe("idle");
+  await sleep(1200); // past the write-coalescing window (MIN_WRITE_INTERVAL_MS = 1000ms)
+  const second = JSON.parse(await Bun.file(schedulerPath).text()) as { ts: number };
+  expect(second.ts).toBeGreaterThan(first.ts); // still actively ticking, not one frozen record
+});
+
+test("a scheduler that cannot progress goes UNHEALTHY on its own file while an idle drain loop stays healthy — the exact production incident this issue was filed from", async () => {
+  const schedulerPath = join(dir, "heartbeat.scheduler");
+  launch({
+    lane: LANES.research, workerId: "sched-fault-research", heartbeatFile: path,
+    schedulerHeartbeatFile: schedulerPath, schedulerProgressTimeoutMs: 300,
+    ...fastOpts, schedulerTickMs: 40, idleProgressTimeoutMs: 60_000,
+  });
+  await waitFor(async () => (await checkHeartbeatFile(schedulerPath)).healthy, 3000, "a healthy scheduler first");
+  // The drain loop has nothing queued and reports healthy too — proving the
+  // two signals are genuinely independent, not one masking the other.
+  await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 3000, "a healthy idle drain loop");
+
+  await sql`ALTER TABLE job_schedules RENAME TO job_schedules_fault_injection`;
+  try {
+    await sleep(700); // several failing ticks, past the 300ms scheduler budget
+    const schedulerVerdict = await checkHeartbeatFile(schedulerPath);
+    expect(schedulerVerdict.healthy).toBe(false);
+    expect(schedulerVerdict.reason).toContain("no progress");
+    // This is the bug: the drain loop is doing fine (nothing to claim, so its
+    // claim query against `jobs` never touches the renamed table) and would,
+    // pre-#614, have been the ONLY heartbeat in the container — masking the
+    // frozen scheduler entirely.
+    expect((await checkHeartbeatFile(path)).healthy).toBe(true);
+  } finally {
+    await sql`ALTER TABLE job_schedules_fault_injection RENAME TO job_schedules`;
+  }
+
+  await waitFor(async () => (await checkHeartbeatFile(schedulerPath)).healthy, 3000, "recovery once job_schedules returns");
+}, 20_000);

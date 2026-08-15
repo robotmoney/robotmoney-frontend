@@ -7,10 +7,14 @@
 import { config, resolveBaseRpcSource, resolveVaultAdapters } from "../../config.ts";
 import { sql } from "../../db/worker-client.ts";
 import { callTotalAssets, callTotalSupply } from "../../chain/base-rpc-client.ts";
+import { declineReplayedSlot, isReplayedSlot } from "./slot.ts";
 
 const USDC_SCALE = 1_000_000;
 
-export async function sampleSharePrice(_payload: Record<string, unknown>): Promise<unknown> {
+export async function sampleSharePrice(payload: Record<string, unknown> = {}): Promise<unknown> {
+  // Class C (NOT_BACKFILLABLE, issue #614): totalAssets()/totalSupply() are
+  // read at "latest" — a replayed slot cannot be honoured for a past hour.
+  if (isReplayedSlot(payload)) return declineReplayedSlot("vault.sample_share_price", payload);
   const opts = { rpcUrl: config.baseRpcUrl };
   const [totalAssets, totalSupply] = await Promise.all([
     callTotalAssets(config.vault.address, opts),
@@ -36,7 +40,8 @@ export async function sampleSharePrice(_payload: Record<string, unknown>): Promi
   return { vaultAddress: config.vault.address, sampleHour: sampleHour.toISOString(), sharePrice };
 }
 
-export async function sampleVaultAdapters(_payload: Record<string, unknown>): Promise<unknown> {
+export async function sampleVaultAdapters(payload: Record<string, unknown> = {}): Promise<unknown> {
+  if (isReplayedSlot(payload)) return declineReplayedSlot("vault.sample_adapters", payload);
   const opts = { rpcUrl: config.baseRpcUrl };
   const source = resolveBaseRpcSource();
   const adapters = resolveVaultAdapters();

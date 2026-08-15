@@ -12,7 +12,7 @@
 import { test, expect } from "bun:test";
 import { sql, jsonValue } from "../../src/db/client.ts";
 import { handleAdmin } from "../../src/api/routes/admin.ts";
-import { PRODUCTION_KINDS, RESEARCH_STALE_DAYS } from "../../src/admin/overview.ts";
+import { MONITORED_KINDS, PRODUCTION_KINDS, RESEARCH_STALE_DAYS, SAMPLER_KINDS } from "../../src/admin/overview.ts";
 
 const PROD = { adminToken: "s3cret-admin-token", allowInsecure: false } as const;
 const INSECURE = { adminToken: null, allowInsecure: true } as const;
@@ -102,6 +102,48 @@ test("overview: production-kind alert distinctions (dead, running-too-long, heal
   expect(rr.alert).toBe("healthy");
 
   expect(PRODUCTION_KINDS).toEqual(["regime.classify", "research.refresh"]);
+});
+
+// issue #614 AC1/AC3: the sampler kinds a wedged scheduler was silently
+// taking down (the AUM-gap incident this issue was filed from) were entirely
+// absent from MONITORED_KINDS — must fail against pre-#614 main, where the
+// overview projection has never heard of any of them.
+test("overview: the AC1 sampler kinds are monitored", async () => {
+  expect(SAMPLER_KINDS).toEqual([
+    "wallet.sample_balances",
+    "wallet.sample_sleeves",
+    "vault.sample_share_price",
+    "vault.sample_adapters",
+    "buybacks.refresh",
+  ]);
+  for (const kind of SAMPLER_KINDS) expect(MONITORED_KINDS).toContain(kind);
+
+  const res = await call(req("GET", "/api/admin/overview", PROD.adminToken));
+  const body = res?.body as { production: Array<{ kind: string }> };
+  const monitoredKinds = body.production.map((p) => p.kind);
+  for (const kind of SAMPLER_KINDS) expect(monitoredKinds).toContain(kind);
+});
+
+// issue #614 AC3: "latest-point age alone is not sufficient" — a sampler kind
+// whose LAST run succeeded but which hasn't run again in a very long time (a
+// frozen scheduler, exactly the production incident) must stop reading
+// 'healthy' once it exceeds its cadence-appropriate staleness budget. Must
+// fail against pre-#614 main, which reports 'healthy' forever off nothing but
+// the latest run's status.
+test("overview: a sampler kind whose last run is far outside its cadence reports stale, not healthy", async () => {
+  const jobId = await insertJob({ kind: "wallet.sample_balances", status: "succeeded" });
+  await insertRun(jobId, { kind: "wallet.sample_balances", status: "succeeded", finished_at: new Date() });
+  let res = await call(req("GET", "/api/admin/overview", PROD.adminToken));
+  let body = res?.body as { production: Array<{ kind: string; alert: string }> };
+  let wb = body.production.find((p) => p.kind === "wallet.sample_balances")!;
+  expect(wb.alert).toBe("healthy"); // just finished — fresh
+
+  // Age the run out well past the every-minute cadence's staleness budget.
+  await sql`UPDATE job_runs SET finished_at = now() - interval '1 day' WHERE job_id = ${jobId}`;
+  res = await call(req("GET", "/api/admin/overview", PROD.adminToken));
+  body = res?.body as typeof body;
+  wb = body.production.find((p) => p.kind === "wallet.sample_balances")!;
+  expect(wb.alert).toBe("stale");
 });
 
 test("overview: regime + research freshness (RESEARCH_STALE_DAYS)", async () => {
