@@ -28,14 +28,20 @@ import {
   valueLeg,
   type KeyedAssetRead,
 } from "../../chain/wallet-valuation.ts";
-import { declineReplayedSlot, isReplayedSlot } from "./slot.ts";
+import { classifySlot, declineReplayedSlot } from "./slot.ts";
 
 export async function sampleWalletBalances(payload: Record<string, unknown> = {}): Promise<unknown> {
-  // Class C (NOT_BACKFILLABLE, issue #614): chain balances are read at
-  // "latest" and prices are spot-only, so a catch-up slot replayed after
-  // downtime cannot be honoured — it would silently rewrite today's row with
-  // today's data under a stale key. Decline explicitly instead.
-  if (isReplayedSlot(payload)) return declineReplayedSlot("wallet.sample_balances", payload);
+  // issue #614 AC4: a slot replayed for a bucket (UTC calendar day here)
+  // that has already closed cannot be honoured — chain balances are read at
+  // "latest" and prices are spot-only, so there is no way to answer "what
+  // was this on a past day" without fabricating it. Decline explicitly.
+  // A slot replayed WITHIN today's still-open bucket (a wedged scheduler
+  // catching up a few hours late) is different: a read taken right now is
+  // exactly as honest for today as an on-time sample would have been, so it
+  // proceeds — tagged 'backfilled' (below) rather than 'live' so the catch-up
+  // stays distinguishable from the nominal scheduled sample.
+  const replay = classifySlot(payload, "daily");
+  if (replay === "past-bucket") return declineReplayedSlot("wallet.sample_balances", payload);
   // Fresh read (bypass the request cache) so the sampler records current chain
   // state, not a value memoized by a recent page load.
   _resetWalletBalancesCacheForTests();
@@ -47,11 +53,15 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
     // would write a fabricated/placeholder row. A degraded 'stale' leg carries
     // its last-persisted value, which is fine to re-record idempotently.
     if (h.valueUsd == null) continue;
+    // Only a genuinely LIVE leg is relabelled 'backfilled' on a same-bucket
+    // catch-up — a leg that already degraded to 'stub'/'stale' keeps that
+    // (more specific, more important) label rather than being overwritten.
+    const provenance = replay === "same-bucket-catchup" && h.provenance === "live" ? "backfilled" : h.provenance;
     await sql`
       INSERT INTO wallet_balance_samples
         (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES
-        (${sampleDate}, ${h.symbol}, ${h.amount}, ${h.priceUsd}, ${h.valueUsd}, ${h.provenance}, now())
+        (${sampleDate}, ${h.symbol}, ${h.amount}, ${h.priceUsd}, ${h.valueUsd}, ${provenance}, now())
       ON CONFLICT (sample_date, symbol) DO UPDATE SET
         amount     = EXCLUDED.amount,
         price_usd  = EXCLUDED.price_usd,
@@ -76,7 +86,8 @@ const SLEEVE_DEFS: SleeveDef[] = [
 ];
 
 export async function sampleWalletSleeves(payload: Record<string, unknown> = {}): Promise<unknown> {
-  if (isReplayedSlot(payload)) return declineReplayedSlot("wallet.sample_sleeves", payload);
+  const sleeveReplay = classifySlot(payload, "daily");
+  if (sleeveReplay === "past-bucket") return declineReplayedSlot("wallet.sample_sleeves", payload);
   const source = resolveBaseRpcSource();
   const priceSource = resolvePriceSource();
   const wallets = resolvePropWallets();
@@ -117,12 +128,15 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
     // providerWalletPriceReader's original ok:false-on-failure behavior.
     const valued = await valueLeg(asset, chainAmount, source, priceSource, persistedFallbackWalletPriceReader);
     if (!valued.ok) continue;
+    // Same relabelling rule as sampleWalletBalances above: only a genuinely
+    // LIVE leg becomes 'backfilled' on a same-bucket catch-up.
+    const provenance = sleeveReplay === "same-bucket-catchup" && valued.provenance === "live" ? "backfilled" : valued.provenance;
 
     await sql`
       INSERT INTO wallet_sleeve_samples
         (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES
-        (${sampleDate}, ${walletAddress}, ${asset.symbol}, ${valued.amount}, ${valued.priceUsd}, ${valued.valueUsd}, ${valued.provenance}, now())
+        (${sampleDate}, ${walletAddress}, ${asset.symbol}, ${valued.amount}, ${valued.priceUsd}, ${valued.valueUsd}, ${provenance}, now())
       ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
         amount     = EXCLUDED.amount,
         price_usd  = EXCLUDED.price_usd,

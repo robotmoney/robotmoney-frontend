@@ -673,7 +673,7 @@ test("history: backfill seeds the pre-launch series; the endpoint returns it str
   // backfillWalletHistory has run — no sampler write yet), so every point's
   // day-level provenance must read 'seed', and the summary count must agree.
   for (const point of r.history) expect(point.provenance).toBe("seed");
-  expect(r.historyProvenance).toEqual({ live: 0, stub: 0, stale: 0, seed: r.history.length });
+  expect(r.historyProvenance).toEqual({ live: 0, stub: 0, stale: 0, backfilled: 0, seed: r.history.length });
 });
 
 // issue #614 AC5: once the daily sampler writes a live day, that ONE day must
@@ -758,6 +758,38 @@ test("sampler: a slot replayed three days late declines with a recorded reason i
   await sampleWalletBalances({});
   const onTime = await sql`SELECT count(*)::int AS c FROM wallet_balance_samples WHERE sample_date = ${today}`;
   expect(onTime[0]!.c).toBe(8);
+});
+
+// issue #614 AC4: a slot replayed WITHIN today's still-open bucket (a
+// scheduler wedged for a few hours, catching up the SAME UTC day) is not
+// unrecoverable the way a past day is — a live read taken right now is
+// exactly as honest for today as an on-time sample would have been. This
+// must PROCEED (not decline) and tag the row 'backfilled' rather than
+// 'live', so the catch-up stays distinguishable from a nominal sample.
+test("sampler: a slot replayed within TODAY's still-open bucket proceeds and tags rows 'backfilled', not 'live' (issue #614 AC4)", async () => {
+  setBaseEnv();
+  // live source (unset BASE_RPC_SOURCE/PRICE_SOURCE) — same setup as "live
+  // price path" above — so every leg genuinely resolves to provenance
+  // 'live' and the same-bucket relabelling rule actually has something to
+  // relabel (a stub-sourced leg is never 'live' in the first place).
+  const fx = stubFixtures();
+  fx.gecko = { [A.WETH]: 1700, [A.ROBOTMONEY]: 0.00002, [A.BNKR]: 0.001 };
+  fx.sp500Price = 4700;
+  mockChain(fx);
+  const today = new Date().toISOString().slice(0, 10);
+  // 6 minutes ago — past REPLAY_SLACK_MS (5 min), but (barring a test run in
+  // the first few minutes of a UTC day) still today's UTC calendar day.
+  const sameBucketSlot = new Date(Date.now() - 6 * 60_000).toISOString();
+
+  const result = (await sampleWalletBalances({ slotAt: sameBucketSlot })) as { sampleDate: string; persisted: number };
+  expect(result.sampleDate).toBe(today);
+  expect(result.persisted).toBe(8); // proceeded — not declined
+
+  const rows = await sql<{ provenance: string }[]>`SELECT provenance FROM wallet_balance_samples WHERE sample_date = ${today}`;
+  expect(rows.length).toBe(8);
+  // Every leg was a genuine 'live' read (mockChain/stubFixtures, live
+  // source) — the same-bucket catch-up relabels each to 'backfilled'.
+  for (const r of rows) expect(r.provenance).toBe("backfilled");
 });
 
 // ── issue #294 regression guard ─────────────────────────────────────────────

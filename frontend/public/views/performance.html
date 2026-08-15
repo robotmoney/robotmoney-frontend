@@ -43,6 +43,15 @@
       <p class="a2-status" x-show="loading">Loading wallet performance…</p>
       <p class="a2-status a2-status--error" x-show="error" x-text="error" x-cloak></p>
 
+      <!-- issue #614 AC5: discloses the seed/live seam and any unrecoverable
+           gap window instead of letting the whole series read as uniformly
+           "live". seamMessage() is null (and this stays hidden) once live
+           sampling covers most of the range and no day is missing. -->
+      <div class="a2-seam" x-show="!loading && !error && seamMessage()" x-cloak role="note">
+        <span class="a2-seam__icon" aria-hidden="true">ⓘ</span>
+        <span x-text="seamMessage()"></span>
+      </div>
+
       <div class="a2-charts" x-show="!loading && !error">
 
         <!-- Absolute value chart (Chart.js stacked area; data in walletPerfView) -->
@@ -255,6 +264,26 @@
 }
 .a2-status--error {
   color: var(--color-warn, #ff6644);
+}
+
+/* Seed/live seam + unrecoverable-gap disclosure (issue #614 AC5) */
+.a2-seam {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin: 0 0 1.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(232, 166, 64, 0.5);
+  border-radius: 2px;
+  background: rgba(232, 166, 64, 0.1);
+  color: var(--color-warm, #e8a640);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.a2-seam__icon {
+  flex: 0 0 auto;
+  font-size: 1rem;
+  line-height: 1.3;
 }
 
 /* Charts */

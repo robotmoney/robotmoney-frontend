@@ -169,7 +169,10 @@ async function valueAsset(
 // fixed series' group/colour ORDER is carried by holdings[]/
 // resolveTrackedAssets, which the frontend iterates — byAsset is a lookup, not
 // the ordering.
-const PROVENANCE_PRIORITY: Provenance[] = ["live", "stale", "seed", "stub"];
+// 'backfilled' ranks just under 'live' (issue #614 AC4): it IS a genuine
+// current read, only a late one, so it is more informative than 'stale' (a
+// degraded leg reusing an older value) or 'seed' (never a chain read at all).
+const PROVENANCE_PRIORITY: Provenance[] = ["live", "backfilled", "stale", "seed", "stub"];
 function dominantProvenance(seen: Set<Provenance>): Provenance {
   for (const p of PROVENANCE_PRIORITY) if (seen.has(p)) return p;
   return "stub"; // unreachable in practice (seen is always non-empty when called)
@@ -196,7 +199,7 @@ async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyPr
     point.totalUsd += v;
     point._seen.add(r.provenance);
   }
-  const historyProvenance: Record<Provenance, number> = { live: 0, stub: 0, stale: 0, seed: 0 };
+  const historyProvenance: Record<Provenance, number> = { live: 0, stub: 0, stale: 0, seed: 0, backfilled: 0 };
   const history: WalletHistoryPoint[] = [];
   for (const { _seen, ...point } of byDate.values()) {
     point.provenance = dominantProvenance(_seen);
@@ -227,7 +230,7 @@ async function computeWalletBalances(): Promise<WalletBalances> {
     assets.map((a) => valueAsset(a, chainAmounts.get(a.symbol) ?? { ok: false }, source, priceSource)),
   );
   const totalUsd = holdings.reduce((sum, h) => sum + (h.valueUsd ?? 0), 0);
-  const EMPTY_PROVENANCE: Record<Provenance, number> = { live: 0, stub: 0, stale: 0, seed: 0 };
+  const EMPTY_PROVENANCE: Record<Provenance, number> = { live: 0, stub: 0, stale: 0, seed: 0, backfilled: 0 };
   const { history, historyProvenance } = await loadHistory().catch(() => ({ history: [] as WalletHistoryPoint[], historyProvenance: EMPTY_PROVENANCE }));
 
   return {
@@ -300,7 +303,7 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
   });
 
   const totalUsd = holdings.reduce((sum, h) => sum + (h.valueUsd ?? 0), 0);
-  const EMPTY_PROVENANCE: Record<Provenance, number> = { live: 0, stub: 0, stale: 0, seed: 0 };
+  const EMPTY_PROVENANCE: Record<Provenance, number> = { live: 0, stub: 0, stale: 0, seed: 0, backfilled: 0 };
   const { history, historyProvenance } = await loadHistory().catch(() => ({ history: [] as WalletHistoryPoint[], historyProvenance: EMPTY_PROVENANCE }));
 
   // asOf = freshest served sample's real timestamp (data age), or now() if empty.

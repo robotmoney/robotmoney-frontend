@@ -46,6 +46,9 @@
         <span class="alloc-aum__prov alloc-wallet-stale" x-show="walletStale()" x-cloak>
           Wallet feed: stale (last-persisted) data
         </span>
+        <span class="alloc-aum__prov alloc-wallet-backfilled" x-show="walletBackfilled()" x-cloak>
+          Wallet feed: caught up late (still a live read)
+        </span>
         <span class="alloc-aum__prov alloc-aum-partial" x-show="aumPartial()" x-cloak>
           Partial total: one feed (wallet or vault) has not resolved
         </span>

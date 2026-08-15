@@ -76,8 +76,17 @@ export interface VaultEconomics {
 // price valuation of the agent's PROP WALLETS. Replaces the baked
 // WALLET_SNAPSHOT_TOTAL_USD scalar (/allocation hero) and the 99-day
 // walletPerfView series (/performance). Per-holding `provenance` is one of
-// 'live' | 'stub' | 'stale' | 'seed'.
-export type WalletHoldingProvenance = "live" | "stub" | "stale" | "seed";
+// 'live' | 'stub' | 'stale' | 'seed' | 'backfilled'.
+//
+// 'backfilled' (issue #614 AC4): a genuinely LIVE chain/price read, written
+// by the scheduler's SAME-BUCKET catch-up path (a wedged scheduler firing a
+// slot a few hours late, still within the same UTC calendar day) rather than
+// the nominal on-time sample. The read itself is exactly as current/honest
+// as 'live' — it is only late — so it is kept distinct from 'seed' (never a
+// chain read at all) and 'stale' (a degraded leg reusing an OLDER persisted
+// value). A slot replayed for a bucket that has already CLOSED (a past day)
+// is never written at all — see worker/handlers/slot.ts.
+export type WalletHoldingProvenance = "live" | "stub" | "stale" | "seed" | "backfilled";
 
 export interface SleeveHolding {
   symbol: string;
