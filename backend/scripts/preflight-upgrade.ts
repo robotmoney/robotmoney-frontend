@@ -118,8 +118,11 @@ function record(name: string, status: Status, detail: string | string[], remedia
 }
 
 /** Password-redacted target, the only form safe to print.
- *  Same shape as backend/scripts/db-preflight.ts:76-85. */
-function redactedTarget(raw: string | undefined): string {
+ *  Same shape as backend/scripts/db-preflight.ts:76-85.
+ *  Exported for backend/tests/preflight-upgrade.test.ts — the only piece of
+ *  this deliberately-standalone script's logic that is pure and needs no live
+ *  Postgres connection to exercise for real. */
+export function redactedTarget(raw: string | undefined): string {
   if (!raw) return "(PREFLIGHT_DATABASE_URL unset)";
   try {
     const u = new URL(raw);
