@@ -432,25 +432,10 @@ export function resolveSwarmSchedules(
 // concatenate a leading-slash path without minting "https://host//swarm/...".
 // Resolved at module load like the other single-value knobs below; the swarm
 // tests that need a different origin set the env before importing config.
-//
-// THIS DEFAULT IS THE EFFECTIVE PRODUCTION VALUE, not a placeholder.
-// SWARM_PUBLIC_BASE_URL is named by NO compose file: not docker-compose.yml's
-// api `environment:` allowlist, not docker-compose.demo.yml's, not the
-// x-worker-env anchor — and there is no `env_file:` anywhere and
-// backend/Dockerfile sets no ENV, so the variable can never reach the
-// container. It is also absent from scripts/lib/demo-main.ts's
-// DEMO_COMPOSE_PASSTHROUGH, so a `bun smoke` / `bun run demo` operator cannot
-// inject it either. Whatever is written here is what every swarm notification
-// email links to. It is exported and pinned by
-// backend/tests/swarm-public-base-url.test.ts precisely because the tests that
-// exercise the emails assert against `config.swarmPublicBaseUrl` (the
-// variable), which stays green no matter what this string says.
-export const SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network";
-
 export function resolveSwarmPublicBaseUrl(
   env: Record<string, string | undefined> = process.env,
 ): string {
-  return (env.SWARM_PUBLIC_BASE_URL || SWARM_PUBLIC_BASE_URL_DEFAULT).replace(/\/+$/, "");
+  return (env.SWARM_PUBLIC_BASE_URL || "https://robotmoney.net").replace(/\/+$/, "");
 }
 
 // --- Swarm notification sender (issue #322) ------------------------------
