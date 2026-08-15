@@ -101,6 +101,7 @@ export const ROUTES: {
     rawHistorySeed: string;
     regimeSnapshots: string;
     researchSignals: string;
+    researchSignalDates: string;
     researchEligibility: string;
     telemetry: string;
   };

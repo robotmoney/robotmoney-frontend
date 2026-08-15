@@ -329,6 +329,28 @@ test("GET raw-history returns the persisted floor to the analytics-provider", as
   expect(history[ind]).toEqual([{ date: "2021-05-05", value: 7 }]);
 });
 
+// issue #614 AC4: the producer's catch-up read side. No DATABASE_URL on that
+// process, so this is the ONLY way it can tell which recent days already have
+// a research signal — must fail against pre-#614 main, where this route does
+// not exist at all.
+test("GET research-signals/dates: analytics-provider-only, validates `since`, and returns only pairs on/after it", async () => {
+  prodAuth();
+  expect((await call(req("GET", `${A.researchSignalDates}?since=2020-01-01`)))?.status).toBe(401); // no credential
+  expect((await call(req("GET", `${A.researchSignalDates}?since=2020-01-01`, undefined, "wrong-token")))?.status).toBe(403);
+  expect((await call(req("GET", `${A.researchSignalDates}?since=2020-01-01`, undefined, ADMIN)))?.status).toBe(403); // ADMIN_TOKEN is not a substitute
+  expect((await call(req("GET", A.researchSignalDates, undefined, TOKEN)))?.status).toBe(400); // missing `since`
+  expect((await call(req("GET", `${A.researchSignalDates}?since=not-a-date`, undefined, TOKEN)))?.status).toBe(400);
+
+  const key = `sig-${rid()}`;
+  await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES (${key}, '2026-02-01', '{}'), (${key}, '2026-02-05', '{}'), (${key}, '2026-01-01', '{}')`;
+
+  const res = await call(req("GET", `${A.researchSignalDates}?since=2026-02-01`, undefined, TOKEN));
+  expect(res?.status).toBe(200);
+  const dates = (res?.body as { dates: { signalKey: string; date: string }[] }).dates;
+  const forKey = dates.filter((d) => d.signalKey === key).map((d) => d.date);
+  expect(forKey).toEqual(["2026-02-01", "2026-02-05"]); // 2026-01-01 excluded — before `since`
+});
+
 // ── POST /api/analytics/telemetry (issue #151) — same analytics-provider-only
 // boundary as every mutation above, just with its own DTO shape (a run with
 // stages/warnings/artifacts) rather than a natural-key batch.

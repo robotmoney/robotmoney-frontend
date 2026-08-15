@@ -213,6 +213,11 @@ export const ROUTES = {
     rawHistorySeed: "/api/analytics/raw-history/seed", // POST — cold-DB gap-fill (existing rows win; EDGAR seed ingestion)
     regimeSnapshots: "/api/analytics/regime-snapshots", // POST — snapshot batch upsert on (date)
     researchSignals: "/api/analytics/research-signals", // POST — signal batch upsert on (signal_key, date)
+    // GET ?since=YYYY-MM-DD — which (signal_key, date) pairs exist on/after
+    // `since` (issue #614 AC4). No payload content, just presence — the
+    // producer's own read side for catch-up: it has no DATABASE_URL, so this
+    // is the only way it can tell which recent days it needs to re-run.
+    researchSignalDates: "/api/analytics/research-signals/dates",
     // POST — retired control-plane path; authenticated callers receive 409 and
     // no consumer schedule/job mutation. Retained so old clients fail closed.
     researchEligibility: "/api/analytics/research-eligibility",
