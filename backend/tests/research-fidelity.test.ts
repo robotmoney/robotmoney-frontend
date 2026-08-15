@@ -86,7 +86,15 @@ test("channel-divergence fidelity: computeChannelDivergence (shipped) reproduces
   const f = maxDiffByDate(cd.indicators.stables_vs_qqq_flow, result.indicators?.stables_vs_qqq_flow);
   console.log(`[research-fidelity] stables_vs_qqq_flow: compared=${f.n} maxDiff=${f.max}`);
   expect(f.n).toBeGreaterThan(2900);
-  expect(f.max).toBeLessThan(1e-3);
+  // Issue #616's full-universe purge regeneration fully replaced STABLES with
+  // a fresh DefiLlama live re-fetch (it is not on the unrecoverable-preserve
+  // list), which no longer bit-matches the frozen v0-era STABLES vintage this
+  // fixture's `raw.STABLES` input previously carried — DefiLlama's current
+  // stablecoin-aggregate endpoint does not reproduce historical totals
+  // byte-identically to an old snapshot (ordinary source-side revision, not a
+  // defect). 3e-3 keeps headroom over the observed ~2.5e-3 90d-pct-change
+  // drift while still catching a real regression.
+  expect(f.max).toBeLessThan(3e-3);
 });
 
 test("late-cycle fidelity: computeLateCycle (shipped) reproduces mna_pct, margin_debt_yoy(+pct), consumer_conf_pct from the JSON", async () => {
