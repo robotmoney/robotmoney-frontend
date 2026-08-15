@@ -34,7 +34,7 @@ interface VaultEconomics {
   adapters: VaultEconomicsAdapter[];
 }
 
-interface WalletHolding { symbol: string; chain: string; group: string; color: string; amount: number | null; priceUsd: number | null; valueUsd: number | null; priceSource: string; provenance: "live" | "stub" | "stale" }
+interface WalletHolding { symbol: string; chain: string; group: string; color: string; amount: number | null; priceUsd: number | null; valueUsd: number | null; priceSource: string; provenance: "live" | "stub" | "stale" | "seed" | "backfilled" }
 interface WalletBalances { asOf: string; totalUsd: number; source: "live" | "stub"; priceSource: "live" | "stub"; holdings: WalletHolding[]; history: { date: string; byAsset: Record<string, number>; totalUsd: number }[] }
 
 function loadVaultEconomicsGolden(): VaultEconomics {
@@ -207,6 +207,22 @@ test("allocation hero flags a stale wallet feed and renders '—' when a wallet 
 
   await expect(page.locator(".alloc-wallet-stale")).toBeVisible();
   await expect(page.locator(".alloc-wallet-stale")).toContainText("stale");
+});
+
+// issue #614 AC4: a scheduler same-bucket catch-up (worker/handlers/slot.ts)
+// writes a genuinely live read tagged 'backfilled' rather than 'live' or
+// 'stale' — distinct from BOTH existing badges, so it needs its own.
+test("allocation hero flags a wallet feed caught up by the scheduler as backfilled — distinct from both the stale and non-live badges (issue #614 AC4)", async ({ page }) => {
+  const golden = loadVaultEconomicsGolden();
+  const wallet = walletStub({ source: "live" });
+  wallet.holdings[2]!.provenance = "backfilled";
+  await stubEnvironment(page, golden, wallet);
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+
+  await expect(page.locator(".alloc-wallet-backfilled")).toBeVisible();
+  await expect(page.locator(".alloc-wallet-stale")).toBeHidden();
+  await expect(page.locator(".alloc-wallet-nonlive")).toBeHidden();
 });
 
 test("a wallet feed that recovered from transient rate-limiting renders LIVE — no stale/non-live badge, live numbers in the hero (429-retry recovery)", async ({ page }) => {

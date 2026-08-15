@@ -9,7 +9,7 @@ import type { AnalyticsPersistence } from "../persistence.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "./raw-history-store.ts";
 import { applyRawFloorSeed } from "./floor-seed.ts";
 import { saveRegimeSnapshots } from "./regime-store.ts";
-import { persistResearchSignal } from "./research-store.ts";
+import { persistResearchSignal, loadRecentResearchSignalDates } from "./research-store.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
   loadRawHistory: () => loadRawIndicatorHistory(),
@@ -19,4 +19,5 @@ export const directAnalyticsPersistence: AnalyticsPersistence = {
   seedRawHistory: (byIndicator) => sql.begin((tx) => applyRawFloorSeed(byIndicator, tx)),
   saveRegimeSnapshots: (rows) => saveRegimeSnapshots(rows),
   saveResearchSignal: (key, asof, payload) => persistResearchSignal(key, asof, payload),
+  loadResearchSignalDates: (sinceDate) => loadRecentResearchSignalDates(sinceDate),
 };

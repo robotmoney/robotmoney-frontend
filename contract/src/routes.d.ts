@@ -101,6 +101,7 @@ export const ROUTES: {
     rawHistorySeed: string;
     regimeSnapshots: string;
     researchSignals: string;
+    researchSignalDates: string;
     researchEligibility: string;
     telemetry: string;
   };
@@ -109,6 +110,7 @@ export const ROUTES: {
     isClaimed: string;
     claim: string;
     overview: string;
+    gaps: string;
     jobs: string;
     job: string;
     jobRetry: string;

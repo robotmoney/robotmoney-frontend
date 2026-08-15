@@ -17,6 +17,7 @@ function recordingPersistence(): AnalyticsPersistence {
     async seedRawHistory() { return { seededPoints: 0, existingPoints: 0, indicators: 0 }; },
     async saveRegimeSnapshots() {},
     async saveResearchSignal() {},
+    async loadResearchSignalDates() { return []; },
   };
 }
 

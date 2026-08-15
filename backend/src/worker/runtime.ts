@@ -13,7 +13,7 @@ import { processOneJob, releaseOwnedJobs } from "./loop.ts";
 import { tickScheduler } from "./scheduler.ts";
 import { reapStuckJobs } from "./reaper.ts";
 import { describeLane, type Lane } from "./lanes.ts";
-import { heartbeatPath, writeHeartbeat } from "../ops/heartbeat.ts";
+import { heartbeatPath, schedulerHeartbeatPath, writeHeartbeat } from "../ops/heartbeat.ts";
 
 export interface WorkerOptions {
   lane: Lane;
@@ -32,6 +32,13 @@ export interface WorkerOptions {
   idleProgressTimeoutMs?: number;
   /** How long a heartbeat written while EXECUTING A JOB stays valid. */
   jobProgressTimeoutMs?: number;
+  /** Liveness file the scheduler tick loop reports into. SEPARATE from
+   *  heartbeatFile (issue #614 AC1) so a frozen scheduler cannot hide behind a
+   *  still-progressing drain loop. Default: SCHEDULER_HEARTBEAT_FILE, else
+   *  `${heartbeatFile}.scheduler`. */
+  schedulerHeartbeatFile?: string;
+  /** How long the scheduler's own heartbeat stays valid. */
+  schedulerProgressTimeoutMs?: number;
 }
 
 export interface WorkerHandle {
@@ -87,6 +94,13 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
   const jobProgressTimeoutMs = opts.jobProgressTimeoutMs
     ?? Number(process.env.WORKER_JOB_PROGRESS_TIMEOUT_MS ?? 900_000);
   const heartbeatFile = opts.heartbeatFile ?? heartbeatPath();
+  const schedulerHeartbeatFile = opts.schedulerHeartbeatFile ?? schedulerHeartbeatPath();
+  // 4x the tick interval — generous enough that a normal tick's DB round trip
+  // never flickers red, tight enough that a scheduler stuck in `periodic()`'s
+  // swallowed-error retry (or genuinely deadlocked) is caught within a couple
+  // of minutes at the default 30s tick, not silently forever.
+  const schedulerProgressTimeoutMs = opts.schedulerProgressTimeoutMs
+    ?? Number(process.env.SCHEDULER_PROGRESS_TIMEOUT_MS ?? Math.max(60_000, schedulerTickMs * 4));
 
   let running = true;
   const stopped = new AbortController();
@@ -184,6 +198,41 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
     }
   }
 
+  // Dedicated liveness loop for the scheduler tick (issue #614 AC1), mirroring
+  // drainLoop's "beat from inside the loop, never from a detached timer" rule
+  // and its edge-triggered `faulted` write — but writing to its OWN file
+  // (schedulerHeartbeatFile) so this signal can never be papered over by the
+  // unrelated drain loop still progressing in the same process. A
+  // `tickScheduler` that throws on every tick (lost DB, bad cron expression on
+  // a seeded row, ...) or that hangs mid-transaction stops refreshing this
+  // file and the container goes unhealthy within schedulerProgressTimeoutMs —
+  // where before, nothing about scheduler health was observable at all.
+  function schedulerBeat(phase: "boot" | "idle" | "faulted", detail?: string): Promise<void> {
+    return writeHeartbeat(
+      { phase, staleAfterMs: schedulerProgressTimeoutMs, writer: workerId, detail: detail ?? `lane=${lane.name} scheduler` },
+      { path: schedulerHeartbeatFile },
+    );
+  }
+
+  async function schedulerLoop(): Promise<void> {
+    await schedulerBeat("boot");
+    let faulted = false;
+    while (running) {
+      try {
+        await tickScheduler();
+        await schedulerBeat("idle");
+        faulted = false; // a real tick succeeded — the next failure is a fresh edge
+      } catch (err) {
+        console.error(`[${workerId}] scheduler error:`, err);
+        if (!faulted) {
+          await schedulerBeat("faulted", `error: ${err instanceof Error ? err.message : String(err)}`);
+          faulted = true;
+        }
+      }
+      await sleep(schedulerTickMs);
+    }
+  }
+
   // Lane-aware health/status line: names the lane and its claim allowlist so an
   // operator reading logs (or `docker compose logs worker-<lane>`) can see
   // exactly which kinds this worker may claim.
@@ -194,7 +243,7 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
   // and no lane depends on another lane's process being alive.
   const loops = [
     drainLoop(),
-    periodic("scheduler", tickScheduler, schedulerTickMs),
+    schedulerLoop(),
     periodic("reaper", reapStuckJobs, reaperTickMs),
   ];
 

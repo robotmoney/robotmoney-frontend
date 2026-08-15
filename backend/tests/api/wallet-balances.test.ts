@@ -617,7 +617,16 @@ test("AC8b (issue #118): the request path reflects the LATEST scheduled sample p
   expect(weth.valueUsd).toBeCloseTo(15500, 6);
 });
 
-test("history: backfill seeds the pre-launch series; the endpoint returns it as continuous, sparse, group-ordered byAsset days", async () => {
+// issue #614 AC6: this test was previously named "...returns it as
+// CONTINUOUS..." while asserting only `date[i] >= date[i-1]` — a tautology
+// against the endpoint's own `ORDER BY sample_date ASC`, true even over a
+// 40-day hole. The series is genuinely, deliberately SPARSE over the
+// calendar axis (contract/src/dashboards.d.ts's WalletHistoryPoint comment),
+// not continuous — the seeded portion carries known gaps ported from its v0
+// source. This asserts what is actually true: dates are unique and strictly
+// increasing (a REAL ordering/dedupe guarantee), and explicitly proves two
+// known gap days are absent rather than silently forward-filled.
+test("history: backfill seeds the pre-launch series; the endpoint returns it strictly ordered and honestly sparse, group-ordered byAsset days", async () => {
   const n = await backfillWalletHistory();
   expect(n).toBeGreaterThan(0);
   // Re-running is idempotent (ON CONFLICT DO NOTHING) — no duplicate rows.
@@ -645,10 +654,50 @@ test("history: backfill seeds the pre-launch series; the endpoint returns it as 
   // Mar 18 held only WETH/ROBOTMONEY/BNKR (sparse byAsset).
   expect(Object.keys(first.byAsset).sort()).toEqual(["BNKR", "ROBOTMONEY", "WETH"]);
   expect(first.totalUsd).toBeCloseTo(21519 + 51300 + 12, 6);
-  // History is date-ascending.
+  // History is STRICTLY ascending — unique dates, never a duplicate or
+  // out-of-order row (a real guarantee, unlike the old `>=` tautology that
+  // held even across a gap).
   for (let i = 1; i < r.history.length; i++) {
-    expect(r.history[i]!.date >= r.history[i - 1]!.date).toBe(true);
+    expect(r.history[i]!.date > r.history[i - 1]!.date).toBe(true);
   }
+  // Honestly sparse, not silently forward-filled: known gap days from the v0
+  // seed source are genuinely ABSENT rows, not zero-filled or interpolated
+  // ones. A consumer reading `history` linearly (rather than indexing by
+  // `date`) would otherwise draw these as one continuous line across the
+  // hole — the exact defect issue #614 was filed from.
+  const dates = new Set(r.history.map((h) => h.date));
+  expect(dates.has("2026-03-24")).toBe(false);
+  expect(dates.has("2026-06-04")).toBe(false);
+
+  // issue #614 AC5: the whole series is still 100% seed at this point (only
+  // backfillWalletHistory has run — no sampler write yet), so every point's
+  // day-level provenance must read 'seed', and the summary count must agree.
+  for (const point of r.history) expect(point.provenance).toBe("seed");
+  expect(r.historyProvenance).toEqual({ live: 0, stub: 0, stale: 0, backfilled: 0, seed: r.history.length });
+});
+
+// issue #614 AC5: once the daily sampler writes a live day, that ONE day must
+// read 'live' while every earlier seeded day still reads 'seed' — the seam
+// between backfilled and live-sampled history must be visible per-point, not
+// collapsed into one series-wide label.
+test("history: a live-sampled day is distinguishable from the seeded backfill it follows", async () => {
+  await backfillWalletHistory();
+  setBaseEnv();
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  mockChain(stubFixtures());
+  await sampleWalletBalances({}); // stub-sourced, but NOT provenance 'seed' — a genuine sampler write
+  _resetWalletBalancesCacheForTests();
+  mockChain(stubFixtures());
+
+  const r = await fetchWalletBalances();
+  const today = new Date().toISOString().slice(0, 10);
+  const todayPoint = r.history.find((h) => h.date === today)!;
+  expect(todayPoint.provenance).not.toBe("seed");
+  const seededPoint = r.history.find((h) => h.date === "2026-03-19")!;
+  expect(seededPoint.provenance).toBe("seed");
+  expect(r.historyProvenance.seed).toBeGreaterThan(0);
+  expect(r.historyProvenance.seed + r.historyProvenance.live + r.historyProvenance.stub + r.historyProvenance.stale).toBe(r.history.length);
 });
 
 test("AC2 (issue #94): backfillWalletHistory never writes the literal provenance 'live'", async () => {
@@ -678,6 +727,69 @@ test("sampler: sampleWalletBalances upserts exactly one row per held symbol per 
   await sampleWalletBalances({});
   const again = await sql`SELECT count(*)::int AS c FROM wallet_balance_samples WHERE sample_date = ${today}`;
   expect(again[0]!.c).toBe(8);
+});
+
+// issue #614 AC2: a Class C sampler must decline a REPLAYED slot for a past
+// date rather than silently rewriting today's row with today's data under
+// that stale key. Must fail against pre-#614 main: sampleWalletBalances
+// ignored its payload entirely and always sampled `new Date()`, so a slot
+// enqueued 3 days late would still write a fresh TODAY row and report
+// success, with nothing to show the missed days were ever detected.
+test("sampler: a slot replayed three days late declines with a recorded reason instead of rewriting today's row (issue #614 AC2)", async () => {
+  setBaseEnv();
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  mockChain(stubFixtures());
+  const today = new Date().toISOString().slice(0, 10);
+  const staleSlot = new Date(Date.now() - 3 * 86_400_000).toISOString();
+
+  const result = (await sampleWalletBalances({ slotAt: staleSlot })) as { ok: boolean; skipped?: boolean; reason?: string };
+  expect(result.ok).toBe(true); // not a failure — the correct outcome for this input
+  expect(result.skipped).toBe(true);
+  expect(typeof result.reason).toBe("string");
+  expect(result.reason).toContain("Class C");
+
+  // Nothing was written under today's key — the whole point of declining.
+  const rows = await sql`SELECT count(*)::int AS c FROM wallet_balance_samples WHERE sample_date = ${today}`;
+  expect(rows[0]!.c).toBe(0);
+
+  // An ON-TIME slot (no slotAt, or a fresh one) still samples normally —
+  // the decline is specific to a stale replay, not a blanket regression.
+  await sampleWalletBalances({});
+  const onTime = await sql`SELECT count(*)::int AS c FROM wallet_balance_samples WHERE sample_date = ${today}`;
+  expect(onTime[0]!.c).toBe(8);
+});
+
+// issue #614 AC4: a slot replayed WITHIN today's still-open bucket (a
+// scheduler wedged for a few hours, catching up the SAME UTC day) is not
+// unrecoverable the way a past day is — a live read taken right now is
+// exactly as honest for today as an on-time sample would have been. This
+// must PROCEED (not decline) and tag the row 'backfilled' rather than
+// 'live', so the catch-up stays distinguishable from a nominal sample.
+test("sampler: a slot replayed within TODAY's still-open bucket proceeds and tags rows 'backfilled', not 'live' (issue #614 AC4)", async () => {
+  setBaseEnv();
+  // live source (unset BASE_RPC_SOURCE/PRICE_SOURCE) — same setup as "live
+  // price path" above — so every leg genuinely resolves to provenance
+  // 'live' and the same-bucket relabelling rule actually has something to
+  // relabel (a stub-sourced leg is never 'live' in the first place).
+  const fx = stubFixtures();
+  fx.gecko = { [A.WETH]: 1700, [A.ROBOTMONEY]: 0.00002, [A.BNKR]: 0.001 };
+  fx.sp500Price = 4700;
+  mockChain(fx);
+  const today = new Date().toISOString().slice(0, 10);
+  // 6 minutes ago — past REPLAY_SLACK_MS (5 min), but (barring a test run in
+  // the first few minutes of a UTC day) still today's UTC calendar day.
+  const sameBucketSlot = new Date(Date.now() - 6 * 60_000).toISOString();
+
+  const result = (await sampleWalletBalances({ slotAt: sameBucketSlot })) as { sampleDate: string; persisted: number };
+  expect(result.sampleDate).toBe(today);
+  expect(result.persisted).toBe(8); // proceeded — not declined
+
+  const rows = await sql<{ provenance: string }[]>`SELECT provenance FROM wallet_balance_samples WHERE sample_date = ${today}`;
+  expect(rows.length).toBe(8);
+  // Every leg was a genuine 'live' read (mockChain/stubFixtures, live
+  // source) — the same-bucket catch-up relabels each to 'backfilled'.
+  for (const r of rows) expect(r.provenance).toBe("backfilled");
 });
 
 // ── issue #294 regression guard ─────────────────────────────────────────────

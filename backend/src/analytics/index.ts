@@ -97,7 +97,10 @@ const nn = (v: number | undefined): number | null =>
 // boundedPreview() (telemetry.ts). Apply that same truncation to ONLY the
 // research-signal entries of the telemetry summary, leaving regime (and any
 // other) entries untouched so regime telemetry behavior is unperturbed.
-const RESEARCH_SIGNAL_TELEMETRY_KEYS = ["channel-divergence", "late-cycle-signals"] as const;
+// Exported (issue #614 AC4) so producer/index.ts's catch-up mechanism checks
+// EXACTLY these two signal_keys rather than duplicating the literal list and
+// risking drift.
+export const RESEARCH_SIGNAL_TELEMETRY_KEYS = ["channel-divergence", "late-cycle-signals"] as const;
 
 // `toolId` alias meaning "both research signals in ONE run" (issue #509).
 // Not a tool in its own right — it produces no output of its own; it selects

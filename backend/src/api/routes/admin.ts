@@ -18,6 +18,7 @@ import { computeRegimeStaleness } from "../../analytics/report/regime-projection
 import { decodeCursor, encodeCursor } from "../../admin/cursor.ts";
 import { recordAudit, redactAuditRow } from "../../admin/audit.ts";
 import { getOverviewProjection, PRODUCTION_KINDS } from "../../admin/overview.ts";
+import { detectAllGaps } from "../../ops/gap-detector.ts";
 import { isPrivileged } from "../auth.ts";
 import { hashKey } from "../../lib/keys.ts";
 
@@ -282,6 +283,17 @@ export async function handleAdmin(
   if (m === "GET" && p === "/api/admin/overview") {
     if (!await isPrivileged(req, cfg)) return FORBIDDEN;
     return { status: 200, body: await getOverviewProjection() };
+  }
+
+  // GET /api/admin/gaps — the generic gap-detector operator surface (issue
+  // #614 AC3): one report per registered series (SERIES_REGISTRY), each with
+  // interior gaps and a stale head reported separately. This is the ONE place
+  // an operator can see "which persisted time series have holes right now"
+  // across wallet/sleeve/vault/projects-daily/research/raw-indicator series —
+  // before #614 nothing in this codebase answered that question at all.
+  if (m === "GET" && p === "/api/admin/gaps") {
+    if (!await isPrivileged(req, cfg)) return FORBIDDEN;
+    return { status: 200, body: { series: await detectAllGaps() } };
   }
 
   // GET /api/admin/jobs — cursor-paginated jobs (kind/status/scope/created-range

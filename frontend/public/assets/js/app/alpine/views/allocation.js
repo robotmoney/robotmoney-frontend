@@ -114,6 +114,14 @@ export function registerAllocationView(Alpine) {
     walletStale() {
       return (this.wallet?.holdings || []).some((h) => h.provenance === "stale");
     },
+    // issue #614 AC4: a same-bucket scheduler catch-up writes a genuinely
+    // live read, just a late one — distinct from both walletNonLive()
+    // (non-live/stub data) and walletStale() (a degraded leg reusing an
+    // older value). Surfaced so "the schedule caught itself up" is visible
+    // rather than silently indistinguishable from an on-time 'live' sample.
+    walletBackfilled() {
+      return (this.wallet?.holdings || []).some((h) => h.provenance === "backfilled");
+    },
     fmtUsd(v) {
       if (v == null) return "—";
       const n = Number(v);

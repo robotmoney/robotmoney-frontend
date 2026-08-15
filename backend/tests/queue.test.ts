@@ -60,6 +60,90 @@ test("scheduler: new schedule seeds next_run_at without firing; a due one catche
   expect(await tickScheduler()).toBe(0); // next_run_at now future → nothing new
 });
 
+// issue #614 AC1: a schedule left more than 1000 slots behind must never be
+// left pinned on a single stale next_run_at. Against pre-#614 main,
+// scheduler.ts's guard loop only updated `nextRun` on the `slotDate > now`
+// break, so overflowing the guard left `nextRun` equal to the ORIGINAL
+// next_run_at and wrote that same past value back — every later tick re-ran
+// the identical first 1000 (dedupe-suppressed) slots forever and net-enqueued
+// zero new jobs. This must fail against that code: after enough ticks to
+// drain the backlog, next_run_at must be in the future and the schedule must
+// still be capable of enqueuing fresh (non-suppressed) work each tick.
+test("scheduler: a per-minute cron >1000 slots (16h40m) behind is never left pinned in the past", async () => {
+  await sql`INSERT INTO job_schedules (kind, cron, enabled) VALUES ('test.ok','* * * * *', true)`;
+  const staleAt = new Date(Date.now() - 20 * 60 * 60 * 1000); // 20h behind = 1200 minute-slots
+  await sql`UPDATE job_schedules SET next_run_at = ${staleAt} WHERE kind='test.ok'`;
+
+  const firstTickEnqueued = await tickScheduler();
+  expect(firstTickEnqueued).toBeGreaterThan(0);
+  const [afterFirst] = await sql`SELECT next_run_at FROM job_schedules WHERE kind='test.ok'`;
+  // The core regression: next_run_at must have MOVED from the original stale
+  // value, not been written back unchanged.
+  expect(new Date(afterFirst.next_run_at).getTime()).toBeGreaterThan(staleAt.getTime());
+
+  // A second tick must enqueue MORE new (non-suppressed) work rather than
+  // reprocessing the same dead batch — proof the cursor genuinely advanced.
+  const secondTickEnqueued = await tickScheduler();
+  expect(secondTickEnqueued).toBeGreaterThan(0);
+
+  const [afterSecond] = await sql`SELECT next_run_at FROM job_schedules WHERE kind='test.ok'`;
+  expect(new Date(afterSecond.next_run_at).getTime()).toBeGreaterThan(new Date(afterFirst.next_run_at).getTime());
+  // 1200 slots / 1000-per-tick cap drains fully within two ticks; confirm it
+  // actually reached the future rather than merely moving forward.
+  expect(new Date(afterSecond.next_run_at).getTime()).toBeGreaterThan(Date.now());
+
+  // Fully caught up now: a third tick finds nothing newly due for this slot
+  // cursor (dedupe still suppresses any residual overlap, and next_run_at is
+  // future so nothing is even selected).
+  expect(await tickScheduler()).toBe(0);
+
+  const [{ c }] = await sql`SELECT count(*)::int c FROM jobs WHERE kind='test.ok'`;
+  expect(c).toBeGreaterThan(1000); // more than one guard-batch worth actually landed
+});
+
+// Same clamp, asserted for a COARSE (hourly) cron: proves the fix is
+// cadence-independent, not a per-minute special case. ~41 days behind
+// overflows the 1000-slot guard exactly the same way.
+test("scheduler: an hourly cron >1000 slots (~41 days) behind is never left pinned in the past", async () => {
+  await sql`INSERT INTO job_schedules (kind, cron, enabled) VALUES ('test.ok','0 * * * *', true)`;
+  const staleAt = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000); // 45 days ≈ 1080 hourly slots
+  await sql`UPDATE job_schedules SET next_run_at = ${staleAt} WHERE kind='test.ok'`;
+
+  const firstTickEnqueued = await tickScheduler();
+  expect(firstTickEnqueued).toBeGreaterThan(0);
+  const [afterFirst] = await sql`SELECT next_run_at FROM job_schedules WHERE kind='test.ok'`;
+  expect(new Date(afterFirst.next_run_at).getTime()).toBeGreaterThan(staleAt.getTime());
+
+  const secondTickEnqueued = await tickScheduler();
+  const [afterSecond] = await sql`SELECT next_run_at FROM job_schedules WHERE kind='test.ok'`;
+  expect(new Date(afterSecond.next_run_at).getTime()).toBeGreaterThan(Date.now());
+  expect(secondTickEnqueued).toBeGreaterThanOrEqual(0); // remaining ~80 slots, may finish on tick 2
+  expect(await tickScheduler()).toBe(0);
+});
+
+// issue #614 AC2: the enqueued job payload carries the SLOT'S OWN timestamp,
+// not just the schedule's static payload — a handler replaying a missed slot
+// needs to know which date it is filling in for instead of always writing
+// `new Date()`. Must fail against pre-#614 main, where every enqueued job's
+// payload is exactly the schedule's static `payload` column with no slot
+// timestamp at all (seed.ts's samplers all seed `{}`).
+test("scheduler: enqueued jobs carry the slot's own timestamp in the payload", async () => {
+  await sql`INSERT INTO job_schedules (kind, cron, payload, enabled) VALUES ('test.ok','* * * * *', '{"a":1}', true)`;
+  await sql`UPDATE job_schedules SET next_run_at = now() - interval '3 minutes' WHERE kind='test.ok'`;
+  expect(await tickScheduler()).toBeGreaterThan(0);
+  const rows = await sql`SELECT payload FROM jobs WHERE kind='test.ok' ORDER BY id ASC`;
+  expect(rows.length).toBeGreaterThan(0);
+  for (const row of rows) {
+    expect(row.payload.a).toBe(1); // static payload preserved
+    expect(typeof row.payload.slotAt).toBe("string");
+    expect(Number.isNaN(Date.parse(row.payload.slotAt))).toBe(false);
+  }
+  // Slots are distinct and strictly increasing — each replayed slot really
+  // does carry ITS OWN timestamp, not one shared value.
+  const slots = rows.map((r) => Date.parse(r.payload.slotAt));
+  for (let i = 1; i < slots.length; i++) expect(slots[i]).toBeGreaterThan(slots[i - 1]);
+});
+
 test("reaper: stuck running job is requeued with backoff; exhausted → dead", async () => {
   const [{ id: a }] = await sql`INSERT INTO jobs (kind, payload, status, locked_at, locked_by, attempts, max_attempts)
                                 VALUES ('test.ok','{}','running', now() - interval '10 minutes','dead-worker',1,5) RETURNING id`;

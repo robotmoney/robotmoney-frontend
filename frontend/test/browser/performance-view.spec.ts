@@ -35,14 +35,23 @@ const SERIES: { symbol: string; color: string }[] = [
   { symbol: "SP500", color: "#8b5cf6" },
 ];
 
-// Six days of continuous, sparse history (last 5 render collapsed).
+// Six PERSISTED days out of a genuine ~97-day span (2026-03-19 → 2026-06-24),
+// deliberately gapped — issue #614 AC6: this fixture used to be labelled "six
+// days of CONTINUOUS history" while jumping across that same hole, which
+// would have passed unchanged against production's real 40-day gap. It is the
+// fixture the AC5 gap-rendering assertions below reuse for exactly that
+// reason: a real multi-week gap, not a synthetic one-off.
+// Provenance mix (issue #614 AC5): 4 of 6 persisted days are 'seed' (ported
+// pre-launch history) — above the 50% disclosure threshold — with one
+// genuinely 'live' day and one 'backfilled' (scheduler same-bucket catch-up)
+// day, so both the seed-share message AND a real seam boundary render.
 const HISTORY = [
-  { date: "2026-03-18", byAsset: { WETH: 21519, ROBOTMONEY: 51300, BNKR: 12 }, totalUsd: 72831 },
-  { date: "2026-03-19", byAsset: { WETH: 20841, ROBOTMONEY: 45207, BNKR: 12 }, totalUsd: 66060 },
-  { date: "2026-06-24", byAsset: { USDC: 8995, WETH: 25682, ETH: 83, ROBOTMONEY: 36143, BNKR: 11, SP500: 4669, "ZYFAI-SS1": 4537 }, totalUsd: 80120 },
-  { date: "2026-06-25", byAsset: { USDC: 9042, WETH: 24916, ETH: 81, ROBOTMONEY: 31831, BNKR: 10, SP500: 4683, "ZYFAI-SS1": 4538 }, totalUsd: 75101 },
-  { date: "2026-06-26", byAsset: { USDC: 9052, WETH: 24194, ETH: 78, ROBOTMONEY: 30652, BNKR: 9, SP500: 4656, "ZYFAI-SS1": 4538 }, totalUsd: 73180 },
-  { date: "2026-06-27", byAsset: { USDC: 9100, WETH: 24000, ETH: 80, ROBOTMONEY: 30000, BNKR: 9, SP500: 4660, "ZYFAI-SS1": 4539 }, totalUsd: 72388 },
+  { date: "2026-03-18", byAsset: { WETH: 21519, ROBOTMONEY: 51300, BNKR: 12 }, totalUsd: 72831, provenance: "seed" },
+  { date: "2026-03-19", byAsset: { WETH: 20841, ROBOTMONEY: 45207, BNKR: 12 }, totalUsd: 66060, provenance: "seed" },
+  { date: "2026-06-24", byAsset: { USDC: 8995, WETH: 25682, ETH: 83, ROBOTMONEY: 36143, BNKR: 11, SP500: 4669, "ZYFAI-SS1": 4537 }, totalUsd: 80120, provenance: "seed" },
+  { date: "2026-06-25", byAsset: { USDC: 9042, WETH: 24916, ETH: 81, ROBOTMONEY: 31831, BNKR: 10, SP500: 4683, "ZYFAI-SS1": 4538 }, totalUsd: 75101, provenance: "seed" },
+  { date: "2026-06-26", byAsset: { USDC: 9052, WETH: 24194, ETH: 78, ROBOTMONEY: 30652, BNKR: 9, SP500: 4656, "ZYFAI-SS1": 4538 }, totalUsd: 73180, provenance: "live" },
+  { date: "2026-06-27", byAsset: { USDC: 9100, WETH: 24000, ETH: 80, ROBOTMONEY: 30000, BNKR: 9, SP500: 4660, "ZYFAI-SS1": 4539 }, totalUsd: 72388, provenance: "backfilled" },
 ];
 
 function walletStub() {
@@ -53,6 +62,7 @@ function walletStub() {
     priceSource: "stub",
     holdings: SERIES.map((s) => ({ symbol: s.symbol, chain: "base", group: "Stable", color: s.color, amount: 1, priceUsd: 1, valueUsd: 1, priceSource: "pinned", provenance: "stub" })),
     history: HISTORY,
+    historyProvenance: { live: 1, stub: 0, stale: 0, seed: 4, backfilled: 1 },
   };
 }
 
@@ -101,6 +111,82 @@ test("performance view draws the eight stacked series + Historical Data table fr
   await page.locator(".a2-table__toggle").click();
   await expect(page.locator("table.a2-table tbody tr")).toHaveCount(HISTORY.length);
   await expect(page.locator("table.a2-table tbody tr").first().locator("td.a2-sticky")).toHaveText("Mar 18");
+});
+
+// issue #614 AC5: the fixture above has a REAL ~97-day gap (2026-03-19 →
+// 2026-06-24). Before this fix, chart-theme.js's monoAxis() never set a scale
+// `type`, so Chart.js defaulted the x axis to "category" — spacing points by
+// ARRAY INDEX. Charting `history` directly (one array slot per PERSISTED day)
+// drew that 97-day hole as one ordinary-width step between two adjacent
+// slots: a price-looking cliff, not six weeks of missing samples. This test
+// inspects the live Chart.js instance and must FAIL against that
+// implementation, where `chart.data.labels.length === HISTORY.length` (6).
+test("AUM chart occupies proportional horizontal space across a real multi-week gap and renders it as a visible discontinuity, not an interpolated line (issue #614 AC5)", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/performance");
+  await expect(page.locator('canvas[x-ref="aum"]')).toBeVisible();
+
+  const expectedDenseDays = Math.round(
+    (Date.parse(HISTORY[HISTORY.length - 1]!.date) - Date.parse(HISTORY[0]!.date)) / 86_400_000,
+  ) + 1; // inclusive of both endpoints
+
+  const chartState = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[x-ref="aum"]') as HTMLCanvasElement;
+    // Chart is a CDN global in the served page; the ambient type here only
+    // declares getChart's return as `{ id: string }`, so widen to `any` for
+    // the full runtime shape rather than fighting the ambient declaration.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chart = (window as any).Chart.getChart(canvas);
+    return {
+      labelCount: chart.data.labels.length,
+      // A dataset's `spanGaps` config — must be explicitly false so Chart.js
+      // never draws a line THROUGH a null (gap) point.
+      spanGaps: chart.data.datasets.map((d: { spanGaps: unknown }) => d.spanGaps),
+      // Every dataset's value on each label index, so the test can find the
+      // gap region without hardcoding a dataset ordering assumption.
+      datasetsData: chart.data.datasets.map((d: { data: (number | null)[] }) => d.data),
+      labels: chart.data.labels as string[],
+    };
+  });
+
+  // The core AC5 assertion: the axis is a DENSE calendar (one slot per real
+  // calendar day across the full span), not a sparse array of only the
+  // persisted points — this is what makes a 97-day hole occupy 97 slots of
+  // horizontal space instead of collapsing to a single step.
+  expect(chartState.labelCount).toBe(expectedDenseDays);
+  expect(chartState.labelCount).toBeGreaterThan(HISTORY.length); // strictly denser than the sparse fixture
+
+  // spanGaps must be false on every stacked series — a `true`/`undefined`
+  // config would let Chart.js bridge the gap with an interpolated line.
+  for (const sg of chartState.spanGaps) expect(sg).toBe(false);
+
+  // At least one gap-region index (a synthesized day strictly between the two
+  // persisted dates on either side of the hole) must be `null` in EVERY
+  // dataset — a real discontinuity, never a fabricated/interpolated value.
+  const midGapIndex = Math.floor(chartState.labelCount / 2);
+  for (const data of chartState.datasetsData) {
+    expect(data[midGapIndex]).toBeNull();
+  }
+});
+
+// issue #614 AC5: "the API stops reporting source:'live' for a series that
+// is 95% seed rows; seed, backfilled and live spans are distinguishable...
+// the UI discloses the seam and any unrecoverable window." The fixture is
+// 4-of-6 'seed' (67%, above the 50% disclosure threshold) with a real seam
+// at 2026-06-26 and a genuine multi-week gap — this must render a visible
+// disclosure, not silently present the series as uniformly live.
+test("performance view discloses the seed/live seam and the unrecoverable gap window (issue #614 AC5)", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/performance");
+
+  const seam = page.locator(".a2-seam");
+  await expect(seam).toBeVisible();
+  const text = await seam.textContent();
+  expect(text).toContain("67%"); // 4 of 6 persisted days are seed
+  expect(text).toContain("Jun 26"); // the seam: first non-seed persisted date
+  expect(text).toMatch(/\d+ days? in this range could not be recovered/); // the ~91-day gap
 });
 
 test("the served performance view no longer bakes the frozen walletPerfView series (issue #84)", async ({ page }) => {

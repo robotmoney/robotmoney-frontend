@@ -35,4 +35,9 @@ export interface AnalyticsPersistence {
   saveRegimeSnapshots(rows: RegimeSnapshotRow[]): Promise<void>;
   // Upsert one research signal payload on (signal_key, date).
   saveResearchSignal(key: string, asof: string, payload: ResearchPayload): Promise<void>;
+  // Which (signal_key, date) pairs are persisted on/after `sinceDate` (issue
+  // #614 AC4): the independent producer has no DATABASE_URL, so this is the
+  // ONLY way it can tell which recent days it needs to catch up — the read
+  // side of the producer catch-up mechanism in producer/index.ts.
+  loadResearchSignalDates(sinceDate: string): Promise<{ signalKey: string; date: string }[]>;
 }

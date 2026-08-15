@@ -48,7 +48,13 @@ import { fetchAssetPriceUsd } from "./token-prices.ts";
 // 'seed' = a pre-launch history row backfilled from the ported baked constants
 // (chain/wallet-history-seed.ts), NOT a live chain read — honesty invariant from
 // migration 0014 ("a value is NEVER fabricated or falsely labelled 'live'").
-export type Provenance = "live" | "stub" | "stale" | "seed";
+// 'backfilled' (issue #614 AC4) = a genuinely LIVE chain/price read, but one
+// written by the scheduler's SAME-BUCKET catch-up path (worker/handlers/
+// slot.ts classifySlot) rather than the nominal on-time sample — the read
+// itself is exactly as current/honest as 'live', it is only late. Kept
+// distinct from 'seed' (never a chain read at all) and 'stale' (a degraded
+// leg reusing an OLDER persisted value) so none of the three get conflated.
+export type Provenance = "live" | "stub" | "stale" | "seed" | "backfilled";
 
 // Price-reader seam for allocation live-data reliability (scout #175).
 // Canonical behavior: docs/architecture.md §10.1 and

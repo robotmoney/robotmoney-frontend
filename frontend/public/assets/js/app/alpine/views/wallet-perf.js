@@ -29,26 +29,81 @@ export function registerWalletPerfView(Alpine) {
     totalAum: [],
     columns: [],
     rows: [],
+    // issue #614 AC5: "the API stops reporting source:'live' for a series
+    // that is 95% seed rows; seed, backfilled and live spans are
+    // distinguishable... the UI discloses the seam and any unrecoverable
+    // window." `source` itself stays config-resolved (whether the CURRENT
+    // sampler is wired to live RPC — a different question from this
+    // series' historical composition), so the disclosure is additive:
+    // seedShare/seamDate/gapDayCount, computed from the endpoint's
+    // historyProvenance + the dense-calendar gap count, drive seamMessage()
+    // below rather than overloading `source`'s existing meaning.
+    seedShare: 0,
+    seamDate: null,
+    gapDayCount: 0,
     init() { this.load(); },
     // ISO calendar day ("2026-03-18") → the compact "Mar 18" label.
     _fmtDay(iso) {
       return new Date(iso + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
     },
+    // issue #614 AC5: `history` from the endpoint is PERSISTED days only — it
+    // skips straight over any gap (seed-source hole, the scheduler wedge this
+    // issue was filed from, ...). Charting it directly (one array slot per
+    // PERSISTED day) is exactly the bug: Chart.js's category scale spaces
+    // slots by ARRAY INDEX, so a 40-day hole between two adjacent slots draws
+    // as one ordinary-width step — a ~$73k→$54k cliff that reads as a price
+    // move, not six weeks of missing samples. Synthesizing every CALENDAR day
+    // between the first and last persisted date (one array slot per day, gap
+    // days included) makes the x-axis proportional to elapsed time again: a
+    // 40-day hole now occupies 40 slots, same width as any other 40 days.
+    _denseCalendarDays(history) {
+      if (history.length === 0) return [];
+      const days = [];
+      const start = new Date(history[0].date + "T00:00:00Z");
+      const end = new Date(history[history.length - 1].date + "T00:00:00Z");
+      for (let t = start.getTime(); t <= end.getTime(); t += 86_400_000) {
+        days.push(new Date(t).toISOString().slice(0, 10));
+      }
+      return days;
+    },
     // Fetch the endpoint and build the series/table from it. Colours + series
     // order come from holdings[] (Stable→Protocol→Agent→Stocks); an asset absent
-    // from a day's byAsset stacks as 0 (chart) / renders "–" (table).
+    // from a PERSISTED day's byAsset stacks as 0 (held nothing that day). A day
+    // with NO persisted row at all is `null` (a genuine gap — Chart.js's default
+    // spanGaps:false breaks the line there instead of interpolating across it).
     async load() {
       try {
         const data = await api.get(ROUTES.dashboards.walletBalances);
         const holdings = data.holdings || [];
         const history = data.history || [];
-        this.labels = history.map((pt) => this._fmtDay(pt.date));
-        this.totalAum = history.map((pt) => pt.totalUsd);
+        const days = this._denseCalendarDays(history);
+        const byDate = new Map(history.map((pt) => [pt.date, pt]));
+
+        // Seam disclosure (issue #614 AC5): what fraction of the PERSISTED
+        // points are ported pre-launch seed rather than a live/backfilled
+        // sample, and where the seam between them falls.
+        const hp = data.historyProvenance || {};
+        const seedCount = hp.seed || 0;
+        this.seedShare = history.length ? seedCount / history.length : 0;
+        const firstNonSeed = history.find((pt) => pt.provenance && pt.provenance !== "seed");
+        this.seamDate = firstNonSeed ? firstNonSeed.date : null;
+        // Unrecoverable window (Class C, D16): dense calendar days minus
+        // persisted days = days this pipeline has no row for at all.
+        this.gapDayCount = days.length - history.length;
+
+        this.labels = days.map((d) => this._fmtDay(d));
+        this.totalAum = days.map((d) => byDate.get(d)?.totalUsd ?? null);
         this.columns = holdings.map((h) => ({ sym: h.symbol, color: assetDot(h.symbol) }));
         this.assets = holdings.map((h) => ({
           label: h.symbol, color: assetDot(h.symbol),
-          aum: history.map((pt) => (pt.byAsset[h.symbol] ?? 0)),
+          aum: days.map((d) => {
+            const pt = byDate.get(d);
+            return pt ? (pt.byAsset[h.symbol] ?? 0) : null;
+          }),
         }));
+        // The Historical Data table lists PERSISTED days only (a list of rows,
+        // not a spatial axis — a missing day is simply an absent row, which
+        // already discloses the gap honestly without needing a placeholder).
         this.rows = history.map((pt) => ({
           d: this._fmtDay(pt.date), aum: pt.totalUsd,
           a: Object.fromEntries(Object.entries(pt.byAsset).map(([sym, v]) => [sym, [v, ""]])),
@@ -61,14 +116,41 @@ export function registerWalletPerfView(Alpine) {
         this.$nextTick(() => this.draw());
       }
     },
+    // issue #614 AC5: a non-null return renders the seam banner
+    // (performance.html). Threshold matches the AC's own "95% seed rows"
+    // framing (rounded down to a still-conservative "more than half" so the
+    // disclosure fires well before a series is ALMOST entirely seed, not
+    // only at the extreme).
+    seamMessage() {
+      const parts = [];
+      if (this.seedShare > 0.5) {
+        const pct = Math.round(this.seedShare * 100);
+        parts.push(
+          `${pct}% of this history is backfilled pre-launch data ported from an earlier source, not a live sample` +
+          (this.seamDate ? ` — live sampling begins ${this._fmtDay(this.seamDate)}.` : "."),
+        );
+      }
+      if (this.gapDayCount > 0) {
+        parts.push(`${this.gapDayCount} day${this.gapDayCount === 1 ? "" : "s"} in this range could not be recovered and render as gaps in the chart above.`);
+      }
+      return parts.length ? parts.join(" ") : null;
+    },
     // Collapsed = last 5 snapshots; "Show All" expands to the full series.
     visibleRows() { return this.showAll ? this.rows : this.rows.slice(-5); },
     fmtUsd(v) { return "$" + Number(v).toLocaleString("en-US"); },
     // Build the eight stacked series. kind "aum" → raw $; "pct" → % of total AUM.
+    // A gap day (v === null, synthesized by _denseCalendarDays/load) must stay
+    // null through the pct transform too — dividing null/total would coerce to
+    // 0 and draw a false dip to zero on a day with no data at all, exactly the
+    // "smoothed into a fake reading" defect issue #614 exists to stop.
     _series(kind) {
       return this.assets.map((a) => ({
         label: a.label, color: a.color,
-        data: a.aum.map((v, i) => kind === "pct" ? (this.totalAum[i] ? (v / this.totalAum[i]) * 100 : 0) : v),
+        data: a.aum.map((v, i) => {
+          const total = this.totalAum[i];
+          if (v === null || total === null) return null;
+          return kind === "pct" ? (total ? (v / total) * 100 : 0) : v;
+        }),
       }));
     },
     _chart(canvas, series, max, step, tick, tip) {
@@ -80,7 +162,11 @@ export function registerWalletPerfView(Alpine) {
           datasets: series.map((s) => ({
             label: s.label, data: s.data, borderColor: s.color,
             backgroundColor: rgba(s.color, 0.8),
-            fill: true, tension: 0, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2,
+            // spanGaps:false is Chart.js's own default, set explicitly here
+            // (issue #614 AC5) so a `null` day breaks the line/fill instead of
+            // ever silently interpolating across a gap, regardless of any
+            // future Chart.js default change.
+            fill: true, tension: 0, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2, spanGaps: false,
           })),
         },
         options: {

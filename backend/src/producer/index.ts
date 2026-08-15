@@ -3,7 +3,7 @@
 // on its own side and submits through the authenticated analytics REST boundary.
 import parser from "cron-parser";
 import { ROUTES } from "@robotmoney/contract";
-import { runAnalytics, resolveAnalyticsSource, RESEARCH_TOOL_GROUP } from "../analytics/index.ts";
+import { runAnalytics, resolveAnalyticsSource, RESEARCH_TOOL_GROUP, RESEARCH_SIGNAL_TELEMETRY_KEYS } from "../analytics/index.ts";
 import { analyticsApiClient, resolveAnalyticsApiConfig, type AnalyticsApiConfig } from "../analytics/api-client.ts";
 import { bootstrapEdgarSeed } from "../analytics/edgar-seed-loader.ts";
 import type { AnalyticsPersistence } from "../analytics/persistence.ts";
@@ -43,6 +43,91 @@ export async function runProducerOnce(
   // persists the fetched rows), and whose degrade never reached the
   // telemetry collector.
   return runner(asof, RESEARCH_TOOL_GROUP, source, persistence);
+}
+
+// ── Catch-up (issue #614 AC4) ────────────────────────────────────────────────
+// "The producer has no catch-up at all — producer/index.ts:132-148 computes
+// `next` from `new Date()`, fires, re-arms. Miss 22:30 and that day never
+// runs." This repairs research_signals specifically: regime does NOT need
+// this — analytics/index.ts rewrites the whole date axis from BACKFILL_START
+// on every run, so regime_snapshots cannot have interior gaps by
+// construction (issue #614's Scope). research_signals IS gap-prone (one row
+// per (signal_key, date)) and replaying a past `asof` is deterministic
+// (analyze/research-signals.ts), so this is the one series the producer
+// itself must actively repair.
+//
+// This is also the mechanism that makes "a degraded EDGAR refresh is
+// retry-later, not success" (analytics/index.ts's late-cycle-signals skip)
+// actually true: a degraded day leaves NO research_signals row for
+// late-cycle-signals that date (even though channel-divergence may have
+// written fine), so it shows up here as missing and gets re-attempted on the
+// next catch-up pass — without depending on worker/loop.ts's retry
+// machinery, which this D25-retired execution path never runs through.
+//
+// Bounded lookback: each missed day re-runs a real, rate-limited EDGAR sweep,
+// so this must never attempt an unbounded historical crawl. 14 days
+// comfortably covers a downtime window (a weekend outage, a bad deploy) while
+// staying cheap; a gap older than that is visible on GET /api/admin/gaps
+// (AC3) for an operator to backfill deliberately via the CLI
+// (`bun run src/producer/index.ts research <date>`).
+const CATCHUP_WINDOW_DAYS = 14;
+
+/** Pure: which of the last `windowDays` days (excluding today — the normal
+ *  cron owns today) are missing at least one of the two research signals. */
+export function computeMissingResearchDays(
+  presentDates: { signalKey: string; date: string }[],
+  now: Date,
+  windowDays: number = CATCHUP_WINDOW_DAYS,
+): string[] {
+  const bySignal = new Map<string, Set<string>>();
+  for (const k of RESEARCH_SIGNAL_TELEMETRY_KEYS) bySignal.set(k, new Set());
+  for (const { signalKey, date } of presentDates) {
+    bySignal.get(signalKey)?.add(date);
+  }
+  const missing: string[] = [];
+  for (let i = windowDays; i >= 1; i--) {
+    const d = new Date(now.getTime() - i * 86_400_000).toISOString().slice(0, 10);
+    const complete = RESEARCH_SIGNAL_TELEMETRY_KEYS.every((k) => bySignal.get(k)!.has(d));
+    if (!complete) missing.push(d);
+  }
+  return missing;
+}
+
+export interface ResearchCatchUpDeps {
+  persistence?: AnalyticsPersistence;
+  runner?: Runner;
+  source?: AnalyticsDataSource;
+  now?: () => Date;
+}
+
+/** Best-effort: a read or repair failure here must never take down the
+ *  producer's boot or its normal daily tick (the same "never crash on an
+ *  ops nice-to-have" rule src/ops/heartbeat.ts follows) — it is retried on
+ *  the next catch-up pass regardless. Returns the days it attempted to
+ *  repair (whether or not each individual repair actually succeeded). */
+export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}): Promise<string[]> {
+  const persistence = deps.persistence ?? analyticsApiClient();
+  const now = (deps.now ?? (() => new Date()))();
+  const since = new Date(now.getTime() - CATCHUP_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
+
+  let present: { signalKey: string; date: string }[];
+  try {
+    present = await persistence.loadResearchSignalDates(since);
+  } catch (err) {
+    console.error(`[analytics-producer] catch-up: could not read recent research-signal dates, skipping this pass: ${err instanceof Error ? err.message : err}`);
+    return [];
+  }
+
+  const missing = computeMissingResearchDays(present, now);
+  for (const day of missing) {
+    console.log(`[analytics-producer] catch-up: repairing missed research day ${day}`);
+    try {
+      await runProducerOnce("research", day, { runner: deps.runner, source: deps.source, persistence });
+    } catch (err) {
+      console.error(`[analytics-producer] catch-up for ${day} failed (will retry next pass): ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  return missing;
 }
 
 async function waitForApi(cfg: AnalyticsApiConfig): Promise<void> {
@@ -135,6 +220,13 @@ function schedule(kind: ProducerKind, cron: string): void {
     const timer = setTimeout(async () => {
       armedSchedules.set(kind, { nextFireAt: next.getTime(), running: true, runningSince: Date.now() });
       try {
+        // issue #614 AC4: "on boot/tick it repairs missed asof days". Boot is
+        // covered by startProducerSchedules below; this covers TICK — every
+        // daily research fire first re-checks the last CATCHUP_WINDOW_DAYS
+        // for a backlog (a day this process was down for, or a day that
+        // degraded and was correctly skipped rather than published) before
+        // running today. Best-effort: catchUpMissedResearchDays never throws.
+        if (kind === "research") await catchUpMissedResearchDays();
         await runProducerOnce(kind, next.toISOString().slice(0, 10));
       } catch (err) {
         console.error(`[analytics-producer] ${kind} failed: ${err instanceof Error ? err.message : err}`);
@@ -151,6 +243,9 @@ export interface ProducerServeDeps {
   env?: Record<string, string | undefined>;
   waitUntilReady?: (cfg: AnalyticsApiConfig) => Promise<void>;
   scheduleKind?: (kind: ProducerKind, cron: string) => void;
+  /** Test seam: override the boot-time catch-up call. Defaults to the real
+   *  catchUpMissedResearchDays against the resolved API config. */
+  catchUp?: (persistence: AnalyticsPersistence) => Promise<unknown>;
 }
 
 /** Validate reachability + provider authorization before arming any cron.
@@ -159,6 +254,12 @@ export interface ProducerServeDeps {
 export async function startProducerSchedules(deps: ProducerServeDeps = {}): Promise<AnalyticsApiConfig> {
   const cfg = requireProducerApiConfig(deps.env);
   await (deps.waitUntilReady ?? waitForApi)(cfg);
+  // issue #614 AC4 ("on boot/tick"): repair any research day missed while
+  // this process was down BEFORE arming today's crons — a restarted producer
+  // must not wait for the next scheduled tick to notice a gap it could close
+  // right now. Best-effort: never blocks/fails the boot on a catch-up hiccup.
+  const persistence = analyticsApiClient(cfg);
+  await (deps.catchUp ?? ((p: AnalyticsPersistence) => catchUpMissedResearchDays({ persistence: p })))(persistence);
   const scheduleKind = deps.scheduleKind ?? schedule;
   scheduleKind("regime", deps.env?.PRODUCER_REGIME_CRON || process.env.PRODUCER_REGIME_CRON || "30 22 * * *");
   scheduleKind("research", deps.env?.PRODUCER_RESEARCH_CRON || process.env.PRODUCER_RESEARCH_CRON || "0 23 * * *");

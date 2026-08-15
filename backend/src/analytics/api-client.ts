@@ -84,5 +84,12 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
     async saveResearchSignal(key: string, asof: string, payload: ResearchPayload) {
       await call("POST", ROUTES.analytics.researchSignals, { signals: [{ key, date: asof, payload }] });
     },
+    async loadResearchSignalDates(sinceDate: string) {
+      const { dates } = await call<{ dates: { signalKey: string; date: string }[] }>(
+        "GET",
+        `${ROUTES.analytics.researchSignalDates}?since=${encodeURIComponent(sinceDate)}`,
+      );
+      return dates;
+    },
   };
 }
