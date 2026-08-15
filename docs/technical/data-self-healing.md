@@ -1,27 +1,426 @@
 # Data self-healing — detecting and repairing bad persisted state
 
-> **Status: design proposal, first pass.** Nothing here is ratified. No accepted
-> decision in [decisions.md](../decisions.md) backs this document, and none of
-> the mechanisms it describes exists in `main` today. It merges two previously
-> separate plans — a wallet/AUM history reconstruction project and a continuous
-> source-reconciliation issue — into one design so they cannot build two
-> competing repair pipelines. Since this document's first draft the wallet plan
-> has been **split into three workstreams and most of it filed** (§3.1): the
-> v0.2.2 release nits as **#647** with subtasks **#639–#646**, the shared
-> chart-axis defect with **#624**, and only the backfill capability itself —
-> four code issues plus a `decision:` issue — still unfiled. The
-> continuous-reconciliation half remains unfiled in every part. **Settled:** the
-> defect taxonomy (§2), the three-detector / one-dispatcher shape (§4), the five
-> verdicts (§5), and the safety properties (§7) — these were argued from the
-> audit evidence and from code that exists. **Open:** every scheduling,
-> storage-layout, and API-surface choice, and the whole of §11. **Gated:** the
-> Class C archive-read direction depends on a `decision:` issue that **has still
-> not been filed** (re-checked against `gh` on 2026-08-15: no `decision:` issue
-> for archive-capable reads exists); three recorded decisions currently read as
-> asserting that data is unreachable, and nothing in §6.3 should be built until
-> that is settled — §11 sets out which of the three needs only a clarifying
-> cross-reference and which needs a genuine new entry. Where a claim below could
-> not be verified against this checkout it is marked *unverified* inline.
+> **Status: design proposal — now the single document for this work.** Nothing
+> here is ratified. No accepted decision in [decisions.md](../decisions.md)
+> backs this document, and none of the mechanisms it describes exists in `main`
+> today. It merges two previously separate plans — a wallet/AUM history
+> reconstruction project and a continuous source-reconciliation issue — into one
+> design so they cannot build two competing repair pipelines, and it now carries
+> **both of their full specifications** (§6.4, §6.5) rather than pointing at
+> working drafts: the three drafts it absorbed are listed in §3.3 and are no
+> longer maintained. Since this document's first draft the wallet plan has been
+> **split into three workstreams and most of it filed** (§3.1): the v0.2.2
+> release nits as **#647** with subtasks **#639–#646**, the shared chart-axis
+> defect with **#624**, and only the backfill capability itself — four code
+> issues plus a `decision:` issue — still unfiled. The continuous-reconciliation
+> half remains unfiled in every part. **Settled:** the defect taxonomy (§2), the
+> three-detector / one-dispatcher shape (§4), the five verdicts (§5), and the
+> safety properties (§7) — these were argued from the audit evidence and from
+> code that exists. **Open:** every scheduling, storage-layout, and API-surface
+> choice, the nine items in *Pending decisions* below, and the whole of §11.
+> **Gated:** the Class C archive-read direction depends on a `decision:` issue
+> that **has still not been filed** (re-checked against `gh issue list` on
+> 2026-08-15: no `decision:` issue for archive-capable reads exists); three
+> recorded decisions currently read as asserting that data is unreachable, and
+> nothing in §6.3 or §6.5 should be built until that is settled — **PD1**. Where
+> a claim below could not be verified against this checkout it is marked
+> *unverified* inline.
+
+## Pending decisions
+
+Nine choices are outstanding, and none of them is an implementation detail that
+can be settled inside a pull request. They are numbered **PD1–PD9** and
+referenced by those tags throughout the rest of the document. Each states what
+must be decided, what is blocked until it is, the options with their
+consequences, and a recommendation.
+
+They are not equally urgent, and the shape of the dependency matters:
+
+- **PD1 blocks code.** Four unfiled issues (§6.5) cannot start until it lands.
+- **PD2, PD3, PD4, PD5 block nothing today, and block everything on the day the
+  first repair executor is written.** Each is a recorded statement that the
+  design contradicts or extends. Left unresolved, they surface as a reviewer's
+  objection at merge time — the most expensive moment to discover them.
+- **PD6 and PD9 are shape decisions that get more expensive with delay.** PD6
+  fixes the RPC budget before a limiter is written; PD9 names the dispatcher's
+  owner before two of them exist. Both are cheap to honour up front and mean
+  rework afterwards — and PD6 additionally carries a spend question that only its
+  recommended option answers.
+- **PD7 and PD8 are scoping judgements** on individual series; both are cheap,
+  and both default to *do less*.
+
+### PD1 — File the `decision:` issue for archive-capable chain reads
+
+**What must be decided.** Whether the backend may pass a historical block tag on
+RPC reads it already issues, in order to reconstruct chain-derived history.
+
+**Blocked until it is.** The whole of §6.3 and all four work items in §6.5 —
+block-addressable reads, historical price resolution, RPC batching, and the
+repair driver. That is the entire backfill workstream, and it is the only work
+this decision blocks: the Class A reconciler (§6.4) makes no chain read and is
+independent of the outcome either way.
+
+**Verified state.** Re-checked with `gh issue list` on 2026-08-15: **no
+`decision:` issue for archive-capable reads exists.** The open `decision:`
+issues are **#623** (docs-diff whitespace CI check) and **#629** (Cloudflare
+dashboard access); the closed ones are #621, #583, #524, #520, #502, #447, #342,
+#228, #163, #145, and #99. None concerns chain reads.
+
+**Why it is a decision and not a task.** Three recorded statements currently read
+as asserting this data is unreachable, so an implementer who simply writes the
+code is contradicting the written record in three places at once:
+
+1. **D16** rejects *"An archive indexer to reconstruct gap-free pre-launch
+   history"* as *"explicitly out of scope for #84"* (`docs/decisions.md:368-371`).
+2. `backend/src/chain/token-prices.ts:10-15` states historical valuation comes
+   from the persisted `wallet_balance_samples` series, *"NOT from a re-fetched
+   OHLCV series, which resolves Open Question 9"*.
+3. **#294**'s out-of-scope list — *"the indexer accumulates forward only."*
+   *(unverified here — issue text, not re-read in this checkout.)*
+
+**The counter-argument to put to the decision.** An archive *indexer* means
+ingesting and persisting chain history yourself. What §6.5.1 proposes is a block
+tag on reads the app already makes, against a node that already answers — no
+indexer, no new vendor, no new persisted chain events, and no change whatsoever
+to any caller that keeps reading `latest`. The empirical basis is in §6.3:
+`https://mainnet.base.org`, the default `BASE_RPC_URL`, answers archive state
+queries at 40 / 90 / 180 / 365-day depth, and returns a correct `"0x"` rather
+than a `latest` fallback at a pre-deployment block.
+
+**Options.**
+
+- **File it, settle it, then build** — one issue of cost, and it converts three
+  standing contradictions into one recorded position. It also forces the
+  distinction the work depends on (PD2): read-only historical *reads* versus
+  writing archive-derived rows into `wallet_balance_samples`.
+- **Build first and record afterwards** — cheapest this week and the most
+  expensive later. Three decisions contradict the work, so the change arrives at
+  review with the written record against it; the likely outcome is the work is
+  blocked at merge, which is where it is hardest to unwind.
+- **Abandon Class C repair and disclose the hole permanently** — coherent, but
+  it makes the 42-day AUM gap permanent *and* growing: the hole's width is
+  (DB bootstrap date) − 2026-06-26, so it re-opens wider on every database
+  rebuild (§3.2).
+
+**Recommendation: file it.** It is the single unfiled prerequisite in front of
+four issues, its cost is one issue body, and the argument for it is already
+written (above, and §6.3). Filing it also produces the artifact PD2 and PD3
+need, since the decision issue is the natural place to record both the D16
+clarification and the Open-Question-9 reversal.
+
+### PD2 — D16: a clarifying cross-reference, or a superseding entry?
+
+**What must be decided.** Whether D16 needs only a clarifying note, or a real
+superseding ADR.
+
+**Blocked until it is.** Nothing immediately — but §6.5.4's repair driver writes
+rows into `wallet_balance_samples`, and that is precisely the operation whose
+legitimacy turns on the answer. Deciding late means deciding under deadline.
+
+**Options and consequences.**
+
+- **A clarifying cross-reference on D16.** D16's rejection names a *component* —
+  *"an archive indexer to reconstruct gap-free pre-launch history"* — and scopes
+  it *"explicitly out of scope for #84"* (`docs/decisions.md:368-371`). A block
+  tag on reads the app already issues is not that component. What the 2026-08-15
+  archive finding actually contests is the **unstated premise** inside *"a full
+  indexer is more machinery than the feature needs"*: namely that reaching this
+  data requires a full indexer at all. Saying so is a clarification, and it costs
+  a paragraph.
+- **A superseding entry.** Heavier, and it overstates what changed: D16's
+  reasoning about #84's scope was correct on its own terms and is not being
+  reversed.
+
+**Recommendation: a clarifying cross-reference** — on the reasoning above, which
+is already the position §11 argues.
+
+**The threshold that flips this, stated so it is not crossed by accident.** Using
+historical reads to **backfill `wallet_balance_samples`** does need a real ADR,
+because D16 commits that table to a specific shape (`docs/decisions.md:339-345`):
+*"seeded once with a pre-launch history backfilled from the retired baked
+constants (`chain/wallet-history-seed.ts`, marked `provenance: 'seed'`, never
+`'live'`)"*, then accumulated forward by the per-minute sampler. Writing
+archive-derived rows into it changes both the seeded-once-then-accumulate-forward
+shape and the `provenance: 'seed'` labelling contract. **Read-only gap detection
+using historical reads does not cross that threshold** — it writes nothing and
+changes no committed shape, so it can proceed on the clarification alone.
+
+### PD3 — "Open Question 9" needs a new decision entry, because it has no canonical record
+
+**What must be decided.** How to record the reversal of a resolution that exists
+nowhere except a source comment.
+
+**Blocked until it is.** §6.5.2, historical price resolution — the one work item
+that genuinely reverses the recorded position rather than clarifying it.
+
+**The problem.** `grep -rn "Open Question" docs/` returns nothing but this
+document. Open Question 9's resolution lives at exactly one place in the repo:
+`backend/src/chain/token-prices.ts:10-15`, asserting historical valuation comes
+from persisted samples *"NOT from a re-fetched OHLCV series, which resolves Open
+Question 9"*. So a historical price resolver **cannot be recorded as superseding
+any numbered decision, because there is no numbered decision to supersede.**
+
+**Options.**
+
+- **A new decision entry in `decisions.md`** that states the position, cites the
+  comment it displaces, and gives the reason (the OHLCV endpoint does reach back
+  far enough for the target window; §6.5.2). Costs a paragraph, and leaves the
+  repo with a canonical record where it currently has none.
+- **Amend only the source comment.** Cheaper, and it recreates the exact defect:
+  a load-bearing position recorded in one comment that no `docs/` reader can
+  find.
+- **Fold it into PD1's issue and never promote it to `decisions.md`.** An issue
+  is not canon; the next reader greps `docs/` and finds the old position.
+
+**Recommendation: a new decision entry**, and a hard requirement on any change
+that reverses it — **it must edit `token-prices.ts:10-15` in the same diff.**
+Leaving that comment intact leaves an actively false statement at the exact spot
+a future reader will consult when asking whether historical prices may be
+re-fetched. The comment's stated reason (*"GeckoTerminal OHLCV may not reach back
+to Mar 18 for illiquid ROBOTMONEY/BNKR"*) is an empirical claim, and §6.5.2's
+measured ~6-month server window is the evidence that decides it.
+
+### PD4 — D16's honesty enumeration is closed; a quarantined row is a fourth state
+
+**What must be decided.** Whether quarantine (§7.2) is compatible with D16's
+enumeration as written, or requires that enumeration to be extended.
+
+**Blocked until it is.** Nothing in the storage layer, but every operator-facing
+surface that would *show* what was quarantined.
+
+**The tension.** `docs/decisions.md:372-374` states the invariant as a **closed
+list**: *"a value is either a real read, a labelled stub, or the last-persisted
+sample marked `stale`/`seed` — never presented as live."* Three admitted states,
+joined by "either/or". A quarantined row is a fourth thing the list does not
+admit.
+
+**Options.**
+
+- **Ratify the presentation-only reading.** The enumeration governs what is
+  *presented*. A quarantined row is excluded from every read path, so it is never
+  presented as anything at all — outside the enumeration's scope rather than a
+  violation of it. The invariant constrains the DTO surface, not the storage
+  layer; nothing in D16 says the database may hold only those three kinds of row.
+  A `revised` row needs no accommodation at all: it *is* a real read, freshly
+  re-fetched. Cost: one sentence of ratification. Risk: the reading is only sound
+  while the exclusion is total.
+- **Extend the enumeration by a decision entry now.** More durable, and it
+  pre-authorizes an operator surface nobody has yet designed — which is how
+  enumerations acquire states that never ship.
+
+**Recommendation: ratify the presentation-only reading**, and treat the second
+option as **required, not optional, the moment a quarantined row reaches a
+DTO** — an operator surface listing what was quarantined, or a per-point flag
+that survives into a chart payload. At that point it is being presented, the
+read-path-exclusion argument evaporates, and the enumeration must be extended in
+a decision entry **first**, not in the same PR that ships the renderer.
+
+### PD5 — Ratify what "append-only" means before quarantine is built
+
+**What must be decided.** Whether removing a row from the read path is compatible
+with the append-only invariant, explicitly, rather than by implication.
+
+**Blocked until it is.** §7.2's quarantine storage, and therefore the `fabricated`
+verdict's executor — which is to say, the half of the reconciler that mutates
+anything.
+
+**The tension.** `backend/src/analytics/store/raw-history-store.ts:1-6` does not
+merely describe the floor as append-only; it makes never-deleting the **stated
+basis of the honesty guarantee**: *"the orchestrator loads this floor, merges
+freshly-fetched points over it (fetched wins on overlap, never deletes — see
+mergeSeries) … This is what keeps the pipeline honest: a failed/empty fetch
+degrades to real persisted history, never to synthetic data."*
+
+**Options.**
+
+- **Ratify the reading §7.1 argues.** The comment's justification is a threat
+  model about an *absent answer*, not a universal retention rule: the harm it
+  names is a failed or empty fetch erasing real history. Quarantining a
+  calendar-invalid row serves that goal rather than violating it, because those
+  rows are the synthetic data the comment defends against. Cheap, and it leaves
+  the executed guard (`backend/tests/analytics-suite.test.ts:148`) untouched and
+  binding.
+- **Rewrite the comment and the invariant.** Heavier, and it risks weakening the
+  guarantee that is actually load-bearing.
+- **Leave it implicit.** The cheapest today, and it guarantees the argument is
+  re-litigated in review of the first PR that deletes anything.
+
+**Recommendation: ratify the §7.1 reading**, on two pieces of evidence that are
+already in the repo. First, **`--purge` (#616, merged in `03a2b01`) is shipped
+precedent**: `backend/scripts/floor-seed-regenerate.ts:49-59` invokes
+`generateFullUniversePurge`, and
+`backend/src/analytics/extract/floor-seed-generator.ts:111-119` states the floor
+is *"fully purged — only freshly fetched rows survive"*, under exactly the two
+guards this design generalizes (a calendar-validity filter and refuse-if-zero-rows).
+Quarantine is a strictly *weaker* operation: reversible, per-key, and
+read-path-scoped rather than whole-artifact. Second, note when ratifying that
+**`docs/architecture.md:780-787` is stale** — it still describes
+`floor-seed:regenerate` as only *"additively merges it into the existing
+committed floor (`mergeSeries` — fetched wins on overlap)"*, with no mention of
+`--purge` or the full-universe mode. A reader who consults architecture.md today
+will conclude no precedent exists, which is the exact reasoning this decision
+exists to forestall. **Whoever ratifies should file the architecture.md
+correction in the same breath**; this document does not edit it.
+
+The hard invariant that survives either way, and must be stated in the ratifying
+text: **an empty or failed fetch must still never remove anything.** That is why
+`fabricated` requires two independent conditions (§5) and why a degenerate
+response sends its whole window to `unexplained_absent` (§7.3).
+
+### PD6 — Class C continuous reconciliation needs an RPC budget decision
+
+**What must be decided.** How the backfill's RPC consumption coexists with the
+live per-minute sampler — and, downstream of that, whether Class C ever gets a
+standing verifier or only a bounded one-time executor.
+
+**Blocked until it is.** §6.5.3's limiter design, and the sizing of any
+production backfill run. Getting this wrong does not merely slow the backfill: it
+**causes new gaps while fixing old ones**, by 429-ing the live sampler.
+
+**The measured constraint** (§6.3; measured from a developer IP, **not**
+re-measured from the production droplet — see the closing note of this item): a ~**5-token bucket refilling at
+~0.55 calls/s**, metered **per-IP at the provider** and **per sub-call, not per
+HTTP request**. The live sampler consumes ~0.033 calls/s (~6%), so a backfill run
+at the full 0.55/s leaves it zero headroom. In-process isolation cannot create
+budget, because the limit is not in our process.
+
+**Options, and what each costs.**
+
+- **A separate `BASE_RPC_BACKFILL_URL` on a keyed provider.** The only *true*
+  isolation — a different key is a different bucket, so the sampler is untouched
+  by construction and Class C becomes eligible for a standing verifier rather
+  than a one-shot run. Cost: a spend decision, plus one env var that must be
+  genuinely deliverable (§8.1 — a variable absent from the compose
+  `environment:` allowlist never reaches the container, so this one fails
+  silently if added carelessly).
+- **One shared priority-aware bucket**, sampler requests pre-empting, backfill
+  capped below ~0.4 calls/s. No spend, and it is the more complex code: a
+  priority queue in front of the transport, correct under concurrency, with the
+  sampler's latency now coupled to backfill scheduling. A 40-day sweep also takes
+  proportionally longer.
+- **An offline sampler-quiet window.** No spend and no new code, but it requires
+  an operator to stop and restart the sampler around the run, which reintroduces
+  exactly the "someone remembers to run a script" property §1 rules out — and
+  the quiet window is itself a gap in the live series.
+
+**The hard warning, which applies to all three.** **Never give the backfill its
+own independent limiter.** Two independent limiters against one per-IP bucket sum
+to 2× the intended rate and guarantee 429s. Note also that what exists today
+bounds *concurrency* and not *rate*: the `acquireSlot`/`releaseSlot` gate at
+`base-rpc-client.ts:243-256`, sized by `BASE_RPC_MAX_CONCURRENCY` (default 4,
+`:230`), is why production saw a `Base RPC HTTP 429` storm on 2026-08-10.
+
+**Recommendation: the keyed provider.** It is the only option that makes the
+sampler safe by construction rather than by tuning, it is the one that converts
+Class C from "repairable once" into "continuously verifiable" — and a chain read
+at a pinned immutable block is in principle the most deterministically verifiable
+data in the system (§6.3). The other two options are contingency plans if the
+spend is refused, and of those, the shared priority-aware bucket is preferable to
+the quiet window because it does not require an operator in the loop.
+
+**Before sizing any run**, re-measure from the production droplet. The ~5-token /
+~0.55-per-second figures were measured from a different IP; shared NAT could make
+production strictly worse, and every cost conclusion in §6.3 and §6.5.3 depends
+on them.
+
+### PD7 — SP500 in the backfill: skip, or approximate?
+
+**What must be decided.** Whether the SP500 leg is included when chain-derived
+history is reconstructed.
+
+**Blocked until it is.** §6.5.2's scope, and §6.5.4's per-day completeness rule —
+a day is atomic (§7.5), so "which legs must be present for a day to count" has to
+be settled before the driver is written.
+
+**The asymmetry that decides it.** The *price* is recoverable: `fetchYahoo(symbol,
+startUnix, endUnix, timeoutMs)` (`backend/src/analytics/extract/yahoo.ts:44`)
+already takes a range. The *position size* is not: `resolveSp500()` reads
+`SP500_SIZE` (`backend/src/config.ts:267-273`) as a single present-tense
+constant, with no history and no positions API to derive one from. Multiplying
+today's size by a past price does not approximate a past value — it **fabricates
+a quantity** and then presents it beside genuinely-read legs.
+
+**Options.** Skip the leg and leave the day's SP500 value absent; or synthesize
+`today's size × historical price` and label it. The second produces a number that
+is wrong in an unbounded and unknowable way (the size has changed however many
+times it has changed), and §8's whole argument is that a plausible fabricated
+value is worse than an absent one.
+
+**Recommendation: skip, do not approximate.** Two further facts support it. A
+365-day `^GSPC` call returned 252 points, so weekends and holidays are absent and
+would need forward-filling on top of the fabricated quantity. And **#648** (OPEN)
+records that the SP500 column is *already* a splice of two different
+measurements — v0 derived it from a Hyperliquid perpetual, v1 from Yahoo
+`^GSPC` via `resolveSp500().ticker` (consumed at `token-prices.ts:270`) — with
+the parity report marking it PROVEN-DIFFERENT and noting *"No decision record
+found."* Backfilling a third derivation into a column whose existing two are
+unreconciled compounds the problem it would appear to fix. #648's own body
+already states the backfill is out of scope for this reason.
+
+### PD8 — The two seed-omission days: leave them, or interpolate?
+
+**What must be decided.** Whether `2026-03-24` and `2026-06-04` are filled.
+
+**Blocked until it is.** Nothing — this is the smallest item here, and it is
+listed because the source plan explicitly flags it as a judgement call rather
+than a correctness question, which means it will otherwise be decided silently by
+whoever writes the driver.
+
+**The facts.** They are literal omissions from the seed constant: `LABELS` in
+`backend/src/chain/wallet-history-seed.ts:17` jumps `"Mar 23","Mar 25"` and
+`"Jun 3","Jun 5"`. They were already missing in the v0 source the seed was ported
+from, so nothing was lost in the port. The surrounding days are unreconciled
+baked UI constants, so splicing archive-derived values between them mixes two
+incompatible bases.
+
+**Options.** Leave them absent, and let PR #615's dense calendar render them as a
+two-day break; or interpolate from neighbours and label the result `'seed'`.
+
+**Recommendation: leave them.** Three reasons, in increasing weight. Two days out
+of a 146-day window render as a hairline break, not a visible defect. An
+interpolated row labelled `'seed'` would be **indistinguishable from the ~99
+genuine v0 observations that carry the same label** — #645 established those are
+real production wallet-balance cron output, not fabrications (§11), so
+introducing one synthetic `'seed'` row destroys the one property that currently
+makes that label trustworthy. And the composition of that same seeded span is
+itself under review in **#648** (PD7): interpolating across a series whose
+instrument definition is an open question is fabricating on top of an unresolved
+base. If the break is ever judged unacceptable cosmetically, the honest fix is a
+new provenance value handled per §7.6 — not a `'seed'` row that is not seed data.
+
+### PD9 — Who builds the remediation dispatcher
+
+**What must be decided.** Which workstream owns building the single dispatcher,
+and how the other is bound to consume it.
+
+**Blocked until it is.** Nothing blocks — which is the hazard. Both workstreams
+independently propose wiring `remediationClass` to something that repairs (§4),
+so absent a decision the default outcome is two dispatchers with two different
+notions of what a repair is, and a blast-radius guard implemented twice and
+differently.
+
+**Options.**
+
+- **The Class A reconciler (§6.4) builds it.** It is the only one of the two that
+  can start today: PD1 gates the backfill and does not gate the reconciler. If
+  the reconciler builds the dispatcher, the schedule risk is zero.
+- **The repair driver (§6.5.4) builds it.** Defensible on the grounds that Class
+  C's needs are the more demanding, but it is gated on PD1, so the dispatcher
+  inherits that gate — and the reconciler, which is ready to proceed, either
+  waits or forks one.
+- **A standalone dispatcher issue up front.** Clean in principle; in practice it
+  means specifying a dispatch interface with no executor to test it against,
+  which is how a mechanism ships unwired — the failure mode §3 documents this
+  codebase repeating.
+
+**Recommendation: assign it to the Class A reconciler**, because it is ungated
+and can start now, and bind the second issue explicitly. The rule that must
+appear **in the issue body of whichever is filed second**: *consumes the existing
+dispatcher; must not add a parallel one.* If circumstances invert the ordering,
+the rule follows the ordering rather than the workstream — whichever lands first
+builds the dispatcher, generically enough for the other to plug into. If the
+repair driver does land first, the reconciler contributes a divergence trigger
+plus the five-verdict classifier and consumes the dispatcher unchanged.
 
 ## 1. Purpose
 
@@ -156,18 +555,22 @@ already filed and must not be re-specified here.
 
 | Workstream | Contents | Tracking |
 |---|---|---|
-| **Backfill capability** — the subject of §6.3 | block-addressable reads, date→block resolution, historical prices, RPC batching, the repair driver | **Unfiled.** Four code issues plus a `decision:` issue, all gated on that decision (§11). |
+| **Backfill capability** — the subject of §6.3, specified in §6.5 | block-addressable reads, date→block resolution, historical prices, RPC batching, the repair driver | **Unfiled.** Four code issues plus a `decision:` issue, all gated on that decision (PD1, §11). |
 | **v0.2.2 release nits** | undeliverable env vars, the `BUYBACK_FROM_BLOCK` constant, runbook verification gaps, #614's AC4 discrepancy | **#647** (parent) with subtasks **#639–#646**, filed 2026-08-15. Explicitly **not** part of the backfill project. |
 | **Research engine cleanup** | the shared `chart-theme.js` category-axis defect and the regime charts | **#624**. Not part of the backfill project. |
 
 The continuous-reconciliation half — the audit's D5 recommendations (§1) and the
 Class A reconciler of §6.1 — is **unfiled in every part**; a `gh issue list`
 search on 2026-08-15 found no issue covering a freshness assertion against
-source, a reconciliation job, or a testable persisted-floor invariant.
+source, a reconciliation job, or a testable persisted-floor invariant. Its full
+specification is §6.4 of this document.
 
 Two of the filed nits are load-bearing for this design rather than incidental,
 and are treated where they belong: the compose-allowlist defect class in §8.1,
-and #645's closure in §11.
+and #645's closure in §11. One issue filed after the split is load-bearing for a
+pending decision: **#648** (OPEN) records that the SP500 column splices two
+different measurements, which is a second and independent reason to keep SP500
+out of the backfill — see PD7 and §10.
 
 ### 3.2 Step 0 — merge and deploy PR #615, and prove the clamp self-heals
 
@@ -183,6 +586,35 @@ reset them. It must be shown explicitly that the clamp **self-heals rows that
 are already pinned**, on its first tick, rather than only preventing future
 wedges — a fix with only the second property ships green while production stays
 frozen. That is an assertion against the persisted rows, not a code reading.
+
+### 3.3 Working drafts this document supersedes
+
+This document absorbs three uncommitted working drafts and is now the single
+specification for both workstreams. They are named here so a reader does not go
+looking for a fuller version that no longer exists; none of them is tracked in
+this repository, and **none of them is maintained.**
+
+| Draft | What it held | Where it now lives |
+|---|---|---|
+| *Reconstruct Wallet History — Project Plan* (`reconstruct-wallet-project.md`, another session's scratch file) | the four backfill code issues, the archive-read decision argument, and the sequencing | §6.5 (the four issues), PD1 and §6.3 (the decision argument), §6.6 (sequencing) |
+| *ISSUE-DRAFT-source-reconciliation.md* (unfiled issue draft) | the Class A reconciler's scope boundaries, acceptance criteria, and test plan | §6.4 |
+| *RECONCILIATION-two-plans.md* (the reconciliation memo between the two) | the one-dispatcher / three-detector argument and the shared hazards | §4, PD9, §7.6, §10 |
+
+Two contents of the wallet plan are **deliberately not carried forward**, and
+must not be re-imported as live work from any copy of it: its Issue 6, the shared
+`chart-theme.js` category-axis defect, moved to **#624**; and its Issue 7, the
+`source: "live"` honesty question, filed as **#645** and **closed NOT_PLANNED**
+on 2026-08-15 because its premise was wrong (§11).
+
+Where the drafts and this document disagreed on a verifiable fact, this document
+carries the value checked against this checkout. The one such correction worth
+flagging: the wallet plan says fourteen exported RPC wrappers thread
+`RpcCallOptions`; the verified count here is thirteen (§6.5.1).
+
+**Naming.** Where a claim below is attributed to *"Plan A"*, that is the wallet
+plan in the first row of the table — its investigation is the source of every
+live-system measurement in this document, and §12 records which of them were
+re-verified here and which were not.
 
 ## 4. Architecture — three detectors, one dispatcher, per-class executors
 
@@ -206,6 +638,8 @@ differently. Whichever work lands first builds the dispatcher, generically
 enough for the other to plug into; the second **must not fork a parallel one**.
 If the repair driver lands first, the reconciler contributes a divergence
 trigger plus the five-verdict classifier and consumes the dispatcher unchanged.
+Assigning the owner is **PD9**, and it should be assigned rather than left to
+whichever branch happens to merge first.
 
 **The blast-radius guard sits in front of the executors, not inside a
 detector.** Put it in a detector and each detector gets its own half-guard: the
@@ -265,10 +699,12 @@ Two further guardrails on the classifier, both drawn directly from the audit:
   response is short or degenerate, the whole compared window goes to
   `unexplained_absent` and the batch mutates nothing — see §7.3.
 
-## 6. Per-class treatment
+## 6. Per-class treatment, and the two work specifications
 
 `remediationClass` partitions series by *how* a wrong row can be corrected. The
-three classes need genuinely different executors.
+three classes need genuinely different executors. §6.1–§6.3 set out what each
+class needs and why; §6.4 and §6.5 are the two specifications ready to be filed
+as issues, and §6.6 orders them.
 
 ### 6.1 Class A — `raw_indicator_history`, re-fetchable
 
@@ -330,8 +766,9 @@ backend/src/producer/*.ts` returns nothing in this checkout).
 
 ### 6.3 Class C — chain-derived, repairable but not continuously reconcilable
 
-**Gated on a `decision:` issue that is still unfiled as of 2026-08-15 (§3.1,
-§11). Nothing in this subsection should be built before that issue is settled.**
+**Gated on a `decision:` issue that is still unfiled as of 2026-08-15 — PD1, and
+§3.1 for where the workstream is tracked. Nothing in this subsection, and nothing
+in §6.5, should be built before that issue is settled.**
 
 Three recorded decisions currently assert this data is unreachable:
 
@@ -387,36 +824,27 @@ must be made explicitly rather than smuggled in. The repo uses
 `decision:`-prefixed issues for exactly this.
 
 **So Class C is repairable but not continuously reconcilable — on cost grounds,
-not impossibility.** Plan A's measurements, taken against the public endpoint:
+not impossibility.** The measured budget is a ~5-token bucket refilling at
+~0.55 calls/s, metered **per-IP at the provider** and **per sub-call rather than
+per HTTP request**, against a structural batch cap of 10; Multicall3 is the only
+real leverage, at 27 inner reads per charged token. The full measurements, and
+what they imply for the limiter that must be built, are §6.5.3.
 
-- Structural batch cap of 10; an oversized batch fails wholesale with
-  `{"error":{"code":-32014,"message":"maximum 10 calls in 1 batch"}}`.
-- **The limiter meters per sub-call, not per HTTP request** — a 10-item batch
-  returned exactly the first 5 results, three times running. Batching saves
-  HTTP/TLS overhead and retry cycles, not throughput.
-- Budget ≈ **5-token bucket, ~0.55 calls/s** refill. No `Retry-After` header.
-- **Multicall3 is the real leverage:** the limiter charges per `eth_call`, not
-  per inner read, so one `aggregate3` with 27 inner reads costs one token.
-  Validated at 540 logical reads in 38.2s, zero errors, at batch 5 / in-flight 1
-  / 9s spacing.
-
-The limit is **per-IP at the provider**, so in-process isolation cannot create
-budget. A backfill running at 0.55/s leaves the every-minute live sampler
+Two consequences are class-level rather than implementation detail. First,
+because the limit is per-IP, **in-process isolation cannot create budget**: a
+backfill running at the full 0.55/s leaves the every-minute live sampler
 (~0.033 calls/s, ~6%) zero headroom and will 429 it — *causing* new gaps while
-fixing old ones. Ranked options: a separate `BASE_RPC_BACKFILL_URL` on a keyed
-provider (the only true isolation); one shared **priority-aware** bucket where
-sampler requests pre-empt and backfill is capped below ~0.4/s; or running
-backfill in a sampler-quiet window. **Never give the backfill its own
-independent limiter** — two limiters against one per-IP bucket sum to 2× and
-guarantee 429s. Note also that what exists today
-(the `acquireSlot`/`releaseSlot` gate at `base-rpc-client.ts:243-256`, sized by
-`BASE_RPC_MAX_CONCURRENCY`, default 4, at `:230`) bounds
-*concurrency* but not *rate*, which is why production saw a `Base RPC HTTP 429`
-storm on 2026-08-10.
+fixing old ones. Choosing between a keyed provider, a shared priority-aware
+bucket, and an offline quiet window is **PD6**; the constraint that survives all
+three is that the backfill must never get its own independent limiter, since two
+limiters against one per-IP bucket sum to 2× and guarantee 429s. What exists
+today bounds *concurrency* and not *rate* — the `acquireSlot`/`releaseSlot` gate
+at `base-rpc-client.ts:243-256`, sized by `BASE_RPC_MAX_CONCURRENCY` (default 4,
+`:230`) — which is why production saw a `Base RPC HTTP 429` storm on 2026-08-10.
 
-A bounded one-time backfill of 40 days is therefore a completely different cost
-problem from re-verifying every chain day forever. Class C gets an executor;
-it does not get a standing reconciliation loop until there is a keyed provider.
+Second, a bounded one-time backfill of 40 days is a completely different cost
+problem from re-verifying every chain day forever. **Class C gets an executor; it
+does not get a standing reconciliation loop until there is a keyed provider.**
 
 **The irony worth recording:** a chain read at a **pinned immutable block** is,
 in principle, the most deterministically verifiable data in the system — more so
@@ -425,12 +853,367 @@ vendor window rolls off. Two independent readers at the same block must agree,
 forever. The rate limit is the only thing standing between that property and a
 continuous verifier.
 
+### 6.4 Specification — the Class A source reconciler
+
+This is one issue, unfiled, and **not gated on PD1**: Class A sources are
+ordinary HTTP re-fetches the pipeline already performs, so nothing here touches a
+chain read or depends on the archive-read decision landing either way. It is the
+work that closes the audit's **D5** (§1) and, per PD9, the workstream that should
+build the shared dispatcher.
+
+Its canonical anchors are `docs/architecture.md`'s analytics pipeline and the
+`AnalyticsPersistence` boundary (#106), and **D16**'s honesty invariant — which
+this work extends from write time to standing verification (see PD4 for the one
+place that extension needs ratifying).
+
+**In scope.**
+
+- Cadence and source-window verifiability promoted onto the indicator registry
+  (`backend/src/analytics/analyze/indicators.ts`), with
+  `sourceCalendar()` (`extract/floor-seed-calendar.ts:44-54`) reading that
+  declaration rather than re-deriving it, and the `DTWEXBGS` weekly-versus-
+  business-day contradiction resolved in favour of the structurally-proven
+  calendar (§6.1, **#637**).
+- A **pure** classifier producing the five verdicts of §5, reusing
+  `validateFloorCalendar` / `filterCalendarValid` / `forwardFillAge` /
+  `mergeSeries` rather than reimplementing them.
+- A generalized batch-divergence guard modelled on `assessEdgarBatchDivergence`
+  (`extract/edgar-fetch-plan.ts:309-368`), applied server-side before any repair
+  commits (§7.3).
+- Quarantine storage: repaired-away rows moved or flagged reversibly and excluded
+  from every read path, plus a `last_verified_at` column on
+  `raw_indicator_history` so an unchecked row is distinguishable from a confirmed
+  one. Next migration ordinal in this checkout is `0032`.
+- A new authenticated analytics verb for submitting a reconciliation report and
+  its proposed repairs — none of the five existing verbs
+  (`contract/src/routes.js:210-216`) is delete- or quarantine-shaped — with
+  validation and guards applied before the transaction opens.
+- A `reconcile` producer kind on its own cron, incremental daily over a trailing
+  window and full weekly, mirroring `selectEdgarRefreshTier`
+  (`edgar-incremental-refresh.ts:101-107`), added to `checkArmedSchedules`'s kind
+  list (`backend/src/producer/index.ts:216`, today `["regime", "research"]`) so
+  liveness covers it. Reconciliation fetches must bypass the
+  `extract/fetch-cache.ts` TTL cache.
+- Class A execution across `raw_indicator_history` — every indicator, every
+  source — which is where the defect class actually occurred.
+- Integrity alerts joined into the existing `GET /api/admin/overview` alerts feed
+  (`backend/src/admin/overview.ts:47`, `AlertLevel`), not a parallel dashboard.
+
+**Out of scope**, each named so the boundary is deliberate rather than
+accidental: Class B recompute-and-compare for `research_signals` (§6.2); **Class
+C**, which is out of scope here on **cost** grounds and not impossibility (§6.3,
+PD6) and is separately gated on PD1; backfilling `source` on the pre-`0024` NULL
+rows; the six persisted series carrying no provenance column at all, and
+`swarm/domain.ts:1285`'s synthetic `regime_snapshots` rows written with no
+`source` in demo and stage *(both inherited from the draft; **unverified** here)*;
+unifying the four provenance vocabularies or adding CHECK constraints to them
+(§10); and any change to v0 (`agentjuno/robotmoney`).
+
+**Acceptance criteria.** Each asserts a *caller*, not just a mechanism — the
+failure mode §3 documents this codebase repeating.
+
+- Publication cadence and source-window verifiability are declared once, on the
+  indicator registry, and `sourceCalendar` derives from that declaration; the
+  `DTWEXBGS` contradiction between `analyze/indicators.ts` and
+  `extract/floor-seed-calendar.ts` is resolved in favour of the
+  structurally-proven calendar.
+- A pure classifier assigns every persisted key in a verification window exactly
+  one of `confirmed` / `revised` / `fabricated` / `unexplained_absent` /
+  `unverifiable`.
+- A source returning a truncated or degenerate window classifies its **whole
+  window** `unexplained_absent` and mutates nothing.
+- `revised` keys are repaired by upsert to the source value; `fabricated` keys
+  are quarantined reversibly and excluded from every read path; **no path
+  hard-deletes.**
+- The batch-divergence guard refuses an entire repair batch and raises an alert
+  when the degeneracy, rewrite-ratio, or aggregate-drift bounds are exceeded, and
+  the refusal is enforced in the API process rather than only in the producer.
+- `raw_indicator_history` records when each row was last verified against source,
+  so an unverified row is distinguishable from a confirmed one.
+- The producer submits reconciliation reports and proposed repairs only through
+  the new authenticated analytics route, and acquires no `DATABASE_URL`.
+- Reconciliation runs on its own cron — incremental daily, full weekly — and is
+  included in the producer's armed-schedule liveness check.
+- A series whose last real observation exceeds its declared cadence tolerance
+  raises an alert in `GET /api/admin/overview` **regardless of how many rows it
+  holds**.
+- Running reconciliation twice with no source change makes no writes on the
+  second run.
+
+**Test plan.** All tests execute in the required backend job. DB-backed tests use
+the same ephemeral Postgres as `backend/tests/floor-seed.test.ts`; a missing
+fixture or an absent database **fails loudly and never skips**.
+
+- `backend/tests/source-reconciliation.test.ts` executes the classifier over a
+  recorded canonical FRED response plus a deliberately polluted floor, and
+  asserts the known source-absent `ICSA`/`DXY` keys from the D6 inventory
+  classify `fabricated` while genuine observations that merely repeat a value
+  classify `confirmed` — the audit's explicit warning that repeated values can be
+  genuine (§5).
+- The same file asserts a revised source value is upserted, and that a key
+  outside the source's re-servable window classifies `unverifiable` and is left
+  untouched.
+- `backend/tests/source-reconciliation-guard.test.ts` feeds a truncated response
+  and a degenerate one, and asserts the batch is refused whole, an alert is
+  raised, and both row count and values are unchanged.
+- `backend/tests/source-reconciliation-repair.test.ts` runs the repair against
+  ephemeral Postgres and asserts quarantined rows disappear from the read path,
+  remain recoverable, and that a second identical run writes nothing.
+- `backend/tests/source-reconciliation-freshness.test.ts` asserts a series with
+  many rows but a stale last real observation raises a freshness alert — the
+  D2/D3 shape.
+- `backend/tests/api/analytics-write.test.ts` executes the new authenticated
+  route and asserts an unauthenticated call is refused and that guard violations
+  are rejected server-side.
+- `backend/tests/producer-liveness.test.ts` asserts the reconcile cron is armed
+  and covered by the producer's armed-schedule check.
+
+### 6.5 Specification — the Class C backfill capability
+
+Four code issues, none filed, **all gated on PD1**. Items §6.5.1, §6.5.2 and
+§6.5.3 are parallelisable; §6.5.4 consumes all three. Their shared baseline is PR
+#615 (§3.2).
+
+#### 6.5.1 Block-addressable chain reads
+
+**Scope.** Add `blockTag?: string` to `RpcCallOptions`
+(`backend/src/chain/base-rpc-client.ts:184`, today `{ rpcUrl, timeoutMs? }`) and
+use `opts.blockTag ?? "latest"` at the only two hardcoded sites in the backend:
+`:374` (`ethCall`) and `:483` (`ethGetBalance`). **Thirteen** exported functions
+take `RpcCallOptions` and inherit the field with zero signature changes and zero
+change to callers that pass nothing — `rpcRequest` (`:310`), `ethCall` (`:373`),
+`ethGetLogs` (`:402`), `ethBlockNumber` (`:410`), `ethGetBlockByNumber` (`:423`),
+`callTotalAssets` (`:429`), `callTotalSupply` (`:433`), `callBalanceOf` (`:437`),
+`callConvertToAssets` (`:444`), `callAsset` (`:454`), `callDecimals` (`:463`),
+`multicall3Aggregate3` (`:473`), and `ethGetBalance` (`:482`). Multicall3
+inherits it for free, because `multicall3Aggregate3` issues its batch through
+`ethCall` at `:475`.
+
+Thread an optional `blockTag` through `readChainAmountsBatched`
+(`backend/src/chain/wallet-valuation.ts:172`) via `rpcOpts()` (`:137`, today
+returning `{ rpcUrl: config.baseRpcUrl }` and nothing else), reaching its two
+callers, `backend/src/chain/wallet-balances.ts:85` and
+`backend/src/chain/wallet-sleeves.ts:57`.
+
+**Review burden, stated separately from diff size** (§6.3): D17 established this
+module as the *single shared RPC transport* for every live chain feed, so a
+defect here reaches vault economics, wallet balances, sleeves, buyback logs and
+token metrics simultaneously. The default must remain `opts.blockTag ?? "latest"`,
+byte-for-byte preserving current behaviour; the change should nonetheless be
+scoped, tested and reviewed as a transport change.
+
+**The date→block resolver, and its cache.** Base blocks are exactly 2s, so
+`block ≈ latest − days_ago × 43200` lands within about one block; refine with a
+bounded walk against `ethGetBlockByNumber` (`:423`) comparing block timestamps
+to the target UTC midnight. Budget ≤8 calls per date, roughly 320 for a 40-day
+window. **A past UTC midnight's block is immutable, so the cache is permanent** —
+a second run over the same window costs zero resolver calls. *(The 2s block time,
+the 43200 constant and the ≤8-call bound are Plan A's arithmetic and are
+**unverified** here.)*
+
+**The silent-zero hazard must be handled in this issue, not deferred** (§8).
+`decodeUint256("0x")` returns `0n` (`base-rpc-client.ts:48-52`) and Multicall3
+returns `success: true` with `returnData: "0x"` for an address with no code, so
+there is no revert to catch. Live this is harmless — the contracts are deployed.
+On a block-addressed historical read a contract deployed *after* the target date
+decodes to a clean, fabricated `0` that becomes a plausible AUM row. Block-
+addressed reads must let callers distinguish an empty return from a genuine zero.
+**Live-path semantics must not change.**
+
+**Acceptance.** An executed-in-CI test reading a known historical balance at a
+pinned block; a test proving an empty `returnData` is distinguishable from a
+genuine `0`; and a date→block test asserting the resolved block's timestamp
+brackets the target UTC midnight.
+
+**The job-payload pattern already exists, unwired.** Handlers take
+`Record<string, unknown>` payloads, and
+`backend/src/worker/handlers/analytics.ts:24-25` already reads
+`(payload.asof as string) ?? new Date().toISOString().slice(0, 10)` — so an
+`{asof}`-carrying job is the house shape, not a new one.
+
+#### 6.5.2 Historical price resolution
+
+**Scope.** Per-day USD prices for the market-priced symbols, for the days
+§6.5.4 reconstructs. **This is the item that reverses Open Question 9 (PD3), and
+the change must edit `token-prices.ts:10-15` in the same diff.**
+
+- **GeckoTerminal daily OHLCV** — `/networks/base/pools/{addr}/ohlcv/day`,
+  keyless. Candles are **exactly UTC-midnight aligned**, which matches the day
+  key the sampler already writes: `backend/src/worker/handlers/wallet.ts:37`
+  computes `new Date().toISOString().slice(0, 10)` as the `sampleDate`, so no
+  boundary reconciliation is needed. A **~6-month server window caps each
+  request** (`limit=1000` and `limit=500` both returned 181 candles); deeper
+  windows need `before_timestamp` paging.
+- **Yahoo** — `fetchYahoo(symbol, startUnix, endUnix, timeoutMs)`
+  (`backend/src/analytics/extract/yahoo.ts:44`) already takes a range.
+- **USDC and both sleeves are pinned $1** and need no fetch. ZYFAI-SS1 and
+  GIZA-SS1 are **not** share tokens: `backend/src/config.ts:172-180` documents
+  them as the agent's delegated smart-account wallets on Base, proven on-chain by
+  #120, with `valuationKind: "strategy"` and `priceKind: "usdc"`.
+
+**Cost is O(1) per pool per window** — about 4 requests for 40 days, 10 for 365.
+Prices are **not** the rate-limit concern; §6.5.3 is.
+
+**Pool addresses are derived, never configured.** The OHLCV endpoint is keyed by
+*pool*, not by the token addresses the spot path uses, and the three `*_POOL_ID`
+env vars are dead (§9, **#639**) — there is nothing to populate. Resolve at use
+time via `GET /networks/base/tokens/{addr}/pools` (keyless, 20 pools per page).
+Two properties of that resolution are load-bearing:
+
+- **Sort candidates by 24h volume, not by reserve.** A `max(reserve_in_usd)`
+  selector picks a decoy for WETH — an observed `Bnb / WETH` pool reporting
+  ~$7.68B reserve against `volume.h1 = 0.0` wins outright. Verified outcomes:
+  ROBOTMONEY is unambiguous (top pool at ~$253k reserve against ~$4.9k for the
+  runner-up); BNKR's top two disagree by sort key but are both real BNKR/WETH
+  pools with a negligible price difference; WETH is the case where reserve-sort
+  is unsafe and volume-sort is correct.
+- **Resolve once, then cache the pool id.** A keyless 429 was observed on the
+  6th call in ~15s, against an endpoint the repo has already tuned to conserve
+  quota — the micro-batching serializer from #202
+  (`backend/src/chain/token-prices.ts:63-70`). Do not re-discover per run.
+
+A round trip confirmed the derived v4 pool id (a 32-byte hash, not a 20-byte
+address) is accepted by the OHLCV endpoint, and its daily close is
+**byte-identical** to what the existing `/simple/…/token_price/` path returns:
+GeckoTerminal's token price *is* the top pool's price. *(All GeckoTerminal
+measurements in this subsection are from the 2026-08-15 investigation and are
+**unverified** in this checkout — see §12.)*
+
+**Vendor constraint, inherited and non-negotiable** (§9).
+`backend/src/chain/token-prices.ts:3-8` permits only the GeckoTerminal and Yahoo
+hosts; CoinGecko is reachable and banned. New GeckoTerminal *endpoint* code is
+explicitly permitted, so a daily OHLCV fetcher is in bounds — but **do not reuse
+`runGeckoBatch`** (`token-prices.ts:203-224`): it is address-keyed with no time
+dimension and targets a spot-only endpoint. Copy the pattern, not the code.
+
+**SP500 is skipped here, not approximated** — PD7 and §10.
+
+#### 6.5.3 RPC batching and rate limiting
+
+**Independently valuable: it improves the live path too**, which is the reason
+this item is worth filing even if the backfill slips.
+
+**Measured facts** (§6.3; from a developer IP, **unverified** from production).
+Base accepts JSON-RPC batch arrays *including* `eth_call` at different historical
+blocks in one POST, but:
+
+- **Structural cap of 10.** An oversized batch fails wholesale with an *object*
+  body — `{"error":{"code":-32014,"message":"maximum 10 calls in 1 batch"},"id":null}`
+  — not a per-item error array.
+- **The limiter meters per sub-call, not per HTTP request.** A 10-item batch
+  returned exactly the first 5 results, three times running. Batching saves
+  HTTP/TLS overhead and retry cycles, **not throughput.**
+- Budget ≈ a **5-token bucket refilling at ~0.55 calls/s**. No `Retry-After`
+  header is sent.
+- **Multicall3 is the real leverage.** The limiter charges per `eth_call`, not
+  per inner read, so one `aggregate3` carrying 27 inner reads costs one token —
+  27:1. Validated at **540 logical reads in 38.2s with zero errors**, at batch 5
+  / in-flight 1 / 9s spacing.
+
+**Scope.** A new `rpcBatchRequest(requests[], opts)`: an array body with unique
+ids — the current transport hardcodes `id: 1`
+(`base-rpc-client.ts:313`) and reads a scalar `parsed.result` — capped at 5,
+**correlating responses by `id` and never by array index**, since ordering is not
+guaranteed by the JSON-RPC spec. It must distinguish a top-level batch failure
+from per-item errors, and classify transients per item (`-32016` and HTTP 429 are
+equivalent). Reuse the existing concurrency gate, backoff, jitter and abort
+plumbing (`:243-301`) verbatim rather than reimplementing it.
+
+Add a real **token bucket** (capacity 5, refill ~0.55/s). What exists today
+bounds *concurrency* and not *rate*: `acquireSlot`/`releaseSlot` at `:243-256`,
+sized by `BASE_RPC_MAX_CONCURRENCY` (default 4, `:230`) — which is why production
+saw the 2026-08-10 `Base RPC HTTP 429` storm.
+
+**Live-sampler contention is the design question, and it is PD6**, not an
+implementation choice to be made inside this issue. The limit is **per-IP at the
+provider**, so in-process isolation cannot create budget. Whichever option PD6
+settles on, the hard constraint holds: **never give the backfill its own
+independent limiter** — two limiters against one per-IP bucket sum to 2× and
+guarantee 429s.
+
+#### 6.5.4 The repair driver
+
+**This is the item that makes "self-healing" true**, and it is the one that turns
+`remediationClass` from a label into behaviour. Today the field is declared on
+`ops/series-registry.ts` (PR #615's branch), appears as a passthrough into
+`GapReport` and in the DTO, and has no behavioural consumer; `detectAllGaps` has
+exactly one caller, the read-only `GET /api/admin/gaps`.
+
+**Scope.** The single dispatcher of §4 — subject to PD9 if the reconciler builds
+it first — plus the Class C executor:
+
+- **Class C becomes repairable** once §6.5.1 and §6.5.2 land: enqueue one
+  `{asof}` job per missing day, resolve `asof`→block, read at that block, price
+  at that date, upsert. This replaces the current past-dated-slot **decline**
+  path *(on PR #615's branch; `backend/src/worker/handlers/slot.ts` does not
+  exist in this checkout, so the file and line are **unverified** here)*.
+- **Class A gains the trigger it is missing.** #614's AC4 Class A bullet is
+  ticked but unimplemented — filed as **#646**. Either the detection→re-fetch
+  trigger is built, or the criterion is restated honestly; a ticked criterion
+  with no code is the exact pattern §12's standing warning is about.
+- **Class B already works** via producer catch-up, but that catch-up computes its
+  own missing-days set and does not consume the gap detector (§6.2). Unify rather
+  than leave two notions of "which days are missing" to drift.
+
+**Failure semantics — required, not advisory.**
+
+- **A day is atomic.** Never write a day whose round-1 read partially failed:
+  round 2 is `convertToAssets` NAV per vault
+  (`backend/src/chain/wallet-valuation.ts:263`) and depends on round 1's output,
+  so a half-read day produces a plausible, wrong total.
+- **Treat `success === true && returnData === "0x"` as a hard failure for that
+  day, never as a zero** (§8), and carry a per-address earliest-valid-block floor
+  so days preceding a target's deployment are skipped rather than zeroed.
+- **Checkpoint per day for resumability**, following the `buyback_scan_state`
+  precedent — `backend/migrations/0015_buyback_swaps.sql:42-46`, a single-row
+  table holding the highest block already scanned, `id int PRIMARY KEY DEFAULT 1
+  CHECK (id = 1)`. This is a cost optimisation and not a correctness requirement,
+  since the upsert is already idempotent; committing per day means an
+  interruption loses at most one day of work.
+
+**Provenance.** Backfilled rows must be distinguishable from `'live'`, and
+`provenance` has no CHECK constraint on any table — so a new value needs no
+migration, which is precisely the trap (§7.6). `WalletHoldingProvenance`
+(`contract/src/dashboards.d.ts:80`) is switched on by the frontend, where an
+unrecognised value renders **unbadged and fully live**. PR #615 adds
+`'backfilled'` to that union on its branch; in this checkout the union is still
+the original four values, so **re-check against `main` before relying on it**
+rather than assuming.
+
+### 6.6 Sequencing
+
+The order below is the merged sequencing of both workstreams. Steps 0 and 1 are
+prerequisites; steps 3a and 3b are genuinely parallel.
+
+0. **Merge and deploy PR #615**, and prove the clamp self-heals rows that are
+   already pinned — §3.2. It is not part of either workstream, and everything in
+   §6.4 and §6.5 assumes its baseline.
+1. **File and settle the archive-read `decision:` issue** — PD1. Nothing in §6.5
+   starts until it lands. §6.4 does not wait on it.
+2. Settle **PD9** by naming the dispatcher's owner before either issue is filed,
+   so the constraint can be written into the second issue's body.
+3. In parallel: **(a)** the Class A reconciler (§6.4), which is ungated; **(b)**
+   §6.5.1, §6.5.2 and §6.5.3, which are parallel with each other once PD1 lands.
+4. **§6.5.4**, the repair driver, once 3(b) is complete.
+5. **Re-measure the RPC rate limit from the production droplet** before sizing
+   any backfill run — PD6.
+6. Run the backfill; verify continuity through `GET /api/admin/gaps`.
+
+Two corrections are owed to existing artifacts and should not be lost in the
+sequencing. **#614's `## Scope` section** still states that reconstructing this
+history is out of scope, on a premise its own later comment disproves — left
+as-is it will keep steering implementers away from the fix. And **#614's AC4
+Class A bullet is ticked but unimplemented**, tracked as #646 and folded into
+§6.5.4.
+
 ## 7. Safety properties
 
 ### 7.1 The append-only tension, met head-on
 
 Any quarantine mechanism collides with an existing, explicitly stated invariant,
-and the collision must be argued rather than skated past.
+and the collision must be argued rather than skated past. **Ratifying the reading
+argued here is PD5** — the argument below is what PD5 recommends adopting, not
+something this document can settle on its own.
 `backend/src/analytics/store/raw-history-store.ts:1-6` does not merely *describe*
 the floor as append-only — it makes never-deleting the **stated basis of the
 honesty guarantee**, verbatim:
@@ -572,18 +1355,14 @@ the sampler that produced the data.
 
 ### 7.5 Day-atomicity and per-day checkpointing
 
-For the Class C backfill specifically:
-
-- **A day is atomic.** Never write a day whose round-1 read partially failed,
-  because round 2 (`convertToAssets` NAV per vault,
-  `wallet-valuation.ts:263+`) depends on round 1's output. A half-read day
-  produces a plausible, wrong total.
-- **Checkpoint per day for resumability**, following the `buyback_scan_state`
-  precedent (`backend/migrations/0015_buyback_swaps.sql:42-46`: a single-row
-  table holding the highest block already scanned, `id int PRIMARY KEY DEFAULT 1
-  CHECK (id = 1)`). This is a cost optimisation, not a correctness requirement —
-  the upsert is already idempotent — but committing per day means an
-  interruption loses at most one day of work.
+Two properties belong to the Class C backfill specifically, and they are safety
+properties rather than implementation preferences. **A day is atomic**: a day
+whose round-1 read partially failed must never be written, because round 2
+depends on round 1's output and a half-read day produces a plausible, wrong
+total. And **progress is checkpointed per day**, so an interruption loses at most
+one day of work. Both are specified, with their `path:line` anchors and the
+`success === true && returnData === "0x"` hard-failure rule they depend on, in
+§6.5.4.
 
 ### 7.6 The unknown-provenance hazard
 
@@ -753,7 +1532,7 @@ proposing a different change.
   6th call in ~15s, against an endpoint the repo has already tuned to conserve
   quota (`token-prices.ts:63-70`, the micro-batching serializer from #202).
   *(Both measured in the 2026-08-15 investigation; **unverified** here — see
-  §12.)*
+  §12.)* The resolution itself is specified in §6.5.2.
 
   The dead-code claim needs stating more precisely than **#639**'s title does,
   since that title says "zero readers" and the env vars *are* read: `config.ts`
@@ -778,6 +1557,8 @@ proposing a different change.
   says the database may hold only those three kinds of row. A `revised` row, by
   contrast, is squarely inside the enumeration: it *is* a real read, freshly
   re-fetched from source, and needs no accommodation.
+
+  Adopting that reading is **PD4**.
 
   **The hard consequence:** if a quarantined row ever does reach a DTO — an
   operator surface that lists what was quarantined, say, or a per-point flag
@@ -804,14 +1585,17 @@ keep.
   no history and no positions API. Multiplying today's size by a past price
   **fabricates a quantity**. Skip it. (A 365-day `^GSPC` call returned 252
   points: weekends and holidays are absent and would need forward-filling
-  anyway.)
+  anyway.) A second, independent reason arrived with **#648**: the column already
+  splices a v0 Hyperliquid-perp-derived quantity onto v1's Yahoo `^GSPC` quote,
+  with no seam marker and no decision record. **PD7.**
 - **`2026-03-24` and `2026-06-04` stay missing.** They are literal omissions
   from the seed constant: `LABELS` in
   `backend/src/chain/wallet-history-seed.ts:17` jumps `"Mar 23","Mar 25"` and
   `"Jun 3","Jun 5"`. The surrounding days are unreconciled baked UI constants,
   so splicing archive-derived values between them mixes two incompatible bases.
   Leave them, or interpolate from neighbours and label `'seed'` — a judgement
-  call, not a correctness question.
+  call, not a correctness question. **PD8** takes it, and recommends leaving
+  them.
 - **`NEW_TOKENS` accumulates forward by design**, per its own registry entry
   (`indicators.ts:317`) and the calendar guard's comment describing it as *"the
   single-point-per-run NEW_TOKENS accumulator"*
@@ -835,50 +1619,14 @@ keep.
 
 ## 11. Open questions
 
-- **The archive-read `decision:` issue has still not been filed** (re-checked
-  against `gh` on 2026-08-15). It blocks all of §6.3 and nothing else — the rest
-  of the source plan has since been filed elsewhere (§3.1), so this is now the
-  single unfiled prerequisite in front of the backfill workstream rather than
-  one gap among many. But the decision-level work is smaller and better targeted
-  than "reverse D16", and it splits into two questions with different answers.
+The nine that are *decisions* — with options, consequences and a recommendation
+each — are in **Pending decisions** at the top of this document, and are not
+repeated here. In particular: the unfiled archive-read `decision:` issue is
+**PD1**, the D16 clarification-versus-supersession question is **PD2**, the Open
+Question 9 record is **PD3**, and whether a keyed RPC provider is acquired is
+**PD6**. What follows is the residue: questions that are open because nobody has
+the answer yet, rather than because nobody has chosen.
 
-  **D16 needs a clarifying cross-reference, not a superseding entry.** Its
-  rejection names a *component* — *"an archive indexer to reconstruct gap-free
-  pre-launch history"*, `docs/decisions.md:368-371` — and scopes it *"explicitly
-  out of scope for #84"*. A block tag on reads the app already issues is not
-  that component: no ingestion, no new persisted chain events, no new vendor.
-  What the 2026-08-15 archive finding actually contests is the **unstated
-  premise** inside *"a full indexer is more machinery than the feature needs"* —
-  namely that reaching this data requires a full indexer at all. That premise is
-  false, and saying so is a clarification.
-
-  **A new ADR becomes required only if historical reads are used to backfill
-  `wallet_balance_samples`.** That crosses from clarification into reversal,
-  because D16 commits to a specific shape for that table
-  (`docs/decisions.md:339-345`): *"seeded once with a pre-launch history
-  backfilled from the retired baked constants (`chain/wallet-history-seed.ts`,
-  marked `provenance: 'seed'`, never `'live'`)"*, then accumulated forward by the
-  per-minute sampler. Writing archive-derived rows into it changes both the
-  seeded-once-then-accumulate-forward shape and the `provenance: 'seed'`
-  labelling contract. **Read-only gap detection using historical reads does
-  not** — it writes nothing and changes no committed shape, so it can proceed on
-  the clarification alone.
-
-- **"Open Question 9" has no canonical record anywhere, which makes its
-  reversal a hard requirement rather than a courtesy.** `grep -rn "Open
-  Question" docs/` returns nothing but this document. Its resolution exists at
-  exactly one place in the repo: the comment at
-  `backend/src/chain/token-prices.ts:10-15`, asserting that historical valuation
-  comes from persisted samples *"NOT from a re-fetched OHLCV series, which
-  resolves Open Question 9"*. So a historical price resolver genuinely reverses
-  it, and **cannot be recorded as superseding any numbered decision, because
-  there is no numbered decision to supersede.** It needs its own decision entry.
-  And any such change **must edit that comment in the same diff**, or it leaves
-  an actively false statement at the exact spot a future reader will consult
-  when asking whether historical prices may be re-fetched.
-- **Is a keyed RPC provider acquired?** This is the difference between Class C
-  getting a bounded one-time executor and Class C getting a standing verifier.
-  It is a spend decision, not an engineering one.
 - **Resolved, and not in the direction an earlier draft assumed: `source:
   "live"` on the wallet-balances DTO is not a defect.** It was filed as **#645**
   and **closed NOT_PLANNED on 2026-08-15T18:39Z**, on the grounds that the
@@ -909,8 +1657,9 @@ keep.
   `totalAum[]` reconstruction is #645's own work and is **unverified** here.)*
 - **Rate limits need re-measuring from the production droplet.** The ~5-token /
   ~0.55-per-second figures were measured from a different IP. Shared NAT could
-  make production strictly worse, and every §6.3 cost conclusion depends on
-  them.
+  make production strictly worse, and every §6.3 and §6.5.3 cost conclusion
+  depends on them. This is a measurement task, not a decision — but PD6 cannot be
+  sized without it.
 - **How production v1 escaped the polluted seed is unresolved** (audit §12).
   `applyRawFloorSeed` preserves source-absent seed keys, yet the captured output
   matched the source-date-cleaned model in 74 indicator-day comparisons across
@@ -944,14 +1693,36 @@ not re-verified in this checkout):
 
 **Read from code and verified in this worktree** at
 `adhoc/20260815-173700-data-integrity-self-healing-design`: every `path:line`
-citation in §3, §5, §6.1, §6.3, §7, §8, §9, and §10 was opened and checked.
-Notably confirmed by absence: `ops/series-registry.ts`, `ops/gap-detector.ts`,
-`/api/admin/gaps`, and the `research_signals` producer catch-up are **not in
-`main`** — they live on PR #615's unmerged branch, so every claim about their
-contents is inherited, not verified. Also confirmed: `WalletHoldingProvenance`
-in this checkout is still the original four values, and the `*_POOL_ID` env vars
-are assigned into `TrackedAsset.poolId` in `config.ts` and read **nowhere else**
-in `backend/src`.
+citation in the *Pending decisions* section and in §3, §5, §6.1, §6.3, §6.4,
+§6.5, §7, §8, §9, and §10 was opened and checked. Notably confirmed by absence:
+`ops/series-registry.ts`, `ops/gap-detector.ts`, `/api/admin/gaps`,
+`backend/src/worker/handlers/slot.ts`, and the `research_signals` producer
+catch-up are **not in `main`** — they live on PR #615's unmerged branch, so every
+claim about their contents is inherited, not verified. Also confirmed:
+`WalletHoldingProvenance` in this checkout is still the original four values, and
+the `*_POOL_ID` env vars are assigned into `TrackedAsset.poolId` in `config.ts`
+and read **nowhere else** in `backend/src`.
+
+Verified for the absorbed specifications (§6.4, §6.5) on 2026-08-15: the two
+hardcoded `"latest"` strings are the only two in `backend/src/chain/`
+(`base-rpc-client.ts:374`, `:483`); **thirteen** exported functions take
+`RpcCallOptions`, at the thirteen lines listed in §6.5.1 — the absorbed plan said
+fourteen, and thirteen is the count in this checkout; `multicall3Aggregate3`
+(`:473`) routes through `ethCall` (`:475`); the `id: 1` hardcode is at `:313`;
+`rpcOpts()` (`wallet-valuation.ts:137`) returns `{ rpcUrl }` alone and round 2's
+`convertToAssets` block begins at `:263`; `asofOf()`
+(`worker/handlers/analytics.ts:24-25`) reads
+`(payload.asof as string) ?? new Date().toISOString().slice(0, 10)`; the
+`buyback_scan_state` single-row table is at `0015_buyback_swaps.sql:42-46`; the
+sampler's UTC day key is `worker/handlers/wallet.ts:37`; `fetchYahoo`'s range
+signature is `extract/yahoo.ts:44`; the ZYFAI/GIZA smart-account documentation and
+their `strategy`/`usdc` kinds are `config.ts:172-180`; `resolveSp500()` is
+`config.ts:267-273`, consumed for the ticker at `token-prices.ts:270`;
+`runGeckoBatch` is `token-prices.ts:203-224`; and `LABELS`'s two omissions are at
+`wallet-history-seed.ts:17`. **Not** verified here: every GeckoTerminal OHLCV and
+pool-selection measurement, every RPC batching and rate-limit number, and the
+date→block arithmetic (2s blocks, 43200/day, ≤8 calls per date) — all are
+2026-08-15 investigation results, marked *unverified* where they appear.
 
 Verified for §8.1 in this checkout on 2026-08-15: the compose allowlist premise
 (no `env_file:` in any of the three compose files, no `ENV` in
@@ -965,11 +1736,14 @@ to their issues: #641's ~20-variable count, #642's characterization of the live
 production impact on `/allocation` and `/performance`, and #645's reconstruction
 of v0's `totalAum[]` cross-check.
 
-**Read from GitHub** on 2026-08-15 with `gh issue view`: the state and titles of
-#639–#647 and #624, #645's NOT_PLANNED closure and its closing comment, and the
-absence of any `decision:` issue for archive-capable reads. Issue state is used
-here only for *what is tracked where*, never as evidence that code exists — see
-the standing warning below.
+**Read from GitHub** on 2026-08-15 with `gh issue list` and `gh issue view`: the
+state and titles of #639–#648 and #624; #645's NOT_PLANNED closure and its
+closing comment; #648's body, including its own statement that an SP500 backfill
+is out of scope; and the **absence of any `decision:` issue for archive-capable
+reads** — the only open `decision:` issues are #623 and #629, and the closed set
+is #621, #583, #524, #520, #502, #447, #342, #228, #163, #145, #99. Issue state
+is used here only for *what is tracked where*, never as evidence that code
+exists — see the standing warning below.
 
 **Inherited from the audit** and not independently re-derived: the D1 mechanism
 and its numeric attribution, the D6 source-key classification counts (110 / 14
