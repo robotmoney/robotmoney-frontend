@@ -10,6 +10,16 @@ The vendor split (D13) keeps this short: **Cloudflare = DNS + observability** (n
 software to deploy), **DigitalOcean = compute + storage** (everything CI builds and
 runs). There is no Worker/`wrangler`, no reverse proxy, and no tunnel by default.
 
+> **⛔ Upgrading production to v0.2.2? Read
+> [the rollout runbook](./v0-2-2-rollout.md) FIRST — before anything below.**
+> This document is the *standing* credential and topology reference;
+> [`v0-2-2-rollout.md`](./v0-2-2-rollout.md) is the *version-specific* procedure
+> for **v0.2.1 → v0.2.2**, and this one is **not sufficient for it**. Two of its
+> go/no-go gates decide the outcome before any instruction here applies: an
+> **admin-lockout gate** that can leave the upgrade unrecoverable, and a
+> **mandatory `--external-pg`** — without it the cutover silently boots an empty
+> database and serves it as production. Neither is decided here.
+
 ---
 
 ## 1. GitOps principle
@@ -96,9 +106,10 @@ read-only at `/srv/frontend`.
 - `scripts/stack/stack.ts`'s `up()` runs the assembly before `docker compose up`,
   so `bun run demo`, `bun run demo -- --stage`, the evals and CI all serve
   prerendered HTML with no extra step. Assembly failure aborts the bring-up.
-- A **hand-run `docker compose up -d` must run `bun run static:assemble` first.**
-  Docker creates an *empty* directory at a bind path that does not exist, and the
-  api would then serve nothing.
+- A **hand-run `docker compose -p <project> up -d` must run `bun run
+  static:assemble` first.** Docker creates an *empty* directory at a bind path
+  that does not exist, and the api would then serve nothing. (`-p` is not
+  optional — see "FIRST: find the project name" in §2.1.)
 - A **redeploy that changes `sitemap.xml` or `seo.js` must re-run the assembly**;
   the prerendered files are otherwise stale. The assembly empties `_static/` in
   place (never `rm -rf`), so it is safe to re-run against a live bind mount.
@@ -150,6 +161,44 @@ left as-is: `backend/src/db/migrate.ts` tracks applied migrations by filename,
 so editing an applied file changes nothing anywhere it already ran, and this
 repo treats applied migrations as frozen artefacts.
 
+**FIRST: find the project name. Every compose command below needs `-p`.**
+Nothing in this repo runs a bare `docker compose`. Every invocation is built as
+`docker compose -p <project> -f …` (`scripts/stack/config.ts:275`), and the
+spawn env deliberately does **not** export `COMPOSE_PROJECT_NAME` or
+`COMPOSE_FILE` (`scripts/stack/config.ts:200`) so a stale exported value can
+never redirect a bring-up. A bare `docker compose …` pasted into your shell
+therefore does not inherit the project — it falls back to the directory name and
+**can address a different stack, or none**.
+
+That is not a theoretical mismatch here: outside GitHub Actions the project name
+is **random per boot** — `rm_demo_stack_<10 hex>`, where the hex is
+`shortHash(crypto.randomUUID())` (`scripts/stack/naming.ts:138`, `:149-151`). Two
+boots leave two projects, and a command scoped to the wrong one reports on an
+orphan.
+
+```bash
+# Authoritative for the LAST boot this checkout made: .agents/demo-state.json,
+# which `bun run demo:status` reads and prints (scripts/demo-status.ts:111).
+RM_PROJECT="$(bun -e 'console.log(JSON.parse(await Bun.file(".agents/demo-state.json").text()).project)')"
+echo "$RM_PROJECT"     # e.g. rm_demo_stack_0114ac93de
+
+# Cross-check against what is actually RUNNING — this is what catches an
+# orphaned stack from an earlier boot that the state file no longer names.
+docker compose ls
+```
+
+If `docker compose ls` shows more than one `rm_demo_stack_*` project, the state
+file names only the most recent one; tear the rest down (`bun run demo:down`
+after re-pointing, or `docker compose -p <other> down`) before you diagnose
+anything, or you will read the wrong container's logs.
+
+For a hand-run production stack you chose the project yourself — use that name.
+Export it once and every command below is safe to paste:
+
+```bash
+export RM_PROJECT=rm_demo_stack_0114ac93de   # or your own
+```
+
 **Getting a SQL session to run it in.** The runbook's own two topologies:
 
 ```bash
@@ -159,7 +208,7 @@ repo treats applied migrations as frozen artefacts.
 # sets them on the postgres service, but your own shell has never seen them
 # (their defaults live in docker-compose.yml's `${POSTGRES_USER:-robotmoney}`
 # interpolation and in .env), so an unquoted paste would run `psql -U "" ""`.
-docker compose exec postgres sh -lc 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"'
+docker compose -p "$RM_PROJECT" exec postgres sh -lc 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"'
 
 # managed Postgres (§4.3). $DATABASE_URL here IS a variable of your own shell —
 # export it, or paste the url literally:
@@ -169,7 +218,9 @@ psql "$DATABASE_URL"
 **If the guard is wrong, or the site must come up before the data can be fixed.**
 Set **`RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1`** in the **droplet env** — the same
 place `DATABASE_URL` and the tokens live (§4.4), from where CI's `docker compose
-pull && up -d` interpolates it — and redeploy. **That variable reaches the
+pull && up -d` interpolates it — and redeploy. **`up -d`, never `restart`**: the
+recreate is what delivers the new value (see the box at the end of this section;
+OPS-610-009). **That variable reaches the
 container only because `docker-compose.yml`'s api `environment:` block names
 it**: that block is an allowlist, there is no `env_file:` in any compose file
 here and `backend/Dockerfile` sets no `ENV`, so a variable it does not name is
@@ -178,6 +229,33 @@ variable you just set. (`scripts/tests/integration/demo-compose-config.test.ts`
 asserts both this variable and `PG_NAMESPACE_GUARD_TIMEOUT_MS` resolve into the
 api service in every composition, from real `docker compose config` output, so
 that block cannot lose them silently.)
+
+> ⛔ **The paragraph above describes the CI/droplet topology only — the one
+> where something runs `docker compose … up -d` directly and the ambient
+> environment is compose's interpolation source. It does NOT hold for a
+> hand-run `bun smoke` / `bun run demo` stack.** There, `stack.up()` spawns
+> compose with a **replacement** env map (`scripts/stack/stack.ts:214-232`);
+> `buildSpawnEnv` (`scripts/stack/config.ts:264-271`) keeps only
+> `DOCKER_CLIENT_ENV_ALLOWLIST` (`:241-259`) and overlays `buildComposeEnv`, and
+> neither `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION` nor
+> `PG_NAMESPACE_GUARD_TIMEOUT_MS` is on that allowlist or in
+> `DEMO_COMPOSE_PASSTHROUGH` (`scripts/lib/demo-main.ts:427-444`). **An
+> `export` in your shell is dropped before `docker` is invoked.** The one place
+> that works on that workflow is the **repo-root `.env`**, which compose
+> auto-loads (the child's cwd is the repo root and nothing passes `--env-file`
+> or `--project-directory`). Being named by the api `environment:` block is
+> necessary but not sufficient — the value still has to reach the compose
+> *process*.
+>
+> ⛔ **And on `bun smoke` specifically the override cannot rescue the boot at
+> all**, wherever you set it. Smoke's archive initializer runs
+> `backend/scripts/prod-bootstrap.ts`, whose step 0 re-runs this same check
+> (`:86-113`), leads every step shape (`stepsFor`, `:272-275`), is the only
+> `haltOnFailure` step (`:266-270`), and **reads no environment**: the override
+> is honoured only by the api guard (`backend/src/db/handle-namespace.ts:476`).
+> A failing initializer throws (`scripts/stack/stack.ts:248-251`) and fails the
+> boot. On that workflow the remedy is the repair below, or rollback — not this
+> variable. See docs/runbooks/v0-2-2-rollout.md §7.5.
 
 The api then logs the same block plus an `OVERRIDE:` line, serves anyway, and
 reports `handle_namespace: "overridden"` at `/health` for the whole life of the
@@ -188,9 +266,9 @@ the variable set and no violation to override says exactly that
 (`… is set but this boot found no violation to override — the guard is
 DISARMED …`), which is the only signal that distinguishes a safe system from a
 disarmed one once the data is clean. Rolling the whole release back instead
-means redeploying the previous image tag (`docker compose pull && docker compose
-up -d` against the prior tag, §4.4); the guard is boot-time only, so a rollback
-removes it immediately.
+means redeploying the previous image tag (`docker compose -p "$RM_PROJECT" pull
+&& docker compose -p "$RM_PROJECT" up -d` against the prior tag, §4.4); the guard
+is boot-time only, so a rollback removes it immediately.
 
 **What still boots, and how to tell.** An empty database, a pre-0030 schema, and
 a database the api cannot query all boot normally. The last of those logs
@@ -206,12 +284,14 @@ picks the host port. Ask for it rather than guessing, or go in through the
 container:
 
 ```bash
-# bundled compose (docker-compose.yml) — host port assigned by the daemon
-curl -s "http://127.0.0.1:$(docker compose port api 8787 | cut -d: -f2)/health"
+# bundled compose (docker-compose.yml) — host port assigned by the daemon.
+# `-p` is required: see "FIRST: find the project name" above. This is the same
+# form docker-compose.yml:230 documents.
+curl -s "http://127.0.0.1:$(docker compose -p "$RM_PROJECT" port api 8787 | cut -d: -f2)/health"
 
 # …or from inside the container. NOT curl: the image is oven/bun and carries no
 # curl, which is why the compose healthcheck itself uses `bun -e`.
-docker compose exec api bun -e 'console.log(await (await fetch("http://127.0.0.1:8787/health")).text())'
+docker compose -p "$RM_PROJECT" exec api bun -e 'console.log(await (await fetch("http://127.0.0.1:8787/health")).text())'
 
 # pinned-origin host (§3.3): 48787, the one fixed host port in the system
 curl -s http://127.0.0.1:48787/health
@@ -225,8 +305,9 @@ either deployment topology.)
 
 `handle_namespace` is `clean` (the check ran and found nothing), `unchecked`
 (the database was not queryable within the guard's budget — this boot proves
-nothing; once the database is queryable again, `docker compose restart api` to
-get a checked boot, since nothing re-checks it in place) or `overridden`.
+nothing; once the database is queryable again, `docker compose -p "$RM_PROJECT"
+up -d api` to get a checked boot, since nothing re-checks it in place) or
+`overridden`.
 **A 200 from `/health` is not by itself evidence the guard ran; that field is.** The status code stays 200 in every case on purpose:
 the compose healthcheck keys on `.ok`, and failing it because Postgres was slow
 at boot would trade a wrong-attribution risk for a restart loop.
@@ -241,8 +322,8 @@ reply and you see neither `db` nor `handle_namespace`. That is a pre-existing
 property of `/health` — it predates
 this guard and is not changed by it; a database that *rejects* connections
 answers 200 immediately. In that one state the `[api]` log line above is the
-only signal, so **read the container log (`docker compose logs api | grep
-'namespace guard'`) when `/health` does not answer at all.**
+only signal, so **read the container log (`docker compose -p "$RM_PROJECT" logs
+api | grep 'namespace guard'`) when `/health` does not answer at all.**
 
 **Bounded.** The guard cannot delay the boot by more than its wall-clock budget
 (`PG_NAMESPACE_GUARD_TIMEOUT_MS`, an integer count of **milliseconds**, default
@@ -254,7 +335,9 @@ races the time remaining.
 
 Set it where the override is set — the droplet env, passed into the container by
 `docker-compose.yml`'s api `environment:` allowlist (see above; a variable that
-block does not name never arrives). Write that value as **milliseconds only** —
+block does not name never arrives, and on a hand-run `bun smoke`/`bun run demo`
+stack only the repo-root `.env` reaches compose at all). Write that value as
+**milliseconds only** —
 `PG_NAMESPACE_GUARD_TIMEOUT_MS=15000`, never `15s`. A value that is not a positive number is **ignored**: the api logs
 `[api] PG_NAMESPACE_GUARD_TIMEOUT_MS="15s" is not a positive number of
 MILLISECONDS — IGNORING it and using 8000ms` and boots on the default. It never
@@ -281,9 +364,31 @@ the api cannot tell it from an intention.
 **It is a boot-time snapshot, not a standing guarantee.** The check runs once,
 at process start; there is no periodic re-check and no request-path re-entry.
 **After any `pg_restore` (or manual bulk load) into a database a running stack
-is already connected to, restart the api** — `docker compose restart api` —
-because nothing re-validates a database that changed underneath a live process,
-and a restore is precisely the population path this guard exists for.
+is already connected to, recreate the api** — `docker compose -p "$RM_PROJECT"
+up -d api` — because nothing re-validates a database that changed underneath a
+live process, and a restore is precisely the population path this guard exists
+for. (`docker compose -p "$RM_PROJECT" restart api` is enough *here*, where no
+environment changed — but see the box below, and prefer the one verb that is
+always correct.)
+
+> **`docker compose restart` does NOT apply environment changes.** `restart`
+> stops and starts the **existing** container with the environment it was
+> created with; only `up -d` **recreates** it and picks up a changed
+> `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION`, `PG_NAMESPACE_GUARD_TIMEOUT_MS`, or any
+> other value. This is verified against real compose, not reasoned about: with
+> the override exported, `restart api` leaves the container at
+> `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=` — unchanged — and the api prints the
+> identical refusal telling you to set the variable you just set, with no port
+> bound and no `/health` to check. **Whenever you change a variable in this
+> runbook, the follow-up verb is `docker compose -p "$RM_PROJECT" up -d`**,
+> never `restart`. Tracked as OPS-610-009 in issue #611.
+>
+> A full `bun run demo` / `bun smoke` re-run also recreates the containers, but
+> it is **not** an equivalent way to apply a changed variable: those two boots
+> filter the environment (see the boxes at the start of this section), so a
+> variable you exported never reaches compose in the first place. Put it in the
+> repo-root `.env` before re-running, and on `bun smoke` expect the namespace
+> override to fail the boot regardless.
 
 ---
 
