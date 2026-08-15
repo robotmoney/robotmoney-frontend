@@ -17,7 +17,11 @@
 > three-detector / one-dispatcher shape (§4), the five verdicts (§5), and the
 > safety properties (§7) — these were argued from the audit evidence and from
 > code that exists. **Open:** every scheduling, storage-layout, and API-surface
-> choice, the nine items in *Pending decisions* below, and the whole of §11.
+> choice, the thirteen open items in *Pending decisions* below, and the whole of
+> §13. **Decided:** the publication model — historical reports are frozen,
+> versioned, and published by an explicit admin action (product owner,
+> 2026-08-15; PD10 and §9), which is the one part of this document that is
+> settled at the product level rather than argued from evidence.
 > **Gated:** the Class C archive-read direction depends on a `decision:` issue
 > that **has still not been filed** (re-checked against `gh issue list` on
 > 2026-08-15: no `decision:` issue for archive-capable reads exists); three
@@ -28,13 +32,19 @@
 
 ## Pending decisions
 
-Nine choices are outstanding, and none of them is an implementation detail that
-can be settled inside a pull request. They are numbered **PD1–PD9** and
-referenced by those tags throughout the rest of the document. Each states what
-must be decided, what is blocked until it is, the options with their
-consequences, and a recommendation.
+Thirteen choices are outstanding and one is settled. None of them is an
+implementation detail that can be decided inside a pull request. They are
+numbered **PD1–PD14** and referenced by those tags throughout the rest of the
+document. Each states what must be decided, what is blocked until it is, the
+options with their consequences, and a recommendation.
 
-They are not equally urgent, and the shape of the dependency matters:
+**PD10 is DECIDED** — the product owner settled the restate-versus-freeze
+question on 2026-08-15 in favour of frozen, versioned publication with an
+explicit publish gate. It stays in this register so the decision is visible, and
+it is marked resolved so nobody re-opens it. Its model is §9; PD11–PD14 are the
+sub-questions it does **not** settle.
+
+The rest are not equally urgent, and the shape of the dependency matters:
 
 - **PD1 blocks code.** Four unfiled issues (§6.5) cannot start until it lands.
 - **PD2, PD3, PD4, PD5 block nothing today, and block everything on the day the
@@ -48,6 +58,9 @@ They are not equally urgent, and the shape of the dependency matters:
   recommended option answers.
 - **PD7 and PD8 are scoping judgements** on individual series; both are cheap,
   and both default to *do less*.
+- **PD11 and PD12 are schema decisions and must be taken before the migration
+  is written**, since both change what a row's key is. PD13 and PD14 are cheap
+  and reversible, and are listed only so they are chosen rather than defaulted.
 
 ### PD1 — File the `decision:` issue for archive-capable chain reads
 
@@ -132,7 +145,7 @@ legitimacy turns on the answer. Deciding late means deciding under deadline.
   reversed.
 
 **Recommendation: a clarifying cross-reference** — on the reasoning above, which
-is already the position §11 argues.
+is already the position this document has argued since its first draft.
 
 **The threshold that flips this, stated so it is not crossed by accident.** Using
 historical reads to **backfill `wallet_balance_samples`** does need a real ADR,
@@ -245,6 +258,12 @@ degrades to real persisted history, never to synthetic data."*
 - **Leave it implicit.** The cheapest today, and it guarantees the argument is
   re-litigated in review of the first PR that deletes anything.
 
+**PD10 lowers the stakes here without removing them.** Under frozen publication a
+repair to the raw floor no longer silently moves a published number — it moves a
+*candidate*, which someone must choose to publish. That removes the reader-facing
+harm; it does not remove the storage-layer question, which is what this item is
+about.
+
 **Recommendation: ratify the §7.1 reading**, on two pieces of evidence that are
 already in the repo. First, **`--purge` (#616, merged in `03a2b01`) is shipped
 precedent**: `backend/scripts/floor-seed-regenerate.ts:49-59` invokes
@@ -290,7 +309,7 @@ budget, because the limit is not in our process.
   isolation — a different key is a different bucket, so the sampler is untouched
   by construction and Class C becomes eligible for a standing verifier rather
   than a one-shot run. Cost: a spend decision, plus one env var that must be
-  genuinely deliverable (§8.1 — a variable absent from the compose
+  genuinely deliverable (§10.1 — a variable absent from the compose
   `environment:` allowlist never reaches the container, so this one fails
   silently if added carelessly).
 - **One shared priority-aware bucket**, sampler requests pre-empting, backfill
@@ -343,7 +362,7 @@ a quantity** and then presents it beside genuinely-read legs.
 **Options.** Skip the leg and leave the day's SP500 value absent; or synthesize
 `today's size × historical price` and label it. The second produces a number that
 is wrong in an unbounded and unknowable way (the size has changed however many
-times it has changed), and §8's whole argument is that a plausible fabricated
+times it has changed), and §10's whole argument is that a plausible fabricated
 value is worse than an absent one.
 
 **Recommendation: skip, do not approximate.** Two further facts support it. A
@@ -380,7 +399,7 @@ two-day break; or interpolate from neighbours and label the result `'seed'`.
 of a 146-day window render as a hairline break, not a visible defect. An
 interpolated row labelled `'seed'` would be **indistinguishable from the ~99
 genuine v0 observations that carry the same label** — #645 established those are
-real production wallet-balance cron output, not fabrications (§11), so
+real production wallet-balance cron output, not fabrications (§13), so
 introducing one synthetic `'seed'` row destroys the one property that currently
 makes that label trustworthy. And the composition of that same seeded span is
 itself under review in **#648** (PD7): interpolating across a series whose
@@ -421,6 +440,143 @@ the rule follows the ordering rather than the workstream — whichever lands fir
 builds the dispatcher, generically enough for the other to plug into. If the
 repair driver does land first, the reconciler contributes a divergence trigger
 plus the five-verdict classifier and consumes the dispatcher unchanged.
+
+### PD10 — DECIDED: frozen, versioned publication with an explicit publish gate
+
+**Status: decided by the product owner, 2026-08-15.** Recorded here so it is not
+mistaken for an open question; the full treatment is §9.
+
+**The question it answers.** Whether a published historical figure may be
+restated silently when reconciliation, repair, or recomputation changes it. The
+answer is no: **historical reports are frozen.**
+
+**The decided model.** Published figures do not change under readers. Reports are
+versioned and the version is displayed. An admin may refresh calculations, which
+computes a **next** version; computing it does **not** publish it, and publishing
+is a separate explicit admin action. A newly computed version identical to the
+prior one is a **noop** — equivalent to a passing audit, and the normal expected
+outcome.
+
+**What this unblocks.** All of §8: a restatement signal for API consumers, a
+version to show dashboard readers, and a diff that expresses a correction at the
+level of the published figure rather than the raw row. §8 is largely
+impracticable without it.
+
+**Remaining recommendation, since the decision itself is settled: ratify it as a
+`docs/decisions.md` entry tagged v4.** Today `version` is a *methodology* tag and
+v3 explicitly disclaims freezing (`regime-versions.ts:1-7`), so this changes what
+a published number means and is not a mere workflow addition. Recording it only
+in this document would recreate the PD3 problem — a load-bearing position with no
+canonical record — and the entry must edit the `regime-versions.ts` comment in
+the same diff, or the repo ships a `v4` whose own version file still says there
+is no frozen lockout. Reasoning and evidence: §9.3.
+
+**Adjustments this decision makes elsewhere in this register.** It strengthens
+PD4 (a quarantined row is now doubly unpresented — excluded from the read path
+*and* unable to move a published figure until a publish action) and it lowers,
+without removing, the risk PD5 weighs (a repair to the raw floor no longer
+silently moves published numbers).
+
+### PD11 — Version granularity: whole snapshot series, or per-series?
+
+**What must be decided.** Whether a version identifies one publication of the
+whole regime snapshot history, or is tracked independently per series.
+
+**Blocked until it is.** The migration. This decides the table's key, so it
+cannot be deferred past the schema change §9.2 already requires.
+
+**Options.**
+
+- **Whole snapshot series** — one version per publication, covering every figure
+  in that publication.
+- **Per-series versions** — each indicator or panel carries its own.
+
+**Recommendation: whole snapshot series.** Two reasons, both structural rather
+than aesthetic. First, §8.3: a single raw revision moves the indicator
+percentile, the panel index, the composite, and potentially the regime label
+together, because they are one fold and not independent computations —
+per-series versioning would fragment one logical restatement into many and make
+*"which version was I reading"* unanswerable for any composite figure, which is
+the figure readers actually cite. Second, it does not match the storage shape:
+`regime_snapshots` holds one row per date carrying every panel
+(`backend/migrations/0002_dashboards.sql:52-62` plus 0009's added columns), so
+per-series versions would require decomposing a table that is deliberately
+row-per-date. Per-series versioning is the right answer only for series that are
+computed independently, and these are not.
+
+### PD12 — Are superseded versions retained and served?
+
+**What must be decided.** Whether a version that has been replaced remains
+resolvable, and whether it is served.
+
+**Blocked until it is.** The same migration as PD11, and §9.4's resolvability
+property — which does not hold at all if the answer is no.
+
+**The constraint.** `regime_snapshots` **cannot currently hold two versions of
+the same date**: its primary key is `date` alone
+(`backend/migrations/0002_dashboards.sql:53`) and the upsert overwrites `version`
+in place (`backend/src/analytics/store/regime-store.ts:67`). Retention is a
+schema change either way — a wider key, or a separate published-versions table.
+
+**Options.** Retain and serve every published version; retain a bounded number
+(the N most recent) and serve those; or retain only the current one and keep the
+diff.
+
+**Recommendation: retain and serve, bounded to the N most recent.** An external
+citation of a figure — in a report, a post, another system's stored copy — is
+meaningful only if the version it was read under can still be resolved to the
+figures it published (§9.4); retaining only the current version makes every prior
+citation unverifiable, which forfeits most of what freezing buys. The storage
+cost is one full history per *publication*, and publication is gated behind a
+deliberate admin action, so the growth rate is a function of how often someone
+chooses to publish rather than of how often anything recomputes. Bounding it
+avoids committing to unbounded growth before anyone knows that rate. Retaining
+only the diff is the false economy: reconstructing a historical figure by
+replaying diffs is exactly the forensics exercise §8.1 argues against building
+later instead of recording now.
+
+### PD13 — Does the candidate recompute run on a schedule, or only on demand?
+
+**What must be decided.** Whether the next-version computation is triggered by a
+cron or only by an admin.
+
+**Blocked until it is.** Nothing structural — but it decides whether §9.4's
+noop-as-audit is a standing check or an occasional one, which is the difference
+between the two things §1 distinguishes.
+
+**Options.** Scheduled candidate recompute with diffing, never auto-publishing;
+or admin-triggered only.
+
+**Recommendation: scheduled, and never auto-publishing.** A scheduled candidate
+diff *is* the audit (§9.4), and it is the only mechanism in this design that
+covers the computation layer at all. An on-demand-only recompute runs when
+someone already suspects something, which makes it *"a tool that would find the
+defect if someone ran it"* — a forensics aid, not self-healing, in §1's exact
+terms. The incremental cost is close to zero, because the full-history recompute
+**already runs daily**: `regime-versions.ts:1-7` states that under v3 *"every run
+recomputes the full history on best-available raw data"*. If the candidate
+producer is a new producer kind, it must be added to `checkArmedSchedules`'s kind
+list (`backend/src/producer/index.ts:216`, today `["regime", "research"]`) or its
+liveness will not be covered — the scheduler-wedge failure class, invisible by
+default (§6.1).
+
+### PD14 — Is the version always displayed, or only once more than one exists?
+
+**What must be decided.** The display policy for the version tag.
+
+**Blocked until it is.** Nothing. It is listed because it is the kind of thing
+that gets defaulted rather than chosen, and the cheap default is the wrong one.
+
+**Options.** Always display it; or display it only once a second version exists.
+
+**Recommendation: always display it.** Showing it conditionally means the UI's
+*shape* changes at the first restatement, simultaneously with its numbers — at
+exactly the moment a reader most needs the surface to be stable and the change to
+be attributable to data rather than to the page. It also makes "no version shown"
+ambiguous between "there is only one" and "this surface is unversioned", which is
+the same failure mode as §7.6's unrecognised provenance rendering as ordinary
+live data: absence of a marker reading as a positive claim. The cost of always
+showing it is one label.
 
 ## 1. Purpose
 
@@ -555,7 +711,7 @@ already filed and must not be re-specified here.
 
 | Workstream | Contents | Tracking |
 |---|---|---|
-| **Backfill capability** — the subject of §6.3, specified in §6.5 | block-addressable reads, date→block resolution, historical prices, RPC batching, the repair driver | **Unfiled.** Four code issues plus a `decision:` issue, all gated on that decision (PD1, §11). |
+| **Backfill capability** — the subject of §6.3, specified in §6.5 | block-addressable reads, date→block resolution, historical prices, RPC batching, the repair driver | **Unfiled.** Four code issues plus a `decision:` issue, all gated on that decision (PD1, §13). |
 | **v0.2.2 release nits** | undeliverable env vars, the `BUYBACK_FROM_BLOCK` constant, runbook verification gaps, #614's AC4 discrepancy | **#647** (parent) with subtasks **#639–#646**, filed 2026-08-15. Explicitly **not** part of the backfill project. |
 | **Research engine cleanup** | the shared `chart-theme.js` category-axis defect and the regime charts | **#624**. Not part of the backfill project. |
 
@@ -566,11 +722,11 @@ source, a reconciliation job, or a testable persisted-floor invariant. Its full
 specification is §6.4 of this document.
 
 Two of the filed nits are load-bearing for this design rather than incidental,
-and are treated where they belong: the compose-allowlist defect class in §8.1,
-and #645's closure in §11. One issue filed after the split is load-bearing for a
+and are treated where they belong: the compose-allowlist defect class in §10.1,
+and #645's closure in §13. One issue filed after the split is load-bearing for a
 pending decision: **#648** (OPEN) records that the SP500 column splices two
 different measurements, which is a second and independent reason to keep SP500
-out of the backfill — see PD7 and §10.
+out of the backfill — see PD7 and §12.
 
 ### 3.2 Step 0 — merge and deploy PR #615, and prove the clamp self-heals
 
@@ -598,13 +754,13 @@ this repository, and **none of them is maintained.**
 |---|---|---|
 | *Reconstruct Wallet History — Project Plan* (`reconstruct-wallet-project.md`, another session's scratch file) | the four backfill code issues, the archive-read decision argument, and the sequencing | §6.5 (the four issues), PD1 and §6.3 (the decision argument), §6.6 (sequencing) |
 | *ISSUE-DRAFT-source-reconciliation.md* (unfiled issue draft) | the Class A reconciler's scope boundaries, acceptance criteria, and test plan | §6.4 |
-| *RECONCILIATION-two-plans.md* (the reconciliation memo between the two) | the one-dispatcher / three-detector argument and the shared hazards | §4, PD9, §7.6, §10 |
+| *RECONCILIATION-two-plans.md* (the reconciliation memo between the two) | the one-dispatcher / three-detector argument and the shared hazards | §4, PD9, §7.6, §12 |
 
 Two contents of the wallet plan are **deliberately not carried forward**, and
 must not be re-imported as live work from any copy of it: its Issue 6, the shared
 `chart-theme.js` category-axis defect, moved to **#624**; and its Issue 7, the
 `source: "live"` honesty question, filed as **#645** and **closed NOT_PLANNED**
-on 2026-08-15 because its premise was wrong (§11).
+on 2026-08-15 because its premise was wrong (§13).
 
 Where the drafts and this document disagreed on a verifiable fact, this document
 carries the value checked against this checkout. The one such correction worth
@@ -613,7 +769,7 @@ flagging: the wallet plan says fourteen exported RPC wrappers thread
 
 **Naming.** Where a claim below is attributed to *"Plan A"*, that is the wallet
 plan in the first row of the table — its investigation is the source of every
-live-system measurement in this document, and §12 records which of them were
+live-system measurement in this document, and §14 records which of them were
 re-verified here and which were not.
 
 ## 4. Architecture — three detectors, one dispatcher, per-class executors
@@ -666,6 +822,13 @@ write.
 | `fabricated` | source lacks the key **and** the declared calendar says the source could never publish that date | **quarantine**, reversibly; never hard-delete |
 | `unexplained_absent` | source lacks the key but the calendar permits it — holiday, degraded source, vendor outage | **never touch**; count, and alarm once it persists across N consecutive runs |
 | `unverifiable` | key predates the source's re-servable window (D7's `HY_OAS`) | leave, count, disclose |
+
+**A repair is not a republication.** Under the decided publication model (PD10,
+§9), `revised` and `fabricated` change the persisted floor and therefore the
+*next candidate* computation; they do not change a published figure until an
+admin publishes that candidate. Every repair must also write an immutable
+revision record — §8.1 — which is what makes the eventual version bump
+explicable.
 
 ### Why `unexplained_absent` is the whole safety argument
 
@@ -884,6 +1047,12 @@ place that extension needs ratifying).
   from every read path, plus a `last_verified_at` column on
   `raw_indicator_history` so an unchecked row is distinguishable from a confirmed
   one. Next migration ordinal in this checkout is `0032`.
+- **An immutable revision log** (§8.1), written by every repair and every
+  quarantine: series, natural key, prior value, new value, verdict, run,
+  source evidence, timestamp. It is the same record quarantine needs to be
+  genuinely reversible, and the same record that explains a version bump under
+  PD10 — so it is one mechanism serving three purposes and must not be deferred
+  to a follow-up.
 - A new authenticated analytics verb for submitting a reconciliation report and
   its proposed repairs — none of the five existing verbs
   (`contract/src/routes.js:210-216`) is delete- or quarantine-shaped — with
@@ -907,7 +1076,7 @@ rows; the six persisted series carrying no provenance column at all, and
 `swarm/domain.ts:1285`'s synthetic `regime_snapshots` rows written with no
 `source` in demo and stage *(both inherited from the draft; **unverified** here)*;
 unifying the four provenance vocabularies or adding CHECK constraints to them
-(§10); and any change to v0 (`agentjuno/robotmoney`).
+(§12); and any change to v0 (`agentjuno/robotmoney`).
 
 **Acceptance criteria.** Each asserts a *caller*, not just a mechanism — the
 failure mode §3 documents this codebase repeating.
@@ -930,6 +1099,11 @@ failure mode §3 documents this codebase repeating.
   the refusal is enforced in the API process rather than only in the producer.
 - `raw_indicator_history` records when each row was last verified against source,
   so an unverified row is distinguishable from a confirmed one.
+- Every repair and every quarantine writes an immutable revision record carrying
+  its prior value, new value, verdict, run, and source evidence, and a
+  quarantined row is restorable from that record alone.
+- A refused batch raises an operator alert in `GET /api/admin/overview`, so a
+  refusal is never indistinguishable from a clean run (§8.2).
 - The producer submits reconciliation reports and proposed repairs only through
   the new authenticated analytics route, and acquires no `DATABASE_URL`.
 - Reconciliation runs on its own cron — incremental daily, full weekly — and is
@@ -1011,7 +1185,7 @@ a second run over the same window costs zero resolver calls. *(The 2s block time
 the 43200 constant and the ≤8-call bound are Plan A's arithmetic and are
 **unverified** here.)*
 
-**The silent-zero hazard must be handled in this issue, not deferred** (§8).
+**The silent-zero hazard must be handled in this issue, not deferred** (§10).
 `decodeUint256("0x")` returns `0n` (`base-rpc-client.ts:48-52`) and Multicall3
 returns `success: true` with `returnData: "0x"` for an address with no code, so
 there is no revert to catch. Live this is harmless — the contracts are deployed.
@@ -1056,7 +1230,7 @@ Prices are **not** the rate-limit concern; §6.5.3 is.
 
 **Pool addresses are derived, never configured.** The OHLCV endpoint is keyed by
 *pool*, not by the token addresses the spot path uses, and the three `*_POOL_ID`
-env vars are dead (§9, **#639**) — there is nothing to populate. Resolve at use
+env vars are dead (§11, **#639**) — there is nothing to populate. Resolve at use
 time via `GET /networks/base/tokens/{addr}/pools` (keyless, 20 pools per page).
 Two properties of that resolution are load-bearing:
 
@@ -1077,16 +1251,16 @@ address) is accepted by the OHLCV endpoint, and its daily close is
 **byte-identical** to what the existing `/simple/…/token_price/` path returns:
 GeckoTerminal's token price *is* the top pool's price. *(All GeckoTerminal
 measurements in this subsection are from the 2026-08-15 investigation and are
-**unverified** in this checkout — see §12.)*
+**unverified** in this checkout — see §14.)*
 
-**Vendor constraint, inherited and non-negotiable** (§9).
+**Vendor constraint, inherited and non-negotiable** (§11).
 `backend/src/chain/token-prices.ts:3-8` permits only the GeckoTerminal and Yahoo
 hosts; CoinGecko is reachable and banned. New GeckoTerminal *endpoint* code is
 explicitly permitted, so a daily OHLCV fetcher is in bounds — but **do not reuse
 `runGeckoBatch`** (`token-prices.ts:203-224`): it is address-keyed with no time
 dimension and targets a spot-only endpoint. Copy the pattern, not the code.
 
-**SP500 is skipped here, not approximated** — PD7 and §10.
+**SP500 is skipped here, not approximated** — PD7 and §12.
 
 #### 6.5.3 RPC batching and rate limiting
 
@@ -1150,7 +1324,7 @@ it first — plus the Class C executor:
 - **Class A gains the trigger it is missing.** #614's AC4 Class A bullet is
   ticked but unimplemented — filed as **#646**. Either the detection→re-fetch
   trigger is built, or the criterion is restated honestly; a ticked criterion
-  with no code is the exact pattern §12's standing warning is about.
+  with no code is the exact pattern §14's standing warning is about.
 - **Class B already works** via producer catch-up, but that catch-up computes its
   own missing-days set and does not consume the gap detector (§6.2). Unify rather
   than leave two notions of "which days are missing" to drift.
@@ -1162,7 +1336,7 @@ it first — plus the Class C executor:
   (`backend/src/chain/wallet-valuation.ts:263`) and depends on round 1's output,
   so a half-read day produces a plausible, wrong total.
 - **Treat `success === true && returnData === "0x"` as a hard failure for that
-  day, never as a zero** (§8), and carry a per-address earliest-valid-block floor
+  day, never as a zero** (§10), and carry a per-address earliest-valid-block floor
   so days preceding a target's deployment are skipped rather than zeroed.
 - **Checkpoint per day for resumability**, following the `buyback_scan_state`
   precedent — `backend/migrations/0015_buyback_swaps.sql:42-46`, a single-row
@@ -1198,6 +1372,16 @@ prerequisites; steps 3a and 3b are genuinely parallel.
 5. **Re-measure the RPC rate limit from the production droplet** before sizing
    any backfill run — PD6.
 6. Run the backfill; verify continuity through `GET /api/admin/gaps`.
+
+**The publication workstream (§9) runs independently of all of this and should
+start earlier than its position in the list suggests.** It is not gated on PD1,
+it does not touch the dispatcher, and it makes §8's disclosure tractable rather
+than expensive — so the reconciler's repairs land into a frozen-and-gated world
+rather than one where each repair silently restates published figures. Its own
+order is: settle PD11 and PD12 (both schema), record the `v4` decision entry
+(PD10), then build the candidate/publish split, which §9.2 argues is far smaller
+than it sounds because the full-history recompute already runs daily. PD13 and
+PD14 can be taken at any point before it ships.
 
 Two corrections are owed to existing artifacts and should not be lost in the
 sequencing. **#614's `## Scope` section** still states that reconstructing this
@@ -1292,6 +1476,11 @@ The current destructive path is the counter-example to design against:
 `raw-history-store.ts:67-69` upserts with
 `DO UPDATE SET value = EXCLUDED.value`, and `store/seed-provenance.ts:58-61`
 issues a real `DELETE`. Neither leaves a trace of what was there before.
+Reversibility is only as good as what was recorded, which is why §8.1's revision
+log is a prerequisite of this mechanism rather than a companion to it: a flag
+that hides a row without preserving its prior value, the evidence, and the run
+that removed it is reversible in name only.
+
 Relatedly, `raw_indicator_history` needs a `last_verified_at` column so an
 unchecked row is distinguishable from a confirmed one; today the table is
 `(date, indicator, value, source)` only
@@ -1392,7 +1581,284 @@ original values (`dashboards.d.ts:80`), so anything written today with
 value is available is a function of whether #615 has merged, and must be
 re-checked against `main` rather than assumed.
 
-## 8. The silent-zero defect class
+## 8. Disclosure of corrections
+
+Everything in §5 through §7 is about changing numbers. A `revised` verdict
+rewrites an observation; a `fabricated` verdict removes one. Both are correct
+operations, and both change figures **that have already been published to
+readers.**
+
+The magnitude is not speculative. The originating audit measured it: cleaning
+v0's floor moved the macro index from `0.610602` to `0.653632`, and `ICSA`
+alone contributed `+0.039932` of the `0.046607` v1-v0 gap — **about 86% of it**,
+from one indicator's source-absent keys.
+
+**Silent self-correction is itself an honesty failure.** A reader who saw a
+figure yesterday and reloads today gets a different one with no explanation, and
+from outside the system that is indistinguishable from three other things: an
+unstable methodology, a bug, and a system quietly editing its own history. The
+design's whole claim is that the numbers are honest; a number that changes
+without saying so forfeits that claim precisely at the moment the system is
+doing the right thing. Detection and repair without disclosure is not
+self-healing — it is a self-editing archive.
+
+This section states what disclosure requires. §9 states the publication model
+the product owner has since decided, which is the mechanism that makes most of
+it tractable.
+
+### 8.1 A revision log is a hard prerequisite, and does not exist
+
+`raw_indicator_history` is `(date, indicator, value, source)`
+(`backend/migrations/0009_analytics_v2.sql:29-33` plus
+`0024_analytics_provenance_source.sql:21`), and the writer is destructive:
+`backend/src/analytics/store/raw-history-store.ts:68-69` issues
+
+> `INSERT INTO raw_indicator_history … ON CONFLICT (date, indicator) DO UPDATE
+> SET value = EXCLUDED.value, source = EXCLUDED.source`
+
+with the module's own comment at `:45` noting that `ON CONFLICT` overwrites
+`source` along with `value`. After that statement runs, **"this row changed" and
+"this row was always this" are indistinguishable.** There is no prior value, no
+timestamp, and nothing that records why.
+
+So every repair must write an **immutable revision record**, and this is a
+prerequisite of the repair executor rather than a follow-up to it. Each record
+carries:
+
+- the **series** and the **natural key** it applies to (for Class A, `(date,
+  indicator)`);
+- the **prior value** and the **new value** — or, for a quarantine, the prior
+  value and the fact of removal;
+- the **verdict** that produced it (§5);
+- the **reconciliation run** that proposed it, so a batch is reconstructable as a
+  batch and not only row by row;
+- the **source evidence** that justified it — what the source returned for that
+  key, at what time, from which endpoint;
+- a **timestamp**.
+
+**This is the same record quarantine needs to be genuinely reversible** (§7.2).
+A quarantine that only sets a flag can be undone; a quarantine that can explain
+what was removed, why, on whose evidence, and in which run is the thing an
+operator can actually audit and revert. One mechanism, two uses — and building it
+once avoids the alternative, which is a flag column now and a forensics
+reconstruction later from data that was never kept.
+
+Note also the interaction with `last_verified_at` (§7.2): that column answers
+*when was this row last checked*, and the revision log answers *what has this row
+been*. Neither substitutes for the other, and the second is the one disclosure
+depends on.
+
+### 8.2 Three audiences, three different needs
+
+Disclosure is not one feature. Three consumers need different things from the
+same event, and collapsing them produces a mechanism that serves none of them.
+
+**Operators need to know a discrepancy was FOUND** — immediately, and
+independently of whether anything was repaired. This explicitly includes the
+cases the system **refuses** to act on: a batch refused by the blast-radius guard
+(§7.3) means the reconciler saw something it could not safely touch, which is
+strictly more urgent than a repair it could. A refusal that is silent is the
+worst outcome available, because it looks identical to a clean run. Route this
+through the existing alerts feed — `GET /api/admin/overview`
+(`backend/src/admin/overview.ts:47`, `AlertLevel`) — per §11's no-new-operator-
+surface constraint.
+
+**API consumers need a machine-readable restatement signal.** A cache, a
+downstream report, or an external agent must be able to distinguish *"the number
+I already had has changed"* from *"I asked for a different window this time"*.
+Without that signal the only way to detect a restatement from outside is to diff
+two payloads and guess, which every consumer would then have to implement
+separately and inconsistently. §9's published version is the natural carrier for
+this, which is one of the reasons the frozen model makes the rest of this section
+cheap rather than expensive.
+
+**Dashboard readers need a plain explanation at the point of the number** — not
+in a changelog, not on an admin page. **Use the seam-banner pattern PR #615
+established for gaps** rather than inventing a second disclosure vocabulary: that
+work already had to solve "explain, in place, why this series is not what you
+expect", and a restated figure is the same problem with a different cause. Two
+vocabularies for "this data is not straightforward" would be a worse outcome than
+either alone. *(The seam banner is on PR #615's unmerged branch, so its shape is
+**unverified** against `main`.)*
+
+### 8.3 Derived-output amplification — disclose the figure, not the row
+
+The most important property of a correction in this system is that **it does not
+change one number.**
+
+A raw revision changes every figure computed from that series, across the whole
+window the computation spans. One corrected `ICSA` observation moves that
+indicator's percentile, the macro panel index, the composite, and potentially the
+**regime label** — for every date inside the 1095-day rolling window, not only
+for the corrected date. The audit's measured `0.610602 → 0.653632` move is
+exactly this effect: a set of raw keys changed, and a published index moved.
+
+The consequence for disclosure is a rule, not a nuance: **disclosure must be
+expressed at the level of the published FIGURE, not the raw row.** Saying "one
+observation was corrected" while an entire published history shifts underneath it
+is technically true and materially misleading — it invites the reader to assume a
+localized fix. What a reader needs to know is which published figures moved and
+over what span, which is a statement about outputs. The revision log (§8.1)
+records the causes; the disclosure describes the effects; and the two are joined
+by §9's version diff, which is the only artifact that actually knows the full
+blast radius of a recompute.
+
+## 9. Frozen, versioned publication
+
+**Decided by the product owner on 2026-08-15** (PD10). This is settled, not
+proposed. What follows states the model, what already exists, what it reverses,
+and why it is a verification instrument and not merely a publishing workflow.
+
+### 9.1 The model
+
+- **Historical reports are FROZEN.** Published figures do not change under
+  readers.
+- They are **VERSIONED**, and the version is **DISPLAYED**.
+- An admin may **refresh calculations**, which computes a **next** version.
+- **Computing a next version does NOT publish it.** Publishing is a separate,
+  explicit admin action.
+- A newly computed version **identical to the prior one is a NOOP** — which is
+  equivalent to a passing audit, and is the normal expected outcome.
+
+That last property is the one to keep in view: under this model the *routine*
+result of a refresh is "nothing changed", and a non-empty diff is the exception
+that demands attention. That inverts today's arrangement, where a recompute
+overwrites published state unconditionally and a change is invisible by
+construction.
+
+### 9.2 What already exists
+
+`regime_snapshots` already carries a `version` column — `version text`, added by
+`backend/migrations/0009_analytics_v2.sql:23`, and named in that migration's own
+header (`:4`) as part of the ported `computeRegime` output. The value is
+`CURRENT_REGIME_VERSION`, exported from
+`backend/src/analytics/analyze/regime-versions.ts:8` as `"v3"`; it is stamped
+onto every snapshot at `backend/src/analytics/index.ts:494`, written and read
+through `backend/src/analytics/store/regime-store.ts` (`:39` in the insert column
+list, `:46` in the bound values, `:67` as `version = EXCLUDED.version` on
+conflict, `:99` when reading a row back), and reaches the DTO at
+`contract/src/dashboards.d.ts:232` as `version?: string | null`.
+
+**Most of the machinery is therefore already built, and this is the single most
+important practical fact in this section.** `regime-versions.ts` states in its own
+comment that under v3 *"every run recomputes the full history on best-available
+raw data"* — so the **full-history recompute already runs, daily.** What the
+decided model needs is not a new computation. It needs three things layered onto
+one that already exists:
+
+1. stop that recompute overwriting published state;
+2. diff the candidate against the published version;
+3. gate publication behind an explicit admin action.
+
+**The cost is in the publish workflow, not in the computation.** Anyone sizing
+this work from the words "versioned historical reports" will overestimate it
+substantially.
+
+One schema fact bounds the work in the other direction, and must not be missed:
+**`regime_snapshots` cannot currently hold two versions of the same date.** Its
+primary key is `date` alone (`backend/migrations/0002_dashboards.sql:53`), and the
+upsert overwrites `version` in place (`regime-store.ts:67`). Holding a
+computed-but-unpublished candidate alongside the published row is therefore a
+schema change and not merely a code change — an unavoidable cost of the model —
+and retaining a *superseded* version is a further one, which is PD12.
+
+### 9.3 This reverses v3's stated semantics, and should be v4
+
+Today `version` is a **methodology tag**: which algorithm produced the row. It is
+not a publication vintage. `regime-versions.ts:1-7` says so directly — it
+describes itself as a *"Methodology version tag stamped on every persisted regime
+snapshot row"*, and v3 explicitly disclaims freezing:
+
+> v3: point-in-time inverse-correlation weighting (trailing 3y window per day,
+> 21-day refresh, 25% cap), **no frozen lockout** — every run recomputes the full
+> history on best-available raw data. Raw inputs remain strictly append-only
+> (`raw_indicator_history` via `mergeSeries`); only the DERIVED labels are
+> recomputed.
+
+**v0 was the frozen one.** Its `data/regime/regime-history.csv` is frozen-vintage
+via `mergeFrozenIntoResult` (`update.js:131`), so a published row stayed as
+published unless a deliberate relock was performed with `rebuild.js --version` —
+and the audit's judgement on that arrangement is the relevant precedent here:
+*"That is a product decision, not a code fix, and should be taken explicitly."*
+The audit records elsewhere that v0 *"handles the point-in-time concern at the
+publication layer instead (frozen `regime-history.csv`), which is a deliberate,
+documented choice."* *(Both quoted from
+`docs/code-review/20260814-review-data-integrity-macro-index-discrepancy.md`;
+the v0 file and line are the audit's, **unverified** in this repository, which
+does not contain v0.)*
+
+So the decided model returns to freezing, and adds an explicit publish gate v0
+did not have. Because that changes **what a published number means** — from "the
+current best recomputation" to "the figure published as version N" — it is a
+methodology-level change and should be tagged **v4**.
+
+**Recommendation: record it as a `docs/decisions.md` entry, not only here.** A
+change to the meaning of a published figure is exactly the class of thing
+`decisions.md` exists for, and the negative example is already in this document:
+"Open Question 9" is load-bearing and has no canonical record anywhere (PD3),
+which is why reversing it is awkward. Do not create a second instance of that
+problem. The entry should state the model of §9.1, tag the methodology `v4`, and
+name the `regime-versions.ts` comment it displaces — which, as with PD3, **must
+be edited in the same diff**, or the repo ships a `v4` whose own version file
+still says there is no frozen lockout.
+
+### 9.4 Noop-as-audit is a first-class verification instrument
+
+The most valuable property of this model is not that readers get stable numbers.
+It is that **comparing a candidate recompute against the published version
+detects three distinct causes of change at once:**
+
+1. **the source revised its data** — what the Class A reconciler (§6.4) is built
+   to find;
+2. **we repaired our own persisted data** — the reconciler's own writes, and the
+   Class C backfill's;
+3. **our own computation changed.**
+
+**The third is invisible to a reconciler that only compares stored values against
+sources**, and that blind spot is not hypothetical. A refactor that silently
+shifts the composite — a changed window boundary, a reordered fold, a corrected-
+looking rounding change — leaves every raw row exactly as the source has it. A
+value-level reconciler compares those rows to the source, finds perfect
+agreement, and reports a clean run while the published index has moved. Under
+this model the same change surfaces immediately, as a **non-empty candidate diff
+against an unchanged published version**: nothing in the inputs moved, so
+anything that moved is us.
+
+That makes the periodic candidate recompute a **standing verification of the
+computation itself**, in the §1 sense — a comparison performed on a schedule
+whose null result is meaningful. It is the only mechanism in this design that
+covers the computation layer at all; §5's verdicts cover stored values, and §6.2's
+Class B recompute covers one series' outputs against its own inputs, but neither
+notices a methodology drift that is internally consistent.
+
+Two design requirements follow.
+
+**The revision log explains the version bump.** The diff between two versions says
+*what* changed — which figures, over which span (§8.3). The revision records of
+§8.1 say *why*: which source keys were revised or quarantined, on what evidence,
+in which run. A version bump with a non-empty diff and no corresponding revision
+records is precisely case 3 above, and should be read as such rather than
+explained away.
+
+**A published version must be resolvable.** An external citation of a figure —
+in a report, a post, another system's stored copy — stays meaningful only if the
+version it was read under can still be resolved to the figures it published.
+Whether superseded versions are retained and served is PD12, and it is the
+question that decides whether that property actually holds.
+
+### 9.5 A trap: `analytics_submissions` is unrelated
+
+`backend/migrations/0023_analytics_submissions.sql` looks like an existing
+approval workflow to build on — its header comment even reads *"No auto-publish:
+everything lands 'pending'"* (`:5`), and it carries a
+`status … CHECK (status IN ('pending', 'accepted', 'rejected'))` (`:14`). **It is
+not related.** The same header describes it as *"public, anonymous
+agent-onboarding / community-commit submissions"* mirroring
+`committee_applications` (`:1-4`); it moderates third-party submissions, not the
+publication of computed analytics. The name and the no-auto-publish comment make
+this a very plausible wrong connection, which is why it is recorded here.
+
+## 10. The silent-zero defect class
 
 The same defect keeps appearing on unrelated rails, and it is worth naming as a
 class because a fix on one rail teaches nothing about the others unless the
@@ -1402,7 +1868,7 @@ success**, and it has two sub-forms:
 - **An absent answer decodes as a real value** — the chain and extract rails
   below.
 - **Unreachable configuration degrades silently while still reporting success**
-  — the config rail, §8.1.
+  — the config rail, §10.1.
 
 The generalization matters to this design specifically. **A reconciliation loop
 that only compares persisted values against sources catches neither sub-form.**
@@ -1439,7 +1905,7 @@ healthy persisted floor, means *every* persisted key looks source-absent. That
 is exactly the input that must classify `unexplained_absent` and trip the
 degeneracy guard — never `fabricated`.
 
-### 8.1 The config rail — undeliverable variables that fail silently
+### 10.1 The config rail — undeliverable variables that fail silently
 
 The mechanism here is a delivery boundary rather than a decoder, but the outcome
 is identical: a live code path computes a wrong answer and reports it as `ok`.
@@ -1493,7 +1959,7 @@ wrong number:
 
 **Why this belongs here rather than only in #647.** Each of the three produces a
 value that a source comparison either cannot see — SP500's *size* has no source
-to compare against, which is the same fact that makes it unbackfillable (§10) —
+to compare against, which is the same fact that makes it unbackfillable (§12) —
 or would misread as a genuine observation, since `indexed: 0` is a true
 statement about an indexer that never ran. The design consequence is exactly the
 one §5 draws for `unexplained_absent`: **what a detector consumes must carry
@@ -1502,7 +1968,7 @@ that means "we did not even try" is indistinguishable from a real read at every
 layer above it, and no amount of comparing numbers to sources recovers the
 difference.
 
-## 9. Constraints inherited from the existing system
+## 11. Constraints inherited from the existing system
 
 These are not negotiable within this design; a proposal that violates one is
 proposing a different change.
@@ -1532,7 +1998,7 @@ proposing a different change.
   6th call in ~15s, against an endpoint the repo has already tuned to conserve
   quota (`token-prices.ts:63-70`, the micro-batching serializer from #202).
   *(Both measured in the 2026-08-15 investigation; **unverified** here — see
-  §12.)* The resolution itself is specified in §6.5.2.
+  §14.)* The resolution itself is specified in §6.5.2.
 
   The dead-code claim needs stating more precisely than **#639**'s title does,
   since that title says "zero readers" and the env vars *are* read: `config.ts`
@@ -1558,7 +2024,9 @@ proposing a different change.
   contrast, is squarely inside the enumeration: it *is* a real read, freshly
   re-fetched from source, and needs no accommodation.
 
-  Adopting that reading is **PD4**.
+  Adopting that reading is **PD4**, and **PD10** strengthens it: under frozen
+  publication a quarantined row cannot move a published figure either, so it is
+  unpresented twice over.
 
   **The hard consequence:** if a quarantined row ever does reach a DTO — an
   operator surface that lists what was quarantined, say, or a per-point flag
@@ -1572,7 +2040,7 @@ proposing a different change.
   existing `GET /api/admin/overview` alerts feed
   (`backend/src/admin/overview.ts:47`, `AlertLevel`), not a parallel dashboard.
 
-## 10. What will remain imperfect
+## 12. What will remain imperfect
 
 Stating these up front prevents the design being read as a promise it cannot
 keep.
@@ -1617,15 +2085,16 @@ keep.
   doc; **unverified** here.)* Unifying these should be its own issue, taken
   **before** a third vocabulary is added, not after.
 
-## 11. Open questions
+## 13. Open questions
 
-The nine that are *decisions* — with options, consequences and a recommendation
+The ones that are *decisions* — with options, consequences and a recommendation
 each — are in **Pending decisions** at the top of this document, and are not
 repeated here. In particular: the unfiled archive-read `decision:` issue is
 **PD1**, the D16 clarification-versus-supersession question is **PD2**, the Open
-Question 9 record is **PD3**, and whether a keyed RPC provider is acquired is
-**PD6**. What follows is the residue: questions that are open because nobody has
-the answer yet, rather than because nobody has chosen.
+Question 9 record is **PD3**, whether a keyed RPC provider is acquired is
+**PD6**, and the four sub-questions left open by the decided publication model
+are **PD11–PD14**. What follows is the residue: questions that are open because
+nobody has the answer yet, rather than because nobody has chosen.
 
 - **Resolved, and not in the direction an earlier draft assumed: `source:
   "live"` on the wallet-balances DTO is not a defect.** It was filed as **#645**
@@ -1670,7 +2139,7 @@ the answer yet, rather than because nobody has chosen.
   `fabricated` on first run. Until that is measured against real production
   data, the rewrite-ratio bound in §7.3 cannot be set to a defensible number.
 
-## 12. Provenance of the claims in this document
+## 14. Provenance of the claims in this document
 
 Precision about what is known versus inferred matters more here than usual,
 because this design proposes automated deletion-shaped operations on production
@@ -1694,7 +2163,7 @@ not re-verified in this checkout):
 **Read from code and verified in this worktree** at
 `adhoc/20260815-173700-data-integrity-self-healing-design`: every `path:line`
 citation in the *Pending decisions* section and in §3, §5, §6.1, §6.3, §6.4,
-§6.5, §7, §8, §9, and §10 was opened and checked. Notably confirmed by absence:
+§6.5, §7, §10, §11, and §12 was opened and checked. Notably confirmed by absence:
 `ops/series-registry.ts`, `ops/gap-detector.ts`, `/api/admin/gaps`,
 `backend/src/worker/handlers/slot.ts`, and the `research_signals` producer
 catch-up are **not in `main`** — they live on PR #615's unmerged branch, so every
@@ -1702,6 +2171,25 @@ claim about their contents is inherited, not verified. Also confirmed:
 `WalletHoldingProvenance` in this checkout is still the original four values, and
 the `*_POOL_ID` env vars are assigned into `TrackedAsset.poolId` in `config.ts`
 and read **nowhere else** in `backend/src`.
+
+Verified for §8 and §9 on 2026-08-15: the destructive upsert at
+`store/raw-history-store.ts:68-69` and its `source`-overwrite comment at `:45`;
+`version text` on `regime_snapshots` at `0009_analytics_v2.sql:23` and its
+mention in that migration's header at `:4`; `CURRENT_REGIME_VERSION = "v3"` at
+`analyze/regime-versions.ts:8` with the v3 comment quoted verbatim from `:1-7`;
+the stamp at `analytics/index.ts:494`; the four `regime-store.ts` sites (`:39`,
+`:46`, `:67`, `:99`); the DTO field at `contract/src/dashboards.d.ts:232`;
+`regime_snapshots`' `date`-only primary key at `0002_dashboards.sql:53` inside
+the table at `:52-62` — from which the finding that **the table cannot hold two
+versions of the same date** is derived here, not inherited; and the
+`analytics_submissions` trap at `0023_analytics_submissions.sql:1-5` and `:14`,
+whose header describes public anonymous agent-onboarding submissions mirroring
+`committee_applications`. **Not** verified here: v0's `mergeFrozenIntoResult` and
+`rebuild.js --version` (quoted from the audit; this repository does not contain
+v0), and PR #615's seam banner, which is on an unmerged branch. The audit
+passages quoted in §9.3 were read from
+`docs/code-review/20260814-review-data-integrity-macro-index-discrepancy.md` in
+this checkout.
 
 Verified for the absorbed specifications (§6.4, §6.5) on 2026-08-15: the two
 hardcoded `"latest"` strings are the only two in `backend/src/chain/`
@@ -1724,7 +2212,7 @@ pool-selection measurement, every RPC batching and rate-limit number, and the
 date→block arithmetic (2s blocks, 43200/day, ≤8 calls per date) — all are
 2026-08-15 investigation results, marked *unverified* where they appear.
 
-Verified for §8.1 in this checkout on 2026-08-15: the compose allowlist premise
+Verified for §10.1 in this checkout on 2026-08-15: the compose allowlist premise
 (no `env_file:` in any of the three compose files, no `ENV` in
 `backend/Dockerfile`) and its guard test at
 `demo-compose-config.test.ts:520-529`; the `BUYBACK_FROM_BLOCK` `NaN` path
