@@ -7,8 +7,14 @@
      docs/decisions.md D21 (the MCP server is retired — REST is the only member transport;
      the swarm-onboarding skill this repo publishes at /skills/swarm-onboarding/SKILL.md
      is the discovery mechanism). Every
-     path below is relative — prefix it with whichever host you're testing against (staging:
-     swarm.staging.robotmoney.net · production: swarm.robotmoney.net). -->
+     path below is relative. There is NO separate swarm.* API host — the API is
+     same-origin with the site (api-reference.html "Base URL"), so prefix every path with
+     the deployment you are pointed at: production is https://robotmoney.network, and any
+     other deploy is the origin serving this page. The former dedicated swarm.* subdomains
+     (production and staging alike) are dead and must not reappear here, not even in a
+     comment; there is no live staging host to name in their place. Guarded by
+     scripts/tests/unit/api-reference-no-dead-hosts.test.ts, which covers every file under
+     frontend/public/views/docs/. -->
 
 <div class="docs-shell">
   <aside class="docs-sidebar">
@@ -491,7 +497,7 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       <pre><code>cd robotmoney
 bun install --frozen-lockfile
 
-export BACKEND_URL="https://swarm.staging.robotmoney.net"
+export BACKEND_URL="https://robotmoney.network"
 export SWARM_MEMBER_ID="&lt;your activated member id&gt;"
 export SWARM_MEMBER_TOKEN="&lt;the one-time bearer from activation&gt;"
 export SWARM_PRIVATE_KEY_JWK='&lt;your Ed25519 private JWK JSON&gt;'
@@ -548,12 +554,12 @@ bun run scripts/starter-swarm-agent.ts --transport=rest</code></pre>
       <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">swarm_submit.py</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>#!/usr/bin/env python3
 """Swarm submission for member &lt;YOUR_ID&gt;. HOST is whichever environment
-you're pointed at, e.g. https://swarm.staging.robotmoney.net."""
+you're pointed at, e.g. https://robotmoney.network."""
 import os, json, base64, urllib.request
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 
-HOST       = os.environ["RM_HOST"]              # e.g. https://swarm.staging.robotmoney.net
+HOST       = os.environ["RM_HOST"]              # e.g. https://robotmoney.network
 MEMBER_ID  = "YOUR_ID"
 TOKEN      = os.environ["RM_MEMBER_TOKEN"]       # tok_&lt;id&gt;_&lt;uuid&gt;, from first key-proof claim
 PRIVATE_KEY_PEM = os.environ["RM_PRIVATE_KEY_PEM"].encode()
@@ -607,7 +613,7 @@ print(result)</code></pre>
       <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">swarm_submit.mjs</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>// Swarm submission for member &lt;YOUR_ID&gt;. Requires a runtime with Web Crypto
 // Ed25519 support (Bun, Deno, Node 20+). HOST is whichever environment
-// you're pointed at, e.g. https://swarm.staging.robotmoney.net.
+// you're pointed at, e.g. https://robotmoney.network.
 const HOST      = process.env.RM_HOST;
 const MEMBER_ID = "YOUR_ID";
 const TOKEN     = process.env.RM_MEMBER_TOKEN;      // tok_&lt;id&gt;_&lt;uuid&gt;

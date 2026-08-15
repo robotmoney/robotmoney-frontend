@@ -3,7 +3,7 @@
   "status": "active",
   "name": "Robot Money Treasury",
   "operator": "robotmoney",
-  "homepage": "https://www.robotmoney.net/allocation",
+  "homepage": "https://robotmoney.network/allocation",
   "thesis_blurb": "Robot Money's protocol-owned capital. Three wallets: the Primary (holds the ROBOTMONEY token, ETH, USDC, and runs the prop wallet buyback flywheel) plus two Stablecoin Strategy wallets delegated to external yield engines (Zyfai SS1, Giza SS2). Distinct from the vault contract, which holds depositor capital and is tracked as a separate subject.",
   "wallets": [
     { "address": "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6", "chain": "base", "label": "primary" },
