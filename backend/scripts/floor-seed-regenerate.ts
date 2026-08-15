@@ -15,10 +15,22 @@
 // silently drags the vendored asof coverage forward — bumping every
 // indicator's vintage together is a separate, independently reviewed change).
 // Pass --max-date to override, or --no-cap to keep every fetched row.
+//
+// `--purge` (issue #616): a SEPARATE, explicitly-invoked full-universe purge
+// regeneration mode that rebuilds the ENTIRE committed floor from this repo's
+// own live fetchers (extract/sources.ts fetchAll) — purging every recoverable
+// indicator's prior history and preserving (calendar-filtered) only the
+// unrecoverable spans. See floor-seed-generator.ts's generateFullUniversePurge
+// header for the preserve-list rationale. Removes the D6/D7 fabricated rows
+// (docs/code-review/20260814-review-data-integrity-macro-index-discrepancy.md)
+// the additive path above cannot reach (it only ever adds).
 import { fetchCoinmetrics } from "../src/analytics/extract/coinmetrics.ts";
+import { fetchAll } from "../src/analytics/extract/sources.ts";
 import {
   generateFloorSeedArtifact,
+  generateFullUniversePurge,
   replaceFloorSeedAtomically,
+  UNRECOVERABLE_PRESERVE_IDS,
 } from "../src/analytics/extract/floor-seed-generator.ts";
 import { DEFAULT_FLOOR_SEED_PATH } from "../src/analytics/extract/floor-seed.ts";
 
@@ -32,11 +44,26 @@ function flag(name: string): boolean {
 }
 
 export async function main(): Promise<void> {
+  const seedPath = arg("out") ?? DEFAULT_FLOOR_SEED_PATH;
+
+  if (flag("purge")) {
+    console.log(
+      `[floor-seed-regenerate] PURGE mode: rebuilding the FULL registry from live sources only ` +
+        `(preserve-list: ${UNRECOVERABLE_PRESERVE_IDS.join(", ")})...`,
+    );
+    const purged = await generateFullUniversePurge({ fetchAll: () => fetchAll(), seedPath });
+    for (const [id, c] of Object.entries(purged.perIndicator)) {
+      console.log(`  ${id.padEnd(14)} fetched=${String(c.fetched).padStart(6)} preserved=${String(c.preserved).padStart(6)} total=${String(c.total).padStart(6)}`);
+    }
+    replaceFloorSeedAtomically(seedPath, { gz: purged.gz });
+    console.log(`[floor-seed-regenerate] wrote ${seedPath} (full-universe purge, atomic replace, prior file untouched on any failure)`);
+    return;
+  }
+
   const indicatorId = arg("indicator") ?? "BTC_MVRV";
   const asset = arg("asset") ?? "btc";
   const metric = arg("metric") ?? "CapMVRVCur";
   const start = arg("start") ?? "2018-01-01";
-  const seedPath = arg("out") ?? DEFAULT_FLOOR_SEED_PATH;
   const maxDate = flag("no-cap") ? undefined : arg("max-date");
 
   console.log(
