@@ -671,6 +671,11 @@ into six independently testable stages — **access → extract → transform �
   seed-ingestion endpoint (parsing of the vendored seed lives in
   `extract/floor-seed.ts`; the orchestrator triggers it via
   `ANALYTICS_FLOOR_SEED=1`).
+  Merge-forward and seed gap-fill only ever *add* to the floor, so neither
+  notices a row that persisted wrong; how the pipeline instead detects and
+  repairs bad persisted data — gap detection, source-calendar validation, and
+  comparative reconciliation across independent sources for the same series —
+  is specified in [`technical/data-self-healing.md`](technical/data-self-healing.md).
   `saveRegimeSnapshots` also bakes the asof-only **`backtest`** + **`correlations`**
   jsonb payloads onto the latest `regime_snapshots` row (columns added by migration
   `0010_backtest_correlations.sql`; NULL on historical rows), sourced via
