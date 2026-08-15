@@ -163,7 +163,13 @@ test("cold DB: the committed floor seeds BTC_MVRV once; a second run is a no-op 
     SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'BTC_MVRV'`;
   expect(afterSecond).toBe(mvrvSeed.length);
   expect(afterSecond).toBe(afterFirst);
-});
+  // Issue #631: two full applyRawFloorSeed passes against the ENTIRE committed
+  // seed (119k+ rows across 26 indicators post-#630 full-universe purge, not
+  // just BTC_MVRV) — the first pass is a cold bulk insert of the whole seed.
+  // That comfortably outgrew bun test's 5000ms default (observed 5020.96ms
+  // timeout on CI, PR #628 run 31856254000/job 94941492948); give it real
+  // headroom against ordinary runner load variance, not just a hair over 5s.
+}, 30000);
 
 test("append-only floor: an existing real BTC_MVRV DB value is never overwritten by the seed", async () => {
   const seed = await loadRawFloorSeed(DEFAULT_FLOOR_SEED_PATH);
@@ -183,4 +189,7 @@ test("append-only floor: an existing real BTC_MVRV DB value is never overwritten
 
   const [{ n }] = await sql`SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'BTC_MVRV'`;
   expect(n).toBe(mvrvSeed.length);
-});
+  // Issue #631: another full applyRawFloorSeed pass over the entire committed
+  // (119k+ row, 26-indicator) seed — give it the same CI-load headroom as the
+  // idempotency test above rather than relying on the 5000ms default.
+}, 15000);
