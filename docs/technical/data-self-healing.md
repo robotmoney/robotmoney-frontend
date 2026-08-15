@@ -2,8 +2,16 @@
 
 > **Status: design proposal — now the single document for this work.** Nothing
 > here is ratified. No accepted decision in [decisions.md](../decisions.md)
-> backs this document, and none of the mechanisms it describes exists in `main`
-> today. It merges two previously separate plans — a wallet/AUM history
+> backs this document, and none of the **repair** mechanisms it proposes exists
+> in `main` today — but the detectors and guards it builds on partly do (§3), and
+> §9's `version` column and daily full-history recompute already exist (§9.2).
+> **PR #615 merged 2026-08-15T19:01:49Z** (`7b92a8c`), closing **#614** as
+> COMPLETED: the gap detector, the series registry, `remediationClass`,
+> `GET /api/admin/gaps`, the `worker/handlers/slot.ts` decline path,
+> `'backfilled'` in the wallet provenance union, and the `/performance` seam
+> banner are all now in `main`, and every citation of them below was re-verified
+> against `main` for this revision. It merges two previously separate plans — a
+> wallet/AUM history
 > reconstruction project and a continuous source-reconciliation issue — into one
 > design so they cannot build two competing repair pipelines, and it now carries
 > **both of their full specifications** (§6.4, §6.5) rather than pointing at
@@ -392,8 +400,8 @@ from, so nothing was lost in the port. The surrounding days are unreconciled
 baked UI constants, so splicing archive-derived values between them mixes two
 incompatible bases.
 
-**Options.** Leave them absent, and let PR #615's dense calendar render them as a
-two-day break; or interpolate from neighbours and label the result `'seed'`.
+**Options.** Leave them absent, and let #615's merged dense calendar render them
+as a two-day break; or interpolate from neighbours and label the result `'seed'`.
 
 **Recommendation: leave them.** Three reasons, in increasing weight. Two days out
 of a 146-day window render as a hairline break, not a visible defect. An
@@ -556,7 +564,7 @@ terms. The incremental cost is close to zero, because the full-history recompute
 **already runs daily**: `regime-versions.ts:1-7` states that under v3 *"every run
 recomputes the full history on best-available raw data"*. If the candidate
 producer is a new producer kind, it must be added to `checkArmedSchedules`'s kind
-list (`backend/src/producer/index.ts:216`, today `["regime", "research"]`) or its
+list (`backend/src/producer/index.ts:317`, today `["regime", "research"]`) or its
 liveness will not be covered — the scheduler-wedge failure class, invisible by
 default (§6.1).
 
@@ -636,8 +644,8 @@ self-healer becomes a self-destroyer.
 
 The state of play is uneven and worth stating bluntly:
 
-- **Absent** has partial machinery: a gap detector exists on PR #615's branch,
-  read-only, with no repair path.
+- **Absent** has partial machinery: a gap detector is merged in `main`
+  (`backend/src/ops/gap-detector.ts`), read-only, with no repair path.
 - **Structurally impossible** has partial machinery: a calendar validator is
   merged, but runs offline against a committed fixture and classifies most of
   the registry as unconstrained.
@@ -653,11 +661,11 @@ Every integrity mechanism this repo has is write-time or absence-shaped.
 
 | Layer | Where | Blind to |
 |---|---|---|
-| Provenance labels (`live`/`stub`/`stale`/`seed`) | `backend/migrations/0014_wallet_balance_samples.sql:30`, `backend/migrations/0024_analytics_provenance_source.sql:21` | a row correctly labelled `live` whose **value** is wrong |
+| Provenance labels (`live`/`stub`/`stale`/`seed`, plus `backfilled` since #615) | `backend/migrations/0014_wallet_balance_samples.sql:30`, `backend/migrations/0024_analytics_provenance_source.sql:21` | a row correctly labelled `live` whose **value** is wrong |
 | Calendar guard (#616/#630) | `backend/src/analytics/extract/floor-seed-calendar.ts:85` (`validateFloorCalendar`) | anything on a calendar-legal date; every source it classifies `"any"`; and it never runs against production data |
-| Gap detection (#614) | `ops/gap-detector.ts`, PR #615 branch — **not in `main`** | present-but-wrong rows — absence-only by construction; dead-ends at a read-only `GET /api/admin/gaps` |
+| Gap detection (#614, CLOSED/COMPLETED) | `backend/src/ops/gap-detector.ts:99` (`detectAllGaps`), `backend/src/ops/series-registry.ts` — merged in `main` via #615 | present-but-wrong rows — absence-only by construction; dead-ends at a read-only `GET /api/admin/gaps` |
 | EDGAR two-tier refresh (#488/#509) | `backend/src/analytics/edgar-incremental-refresh.ts:101` (`selectEdgarRefreshTier`), `backend/src/analytics/extract/edgar-fetch-plan.ts:309` (`assessEdgarBatchDivergence`) | everything outside the single EDGAR indicator |
-| Forward-fill cap (#402) | `backend/src/analytics/transform/math.ts:302` (`MAX_FORWARD_FILL_DAYS = 120`), surfaced at `backend/src/analytics/index.ts:528` | emits a DTO field (`forward_fill_expired`) only; raises no alert |
+| Forward-fill cap (#402) | `backend/src/analytics/transform/math.ts:302` (`MAX_FORWARD_FILL_DAYS = 120`), surfaced at `backend/src/analytics/index.ts:531` | emits a DTO field (`forward_fill_expired`, `:547`) only; raises no alert |
 | Destructive upsert | `backend/src/analytics/store/raw-history-store.ts:67-69` — `ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value, source = EXCLUDED.source` | no audit trail; nothing records when a row was last checked, so "never verified" and "verified and confirmed" are indistinguishable |
 
 Three specifics matter more than the table conveys.
@@ -686,13 +694,17 @@ overwrite a persisted floor on the grounds that the *fetch* looks wrong rather
 than the *row*.
 
 **`remediationClass` has zero behavioural consumers.** The field is declared in
-`ops/series-registry.ts` on PR #615's branch and appears only there, as a
-passthrough into `GapReport`, and in the DTO. `detectAllGaps` has exactly one
-caller: the read-only `GET /api/admin/gaps` route. *(Verified negatively here:
-`grep -rn remediationClass backend/src contract/src` returns nothing in this
-checkout, because #615 is unmerged. The positive claims about its contents are
-inherited from Plan A's inspection of that branch and are **unverified** against
-`main`.)*
+`backend/src/ops/series-registry.ts:47` and assigned per series (`:60`–`:150`,
+ten registered series: eight `"C"`, one `"B"`, one `"A"`); it is copied straight
+through into `GapReport` (`backend/src/ops/gap-detector.ts:28`, populated at
+`:85`) and re-declared on the DTO (`contract/src/admin.d.ts:108`). Those are its
+only non-test sites. `detectAllGaps` (`backend/src/ops/gap-detector.ts:99`) has
+exactly one production caller: `backend/src/api/routes/admin.ts:296`, the
+read-only `GET /api/admin/gaps` route registered at `contract/src/routes.js:250`.
+The only other references are assertions in `backend/tests/gap-detector.test.ts`
+and `backend/tests/api/admin-surface.test.ts:165`, which check the value is one
+of `A`/`B`/`C` — not that anything acts on it. *(Verified against `main` at
+`7b92a8c`: `grep -rn remediationClass backend/src contract/src`.)*
 
 This is a pattern, not an accident. `backend/scripts/seed-provenance-verify.ts`
 has a real executed CI test (`backend/tests/seed-provenance-verify.test.ts:5`
@@ -712,7 +724,7 @@ already filed and must not be re-specified here.
 | Workstream | Contents | Tracking |
 |---|---|---|
 | **Backfill capability** — the subject of §6.3, specified in §6.5 | block-addressable reads, date→block resolution, historical prices, RPC batching, the repair driver | **Unfiled.** Four code issues plus a `decision:` issue, all gated on that decision (PD1, §13). |
-| **v0.2.2 release nits** | undeliverable env vars, the `BUYBACK_FROM_BLOCK` constant, runbook verification gaps, #614's AC4 discrepancy | **#647** (parent) with subtasks **#639–#646**, filed 2026-08-15. Explicitly **not** part of the backfill project. |
+| **v0.2.2 release nits** | undeliverable env vars, the `BUYBACK_FROM_BLOCK` constant, runbook verification gaps, the AC4 discrepancy inherited from the now-closed #614 | **#647** (parent) with subtasks **#639–#646**, filed 2026-08-15. Explicitly **not** part of the backfill project. |
 | **Research engine cleanup** | the shared `chart-theme.js` category-axis defect and the regime charts | **#624**. Not part of the backfill project. |
 
 The continuous-reconciliation half — the audit's D5 recommendations (§1) and the
@@ -728,20 +740,28 @@ pending decision: **#648** (OPEN) records that the SP500 column splices two
 different measurements, which is a second and independent reason to keep SP500
 out of the backfill — see PD7 and §12.
 
-### 3.2 Step 0 — merge and deploy PR #615, and prove the clamp self-heals
+### 3.2 Step 0 — deploy #615, and prove the clamp self-heals the pinned rows
 
-Everything in §6 assumes PR #615's baseline: the gap detector, the series
-registry, `remediationClass`, the `'backfilled'` provenance value, and the
-scheduler-wedge clamp all live on that unmerged branch. Merging and deploying it
-is step 0 of any sequencing built from this document, and it is the step that
-stops the AUM hole widening.
+Everything in §6 assumes #615's baseline: the gap detector, the series registry,
+`remediationClass`, the `'backfilled'` provenance value, and the scheduler-wedge
+clamp. **The merge is done** — #615 landed on `main` as `7b92a8c` on
+2026-08-15 and closed #614 COMPLETED — so half of step 0 is discharged, and
+nothing in §6 is blocked on it any longer.
 
-One verification at that step cannot be skipped. **The wedged schedules live in
-an external Postgres that survives every teardown**, so redeploying does not
-reset them. It must be shown explicitly that the clamp **self-heals rows that
-are already pinned**, on its first tick, rather than only preventing future
-wedges — a fix with only the second property ships green while production stays
-frozen. That is an assertion against the persisted rows, not a code reading.
+**The outstanding half is deploy, and the deploy carries an obligation nobody has
+discharged yet.** A merge to `main` does not touch production, and it is
+production where the AUM hole is still widening. The clamp only stops that
+widening once it is running on the droplet.
+
+That obligation is the one verification at this step that cannot be skipped, and
+it does not follow from the merge. **The wedged schedules live in an external
+Postgres that survives every teardown**, so redeploying does not reset them, and
+a green CI run on `main` says nothing about them: CI starts from a clean
+database, where no row is pinned. It must be shown explicitly, against the
+production rows, that the clamp **self-heals schedules that are already pinned**,
+on its first tick, rather than only preventing future wedges — a fix with only
+the second property ships green while production stays frozen. That is an
+assertion against the persisted rows, not a code reading and not a merge status.
 
 ### 3.3 Working drafts this document supersedes
 
@@ -905,7 +925,7 @@ Design points specific to Class A:
 - **Cadence: incremental daily over a trailing window, full weekly**, mirroring
   `selectEdgarRefreshTier` (`edgar-incremental-refresh.ts:101-107`). Whatever
   producer kind carries it must be added to `checkArmedSchedules`'s kind list
-  (`backend/src/producer/index.ts:216`, today `["regime", "research"]`) or
+  (`backend/src/producer/index.ts:317`, today `["regime", "research"]`) or
   liveness will not cover it — the scheduler-wedge class of failure, invisible
   by default.
 
@@ -919,13 +939,17 @@ silently backfilled over history; that is a version-relock decision, not a
 repair).
 
 One integration hazard to record now: **the existing producer catch-up computes
-its own missing-days set and does not consume the gap detector.** Plan A
-describes a 14-day catch-up window on PR #615's branch making `research_signals`
-the only series that genuinely self-heals today. Two independent notions of
-"which days are missing" will drift. Unifying them — the catch-up consuming the
-detector rather than duplicating it — is the right shape, and is *unverified*
-here because that catch-up is not in `main` (`grep -rn "research_signals"
-backend/src/producer/*.ts` returns nothing in this checkout).
+its own missing-days set and does not consume the gap detector.** That catch-up
+is in `main`: `catchUpMissedResearchDays` (`backend/src/producer/index.ts:108`)
+walks back `CATCHUP_WINDOW_DAYS = 14` (`:73`), asks
+`GET /api/analytics/research-signals/dates?since=` which days already exist
+(`:111`–`:117`), and re-runs the missing ones (`:123`) — on boot (`:262`) and
+again on every daily `research` fire (`:229`). That makes `research_signals` the
+only series that genuinely self-heals today. But it enumerates missing days by
+its own presence query, not through `detectAllGaps`, so two independent notions
+of "which days are missing" now exist in `main` and will drift. Unifying them —
+the catch-up consuming the detector rather than duplicating it — is the right
+shape. *(Verified against `main` at `7b92a8c`.)*
 
 ### 6.3 Class C — chain-derived, repairable but not continuously reconcilable
 
@@ -972,8 +996,8 @@ caller that passes nothing — but the review burden is transport-wide, and the
 work should be scoped, tested, and reviewed on that basis.
 
 Threading it through `readChainAmountsBatched`
-(`backend/src/chain/wallet-valuation.ts:172`, via `rpcOpts()` at `:137`) reaches
-its two callers, `backend/src/chain/wallet-balances.ts:85` and
+(`backend/src/chain/wallet-valuation.ts:178`, via `rpcOpts()` at `:143`) reaches
+its two callers, `backend/src/chain/wallet-balances.ts:98` and
 `backend/src/chain/wallet-sleeves.ts:57`. The job-payload pattern already exists
 unwired: `backend/src/worker/handlers/analytics.ts:24-25` reads
 `payload.asof ?? new Date()`.
@@ -1054,19 +1078,19 @@ place that extension needs ratifying).
   PD10 — so it is one mechanism serving three purposes and must not be deferred
   to a follow-up.
 - A new authenticated analytics verb for submitting a reconciliation report and
-  its proposed repairs — none of the five existing verbs
-  (`contract/src/routes.js:210-216`) is delete- or quarantine-shaped — with
+  its proposed repairs — none of the eight existing verbs
+  (`contract/src/routes.js:210-228`) is delete- or quarantine-shaped — with
   validation and guards applied before the transaction opens.
 - A `reconcile` producer kind on its own cron, incremental daily over a trailing
   window and full weekly, mirroring `selectEdgarRefreshTier`
   (`edgar-incremental-refresh.ts:101-107`), added to `checkArmedSchedules`'s kind
-  list (`backend/src/producer/index.ts:216`, today `["regime", "research"]`) so
+  list (`backend/src/producer/index.ts:317`, today `["regime", "research"]`) so
   liveness covers it. Reconciliation fetches must bypass the
   `extract/fetch-cache.ts` TTL cache.
 - Class A execution across `raw_indicator_history` — every indicator, every
   source — which is where the defect class actually occurred.
 - Integrity alerts joined into the existing `GET /api/admin/overview` alerts feed
-  (`backend/src/admin/overview.ts:47`, `AlertLevel`), not a parallel dashboard.
+  (`backend/src/admin/overview.ts:75`, `AlertLevel`), not a parallel dashboard.
 
 **Out of scope**, each named so the boundary is deliberate rather than
 accidental: Class B recompute-and-compare for `research_signals` (§6.2); **Class
@@ -1145,8 +1169,8 @@ fixture or an absent database **fails loudly and never skips**.
 ### 6.5 Specification — the Class C backfill capability
 
 Four code issues, none filed, **all gated on PD1**. Items §6.5.1, §6.5.2 and
-§6.5.3 are parallelisable; §6.5.4 consumes all three. Their shared baseline is PR
-#615 (§3.2).
+§6.5.3 are parallelisable; §6.5.4 consumes all three. Their shared baseline is
+#615, which is merged in `main` (§3.2).
 
 #### 6.5.1 Block-addressable chain reads
 
@@ -1164,9 +1188,9 @@ inherits it for free, because `multicall3Aggregate3` issues its batch through
 `ethCall` at `:475`.
 
 Thread an optional `blockTag` through `readChainAmountsBatched`
-(`backend/src/chain/wallet-valuation.ts:172`) via `rpcOpts()` (`:137`, today
+(`backend/src/chain/wallet-valuation.ts:178`) via `rpcOpts()` (`:143`, today
 returning `{ rpcUrl: config.baseRpcUrl }` and nothing else), reaching its two
-callers, `backend/src/chain/wallet-balances.ts:85` and
+callers, `backend/src/chain/wallet-balances.ts:98` and
 `backend/src/chain/wallet-sleeves.ts:57`.
 
 **Review burden, stated separately from diff size** (§6.3): D17 established this
@@ -1213,7 +1237,7 @@ the change must edit `token-prices.ts:10-15` in the same diff.**
 
 - **GeckoTerminal daily OHLCV** — `/networks/base/pools/{addr}/ohlcv/day`,
   keyless. Candles are **exactly UTC-midnight aligned**, which matches the day
-  key the sampler already writes: `backend/src/worker/handlers/wallet.ts:37`
+  key the sampler already writes: `backend/src/worker/handlers/wallet.ts:49`
   computes `new Date().toISOString().slice(0, 10)` as the `sampleDate`, so no
   boundary reconciliation is needed. A **~6-month server window caps each
   request** (`limit=1000` and `limit=500` both returned 181 candles); deeper
@@ -1309,9 +1333,12 @@ guarantee 429s.
 
 **This is the item that makes "self-healing" true**, and it is the one that turns
 `remediationClass` from a label into behaviour. Today the field is declared on
-`ops/series-registry.ts` (PR #615's branch), appears as a passthrough into
-`GapReport` and in the DTO, and has no behavioural consumer; `detectAllGaps` has
-exactly one caller, the read-only `GET /api/admin/gaps`.
+`backend/src/ops/series-registry.ts:47`, appears as a passthrough into
+`GapReport` (`backend/src/ops/gap-detector.ts:85`) and in the DTO
+(`contract/src/admin.d.ts:108`), and has no behavioural consumer;
+`detectAllGaps` (`backend/src/ops/gap-detector.ts:99`) has exactly one production
+caller, `backend/src/api/routes/admin.ts:296` — the read-only
+`GET /api/admin/gaps` (`contract/src/routes.js:250`).
 
 **Scope.** The single dispatcher of §4 — subject to PD9 if the reconciler builds
 it first — plus the Class C executor:
@@ -1319,12 +1346,18 @@ it first — plus the Class C executor:
 - **Class C becomes repairable** once §6.5.1 and §6.5.2 land: enqueue one
   `{asof}` job per missing day, resolve `asof`→block, read at that block, price
   at that date, upsert. This replaces the current past-dated-slot **decline**
-  path *(on PR #615's branch; `backend/src/worker/handlers/slot.ts` does not
-  exist in this checkout, so the file and line are **unverified** here)*.
-- **Class A gains the trigger it is missing.** #614's AC4 Class A bullet is
-  ticked but unimplemented — filed as **#646**. Either the detection→re-fetch
-  trigger is built, or the criterion is restated honestly; a ticked criterion
-  with no code is the exact pattern §14's standing warning is about.
+  path, which is in `main`: `classifySlot` returns `"past-bucket"`
+  (`backend/src/worker/handlers/slot.ts:74-76`) and the handler answers with
+  `declineReplayedSlot` (`:98-108`) — see `worker/handlers/wallet.ts:44` and
+  `:90`. The same-bucket case instead proceeds and tags the row `'backfilled'`
+  rather than `'live'` (`worker/handlers/wallet.ts:59` and `:133`); the reasoning
+  for the split is stated in the file header at `slot.ts:19-44`.
+- **Class A gains the trigger it is missing.** The AC4 Class A bullet on the
+  now-closed **#614** is ticked but unimplemented — carried forward as **#646**.
+  Either the detection→re-fetch trigger is built, or the criterion is restated
+  honestly in #646; a ticked criterion with no code is the exact pattern §14's
+  standing warning is about, and #614 closing COMPLETED with that bullet ticked
+  is a live instance of it, not a hypothetical.
 - **Class B already works** via producer catch-up, but that catch-up computes its
   own missing-days set and does not consume the gap detector (§6.2). Unify rather
   than leave two notions of "which days are missing" to drift.
@@ -1333,7 +1366,7 @@ it first — plus the Class C executor:
 
 - **A day is atomic.** Never write a day whose round-1 read partially failed:
   round 2 is `convertToAssets` NAV per vault
-  (`backend/src/chain/wallet-valuation.ts:263`) and depends on round 1's output,
+  (`backend/src/chain/wallet-valuation.ts:269`) and depends on round 1's output,
   so a half-read day produces a plausible, wrong total.
 - **Treat `success === true && returnData === "0x"` as a hard failure for that
   day, never as a zero** (§10), and carry a per-address earliest-valid-block floor
@@ -1348,20 +1381,25 @@ it first — plus the Class C executor:
 **Provenance.** Backfilled rows must be distinguishable from `'live'`, and
 `provenance` has no CHECK constraint on any table — so a new value needs no
 migration, which is precisely the trap (§7.6). `WalletHoldingProvenance`
-(`contract/src/dashboards.d.ts:80`) is switched on by the frontend, where an
-unrecognised value renders **unbadged and fully live**. PR #615 adds
-`'backfilled'` to that union on its branch; in this checkout the union is still
-the original four values, so **re-check against `main` before relying on it**
-rather than assuming.
+(`contract/src/dashboards.d.ts:89`) is switched on by the frontend, where an
+unrecognised value renders **unbadged and fully live**. #615 added `'backfilled'`
+to that union, and it is in `main`: the union is now the five values
+`"live" | "stub" | "stale" | "seed" | "backfilled"`. The value is therefore
+available to a repair driver without a further contract change — but the §7.6
+hazard is unchanged for **the next** value this design adds (a quarantine state),
+which must land in the DTO union and the renderer in the same change as the
+writer.
 
 ### 6.6 Sequencing
 
 The order below is the merged sequencing of both workstreams. Steps 0 and 1 are
 prerequisites; steps 3a and 3b are genuinely parallel.
 
-0. **Merge and deploy PR #615**, and prove the clamp self-heals rows that are
-   already pinned — §3.2. It is not part of either workstream, and everything in
-   §6.4 and §6.5 assumes its baseline.
+0. **Deploy #615** — the merge is done (`7b92a8c`) — and prove the clamp
+   self-heals schedules that are already pinned in the external Postgres, §3.2.
+   It is not part of either workstream, and everything in §6.4 and §6.5 assumes
+   its baseline. The merge half no longer blocks anything; the deploy-and-prove
+   half still does, because production is where the hole is widening.
 1. **File and settle the archive-read `decision:` issue** — PD1. Nothing in §6.5
    starts until it lands. §6.4 does not wait on it.
 2. Settle **PD9** by naming the dispatcher's owner before either issue is filed,
@@ -1384,11 +1422,23 @@ than it sounds because the full-history recompute already runs daily. PD13 and
 PD14 can be taken at any point before it ships.
 
 Two corrections are owed to existing artifacts and should not be lost in the
-sequencing. **#614's `## Scope` section** still states that reconstructing this
-history is out of scope, on a premise its own later comment disproves — left
-as-is it will keep steering implementers away from the fix. And **#614's AC4
-Class A bullet is ticked but unimplemented**, tracked as #646 and folded into
-§6.5.4.
+sequencing. Both concern **#614, which is now CLOSED/COMPLETED** (closed
+2026-08-15T19:01:50Z by #615's merge) — which changes how each is actioned, not
+whether. A closed issue's body is a historical record: editing it silently
+rewrites what the closure attested to. So neither correction is a scope edit any
+more.
+
+- **#614's `## Scope` section** still states that reconstructing this history is
+  out of scope, on a premise its own later comment disproves. Left standing it
+  will keep steering implementers away from the fix, because a closed issue is
+  exactly what a future reader greps. Record the correction as a **closing
+  comment on #614** pointing at this document, and let the body stand as what
+  was believed at the time.
+- **#614's AC4 Class A bullet is ticked but unimplemented.** The forward-looking
+  work is already carried by **#646** and folded into §6.5.4; what is owed to
+  #614 itself is the same closing comment noting that this one criterion closed
+  ticked without code, so its COMPLETED status is not evidence that the Class A
+  trigger exists (§14's standing warning).
 
 ## 7. Safety properties
 
@@ -1425,9 +1475,11 @@ path while leaving every real persisted observation exactly where it was.
 `backend/tests/analytics-suite.test.ts:148` is the test that encodes it —
 *"append-only raw floor persisted; a later EMPTY fetch never erases it"* — and it
 re-runs the pipeline with an `AnalyticsDataSource` returning `[]` for every
-indicator, asserting the persisted floor survives (`:155-160`). **Hard invariant
-this design preserves: an empty or failed fetch must still never remove
-anything.** That is exactly why the classifier requires two independent
+indicator (the stub is `:156-168`, the re-run `:169`), asserting the persisted
+floor survives at `:170-171` — `expect(t10After).toBe(t10Rows)`, *"floor intact
+— nothing erased by an empty fetch"*. **Hard invariant this design preserves: an
+empty or failed fetch must still never remove anything.** That is exactly why
+the classifier requires two independent
 conditions for `fabricated` (§5) and why a degenerate response sends its whole
 window to `unexplained_absent` (§7.3). A quarantine triggered by source absence
 alone would break this test, and breaking this test means the design is wrong,
@@ -1523,9 +1575,13 @@ the database does not have. Validation runs **before the transaction opens** —
 validate the whole payload before opening a transaction and are idempotent on
 their natural keys. There is NO generic SQL-over-HTTP endpoint."*
 
-No quarantine or delete route exists today. The analytics verbs are
-`readiness`, `rawHistory` (GET/POST), `rawHistorySeed`, `regimeSnapshots`, and
-`researchSignals` (`contract/src/routes.js:210-216`), all upsert-shaped. A
+No quarantine or delete route exists today. The analytics namespace holds eight
+verbs (`contract/src/routes.js:210-228`): `readiness`, `rawHistory` (GET/POST),
+`rawHistorySeed`, `regimeSnapshots`, and `researchSignals` are the upsert-shaped
+canonical writes; `researchSignalDates` (`:220`, added by #615) is a read-only
+presence GET; `researchEligibility` (`:223`) is a retired path that answers 409
+and mutates nothing; and `telemetry` (`:227`) is an append-only run-telemetry
+submission. **Not one of the eight is delete- or quarantine-shaped.** A
 reconciliation report plus proposed repairs needs a new authenticated verb in
 that namespace, not a new surface beside it.
 
@@ -1558,28 +1614,32 @@ one day of work. Both are specified, with their `path:line` anchors and the
 **An unrecognised provenance value renders as unbadged and fully live.** This is
 the most misleading direction a failure can fail in, and it is live today.
 
-`WalletHoldingProvenance` is `"live" | "stub" | "stale" | "seed"`
-(`contract/src/dashboards.d.ts:80`), and the frontend switches on it by
+`WalletHoldingProvenance` is `"live" | "stub" | "stale" | "seed" | "backfilled"`
+(`contract/src/dashboards.d.ts:89`), and the frontend switches on it by
 equality:
 `frontend/public/assets/js/app/alpine/views/allocation.js:112` tests
-`h.provenance === "stub"` and `:115` tests `h.provenance === "stale"`. Any value
-that is neither — including a new one the backend starts writing — takes no
-branch, gets no badge, and is presented to the user as ordinary live data.
+`h.provenance === "stub"`, `:115` tests `h.provenance === "stale"`, and `:123`
+(added by #615) tests `h.provenance === "backfilled"`. Any value matching none of
+them — including a new one the backend starts writing — takes no branch, gets no
+badge, and is presented to the user as ordinary live data.
 
 `provenance` has **no CHECK constraint** on any table
 (`0014_wallet_balance_samples.sql:30` declares it `text NOT NULL DEFAULT 'live'`
 with the permitted values in a *comment*), so a new value needs no migration —
 which is precisely the trap. **Any new provenance value must land in the DTO
-union and the renderer in the same change as the writer.** A quarantine state
-and a `'backfilled'` state each need this treatment.
+union and the renderer in the same change as the writer.** `'backfilled'` got
+that treatment in #615 (union at `dashboards.d.ts:89`, renderer at
+`allocation.js:123`); a quarantine state still needs it.
 
 Stated precisely, because the distinction matters: Plan A says #615 "already
-added `'backfilled'` to the union" — that is **true of PR #615's unmerged
-branch and false of `main`.** The union in this checkout is still the four
-original values (`dashboards.d.ts:80`), so anything written today with
-`provenance: 'backfilled'` would render unbadged and fully live. Whether the
-value is available is a function of whether #615 has merged, and must be
-re-checked against `main` rather than assumed.
+added `'backfilled'` to the union" — and since #615 merged (`7b92a8c`,
+2026-08-15) that is now **true of `main`.** The union carries five values
+(`dashboards.d.ts:89`), so a row written today with `provenance: 'backfilled'`
+is a declared value rather than an unknown one. That closes the hazard for this
+one value and for no other: the trap is structural, not specific to
+`'backfilled'`, and the **next** value — a quarantine state — reopens it exactly
+as described above unless the union and the renderer move in the same change as
+the writer.
 
 ## 8. Disclosure of corrections
 
@@ -1660,7 +1720,7 @@ cases the system **refuses** to act on: a batch refused by the blast-radius guar
 strictly more urgent than a repair it could. A refusal that is silent is the
 worst outcome available, because it looks identical to a clean run. Route this
 through the existing alerts feed — `GET /api/admin/overview`
-(`backend/src/admin/overview.ts:47`, `AlertLevel`) — per §11's no-new-operator-
+(`backend/src/admin/overview.ts:75`, `AlertLevel`) — per §11's no-new-operator-
 surface constraint.
 
 **API consumers need a machine-readable restatement signal.** A cache, a
@@ -1673,13 +1733,20 @@ this, which is one of the reasons the frozen model makes the rest of this sectio
 cheap rather than expensive.
 
 **Dashboard readers need a plain explanation at the point of the number** — not
-in a changelog, not on an admin page. **Use the seam-banner pattern PR #615
+in a changelog, not on an admin page. **Use the seam-banner pattern #615
 established for gaps** rather than inventing a second disclosure vocabulary: that
 work already had to solve "explain, in place, why this series is not what you
 expect", and a restated figure is the same problem with a different cause. Two
 vocabularies for "this data is not straightforward" would be a worse outcome than
-either alone. *(The seam banner is on PR #615's unmerged branch, so its shape is
-**unverified** against `main`.)*
+either alone. *(Verified in `main`: `seamMessage()` at
+`frontend/public/assets/js/app/alpine/views/wallet-perf.js:124-137` composes at
+most two sentences — a seed-share disclosure when `seedShare > 0.5` (`:126-131`)
+and an unrecoverable-gap-day count when `gapDayCount > 0` (`:133-135`) — and
+returns `null` when neither applies (`:136`). Its inputs are computed from the
+endpoint's `historyProvenance` map and the dense calendar at `:87-92`; the banner
+renders at `frontend/public/views/performance.html:50-53`, hidden by
+`x-show="…&& seamMessage()"`. That "silent when there is nothing to say" property
+is the part worth copying.)*
 
 ### 8.3 Derived-output amplification — disclose the figure, not the row
 
@@ -1733,11 +1800,11 @@ construction.
 header (`:4`) as part of the ported `computeRegime` output. The value is
 `CURRENT_REGIME_VERSION`, exported from
 `backend/src/analytics/analyze/regime-versions.ts:8` as `"v3"`; it is stamped
-onto every snapshot at `backend/src/analytics/index.ts:494`, written and read
+onto every snapshot at `backend/src/analytics/index.ts:497`, written and read
 through `backend/src/analytics/store/regime-store.ts` (`:39` in the insert column
 list, `:46` in the bound values, `:67` as `version = EXCLUDED.version` on
 conflict, `:99` when reading a row back), and reaches the DTO at
-`contract/src/dashboards.d.ts:232` as `version?: string | null`.
+`contract/src/dashboards.d.ts:259` as `version?: string | null`.
 
 **Most of the machinery is therefore already built, and this is the single most
 important practical fact in this section.** `regime-versions.ts` states in its own
@@ -1952,7 +2019,7 @@ wrong number:
 - **SP500 sizing (#641) — a plausible dollar figure with no staleness signal.**
   `readChainAmounts` sets `{ ok: true, amount: resolveSp500().size }`
   unconditionally for the `config` valuation kind
-  (`backend/src/chain/wallet-balances.ts:80`, inside `:74-89`), so an unset or
+  (`backend/src/chain/wallet-balances.ts:93`, inside `:87-102`), so an unset or
   stale `SP500_SIZE` never degrades to `stale` the way a failed chain read does.
   The default is a hardcoded `0.6330` (`backend/src/config.ts:267-273`).
   *(Verified in this checkout.)*
@@ -2038,7 +2105,7 @@ proposing a different change.
 - **Cadence declared once, not restated** (#637) — see §6.1.
 - **No new operator surface.** Verdicts and freshness alerts land in the
   existing `GET /api/admin/overview` alerts feed
-  (`backend/src/admin/overview.ts:47`, `AlertLevel`), not a parallel dashboard.
+  (`backend/src/admin/overview.ts:75`, `AlertLevel`), not a parallel dashboard.
 
 ## 12. What will remain imperfect
 
@@ -2076,9 +2143,10 @@ keep.
   implementations' different spans measurably changed panel weights. Disclose,
   never repair.
 - **Four incompatible provenance vocabularies, none CHECK-constrained.**
-  `WalletHoldingProvenance` is `"live" | "stub" | "stale" | "seed"`
-  (`dashboards.d.ts:80`); `AnalyticsProvenance` is
-  `"live" | "hermetic" | "fixture" | "seed"` (`dashboards.d.ts:146`); the SQL
+  `WalletHoldingProvenance` is
+  `"live" | "stub" | "stale" | "seed" | "backfilled"`
+  (`dashboards.d.ts:89`); `AnalyticsProvenance` is
+  `"live" | "hermetic" | "fixture" | "seed"` (`dashboards.d.ts:173`); the SQL
   columns constrain nothing. **Six persisted series carry no provenance column
   at all** — `research_signals`, `vault_share_price_history`, and the four
   `daily_*_snapshots`. *(Column-absence count inherited from the reconciliation
@@ -2108,7 +2176,7 @@ nobody has the answer yet, rather than because nobody has chosen.
   $2 on **99 of 99 days** (exact on 43) — the arithmetic signature of one
   full-precision dataset totalled and then rounded, which no fill or synthesis
   produces. `resolveBaseRpcSource()` (`backend/src/config.ts:25`, consumed at
-  `backend/src/chain/wallet-balances.ts:186` and `:228`) reports which *reader*
+  `backend/src/chain/wallet-balances.ts:221` and `:265`) reports which *reader*
   the deployment is configured against and makes no claim about history
   composition, so it is truthful on its own terms.
 
@@ -2116,14 +2184,23 @@ nobody has the answer yet, rather than because nobody has chosen.
   Nothing in this document should treat provenance `seed` as a synonym for
   suspect, and the two seeds in play are unrelated — the *analytics floor* seed
   of §1 genuinely inherited 110 source-absent `ICSA` keys (audit D6), while the
-  *wallet history* seed did not. What #645 leaves behind is a **disclosure** gap,
-  not a data-quality one: `loadHistory()`
-  (`backend/src/chain/wallet-balances.ts:155-159`) selects only `sample_date,
-  symbol, value_usd` and discards the `provenance` column the schema stores, so
-  on `main` no consumer can tell seed from live at any granularity. PR #615
-  fixes exactly that, with per-point provenance, a count map, and a seam banner.
+  *wallet history* seed did not. What #645 left behind was a **disclosure** gap,
+  not a data-quality one — and **that gap has since closed on `main`.** When this
+  was first written, `loadHistory()` selected only `sample_date, symbol,
+  value_usd` and discarded the `provenance` column the schema stores, so no
+  consumer could tell seed from live at any granularity. #615 fixed exactly that:
+  `loadHistory()` is now at `backend/src/chain/wallet-balances.ts:181` and its
+  query selects `provenance` (`:182-186`), the function returns a
+  `historyProvenance` count map alongside the series, a per-point dominant value
+  is resolved by `dominantProvenance` over the `PROVENANCE_PRIORITY` order
+  `["live", "backfilled", "stale", "seed", "stub"]` (`:175-179`), the DTO carries
+  `historyProvenance: Record<WalletHoldingProvenance, number>`
+  (`contract/src/dashboards.d.ts:161`), and the seam banner (§8.2) renders it.
+  **The remaining §13 item here is therefore the design consequence, not the
+  defect:** a `seed` row is genuine history and must not be treated as suspect.
   *(Issue state and closing comment read from `gh` on 2026-08-15; the v0
-  `totalAum[]` reconstruction is #645's own work and is **unverified** here.)*
+  `totalAum[]` reconstruction is #645's own work and is **unverified** here. The
+  `loadHistory` disclosure fix is verified against `main` at `7b92a8c`.)*
 - **Rate limits need re-measuring from the production droplet.** The ~5-token /
   ~0.55-per-second figures were measured from a different IP. Shared NAT could
   make production strictly worse, and every §6.3 and §6.5.3 cost conclusion
@@ -2163,31 +2240,38 @@ not re-verified in this checkout):
 **Read from code and verified in this worktree** at
 `adhoc/20260815-173700-data-integrity-self-healing-design`: every `path:line`
 citation in the *Pending decisions* section and in §3, §5, §6.1, §6.3, §6.4,
-§6.5, §7, §10, §11, and §12 was opened and checked. Notably confirmed by absence:
-`ops/series-registry.ts`, `ops/gap-detector.ts`, `/api/admin/gaps`,
-`backend/src/worker/handlers/slot.ts`, and the `research_signals` producer
-catch-up are **not in `main`** — they live on PR #615's unmerged branch, so every
-claim about their contents is inherited, not verified. Also confirmed:
-`WalletHoldingProvenance` in this checkout is still the original four values, and
-the `*_POOL_ID` env vars are assigned into `TrackedAsset.poolId` in `config.ts`
-and read **nowhere else** in `backend/src`.
+§6.5, §7, §10, §11, and §12 was opened and checked. **This revision was rebased
+onto `main` at `7b92a8c` (PR #615's merge commit) and re-checked against it.**
+An earlier draft recorded `backend/src/ops/series-registry.ts`,
+`backend/src/ops/gap-detector.ts`, `/api/admin/gaps`,
+`backend/src/worker/handlers/slot.ts`, `'backfilled'` in
+`WalletHoldingProvenance`, the `/performance` seam banner, and the
+`research_signals` producer catch-up as *confirmed absent from `main`*. **That
+was true of the pre-merge checkout and is false now** — all seven are in `main`,
+and every claim about their contents above was read from the merged files rather
+than inherited. Also confirmed here: the `*_POOL_ID` env vars are assigned into
+`TrackedAsset.poolId` in `config.ts` and read **nowhere else** in `backend/src`.
+This inversion is itself the §14 point: an absence verified against a checkout is
+dated evidence, not a standing fact.
 
 Verified for §8 and §9 on 2026-08-15: the destructive upsert at
 `store/raw-history-store.ts:68-69` and its `source`-overwrite comment at `:45`;
 `version text` on `regime_snapshots` at `0009_analytics_v2.sql:23` and its
 mention in that migration's header at `:4`; `CURRENT_REGIME_VERSION = "v3"` at
 `analyze/regime-versions.ts:8` with the v3 comment quoted verbatim from `:1-7`;
-the stamp at `analytics/index.ts:494`; the four `regime-store.ts` sites (`:39`,
-`:46`, `:67`, `:99`); the DTO field at `contract/src/dashboards.d.ts:232`;
+the stamp at `analytics/index.ts:497`; the four `regime-store.ts` sites (`:39`,
+`:46`, `:67`, `:99`); the DTO field at `contract/src/dashboards.d.ts:259`;
 `regime_snapshots`' `date`-only primary key at `0002_dashboards.sql:53` inside
 the table at `:52-62` — from which the finding that **the table cannot hold two
 versions of the same date** is derived here, not inherited; and the
 `analytics_submissions` trap at `0023_analytics_submissions.sql:1-5` and `:14`,
 whose header describes public anonymous agent-onboarding submissions mirroring
-`committee_applications`. **Not** verified here: v0's `mergeFrozenIntoResult` and
-`rebuild.js --version` (quoted from the audit; this repository does not contain
-v0), and PR #615's seam banner, which is on an unmerged branch. The audit
-passages quoted in §9.3 were read from
+`committee_applications`. #615's seam banner was previously listed here as
+unverifiable; it is now verified in `main` at
+`frontend/public/assets/js/app/alpine/views/wallet-perf.js:124-137` and
+`frontend/public/views/performance.html:50-53`. **Not** verified here: v0's
+`mergeFrozenIntoResult` and `rebuild.js --version` (quoted from the audit; this
+repository does not contain v0). The audit passages quoted in §9.3 were read from
 `docs/code-review/20260814-review-data-integrity-macro-index-discrepancy.md` in
 this checkout.
 
@@ -2197,12 +2281,12 @@ hardcoded `"latest"` strings are the only two in `backend/src/chain/`
 `RpcCallOptions`, at the thirteen lines listed in §6.5.1 — the absorbed plan said
 fourteen, and thirteen is the count in this checkout; `multicall3Aggregate3`
 (`:473`) routes through `ethCall` (`:475`); the `id: 1` hardcode is at `:313`;
-`rpcOpts()` (`wallet-valuation.ts:137`) returns `{ rpcUrl }` alone and round 2's
-`convertToAssets` block begins at `:263`; `asofOf()`
+`rpcOpts()` (`wallet-valuation.ts:143`) returns `{ rpcUrl }` alone and round 2's
+`convertToAssets` block begins at `:269`; `asofOf()`
 (`worker/handlers/analytics.ts:24-25`) reads
 `(payload.asof as string) ?? new Date().toISOString().slice(0, 10)`; the
 `buyback_scan_state` single-row table is at `0015_buyback_swaps.sql:42-46`; the
-sampler's UTC day key is `worker/handlers/wallet.ts:37`; `fetchYahoo`'s range
+sampler's UTC day key is `worker/handlers/wallet.ts:49`; `fetchYahoo`'s range
 signature is `extract/yahoo.ts:44`; the ZYFAI/GIZA smart-account documentation and
 their `strategy`/`usdc` kinds are `config.ts:172-180`; `resolveSp500()` is
 `config.ts:267-273`, consumed for the ticker at `token-prices.ts:270`;
@@ -2219,7 +2303,7 @@ Verified for §10.1 in this checkout on 2026-08-15: the compose allowlist premis
 through `buyback-logs.ts:215`, `:216`, `:242-245` and `:253`; the five
 `STRATEGY_VAULT_*_ADDRESS` keys and the empty-by-default
 `resolveStrategyVaults()`; and the unconditional `{ ok: true }` for the `config`
-valuation kind at `wallet-balances.ts:80`. **Not** verified here and attributed
+valuation kind at `wallet-balances.ts:93`. **Not** verified here and attributed
 to their issues: #641's ~20-variable count, #642's characterization of the live
 production impact on `/allocation` and `/performance`, and #645's reconstruction
 of v0's `totalAum[]` cross-check.
