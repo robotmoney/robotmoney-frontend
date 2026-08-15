@@ -109,6 +109,7 @@ export const ROUTES: {
     isClaimed: string;
     claim: string;
     overview: string;
+    gaps: string;
     jobs: string;
     job: string;
     jobRetry: string;

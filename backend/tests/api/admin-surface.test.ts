@@ -39,6 +39,7 @@ async function insertRun(jobId: number, fields: Record<string, unknown>) {
 
 test("prod-mode with no token → 403 on every new admin route, before body parsing", async () => {
   expect((await call(req("GET", "/api/admin/overview")))?.status).toBe(403);
+  expect((await call(req("GET", "/api/admin/gaps")))?.status).toBe(403);
   expect((await call(req("GET", "/api/admin/audit")))?.status).toBe(403);
   // Malformed JSON bodies must never be parsed before the auth guard runs.
   const badBody = new Request("http://x/api/admin/jobs/1/retry", {
@@ -144,6 +145,28 @@ test("overview: a sampler kind whose last run is far outside its cadence reports
   body = res?.body as typeof body;
   wb = body.production.find((p) => p.kind === "wallet.sample_balances")!;
   expect(wb.alert).toBe("stale");
+});
+
+// issue #614 AC3: the gap-detector operator surface. Must fail against
+// pre-#614 main, where GET /api/admin/gaps does not exist (404/undefined) —
+// there is no operator-facing view of "which series have holes" at all.
+test("gaps: GET /api/admin/gaps returns one report per registered series, auth-gated the same as every other admin route", async () => {
+  const res = await call(req("GET", "/api/admin/gaps", PROD.adminToken));
+  expect(res?.status).toBe(200);
+  const body = res?.body as { series: Array<{ key: string; cadence: string; remediationClass: string; interiorGaps: string[]; staleHead: boolean; clean: boolean }> };
+  expect(Array.isArray(body.series)).toBe(true);
+  expect(body.series.length).toBeGreaterThan(0);
+  const byKey = new Map(body.series.map((s) => [s.key, s]));
+  for (const key of ["wallet_balance_samples", "vault_share_price_history", "research_signals", "raw_indicator_history"]) {
+    expect(byKey.has(key)).toBe(true);
+  }
+  for (const s of body.series) {
+    expect(["daily", "hourly"]).toContain(s.cadence);
+    expect(["A", "B", "C"]).toContain(s.remediationClass);
+    expect(Array.isArray(s.interiorGaps)).toBe(true);
+    expect(typeof s.staleHead).toBe("boolean");
+    expect(typeof s.clean).toBe("boolean");
+  }
 });
 
 test("overview: regime + research freshness (RESEARCH_STALE_DAYS)", async () => {

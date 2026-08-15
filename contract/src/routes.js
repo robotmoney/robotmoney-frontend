@@ -239,6 +239,10 @@ export const ROUTES = {
     // docs/architecture.md US-A2. Route shape fixed here so the #157
     // frontend and the #155 backend converge on the same path on rebase.
     overview: "/api/admin/overview",
+    // GET — one gap report per registered series (issue #614 AC3): interior
+    // gaps and a stale head, reported separately, for every persisted time
+    // series the pipeline writes on a schedule.
+    gaps: "/api/admin/gaps",
     jobs: "/api/admin/jobs", // GET ?limit=&cursor=&kind=&status=&scopeType=&scopeId=&createdFrom=&createdTo= — task-queue jobs + schedules + status summary
     job: "/api/admin/jobs/:id", // GET — one job + its recent runs (the logs)
     jobRetry: "/api/admin/jobs/:id/retry", // POST — clone a dead job into a new pending job (US-Q1)

@@ -92,6 +92,34 @@ export interface AdminOverview {
   alerts: AdminAlert[];
 }
 
+// ── Gap detector (issue #614 AC3) — GET /api/admin/gaps ─────────────────────
+// One report per registered series (backend/src/ops/series-registry.ts).
+// Interior gaps and a stale head are reported SEPARATELY: latest-point age
+// alone was the only signal that existed pre-#614 and cannot distinguish "a
+// hole in the middle of the series" from "the series just hasn't caught up
+// to now yet".
+export type AdminGapRemediationClass = "A" | "B" | "C";
+export type AdminGapCadence = "daily" | "hourly";
+
+export interface AdminGapReport {
+  key: string;
+  label: string;
+  table: string;
+  remediationClass: AdminGapRemediationClass;
+  cadence: AdminGapCadence;
+  seriesStart: string; // ISO
+  expectedHead: string; // ISO — the latest slot that should exist by now
+  headDate: string | null; // ISO — the latest slot actually observed; null = zero rows
+  interiorGaps: string[]; // ISO slots missing strictly at-or-before the observed head
+  interiorGapCount: number;
+  staleHead: boolean;
+  clean: boolean;
+}
+
+export interface AdminGapsResponse {
+  series: AdminGapReport[];
+}
+
 // ── Queue jobs/runs (extended list — see routes.js for filter query params) ─
 export interface AdminJobRow {
   id: number;
