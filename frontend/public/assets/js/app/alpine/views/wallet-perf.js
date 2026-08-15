@@ -34,21 +34,51 @@ export function registerWalletPerfView(Alpine) {
     _fmtDay(iso) {
       return new Date(iso + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
     },
+    // issue #614 AC5: `history` from the endpoint is PERSISTED days only — it
+    // skips straight over any gap (seed-source hole, the scheduler wedge this
+    // issue was filed from, ...). Charting it directly (one array slot per
+    // PERSISTED day) is exactly the bug: Chart.js's category scale spaces
+    // slots by ARRAY INDEX, so a 40-day hole between two adjacent slots draws
+    // as one ordinary-width step — a ~$73k→$54k cliff that reads as a price
+    // move, not six weeks of missing samples. Synthesizing every CALENDAR day
+    // between the first and last persisted date (one array slot per day, gap
+    // days included) makes the x-axis proportional to elapsed time again: a
+    // 40-day hole now occupies 40 slots, same width as any other 40 days.
+    _denseCalendarDays(history) {
+      if (history.length === 0) return [];
+      const days = [];
+      const start = new Date(history[0].date + "T00:00:00Z");
+      const end = new Date(history[history.length - 1].date + "T00:00:00Z");
+      for (let t = start.getTime(); t <= end.getTime(); t += 86_400_000) {
+        days.push(new Date(t).toISOString().slice(0, 10));
+      }
+      return days;
+    },
     // Fetch the endpoint and build the series/table from it. Colours + series
     // order come from holdings[] (Stable→Protocol→Agent→Stocks); an asset absent
-    // from a day's byAsset stacks as 0 (chart) / renders "–" (table).
+    // from a PERSISTED day's byAsset stacks as 0 (held nothing that day). A day
+    // with NO persisted row at all is `null` (a genuine gap — Chart.js's default
+    // spanGaps:false breaks the line there instead of interpolating across it).
     async load() {
       try {
         const data = await api.get(ROUTES.dashboards.walletBalances);
         const holdings = data.holdings || [];
         const history = data.history || [];
-        this.labels = history.map((pt) => this._fmtDay(pt.date));
-        this.totalAum = history.map((pt) => pt.totalUsd);
+        const days = this._denseCalendarDays(history);
+        const byDate = new Map(history.map((pt) => [pt.date, pt]));
+        this.labels = days.map((d) => this._fmtDay(d));
+        this.totalAum = days.map((d) => byDate.get(d)?.totalUsd ?? null);
         this.columns = holdings.map((h) => ({ sym: h.symbol, color: assetDot(h.symbol) }));
         this.assets = holdings.map((h) => ({
           label: h.symbol, color: assetDot(h.symbol),
-          aum: history.map((pt) => (pt.byAsset[h.symbol] ?? 0)),
+          aum: days.map((d) => {
+            const pt = byDate.get(d);
+            return pt ? (pt.byAsset[h.symbol] ?? 0) : null;
+          }),
         }));
+        // The Historical Data table lists PERSISTED days only (a list of rows,
+        // not a spatial axis — a missing day is simply an absent row, which
+        // already discloses the gap honestly without needing a placeholder).
         this.rows = history.map((pt) => ({
           d: this._fmtDay(pt.date), aum: pt.totalUsd,
           a: Object.fromEntries(Object.entries(pt.byAsset).map(([sym, v]) => [sym, [v, ""]])),
@@ -65,10 +95,18 @@ export function registerWalletPerfView(Alpine) {
     visibleRows() { return this.showAll ? this.rows : this.rows.slice(-5); },
     fmtUsd(v) { return "$" + Number(v).toLocaleString("en-US"); },
     // Build the eight stacked series. kind "aum" → raw $; "pct" → % of total AUM.
+    // A gap day (v === null, synthesized by _denseCalendarDays/load) must stay
+    // null through the pct transform too — dividing null/total would coerce to
+    // 0 and draw a false dip to zero on a day with no data at all, exactly the
+    // "smoothed into a fake reading" defect issue #614 exists to stop.
     _series(kind) {
       return this.assets.map((a) => ({
         label: a.label, color: a.color,
-        data: a.aum.map((v, i) => kind === "pct" ? (this.totalAum[i] ? (v / this.totalAum[i]) * 100 : 0) : v),
+        data: a.aum.map((v, i) => {
+          const total = this.totalAum[i];
+          if (v === null || total === null) return null;
+          return kind === "pct" ? (total ? (v / total) * 100 : 0) : v;
+        }),
       }));
     },
     _chart(canvas, series, max, step, tick, tip) {
@@ -80,7 +118,11 @@ export function registerWalletPerfView(Alpine) {
           datasets: series.map((s) => ({
             label: s.label, data: s.data, borderColor: s.color,
             backgroundColor: rgba(s.color, 0.8),
-            fill: true, tension: 0, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2,
+            // spanGaps:false is Chart.js's own default, set explicitly here
+            // (issue #614 AC5) so a `null` day breaks the line/fill instead of
+            // ever silently interpolating across a gap, regardless of any
+            // future Chart.js default change.
+            fill: true, tension: 0, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2, spanGaps: false,
           })),
         },
         options: {

@@ -117,12 +117,25 @@ export interface WalletHolding {
   provenance: WalletHoldingProvenance;
 }
 
-// One day of continuous history. byAsset is sparse (only symbols held that day);
-// totalUsd is the sum of the held legs.
+// One PERSISTED day of history — the series is deliberately sparse over the
+// calendar axis, not continuous (issue #614): the seeded pre-launch portion
+// carries known gaps ported from its v0 source, and any window this pipeline
+// cannot backfill (chain state is read at "latest"; prices are spot-only —
+// docs/decisions.md D16) is recorded as missing rather than fabricated. A
+// consumer MUST NOT assume `history[i+1].date === history[i].date + 1 day`;
+// index a dense calendar axis by `date` and treat absent days as gaps, not
+// errors. byAsset is separately sparse (only symbols held that day); totalUsd
+// is the sum of the held legs.
 export interface WalletHistoryPoint {
   date: string; // ISO calendar day
   byAsset: Record<string, number>;
   totalUsd: number;
+  // issue #614 AC5: which kind of row produced this day — 'live' wins if ANY
+  // symbol that day was a genuine chain read, else 'stale', else 'seed'
+  // (ported pre-launch history), else 'stub'. Lets a consumer render/disclose
+  // the seam between backfilled and live-sampled spans instead of one
+  // undifferentiated line.
+  provenance: WalletHoldingProvenance;
 }
 
 export interface WalletBalances {
@@ -132,6 +145,11 @@ export interface WalletBalances {
   priceSource: "live" | "stub";
   holdings: WalletHolding[]; // the eight fixed labelled series, in group/colour order
   history: WalletHistoryPoint[];
+  // Day counts by history[].provenance (issue #614 AC5) — e.g. a consumer can
+  // tell "95% of this series is seed rows" without scanning `history` itself.
+  // `source` above only ever describes the CURRENT sampler's config; this is
+  // the composition of what was actually returned.
+  historyProvenance: Record<WalletHoldingProvenance, number>;
 }
 
 // Row-level provenance for the analytics pipeline (issue #397): which data

@@ -35,7 +35,12 @@ const SERIES: { symbol: string; color: string }[] = [
   { symbol: "SP500", color: "#8b5cf6" },
 ];
 
-// Six days of continuous, sparse history (last 5 render collapsed).
+// Six PERSISTED days out of a genuine ~97-day span (2026-03-19 → 2026-06-24),
+// deliberately gapped — issue #614 AC6: this fixture used to be labelled "six
+// days of CONTINUOUS history" while jumping across that same hole, which
+// would have passed unchanged against production's real 40-day gap. It is the
+// fixture the AC5 gap-rendering assertions below reuse for exactly that
+// reason: a real multi-week gap, not a synthetic one-off.
 const HISTORY = [
   { date: "2026-03-18", byAsset: { WETH: 21519, ROBOTMONEY: 51300, BNKR: 12 }, totalUsd: 72831 },
   { date: "2026-03-19", byAsset: { WETH: 20841, ROBOTMONEY: 45207, BNKR: 12 }, totalUsd: 66060 },
@@ -101,6 +106,63 @@ test("performance view draws the eight stacked series + Historical Data table fr
   await page.locator(".a2-table__toggle").click();
   await expect(page.locator("table.a2-table tbody tr")).toHaveCount(HISTORY.length);
   await expect(page.locator("table.a2-table tbody tr").first().locator("td.a2-sticky")).toHaveText("Mar 18");
+});
+
+// issue #614 AC5: the fixture above has a REAL ~97-day gap (2026-03-19 →
+// 2026-06-24). Before this fix, chart-theme.js's monoAxis() never set a scale
+// `type`, so Chart.js defaulted the x axis to "category" — spacing points by
+// ARRAY INDEX. Charting `history` directly (one array slot per PERSISTED day)
+// drew that 97-day hole as one ordinary-width step between two adjacent
+// slots: a price-looking cliff, not six weeks of missing samples. This test
+// inspects the live Chart.js instance and must FAIL against that
+// implementation, where `chart.data.labels.length === HISTORY.length` (6).
+test("AUM chart occupies proportional horizontal space across a real multi-week gap and renders it as a visible discontinuity, not an interpolated line (issue #614 AC5)", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/performance");
+  await expect(page.locator('canvas[x-ref="aum"]')).toBeVisible();
+
+  const expectedDenseDays = Math.round(
+    (Date.parse(HISTORY[HISTORY.length - 1]!.date) - Date.parse(HISTORY[0]!.date)) / 86_400_000,
+  ) + 1; // inclusive of both endpoints
+
+  const chartState = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[x-ref="aum"]') as HTMLCanvasElement;
+    // Chart is a CDN global in the served page; the ambient type here only
+    // declares getChart's return as `{ id: string }`, so widen to `any` for
+    // the full runtime shape rather than fighting the ambient declaration.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chart = (window as any).Chart.getChart(canvas);
+    return {
+      labelCount: chart.data.labels.length,
+      // A dataset's `spanGaps` config — must be explicitly false so Chart.js
+      // never draws a line THROUGH a null (gap) point.
+      spanGaps: chart.data.datasets.map((d: { spanGaps: unknown }) => d.spanGaps),
+      // Every dataset's value on each label index, so the test can find the
+      // gap region without hardcoding a dataset ordering assumption.
+      datasetsData: chart.data.datasets.map((d: { data: (number | null)[] }) => d.data),
+      labels: chart.data.labels as string[],
+    };
+  });
+
+  // The core AC5 assertion: the axis is a DENSE calendar (one slot per real
+  // calendar day across the full span), not a sparse array of only the
+  // persisted points — this is what makes a 97-day hole occupy 97 slots of
+  // horizontal space instead of collapsing to a single step.
+  expect(chartState.labelCount).toBe(expectedDenseDays);
+  expect(chartState.labelCount).toBeGreaterThan(HISTORY.length); // strictly denser than the sparse fixture
+
+  // spanGaps must be false on every stacked series — a `true`/`undefined`
+  // config would let Chart.js bridge the gap with an interpolated line.
+  for (const sg of chartState.spanGaps) expect(sg).toBe(false);
+
+  // At least one gap-region index (a synthesized day strictly between the two
+  // persisted dates on either side of the hole) must be `null` in EVERY
+  // dataset — a real discontinuity, never a fabricated/interpolated value.
+  const midGapIndex = Math.floor(chartState.labelCount / 2);
+  for (const data of chartState.datasetsData) {
+    expect(data[midGapIndex]).toBeNull();
+  }
 });
 
 test("the served performance view no longer bakes the frozen walletPerfView series (issue #84)", async ({ page }) => {

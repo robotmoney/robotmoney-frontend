@@ -51,6 +51,13 @@ export interface WalletHistoryPoint {
   date: string; // ISO calendar day
   byAsset: Record<string, number>; // sparse: only symbols present that day
   totalUsd: number;
+  // issue #614 AC5: which kind of row produced this day, so a consumer can
+  // distinguish a genuinely LIVE-sampled point from a backfilled/seeded one
+  // instead of the whole series reading as one undifferentiated line. Priority
+  // when a day mixes provenances across symbols: 'live' (any leg was a real
+  // read that day) > 'stale' (a schedule ran but degraded) > 'seed' (ported
+  // pre-launch history, never a chain read) > 'stub' (hermetic fixture).
+  provenance: Provenance;
 }
 
 export interface WalletBalances {
@@ -58,6 +65,12 @@ export interface WalletBalances {
   totalUsd: number;
   source: BaseRpcSource;
   priceSource: PriceSource;
+  // issue #614 AC5: day counts by history[].provenance, so a consumer can
+  // tell "this series is 95% seed rows" without scanning `history` itself —
+  // the seam between backfilled and live-sampled history, disclosed rather
+  // than smoothed over by a top-level `source` that only ever describes the
+  // CURRENT sampler's config, never the composition of what it returned.
+  historyProvenance: Record<Provenance, number>;
   holdings: WalletHolding[];
   history: WalletHistoryPoint[];
 }
@@ -146,32 +159,51 @@ async function valueAsset(
   };
 }
 
-// Continuous history from persisted samples (seeded once from the baked series,
-// then accumulated forward by the daily sampler). byAsset is sparse per day
-// (ZYFAI/GIZA/SP500 are intermittent); the eight fixed series' group/colour
-// ORDER is carried by holdings[]/resolveTrackedAssets, which the frontend
-// iterates — byAsset is a lookup, not the ordering.
-async function loadHistory(): Promise<WalletHistoryPoint[]> {
-  const rows = await sql<{ sample_date: Date; symbol: string; value_usd: string }[]>`
-    SELECT sample_date, symbol, value_usd
+// PERSISTED (deliberately sparse, not continuous — issue #614) history from
+// persisted samples: the seeded portion is ported once from the baked v0
+// series and carries its own known gaps, then the daily sampler accumulates
+// forward. Any day this pipeline never sampled is simply ABSENT from the
+// result — see WalletHistoryPoint's doc comment (contract/src/dashboards.d.ts)
+// for why a consumer must not assume day-to-day contiguity. byAsset is
+// separately sparse per day (ZYFAI/GIZA/SP500 are intermittent); the eight
+// fixed series' group/colour ORDER is carried by holdings[]/
+// resolveTrackedAssets, which the frontend iterates — byAsset is a lookup, not
+// the ordering.
+const PROVENANCE_PRIORITY: Provenance[] = ["live", "stale", "seed", "stub"];
+function dominantProvenance(seen: Set<Provenance>): Provenance {
+  for (const p of PROVENANCE_PRIORITY) if (seen.has(p)) return p;
+  return "stub"; // unreachable in practice (seen is always non-empty when called)
+}
+
+async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyProvenance: Record<Provenance, number> }> {
+  const rows = await sql<{ sample_date: Date; symbol: string; value_usd: string; provenance: Provenance }[]>`
+    SELECT sample_date, symbol, value_usd, provenance
       FROM wallet_balance_samples
      ORDER BY sample_date ASC, symbol ASC
   `;
-  const byDate = new Map<string, WalletHistoryPoint>();
+  const byDate = new Map<string, WalletHistoryPoint & { _seen: Set<Provenance> }>();
   for (const r of rows) {
     const date = (r.sample_date instanceof Date ? r.sample_date : new Date(r.sample_date))
       .toISOString()
       .slice(0, 10);
     let point = byDate.get(date);
     if (!point) {
-      point = { date, byAsset: {}, totalUsd: 0 };
+      point = { date, byAsset: {}, totalUsd: 0, provenance: "stub", _seen: new Set() };
       byDate.set(date, point);
     }
     const v = Number(r.value_usd);
     point.byAsset[r.symbol] = v;
     point.totalUsd += v;
+    point._seen.add(r.provenance);
   }
-  return [...byDate.values()];
+  const historyProvenance: Record<Provenance, number> = { live: 0, stub: 0, stale: 0, seed: 0 };
+  const history: WalletHistoryPoint[] = [];
+  for (const { _seen, ...point } of byDate.values()) {
+    point.provenance = dominantProvenance(_seen);
+    historyProvenance[point.provenance] += 1;
+    history.push(point);
+  }
+  return { history, historyProvenance };
 }
 
 const CACHE_TTL_MS = 30_000;
@@ -195,7 +227,8 @@ async function computeWalletBalances(): Promise<WalletBalances> {
     assets.map((a) => valueAsset(a, chainAmounts.get(a.symbol) ?? { ok: false }, source, priceSource)),
   );
   const totalUsd = holdings.reduce((sum, h) => sum + (h.valueUsd ?? 0), 0);
-  const history = await loadHistory().catch(() => [] as WalletHistoryPoint[]);
+  const EMPTY_PROVENANCE: Record<Provenance, number> = { live: 0, stub: 0, stale: 0, seed: 0 };
+  const { history, historyProvenance } = await loadHistory().catch(() => ({ history: [] as WalletHistoryPoint[], historyProvenance: EMPTY_PROVENANCE }));
 
   return {
     asOf: new Date(now).toISOString(),
@@ -204,6 +237,7 @@ async function computeWalletBalances(): Promise<WalletBalances> {
     priceSource,
     holdings,
     history,
+    historyProvenance,
   };
 }
 
@@ -266,7 +300,8 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
   });
 
   const totalUsd = holdings.reduce((sum, h) => sum + (h.valueUsd ?? 0), 0);
-  const history = await loadHistory().catch(() => [] as WalletHistoryPoint[]);
+  const EMPTY_PROVENANCE: Record<Provenance, number> = { live: 0, stub: 0, stale: 0, seed: 0 };
+  const { history, historyProvenance } = await loadHistory().catch(() => ({ history: [] as WalletHistoryPoint[], historyProvenance: EMPTY_PROVENANCE }));
 
   // asOf = freshest served sample's real timestamp (data age), or now() if empty.
   const asOfMs = rows.reduce((max, r) => {
@@ -275,5 +310,5 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
   }, 0);
   const asOf = new Date(asOfMs > 0 ? asOfMs : Date.now()).toISOString();
 
-  return { asOf, totalUsd, source, priceSource, holdings, history };
+  return { asOf, totalUsd, source, priceSource, holdings, history, historyProvenance };
 }

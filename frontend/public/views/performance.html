@@ -36,7 +36,14 @@
 
     <div x-data="walletPerfView()">
 
-      <div class="a2-charts">
+      <!-- issue #614 AC5: loading/error were tracked on the component but bound
+           nowhere in this view — a failed fetch rendered as an empty chart,
+           indistinguishable from a wallet genuinely holding $0. Surfaced explicitly,
+           same pattern as regime.html/swarm.html/projects.html. -->
+      <p class="a2-status" x-show="loading">Loading wallet performance…</p>
+      <p class="a2-status a2-status--error" x-show="error" x-text="error" x-cloak></p>
+
+      <div class="a2-charts" x-show="!loading && !error">
 
         <!-- Absolute value chart (Chart.js stacked area; data in walletPerfView) -->
         <div class="a2-card">
@@ -59,7 +66,7 @@
       </div>
 
       <!-- Historical Data table (last 5 collapsed / all 99 via Show All) -->
-      <div class="a2-tablewrap">
+      <div class="a2-tablewrap" x-show="!loading && !error">
         <div class="a2-table__head">
           <h3 class="a2-card__title">Historical Data</h3>
           <button type="button" class="a2-table__toggle" @click="showAll = !showAll"
@@ -237,6 +244,17 @@
   width: 10px; height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+/* Loading / error status (issue #614 AC5) */
+.a2-status {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  margin: 0 0 1.5rem;
+}
+.a2-status--error {
+  color: var(--color-warn, #ff6644);
 }
 
 /* Charts */
