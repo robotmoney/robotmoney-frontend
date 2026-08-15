@@ -1272,26 +1272,32 @@ failure mode §3 documents this codebase repeating.
 
 **Test plan.** All tests execute in the required backend job. DB-backed tests use
 the same ephemeral Postgres as `backend/tests/floor-seed.test.ts`; a missing
-fixture or an absent database **fails loudly and never skips**.
+fixture or an absent database **fails loudly and never skips**. The four
+`source-reconciliation` suites below do not exist yet, so they are named
+descriptively rather than by filename:
+`scripts/tests/unit/test-path-citations.test.ts` requires every concrete test
+path cited in `docs/**` to resolve on disk, and that gate cannot distinguish a
+proposed path from a stale one.
 
-- `backend/tests/source-reconciliation.test.ts` executes the classifier over a
-  recorded canonical FRED response plus a deliberately polluted floor, and
-  asserts the known source-absent `ICSA`/`DXY` keys from the D6 inventory
-  classify `fabricated` while genuine observations that merely repeat a value
-  classify `confirmed` — the audit's explicit warning that repeated values can be
-  genuine (§5).
-- The same file asserts a revised source value is upserted, and that a key
-  outside the source's re-servable window classifies `unverifiable` and is left
-  untouched.
-- `backend/tests/source-reconciliation-guard.test.ts` feeds a truncated response
-  and a degenerate one, and asserts the batch is refused whole, an alert is
-  raised, and both row count and values are unchanged.
-- `backend/tests/source-reconciliation-repair.test.ts` runs the repair against
-  ephemeral Postgres and asserts quarantined rows disappear from the read path,
-  remain recoverable, and that a second identical run writes nothing.
-- `backend/tests/source-reconciliation-freshness.test.ts` asserts a series with
-  many rows but a stale last real observation raises a freshness alert — the
-  D2/D3 shape.
+- A **`source-reconciliation` classifier suite**, added under `backend/tests/`,
+  executes the classifier over a recorded canonical FRED response plus a
+  deliberately polluted floor, and asserts the known source-absent `ICSA`/`DXY`
+  keys from the D6 inventory classify `fabricated` while genuine observations
+  that merely repeat a value classify `confirmed` — the audit's explicit warning
+  that repeated values can be genuine (§5).
+- The same classifier suite asserts a revised source value is upserted, and that
+  a key outside the source's re-servable window classifies `unverifiable` and is
+  left untouched.
+- A **`source-reconciliation` batch-guard suite**, added under `backend/tests/`,
+  feeds a truncated response and a degenerate one, and asserts the batch is
+  refused whole, an alert is raised, and both row count and values are unchanged.
+- A **`source-reconciliation` repair suite**, added under `backend/tests/`, runs
+  the repair against ephemeral Postgres and asserts quarantined rows disappear
+  from the read path, remain recoverable, and that a second identical run writes
+  nothing.
+- A **`source-reconciliation` freshness suite**, added under `backend/tests/`,
+  asserts a series with many rows but a stale last real observation raises a
+  freshness alert — the D2/D3 shape.
 - `backend/tests/api/analytics-write.test.ts` executes the new authenticated
   route and asserts an unauthenticated call is refused and that guard violations
   are rejected server-side.
