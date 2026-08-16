@@ -28,12 +28,15 @@ Each release ships from a branch named `releases-A.B.x`:
 
 Example: `releases-0.2.x` for the 0.2 line (currently the branch cutting v0.2.2).
 
-The branch holds every feature PR that makes up the release plus any small
-incidental nit-fix commits discovered while getting it out the door (see
-§5, Backporting). A release is **never tagged directly on `main`** — the tag
-lands on the `releases-A.B.x` branch, so `main` keeps moving with ordinary
-merges while the release line is frozen except for the fixes it specifically
-needs.
+Feature PRs never target `releases-A.B.x` directly — ordinary feature work is
+reviewed and merged via PR against `main`, exactly as this document's intro
+paragraph says. Once a release's scope is decided, the branch receives only
+(a) the specific commits cherry-picked from `main` that the release needs,
+and (b) small incidental nit-fix commits made directly on the branch while
+getting it out the door (see §5, Backporting). A release is **never tagged
+directly on `main`** — the tag lands on the `releases-A.B.x` branch, so
+`main` keeps moving with ordinary merges while the release line is frozen
+except for the fixes it specifically needs.
 
 ## 2. Per-release runbook
 
@@ -82,12 +85,14 @@ in the runbook was actually executed and passed — the issue is a state
 summary derived from real runbook execution, never ticked off independent of
 it.
 
-(Today's #660 and #661 are examples of the release-tracking-issue *shape*
-inherited from the Release → Phase → Feature hierarchy that superseded the
-old monolithic Plan issue #15 — they list Phases, not a preflight/postflight
-checklist yet, since the v0.2.2 rollout itself has not started. The
-preflight/postflight checklist described here is the convention this
-document defines going forward, on top of that existing issue shape.)
+(#660 and #661 both carry the release-tracking-issue *shape* inherited from
+the Release → Phase → Feature hierarchy that superseded the old monolithic
+Plan issue #15. #660 (`release:v0.2.2`) is now a live example of the full
+convention described here: it carries Objective, Preflight checklist,
+Postflight checklist, and Tracking authority note sections in addition to
+its Phases list. #661 (`release:v0.3.0`) has not started and, as of this
+writing, is still Phase-only — Objective and the two checklists get added
+once its rollout begins.)
 
 ## 4. Process flow
 
