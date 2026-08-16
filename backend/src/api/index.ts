@@ -2,7 +2,7 @@
 // answers the JSON API and serves the static frontend (STATIC_DIR), so a
 // single-box deployment needs no reverse proxy.
 import { ROUTES } from "@robotmoney/contract";
-import { config, assertNoVaultAddressCollision } from "../config.ts";
+import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
@@ -29,6 +29,14 @@ function json(data: unknown, status = 200): Response {
 // vault share. Fail-closed at startup — a misconfiguration must never serve a
 // live-looking double-counted number.
 assertNoVaultAddressCollision();
+
+// Config-time completeness WARNING (issue #642, decision D37): an empty
+// STRATEGY_VAULT_*_ADDRESS list makes ZYFAI-SS1/GIZA-SS1 NAV idle-USDC-only,
+// omitting every deployed vault position. Deliberately NOT a refusal to boot —
+// see warnIfStrategyVaultsUnconfigured() for why the sibling collision guard
+// throws and this one does not. The per-leg wire flag
+// (WalletHolding.strategyNavIdleOnly) carries the same fact to consumers.
+warnIfStrategyVaultsUnconfigured();
 
 // Data-time namespace guard (issue #602): refuse to serve a database in which
 // one member's handle is another member's id, because /swarm/members/<name>

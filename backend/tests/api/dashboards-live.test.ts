@@ -224,7 +224,14 @@ test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; tot
   const counter = mockChain();
   await sampleWalletSleeves({});
   const r = await getWalletSleeves();
-  expect(counter.aggregateCalls).toBe(1);
+  // TWO rounds, and the bound in the title is what matters. This mock answers
+  // EVERY balanceOf with a non-zero word, so since issue #642 baked the real
+  // ERC-4626 vault addresses into the strategy position list, both strategy
+  // accounts report non-zero vault shares here and round 2 (convertToAssets)
+  // legitimately fires. The invariant being guarded is that the count never
+  // scales with wallet/asset count — not that it is exactly one.
+  expect(counter.aggregateCalls).toBe(2);
+  expect(counter.aggregateCalls).toBeLessThanOrEqual(2);
   expect(r.source).toBe("stub");
   expect(r.wallets).toHaveLength(3);
   const bankr = r.wallets.find((w) => w.type === "primary")!;
@@ -248,7 +255,11 @@ test("wallet-sleeves: ONE reverted sub-call degrades ONLY that holding to stale;
   const counter = mockChain({ failBalanceOfTargets: [weth] });
   await sampleWalletSleeves({});
   const r = await getWalletSleeves();
-  expect(counter.aggregateCalls).toBe(1);
+  // Two rounds for the same reason as the test above (issue #642 baked the
+  // vault addresses; this mock reports a non-zero share balance for them), and
+  // still bounded — a reverted leg does not add a round.
+  expect(counter.aggregateCalls).toBe(2);
+  expect(counter.aggregateCalls).toBeLessThanOrEqual(2);
   const bankr = r.wallets.find((w) => w.type === "primary")!;
   const wethHolding = bankr.holdings.find((h) => h.symbol === "WETH")!;
   expect(wethHolding.amount).toBeNull();

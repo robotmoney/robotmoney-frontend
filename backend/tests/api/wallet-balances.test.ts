@@ -12,6 +12,8 @@ import {
   resolvePropWallets,
   resolveTrackedAssets,
   resolvePriceSource,
+  resolveStrategyVaults,
+  warnIfStrategyVaultsUnconfigured,
   assertNoVaultAddressCollision,
   config,
   SP500_SIZE,
@@ -56,10 +58,19 @@ const ENV_KEYS = [
   "USDC_ADDRESS", "ZYFAI_SS1_ADDRESS", "GIZA_SS1_ADDRESS", "WETH_ADDRESS",
   "ROBOTMONEY_ADDRESS", "BNKR_ADDRESS", "AAVE_AUSDC_ADDRESS",
   "BASE_RPC_RETRY_BASE_MS", "BASE_RPC_MAX_RETRIES", "BASE_RPC_MAX_CONCURRENCY",
-  "STRATEGY_VAULT_GTUSDCP_ADDRESS", "STRATEGY_VAULT_STEAKUSDC_ADDRESS",
-  "STRATEGY_VAULT_CUSDCV3_ADDRESS", "STRATEGY_VAULT_ABASUSDC_ADDRESS",
-  "STRATEGY_VAULT_CSHYUSDC_ADDRESS",
 ] as const;
+
+// The strategy-account positions, BAKED constants since issue #642 (no env
+// indirection — the owner ruled against new compose allowlist keys, and these
+// are on-chain-verifiable facts, not deployment configuration). Repeated here
+// as literals rather than imported so a silent edit to config.ts's constants
+// fails a test instead of quietly re-pointing every assertion below with it.
+const V = {
+  gtUSDCp: "0xee8f4ec5672f09119b96ab6fb59c27e1b7e44b61", // ERC-4626: decimals 18, asset() = USDC
+  steakUSDC: "0xbeefe94c8ad530842bfe7d8b397938ffc1cb83b2", // ERC-4626: decimals 18, asset() = USDC
+  aBasUSDC: "0x4e65fe4dba92790696d040ac24aa414708f5c0ab", // Aave aToken: decimals 6, asset() REVERTS
+  cUSDCv3: "0xb125e6687d4313864e53df431d5425969c15eb2f", // Compound III Comet: not ERC-4626, EXCLUDED
+} as const;
 
 function setBaseEnv(extra: Record<string, string> = {}) {
   process.env.PROP_WALLET_ADDRESSES = WALLET;
@@ -143,10 +154,15 @@ interface ChainFixtures {
 // point of the Multicall3 batching is that this stays 1–2 regardless of fan-out.
 interface MockCounter {
   aggregateCalls: number;
+  // Every decoded sub-call across every round (issue #642). The batching
+  // counters above say HOW MANY eth_calls went out; this says WHAT was asked of
+  // WHICH contract, which is the only way to assert that a non-ERC-4626 address
+  // is never sent an ERC-4626 method.
+  subCalls: { target: string; selector: string }[];
 }
 
 function mockChain(fx: ChainFixtures): MockCounter {
-  const counter: MockCounter = { aggregateCalls: 0 };
+  const counter: MockCounter = { aggregateCalls: 0, subCalls: [] };
   // Answer one aggregate3 sub-call using the same per-selector fixtures the old
   // single-eth_call path used. A failed balanceOf leg → success:false (mirrors an
   // allowFailure revert); an unknown selector/missing fixture throws (loud).
@@ -213,6 +229,7 @@ function mockChain(fx: ChainFixtures): MockCounter {
         }
         counter.aggregateCalls += 1;
         const calls = decodeAggregate3Calls(data);
+        for (const c of calls) counter.subCalls.push({ target: c.target.toLowerCase(), selector: c.callData.slice(0, 10) });
         const results = calls.map((c) => subResult(c.target, c.callData));
         return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) }), { status: 200 });
       }
@@ -232,11 +249,17 @@ function mockChain(fx: ChainFixtures): MockCounter {
 
 // Fixtures under PRICE_SOURCE=stub (prices come from token-prices STUB_PRICES:
 // WETH/ETH 1600, ROBOTMONEY 1e-5, BNKR 5e-4, SP500 4600; USDC/strategy $1).
-// ZYFAI-SS1/GIZA-SS1 are smart-account NAV legs (issues #120/#145): with no
-// STRATEGY_VAULT_*_ADDRESS configured (the default), NAV = idle USDC balance
-// of the account, read via USDC.balanceOf(account) — same target (A.USDC) the
-// primary wallet's own USDC leg queries, but a DIFFERENT holder, hence
-// balanceOfByHolder rather than the holder-agnostic `balanceOf` map.
+// ZYFAI-SS1/GIZA-SS1 are smart-account NAV legs (issues #120/#145): NAV = idle
+// USDC balance of the account, read via USDC.balanceOf(account) — same target
+// (A.USDC) the primary wallet's own USDC leg queries, but a DIFFERENT holder,
+// hence balanceOfByHolder rather than the holder-agnostic `balanceOf` map —
+// PLUS the account's balance in each baked position.
+//
+// The baked positions default to ZERO here, which is both accurate (this is
+// ZYFAI-SS1's real on-chain state) and load-bearing for the mock: a MISSING
+// balanceOf fixture throws loudly, so every address round 1 touches must appear
+// in this book. cUSDCv3 is deliberately absent — it is excluded from both
+// config lists, so any read of it must blow up this mock rather than pass.
 function stubFixtures(): ChainFixtures {
   return {
     balanceOf: {
@@ -244,6 +267,9 @@ function stubFixtures(): ChainFixtures {
       [A.WETH]: 10n * E18, // 10 WETH → $16,000
       [A.ROBOTMONEY]: 3_000_000_000n * E18, // 3e9 → $30,000 @ 1e-5
       [A.BNKR]: 20000n * E18, // 20,000 → $10 @ 5e-4
+      [V.gtUSDCp]: 0n, // no vault shares held by default
+      [V.steakUSDC]: 0n,
+      [V.aBasUSDC]: 0n, // no aToken position held by default
     },
     balanceOfByHolder: {
       [A.USDC]: {
@@ -414,11 +440,12 @@ test("AC3-retry negative control: the SAME transient 429 with BASE_RPC_MAX_RETRI
 test("AC3-batch: the endpoint issues at most TWO aggregate3 eth_calls regardless of wallet/asset count (was ~23 individual eth_calls)", async () => {
   // Three prop wallets × the eight tracked assets used to fan out to ~23 separate
   // eth_calls. With Multicall3 that collapses to ONE round-1 aggregate3 call
-  // (balances + each strategy account's idle-USDC/vault-share reads); round 2
-  // (per-vault convertToAssets) only fires when a vault is actually configured
-  // (issues #120/#145 — see the dedicated NAV test below), so with the default
-  // EMPTY vault list this stays at ONE call. This bound (never scaling with
-  // wallet/asset count) is the whole point of the fix.
+  // (balances + each strategy account's idle-USDC/vault-share/underlying
+  // reads); round 2 (per-vault convertToAssets) only fires when an account
+  // actually HOLDS shares in a baked vault (issues #120/#145 — see the
+  // dedicated NAV test below), and these fixtures hold none, so this stays at
+  // ONE call. This bound (never scaling with wallet/asset count) is the whole
+  // point of the fix.
   const wallets = ["0x" + "a1".repeat(20), "0x" + "b2".repeat(20), "0x" + "c3".repeat(20)];
   setBaseEnv();
   process.env.PROP_WALLET_ADDRESSES = wallets.join(",");
@@ -432,14 +459,14 @@ test("AC3-batch: the endpoint issues at most TWO aggregate3 eth_calls regardless
   expect(counter.aggregateCalls).toBeLessThanOrEqual(2); // never scales with wallet/asset count
 });
 
-test("NAV (issues #120/#145): a configured strategy vault is queried for shares in round 1 and convertToAssets in round 2; NAV = idle USDC + vault assets", async () => {
-  setBaseEnv({ STRATEGY_VAULT_GTUSDCP_ADDRESS: "0x" + "aa".repeat(20) });
+test("NAV (issues #120/#145): a baked ERC-4626 vault is queried for shares in round 1 and convertToAssets in round 2; NAV = idle USDC + vault assets", async () => {
+  setBaseEnv();
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
-  const VAULT = "0x" + "aa".repeat(20);
   const fx = stubFixtures();
-  fx.balanceOfByHolder![VAULT] = { [A.ZYFAI]: 1_000n * E6, [A.GIZA]: 0n }; // ZYFAI-SS1 holds 1000 (raw) gtUSDCp shares; GIZA holds none
-  fx.nav = { [VAULT]: 1_050n * E6 }; // convertToAssets(1000 shares) → 1050 USDC (accrued yield)
+  // ZYFAI-SS1 holds 1000 (raw) gtUSDCp shares; GIZA-SS1 holds none.
+  fx.balanceOfByHolder![V.gtUSDCp] = { [A.ZYFAI]: 1_000n * E6, [A.GIZA]: 0n };
+  fx.nav = { [V.gtUSDCp]: 1_050n * E6 }; // convertToAssets(1000 shares) → 1050 USDC (accrued yield)
   const counter = mockChain(fx);
 
   const r = await fetchWalletBalances();
@@ -448,11 +475,34 @@ test("NAV (issues #120/#145): a configured strategy vault is queried for shares 
   expect(bySym["ZYFAI-SS1"]!.provenance).toBe("stub");
   expect(bySym["ZYFAI-SS1"]!.amount).toBeCloseTo(5588, 6);
   expect(bySym["ZYFAI-SS1"]!.valueUsd).toBeCloseTo(5588, 6);
-  // GIZA-SS1 holds no shares in the configured vault → NAV = idle-only, unaffected.
+  expect(bySym["ZYFAI-SS1"]!.strategyNavIdleOnly).toBe(false); // a position contributed
+  // GIZA-SS1 holds no shares in any baked position → NAV = idle-only, unaffected.
   expect(bySym["GIZA-SS1"]!.provenance).toBe("stub");
   expect(bySym["GIZA-SS1"]!.amount).toBeCloseTo(4524, 6);
+  expect(bySym["GIZA-SS1"]!.strategyNavIdleOnly).toBe(true);
   // Round 2 (convertToAssets) fires because ZYFAI-SS1 has non-zero vault shares.
   expect(counter.aggregateCalls).toBe(2);
+});
+
+test("#642: an underlying-denominated position (aBasUSDC) is summed from its round-1 balanceOf and NEVER sent to convertToAssets", async () => {
+  setBaseEnv();
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  const fx = stubFixtures();
+  // GIZA-SS1 holds an aToken position only — no ERC-4626 shares anywhere.
+  fx.balanceOfByHolder![V.aBasUSDC] = { [A.GIZA]: 300n * E6, [A.ZYFAI]: 0n };
+  // No `nav` fixture at all: convertToAssets on ANY target now throws inside the
+  // mock, so this test fails loudly if the aToken is routed through round 2.
+  const counter = mockChain(fx);
+
+  const r = await fetchWalletBalances();
+  const bySym = Object.fromEntries(r.holdings.map((h) => [h.symbol, h]));
+  // aToken balanceOf is already underlying-denominated: NAV = 4524 idle + 300.
+  expect(bySym["GIZA-SS1"]!.amount).toBeCloseTo(4824, 6);
+  expect(bySym["GIZA-SS1"]!.strategyNavIdleOnly).toBe(false);
+  expect(bySym["GIZA-SS1"]!.provenance).toBe("stub"); // NOT degraded
+  // Round 1 only — an underlying position never triggers a NAV round.
+  expect(counter.aggregateCalls).toBe(1);
 });
 
 test("live price path: PRICE_SOURCE=live executes the GeckoTerminal + Yahoo fetchers and labels provenance 'live'", async () => {
@@ -912,4 +962,186 @@ test("issue #294 regression: fetchWalletBalances degrade path is unchanged — a
   for (const sym of ["WETH", "ROBOTMONEY", "SP500"]) {
     expect(r.holdings.find((h) => h.symbol === sym)!.provenance).toBe("live");
   }
+});
+
+
+// ── issue #642 ────────────────────────────────────────────────────────────────
+// Two defects, one root cause. The strategy vault list was reached through five
+// STRATEGY_VAULT_*_ADDRESS env keys that no compose `environment:` block named,
+// so it was unconditionally empty in every containerized deployment. The
+// mechanism was justified by a claim — "the agent rotates vaults every 1-2 days
+// per the #120 investigation" — that originated as the auto-loop's own default
+// rationale in decision issue #145, was never answered by the owner,
+// auto-applied at the 7-day timeout, and then written into config.ts as settled
+// fact. On-chain verification (2026-08-16) found no rotation: GIZA-SS1 holds
+// four candidates SIMULTANEOUSLY. The addresses are now baked constants.
+//
+// The second defect is the one that would have bitten the moment anyone
+// populated that list: two of the five candidates are not ERC-4626 at all, so
+// convertToAssets on them REVERTS — degrading the whole leg to 'stale', which
+// is precisely the #120 failure the vault list was introduced to fix.
+
+test("#642: the baked lists are the on-chain-verified ones, and no non-ERC-4626 address is in the vault list", () => {
+  // The vault list feeds convertToAssets, so membership in it is a claim that
+  // the address implements ERC-4626. Both of these were verified on Base
+  // mainnet: decimals() = 18, asset() = USDC 0x8335…2913.
+  expect(resolveStrategyVaults().map((v) => v.address).sort()).toEqual([V.gtUSDCp, V.steakUSDC].sort());
+  // aBasUSDC (Aave aToken, asset() reverts) and cUSDCv3 (Compound III Comet)
+  // must never appear here — that is the whole point of the split.
+  const vaultAddrs = new Set(resolveStrategyVaults().map((v) => v.address));
+  expect(`aBasUSDC-in-vault-list:${vaultAddrs.has(V.aBasUSDC)}`).toBe("aBasUSDC-in-vault-list:false");
+  expect(`cUSDCv3-in-vault-list:${vaultAddrs.has(V.cUSDCv3)}`).toBe("cUSDCv3-in-vault-list:false");
+});
+
+test("#642: a non-ERC-4626 position is NEVER sent convertToAssets — the guard that fails against an implementation feeding the whole list uniformly", async () => {
+  setBaseEnv();
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  const fx = stubFixtures();
+  // Reproduce GIZA-SS1's real shape: it holds ERC-4626 shares AND an aToken at
+  // the same time. Both are non-zero, so a uniform implementation would put
+  // BOTH into the round-2 convertToAssets batch.
+  fx.balanceOfByHolder![V.gtUSDCp] = { [A.GIZA]: 500n * E6, [A.ZYFAI]: 0n };
+  fx.balanceOfByHolder![V.aBasUSDC] = { [A.GIZA]: 300n * E6, [A.ZYFAI]: 0n };
+  fx.nav = { [V.gtUSDCp]: 520n * E6 }; // ONLY the real vault has a NAV fixture
+  const counter = mockChain(fx);
+
+  const r = await fetchWalletBalances();
+  const giza = r.holdings.find((h) => h.symbol === "GIZA-SS1")!;
+
+  // (1) The direct assertion: convertToAssets went to the ERC-4626 vault and to
+  // nothing else. This is what fails against a uniform implementation.
+  const converted = counter.subCalls.filter((c) => c.selector === CONVERT_TO_ASSETS).map((c) => c.target);
+  expect(converted).toEqual([V.gtUSDCp]);
+  expect(`aBasUSDC-converted:${converted.includes(V.aBasUSDC)}`).toBe("aBasUSDC-converted:false");
+
+  // (2) cUSDCv3 is not read AT ALL — not balanceOf, not convertToAssets. It is
+  // excluded from both lists (see D37), and the mock has no fixture for it, so
+  // any read would also have thrown.
+  const cometTouched = counter.subCalls.some((c) => c.target === V.cUSDCv3);
+  expect(`cUSDCv3-touched:${cometTouched}`).toBe("cUSDCv3-touched:false");
+
+  // (3) The consequence a uniform implementation would produce, asserted from
+  // the outside: on real Base, convertToAssets(aBasUSDC) reverts, the sub-call
+  // comes back success:false, and readChainAmountsBatched fails the WHOLE key —
+  // GIZA-SS1 would degrade to 'stale' with no vault value at all. It does not.
+  expect(giza.provenance).toBe("stub");
+  // NAV = 4524 idle + 520 vault assets + 300 aToken underlying.
+  expect(giza.amount).toBeCloseTo(5344, 6);
+  expect(giza.strategyNavIdleOnly).toBe(false);
+});
+
+test("#642: an account holding NO position discloses strategyNavIdleOnly:true rather than reading as an ordinary NAV", async () => {
+  // ZYFAI-SS1's real on-chain state (2026-08-16): idle dust, zero positions.
+  // Before this field, that rendered identically to a working strategy leg.
+  setBaseEnv();
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  mockChain(stubFixtures()); // every baked position balance is 0
+
+  const r = await fetchWalletBalances();
+  const bySym = Object.fromEntries(r.holdings.map((h) => [h.symbol, h]));
+  for (const sym of ["ZYFAI-SS1", "GIZA-SS1"]) {
+    expect(`${sym}:${bySym[sym]!.strategyNavIdleOnly}`).toBe(`${sym}:true`);
+    // Provenance is NOT repurposed: the read succeeded, the value is real, and
+    // #145 declined a distinct provenance value for these legs. Composition is
+    // a separate question from origin.
+    expect(bySym[sym]!.provenance).toBe("stub");
+    expect(bySym[sym]!.valueUsd).toBeCloseTo(EXPECT[sym]!, 6);
+  }
+  // Absent — not `false` — on every leg where the field is meaningless.
+  for (const h of r.holdings.filter((x) => !x.symbol.endsWith("-SS1"))) {
+    expect(`${h.symbol}:${"strategyNavIdleOnly" in h}`).toBe(`${h.symbol}:false`);
+  }
+});
+
+test("#642: a DEGRADED strategy read omits the field entirely — 'no positions' is never inferred from a failed call", async () => {
+  setBaseEnv();
+  process.env.PRICE_SOURCE = "stub";
+  const fx = stubFixtures();
+  fx.failBalanceOf = [A.USDC]; // the idle-USDC sub-call reverts → the whole leg degrades
+  mockChain(fx);
+
+  const r = await fetchWalletBalances();
+  const zyfai = r.holdings.find((h) => h.symbol === "ZYFAI-SS1")!;
+  expect(zyfai.provenance).toBe("stale");
+  // A reverted read tells us nothing about what the account holds. Claiming
+  // idle-only here would be asserting a fact the chain never gave us.
+  expect(`degraded-has-field:${"strategyNavIdleOnly" in zyfai}`).toBe("degraded-has-field:false");
+});
+
+test("#642: the disclosure survives the sampler → Postgres → request path, which serves persisted rows with zero RPC", async () => {
+  // The request path (fetchPersistedWalletBalances, issue #118) cannot recompute
+  // this — it makes no RPC calls at all. So the sampler records it (migration
+  // 0032) and the request path echoes it. A disclosure that lived only on the
+  // live read would never reach /allocation or /performance.
+  setBaseEnv();
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  const fx = stubFixtures();
+  // ZYFAI-SS1 holds nothing; GIZA-SS1 holds a real vault position.
+  fx.balanceOfByHolder![V.gtUSDCp] = { [A.GIZA]: 500n * E6, [A.ZYFAI]: 0n };
+  fx.nav = { [V.gtUSDCp]: 520n * E6 };
+  mockChain(fx);
+  await sampleWalletBalances({});
+
+  // Prove the request path is genuinely RPC-free for this read.
+  let fetchCalls = 0;
+  globalThis.fetch = (async (...args: unknown[]) => {
+    fetchCalls++;
+    throw new Error(`request path must not fetch — was called with ${String(args[0])}`);
+  }) as unknown as typeof fetch;
+
+  const r = await fetchPersistedWalletBalances();
+  expect(fetchCalls).toBe(0);
+  const bySym = Object.fromEntries(r.holdings.map((h) => [h.symbol, h]));
+  expect(bySym["ZYFAI-SS1"]!.strategyNavIdleOnly).toBe(true);
+  expect(bySym["GIZA-SS1"]!.strategyNavIdleOnly).toBe(false);
+  expect(bySym["GIZA-SS1"]!.amount).toBeCloseTo(5044, 6); // 4524 idle + 520 vault
+  // Never leaks onto a non-strategy symbol.
+  expect(`USDC-has-field:${"strategyNavIdleOnly" in bySym.USDC!}`).toBe("USDC-has-field:false");
+});
+
+test("#642: a row persisted BEFORE migration 0032 reads as absent, never as false", async () => {
+  // NULL means "not known", and the three-valued column exists precisely so a
+  // backfilled/seeded row cannot claim "positions contributed" about a sample
+  // nobody measured that way.
+  setBaseEnv();
+  const today = new Date().toISOString().slice(0, 10);
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES (${today}, 'ZYFAI-SS1', 4538, 1, 4538, 'live', now())
+  `; // strategy_nav_idle_only left unset → NULL, exactly like a pre-0032 row
+
+  const r = await fetchPersistedWalletBalances();
+  const zyfai = r.holdings.find((h) => h.symbol === "ZYFAI-SS1")!;
+  expect(zyfai.valueUsd).toBeCloseTo(4538, 6); // the row is still served
+  expect(`legacy-row-has-field:${"strategyNavIdleOnly" in zyfai}`).toBe("legacy-row-has-field:false");
+});
+
+test("#642 / D37: an empty position list WARNS at boot and never throws", () => {
+  setBaseEnv();
+  // The lists are baked constants now, so this cannot fire from a missing env
+  // var — it fires if a code change ever empties them, which is exactly when a
+  // silent regression to idle-USDC-only would otherwise ship unnoticed. The
+  // count is injected so that regression is assertable without mutating config.
+  const lines: string[] = [];
+  const message = warnIfStrategyVaultsUnconfigured(process.env, (m) => lines.push(m), 0);
+  // Warning, not refusal. assertNoVaultAddressCollision() throws because a
+  // collision DOUBLE-COUNTS — arithmetically wrong and unservable. An
+  // idle-USDC-only NAV is a real read that is merely incomplete, and refusing
+  // here would take down the api (which serves the whole static frontend) and
+  // every worker lane for a condition the site has survived since launch.
+  expect(() => warnIfStrategyVaultsUnconfigured(process.env, () => {}, 0)).not.toThrow();
+  expect(lines).toHaveLength(1);
+  expect(message).toBe(lines[0]!);
+  expect(message).toContain("ZYFAI-SS1");
+  expect(message).toContain("GIZA-SS1");
+
+  // With the real baked lists (the shipped state) it is silent — a warning on
+  // every boot of a correctly configured deployment is one operators learn to
+  // ignore.
+  const quiet: string[] = [];
+  expect(warnIfStrategyVaultsUnconfigured(process.env, (m) => quiet.push(m))).toBeNull();
+  expect(quiet).toEqual([]);
 });
