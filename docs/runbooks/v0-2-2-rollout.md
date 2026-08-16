@@ -134,6 +134,23 @@ Treat this as a minor release with a manual auth migration attached.
 
 ## 2. Go/no-go gates
 
+> ⛔ **PRECONDITION — do not enter these gates until every Phase for this
+> release is closed.** Preflight (this section and §4's pre-flight script)
+> may only *begin* once every Phase/feature issue linked from the release
+> tracking issue **#660** is closed — i.e. #660's `## Phases` tasklist shows
+> all boxes checked. #660 is the source of truth: before running any gate
+> below, check it (`gh issue view 660 --json body -q .body`, or the rendered
+> checklist on GitHub) and confirm every linked Phase issue's state is
+> `CLOSED`. If any linked Phase is still open, preflight has not started and
+> must not be started or suggested — stop here and go finish the Phase(s)
+> instead.
+>
+> **As of 2026-08-16, this precondition is NOT satisfied.** #660 links four
+> Phase issues — #647, #652, #653, #654 — and per `gh issue view <N> --json
+> state -q .state`, **all four are still `OPEN`**. Preflight for v0.2.2 is
+> therefore **not yet authorized to begin**; #647, #652, #653, and #654 are
+> the concrete blockers. Re-check #660 before proceeding past this point.
+
 Five gates. **They are printed in execution order, and that order is not the
 alphabet** — the letters are stable names the rest of this document cites,
 nothing more. Each gate needs the section before it to have run, and the admin
