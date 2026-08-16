@@ -2058,3 +2058,80 @@ leaves it on.
 - **No override ("fail-closed means fail-closed").** Defensible for a
   configuration gate; not for a data gate whose repair path runs through the
   database the operator may not be able to reach.
+
+---
+
+## D35 — Cutover data gate (issue #344): tooling shipped, gate NOT YET RUN, blocked on production credentials
+
+**Decision recorded, not a pass or fail.** Issue #344 asked this gate to be
+executed against the production database and its outcome logged here, pass or
+fail, with the date and the session count actually observed. That has still not
+happened. The two credentials the live checks require — a read-only production
+`DATABASE_URL` (a DigitalOcean Managed Postgres HA credential, D13) and the
+deployment's `ADMIN_TOKEN` — are, by design, never available outside a human
+operator's own environment (`scripts/gitops-credentials.ts` marks the
+equivalent DO token "local-only... never uploaded to GitHub"). Recording that
+absence here rather than fabricating a result is the point of this entry.
+
+**Provenance.** This decision and its tooling were authored on **2026-07-31**
+under issue #344. PR #408 was closed unmerged and the work never reached
+`main`; the issue was closed COMPLETED without delivery. It is re-landed
+**2026-08-16** with the drift fixes below. The credential blocker is unchanged.
+
+**Read-only observations from 2026-07-31 — NOT re-verified at re-landing.**
+They are recorded as history, not as current fact, and the deployment topology
+has since moved on (see D29, which makes the api process the cutover host for
+`robotmoney.net`):
+- `https://stage.robotmoney-labs.dev` returned `502` — the stage stack was not
+  running at the time, so even the misconfigured-data symptoms in the issue
+  could not be re-observed live.
+- `https://robotmoney.net` still served the pre-D1 Next.js production site.
+- No production or staging database credential, and no admin token for either
+  host, existed in the worktree, this repo's GitHub secrets, or CI.
+
+**Step 1 methodology is corrected per the issue's own review comment** before
+any run is attempted: the original `job_schedules`/`jobs` join cannot answer
+the question post-D25/#366, because `regime.classify`/`research.refresh` are
+seeded `enabled: false` compatibility markers now
+(`backend/src/db/seed.ts:43-44`) and would false-confirm the stopped-producer
+hypothesis. The corrected check reads producer freshness straight off `GET
+/api/admin/overview`'s `regime` and `research[]` fields, computed directly from
+`regime_snapshots` / `research_signals` (`backend/src/admin/overview.ts`) — the
+tables the independent producer actually writes.
+
+**Tooling shipped so the gate is a command, not a manual transcription of the
+issue's curl snippet:** `scripts/verify-cutover-data-gate.ts`, self-tested by
+`scripts/tests/integration/verify-cutover-data-gate.test.ts` against a stub
+backend. The test is hermetic — it spawns its own `Bun.serve` stub and needs no
+external resource — so it runs in CI unconditionally and never skips, covering
+the healthy pass path and every failure mode named in the issue (a broken
+session, the 7-member demo-seed roster, a future-dated regime `asOf`, an AUM
+history gap, a stale producer signal) plus the no-admin-token skip path. The
+script itself is deliberately **not** wired into any CI workflow: it is a
+one-shot operator check requiring exactly the two secrets above, run by hand:
+
+```bash
+ADMIN_TOKEN=<deployment admin token> \
+  bun scripts/verify-cutover-data-gate.ts --base https://<host pointed at the production database>
+```
+
+**Drift fixed at re-landing (2026-08-16).** The original was written against
+the pre-D28 contract. Per D28 (Committee → Swarm rename, pass 2) the script and
+its test now read `ROUTES.swarm.sessions` / `.session` / `.members` rather than
+the removed `ROUTES.committee.*`, and the human-readable check labels follow
+D28's user-facing copy rename ("committee sessions/member roster" → "swarm
+sessions/member roster") even though issue #344 predates it and still says
+`/committee`. The archive path named under "not in scope" below is likewise now
+`frontend/public/data/swarm/sessions/`.
+
+**Next action, for whoever holds the credentials:** boot the stage stack (or a
+throwaway backend) against a read-only production `DATABASE_URL`, run the
+command above, and replace this entry's status with the actual pass/fail and
+session count — this decision does not close the gate, it un-blocks it.
+
+**Not in scope (unchanged from issue #344).** The frontend follow-up — deleting
+or re-scoping the committed archive under
+`frontend/public/data/swarm/sessions/` and `ARCHIVE_LAST_DATE` in
+`frontend/public/assets/js/app/alpine/static-views.js:35` — stays deferred to
+whoever runs the gate to a real pass or fail; doing it now would be guessing
+the outcome.
