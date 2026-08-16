@@ -254,7 +254,7 @@ that block cannot lose them silently.)
 > `haltOnFailure` step (`:266-270`), and **reads no environment**: the override
 > is honoured only by the api guard (`backend/src/db/handle-namespace.ts:476`).
 > A failing initializer throws (`scripts/stack/stack.ts:248-251`) and fails the
-> boot. On that workflow the remedy is the repair below, or rollback — not this
+> boot. On that workflow the remedy is the repair above, or rollback — not this
 > variable. See docs/runbooks/v0-2-2-rollout.md §7.5.
 
 The api then logs the same block plus an `OVERRIDE:` line, serves anyway, and
@@ -371,7 +371,7 @@ for. (`docker compose -p "$RM_PROJECT" restart api` is enough *here*, where no
 environment changed — but see the box below, and prefer the one verb that is
 always correct.)
 
-> **`docker compose restart` does NOT apply environment changes.** `restart`
+> **`docker compose restart` does NOT apply environment variable changes.** `restart`
 > stops and starts the **existing** container with the environment it was
 > created with; only `up -d` **recreates** it and picks up a changed
 > `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION`, `PG_NAMESPACE_GUARD_TIMEOUT_MS`, or any
@@ -488,7 +488,7 @@ enabled. Migrations (D9) run with this credential.
 
 - **SSH deploy (simplest).** Generate an SSH keypair; put the public key in the
   droplet's `authorized_keys` (and register it in DO); store the private key as
-  **`SSH_PRIVATE_KEY`**. CI SSHes in and runs `docker compose pull && up -d`.
+  **`SSH_PRIVATE_KEY`**. CI SSHes in and runs `docker compose -p <project> pull && docker compose -p <project> up -d`.
 - **Container registry (reproducible).** Push images to **DO Container Registry**;
   `DO_API_TOKEN` authenticates `doctl registry login`. The droplet needs its own
   scoped **read** token to pull.
