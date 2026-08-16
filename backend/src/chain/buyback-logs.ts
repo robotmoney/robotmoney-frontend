@@ -10,7 +10,15 @@
 // adds any NEW live swaps keyed on tx_hash. On a table/read failure it degrades
 // honestly rather than fabricating rows. Per #50: 'stub'/'stale'/'seed' are
 // never presented as live chain data.
-import { config, resolveBuybackConfig, resolveBaseRpcSource, WETH_USDC_POOL, type BaseRpcSource } from "../config.ts";
+import {
+  config,
+  resolveBuybackConfig,
+  resolveBaseRpcSource,
+  WETH_USDC_POOL,
+  BUYBACK_LOG_CHUNK,
+  BUYBACK_MAX_CHUNKS,
+  type BaseRpcSource,
+} from "../config.ts";
 import { sql } from "../db/client.ts";
 import {
   decodeUint256,
@@ -231,13 +239,16 @@ export async function indexBuybacks(): Promise<IndexResult> {
     return { indexed: 0, skipped: `source-${cfg.source}`, scannedToBlock: null };
   }
 
-  const chunk = Number(process.env.BUYBACK_LOG_CHUNK ?? "9000");
-  const maxChunks = Number(process.env.BUYBACK_MAX_CHUNKS ?? "25");
-  // The scan floor is the committed BUYBACK_FROM_BLOCK constant (config.ts), not
+  // Committed scan bounds (issues #640/#641): all are committed constants, not env
+  // reads. The floor is the committed BUYBACK_FROM_BLOCK constant (config.ts), not
   // an env read: a bounded per-run scan starting at block 0 would spend ~51 days
   // of empty eth_getLogs calls before reaching the buyback era. With no env read
   // there is no value to malform, so the old NaN path — which slipped past the
   // `floor <= 0` warning and froze the chunk loop permanently — cannot recur.
+  // The chunk/maxChunks constants are the committed scan-window bounds; 9000 sits
+  // under the common 10k eth_getLogs provider cap (see config.ts).
+  const chunk = BUYBACK_LOG_CHUNK;
+  const maxChunks = BUYBACK_MAX_CHUNKS;
   const floor = cfg.fromBlock;
 
   let indexed = 0;

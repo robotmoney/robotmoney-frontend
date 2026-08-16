@@ -262,16 +262,27 @@ export function resolveStrategyVaults(
 }
 
 // SP500 position size + ticker (Open Question 3 — owner data; size comes from
-// config because there is no derivatives-venue positions API). Yahoo ticker
-// defaults to ^GSPC (the index the baked series tracked).
-export function resolveSp500(
-  env: Record<string, string | undefined> = process.env,
-): { size: number; ticker: string } {
-  return {
-    size: Number(env.SP500_SIZE ?? "0.6330"),
-    ticker: env.SP500_TICKER || "^GSPC",
-  };
-}
+// here because there is no derivatives-venue positions API). ^GSPC is the index
+// the baked series tracked.
+//
+// COMMITTED CONSTANTS, NOT ENV (issue #641). `SP500_SIZE` and `SP500_TICKER`
+// used to be env overrides, which is the worst of both worlds: neither key is in
+// docker-compose.yml's `environment:` block, and that block is an ALLOWLIST (no
+// compose file has an `env_file:` and backend/Dockerfile sets no ENV), so no
+// deployed container could ever receive them — while the code kept claiming they
+// were operator-settable. They follow the same rule as the addresses below
+// (ROBOTMONEY_ADDRESS/WETH_ADDRESS/BUYBACK_PRIMARY_WALLET were baked for the same
+// reason): the allowlist is reserved for SECRETS and OPERATOR ESCAPE HATCHES, and
+// this is neither.
+//
+// The ticker is immutable — ^GSPC is what this leg IS. The size is not: it is
+// mutable owner data, and nothing detects that it has gone stale (see the
+// decision recorded at chain/wallet-balances.ts's `config` leg). As a committed
+// constant its staleness is at least VISIBLE — it changes under review in a pull
+// request, with a diff and a date, instead of drifting invisibly inside one
+// droplet's environment where no reader of this repo could see it.
+export const SP500_SIZE = 0.6330; // contracts held; owner-stated, last set 2026-03
+export const SP500_TICKER = "^GSPC";
 
 // --- ROBOTMONEY token / WETH / buyback feed ----------------------------------
 // Exposed to the token-metrics + token-buyback dashboards (and any other module)
@@ -350,6 +361,29 @@ export function resolveBuybackConfig(
     fromBlock: BUYBACK_FROM_BLOCK,
   };
 }
+
+// Per-run bounds of the live buyback log scan (chain/buyback-logs.ts): the
+// eth_getLogs window size and how many of those windows a single run may walk.
+//
+// COMMITTED CONSTANTS, NOT ENV (issue #641), for the same reason as the SP500
+// pair above: `BUYBACK_LOG_CHUNK`/`BUYBACK_MAX_CHUNKS` were env overrides that no
+// deployed container could ever receive, because docker-compose.yml's
+// `environment:` block is an allowlist and neither key is in it. A knob that
+// nothing can turn is not configuration; it is a constant with a misleading
+// spelling.
+//
+// WHY 9000. `eth_getLogs` is range-capped by the provider, and 10,000 blocks is
+// the cap the common public endpoints impose (including https://mainnet.base.org,
+// the BASE_RPC_URL default). 9000 sits under it with margin rather than at it, so
+// an off-by-one in the inclusive `[from, from + chunk - 1]` window below can
+// never turn a working scan into a provider-side range error. THIS IS THE NUMBER
+// TO REVISIT — and the only one — if BASE_RPC_URL is ever re-pointed at a
+// provider with a different cap: lower it to that provider's cap minus a similar
+// margin. MAX_CHUNKS bounds one run's wall-clock and RPC spend; the persisted
+// scan cursor (buyback_scan_state) carries progress across runs, so a lower value
+// costs catch-up latency, never coverage.
+export const BUYBACK_LOG_CHUNK = 9000;
+export const BUYBACK_MAX_CHUNKS = 25;
 
 // Config-time double-count guard (AC): a prop wallet must never be the vault or
 // an adapter address (their shares are valued by chain/vault-economics.ts — the
