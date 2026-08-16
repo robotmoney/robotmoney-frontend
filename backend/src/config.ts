@@ -308,7 +308,36 @@ export interface BuybackConfig {
   robotmoneyToken: string; // ROBOTMONEY ERC-20 (Transfer event `to` filter)
   wethToken: string; // WETH ERC-20 (swap input leg)
   source: BaseRpcSource; // 'live' = eth_getLogs vs Base RPC; 'stub' = hermetic fixture
+  fromBlock: number; // first Base block the live indexer scans (see BUYBACK_FROM_BLOCK)
 }
+
+// The block the buyback era began on Base — an IMMUTABLE MAINNET FACT, identical
+// in demo, stage and prod, so it is a committed constant with NO env override
+// (#640), the same treatment ROBOTMONEY_ADDRESS / WETH_ADDRESS /
+// BUYBACK_PRIMARY_WALLET already get above: a baked real default, absent from
+// docker-compose.yml's `environment:` allowlist, which is reserved for secrets
+// and operator escape hatches. 43,741,600 is the block of the earliest buyback
+// swap in the seed set (tx 0xa19a0866…ffa37, migrations/0015_buyback_swaps.sql;
+// eth_getTransactionByHash returns blockNumber 0x29b71a0, blockTimestamp
+// 0x69c14023 = 2026-03-23). There is no testnet deployment for this feed, so
+// nothing legitimately varies it per environment.
+//
+// Why this is not an env read defaulting to 0: the indexer is bounded at
+// BUYBACK_MAX_CHUNKS × BUYBACK_LOG_CHUNK blocks per run against Base's ~43,200
+// blocks/day, so crawling from block 0 takes ~51 days of empty eth_getLogs calls
+// before the scan reaches the first buyback — 51 days of a live feed serving only
+// the seed rows. Deleting the read also removes, BY CONSTRUCTION, the NaN hazard
+// the old `Number(process.env.BUYBACK_FROM_BLOCK ?? "0")` carried: a value that
+// cannot be supplied cannot be malformed.
+export const BUYBACK_FROM_BLOCK = 43_741_600;
+
+// The deepest Base WETH/USDC pool (~$111M reserve), used ONLY to read HISTORICAL
+// daily WETH/USD candles when the buyback indexer prices a swap at its own block
+// time (chain/token-prices.ts fetchGeckoDailyCloseUsd). Baked like every other
+// Base-mainnet fact above; the optional per-asset `poolId` knobs are unrelated
+// owner data for a spot read that does not use them.
+export const WETH_USDC_POOL = "0x6c561b446416e1a00e8e93e221854d6ea4171372";
+
 export function resolveBuybackConfig(
   env: Record<string, string | undefined> = process.env,
 ): BuybackConfig {
@@ -318,6 +347,7 @@ export function resolveBuybackConfig(
     robotmoneyToken: resolveRobotmoneyToken(env),
     wethToken: resolveWeth(env).address,
     source: resolveBaseRpcSource(env),
+    fromBlock: BUYBACK_FROM_BLOCK,
   };
 }
 
