@@ -64,6 +64,7 @@ test("serveStatic gives SPA documents a same-origin script policy and enables We
   expect(res?.headers.get("Permissions-Policy")).toBe(
     "publickey-credentials-get=(self), publickey-credentials-create=(self)",
   );
+  expect(res?.headers.get("Referrer-Policy")).toBe("strict-origin-when-cross-origin");
   expect(res?.headers.get("X-Content-Type-Options")).toBe("nosniff");
 });
 

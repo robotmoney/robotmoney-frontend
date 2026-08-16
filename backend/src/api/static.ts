@@ -29,6 +29,7 @@ function shellResponse(body: BodyInit, contentType?: string): Response {
     "Cache-Control": SHELL_CACHE_CONTROL,
     "Content-Security-Policy": CONTENT_SECURITY_POLICY,
     "Permissions-Policy": "publickey-credentials-get=(self), publickey-credentials-create=(self)",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
     "X-Content-Type-Options": "nosniff",
   };
   if (contentType) headers["Content-Type"] = contentType;
