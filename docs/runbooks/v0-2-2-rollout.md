@@ -49,17 +49,39 @@ otherwise assume.
 | | |
 |---|---|
 | Currently in production | tag **`v0.2.1`** = `5970f2d` |
-| Target | **`main @ ccf983f`**, to be tagged **`v0.2.2`** |
-| Delta | **14 commits** (`git rev-list --count v0.2.1..ccf983f` → `14`) |
+| Target | **`releases-0.2.x @ 7de3871`**, to be tagged **`v0.2.2`** |
+| Delta | **21 commits** (`git rev-list --count v0.2.1..7de3871` → `21`) |
 
 ```bash
 git fetch --tags origin
-git log --oneline v0.2.1..ccf983f      # expect exactly 14 lines
+git log --oneline v0.2.1..7de3871      # expect exactly 21 lines
 ```
+
+### Branching model
+
+Feature PRs are reviewed and merged against `main` — never opened directly
+against `releases-0.2.x`. `releases-0.2.x` carries only the commits this
+release actually needs: they are cherry-picked onto it from `main`, plus
+small nit-fix commits made directly on the release branch during rollout
+(this edit is one of the latter). This is the intended model, not a
+workaround — if a `main` commit is missing from the delta below, that is
+expected unless the missing commit is release-blocking.
 
 ### What is in the delta
 
+This grew past the original 14-commit cut at `ccf983f`: the runbook itself
+(`7c6f659`, #618) and six further commits have since landed. Notably
+`7b1abbf` (#628) is now in — §10.2 used to flag that fix as "not yet
+merged"; it has landed and that section is updated below.
+
 ```
+7de3871 docs(technical): canonical design for analytics data self-healing…      (#664)
+7b92a8c feat(pipeline): self-healing gap detection and backfill for every…      (#615)
+b9cd90b fix(pipeline): floor-seed idempotency test times out at the 5s…         (#632)
+7b1abbf fix(swarm): every notification email links to the retired…             (#628)
+836c0ff docs: Document macro-index discrepancy root cause in v0                 (#620)
+03a2b01 feat(analytics): full-universe purge regeneration of the regime…       (#630)
+7c6f659 docs(deploy): v0.2.2 rollout runbook, a read-only pre-upgrade gate…    (#618)
 ccf983f feat(swarm): derive a member's handle from its name at acceptance…      (#612)
 56de8e9 fix(ops): the handle/id namespace re-check runs only on --external-pg…  (#610)
 bc9f20f fix(seo): the new domain told every crawler its canonical identity…     (#603)
@@ -92,17 +114,17 @@ f51a8fe feat: admin auth: segregate automation and strict setup token           
   `https://robotmoney.network` (`scripts/prerender.ts:5`,
   `frontend/public/assets/js/app/seo.js:16`). **At `ccf983f` the api did not
   follow**: `backend/src/config.ts:438` defaulted to the old
-  `https://robotmoney.net`, and nothing can override it in this deployment (§6,
-  §10). ⚠ **Check this before you cut the tag** — commit `969bc2e` moves that
-  default to `SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network"`
-  (`backend/src/config.ts:448`, resolved at `:450-454`), but it is **not on
-  this runbook's branch**: it was extracted out to issue #627 / PR #628 (not
-  yet merged as of this writing). If the tag you cut includes that fix (check
-  #627/#628's status), §10.2 is not a defect of your release; if it is cut
-  without it, it is. Verify with
+  `https://robotmoney.net`. That gap is now closed: `7b1abbf` (#628, merged
+  onto this branch) moved the default to
+  `SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network"`
+  (`backend/src/config.ts:448`, resolved at `:450-454`). §10.2 previously
+  tracked this as known-broken; it is updated below to reflect the fix.
+  **Verify empirically before you cut the tag anyway** — do not trust this
+  paragraph over the checkout in front of you:
   `git show <tag>:backend/src/config.ts | grep -n 'robotmoney\.net"'` — keep the
   closing quote, or the pattern also matches `robotmoney.network` and always
-  hits (the same half-match that once broke `scripts/prerender.ts:25-29`).
+  hits (the same half-match that once broke `scripts/prerender.ts:25-29`). No
+  hit means the fix is present.
 - **New identity column with a unique index and two new triggers** on
   `swarm_members` (`0030`, `0031`).
 
@@ -693,16 +715,17 @@ never out of your shell, and even then it cannot rescue the boot. See §7.5.
 `.env.example:138` documents it as if it were configurable. It is not.
 
 **Effect in v0.2.2:** the api always computes the **compiled-in default**,
-whatever that is in the tag you deploy. At `ccf983f` that is
-`backend/src/config.ts:438`'s `https://robotmoney.net` — the **old** domain that
-`bc9f20f` (#603) just moved away from — so every swarm application-receipt and
-activation email links to the old host. `969bc2e` changes it to
-`https://robotmoney.network` (`SWARM_PUBLIC_BASE_URL_DEFAULT`,
-`backend/src/config.ts:448`, resolved at `:450-454`) — but that commit is
-**not on this runbook's branch**; it is tracked separately as issue #627 / PR
-#628 (not yet merged as of this writing). **Confirm which one is in your tag
-(§1); do not attempt to change it during the rollout** — it is unreachable
-from `.env` and from your shell either way. See §10.
+whatever that is in the tag you deploy. At `ccf983f` that was
+`backend/src/config.ts:438`'s `https://robotmoney.net` — the **old** domain
+that `bc9f20f` (#603) just moved away from — so every swarm
+application-receipt and activation email linked to the old host. `7b1abbf`
+(#628) fixed this: the default is now
+`SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network"`
+(`backend/src/config.ts:448`, resolved at `:450-454`), and that commit **is**
+on this runbook's branch (`releases-0.2.x`) as of this revision. **Confirm
+which one is in your tag anyway (§1); do not attempt to change it during the
+rollout** — it is unreachable from `.env` and from your shell either way. See
+§10.2.
 
 ### 6.4 ⚠ `ADMIN_TOKEN` is also minted per boot — read it from the container
 
@@ -1135,39 +1158,35 @@ in `backend/Dockerfile`, they cannot be delivered.
 **Use password auth for the admin surface in v0.2.2.** Passkeys are a
 known-broken feature, not a rollout step.
 
-### 10.2 The api advertises the old domain — **only if you tag at `ccf983f`**
+### 10.2 The api advertised the old domain — **RESOLVED, #628 is merged**
 
-At `ccf983f`, `backend/src/config.ts:438` defaults `SWARM_PUBLIC_BASE_URL` to
-`https://robotmoney.net` while the canonical origin is
+Historical note, kept because §1 and §6.3 point here. At `ccf983f`,
+`backend/src/config.ts:438` defaulted `SWARM_PUBLIC_BASE_URL` to
+`https://robotmoney.net` while the canonical origin was already
 `https://robotmoney.network` (`scripts/prerender.ts:5`,
-`frontend/public/assets/js/app/seo.js:16`). Not overridable — §6.3. Swarm emails
-then link to the old host.
+`frontend/public/assets/js/app/seo.js:16`). Not overridable — §6.3. Swarm
+emails linked to the old host.
 
-⚠ **This fix is NOT carried by this runbook's branch.** It was originally
-bundled here as `969bc2e`, extracting the default to
+**This is fixed.** `7b1abbf` (#628) landed the extraction to
 `SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network"`
-(`backend/src/config.ts:448`, resolved at `:450-454`) and pinning it with a
-new executed test on that PR's branch (a `swarm-public-base-url.test.ts` file
-under `backend/tests/`, not present here). A compliance review found that
-unrelated to the v0.2.2 rollout scope, so it was extracted into its own
-issue/PR (#627 / #628) and reverted out of this branch. Whether this section
-applies to your release depends on whether #627 / #628 have landed on `main`
-by the time you cut the tag — not on anything in this runbook's branch. Check
-their status, then verify empirically regardless:
+(`backend/src/config.ts:448`, resolved at `:450-454`), pinned by an executed
+test (`backend/tests/swarm-public-base-url.test.ts`). It is on
+`releases-0.2.x` as of this revision — no longer conditional on "if you tag
+at `ccf983f`," because the branch has moved past that point (§1). Still
+verify empirically before cutover, since a fix landing on this branch today
+does not guarantee it survives whatever else lands before you cut the tag:
 
 ```bash
 git show <the tag you cut>:backend/src/config.ts | grep -n 'robotmoney\.net"'
-# a hit  → this section applies; emails link to the retired host
+# a hit  → the fix regressed; emails link to the retired host — stop and investigate
 # no hit → the default is robotmoney.network; nothing to do
 ```
 
-Decide it before cutover and record the answer, because it changes nothing you
-*do* — it changes only what you tell people to expect in their inbox.
-
-**CONTRADICTS deployment.md §2**, whose host table still lists
+**Still CONTRADICTS deployment.md §2**, whose host table still lists
 `robotmoney.net` / `swarm.robotmoney.net` / `app.robotmoney.net`, and
-`cloudflared.config.example.yml:43`. Those are stale at `ccf983f` and are not
-this runbook's to fix.
+`cloudflared.config.example.yml:43`. #628 fixed only the api's compiled-in
+default, not those docs/config — they remain stale as of this revision and
+are not this runbook's to fix.
 
 ### 10.3 CSP headers — issue #607
 
