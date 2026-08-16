@@ -94,9 +94,28 @@ its Phases list. #661 (`release:v0.3.0`) has not started and, as of this
 writing, is still Phase-only — Objective and the two checklists get added
 once its rollout begins.)
 
+The Phases tasklist is not just status tracking: it is the hard precondition
+checked before preflight is allowed to start — see §4, step 0.
+
 ## 4. Process flow
 
-In order:
+### 0. Precondition — all features closed
+
+**Preflight cannot start while the release still has open Phase or feature
+issues.** Every Phase/feature issue linked from the release's tracking
+issue's Phases tasklist (§3) must be closed before an agent may begin, or
+even suggest beginning, preflight. This is a hard precondition, not a soft
+guideline: one open Phase or feature issue is enough to block preflight
+outright, with no exception for "the remaining work doesn't touch the
+rollout."
+
+Checking this in practice means reading the tracking issue's Phases
+tasklist and confirming every box is checked — every linked Phase/feature
+issue is closed, not merely present with an unchecked box. If any Phase or
+feature issue under the release is still open, preflight does not begin:
+report the gap and stop.
+
+In order, once the precondition above is satisfied:
 
 1. **Preflight.** An agent dry-runs the runbook against production,
    read-only wherever the runbook allows it. Any bug the dry-run turns up —
