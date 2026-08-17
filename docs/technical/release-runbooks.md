@@ -1,14 +1,15 @@
 # Release process — branches, runbooks, and tracking issues
 
-> **Status: standing convention, partially followed today.** This describes
-> how a release is *meant* to ship — a release branch, a runbook committed to
-> it, and a GitHub tracking issue with preflight/postflight checklists. The
-> v0.2.2 rollout, the one release currently in flight, deviates from part of
-> it: its tracking issue (#660) states explicitly that rollout work is on
-> `release/v0.2.2-rollout`, not a `releases-0.2.x` branch, and flags that as a
-> known deviation rather than a change to the convention. No `releases-A.B.x`
-> branch exists in this repo as of this writing. Treat the branch-naming rule
-> below as the target, not a claim that it is in effect right now.
+> **Status: in effect.** This describes how a release ships — a release
+> branch, a runbook committed to it, and a GitHub tracking issue with
+> preflight/postflight checklists. `releases-0.2.x` exists on origin and is
+> the branch cutting v0.2.2, the one release currently in flight; the `v0.2.2`
+> tag itself has not been cut yet.
+>
+> `release/v0.2.2-rollout` is **retired** — it was a pre-convention PR head
+> branch (#618), squash-merged into `main` as `7c6f659` and deleted from
+> origin on merge. It holds no unmerged work. Any surviving reference to it,
+> including in #660's header, is stale; read it as `releases-0.2.x`.
 
 This is not the process for landing ordinary feature work — that is PR review
 against `main`, covered by [CONTRIBUTING.md](../../CONTRIBUTING.md) and the CI
@@ -37,6 +38,14 @@ getting it out the door (see §5, Backporting). A release is **never tagged
 directly on `main`** — the tag lands on the `releases-A.B.x` branch, so
 `main` keeps moving with ordinary merges while the release line is frozen
 except for the fixes it specifically needs.
+
+Cherry-picking is what the branch needs *once `main` has moved past the
+release scope*. A branch cut while the release scope is still exactly "all of
+`main`" is legitimately cut whole and kept in step by fast-forward — that is
+how `releases-0.2.x` was cut and is being carried
+([`docs/runbooks/v0-2-2-rollout.md` §1](../runbooks/v0-2-2-rollout.md),
+"Branching model"). Selective cherry-pick starts at the point the branch and
+`main` must diverge, not at the cut.
 
 ## 2. Per-release runbook
 
@@ -150,3 +159,13 @@ instead of on `main` first. A fix discovered on `releases-A.B.x` is exactly
 the kind of "nit" §1 already expects the branch to accumulate; backporting it
 is what keeps that branch's fixes from being silently lost the moment the
 branch is done being the active release line.
+
+The outstanding backport debt is a command, never a sentence in a document:
+
+```bash
+git log --oneline origin/main..origin/releases-A.B.x
+```
+
+Empty means the branch is a strict subset of `main` and nothing is owed.
+Every commit listed is a fix that exists only on the release branch and must
+be carried back to `main`.

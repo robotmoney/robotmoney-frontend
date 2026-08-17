@@ -49,32 +49,69 @@ otherwise assume.
 | | |
 |---|---|
 | Currently in production | tag **`v0.2.1`** = `5970f2d` |
-| Target | **`releases-0.2.x @ 7de3871`**, to be tagged **`v0.2.2`** |
-| Delta | **21 commits** (`git rev-list --count v0.2.1..7de3871` → `21`) |
+| Target | branch **`releases-0.2.x`** — its tip at the moment you run, to be tagged **`v0.2.2`** |
+| Delta | **resolve it yourself, below.** No count written in this file is authoritative |
+
+The target is a **branch, not a pinned SHA**. This section has already gone
+stale twice by pinning one (first `main @ ccf983f` / "14 commits", then
+`releases-0.2.x @ 7de3871` / "21 commits"), and it will go stale again — the
+branch is still receiving commits from `main`. Resolve the tip and the delta
+at execution time:
 
 ```bash
 git fetch --tags origin
-git log --oneline v0.2.1..7de3871      # expect exactly 21 lines
+git rev-parse origin/releases-0.2.x                  # ← the tip you will tag
+git rev-list --count v0.2.1..origin/releases-0.2.x   # ← the delta count
+git log --oneline v0.2.1..origin/releases-0.2.x      # ← the delta itself
 ```
+
+Write down the SHA `git rev-parse` printed and use **that one SHA** for the
+whole rollout — every gate below, the tag you cut in §8, and the
+`git rev-parse HEAD` check on the deployed checkout must all refer to it. If
+the branch moves mid-rollout, you are gating one commit and shipping another.
 
 ### Branching model
 
 Feature PRs are reviewed and merged against `main` — never opened directly
-against `releases-0.2.x`. `releases-0.2.x` carries only the commits this
-release actually needs: they are cherry-picked onto it from `main`, plus
-small nit-fix commits made directly on the release branch during rollout
-(this edit is one of the latter). This is the intended model, not a
-workaround — if a `main` commit is missing from the delta below, that is
-expected unless the missing commit is release-blocking.
+against `releases-0.2.x`. The standing convention
+([`docs/technical/release-runbooks.md` §1](../technical/release-runbooks.md))
+is that a release branch then carries only what the release needs:
+cherry-picks from `main`, plus small nit-fix commits made directly on the
+branch during rollout.
 
-### What is in the delta
+**What is actually true for v0.2.2:** `releases-0.2.x` was cut whole from
+`main`, not assembled by cherry-pick — at the cut, the release scope *was*
+everything on `main`. It is being kept in step with `main` by fast-forward
+rather than by selective pick, so it currently carries no commit that is not
+also on `main`. That stops being true the moment a fix lands directly on the
+branch, so check rather than assume:
 
-This grew past the original 14-commit cut at `ccf983f`: the runbook itself
-(`7c6f659`, #618) and six further commits have since landed. Notably
-`7b1abbf` (#628) is now in — §10.2 used to flag that fix as "not yet
-merged"; it has landed and that section is updated below.
+```bash
+git log --oneline origin/main..origin/releases-0.2.x   # branch-only commits
+```
+
+Empty ⇒ the branch is a strict subset of `main`, and there is nothing owed to
+`main` (release-runbooks.md §5, backporting). Anything listed is a fix that
+exists only here and must be backported.
+
+`release/v0.2.2-rollout` is **retired** and is not this branch. It was the
+head branch of PR #618, squash-merged into `main` as `7c6f659` and deleted
+from origin on merge; no ref to it survives. If you find it named anywhere —
+including in #660's header — the reference is stale, and `releases-0.2.x` is
+what it means.
+
+### What is in the delta — snapshot, 2026-08-17
+
+> **Informational, not authoritative.** On 2026-08-17 `releases-0.2.x` was at
+> `d852329`, 22 commits ahead of `v0.2.1`, and is expected to be
+> fast-forwarded further before the tag is cut. Re-derive with
+> `git log --oneline v0.2.1..origin/releases-0.2.x` above before trusting any
+> count or assuming a commit below is the tip. The list is here so you can
+> recognise *what kind* of release this is; the command tells you what you are
+> actually shipping.
 
 ```
+d852329 docs: document the release branch/runbook/tracking-issue process…      (#666)
 7de3871 docs(technical): canonical design for analytics data self-healing…      (#664)
 7b92a8c feat(pipeline): self-healing gap detection and backfill for every…      (#615)
 b9cd90b fix(pipeline): floor-seed idempotency test times out at the 5s…         (#632)
