@@ -682,15 +682,14 @@ dump as well.
 > the tree, and inside `./_static` / repo-root reach of a compose bind mount.
 > Pick a directory outside the repo on a filesystem you control.
 
-> 🔴 **Two roles, two passwords — `PGPASSWORD` does not follow `--username`.**
-> libpq reads `PGPASSWORD` from the process environment for **every**
-> connection, whatever `--username` says. Exporting `rm_readonly`'s password and
-> then running `pg_dumpall --username=doadmin` sends `rm_readonly`'s password as
-> `doadmin`'s: the server rejects it, or — if the terminal is interactive —
-> `pg_dumpall` blocks on a password prompt, which at 3am inside a script reads
-> as a hang. Scope the variable to the one command that needs it (a per-command
-> assignment, never `export`), or put both roles in `~/.pgpass` and set no
-> `PGPASSWORD` at all.
+> **One role, one password, one host.** Both commands below run as
+> `rm_readonly` against the replica (the globals dump too — see the ✅ box
+> after them). An earlier revision needed `doadmin` against the primary for
+> the second command and warned at length that `PGPASSWORD` does not follow
+> `--username`; that hazard is gone with the second credential. Still scope
+> the variable to each command (a per-command assignment, never `export`) or
+> use `~/.pgpass`, so the password does not leak into unrelated child
+> processes.
 
 ```bash
 mkdir -p ~/rm-backup-v022 && cd ~/rm-backup-v022   # OUTSIDE the checkout (§5.2)
@@ -709,16 +708,14 @@ PGPASSWORD='<rm_readonly password>' pg_dump \
   --file="rm-preupgrade-${STAMP}.dump"
 echo "pg_dump exit=$?"
 
-# Roles are NOT in the dump above. This is a separate, required artifact —
-# and a DIFFERENT role, so a DIFFERENT password. Verified against the
-# PRIMARY on 2026-08-17 (doadmin, with -l defaultdb — see the box below for
-# why). Whether pg_dumpall --globals-only also works against the replica's
-# endpoint (it is a pure catalog READ, so there is no structural reason it
-# should not) has not been verified — test it yourself before relying on it,
-# and prefer the replica if it works, to keep doadmin off the primary
-# connection during routine backups entirely.
-PGPASSWORD='<doadmin password>' pg_dumpall \
-  --host=<primary-host> --port=25060 --username=doadmin --database=defaultdb \
+# Roles are NOT in the dump above. This is a separate, required artifact.
+# SAME role, SAME replica, SAME password as the pg_dump above — no doadmin,
+# no primary. VERIFIED 2026-08-17 (see the box below): rm_readonly against
+# the replica produces a complete globals dump, because --globals-only with
+# --no-role-passwords is a pure catalog READ of pg_roles (NOT pg_authid,
+# which is what would need superuser).
+PGPASSWORD='<rm_readonly password>' pg_dumpall \
+  --host=<replica-host> --port=25060 --username=rm_readonly --database=defaultdb \
   --globals-only --no-role-passwords \
   --file="rm-globals-${STAMP}.sql"
 echo "pg_dumpall exit=$?"
@@ -731,13 +728,37 @@ echo "pg_dumpall exit=$?"
 > database "template1"`. `pg_dumpall`'s `-l`/`--database` flag picks the
 > database it connects through to enumerate globals; it does not change what
 > gets dumped (globals are cluster-wide either way).
+>
+> ✅ **`rm_readonly` against the replica is enough for the globals dump —
+> verified 2026-08-17, resolving what an earlier revision left open.** The
+> run exited `0` and produced all 11 cluster roles, including the two
+> anything downstream actually needs (`rm_readonly` and `rm_worker`, with
+> their `ALTER ROLE` attribute lines), terminated by `PostgreSQL database
+> cluster dump complete`. `restore-check.ts` then consumed it and reached
+> `PASS rm-worker-role` off exactly this file. **So this runbook's entire
+> backup path — data and roles — runs as one non-superuser role against the
+> replica, and `doadmin` and the primary are not touched at all.**
+>
+> Why it works, so you can predict when it would stop: `--no-role-passwords`
+> makes `pg_dumpall` read **`pg_roles`** (a world-readable catalog view)
+> instead of **`pg_authid`** (superuser-only, because it holds the password
+> hashes). Drop `--no-role-passwords` and it reverts to `pg_authid` and
+> fails for a non-superuser — which is fine, because you do not want a
+> plaintext-equivalent role-password dump in this artifact anyway (§5.2).
+> **Verify the output rather than trusting the exit code**, since a role you
+> cannot read is omitted silently, exactly as §3's box warns for tables:
+>
+> ```bash
+> grep -cE '^CREATE ROLE' "rm-globals-${STAMP}.sql"          # expect the cluster's role count
+> grep -E '^(CREATE|ALTER) ROLE (rm_readonly|rm_worker)\b' "rm-globals-${STAMP}.sql"
+> tail -1 "rm-globals-${STAMP}.sql"   # must be the "dump complete" marker, not a truncated line
+> ```
 
 The `~/.pgpass` alternative, if you prefer no secrets on the command line —
 `chmod 600` it or libpq ignores the file silently:
 
 ```
-<host>:25060:defaultdb:rm_readonly:<rm_readonly password>
-<host>:25060:*:doadmin:<doadmin password>
+<replica-host>:25060:defaultdb:rm_readonly:<rm_readonly password>
 ```
 
 > **`--file=`, not `>`, and `set -o pipefail`.** `pg_dump … | gzip > out.gz`
@@ -1320,7 +1341,7 @@ matches what is documented here — verified 2026-08-17 against production:
 | 5 | namespace trigger `ENABLE ALWAYS` | `0 rows` | Correct — the trigger does not exist until `0031`. A `pg_trigger` lookup by name degrades gracefully to empty, unlike a column reference. |
 | 6 | members missing handle | `ERROR: column "handle" does not exist` (`42703`) | **Expected**, same reason as check 4. |
 | 7 | unsaveable handles | `ERROR: column "handle" does not exist` (`42703`) | **Expected**, same reason as check 4. |
-| 8 | `swarm_recommendations` baseline | `547` rows (2026-08-17; re-derive on your own run — this is a point-in-time count, not a constant) | This is the number check 8 compares against post-upgrade (`≥` this). Write down your own count now; you cannot recover it from a rolled-back or already-upgraded database. |
+| 8 | `swarm_recommendations` baseline | `557` rows (2026-08-17, measured by `restore-check.ts` against that day's dump; it read `547` earlier the same day — the table grows continuously, so this is a point-in-time count, **not** a constant, and yours will differ) | This is the number check 8 compares against post-upgrade (`≥` this). Take it from **your own** Gate C run, which prints it: `restore-check.ts` logs `swarm_recommendations: <n>` off the dump you are actually shipping with. You cannot recover it from a rolled-back or already-upgraded database. |
 | 9 | `admin_credential` untouched | `ERROR: column "recovery_hash" does not exist` (`42703`) | **Expected — and previously undocumented here.** This is the exact same landmine §2's admin-credential check already documents at length (*"Do not name `recovery_hash` in this query"*) — `0029_admin_auth_recovery.sql` has not applied yet, so the column does not exist. Check 9 as written names it directly and WILL throw pre-upgrade. Do not read this error as a release failure; it is the correct pre-upgrade state. Re-run check 9 verbatim only after §7.4's migrations have applied — post-upgrade it must return rows, not an error. |
 | 12 | swarm schedules baseline | five rows, all `enabled = f` (2026-08-17) | This is exactly what §5.4 asks you to capture — do it here too, so you have it recorded in two places before the boot in §7 can clobber it. |
 
