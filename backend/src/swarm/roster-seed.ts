@@ -54,6 +54,7 @@
 // be a maintenance cost with no reader.
 import { sql, jsonValue } from "../db/client.ts";
 import { toMember } from "./projections.ts";
+import { deriveMemberHandle, handleIsUnset } from "./handle.ts";
 
 export interface RosterSeedMember {
   /**
@@ -228,4 +229,54 @@ export async function readLiveRoster() {
   const rows = await sql`
     SELECT * FROM swarm_members WHERE handle = ANY(${[...LIVE_ROSTER_HANDLES]}) ORDER BY handle`;
   return rows.map(toMember);
+}
+
+// ── Handle backfill ────────────────────────────────────────────────────────
+//
+// Give every member whose handle is still UNSET the handle its display name
+// derives to. This is the missing reader of a signal migration 0030 already
+// sets: because `swarm_members.handle` is NOT NULL there is no null to mean
+// "nobody chose one", so 0030 writes `handle = id` and `handleIsUnset()` treats
+// that equality as the sentinel.
+//
+// WHY IT IS NEEDED AT ALL. Every other place a handle gets derived fires on an
+// EVENT — acceptApplication, registerMember, addMemberAdmin. A member admitted
+// before this release already passed those events, so none of them will ever
+// fire for it again: Maximus, nat and the member named Woon would keep a
+// UUID-shaped handle indefinitely and /swarm/members/maximus would never
+// resolve. The sentinel was a flag nothing read.
+//
+// ONE ALGORITHM, NO EXCEPTIONS. It calls the same deriveMemberHandle() the
+// event paths call, which is why this is TypeScript in seed() and not SQL in a
+// migration: slugifyMemberName() does NFKD normalisation and combining-mark
+// stripping that a hand-rolled SQL version would get subtly wrong, and a second
+// implementation is a second thing to drift.
+//
+// NEVER overwrites a deliberate choice (#562 decision 1): a handle somebody set
+// on purpose is a published URL, and moving it unasked is the failure that rule
+// exists to prevent. Only the untouched default is filled in.
+//
+// ORDERING. Run this AFTER any migration that re-identifies members. Derivation
+// probes both namespaces, so while a human slug is still some member's id the
+// member whose name derives to it is pushed to `<stem>-2` — which is exactly
+// the defect this release exists to remove. Migrations run before seed(), so the
+// default order is already correct.
+//
+// Idempotent: returns how many handles it wrote, and 0 on every later run.
+export async function backfillMemberHandles(): Promise<number> {
+  const rows = await sql<{ id: string; handle: string | null; name: string }[]>`
+    SELECT id, handle, name FROM swarm_members ORDER BY applied_at NULLS FIRST, id`;
+
+  let written = 0;
+  for (const row of rows) {
+    if (!handleIsUnset(row)) continue;
+    // Derived one at a time, inside its own statement, so each derivation sees
+    // the handles the previous ones just claimed — two members sharing a name
+    // must not both be handed the same stem.
+    const handle = await deriveMemberHandle(sql, { memberId: row.id, name: row.name });
+    if (handle === row.handle) continue;
+    await sql`UPDATE swarm_members SET handle = ${handle} WHERE id = ${row.id}`;
+    written += 1;
+  }
+  return written;
 }
