@@ -11,6 +11,10 @@
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
+
+// Own database per file, cloned from the migrated template (support/clean-db.ts).
+useCleanDatabase(import.meta.file);
 
 const WORKER_PASSWORD = "rm_worker_ci_password";
 let worker: postgres.Sql<{}>;
@@ -99,6 +103,10 @@ test("analytics data tables DENY insert/update/delete to the worker role (42501)
   expect(await denied(worker`UPDATE research_signals SET payload = '{"x":1}'::jsonb WHERE signal_key = 'role-test'`)).toBe("42501");
   // DELETE
   expect(await denied(worker`DELETE FROM raw_indicator_history WHERE indicator = 'ROLE_TEST'`)).toBe("42501");
+  // Still 42501, NOT the 0A000 of migration 0032's append-only guard: the
+  // table-level privilege check runs BEFORE any statement trigger fires, so a
+  // role without DELETE never reaches the guard. Both refusals are real; which
+  // one a caller sees depends on its grants, and this file is about the grants.
   expect(await denied(worker`DELETE FROM regime_snapshots WHERE date = '1997-01-01'`)).toBe("42501");
   expect(await denied(worker`DELETE FROM research_signals WHERE signal_key = 'role-test'`)).toBe("42501");
 
@@ -109,10 +117,6 @@ test("analytics data tables DENY insert/update/delete to the worker role (42501)
   const [snap] = await worker`SELECT composite FROM regime_snapshots WHERE date = '1997-01-01'`;
   expect(Number(snap.composite)).toBe(0.5);
 
-  // Cleanup with the owner connection.
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'ROLE_TEST'`;
-  await sql`DELETE FROM regime_snapshots WHERE date = '1997-01-01'`;
-  await sql`DELETE FROM research_signals WHERE signal_key = 'role-test'`;
 });
 
 test("non-analytics sampler tables stay writable to the worker role (legacy handlers unaffected)", async () => {

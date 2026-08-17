@@ -22,6 +22,12 @@ import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { directTelemetrySink } from "../src/analytics/store/telemetry-direct.ts";
 import { hermeticDataSource } from "../src/analytics/access/hermetic-source.ts";
 import type { TelemetryRunSubmission, TelemetrySink, TelemetrySubmitResult } from "../src/analytics/telemetry.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 const ASOF = "2026-05-15";
 
@@ -203,7 +209,6 @@ test(
 test(
   "AC3: an injected telemetry write failure leaves canonical analytics rows unchanged, returns the normal analytics result, and exposes the failure on the result",
   async () => {
-    await sql`DELETE FROM regime_snapshots WHERE date = ${ASOF}`;
     const [{ n: runsBefore }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
 
     const failingSink: TelemetrySink = {

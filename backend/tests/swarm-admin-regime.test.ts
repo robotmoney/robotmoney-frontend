@@ -10,6 +10,10 @@ import { test, expect, afterEach } from "bun:test";
 import { config } from "../src/config.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { sql } from "../src/db/client.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
+
+// Own database per file, cloned from the migrated template (support/clean-db.ts).
+useCleanDatabase(import.meta.file);
 
 const origConfig = {
   adminToken: config.adminToken,
@@ -64,7 +68,6 @@ test("POST /api/swarm/regime is a provider SUBMISSION gate: analytics bearer per
   config.allowInsecure = false;
 
   const date = "2031-06-15";
-  await sql`DELETE FROM regime_snapshots WHERE date = ${date}`;
   const res = await call(
     regimeReq({ snapshots: [snapshotRow(date, 0.731)] }, { Authorization: "Bearer analytics-secret" }),
   );
@@ -79,7 +82,6 @@ test("POST /api/swarm/regime is a provider SUBMISSION gate: analytics bearer per
     SELECT composite, version FROM regime_snapshots WHERE date = ${date}`;
   expect(Number(row.composite)).toBeCloseTo(0.731, 6);
   expect(row.version).toBe("test-v1");
-  await sql`DELETE FROM regime_snapshots WHERE date = ${date}`;
 });
 
 test("POST /api/swarm/regime rejects a malformed submission with 400 and zero writes", async () => {
@@ -198,12 +200,18 @@ test("swarm_session_members and swarm_session_events round-trip a real session's
     SELECT action, to_state FROM swarm_session_events WHERE session_id = ${session.id}`;
   expect([...events]).toEqual([{ action: "create", to_state: "scheduled" }]);
 
-  // ON DELETE CASCADE: removing the session removes its roster/event rows too.
-  await sql`DELETE FROM swarm_sessions WHERE id = ${session.id}`;
+  // The session's ON DELETE CASCADE to its roster/event rows is now
+  // UNREACHABLE: migration 0032 makes swarm_sessions append-only, so the
+  // delete that would have triggered the cascade is refused categorically
+  // (0A000) for every role. That refusal is the guarantee worth asserting —
+  // a convened session's attendance and event trail cannot be erased.
+  const refusal = await sql`DELETE FROM swarm_sessions WHERE id = ${session.id}`
+    .then(() => null, (e: { code?: string }) => e.code ?? "unknown");
+  expect(refusal).toBe("0A000");
   const [{ n: remainingRoster }] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM swarm_session_members WHERE session_id = ${session.id}`;
   const [{ n: remainingEvents }] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM swarm_session_events WHERE session_id = ${session.id}`;
-  expect(remainingRoster).toBe(0);
-  expect(remainingEvents).toBe(0);
+  expect(remainingRoster).toBeGreaterThan(0);
+  expect(remainingEvents).toBeGreaterThan(0);
 });

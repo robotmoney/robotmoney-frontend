@@ -24,7 +24,7 @@
 // v0-archive commit does not turn this file red for the wrong reason. The
 // per-dataset ASSERTIONS are still exact — "everything in the archive landed",
 // not "some rows landed".
-import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { beforeAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
@@ -33,6 +33,12 @@ import { loadV0Archive, V0_ARCHIVE_PUBLIC_KEY_B64 } from "../src/swarm/v0-archiv
 import { verifyStoredSubmissionSignature } from "../src/lib/signing.ts";
 import { getMemberTakes, getSession, getTakeReceipt } from "../src/swarm/domain.ts";
 import { LIVE_ROSTER_IDS, seedLiveRoster } from "../src/swarm/roster-seed.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 const MEMBER_IDS = ["athena", "robotmoney", "woon"];
 const SUBJECT_IDS = ["robotmoney-allocation", "robotmoney-treasury", "robotmoney-vault", "woon"];
@@ -45,20 +51,6 @@ beforeAll(() => {
   delete process.env.V0_ARCHIVE_SIGNING_KEY;
 });
 
-async function cleanArchiveRows(): Promise<void> {
-  // Reverse dependency order. swarm_recommendations cascades from sessions,
-  // but delete it explicitly so a failure here is about this table rather than
-  // a surprise about cascade behavior.
-  await sql`DELETE FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_briefs WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_subject_snapshots WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_sessions WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_subjects WHERE id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
-}
-
-beforeEach(cleanArchiveRows);
-afterEach(cleanArchiveRows);
 
 test("cold DB: every dataset in the archive is inserted at its manifest count", async () => {
   const { payload, manifest } = await loadV0Archive();

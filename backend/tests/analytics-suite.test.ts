@@ -19,6 +19,12 @@ import type { Indicator } from "../src/analytics/analyze/indicators.ts";
 import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/access/data-source.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { loadRawIndicatorHistory, loadRegimeHistory, loadJsonGz } from "./fixtures/regime/load.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 type JsonPt = { date: string; value: number | null };
 const finitePts = (pts: JsonPt[] | undefined): Point[] =>
@@ -75,7 +81,6 @@ test(
     const gt = expected[expected.length - 1]; // the freshly-computed (non-frozen) as-of row
     expect(gt.date).toBe(ASOF);
 
-    await sql`DELETE FROM regime_snapshots`;
     await sql`DELETE FROM raw_indicator_history`;
     await sql`DELETE FROM research_signals WHERE date = ${ASOF}`;
 

@@ -1,4 +1,4 @@
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { SWARM_ROSTER_CAP, getRosterCapacityStatus } from "../src/swarm/domain.ts";

@@ -9,7 +9,7 @@
 // not.
 //
 // Runs in the required backend-integration job against ephemeral Postgres.
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

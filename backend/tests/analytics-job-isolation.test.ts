@@ -6,7 +6,7 @@
 //   - the seed defines independent cadences and retires analytics.run rows;
 //   - the scheduler derives independent per-kind dedupe keys.
 // Runs in the required backend-integration job against ephemeral Postgres.
-import { test, expect, beforeEach, afterAll } from "bun:test";
+import { test, expect, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { makeAnalyticsHandlers, RESEARCH_TOOLS, REGIME_TOOL, type AnalyticsRunner } from "../src/worker/handlers/analytics.ts";

@@ -7,7 +7,7 @@
 // (ic.updateMemberProfile) and over the real HTTP dispatcher (handleSwarm)
 // so a route-level regression (path parsing, bearer extraction, JSON body
 // validation) is caught too, not just the domain function in isolation.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";

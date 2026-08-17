@@ -23,13 +23,19 @@
 // round-trip applied so the assertions run over the serialized response body a
 // client receives. Path registration itself is pinned by
 // api-routes-contract.test.ts.
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
 import { fetchRegimeSnapshots } from "../../src/analytics/report/projections.ts";
 import { getRegimeSnapshots } from "../../src/api/routes/dashboards.ts";
 import { saveRegimeSnapshots } from "../../src/analytics/store/regime-store.ts";
 import { REGIME_STALE_THRESHOLD_DAYS, type JsonValue } from "../../src/analytics/report/regime-projection.ts";
+import { useCleanDatabasePerTest } from "../support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 // fetchRegimeSnapshots measures freshness against the real server clock (UTC
 // today), so seed dates are computed relative to that same clock.
@@ -68,14 +74,6 @@ const snapRow = (date: string, indicators: readonly JsonValue[] = freshIndicator
   indicators,
 });
 
-// Each test owns the table. report.test.ts already uses the same full-table
-// reset, and every other regime test seeds its own dates, so this is safe.
-beforeEach(async () => {
-  await sql`DELETE FROM regime_snapshots`;
-});
-afterAll(async () => {
-  await sql`DELETE FROM regime_snapshots`;
-});
 
 // ── fetchRegimeSnapshots (producer over real DB state) ──────────────────────
 test("a today-dated snapshot row with current indicator observations yields staleness.stale === false with correct asof/ageDays", async () => {

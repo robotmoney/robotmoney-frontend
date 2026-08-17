@@ -7,7 +7,7 @@
 //     to 'pending' — no orphaned 'running' row owned by a stopped worker, and
 //     the zombie's eventual completion is discarded.
 // Runs in the required backend-integration job against ephemeral Postgres.
-import { test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { test, expect, beforeAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { LANES } from "../src/worker/lanes.ts";

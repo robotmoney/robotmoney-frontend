@@ -20,6 +20,10 @@ import { config } from "../../src/config.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import { assertAnalyticsUpdaterCredentials } from "../../src/analytics/api-client.ts";
 import { hashKey } from "../../src/lib/keys.ts";
+import { useCleanDatabase } from "../support/clean-db.ts";
+
+// Own database per file, cloned from the migrated template (support/clean-db.ts).
+useCleanDatabase(import.meta.file);
 
 const A = ROUTES.analytics;
 const TOKEN = "tok_analytics_test_secret";
@@ -197,7 +201,6 @@ test("raw-history + regime-snapshots: accept an optional provenance `source`, re
 
   // Same validation on the regime-snapshots batch: garbage rejected, valid value persisted.
   const date = "1997-03-04";
-  await sql`DELETE FROM regime_snapshots WHERE date = ${date}`;
   const badSnap = { snapshots: [{ date, percentiles: {}, indicators: [], source: "not-a-real-source" }] };
   expect((await call(req("POST", A.regimeSnapshots, badSnap, TOKEN)))?.status).toBe(400);
   const goodSnap = { snapshots: [{ date, percentiles: {}, indicators: [], source: "seed" }] };
@@ -241,7 +244,6 @@ test("seed ingestion: gap-fill only (existing rows win), idempotent no-op when w
 test("regime snapshots + research signals: idempotent on (date) / (signal_key, date)", async () => {
   prodAuth();
   const date = "1998-06-15";
-  await sql`DELETE FROM regime_snapshots WHERE date = ${date}`;
   const snap = { date, composite: 0.4, compositePercentile: 0.6, regime: "neutral", macroRegime: "neutral", onchainRegime: "neutral", factorRegime: null, percentiles: { VIX: 0.5 }, indicators: [{ id: "VIX" }] };
   expect((await call(req("POST", A.regimeSnapshots, { snapshots: [snap] }, TOKEN)))?.status).toBe(200);
   expect((await call(req("POST", A.regimeSnapshots, { snapshots: [{ ...snap, composite: 0.9 }] }, TOKEN)))?.status).toBe(200);

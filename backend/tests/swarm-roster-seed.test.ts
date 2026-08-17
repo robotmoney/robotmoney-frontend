@@ -25,22 +25,25 @@
 // member is never swept, and the flag does nothing unless SWARM_SEED_ROSTER is
 // set too.
 //
-// CLEANUP IS DELIBERATELY NARROW — DELETE of exactly the two roster ids and
-// this suite's own throwaway fixture ids, never `TRUNCATE swarm_members ...
-// CASCADE`. This suite shares one ephemeral Postgres with
-// v0-seed-bootstrap.test.ts and prod-bootstrap.test.ts, whose archive rows a
-// cascade would destroy (decision #502). The prune is a GLOBAL statement by
-// design, so the tests that run it snapshot every active member row they did
-// not create and put it back exactly as found (withForeignRowsRestored below)
-// — nothing outside the live roster and the fixtures is left changed, in
-// either direction.
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+// NO CLEANUP. pruneToLiveRoster() is a GLOBAL statement — it retires every
+// active member outside the roster, which is the behaviour under test — and
+// this file used to have to snapshot and restore the rows sibling suites owned
+// because they all shared one database (decision #502). Each test now runs
+// against a database of its own, so there are no foreign rows to protect and
+// nothing to put back.
+import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { LIVE_ROSTER, LIVE_ROSTER_IDS, pruneToLiveRoster, readLiveRoster, seedLiveRoster } from "../src/swarm/roster-seed.ts";
 import { getMembers } from "../src/swarm/domain.ts";
 import { seed } from "../src/db/seed.ts";
 import { sql } from "../src/db/client.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 const MANIFEST_DIR = join(import.meta.dir, "..", "..", "frontend", "public", "data", "swarm", "manifests", "members");
 
@@ -53,39 +56,6 @@ function manifest(id: string): Record<string, any> {
 // can never delete a row another suite owns.
 const FIXTURE_IDS = ["prune-fixture-draco", "prune-fixture-helios", "prune-fixture-applicant"] as const;
 
-async function clearRoster(): Promise<void> {
-  await sql`DELETE FROM swarm_members WHERE id = ANY(${[...LIVE_ROSTER_IDS]})`;
-  await sql`DELETE FROM swarm_members WHERE id = ANY(${[...FIXTURE_IDS]})`;
-}
-
-interface MemberSnapshot {
-  id: string;
-  status: string;
-  version: number;
-  updated_at: Date;
-}
-
-// pruneToLiveRoster() retires EVERY active member outside the roster — that is
-// the behaviour under test, and it does not stop at rows this file created.
-// Snapshot the ones belonging to sibling suites, run the prune, then restore
-// them byte-for-byte (status, version, updated_at) so the shared ephemeral
-// Postgres leaves this file exactly as it entered it.
-async function withForeignRowsRestored<T>(fn: () => Promise<T>): Promise<T> {
-  const foreign = await sql<MemberSnapshot[]>`
-    SELECT id, status, version, updated_at FROM swarm_members
-     WHERE status = 'active'
-       AND id <> ALL(${[...LIVE_ROSTER_IDS]})
-       AND id <> ALL(${[...FIXTURE_IDS]})`;
-  try {
-    return await fn();
-  } finally {
-    for (const r of foreign) {
-      await sql`UPDATE swarm_members SET status = ${r.status}, version = ${r.version}, updated_at = ${r.updated_at}
-                WHERE id = ${r.id}`;
-    }
-  }
-}
-
 async function statusOf(id: string): Promise<string | null> {
   const rows = await sql<{ status: string }[]>`SELECT status FROM swarm_members WHERE id = ${id}`;
   return rows.length ? rows[0]!.status : null;
@@ -94,15 +64,12 @@ async function statusOf(id: string): Promise<string | null> {
 const origFlag = process.env.SWARM_SEED_ROSTER;
 const origPruneFlag = process.env.SWARM_SEED_ROSTER_PRUNE;
 
-beforeEach(clearRoster);
 afterEach(async () => {
   if (origFlag === undefined) delete process.env.SWARM_SEED_ROSTER;
   else process.env.SWARM_SEED_ROSTER = origFlag;
   if (origPruneFlag === undefined) delete process.env.SWARM_SEED_ROSTER_PRUNE;
   else process.env.SWARM_SEED_ROSTER_PRUNE = origPruneFlag;
-  await clearRoster();
 });
-afterAll(clearRoster);
 
 test("LIVE_ROSTER matches the committed manifests field for field", () => {
   expect(LIVE_ROSTER.length).toBeGreaterThan(0);
@@ -214,66 +181,60 @@ test("SWARM_SEED_ROSTER gates the seeding: inert unset, seats when =1", async ()
 // ── The Contract half (issue #530): pruneToLiveRoster ────────────────────────
 
 test("prune retires off-roster members to inactive and never deletes them", async () => {
-  await withForeignRowsRestored(async () => {
-    await sql`INSERT INTO swarm_members (id, status, name, lens)
-              VALUES ('prune-fixture-draco', 'active', 'Draco', 'contrarian'),
-                     ('prune-fixture-helios', 'active', 'Helios', 'liquidity')`;
-    await seedLiveRoster();
+  await sql`INSERT INTO swarm_members (id, status, name, lens)
+            VALUES ('prune-fixture-draco', 'active', 'Draco', 'contrarian'),
+                   ('prune-fixture-helios', 'active', 'Helios', 'liquidity')`;
+  await seedLiveRoster();
 
-    const retired = await pruneToLiveRoster();
-    expect(retired.filter((id) => (FIXTURE_IDS as readonly string[]).includes(id)).sort()).toEqual([
-      "prune-fixture-draco",
-      "prune-fixture-helios",
-    ]);
-    // The roster is what the prune converges TO, so it is never in the sweep.
-    for (const id of LIVE_ROSTER_IDS) expect(retired).not.toContain(id);
+  const retired = await pruneToLiveRoster();
+  expect(retired.filter((id) => (FIXTURE_IDS as readonly string[]).includes(id)).sort()).toEqual([
+    "prune-fixture-draco",
+    "prune-fixture-helios",
+  ]);
+  // The roster is what the prune converges TO, so it is never in the sweep.
+  for (const id of LIVE_ROSTER_IDS) expect(retired).not.toContain(id);
 
-    // The ROWS SURVIVE. Published sessions reference their takes by member id
-    // (swarm_recommendations.member_id has no ON DELETE CASCADE), so a
-    // retirement that deleted them would tear holes in the archive.
-    const rows = await sql<{ id: string; status: string }[]>`
-      SELECT id, status FROM swarm_members WHERE id = ANY(${[...FIXTURE_IDS]}) ORDER BY id`;
-    expect(rows.map((r) => ({ id: r.id, status: r.status }))).toEqual([
-      { id: "prune-fixture-draco", status: "inactive" },
-      { id: "prune-fixture-helios", status: "inactive" },
-    ]);
+  // The ROWS SURVIVE. Published sessions reference their takes by member id
+  // (swarm_recommendations.member_id has no ON DELETE CASCADE), so a
+  // retirement that deleted them would tear holes in the archive.
+  const rows = await sql<{ id: string; status: string }[]>`
+    SELECT id, status FROM swarm_members WHERE id = ANY(${[...FIXTURE_IDS]}) ORDER BY id`;
+  expect(rows.map((r) => ({ id: r.id, status: r.status }))).toEqual([
+    { id: "prune-fixture-draco", status: "inactive" },
+    { id: "prune-fixture-helios", status: "inactive" },
+  ]);
 
-    // What /api/swarm/members serves is exactly what changed: getMembers()
-    // filters on status='active', so the retired members drop out of the
-    // directory while the roster stays in it.
-    const servedIds = (await getMembers()).map((m) => m.id);
-    for (const id of FIXTURE_IDS) expect(servedIds).not.toContain(id);
-    for (const id of LIVE_ROSTER_IDS) expect(servedIds).toContain(id);
+  // What /api/swarm/members serves is exactly what changed: getMembers()
+  // filters on status='active', so the retired members drop out of the
+  // directory while the roster stays in it.
+  const servedIds = (await getMembers()).map((m) => m.id);
+  for (const id of FIXTURE_IDS) expect(servedIds).not.toContain(id);
+  for (const id of LIVE_ROSTER_IDS) expect(servedIds).toContain(id);
 
-    // Idempotent: a second run finds nothing left to retire.
-    expect(await pruneToLiveRoster()).toEqual([]);
-  });
+  // Idempotent: a second run finds nothing left to retire.
+  expect(await pruneToLiveRoster()).toEqual([]);
 });
 
 // status='applied' is a member who applied through the real flow and is
 // waiting on an admin. The prune only touches status='active', so a
 // convergence run must not sweep the queue an operator is about to approve.
 test("prune leaves a pending application seated", async () => {
-  await withForeignRowsRestored(async () => {
-    await sql`INSERT INTO swarm_members (id, status, name, lens)
-              VALUES ('prune-fixture-applicant', 'applied', 'Applicant', 'macro')`;
-    await seedLiveRoster();
+  await sql`INSERT INTO swarm_members (id, status, name, lens)
+            VALUES ('prune-fixture-applicant', 'applied', 'Applicant', 'macro')`;
+  await seedLiveRoster();
 
-    const retired = await pruneToLiveRoster();
-    expect(retired).not.toContain("prune-fixture-applicant");
-    expect(await statusOf("prune-fixture-applicant")).toBe("applied");
-  });
+  const retired = await pruneToLiveRoster();
+  expect(retired).not.toContain("prune-fixture-applicant");
+  expect(await statusOf("prune-fixture-applicant")).toBe("applied");
 });
 
 test("prune never retires a live-roster member", async () => {
-  await withForeignRowsRestored(async () => {
-    await seedLiveRoster();
+  await seedLiveRoster();
 
-    const retired = await pruneToLiveRoster();
-    for (const id of LIVE_ROSTER_IDS) expect(retired).not.toContain(id);
-    for (const id of LIVE_ROSTER_IDS) expect(await statusOf(id)).toBe("active");
-    expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
-  });
+  const retired = await pruneToLiveRoster();
+  for (const id of LIVE_ROSTER_IDS) expect(retired).not.toContain(id);
+  for (const id of LIVE_ROSTER_IDS) expect(await statusOf(id)).toBe("active");
+  expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
 });
 
 // The gate, driven through the REAL seed() entry point `bun run migrate`
@@ -281,34 +242,32 @@ test("prune never retires a live-roster member", async () => {
 // first leg below is the important one: on its own it does nothing, and a
 // deployment can never end up with its members retired and no roster seated.
 test("SWARM_SEED_ROSTER_PRUNE gates the pruning: inert alone, inert unset, retires when =1", async () => {
-  await withForeignRowsRestored(async () => {
-    await sql`INSERT INTO swarm_members (id, status, name, lens)
-              VALUES ('prune-fixture-draco', 'active', 'Draco', 'contrarian')`;
+  await sql`INSERT INTO swarm_members (id, status, name, lens)
+            VALUES ('prune-fixture-draco', 'active', 'Draco', 'contrarian')`;
 
-    delete process.env.SWARM_SEED_ROSTER;
-    process.env.SWARM_SEED_ROSTER_PRUNE = "1";
-    await seed();
-    expect(await readLiveRoster()).toEqual([]);
-    expect(await statusOf("prune-fixture-draco")).toBe("active");
+  delete process.env.SWARM_SEED_ROSTER;
+  process.env.SWARM_SEED_ROSTER_PRUNE = "1";
+  await seed();
+  expect(await readLiveRoster()).toEqual([]);
+  expect(await statusOf("prune-fixture-draco")).toBe("active");
 
-    // Seeding without the prune flag stays additive: the roster is seated and
-    // the off-roster member is left exactly where it was.
-    process.env.SWARM_SEED_ROSTER = "1";
-    delete process.env.SWARM_SEED_ROSTER_PRUNE;
-    await seed();
-    expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
-    expect(await statusOf("prune-fixture-draco")).toBe("active");
+  // Seeding without the prune flag stays additive: the roster is seated and
+  // the off-roster member is left exactly where it was.
+  process.env.SWARM_SEED_ROSTER = "1";
+  delete process.env.SWARM_SEED_ROSTER_PRUNE;
+  await seed();
+  expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
+  expect(await statusOf("prune-fixture-draco")).toBe("active");
 
-    process.env.SWARM_SEED_ROSTER_PRUNE = "0";
-    await seed();
-    expect(await statusOf("prune-fixture-draco")).toBe("active");
+  process.env.SWARM_SEED_ROSTER_PRUNE = "0";
+  await seed();
+  expect(await statusOf("prune-fixture-draco")).toBe("active");
 
-    // Both flags set: the convergence run retires the off-roster member and
-    // leaves the seated roster active.
-    process.env.SWARM_SEED_ROSTER_PRUNE = "1";
-    await seed();
-    expect(await statusOf("prune-fixture-draco")).toBe("inactive");
-    for (const id of LIVE_ROSTER_IDS) expect(await statusOf(id)).toBe("active");
-    expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
-  });
+  // Both flags set: the convergence run retires the off-roster member and
+  // leaves the seated roster active.
+  process.env.SWARM_SEED_ROSTER_PRUNE = "1";
+  await seed();
+  expect(await statusOf("prune-fixture-draco")).toBe("inactive");
+  for (const id of LIVE_ROSTER_IDS) expect(await statusOf(id)).toBe("active");
+  expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
 });

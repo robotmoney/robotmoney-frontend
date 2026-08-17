@@ -1,4 +1,4 @@
-import { test, expect, afterEach, beforeAll } from "bun:test";
+import { test, expect, afterEach } from "bun:test";
 import { config } from "../src/config.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { sql } from "../src/db/client.ts";

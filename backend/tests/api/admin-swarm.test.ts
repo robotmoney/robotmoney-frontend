@@ -3,7 +3,7 @@
 // same idiom as routes/admin.ts). Runs against the ephemeral Postgres from
 // tests/preload.ts. Also asserts documented 200/201/404/409 envelopes and
 // that a path this handler does not own falls through as null.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import { generateKeyPair } from "../../src/lib/signing.ts";
 import { handleSwarmAdmin } from "../../src/api/routes/swarm-admin.ts";
 import { sql } from "../../src/db/client.ts";

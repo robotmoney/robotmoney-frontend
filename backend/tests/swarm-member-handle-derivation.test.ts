@@ -28,7 +28,7 @@
 // Shares the one ephemeral Postgres every other swarm test file uses
 // (tests/preload.ts). A missing Docker/Postgres fails that preload loudly;
 // nothing here skips.
-import { test, expect, beforeEach } from "bun:test";
+import { test, expect } from "bun:test";
 import { canonicalizeApplication, ROUTES, path as routePath } from "@robotmoney/contract";
 import * as ic from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";

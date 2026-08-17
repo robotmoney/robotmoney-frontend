@@ -4,7 +4,7 @@
 // stdout. Both are now recorded on a durable, queryable, append-only event
 // log (swarm_agent_health_events) and exposed admin-only via
 // GET /api/swarm/admin/agent-health.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

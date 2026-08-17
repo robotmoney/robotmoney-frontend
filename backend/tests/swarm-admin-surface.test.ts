@@ -9,7 +9,7 @@
 //
 // Runs against the ephemeral Postgres from tests/preload.ts (already fully
 // migrated).
-import { beforeAll, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";

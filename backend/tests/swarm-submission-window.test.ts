@@ -18,7 +18,7 @@
 // exactly three places in the tree — domain.ts and two PUBLISHED docs pages —
 // and in no backend test at all, so the contract could be changed with nothing
 // going red. These are the tests that were missing.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
