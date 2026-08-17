@@ -57,10 +57,61 @@ interface DemoState {
   apiPort: number;
 }
 
+/** First `key=`/`key =` value in a dotenv-shaped file, or null. */
+function readEnvKey(file: string, key: string): string | null {
+  if (!existsSync(file)) return null;
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (m && m[1] === key) return m[2]!.trim().replace(/^["']|["']$/g, "") || null;
+  }
+  return null;
+}
+
+/**
+ * The funded OpenCode Zen credential, which this rehearsal REQUIRES.
+ *
+ * A rehearsal exists to run what production runs. AGENT_MODEL unset resolves
+ * to DEFAULT_AGENT_MODEL (`opencode/deepseek-v4-flash`) — production's model —
+ * and that needs OPENCODE_API_KEY. An earlier version of this script pinned
+ * AGENT_MODEL=free to avoid spending the key, which quietly rehearsed a
+ * DIFFERENT system: scripts/lib/swarm/inference.ts documents that model choice
+ * is not neutral for swarm authorship (some families refuse the persona task
+ * outright), so a green `free` run does not predict a production boot.
+ *
+ * Resolution order — process env first (CI/shell), then the two dotenv files a
+ * staging host actually keeps. Never falls back to a keyless model: the same
+ * refuse-rather-than-substitute rule scripts/lib/onboarding-eval.ts enforces.
+ */
+function resolveZenKey(): { key: string; source: string } | { error: string } {
+  const fromEnv = process.env.OPENCODE_API_KEY?.trim();
+  if (fromEnv) return { key: fromEnv, source: "process environment" };
+  for (const rel of [".env", ".env.readonly"]) {
+    const file = join(repoRoot, rel);
+    const found = readEnvKey(file, "OPENCODE_API_KEY");
+    if (found) return { key: found, source: rel };
+  }
+  return {
+    error:
+      "OPENCODE_API_KEY is not set (checked the process environment, ./.env and ./.env.readonly). " +
+      "This rehearsal boots the production model (AGENT_MODEL unset -> opencode/deepseek-v4-flash), " +
+      "which requires a funded Zen key. Set it and re-run. Do NOT work around this with AGENT_MODEL=free: " +
+      "that rehearses a different model than production, and model choice materially changes swarm " +
+      "authorship (scripts/lib/swarm/inference.ts).",
+  };
+}
+
 async function main(backupDirArg?: string): Promise<number> {
   const backup = resolveBackupFiles(backupDirArg);
   if ("error" in backup) {
     err(backup.error);
+    return 2;
+  }
+
+  // Resolve the credential BEFORE the expensive work. Discovering a missing
+  // key after a restore and a multi-minute image build is a wasted window.
+  const zen = resolveZenKey();
+  if ("error" in zen) {
+    err(zen.error);
     return 2;
   }
 
@@ -109,11 +160,17 @@ async function main(backupDirArg?: string): Promise<number> {
     }
 
     const databaseUrl = `postgres://${restored.username}:${restored.password}@${restored.host}:${restored.port}/${restored.database}`;
-    // AGENT_MODEL=free: this rehearsal is about migrations + boot + page
-    // serving, not agent-simulation quality — avoid needing (or spending)
-    // the real, funded OPENCODE_API_KEY the main .env carries.
-    writeFileSync(join(worktree, ".env"), `DATABASE_URL=${databaseUrl}\nAGENT_MODEL=free\n`, "utf8");
+    // NO AGENT_MODEL here, deliberately: unset resolves to DEFAULT_AGENT_MODEL,
+    // which is what production runs. Pinning a model — free or otherwise —
+    // would rehearse something production does not do. The funded key rides
+    // along so that default model can actually authenticate.
+    writeFileSync(
+      join(worktree, ".env"),
+      `DATABASE_URL=${databaseUrl}\nOPENCODE_API_KEY=${zen.key}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
     log(`wrote worktree .env pointing at the restored container via ${restored.host} (never the real .env)`);
+    log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key`);
 
     log(`booting: bun scripts/demo.ts --smoke --external-pg --no-tui  (project=${project}, this can take several minutes)`);
     // §7.3's box: CI unset, or the boot tears itself down on exit.

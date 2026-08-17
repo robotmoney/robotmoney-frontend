@@ -920,6 +920,23 @@ bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022
 several minutes: image build/pull, the real `migrate.ts` run against the
 restored data, `seed()`, and a full health-wait.
 
+> 💳 **This runs the production model on a funded key, and that is the
+> point.** `OPENCODE_API_KEY` must be set — in your shell, or in the
+> checkout's `.env` or `.env.readonly`, which the script checks in that
+> order. It **refuses to start** without one rather than quietly downgrading.
+>
+> An earlier version pinned `AGENT_MODEL=free` to avoid the spend. That made
+> the rehearsal cheaper and less meaningful: `scripts/lib/swarm/inference.ts`
+> documents that **model choice is not neutral** for swarm authorship — some
+> Zen families refuse the persona task outright or break format, so a green
+> `free` run does not predict a production boot. A rehearsal that does not
+> use production's model is not rehearsing production.
+>
+> If you genuinely want the cheap structural check instead, that is §5.3's
+> `restore-check.ts`, which needs no inference at all. Do not reach for
+> `AGENT_MODEL=free` here to make this step cheaper — it converts a
+> production rehearsal into a different test while still reporting exit `0`.
+
 What it does:
 
 1. Restores the backup into a throwaway local Postgres (same mechanism as
@@ -937,9 +954,10 @@ What it does:
    later boot run by hand. `node_modules` is symlinked in from the main
    checkout (same lockfile, same commit) instead of a slow reinstall.
 3. Writes the worktree's own `.env`: `DATABASE_URL` pointing at the restored
-   container, and `AGENT_MODEL=free` — the rehearsal is about migrations and
-   page serving, not agent-simulation quality, and should not need (or
-   spend) the real `.env`'s funded `OPENCODE_API_KEY`.
+   container, plus the funded **`OPENCODE_API_KEY`**. It deliberately sets
+   **no `AGENT_MODEL`**, so the model resolves to `DEFAULT_AGENT_MODEL`
+   (`opencode/deepseek-v4-flash`) — the one production runs. See the box
+   below: this rehearsal spends real credit, on purpose.
 4. Boots with the **exact command §7.3 runs for real cutover**:
    `bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI` unset, a
    scoped `DEMO_PROJECT` (lowercased — Compose project names reject the
