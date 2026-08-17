@@ -192,6 +192,18 @@ Treat this as a minor release with a manual auth migration attached.
 
 ## 2. Go/no-go gates
 
+> ⛔ **RUN THIS ENTIRE RUNBOOK FROM THE DEDICATED STAGING HOST, NOT THE
+> PRODUCTION API HOST.** §3, §4, and §5 — provisioning, live preflight, the
+> backup, `restore-check.ts`, and especially `stage-rehearsal.ts` (a real
+> Docker image build plus a full app boot) — are real compute and disk load.
+> Running any of it on the box serving live production traffic is resource
+> contention and blast-radius risk on a machine that cannot afford either.
+> There is a separate staging host on the same private network as the read
+> replica (§3) for exactly this — clone/pull the release branch there and run
+> every command below from it. This was learned the hard way, 2026-08-17: an
+> earlier session ran `stage-rehearsal.ts` directly on the production API
+> host before this rule existed.
+>
 > ⛔ **PRECONDITION — do not enter these gates until every Phase for this
 > release is closed.** Preflight (this section and §4's pre-flight script)
 > may only *begin* once every Phase/feature issue linked from the release
@@ -203,7 +215,16 @@ Treat this as a minor release with a manual auth migration attached.
 > must not be started or suggested — stop here and go finish the Phase(s)
 > instead.
 >
-> **As of 2026-08-16, this precondition is NOT satisfied.** #660 links four
+> **As of 2026-08-17, this precondition IS satisfied.** #660 linked four
+> Phase issues — #647, #652, #653, #654. #647 and #653 were descoped to
+> v0.3.0 in the 2026-08-16 replan (out of this release's blocking scope); the
+> remaining two, #652 and #654, are both confirmed `CLOSED` (verified live via
+> the GitHub issue pages, not from a cached note — re-verify #660 yourself
+> before trusting this line, since it decays the same way the note it
+> replaces did). Preflight is authorized to begin. The paragraph below is kept
+> for the record of what NOT satisfied looked like:
+>
+> **As of 2026-08-16, this precondition was NOT satisfied.** #660 links four
 > Phase issues — #647, #652, #653, #654 — and per `gh issue view <N> --json
 > state -q .state`, **all four are still `OPEN`**. Preflight for v0.2.2 is
 > therefore **not yet authorized to begin**; #647, #652, #653, and #654 are
@@ -825,6 +846,64 @@ replica. Exit `1` means a verification query or a preflight check found a
 real problem; exit `2` means it could not run at all (missing files, Docker
 failure). Nothing here is destructive and nothing needs manual cleanup — the
 throwaway container is gone whether the run succeeds or fails.
+
+### 5.3b Optional but recommended: a real stage rehearsal, not just static checks
+
+`restore-check.ts` proves the dump restores and that static SQL checks pass
+against it. It does **not** prove this release's actual migration code path
+runs cleanly, or that the app boots and serves pages against production-shaped
+data — a migration can pass every static check above and still fail for
+reasons only a real run surfaces (lock timing under a live boot, a seed()
+interaction, a route that 500s against real data shapes). `stage-rehearsal.ts`
+closes that gap:
+
+```bash
+cd <checkout>/backend
+bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022
+```
+
+⛔ **Staging host only (§2) — this does a real Docker image build.** Expect
+several minutes: image build/pull, the real `migrate.ts` run against the
+restored data, `seed()`, and a full health-wait.
+
+What it does:
+
+1. Restores the backup into a throwaway local Postgres (same mechanism as
+   §5.3), bound to the Docker bridge gateway rather than `127.0.0.1` — the
+   app containers it boots next need to reach it from inside their own
+   network namespace, and the gateway address is reachable from sibling
+   containers without being internet-routable the way `0.0.0.0` would be
+   (Docker's own iptables rules can expose a `0.0.0.0` bind past a firewall
+   that looks like it blocks the port — verified 2026-08-17, this is not
+   hypothetical).
+2. Checks out an **isolated `git worktree`** (detached `HEAD`) rather than
+   using the checkout you are sitting in — `--external-pg` reads
+   `DATABASE_URL` from repo-root `.env`, and overwriting the real `.env`,
+   even temporarily, risks corrupting it or leaking the throwaway DB into a
+   later boot run by hand. `node_modules` is symlinked in from the main
+   checkout (same lockfile, same commit) instead of a slow reinstall.
+3. Writes the worktree's own `.env`: `DATABASE_URL` pointing at the restored
+   container, and `AGENT_MODEL=free` — the rehearsal is about migrations and
+   page serving, not agent-simulation quality, and should not need (or
+   spend) the real `.env`'s funded `OPENCODE_API_KEY`.
+4. Boots with the **exact command §7.3 runs for real cutover**:
+   `bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI` unset, a
+   scoped `DEMO_PROJECT` (lowercased — Compose project names reject the
+   uppercase `T`/`Z` in the backup's own timestamp).
+5. On a clean boot, reads the worktree's `.agents/demo-state.json` for the
+   api's published port, checks `/health`, then runs
+   `scripts/demo-frontend-check.ts` against it — the same route/content
+   checks CI runs on every boot, not a bespoke probe.
+6. Tears down: `demo-down.ts`, `git worktree remove --force`, the throwaway
+   Postgres container.
+
+Exit `0` means the migration ran for real, the stack came up healthy, and the
+frontend checks passed against production-shaped data. Verified through boot,
+migration, and live analytics/swarm processing on 2026-08-17 (composite
+regime score computed, a real session published) — that run was interrupted
+for the host-policy reason boxed at the top of §2 before its own
+frontend-check step completed, so treat the very first full run on the
+staging host as the actual end-to-end confirmation, not a formality.
 
 ### 5.4 🔴 IRREVERSIBLE — capture the swarm schedule rows, which no restore returns
 

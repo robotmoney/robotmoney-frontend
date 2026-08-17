@@ -1,3 +1,8 @@
+// ⛔ RUN THIS ON THE DEDICATED STAGING HOST, NEVER THE PRODUCTION API HOST
+// (docs/runbooks/*.md §2). Lighter than stage-rehearsal.ts — one small
+// container, no image build — but still real load, and the rule is "the
+// staging host," not "whichever checks seem cheap enough."
+//
 // Restore-verify the encrypted Gate C backup (docs/runbooks/*.md §5) into a
 // THROWAWAY local Postgres container, THEN run this release's full preflight
 // checks (preflight.ts's runChecks) against that restored copy. Touches
@@ -6,10 +11,9 @@
 // checks run: the runbook's process is dump -> restore -> check the dump ->
 // only then check the live replica (§4), never production first.
 //
-// Uses Bun.spawn for the docker/gpg/pg_restore/psql processes this inherently
-// needs (there is no JS-native pg_dump-format reader) and the `postgres` npm
-// client for the verification queries, so results are structured instead of
-// parsed back out of psql's text output.
+// This is the FAST, SQL-only check. For a much heavier but much stronger
+// rehearsal — actually running this release's migrations for real and
+// booting the whole app against the restored data — see stage-rehearsal.ts.
 //
 // Usage:
 //   bun scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts [backupDir]
@@ -23,144 +27,37 @@
 // 1 = a verification query or a preflight check FAILed,
 // 2 = could not run (missing files, docker/gpg/pg_restore failure).
 
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import postgres from "postgres";
 import { columnExists, createChecker, printVerdict } from "../../lib/checks.ts";
+import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
 import { runChecks } from "./preflight.ts";
 
 const NAME = "restore-check-0.2.2";
 const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
 const err = (msg: string) => console.error(`[${NAME}] ${msg}`);
 
-const IMAGE = "postgres:18"; // matches production's 18.4 major version (§4's server-version check)
-const LOCAL_USER = "restore_check";
-const LOCAL_PASSWORD = "throwaway-local-only";
-const LOCAL_DB = "rm_restore_check";
-// Only these two roles matter for verification (Gate D's rm-worker-role check,
-// and the role query in §5.3) — the rest of a real globals dump is DO Managed
-// Postgres's internal cluster role graph (_doadmin_*, _dodb*, doadmin_group,
-// avn_* GUCs), which a vanilla postgres image cannot replicate and which
-// nothing here checks anyway. Allowlist rather than fight it line by line.
-const RESTORE_ROLES = ["rm_readonly", "rm_worker"] as const;
-
-async function run(cmd: string[], opts: { stdin?: ReadableStream | number } = {}): Promise<{ code: number; stderr: string }> {
-  const proc = Bun.spawn(cmd, { stdin: opts.stdin ?? "ignore", stdout: "inherit", stderr: "pipe" });
-  const stderr = await new Response(proc.stderr).text();
-  const code = await proc.exited;
-  if (stderr.trim()) err(stderr.trim());
-  return { code, stderr };
-}
-
 async function main(backupDirArg?: string): Promise<number> {
-  const backupDir = backupDirArg ?? join(homedir(), "rm-backup-v022");
-  const stampFile = join(backupDir, ".last-stamp");
-  if (!existsSync(stampFile)) {
-    err(`missing ${stampFile} — run §5.1's pg_dump/pg_dumpall first`);
+  const backup = resolveBackupFiles(backupDirArg);
+  if ("error" in backup) {
+    err(backup.error);
     return 2;
   }
-  const stamp = readFileSync(stampFile, "utf8").trim();
-  const dumpEnc = join(backupDir, `rm-preupgrade-${stamp}.dump.gpg`);
-  const globalsEnc = join(backupDir, `rm-globals-${stamp}.sql.gpg`);
-  const passphraseFile = join(backupDir, ".backup-passphrase");
-  for (const f of [dumpEnc, globalsEnc, passphraseFile]) {
-    if (!existsSync(f)) {
-      err(`missing ${f}`);
-      return 2;
-    }
-  }
 
-  const container = `rm-restore-check-${stamp}`;
-  log(`starting throwaway Postgres (${IMAGE})`);
-  const runResult = await run([
-    "docker",
-    "run",
-    "-d",
-    "--name",
-    container,
-    "-e",
-    `POSTGRES_USER=${LOCAL_USER}`,
-    "-e",
-    `POSTGRES_PASSWORD=${LOCAL_PASSWORD}`,
-    "-e",
-    `POSTGRES_DB=${LOCAL_DB}`,
-    "-p",
-    "127.0.0.1::5432",
-    IMAGE,
-  ]);
-  if (runResult.code !== 0) {
-    err("docker run failed");
+  const restored = await restoreBackupIntoContainer(backup, log);
+  if ("error" in restored) {
+    err(restored.error);
+    if (restored.container) teardownContainer(restored.container, log);
     return 2;
   }
 
   try {
-    const inspect = Bun.spawnSync([
-      "docker",
-      "inspect",
-      "-f",
-      '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}',
-      container,
-    ]);
-    const hostPort = new TextDecoder().decode(inspect.stdout).trim();
-    log(`listening on 127.0.0.1:${hostPort}`);
-
-    log("waiting for readiness");
-    let ready = false;
-    for (let i = 0; i < 30; i++) {
-      const check = Bun.spawnSync(["docker", "exec", container, "pg_isready", "-U", LOCAL_USER, "-d", LOCAL_DB]);
-      if (check.exitCode === 0) {
-        ready = true;
-        log(`ready after ${i + 1}s`);
-        break;
-      }
-      await Bun.sleep(1000);
-    }
-    if (!ready) {
-      err("Postgres never became ready");
-      return 2;
-    }
-
-    const connArgs = ["--host=127.0.0.1", `--port=${hostPort}`, `--username=${LOCAL_USER}`];
-    const env = { ...process.env, PGPASSWORD: LOCAL_PASSWORD };
-
-    log("loading globals (just the app-relevant roles)");
-    const gpgGlobals = Bun.spawn(
-      ["gpg", "--batch", "--yes", "--passphrase-file", passphraseFile, "--decrypt", globalsEnc],
-      { stdout: "pipe", stderr: "inherit" },
-    );
-    const grepRoles = Bun.spawn(
-      ["grep", "-E", `^(CREATE ROLE|ALTER ROLE) (${RESTORE_ROLES.join("|")})\\b`],
-      { stdin: gpgGlobals.stdout, stdout: "pipe" },
-    );
-    const psqlGlobals = Bun.spawn(
-      ["psql", ...connArgs, `--dbname=${LOCAL_DB}`, "--set", "ON_ERROR_STOP=on", "-f", "-"],
-      { stdin: grepRoles.stdout, stdout: "inherit", stderr: "inherit", env },
-    );
-    const globalsExit = await psqlGlobals.exited;
-    log(`globals load exit=${globalsExit}`);
-    if (globalsExit !== 0) return 2;
-
-    log("restoring dump");
-    const gpgDump = Bun.spawn(["gpg", "--batch", "--yes", "--passphrase-file", passphraseFile, "--decrypt", dumpEnc], {
-      stdout: "pipe",
-      stderr: "inherit",
-    });
-    const pgRestore = Bun.spawn(
-      ["pg_restore", ...connArgs, `--dbname=${LOCAL_DB}`, "--no-owner", "--no-privileges", "--exit-on-error"],
-      { stdin: gpgDump.stdout, stdout: "inherit", stderr: "inherit", env },
-    );
-    const restoreExit = await pgRestore.exited;
-    log(`pg_restore exit=${restoreExit}`);
-    if (restoreExit !== 0) return 2;
-
     log("verification queries");
     const db = postgres({
-      host: "127.0.0.1",
-      port: Number(hostPort),
-      username: LOCAL_USER,
-      password: LOCAL_PASSWORD,
-      database: LOCAL_DB,
+      host: restored.host,
+      port: restored.port,
+      username: restored.username,
+      password: restored.password,
+      database: restored.database,
       max: 1,
     });
     try {
@@ -211,8 +108,7 @@ async function main(backupDirArg?: string): Promise<number> {
     log("restore verified and dump-based preflight is clean — safe to proceed to §4's live replica check");
     return 0;
   } finally {
-    log(`cleaning up: docker rm -f ${container}`);
-    Bun.spawnSync(["docker", "rm", "-f", container]);
+    teardownContainer(restored.container, log);
   }
 }
 
