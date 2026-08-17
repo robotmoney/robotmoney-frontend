@@ -32,9 +32,14 @@ import { runV0SeedBootstrap } from "../scripts/v0-seed-bootstrap.ts";
 import { loadV0Archive, V0_ARCHIVE_PUBLIC_KEY_B64 } from "../src/swarm/v0-archive.ts";
 import { verifyStoredSubmissionSignature } from "../src/lib/signing.ts";
 import { getMemberTakes, getSession, getTakeReceipt } from "../src/swarm/domain.ts";
-import { LIVE_ROSTER_IDS, seedLiveRoster } from "../src/swarm/roster-seed.ts";
+import { LIVE_ROSTER_HANDLES, seedLiveRoster } from "../src/swarm/roster-seed.ts";
 
-const MEMBER_IDS = ["athena", "robotmoney", "woon"];
+// The archive's member ids are HANDLES in the database (issue #685): the
+// importer resolves them to whatever id this deployment holds, so no test can
+// name a member id. Address members by handle and let SQL resolve the id.
+const MEMBER_HANDLES = ["athena", "robot-money", "noop-analyst"];
+/** Sub-select every test uses instead of a literal id list. */
+const MEMBER_IDS_SQL = sql`SELECT id FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES})`;
 const SUBJECT_IDS = ["robotmoney-allocation", "robotmoney-treasury", "robotmoney-vault", "woon"];
 
 // No key is set: the importer uses the PUBLISHED archival key
@@ -54,7 +59,7 @@ async function cleanArchiveRows(): Promise<void> {
   await sql`DELETE FROM swarm_subject_snapshots WHERE subject_id = ANY(${SUBJECT_IDS})`;
   await sql`DELETE FROM swarm_sessions WHERE subject_id = ANY(${SUBJECT_IDS})`;
   await sql`DELETE FROM swarm_subjects WHERE id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
+  await sql`DELETE FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES})`;
 }
 
 beforeEach(cleanArchiveRows);
@@ -78,7 +83,7 @@ test("cold DB: every dataset in the archive is inserted at its manifest count", 
   const count = async (table: string, col: string, ids: string[]) =>
     (await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM ${sql(table)} WHERE ${sql(col)} = ANY(${ids})`)[0].n;
 
-  expect(await count("swarm_members", "id", MEMBER_IDS)).toBe(manifest.counts.members);
+  expect(await count("swarm_members", "handle", MEMBER_HANDLES)).toBe(manifest.counts.members);
   expect(await count("swarm_subjects", "id", SUBJECT_IDS)).toBe(manifest.counts.subjects);
   expect(await count("swarm_sessions", "subject_id", SUBJECT_IDS)).toBe(manifest.counts.sessions);
   expect(await count("swarm_recommendations", "subject_id", SUBJECT_IDS)).toBe(expectedTakes);
@@ -89,9 +94,10 @@ test("cold DB: every dataset in the archive is inserted at its manifest count", 
 test("takes land in swarm_recommendations, signed but NOT verifiable as a member submission", async () => {
   await runV0SeedBootstrap();
 
-  const rows = await sql<{ member_id: string; nonce: string; signature: string; payload: Record<string, unknown>; body: string }[]>`
-    SELECT member_id, nonce, signature, payload, body FROM swarm_recommendations
-    WHERE subject_id = ANY(${SUBJECT_IDS}) ORDER BY date, member_id LIMIT 5`;
+  const rows = await sql<{ member_handle: string; nonce: string; signature: string; payload: Record<string, unknown>; body: string }[]>`
+    SELECT m.handle AS member_handle, r.nonce, r.signature, r.payload, r.body
+    FROM swarm_recommendations r JOIN swarm_members m ON m.id = r.member_id
+    WHERE r.subject_id = ANY(${SUBJECT_IDS}) ORDER BY r.date, m.handle LIMIT 5`;
   expect(rows.length).toBe(5);
 
   for (const r of rows) {
@@ -99,15 +105,19 @@ test("takes land in swarm_recommendations, signed but NOT verifiable as a member
     expect(Buffer.from(r.signature, "base64").length).toBe(64);
     // Deterministic, reconstructible nonce — what makes the import idempotent.
     expect(r.nonce.startsWith("v0-archive-")).toBe(true);
-    // The payload is the canonical submission shape a live member signs.
-    expect(r.payload.memberId).toBe(r.member_id);
+    // The payload is the canonical submission shape a live member signs — and
+    // its memberId is the ARCHIVE's signer slug, deliberately NOT the FK
+    // (issue #685): the FK is this deployment's generated id, while the signed
+    // bytes must keep naming who authored the take. Asserting they are equal
+    // is what welded the archive to a slug-id namespace.
+    expect(r.payload.memberId).toBe(r.member_handle);
     expect(r.payload.body).toBe(r.body);
   }
 
   // The archival key is deliberately NOT registered in swarm_member_keys, so
   // the read path cannot verify these against a member and must not claim to.
   const keyRows = await sql<{ n: number }[]>`
-    SELECT COUNT(*)::int AS n FROM swarm_member_keys WHERE member_id = ANY(${MEMBER_IDS}) AND active`;
+    SELECT COUNT(*)::int AS n FROM swarm_member_keys WHERE member_id IN (${MEMBER_IDS_SQL}) AND active`;
   expect(keyRows[0].n).toBe(0);
 
   // Stored verified flag is false, and re-verification against any member key
@@ -154,7 +164,7 @@ test("drift: a mutated existing member field is reported field-by-field and neve
   const { payload } = await loadV0Archive();
   const athena = payload.members.find((m) => m.id === "athena")!;
   const mutatedTagline = "MUTATED — this should never be overwritten by the archive";
-  await sql`UPDATE swarm_members SET tagline = ${mutatedTagline} WHERE id = 'athena'`;
+  await sql`UPDATE swarm_members SET tagline = ${mutatedTagline} WHERE handle = 'athena'`;
 
   const result = await runV0SeedBootstrap();
 
@@ -162,7 +172,7 @@ test("drift: a mutated existing member field is reported field-by-field and neve
   expect(result.drifts).toEqual([
     {
       entity: "swarm_members",
-      naturalKey: "id=athena",
+      naturalKey: "handle=athena",
       field: "tagline",
       oldValue: mutatedTagline,
       newValue: athena.tagline,
@@ -288,13 +298,14 @@ test("every imported take is filed at the artifact's generated_at, never at the 
   }
   expect(expected.size).toBeGreaterThan(0);
 
-  const rows = await sql<{ subject_id: string; date: string; member_id: string; received_at: Date }[]>`
-    SELECT subject_id, to_char(date, 'YYYY-MM-DD') AS date, member_id, received_at
-    FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  const rows = await sql<{ subject_id: string; date: string; member_handle: string; received_at: Date }[]>`
+    SELECT r.subject_id, to_char(r.date, 'YYYY-MM-DD') AS date, m.handle AS member_handle, r.received_at
+    FROM swarm_recommendations r JOIN swarm_members m ON m.id = r.member_id
+    WHERE r.subject_id = ANY(${SUBJECT_IDS})`;
   expect(rows.length).toBe(expected.size);
 
   for (const r of rows) {
-    const key = `${r.subject_id}|${r.date}|${r.member_id}`;
+    const key = `${r.subject_id}|${r.date}|${r.member_handle}`;
     const want = expected.get(key);
     expect(want).toBeDefined();
     expect(new Date(r.received_at).toISOString()).toBe(new Date(want!).toISOString());
@@ -354,7 +365,7 @@ test("every imported take verifies against the PUBLISHED archival key, and only 
   // deliberately absent from swarm_member_keys, so no read path can ever
   // report one of these as a verified member submission.
   const [{ n }] = await sql<{ n: number }[]>`
-    SELECT COUNT(*)::int AS n FROM swarm_member_keys WHERE member_id = ANY(${MEMBER_IDS}) AND active`;
+    SELECT COUNT(*)::int AS n FROM swarm_member_keys WHERE member_id IN (${MEMBER_IDS_SQL}) AND active`;
   expect(n).toBe(0);
 });
 
@@ -455,20 +466,20 @@ test("v0's pre-rename avatar paths land canonicalized, byte-identical to the com
   await runV0SeedBootstrap();
 
   const rows = await sql<{ id: string; avatar: Record<string, unknown> }[]>`
-    SELECT id, avatar FROM swarm_members WHERE id = ANY(${MEMBER_IDS}) ORDER BY id`;
+    SELECT handle, avatar FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES}) ORDER BY handle`;
   expect(rows.length).toBe(3);
   for (const r of rows) {
-    expect(r.avatar.path).toBe(`/avatars/swarm/${r.id}.jpg`);
+    expect(r.avatar.path).toBe(`/avatars/swarm/${r.handle}.jpg`);
     // Not merely "starts with /avatars/swarm/": the whole avatar object must
     // equal what the site publishes for that member, credit and source_url
     // included.
-    expect(r.avatar).toEqual(manifestAvatar(r.id) as Record<string, unknown>);
+    expect(r.avatar).toEqual(manifestAvatar(r.handle) as Record<string, unknown>);
   }
 });
 
 test("ordering A — backfill, then seedLiveRoster: a following bootstrap comparison reports zero member drift", async () => {
   await runV0SeedBootstrap();
-  expect(await seedLiveRoster()).toBe(LIVE_ROSTER_IDS.length);
+  expect(await seedLiveRoster()).toBe(LIVE_ROSTER_HANDLES.length);
 
   const result = await runV0SeedBootstrap();
   expect(result.members).toEqual({ inserted: 0, unchanged: 3, drifted: 0, total: 3 });
@@ -476,19 +487,19 @@ test("ordering A — backfill, then seedLiveRoster: a following bootstrap compar
 
   // The seeder rewrote `avatar` from the manifests; the archive agrees with it.
   const rows = await sql<{ id: string; avatar: Record<string, unknown> }[]>`
-    SELECT id, avatar FROM swarm_members WHERE id = ANY(${MEMBER_IDS}) ORDER BY id`;
-  for (const r of rows) expect(r.avatar.path).toBe(`/avatars/swarm/${r.id}.jpg`);
+    SELECT handle, avatar FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES}) ORDER BY handle`;
+  for (const r of rows) expect(r.avatar.path).toBe(`/avatars/swarm/${r.handle}.jpg`);
 });
 
 test("ordering B — seedLiveRoster, then backfill (what prod-bootstrap itself produces): also zero member drift", async () => {
-  expect(await seedLiveRoster()).toBe(LIVE_ROSTER_IDS.length);
+  expect(await seedLiveRoster()).toBe(LIVE_ROSTER_HANDLES.length);
 
   // The seeder owns only the manifests' profile columns, so the two rows it
   // seats carry no voice_md and no submit — the state the backfill must
   // complete rather than call drift.
   const before = await sql<{ id: string; voice_md: string | null; submit: unknown }[]>`
-    SELECT id, voice_md, submit FROM swarm_members WHERE id = ANY(${[...LIVE_ROSTER_IDS]}) ORDER BY id`;
-  expect(before.length).toBe(LIVE_ROSTER_IDS.length);
+    SELECT handle, voice_md, submit FROM swarm_members WHERE handle = ANY(${[...LIVE_ROSTER_HANDLES]}) ORDER BY handle`;
+  expect(before.length).toBe(LIVE_ROSTER_HANDLES.length);
   for (const r of before) {
     expect(r.voice_md).toBeNull();
     expect(r.submit).toBeNull();
@@ -501,14 +512,14 @@ test("ordering B — seedLiveRoster, then backfill (what prod-bootstrap itself p
 
   const { payload } = await loadV0Archive();
   const after = await sql<{ id: string; voice_md: string | null; submit: unknown; avatar: Record<string, unknown> }[]>`
-    SELECT id, voice_md, submit, avatar FROM swarm_members WHERE id = ANY(${MEMBER_IDS}) ORDER BY id`;
+    SELECT handle, voice_md, submit, avatar FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES}) ORDER BY handle`;
   expect(after.length).toBe(3);
   for (const r of after) {
     const archived = payload.members.find((m) => m.id === r.id)!;
     expect(r.voice_md).toBe(archived.voice_md as string);
     expect(r.voice_md!.length).toBeGreaterThan(0);
     expect(r.submit ?? null).toEqual((archived.submit ?? null) as never);
-    expect(r.avatar.path).toBe(`/avatars/swarm/${r.id}.jpg`);
+    expect(r.avatar.path).toBe(`/avatars/swarm/${r.handle}.jpg`);
   }
   // robotmoney is the member whose archive `submit` is a real object, so the
   // fill above is not vacuously true for every row.
@@ -529,7 +540,7 @@ test("the reconciliation still never overwrites a non-empty column, and touches 
        SET applied_at = ${applied}, activated_at = ${activated},
            key_hash = 'hash_540', public_key = 'pk_540',
            tagline = 'OPERATOR EDIT — must survive the backfill'
-     WHERE id = 'athena'`;
+     WHERE handle = 'athena'`;
 
   const result = await runV0SeedBootstrap();
 
