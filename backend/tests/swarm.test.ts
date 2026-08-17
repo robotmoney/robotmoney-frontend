@@ -4,6 +4,7 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeApplication, canonicalizeSubmission, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 // A session's date is whatever the DATABASE derived from convened_at
 // (migration 0022). postgres returns it as a Date; normalise to the YYYY-MM-DD
@@ -23,15 +24,12 @@ async function signedApply(fields: { name: string; contact: string; lens?: strin
   return { publicKeyB64, privateKey, signature, body: { ...fields, publicKey: publicKeyB64, signature } };
 }
 
-// All swarm test files share ONE ephemeral Postgres (tests/preload.ts). Now
-// that SWARM_ROSTER_CAP is hard-enforced on every transition-to-active, a
-// roster left full by an earlier-running file would make this file's real
-// apply→activate / registerMember admissions 409 ("roster full"). Start from a
-// clean roster so this file's ~6 admissions are order-independent and well under
-// the cap. (CASCADE also clears member keys / session-member rows.)
-beforeAll(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per TEST, cloned from the migrated template. Per-test, not
+// per-file: countActiveMembers() is global and SWARM_ROSTER_CAP is enforced on
+// every transition-to-active, so members seated by one test would make the
+// next test's admission a spurious 409. Unique ids cannot fix that; a clean
+// database can.
+useCleanDatabasePerTest(import.meta.file);
 
 async function activeMember() {
   const id = rid("m");
@@ -427,10 +425,6 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
 });
 
 test("aggregation omits invented prose and weights when no eligible body or valid weighted take exists", async () => {
-  // Reset first: this file's earlier tests accumulate active members toward
-  // SWARM_ROSTER_CAP without deactivating them (see the file header
-  // comment), and this test's single activeMember() call must never 409.
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
   const subjectId = rid("empty");
   await ic.ensureSubject(subjectId, "Empty Body Subject");
   const member = await activeMember();
@@ -457,10 +451,6 @@ test("aggregation omits invented prose and weights when no eligible body or vali
 });
 
 test("restart-safety (issue #208): re-opening the same session is idempotent (one row); a REPLAYED member take is 409 with exactly one recommendation row", async () => {
-  // This file's earlier tests accumulate active members toward
-  // SWARM_ROSTER_CAP without deactivating them (see the file header
-  // comment) — reset so this test's one admission is never a spurious 409.
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
   const subj = rid("restart");
   await ic.ensureSubject(subj, "Restart Subject");
 
@@ -748,8 +738,6 @@ test("GET /api/swarm/members/:id/takes: an unknown/never-submitted member gets a
   expect((res!.body as { takes: any[] }).takes).toEqual([]);
 });
 test("GET /api/swarm/members exposes rosterCap, seatsFilled, and seatsAvailable, updating on activate/deactivate", async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-
   const getMembersRoute = async () => {
     const req = new Request(`http://test${ROUTES.swarm.members}`);
     const res = await handleSwarm(req, new URL(req.url));
@@ -993,7 +981,6 @@ test("two sessions for one subject on one day: BOTH briefs survive, each keeping
 // by one row per persona, which is exactly what the hosted database suffered
 // (three active Helios rows plus two stranded applications).
 test("re-registering an existing member rebinds the key and never creates a second row", async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
   const id = rid("persona");
   const keyA = "AAAA" + "a".repeat(40);
   const keyB = "BBBB" + "b".repeat(40);
@@ -1026,7 +1013,6 @@ test("re-registering an existing member rebinds the key and never creates a seco
 });
 
 test("re-registering an active member does not consume roster capacity", async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
   // Fill the roster to the cap with distinct members…
   const ids: string[] = [];
   for (let i = 0; i < SWARM_ROSTER_CAP; i++) {

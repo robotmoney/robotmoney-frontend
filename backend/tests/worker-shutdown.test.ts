@@ -12,7 +12,11 @@ import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { startWorker, type WorkerHandle } from "../src/worker/runtime.ts";
-import { seedJobSchedules } from "../src/db/seed.ts";
+
+import { useCleanDatabase } from "./support/clean-db.ts";
+
+// Own database, cloned from the migrated template — see support/clean-db.ts.
+useCleanDatabase(import.meta.file);
 
 function gate() {
   let open!: () => void;
@@ -26,14 +30,11 @@ beforeAll(() => {
   handlers["test.shutdown_slow"] = async () => { await new Promise((r) => setTimeout(r, 800)); return { ok: true }; };
   handlers["research.test_shutdown_hang"] = async () => { await hangGate.opened; return { ok: true }; };
 });
-// This file's beforeEach TRUNCATEs job_schedules for isolation; restore the
-// production seed rows once the file's own tests are done so later test files
-// sharing this ephemeral Postgres (e.g. tests/api/admin-surface.test.ts, which
-// asserts regime.classify is seeded enabled=true) don't see an empty table.
-afterAll(async () => { await seedJobSchedules(); });
 beforeEach(async () => {
   hangGate = gate();
-  await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`;
+  await sql`DELETE FROM job_runs`;
+  await sql`DELETE FROM jobs`;
+  await sql`DELETE FROM job_schedules`;
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

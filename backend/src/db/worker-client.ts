@@ -28,14 +28,39 @@ import { config } from "../config.ts";
 const STATEMENT_TIMEOUT_MS = Number(process.env.PG_STATEMENT_TIMEOUT_MS ?? 300_000); // 5 min
 const IDLE_IN_TXN_TIMEOUT_MS = Number(process.env.PG_IDLE_IN_TXN_TIMEOUT_MS ?? 600_000); // 10 min
 
-export const sql = postgres(process.env.WORKER_DATABASE_URL || config.databaseUrl, {
-  max: Number(process.env.PG_POOL_MAX ?? 10),
-  onnotice: () => {}, // silence NOTICE spam
-  connection: {
-    statement_timeout: STATEMENT_TIMEOUT_MS,
-    idle_in_transaction_session_timeout: IDLE_IN_TXN_TIMEOUT_MS,
-  },
-});
+function makePool(url: string): postgresTypes.Sql<{}> {
+  return postgres(url, {
+    max: Number(process.env.PG_POOL_MAX ?? 10),
+    onnotice: () => {}, // silence NOTICE spam
+    connection: {
+      statement_timeout: STATEMENT_TIMEOUT_MS,
+      idle_in_transaction_session_timeout: IDLE_IN_TXN_TIMEOUT_MS,
+    },
+  });
+}
+
+// `let`, not `const`, for exactly one reason: setDatabase() below. Importers
+// use `import { sql }`, an ESM live binding, so they observe the rebuilt pool.
+// Nothing in production ever reassigns it.
+export let sql = makePool(process.env.WORKER_DATABASE_URL || config.databaseUrl);
+
+// Point this pool at a different database, closing the old one.
+//
+// TEST SEAM, the twin of db/client.ts's setDatabase(). It has to be a second
+// function rather than a call from there because the source-level boundary runs
+// the other way: worker/** imports this module and never db/client.ts. Without
+// it, a test file that redirects the shared pool to its own clean database
+// would leave every queue lifecycle call still writing to the shared one — the
+// two would silently disagree about which jobs exist.
+//
+// The WORKER_DATABASE_URL fallback is deliberately NOT re-applied: the caller
+// is naming the database this process must now use, and tests never provision
+// the restricted `rm_worker` role's URL.
+export async function setDatabase(url: string): Promise<void> {
+  const previous = sql;
+  sql = makePool(url);
+  await previous.end({ timeout: 5 });
+}
 
 // Same single-seam JSON assertion as db/client.ts.
 export function jsonValue(value: unknown): postgresTypes.JSONValue {

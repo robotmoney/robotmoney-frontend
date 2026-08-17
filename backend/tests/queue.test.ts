@@ -1,22 +1,29 @@
-import { test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { test, expect, beforeAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { reapStuckJobs } from "../src/worker/reaper.ts";
 import { tickScheduler } from "../src/worker/scheduler.ts";
-import { seedJobSchedules } from "../src/db/seed.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
+
+useCleanDatabase(import.meta.file);
 
 beforeAll(() => {
   handlers["test.ok"] = async () => ({ ok: true });
   handlers["test.fail"] = async () => { throw new Error("boom"); };
 });
-// Isolate each test: clear the queue + schedules so processOneJob claims only our job.
-beforeEach(async () => { await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`; });
-// Restore the production seed rows once this file's own tests are done so
-// later test files sharing this ephemeral Postgres (e.g.
-// tests/api/admin-surface.test.ts, which asserts regime.classify is seeded
-// enabled=true) don't see an empty job_schedules table.
-afterAll(async () => { await seedJobSchedules(); });
+// Isolate each test: clear the queue + schedules so processOneJob claims only
+// our job. Ordered DELETEs, not `TRUNCATE ... CASCADE`: jobs/job_runs/
+// job_schedules are deliberately unprotected churn, but three tables reference
+// jobs(id) — audit_log, swarm_session_events and analytics_runs — and CASCADE
+// truncates a referencing table WHOLE regardless of its ON DELETE clause. The
+// queue fixture was destroying the audit trail. A DELETE honours the declared
+// `ON DELETE SET NULL` and merely detaches it.
+beforeEach(async () => {
+  await sql`DELETE FROM job_runs`;
+  await sql`DELETE FROM jobs`;
+  await sql`DELETE FROM job_schedules`;
+});
 
 test("processOneJob: success → succeeded + a job_runs row", async () => {
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('test.ok','{}') RETURNING id`;

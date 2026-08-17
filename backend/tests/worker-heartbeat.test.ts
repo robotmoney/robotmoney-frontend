@@ -17,8 +17,12 @@ import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { startWorker, type WorkerHandle } from "../src/worker/runtime.ts";
-import { seedJobSchedules } from "../src/db/seed.ts";
 import { checkHeartbeatFile, resetHeartbeatWriter } from "../src/ops/heartbeat.ts";
+
+import { useCleanDatabase } from "./support/clean-db.ts";
+
+// Own database, cloned from the migrated template — see support/clean-db.ts.
+useCleanDatabase(import.meta.file);
 
 function gate() {
   let open!: () => void;
@@ -39,9 +43,6 @@ beforeAll(() => {
     throw new Error("handler exploded after the database was pulled out from under it");
   };
 });
-// This file TRUNCATEs job_schedules for isolation; restore the production seed
-// rows so later files sharing this ephemeral Postgres don't see an empty table.
-afterAll(async () => { await seedJobSchedules(); });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const fastOpts = { idlePollMs: 25, schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 1000 };
@@ -55,7 +56,9 @@ beforeEach(async () => {
   resetHeartbeatWriter();
   dir = await mkdtemp(join(tmpdir(), "rm-worker-hb-"));
   path = join(dir, "heartbeat");
-  await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`;
+  await sql`DELETE FROM job_runs`;
+  await sql`DELETE FROM jobs`;
+  await sql`DELETE FROM job_schedules`;
 });
 afterEach(async () => {
   await Promise.all(started.splice(0).map((w) => w.stop()));

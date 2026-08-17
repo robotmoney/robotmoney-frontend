@@ -23,6 +23,7 @@ import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -31,16 +32,12 @@ const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const sessionDate = (value: unknown): string =>
   value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
 
-// All swarm test files share ONE ephemeral Postgres, and createSessionAdmin
-// seats EVERY currently-active member. Each test starts from an empty roster so
-// the seated roster is exactly the members that test registers — the absent
-// list is asserted by exact contents, which a roster left behind by another
-// file (or by this file's previous test) would silently inflate. This is the
-// "fix your own roster" rule: which members the domain seats as active is
-// itself subject to change, so an attendance assertion may never assume it.
-beforeEach(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per TEST, cloned from the migrated template. Per-test, not
+// per-file: countActiveMembers() is global and SWARM_ROSTER_CAP is enforced on
+// every transition-to-active, so members seated by one test would make the
+// next test's admission a spurious 409. Unique ids cannot fix that; a clean
+// database can.
+useCleanDatabasePerTest(import.meta.file);
 
 async function activeMember(name: string) {
   const id = rid("m");
