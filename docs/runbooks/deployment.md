@@ -35,7 +35,10 @@ on vendor repo-watching:
   for their management APIs, so these are **long-lived scoped tokens**. Least
   privilege + rotation are the mitigation (§6).
 - **Branch → environment** (example, adjust to your branch model): merge to
-  `dev` → deploy **staging**; tag a release → deploy **production**.
+  `dev` → deploy **staging**; a preflighted `vA.B.C-rc.N` cut on
+  `releases-A.B.x` → deploy **production**, and `vA.B.C` is tagged only after
+  postflight — never before the deploy
+  ([release-runbooks.md §2](../technical/release-runbooks.md#2-version-tags-and-release-candidates)).
 
 **Which credential deploys which D13 tier:**
 

@@ -76,9 +76,16 @@ together. There is no deploy automation in this repo yet — no
 `repo-guards.yml`, `docs-lint.yml`) are all test gates, not release
 pipelines. [`docs/runbooks/deployment.md`](../runbooks/deployment.md)
 describes the *intended* GitOps shape for production (CI-driven,
-environment-scoped secrets, "merge to `dev` → staging, tag a release →
-production" given explicitly as an example to adapt) but that pipeline isn't
-implemented yet. Production's actual topology per D13, once built, separates
+environment-scoped secrets, "merge to `dev` → staging, a preflighted
+`vA.B.C-rc.N` → production, `vA.B.C` tagged after postflight" given
+explicitly as an example to adapt) but that pipeline isn't implemented yet.
+That rc-first ordering is not this doc's invention and is not optional for
+whatever pipeline gets built: it is the standing policy in
+[`release-runbooks.md` §2](./release-runbooks.md#2-version-tags-and-release-candidates)
+— a version tag records what is proven in production, so it can never be the
+thing that triggers the deploy.
+
+Production's actual topology per D13, once built, separates
 into: an **API tier** droplet (API + all three worker containers
 co-located — currently one deploy unit at the infra level even though they
 are separate containers), a **data tier** (DO Managed Postgres HA, entirely
