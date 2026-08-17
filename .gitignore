@@ -7,6 +7,7 @@ node_modules/
 # template committable (and documents that intent if it is ever re-added).
 .env*
 !.env.example
+!.env.readonly.example
 *.log
 .DS_Store
 dist/

@@ -389,15 +389,19 @@ this delta) — but it means you are triaging, not stranded. §12.2 is the fix.
 The pre-flight and the dump must both run as a role that **cannot write**. Do
 this once, as `doadmin`, against the production cluster.
 
-> 🔴 **Restrict the password's alphabet to `[A-Za-z0-9._~-]`.** §4 pastes it
-> into a **URI** —
-> `PREFLIGHT_DATABASE_URL='postgres://rm_readonly:<pw>@<host>:25060/…'` — where
-> `@ : / ? # [ ] %` and space are reserved delimiters, not password characters.
-> A `@` truncates the userinfo and libpq reports a host that does not exist; a
-> `%` starts a percent-escape and either mangles the password silently or errors;
-> `#` and `?` silently truncate the rest of the URI. Those are the unreserved
-> URI characters, so nothing in that set needs escaping anywhere in §3, §4 or
-> §5. Take the length from a longer password, not from a wider alphabet:
+> 🔴 **Restrict the password's alphabet to `[A-Za-z0-9._~-]`** for the manual
+> `psql` spot-check below and for §5's dump commands, both of which build or
+> pass a connection string by hand. `@ : / ? # [ ] %` and space are reserved
+> delimiters there, not password characters — a `@` truncates the userinfo and
+> libpq reports a host that does not exist; a `%` starts a percent-escape and
+> either mangles the password silently or errors; `#` and `?` silently
+> truncate the rest of the URI. **§4 is the one exception**: the pre-flight
+> script takes this password from a discrete `password=` key in
+> `.env.readonly`, not a pasted URI, and URI-escapes it itself
+> (`encodeURIComponent`) before building the connection string — so the
+> restriction does not apply there. Take the length from a longer password,
+> not from a wider alphabet, since you need one alphabet that works
+> everywhere this password is used:
 >
 > ```bash
 > LC_ALL=C tr -dc 'A-Za-z0-9._~-' </dev/urandom | head -c 40; echo
@@ -454,13 +458,35 @@ read-only, and every query in it is a `SELECT`.
 
 ### Run it
 
-```bash
-cd <checkout>/backend
-bun install                      # the script imports `postgres` from backend/package.json
+The script reads its connection details from **`.env.readonly`** at the repo
+root — a file separate from `.env`, holding the `rm_readonly` role's
+credentials as discrete keys, never a pasted URI. Create it once (see
+`.env.readonly.example`):
 
-PREFLIGHT_DATABASE_URL='postgres://rm_readonly:<pw>@<host>:25060/defaultdb?sslmode=require' \
-  bun scripts/preflight-upgrade.ts
+```bash
+cd <checkout>
+cat > .env.readonly <<'EOF'
+host=<host>
+port=25060
+username=rm_readonly
+password=<pw>
+database=defaultdb
+EOF
+chmod 600 .env.readonly     # it is a credential store
 ```
+
+Then, from `backend/`:
+
+```bash
+cd backend
+bun install                      # the script imports `postgres` from backend/package.json
+bun scripts/preflight-upgrade.ts
+```
+
+The path resolves off the script's own file location (`preflight-upgrade.ts`
+is two directories below the repo root), not off your current directory, so
+it finds `.env.readonly` whether you run the script from `backend/` or from
+the repo root.
 
 **Run it from a checkout at the release tip you pinned in §1** — the SHA
 `git rev-parse origin/releases-0.2.x` printed, which is the commit you will tag
@@ -469,23 +495,24 @@ print it. The script compares
 `backend/migrations/` on disk against `schema_migrations` in the database; run
 from the wrong tag and the pending list is wrong.
 
-`PREFLIGHT_DATABASE_URL` is a deliberately separate variable. The script reads
+`.env.readonly` is a deliberately separate file from `.env`. The script reads
 `DATABASE_URL` for exactly one purpose — the equality guard at
-`backend/scripts/preflight-upgrade.ts:673`, `if (process.env.DATABASE_URL &&
-process.env.DATABASE_URL === url)` → exit `2`. It reads it nowhere else, opens
-no pool on it, and never falls back to it (`:666-672` exits `2` when
-`PREFLIGHT_DATABASE_URL` is unset). What it does **not** do is import anything
-from `src/` — that is the point of the file's standalone shape
-(`preflight-upgrade.ts:15-22`).
+`backend/scripts/preflight-upgrade.ts:760`, `if (process.env.DATABASE_URL &&
+process.env.DATABASE_URL === url)` → exit `2`, where `url` is what it just
+assembled from `.env.readonly`. It reads `DATABASE_URL` nowhere else, opens no
+pool on it, and never falls back to it (`:744-758` exits `2` when
+`.env.readonly` is missing or missing required keys). What it does **not** do
+is import anything from `src/` — that is the point of the file's standalone
+shape (`preflight-upgrade.ts:15-23`).
 
 > **The guard is live or dead depending on where you stand.** It only fires when
 > `DATABASE_URL` is in the process environment. Two things put it there:
 > §2.0's `export`, and **`bun` auto-loading `.env` from the cwd** — so running
 > the script from the repo root rather than from `backend/` makes the guard
 > active off the repo-root `.env` alone. That is the state you want: it is a
-> real safety check. If it exits `2` with *"identical to DATABASE_URL"*, you
-> pasted the application's writer URL — fix the URL, do not unset
-> `DATABASE_URL` to silence it.
+> real safety check. If it exits `2` with *"resolves to the same URL as
+> DATABASE_URL"*, `.env.readonly` names the application's writer role — fix
+> it, do not unset `DATABASE_URL` to silence it.
 
 ### Exit codes
 
@@ -493,7 +520,7 @@ from `src/` — that is the point of the file's standalone shape
 |---|---|
 | `0` | `SAFE TO UPGRADE` (possibly with warnings — read them) |
 | `1` | `BLOCKED` — at least one FAIL, or the session is not provably read-only |
-| `2` | Could not run (no URL, cannot connect, a check threw) |
+| `2` | Could not run (`.env.readonly` missing/incomplete, cannot connect, a check threw) |
 
 ### Reading the output
 
@@ -520,7 +547,7 @@ Warnings worth stopping to read even though they exit `0`:
   pre-flight only warns; **the gate decision is yours.** Note this is the one
   safe way to ask about `recovery_hash` before the upgrade: the script checks
   `information_schema.columns` first and switches query shape on the answer
-  (`backend/scripts/preflight-upgrade.ts:485-507`), so it never raises `42703`.
+  (`backend/scripts/preflight-upgrade.ts:562-585`), so it never raises `42703`.
   Your own Gate A query must not name the column at all — see Gate A.
 - `handle-shape` — member ids that are not valid handles. `0030` backfills
   `handle = id` with no `CHECK`, so those handles can never be saved again
@@ -532,7 +559,7 @@ Warnings worth stopping to read even though they exit `0`:
 ### On the reconciliation
 
 The script was authored at `bc9f20f`. Its inlined namespace relation
-(`backend/scripts/preflight-upgrade.ts:92`) is byte-identical to
+(`backend/scripts/preflight-upgrade.ts:166`) is byte-identical to
 `HANDLE_NAMESPACE_CONFLICT_RELATION` (`backend/src/db/handle-namespace.ts:63`),
 and both agree with `0031`'s DO block
 (`0031_swarm_member_handle_namespace.sql:91-92`, where the same relation is
@@ -553,7 +580,7 @@ pre-flight's copy is not: nothing in CI fails if it drifts.
 # The two TypeScript copies must print the identical string.
 grep -n 'FROM swarm_members a JOIN swarm_members b' \
   backend/src/db/handle-namespace.ts backend/scripts/preflight-upgrade.ts
-# expect handle-namespace.ts:63 and preflight-upgrade.ts:92, same predicate:
+# expect handle-namespace.ts:63 and preflight-upgrade.ts:166, same predicate:
 #   FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id
 ```
 

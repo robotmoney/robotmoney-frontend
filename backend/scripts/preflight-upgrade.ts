@@ -15,8 +15,9 @@
 // So this file is deliberately standalone:
 //   * it imports `postgres` (backend/package.json dependency) and node builtins,
 //     and NOTHING from src/ — no config, no shared pool, no DATABASE_URL;
-//   * it connects via PREFLIGHT_DATABASE_URL, a separate variable, and refuses
-//     to run if that value is the application's DATABASE_URL;
+//   * it connects using the repo-root .env.readonly file, a separate file from
+//     the application's own .env, and refuses to run if the URL it assembles
+//     from that file is identical to the application's DATABASE_URL;
 //   * it pins the session read-only at the server and PROVES it before issuing
 //     a single check query;
 //   * every check is a SELECT. There is no code path here that writes.
@@ -43,19 +44,92 @@
 // the exported constant, so `grep -rF 'FROM swarm_members a JOIN swarm_members b'`
 // finds all three and a drift is visible in one command.
 //
-// Usage (from backend/):
-//   PREFLIGHT_DATABASE_URL='postgres://rm_readonly:...@host:25060/defaultdb?sslmode=require' \
+// Usage (from anywhere in the checkout — the config path resolves off this
+// file's own location, not the cwd):
+//   Create <repo root>/.env.readonly with the rm_readonly role's connection
+//   details as discrete keys (see .env.readonly.example):
+//     host=<host>
+//     port=25060
+//     username=rm_readonly
+//     password=<pw>
+//     database=defaultdb
+//     sslmode=require        # optional, defaults to require
+//   then:
 //     bun scripts/preflight-upgrade.ts
+//
+// Discrete keys, not a pasted URL: the script builds and URI-escapes the
+// connection string itself, so a password containing `@ : / ? # [ ] %` or a
+// space — characters that would corrupt a hand-built postgres:// URI — is
+// safe here without restricting the alphabet you generate it from.
 //
 // Exit codes: 0 = SAFE TO UPGRADE, 1 = BLOCKED, 2 = could not run the check.
 
+import { readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import type postgresTypes from "postgres";
 
-const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const migrationsDir = join(scriptDir, "..", "migrations");
+
+/** Repo root is two levels up from backend/scripts/. Resolved off this file's
+ *  own location, not the cwd, so it works whether the operator runs the
+ *  script from the repo root or from backend/ (the runbook does the latter). */
+const DEFAULT_READONLY_ENV_PATH = join(scriptDir, "..", "..", ".env.readonly");
+
+const READONLY_ENV_REQUIRED_KEYS = ["host", "port", "username", "password", "database"] as const;
+
+/** Minimal KEY=VALUE parser — same shape as scripts/lib/demo-external-pg.ts's,
+ *  duplicated rather than imported to keep this file's zero-dependency,
+ *  standalone story intact (see the file header). */
+function parseEnvFile(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).replace(/^export\s+/, "").trim();
+    let value = line.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length > 1)
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (key) out[key] = value;
+  }
+  return out;
+}
+
+function loadEnvFile(path: string): Record<string, string> | undefined {
+  try {
+    return parseEnvFile(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+type ReadonlyUrlResolution = { url: string } | { missing: (typeof READONLY_ENV_REQUIRED_KEYS)[number][] };
+
+/** Assembles postgres://... from discrete keys and URI-escapes each field
+ *  itself, so the reserved-character password restriction that applies to a
+ *  hand-built URI does not apply to this file.
+ *  Exported for backend/tests/preflight-upgrade.test.ts — pure, needs no live
+ *  Postgres connection to exercise for real (same rationale as redactedTarget). */
+export function urlFromReadonlyEnv(env: Record<string, string>): ReadonlyUrlResolution {
+  const missing = READONLY_ENV_REQUIRED_KEYS.filter((k) => !env[k]);
+  if (missing.length > 0) return { missing };
+  const u = new URL(`postgres://${env.host}`);
+  u.port = env.port;
+  u.username = encodeURIComponent(env.username);
+  u.password = encodeURIComponent(env.password);
+  u.pathname = `/${env.database}`;
+  u.searchParams.set("sslmode", env.sslmode ?? "require");
+  return { url: u.toString() };
+}
 
 /** Lock duration on swarm_members is proportional to row count: 0030 runs
  *  ADD COLUMN + full-table UPDATE + SET NOT NULL + CREATE UNIQUE INDEX inside
@@ -82,7 +156,7 @@ const HANDLE_MAX_LEN = 80;
  * Not imported — see the header. The canonical module reaches src/config.ts
  * (`required("DATABASE_URL")` at module load) and src/db/client.ts's shared
  * pool through its own imports, and this script must open exactly one
- * connection, on the read-only role, from PREFLIGHT_DATABASE_URL.
+ * connection, on the read-only role, assembled from .env.readonly.
  *
  * backend/tests/handle-namespace-predicate-parity.test.ts holds the OTHER two
  * in agreement mechanically. Nothing holds this third one, so if that test ever
@@ -123,13 +197,13 @@ function record(name: string, status: Status, detail: string | string[], remedia
  *  this deliberately-standalone script's logic that is pure and needs no live
  *  Postgres connection to exercise for real. */
 export function redactedTarget(raw: string | undefined): string {
-  if (!raw) return "(PREFLIGHT_DATABASE_URL unset)";
+  if (!raw) return "(no read-only database URL — see .env.readonly)";
   try {
     const u = new URL(raw);
     if (u.password) u.password = "***";
     return `${u.username}@${u.hostname}:${u.port || "5432"}${u.pathname}`;
   } catch {
-    return "(unparseable PREFLIGHT_DATABASE_URL)";
+    return "(unparseable read-only database URL)";
   }
 }
 
@@ -309,7 +383,7 @@ async function checkPendingMigrations(db: Db): Promise<string[]> {
       "schema-migrations",
       "FAIL",
       "no public.schema_migrations — this database was never migrated by src/db/migrate.ts",
-      "Confirm PREFLIGHT_DATABASE_URL points at the production database, not an empty/wrong one.",
+      "Confirm .env.readonly points at the production database, not an empty/wrong one.",
     );
     return [];
   }
@@ -665,16 +739,26 @@ async function checkExtensions(db: Db): Promise<void> {
 
 // ── Main ────────────────────────────────────────────────────────────────────
 
-export async function main(): Promise<number> {
-  const url = process.env.PREFLIGHT_DATABASE_URL;
-  if (!url) {
-    console.error("[preflight-upgrade] PREFLIGHT_DATABASE_URL is not set.");
-    console.error("[preflight-upgrade] This script deliberately does NOT read DATABASE_URL: it must run as a");
-    console.error("[preflight-upgrade] dedicated read-only role, never as the application's writer.");
+export async function main(envPath: string = DEFAULT_READONLY_ENV_PATH): Promise<number> {
+  const env = loadEnvFile(envPath);
+  if (!env) {
+    console.error(`[preflight-upgrade] cannot read ${envPath}`);
+    console.error("[preflight-upgrade] This script deliberately does NOT read DATABASE_URL or an ambient env var:");
+    console.error("[preflight-upgrade] it must run as a dedicated read-only role, configured explicitly in that");
+    console.error("[preflight-upgrade] file, never as the application's writer. See .env.readonly.example.");
     return 2;
   }
+  const resolved = urlFromReadonlyEnv(env);
+  if ("missing" in resolved) {
+    console.error(`[preflight-upgrade] ${envPath} is missing: ${resolved.missing.join(", ")}`);
+    console.error(
+      `[preflight-upgrade] Required keys: ${READONLY_ENV_REQUIRED_KEYS.join(", ")} (sslmode optional, defaults to require).`,
+    );
+    return 2;
+  }
+  const url = resolved.url;
   if (process.env.DATABASE_URL && process.env.DATABASE_URL === url) {
-    console.error("[preflight-upgrade] PREFLIGHT_DATABASE_URL is identical to DATABASE_URL — refusing.");
+    console.error(`[preflight-upgrade] ${envPath} resolves to the same URL as DATABASE_URL — refusing.`);
     console.error("[preflight-upgrade] Point it at the dedicated read-only role instead.");
     return 2;
   }
