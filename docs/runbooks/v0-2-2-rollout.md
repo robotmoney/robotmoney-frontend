@@ -217,7 +217,7 @@ one that requires §5's backup to already exist.
 
 | Order | Gate | Cannot be answered until | Where the answer comes from |
 |---|---|---|---|
-| 1 | **Gate B** — pre-flight verdict | §3 (the read-only role) and §4 | `backend/scripts/preflight-upgrade.ts` exit code |
+| 1 | **Gate B** — pre-flight verdict | §3 (the read-only role) and §4 | `backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts` exit code |
 | 2 | **Gate D** — the `rm_worker` role exists | §4 | the pre-flight's `rm-worker-role` check |
 | 3 | **Gate E** — no long-running transactions | §4 | the pre-flight's `blocking-xacts` check |
 | 4 | **Gate C** — backup proven restorable | §5, including §5.3's restore | §5.3 |
@@ -450,7 +450,7 @@ Expect `on`, then five `f`. Anything else and §4 will refuse to run anyway.
 
 ---
 
-## 4. Pre-flight: `backend/scripts/preflight-upgrade.ts`
+## 4. Pre-flight: `backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts`
 
 A read-only dry run against **live production**, executed by `rm_readonly`,
 before you pull anything. It refuses to run on a session it cannot prove is
@@ -480,13 +480,18 @@ Then, from `backend/`:
 ```bash
 cd backend
 bun install                      # the script imports `postgres` from backend/package.json
-bun scripts/preflight-upgrade.ts
+bun scripts/upgrades/0.2.1-to-0.2.2/preflight.ts
 ```
 
-The path resolves off the script's own file location (`preflight-upgrade.ts`
-is two directories below the repo root), not off your current directory, so
-it finds `.env.readonly` whether you run the script from `backend/` or from
-the repo root.
+The path resolves off `preflight.ts`'s own file location, not off your
+current directory, so it finds `.env.readonly` whether you run the script
+from `backend/` or from the repo root. The release-neutral mechanics
+(env loading, connect, gate, verdict) live in
+`backend/scripts/lib/preflight-utils.ts`; `preflight.ts` only adds the checks
+specific to this release's migrations (`0029`-`0031`). A future release gets
+its own `backend/scripts/upgrades/<from>-to-<to>/` directory rather than an
+edit to this one, so what a past release's preflight actually checked stays
+reconstructable from git history.
 
 **Run it from a checkout at the release tip you pinned in §1** — the SHA
 `git rev-parse origin/releases-0.2.x` printed, which is the commit you will tag
@@ -497,13 +502,13 @@ from the wrong tag and the pending list is wrong.
 
 `.env.readonly` is a deliberately separate file from `.env`. The script reads
 `DATABASE_URL` for exactly one purpose — the equality guard at
-`backend/scripts/preflight-upgrade.ts:760`, `if (process.env.DATABASE_URL &&
+`backend/scripts/lib/preflight-utils.ts:281`, `if (process.env.DATABASE_URL &&
 process.env.DATABASE_URL === url)` → exit `2`, where `url` is what it just
 assembled from `.env.readonly`. It reads `DATABASE_URL` nowhere else, opens no
-pool on it, and never falls back to it (`:744-758` exits `2` when
+pool on it, and never falls back to it (`:266-279` exits `2` when
 `.env.readonly` is missing or missing required keys). What it does **not** do
 is import anything from `src/` — that is the point of the file's standalone
-shape (`preflight-upgrade.ts:15-23`).
+shape (`preflight-utils.ts:9-26`).
 
 > **The guard is live or dead depending on where you stand.** It only fires when
 > `DATABASE_URL` is in the process environment. Two things put it there:
@@ -547,7 +552,7 @@ Warnings worth stopping to read even though they exit `0`:
   pre-flight only warns; **the gate decision is yours.** Note this is the one
   safe way to ask about `recovery_hash` before the upgrade: the script checks
   `information_schema.columns` first and switches query shape on the answer
-  (`backend/scripts/preflight-upgrade.ts:562-585`), so it never raises `42703`.
+  (`backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts:279-300`), so it never raises `42703`.
   Your own Gate A query must not name the column at all — see Gate A.
 - `handle-shape` — member ids that are not valid handles. `0030` backfills
   `handle = id` with no `CHECK`, so those handles can never be saved again
@@ -559,28 +564,28 @@ Warnings worth stopping to read even though they exit `0`:
 ### On the reconciliation
 
 The script was authored at `bc9f20f`. Its inlined namespace relation
-(`backend/scripts/preflight-upgrade.ts:166`) is byte-identical to
+(`backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts:70-71`) is byte-identical to
 `HANDLE_NAMESPACE_CONFLICT_RELATION` (`backend/src/db/handle-namespace.ts:63`),
 and both agree with `0031`'s DO block
 (`0031_swarm_member_handle_namespace.sql:91-92`, where the same relation is
 wrapped across two lines).
 
 **Verified today, guarded by nothing — re-grep before each use.** The script
-keeps a **copy, not an import**, on purpose, and its own header says so
-(`preflight-upgrade.ts:39-44`): importing the canonical module would drag in
+keeps a **copy, not an import**, on purpose, and its own comment says so
+(`preflight.ts:60-64`): importing the canonical module would drag in
 `src/config.ts`'s module-load `required("DATABASE_URL")` and the shared pool,
 destroying the standalone/zero-write-risk property this file exists for. The
 executed parity test that does exist
 (`backend/tests/handle-namespace-predicate-parity.test.ts`) parses `0031`'s DO
-block and compares it to the exported constant — it **never reads
-`preflight-upgrade.ts`**. So the migration/runtime pair is guarded and the
+block and compares it to the exported constant — it **never reads**
+**`preflight.ts`**. So the migration/runtime pair is guarded and the
 pre-flight's copy is not: nothing in CI fails if it drifts.
 
 ```bash
 # The two TypeScript copies must print the identical string.
 grep -n 'FROM swarm_members a JOIN swarm_members b' \
-  backend/src/db/handle-namespace.ts backend/scripts/preflight-upgrade.ts
-# expect handle-namespace.ts:63 and preflight-upgrade.ts:166, same predicate:
+  backend/src/db/handle-namespace.ts backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts
+# expect handle-namespace.ts:63 and preflight.ts:71, same predicate:
 #   FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id
 ```
 
