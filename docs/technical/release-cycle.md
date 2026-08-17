@@ -608,15 +608,27 @@ is declarative, in git, and reviewable — while the machinery is a script:
   otherwise mean duplicating the YAML files; until then, one environment =
   plain files. Whether the files live in this repo or a separate deploy
   repo is open (§8).
-- **CI builds and bumps — all five Deployments, one SHA.** On merge, CI
-  builds the image, pushes it to a registry tagged with the **immutable
-  git SHA** (registry choice — GHCR vs DO Container Registry — is a minor
-  open question, §8), and commits an edit of the `image:` field in the
-  plain YAML (`yq`/`sed`-level tooling, nothing manifest-aware). Decided:
-  on any `backend/**` or `contract/**` change, the bump moves **all five
-  Deployments to the same SHA**. They are one image (§3.2) — the code was
-  built and tested together, and R1–R4 make rolling all five safe — so
-  lockstep *within the backend* is embraced rather than fought.
+- **CI builds; the release bumps — all five Deployments, one SHA.** On
+  merge to `main`, CI builds the image and pushes it to a registry tagged
+  with the **immutable git SHA** (registry choice — GHCR vs DO Container
+  Registry — is a minor open question, §8). **Building is not deploying:
+  CI does not bump the production manifest on merge.** The production
+  `image:` bump is a step of the release procedure — it moves production
+  to the SHA of the `vA.B.C-rc.N` that passed **preflight**, and `vA.B.C`
+  is tagged only afterwards, once postflight is clean, at the exact commit
+  production is running. This is not this doc's preference: it is the
+  standing policy in [`release-runbooks.md`
+  §2](./release-runbooks.md#2-version-tags-and-release-candidates), which
+  an earlier draft of this bullet contradicted — auto-bumping on merge,
+  against a reconciler that converges within a minute (below), is
+  continuous deployment from `main`, and production is defined as running
+  only artifacts that have passed preflight. The bump itself is still an
+  edit of the `image:` field in the plain YAML (`yq`/`sed`-level tooling,
+  nothing manifest-aware); *who* commits it and with what authorization is
+  open (§8). Decided, and unaffected by what triggers it: a bump moves
+  **all five Deployments to the same SHA**. They are one image (§3.2) —
+  the code was built and tested together, and R1–R4 make rolling all five
+  safe — so lockstep *within the backend* is embraced rather than fought.
   Per-Deployment pinning stays available as an exceptional capability
   (staged rollout of a risky worker change, single-lane rollback), not
   everyday practice. **Rejected: path-filtered bumps** (`src/api/**` →
@@ -624,7 +636,10 @@ is declarative, in git, and reviewable — while the machinery is a script:
   the day it misses a shared dependency (`src/db/**`, `contract/**`) a
   Deployment silently keeps running code that no longer matches its
   siblings' assumptions. CI's write access still ends at git; it never
-  touches the cluster.
+  touches the cluster. Note what is and isn't rc-gated here: it is
+  **production** specifically. If a staging environment is ever added
+  (§8), bumping it automatically on merge is the natural fit — that is
+  what a staging environment is for — and nothing above argues otherwise.
 - **A pull-based reconciler on the droplet.** A systemd timer (~every
   minute) runs a small script (`set -euo pipefail` — any failing step
   aborts the run): `git fetch` with a **read-only deploy key**; if the
@@ -658,9 +673,15 @@ is declarative, in git, and reviewable — while the machinery is a script:
   immutable, reverting the manifest reverts the running code exactly — and
   because the static publish is the reconciler's last step, the same
   revert republishes the previous SPA *after* the backend has rolled back:
-  both tiers restored, in the right order, from one commit. (Schema
-  rollback remains forward-fix only, per §4a — this loop doesn't change
-  that.)
+  both tiers restored, in the right order, from one commit. Because the
+  bump is now a release step rather than a per-merge event, what the revert
+  converges *to* is the **previously deployed artifact** — the last rc or
+  release that was actually deployed and healthy, not "this release minus
+  the bug", which never existed as a deployed thing. That is the same
+  target [`docs/runbooks/v0-2-2-rollout.md`
+  §9](../runbooks/v0-2-2-rollout.md) names for a manual rollback, reached
+  by reverting a commit instead of checking out a tag. (Schema rollback
+  remains forward-fix only, per §4a — this loop doesn't change that.)
 - **Failure visibility — a dead-man's switch, git-native.** A halted
   rollout writes a log on the droplet, which nobody reads; worse, a *dead*
   reconciler (rotated deploy key, full disk, wedged timer) means deploys
@@ -865,6 +886,27 @@ New questions raised by the §3/§6 design:
   and deploy state reviewable together but means CI's tag-bump commits land
   in the main history; a deploy repo isolates that churn at the cost of a
   second repo to keep in sync.
+- **Who performs the production manifest bump, and how is that actor
+  authorized?** §6 settles *when* production moves — to the SHA of an rc
+  that passed preflight, per [`release-runbooks.md`
+  §2](./release-runbooks.md#2-version-tags-and-release-candidates) — but
+  not *who* commits the bump. Two shapes: an operator (or an agent running
+  the release runbook) makes the commit as a step of the procedure, or CI
+  reacts to a `v*-rc.*` tag push on `releases-A.B.x` and commits it. The
+  automatic form needs a rule the tag alone cannot supply: an rc tag is cut
+  *before* preflight runs against it (release-runbooks.md §2, steps 1–3),
+  so "an rc tag exists" is not "an rc passed preflight" — something else
+  has to carry that verdict into the bump. Both shapes stay inside §6's
+  constraint that CI's write access ends at git and nothing touches the
+  cluster, but neither yet has an answer for what protects the manifest ref
+  the reconciler watches from a bump no preflight backs.
+- **Which ref the production manifests live on.** Related to the previous
+  question and not settled by it: the reconciler follows "the manifest
+  ref", and with production pinned to an rc cut on `releases-A.B.x`
+  ([`release-runbooks.md` §1](./release-runbooks.md#1-release-branch)),
+  that ref is no longer obviously `main`. Whether the reconciler tracks the
+  release branch, a dedicated production ref, or a deploy repo of its own
+  is open.
 - **Staging environment shape under k3s.** A second namespace on the same
   node (cheap, shares the SPOF and the k3s version) or a second droplet
   (isolated, doubles the cost)? Either way, committing to a second
