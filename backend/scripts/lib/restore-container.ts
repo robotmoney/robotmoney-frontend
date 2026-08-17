@@ -123,10 +123,22 @@ export async function restoreBackupIntoContainer(
   const hostPort = new TextDecoder().decode(inspect.stdout).trim();
   log(`listening on ${bindHost}:${hostPort}`);
 
+  const connArgs = [`--host=${bindHost}`, `--port=${hostPort}`, `--username=${LOCAL_USER}`];
+  const env = { ...process.env, PGPASSWORD: LOCAL_PASSWORD };
+
+  // Probe over the SAME path the work below uses: host -> published port ->
+  // auth -> a real query. NOT `docker exec ... pg_isready`, which answers a
+  // different question and answers it too early: the postgres image's
+  // entrypoint runs a TEMPORARY server for initdb (bound inside the container
+  // only), shuts it down, then starts the real one. An in-container probe goes
+  // green against that temporary server, so the first host-side connection
+  // lands in the shutdown window and dies with "server closed the connection
+  // unexpectedly". Measured on postgres:18: in-container READY at t=2s,
+  // host-side connections not accepted until t=3s.
   log("waiting for readiness");
   let ready = false;
-  for (let i = 0; i < 30; i++) {
-    const check = Bun.spawnSync(["docker", "exec", container, "pg_isready", "-U", LOCAL_USER, "-d", LOCAL_DB]);
+  for (let i = 0; i < 60; i++) {
+    const check = Bun.spawnSync(["psql", ...connArgs, `--dbname=${LOCAL_DB}`, "-X", "-Atc", "SELECT 1"], { env });
     if (check.exitCode === 0) {
       ready = true;
       log(`ready after ${i + 1}s`);
@@ -135,9 +147,6 @@ export async function restoreBackupIntoContainer(
     await Bun.sleep(1000);
   }
   if (!ready) return { error: "Postgres never became ready", container };
-
-  const connArgs = [`--host=${bindHost}`, `--port=${hostPort}`, `--username=${LOCAL_USER}`];
-  const env = { ...process.env, PGPASSWORD: LOCAL_PASSWORD };
 
   log("loading globals (just the app-relevant roles)");
   const gpgGlobals = Bun.spawn(
