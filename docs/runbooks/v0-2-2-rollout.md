@@ -51,8 +51,24 @@ assume. Re-check them against the tip you pin in §1 before you rely on them.
 | | |
 |---|---|
 | Currently in production | tag **`v0.2.1`** = `5970f2d` |
-| Target | branch **`releases-0.2.x`** — its tip at the moment you run, to be tagged **`v0.2.2`** |
+| Target | branch **`releases-0.2.x`** — its tip at the moment you run |
+| What you cut and deploy | **`v0.2.2-rc.N`** at that tip (§7.2). **Not `v0.2.2`** |
+| `v0.2.2` | cut only after §8's postflight is clean, at the deployed rc's commit (§8, last step) |
 | Delta | **resolve it yourself, below.** No count written in this file is authoritative |
+
+**The bare `v0.2.2` tag does not exist while you are executing this runbook, and
+cannot.** A version tag records what has been proven in production, so it is cut
+after both preflight and postflight, never before —
+[`docs/technical/release-runbooks.md` §2](../technical/release-runbooks.md)
+("Version tags and release candidates") owns that policy end to end, including
+what happens when preflight or postflight fails. Read it once before you start;
+this runbook executes it and does not restate it.
+
+Which `N`: `git tag -l 'v0.2.2*'` and `git ls-remote --tags origin | grep v0.2.2`
+are both empty (checked 2026-08-17, this worktree and origin), so the next tag is
+**`v0.2.2-rc.0`**. Re-run both before you cut — a previous attempt that failed
+preflight or postflight will have consumed rc numbers, and yours is the highest
+existing `N` plus one.
 
 The target is a **branch, not a pinned SHA**. This section has already gone
 stale twice by pinning one (first `main @ ccf983f` / "14 commits", then
@@ -62,15 +78,18 @@ at execution time:
 
 ```bash
 git fetch --tags origin
-git rev-parse origin/releases-0.2.x                  # ← the tip you will tag
+git rev-parse origin/releases-0.2.x                  # ← the tip you will tag as v0.2.2-rc.N
 git rev-list --count v0.2.1..origin/releases-0.2.x   # ← the delta count
 git log --oneline v0.2.1..origin/releases-0.2.x      # ← the delta itself
 ```
 
 Write down the SHA `git rev-parse` printed and use **that one SHA** for the
-whole rollout — every gate below, the tag you cut in §8, and the
-`git rev-parse HEAD` check on the deployed checkout must all refer to it. If
-the branch moves mid-rollout, you are gating one commit and shipping another.
+whole rollout — every gate below, the `v0.2.2-rc.N` tag you cut in §7.2, the
+`git rev-parse HEAD` check on the deployed checkout, and the `v0.2.2` tag you
+cut in §8 once postflight is clean must all refer to it. If the branch moves
+mid-rollout, you are gating one commit and shipping another. `v0.2.2` landing on
+the same commit as the final rc is the expected outcome, not double-tagging to
+clean up (release-runbooks.md §2).
 
 ### Branching model
 
@@ -93,7 +112,7 @@ git log --oneline origin/main..origin/releases-0.2.x   # branch-only commits
 ```
 
 Empty ⇒ the branch is a strict subset of `main`, and there is nothing owed to
-`main` (release-runbooks.md §5, backporting). Anything listed is a fix that
+`main` (release-runbooks.md §6, backporting). Anything listed is a fix that
 exists only here and must be backported.
 
 `release/v0.2.2-rollout` is **retired** and is not this branch. It was the
@@ -445,7 +464,7 @@ PREFLIGHT_DATABASE_URL='postgres://rm_readonly:<pw>@<host>:25060/defaultdb?sslmo
 
 **Run it from a checkout at the release tip you pinned in §1** — the SHA
 `git rev-parse origin/releases-0.2.x` printed, which is the commit you will tag
-as `v0.2.2`. Verify before you run: `git rev-parse HEAD` in that checkout must
+as `v0.2.2-rc.N` (§7.2). Verify before you run: `git rev-parse HEAD` in that checkout must
 print it. The script compares
 `backend/migrations/` on disk against `schema_migrations` in the database; run
 from the wrong tag and the pending list is wrong.
@@ -916,11 +935,44 @@ demo-only services and leaves them behind as orphans, which is exactly the
 leftover you came here to clear. `--remove-orphans` covers the gap. See
 deployment.md §2.1, "FIRST: find the project name".
 
-### 7.2 Pull the tag
+### 7.2 Cut `v0.2.2-rc.N` and check it out
+
+**You deploy a release candidate, not `v0.2.2`.** The bare version tag is cut
+only after §8's postflight passes (release-runbooks.md §2). Nothing else in this
+runbook creates a tag, so this is the step that makes the thing you are about to
+check out exist.
 
 ```bash
+cd <checkout>
 git fetch --tags origin
-git checkout v0.2.2          # after it is cut, at the §1 tip
+git tag -l 'v0.2.2*'                          # local rcs;  N = highest + 1, else 0
+git ls-remote --tags origin | grep v0.2.2     # the same question, asked of origin
+```
+
+Cut it on the release branch, at the SHA you wrote down in §1 — **never on
+`main`** (release-runbooks.md §2, last paragraph). Confirm the SHA is on the
+branch before you tag it:
+
+```bash
+SHA=<the SHA you wrote down in §1>
+git merge-base --is-ancestor "$SHA" origin/releases-0.2.x && echo "on releases-0.2.x"
+
+git tag -a v0.2.2-rc.<N> "$SHA" -m 'v0.2.2 release candidate <N>'
+git push origin v0.2.2-rc.<N>
+```
+
+(`v0.2.1` and both its rcs are lightweight tags — `git cat-file -t v0.2.1` prints
+`commit`. Annotated is the better record of who cut what when, and nothing in
+this repo reads the object type.)
+
+If §4's preflight already ran against an rc you cut then — which is how
+release-runbooks.md §5 step 1 says preflight is supposed to run — the tag exists
+already; skip the two commands above and go straight to the checkout. Cutting it
+here instead changes nothing about what ships: the tag is a name for the commit
+you already gated, and the `git rev-parse HEAD` check below is what proves that.
+
+```bash
+git checkout v0.2.2-rc.<N>
 git rev-parse HEAD           # MUST print the SHA you wrote down in §1
 ```
 
@@ -932,9 +984,8 @@ moved past several of them:
 test "$(git rev-parse HEAD)" = "<the SHA you wrote down in §1>" && echo OK
 ```
 
-A mismatch means the tag was cut somewhere other than the commit you gated in
-§4 and §6, and you are shipping something you never ran those gates against.
-Stop.
+A mismatch means the rc was cut somewhere other than the commit you gated in §4
+and §6, and you are shipping something you never ran those gates against. Stop.
 
 ### 7.3 The invocation
 
@@ -1157,6 +1208,41 @@ docker compose -p "$RM_PROJECT" exec -T api ls -l /srv/frontend/swarm/index.html
   `docker compose -p "$RM_PROJECT" ps` and compare `CREATED` against the boot.
   The fix is §7.3 again, never `docker compose restart` (§11 step 6's box).
 
+### Only when all twelve checks are clean — tag `v0.2.2`
+
+This is the last step of the rollout. The version tag goes on the **exact commit
+that is running and verified in production** — the rc you deployed in §7.2, which
+is the SHA from §1. Take it from the running deployment, not from the branch,
+which may have moved:
+
+```bash
+cd <checkout>
+git rev-parse HEAD                       # the deployed commit; still the §1 SHA
+git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/releases-0.2.x \
+  && echo "on releases-0.2.x"            # the tag goes on the release branch, never main
+
+git tag -a v0.2.2 "$(git rev-parse HEAD)" -m 'v0.2.2 — verified in production'
+git push origin v0.2.2
+git rev-parse v0.2.2 v0.2.2-rc.<N>       # the two MUST print the same SHA
+```
+
+Those two tags naming one commit is the expected end state, not duplication to
+clean up (release-runbooks.md §2).
+
+⛔ **A failed check is not a reason to tag anyway.** Any check above that is not
+clean means the release goes back around the loop: patch it on `releases-0.2.x`,
+cut `v0.2.2-rc.<N+1>`, run **preflight again** against that rc, redeploy, and
+re-run this whole section. `v0.2.2` cannot be cut at a commit that was never
+deployed and verified, so a fix that lands after the deployed rc always costs
+another rc — it cannot be "rolled into the final tag" (release-runbooks.md §2).
+If the failure is bad enough to need production back on the old code first, that
+is §9, and it is not an alternative to the patch-and-new-rc loop.
+
+Then check every postflight box on the release tracking issue (#660), and check
+`git log --oneline origin/main..origin/releases-0.2.x` for fixes made on the
+branch during the rollout that are owed back to `main` (§1, "Branching model";
+release-runbooks.md §6).
+
 ---
 
 ## 9. Rollback
@@ -1181,11 +1267,25 @@ trigger defaults `handle := id` (`0030_swarm_member_handle.sql:41`), and all six
 `backend/scripts/v0-seed-bootstrap.ts:237`. So v0.2.1 code writing to a v0.2.2
 schema produces valid rows, and the `NOT NULL` on `handle` cannot bite.
 
+**Roll back to the last artifact that was actually deployed and running** — not
+to "v0.2.2 minus the bug", which does not exist as a deployed thing. On a first
+v0.2.2 attempt that is `v0.2.1`, and the commands below are literal. If an
+earlier `v0.2.2-rc.<N-1>` was deployed and healthy before this attempt, that rc
+is the last known-good artifact and is what you check out instead; substitute it
+for `v0.2.1` in the two commands below and expect its own SHA from
+`git rev-parse`. "What rollback does NOT undo" applies to either target — every
+v0.2.2 rc carries the same four migrations — with **one exception**: an rc is
+v0.2.2 code, so it does *not* restore `ADMIN_TOKEN` access to a claimed
+credential. Only `v0.2.1` does (`auth.ts:64` is a bare `return false` on every
+rc). If the trigger you are rolling back for is the admin lockout, the target is
+`v0.2.1`. Rolling back never cuts or moves a tag; the way forward is still §8's
+loop: patch, next rc, preflight again.
+
 ```bash
 cd <checkout>
 bun run demo:down
-git checkout v0.2.1
-git rev-parse HEAD                     # MUST print 5970f2d…
+git checkout v0.2.1                    # or the last deployed, healthy v0.2.2-rc.<N-1>
+git rev-parse HEAD                     # MUST print 5970f2d… (or that rc's SHA)
 echo "CI=[$CI]"                        # MUST be empty
 DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
 BOOT_STATUS=$?; echo "rollback boot exit=$BOOT_STATUS"   # capture it here (§7.3)
