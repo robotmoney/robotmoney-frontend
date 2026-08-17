@@ -113,7 +113,12 @@ git log --oneline origin/main..origin/releases-0.2.x   # branch-only commits
 
 Empty ⇒ the branch is a strict subset of `main`, and there is nothing owed to
 `main` (release-runbooks.md §6, backporting). Anything listed is a fix that
-exists only here and must be backported.
+exists only here and must be backported — **after `v0.2.2` is tagged, not
+before.** This is informational context for §1, not one of §2's go/no-go
+gates: an operator or agent running this rollout does not act on it, does not
+let it block or delay preflight/cutover/postflight, and does not need to
+re-check it mid-rollout. It is a TODO for whoever picks up `main` once this
+release line is done.
 
 `release/v0.2.2-rollout` is **retired** and is not this branch. It was the
 head branch of PR #618, squash-merged into `main` as `7c6f659` and deleted
