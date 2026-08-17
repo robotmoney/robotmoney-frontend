@@ -13,7 +13,7 @@
 // downgrades that one comparison to a WARN telling you to compare by hand
 // against docs/runbooks/*.md §5.3/§5.4's captured values):
 //   POSTFLIGHT_BASELINE_SWARM_RECOMMENDATIONS=<pre-upgrade count>   (check 8)
-//   POSTFLIGHT_GATE_A_ROWS=<Gate A's `rows` count>                  (check 9)
+//   POSTFLIGHT_ADMIN_CREDENTIAL_ROWS=<§2's pre-cutover count>       (check 9, defaults to 0)
 //
 // Exit codes: 0 = clean, 1 = a check failed, 2 = could not run.
 
@@ -143,38 +143,46 @@ async function checkAdminCredentialUntouched(db: Db, { record }: Checker): Promi
     record("admin-credential-untouched", "FAIL", "admin_credential does not exist — migration 0028 (pre-existing) or the boot itself is broken");
     return;
   }
+  // ONE row, always. The obvious form here was
+  //   SELECT count(*), (recovery_hash IS NULL) FROM admin_credential GROUP BY 2
+  // which on the EXPECTED state — unclaimed, zero rows — has no group to emit
+  // and returns nothing at all. That happened to survive here only because
+  // [].every() is vacuously true and reduce() had a seed; it is one refactor
+  // away from reporting a pass it never computed, and the same shape printed
+  // "(0 rows)" in the runbook where an operator was told to expect 0. An
+  // aggregate with FILTER always returns a row, so "expected 0" is a value you
+  // can actually compare. Same form preflight.ts already uses.
   const rows = (await db`
-    SELECT count(*)::int AS count, (recovery_hash IS NULL) AS no_recovery FROM admin_credential GROUP BY 2
-  `) as unknown as { count: number; no_recovery: boolean }[];
-  const total = rows.reduce((sum, r) => sum + r.count, 0);
-  const allPreexistingNull = rows.every((r) => r.no_recovery);
-  const gateARows = process.env.POSTFLIGHT_GATE_A_ROWS;
-  if (!allPreexistingNull) {
+    SELECT count(*)::int AS total,
+           count(*) FILTER (WHERE recovery_hash IS NOT NULL)::int AS with_recovery
+    FROM admin_credential
+  `) as unknown as { total: number; with_recovery: number }[];
+  const { total, with_recovery } = rows[0]!;
+  // Unclaimed is the ONLY state this upgrade can start from: v0.2.1 ships no
+  // claim UX, so nothing can have written this table (docs/runbooks/*.md §2,
+  // "Admin credential — confirm unclaimed before cutover"). Default the
+  // expectation to 0 rather than demanding a baseline nobody can vary.
+  const expectedRows = Number(process.env.POSTFLIGHT_ADMIN_CREDENTIAL_ROWS ?? "0");
+  if (with_recovery > 0) {
     record(
       "admin-credential-untouched",
       "FAIL",
-      `admin_credential has a non-NULL recovery_hash already — no seed path should ever write this table`,
+      `admin_credential has ${with_recovery} row(s) with a non-NULL recovery_hash — 0029 adds that column and backfills nothing, and no seed path ever writes this table`,
     );
     return;
   }
-  if (!gateARows) {
-    record(
-      "admin-credential-untouched",
-      "WARN",
-      `${total} row(s), all with recovery_hash NULL — no Gate A baseline given`,
-      "Set POSTFLIGHT_GATE_A_ROWS to Gate A's `rows` count, or compare by hand.",
-    );
-    return;
-  }
-  if (total !== Number(gateARows)) {
+  if (total !== expectedRows) {
     record(
       "admin-credential-untouched",
       "FAIL",
-      `${total} row(s), but Gate A recorded ${gateARows} — the boot touched admin_credential's row count`,
+      `${total} row(s), expected ${expectedRows} — the boot changed admin_credential's row count`,
+      total > expectedRows
+        ? "If the admin claim (§12.1) was completed BEFORE this check ran, that is the expected 1 row: re-run with POSTFLIGHT_ADMIN_CREDENTIAL_ROWS=1."
+        : undefined,
     );
     return;
   }
-  record("admin-credential-untouched", "PASS", `${total} row(s), matches Gate A, all recovery_hash NULL as expected`);
+  record("admin-credential-untouched", "PASS", `${total} row(s) as expected, none carrying a recovery_hash — the boot did not touch this table`);
 }
 
 // check 12 — swarm schedules state (compare against §5.4's captured file by hand)

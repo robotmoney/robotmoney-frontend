@@ -64,8 +64,9 @@ export async function tableExists(db: QueryableDb, table: string): Promise<boole
  * "does this column exist yet" before a migration that adds it has applied.
  * Naming a not-yet-existing column directly raises 42703, which reads as a
  * confusing failure rather than the expected pre-migration state. This
- * pattern is documented at length in docs/runbooks/*.md (Gate A's
- * recovery_hash, §8's checks 4/6/7/9, §5.3's namespace-invariant query) —
+ * pattern is documented at length in docs/runbooks/*.md (§2's
+ * admin-credential recovery_hash, §8's checks 4/6/7/9, §5.3's
+ * namespace-invariant query) —
  * three separate hand-written landmines this helper exists to stop from
  * recurring a fourth time.
  */
