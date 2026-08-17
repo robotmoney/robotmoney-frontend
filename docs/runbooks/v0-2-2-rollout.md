@@ -1601,27 +1601,41 @@ separate member identity from public handle, so a cutover that leaves a
 member with the wrong handle has not delivered the release, however green
 every other check is.
 
-Background on why derivation alone cannot satisfy AC2: `0030` backfills
-`handle = id`, and that equality doubles as the *"nobody has set a handle
-yet"* sentinel — the column is `NOT NULL`, so there is no unset value to look
-for (`backend/src/swarm/handle.ts`, `handleIsUnset`). Acceptance/registration
-then derives an unset handle from the member's **name**
-(`domain.ts:1003`, `:1199`). Two consequences bite:
+**ONE algorithm, no exceptions.** Every handle is
+`slugifyMemberName(name)` — the same function every code path uses. No member
+gets a hand-picked handle, and in particular the v0 archive's own slugs are
+**not** handles: the importer derives from the display name like everything
+else. Two mechanics make this work, and both are worth knowing before reading
+the table:
 
-- `slugifyMemberName("Robot Money")` is `robot-money`, **not** the published
-  `robotmoney`, so derivation drifts from the identity the archive ships.
-- A handle set to its own id is indistinguishable from unset, so it is
-  re-derived on every acceptance — meaning **a slug id can never hold a
-  matching handle stably.** An id that is a UUID is what makes a handle
-  durable.
+- **A slug id can never hold a matching handle.** `0030` backfills
+  `handle = id`, and that equality doubles as the *"nobody has set a handle
+  yet"* sentinel — the column is `NOT NULL`, so there is no unset value to look
+  for (`backend/src/swarm/handle.ts`, `handleIsUnset`). A handle equal to its
+  own id therefore reads as unset and is re-derived forever. **A UUID id is
+  what makes a handle durable**, which is why AC1 is a prerequisite for AC2
+  rather than a tidiness goal.
+- **A slug id also SQUATS the handle namespace.** `0031` rightly refuses a
+  handle equal to another member's id. With `woon` sitting in the id column,
+  the member actually *named* Woon cannot be given `woon`; derivation avoids
+  the collision and hands it `woon-2`. So AC1 must land **before** the handles
+  are derived — derived first, the collision is baked in.
+
+**Consequence, stated plainly: some published URLs stop resolving.** Once
+"Robot Money" holds handle `robot-money` and a UUID id,
+`/swarm/members/robotmoney` matches neither column and 404s. That address is in
+the shipped archive and in previously published links. Breaking it is the
+accepted price of one uniform rule — the alternative was a per-member
+exception, which is what let two subsystems disagree about the same member.
+Where those references should land instead is tracked separately (#687).
 
 | AC | Requirement | Verify |
 |---|---|---|
 | **AC1** | **Every member id is a UUID.** Members whose id was a human slug (`athena`, `robotmoney`, `woon`) are re-identified; `46bed5c1…`, `b4cc55fd…`, `f7ee9a6a…` already comply and must be left alone. | `SELECT id FROM swarm_members WHERE id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';` → **0 rows** |
-| **AC2** | **Handles are exact, not derived.** `Robot Money` → `robotmoney` (verbatim, no hyphen); `Athena` → `athena`; the member named `Woon` → `woon`; the member named `Noop Analyst` → `noop-analyst`. | `SELECT name, handle FROM swarm_members ORDER BY name;` compared against this table |
-| **AC3** | **Handles match the published archive.** Each seated member's handle equals its manifest name under `frontend/public/data/swarm/manifests/members/<handle>.json`, so no published URL is orphaned. | compare the AC2 output against `ls` of that directory |
+| **AC2** | **Every handle is the derived one.** `slugifyMemberName(name)` for every member, with no exceptions: `Athena`→`athena`, `Robot Money`→`robot-money`, `Noop Analyst`→`noop-analyst`, `Woon`→`woon`, `Maximus`→`maximus`, `nat`→`nat`. | `SELECT name, handle FROM swarm_members ORDER BY name;` — every row must equal the derivation, and the six above are what a clean run produced against a production dump |
+| **AC3** | **No member is left at `0030`'s default.** A handle still equal to its own id means the backfill never reached that member — the failure mode that would have left `Maximus`, `nat` and `Woon` at UUID handles, since the other derivation sites only fire on acceptance/registration events they had already passed. | `SELECT id, handle FROM swarm_members WHERE handle = id;` → **0 rows**. Manifest **filenames are not handles** and deliberately do not move (`robotmoney.json` stays), so do not compare handles against that directory |
 | **AC4** | **No member carries a derived-suffix handle.** `woon-2` and anything shaped `<stem>-<n>` is a **failure**: it means derivation ran where an exact handle was required. | `SELECT id, handle FROM swarm_members WHERE handle ~ '-[0-9]+$';` → **0 rows** |
-| **AC5** | **Demo/smoke tooling still works by handle.** A member is resolvable by handle through the API, and the demo/smoke path finds its member id by handle rather than a hardcoded literal — so no tooling depends on a slug id continuing to exist. | `curl -s "$API/api/swarm/members/robotmoney"` returns that member; `bun scripts/demo-frontend-check.ts` passes; a smoke boot seats its roster |
+| **AC5** | **Demo/smoke tooling still works by handle.** A member is resolvable by handle through the API, and the demo/smoke path finds its member id by handle rather than a hardcoded literal — so no tooling depends on a slug id continuing to exist. | `curl -s "$API/api/swarm/members/robot-money"` returns that member (**not** `robotmoney`, which no longer resolves — see above); `bun scripts/demo-frontend-check.ts` passes; a smoke boot seats its roster |
 | **AC6** | **History stayed attached across the re-id.** Take, memo and key counts per member are unchanged, and signatures still verify — the re-id must carry every FK, **including `swarm_member_keys`**, or verification silently goes false. | per-member `count(*)` on `swarm_recommendations`/`swarm_memos` matches the pre-upgrade capture, and `/api/swarm/sessions/<id>` reports takes as `verified` |
 
 > **AC6 is the one with a silent failure mode.** Verification is
@@ -1634,6 +1648,47 @@ then derives an unset handle from the member's **name**
 **If any AC fails, the release has not been achieved** — that is a postflight
 failure in the §2 sense: patch, cut the next rc, and re-run preflight before
 redeploying. Do not tag `v0.2.2`.
+
+#### What delivers these, and what has been proven
+
+Two changes land together, and **neither works alone** (branch
+`issue-685-members-keyed-by-handle`):
+
+| | delivers |
+|---|---|
+| Migration `0032_swarm_member_uuid_ids.sql` | AC1 — re-identifies every non-UUID member. `UPDATE` only: the seven child FKs are made `DEFERRABLE` for the transaction and restored, never dropped/re-added, so their definitions (including three `ON DELETE CASCADE`s) cannot come back subtly different |
+| `backfillMemberHandles()`, called unconditionally from `seed()` | AC2/AC3 — derives a handle for every member still at `0030`'s default |
+
+**Order is not optional.** Migrations run before `seed()`, which is the only
+correct sequence: run the backfill first and `woon` is still an id, so the
+member named Woon is permanently handed `woon-2`.
+
+Two things the implementation had to discover, recorded because a reimplementation
+will hit both: `SET CONSTRAINTS ALL IMMEDIATE` is required before restoring the
+constraints (otherwise the `ALTER` fails with *"cannot ALTER TABLE … because it
+has pending trigger events"*), and `swarm_subjects.linked_member_id` must be
+remapped **explicitly** — it is not a foreign key, so nothing in the deferral
+loop can see it, and it would be left pointing at an id that no longer exists.
+
+**Verified against a restored production dump on 2026-08-17**, not against
+fixtures — the twin is where these ACs are cheap to evaluate and the data is
+what will actually be migrated (§5.3b.0):
+
+```
+Athena athena | Maximus maximus | nat nat
+Noop Analyst noop-analyst | Robot Money robot-money | Woon woon
+```
+
+all six ids UUIDs, no `-N` suffix anywhere, and a second pass wrote 0 changes
+(idempotent). AC6 held completely: 29/167/168/26/167 takes and 95/96/95 memos
+all still attached, zero orphans across all seven child tables,
+`linked_member_id` remapped, **40/40 sampled signatures still verified**, no FK
+left `DEFERRABLE`, all three `ON DELETE CASCADE`s preserved.
+
+⚠ **Not yet merged.** Both branches pass in isolation but the test suite shares
+one ephemeral database and interferes through mutable state (#688), which blocks
+this and #684. Re-run these ACs on the twin from the actual rc before cutover
+rather than trusting this block.
 
 ### Diagnosing check 11
 
