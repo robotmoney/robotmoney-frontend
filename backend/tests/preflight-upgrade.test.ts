@@ -182,13 +182,6 @@ describe("main() against live Postgres roles — gateReadOnly's PASS/BLOCKED pat
     dbUrl = new URL(process.env.DATABASE_URL as string);
   });
 
-  afterAll(async () => {
-    const sql = postgres(process.env.DATABASE_URL as string);
-    await sql`DROP ROLE IF EXISTS rm_readonly_test`;
-    await sql`DROP ROLE IF EXISTS rm_writer_test`;
-    await sql.end();
-  });
-
   afterEach(() => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
