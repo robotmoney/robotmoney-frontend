@@ -728,13 +728,34 @@ UNION ALL SELECT 'schema_migrations', count(*) FROM schema_migrations;
 -- 2. Roles survived the globals restore.
 SELECT rolname FROM pg_roles WHERE rolname IN ('rm_worker', 'rm_readonly');
 
--- 3. The namespace invariant holds in the restored copy.
-SELECT a.id AS holder, a.handle, b.id AS shadowed
-FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id;
--- expect 0 rows
+-- 3. The namespace invariant — ONLY once this backup is already post-0030.
+--    Do not name `handle` blind; check first. See the box below.
+SELECT EXISTS (
+  SELECT 1 FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = 'swarm_members' AND column_name = 'handle'
+) AS has_handle;
+-- has_handle = f — this runbook's pre-cutover backup: expected, stop here,
+--   see the box below. Do NOT run the query below; it throws 42703.
+-- has_handle = t — a backup taken after 0030 has applied (e.g. re-verifying
+--   post-cutover): now run this, and expect 0 rows.
+--   SELECT a.id AS holder, a.handle, b.id AS shadowed
+--   FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id;
 ```
 
-Run the same three against production and compare. Only then is Gate C green.
+> ⚠ **Check 3's `handle` query does not apply to a pre-upgrade backup, and
+> throws `column "handle" does not exist` (`42703`) if you run it anyway.**
+> `swarm_members.handle` is added by migration `0030`, which has not applied
+> to the data in this dump — that is the entire point of a backup taken
+> *before* cutover. This is the same landmine Gate A already documents for
+> `recovery_hash` (§2, Gate A): a verification query written assuming
+> post-migration schema, run against a pre-migration snapshot. `has_handle =
+> f` here is the expected, healthy result for this backup, not a failure —
+> the literal namespace-invariant query only becomes meaningful again against
+> a backup taken after cutover (e.g. while validating §9's rollback path).
+
+Run the same against production and compare. `has_handle` should read `f` on
+production too, pre-upgrade — that match is what proves the restore is
+faithful, not a discrepancy to chase. Only then is Gate C green.
 
 > **DESTRUCTIVE.** Drop the scratch database when done — it is a second
 > plaintext copy of every credential above.
