@@ -978,6 +978,33 @@ What it does:
 Exit `0` means the migration ran for real, the stack came up healthy, and the
 frontend checks passed against production-shaped data.
 
+#### 5.3b.0 ⛔ The rehearsal runs preflight AND POSTFLIGHT against the twin
+
+**A rehearsal that only proves the stack boots has not rehearsed the
+release.** Run **both** halves against the digital twin, in the same order
+production will see them, before production is touched at all:
+
+1. **Preflight** — §5.3's `restore-check.ts` (Gate C), then §4's checks.
+2. **Cutover** — §5.3b's boot, which applies this release's migrations to the
+   restored production rows for real.
+3. **Postflight** — **every §8 check, and every §8.1 acceptance criterion**,
+   against the migrated twin.
+
+Step 3 is the one that was missing, and its absence is exactly how a real
+defect reached rc.5 while every script reported success: the boot exited `0`,
+the frontend checks passed, and **two members still ended up with the wrong
+public handle** (`robot-money` instead of `robotmoney`, `woon-2` instead of
+`woon`) — §8.1. A green mechanism is not a met objective, and only §8.1
+distinguishes them.
+
+The twin is the right place for this and the only place it is free: it holds
+real production rows, so the ACs are evaluated against the data that will
+actually be migrated, and a failure costs a rerun rather than a rollback.
+**Treat an AC failure on the twin exactly as an AC failure in production** —
+patch, cut the next rc, rehearse again. Do not carry a known-failing AC into
+a cutover on the theory that production will behave differently; it is the
+same data.
+
 #### 5.3b.1 Contract — what a correct rehearsal run does
 
 This is the **specification**, written so the tool can be judged against it.
@@ -1023,12 +1050,19 @@ VERDICT: migrated and booted clean, frontend checks pass
 EXIT=0
 ```
 
-with zero containers, volumes, worktrees or processes surviving. The
-migration evidence from the earlier hung run stands unchanged and was
-re-confirmed here: all four migrations applied to production-shaped data, and
-§8's checks 2/4/5/6/7/8 all pass against the resulting database (trigger
-`tgenabled = A`, zero null handles, zero namespace violations,
-`swarm_recommendations` above its pre-upgrade baseline).
+with zero containers, volumes, worktrees or processes surviving. All four
+migrations applied to production-shaped data, and §8's checks 2/4/5/6/7/8 pass
+against the resulting database (trigger `tgenabled = A`, zero null handles,
+zero namespace violations, `swarm_recommendations` above its pre-upgrade
+baseline).
+
+> ⛔ **A clean `EXIT=0` here does NOT mean the release passed.** This contract
+> is about the rehearsal *mechanism* — G1–G7 describe a run that terminates,
+> verifies and cleans up. It says nothing about whether the release achieved
+> its objective. On 2026-08-17 this script exited `0` with every check above
+> green while **two members ended up with the wrong public handle** — the
+> defect §8.1 exists to catch. Always follow a green run with §5.3b.0 step 3:
+> §8's checks *and* §8.1's acceptance criteria, against the same twin.
 
 > **Reading a run.** "Still running" is only ever legitimate *before*
 > readiness, and only up to G3's deadline — a cold first build genuinely
@@ -1559,44 +1593,47 @@ and never `$?`.
 | 11 | Site serves prerendered HTML | `curl -s http://127.0.0.1:<port>/swarm/ \| grep -o '<title>[^<]*'` | Not the home page's title. **"Assembly did not run" is not a possible cause here** — see the diagnosis below. |
 | 12 | Swarm schedules state | `psql "$DATABASE_URL" -c "SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;"` | five rows, **all `enabled = f`** — expected under the demo composition (§6.5). Compare against §5.4's capture: the difference is what this boot clobbered, and it is not coming back on its own. Drive sessions manually. |
 
-### Expected, not damage — handles stop matching ids
+### 8.1 ⛔ Release acceptance criteria — member identity
 
-**Some members' `handle` will differ from their `id` after cutover. That is
-this release shipping, not the upgrade corrupting data.** Do not "repair" it.
+**These are the release's objective, not a spot check. `EXIT=0` from any
+script above does not satisfy them; only these queries do.** v0.2.2 exists to
+separate member identity from public handle, so a cutover that leaves a
+member with the wrong handle has not delivered the release, however green
+every other check is.
 
-`0030` backfills `handle = id`, and that equality doubles as the *"nobody has
-set a handle yet"* sentinel — the column is `NOT NULL`, so there is no unset
-value to look for (`backend/src/swarm/handle.ts`, `handleIsUnset`). When a
-member is then accepted or re-registered, a still-unset handle is derived
-from its **name** (`backend/src/swarm/domain.ts:1003`, `:1199`): `#594`
-separated identity from public handle and `#612` derives the handle at
-acceptance, both in this delta (§1).
+Background on why derivation alone cannot satisfy AC2: `0030` backfills
+`handle = id`, and that equality doubles as the *"nobody has set a handle
+yet"* sentinel — the column is `NOT NULL`, so there is no unset value to look
+for (`backend/src/swarm/handle.ts`, `handleIsUnset`). Acceptance/registration
+then derives an unset handle from the member's **name**
+(`domain.ts:1003`, `:1199`). Two consequences bite:
 
-Observed in §5.3b's rehearsal against production data — after migration plus
-one boot:
+- `slugifyMemberName("Robot Money")` is `robot-money`, **not** the published
+  `robotmoney`, so derivation drifts from the identity the archive ships.
+- A handle set to its own id is indistinguishable from unset, so it is
+  re-derived on every acceptance — meaning **a slug id can never hold a
+  matching handle stably.** An id that is a UUID is what makes a handle
+  durable.
 
-```
-athena      → athena          (name slugifies to the same string)
-robotmoney  → robot-money
-woon        → noop-analyst
-<uuid ids>  → <same uuid>     (never seated this boot, so still the default)
-```
+| AC | Requirement | Verify |
+|---|---|---|
+| **AC1** | **Every member id is a UUID.** Members whose id was a human slug (`athena`, `robotmoney`, `woon`) are re-identified; `46bed5c1…`, `b4cc55fd…`, `f7ee9a6a…` already comply and must be left alone. | `SELECT id FROM swarm_members WHERE id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';` → **0 rows** |
+| **AC2** | **Handles are exact, not derived.** `Robot Money` → `robotmoney` (verbatim, no hyphen); `Athena` → `athena`; the member named `Woon` → `woon`; the member named `Noop Analyst` → `noop-analyst`. | `SELECT name, handle FROM swarm_members ORDER BY name;` compared against this table |
+| **AC3** | **Handles match the published archive.** Each seated member's handle equals its manifest name under `frontend/public/data/swarm/manifests/members/<handle>.json`, so no published URL is orphaned. | compare the AC2 output against `ls` of that directory |
+| **AC4** | **No member carries a derived-suffix handle.** `woon-2` and anything shaped `<stem>-<n>` is a **failure**: it means derivation ran where an exact handle was required. | `SELECT id, handle FROM swarm_members WHERE handle ~ '-[0-9]+$';` → **0 rows** |
+| **AC5** | **Demo/smoke tooling still works by handle.** A member is resolvable by handle through the API, and the demo/smoke path finds its member id by handle rather than a hardcoded literal — so no tooling depends on a slug id continuing to exist. | `curl -s "$API/api/swarm/members/robotmoney"` returns that member; `bun scripts/demo-frontend-check.ts` passes; a smoke boot seats its roster |
+| **AC6** | **History stayed attached across the re-id.** Take, memo and key counts per member are unchanged, and signatures still verify — the re-id must carry every FK, **including `swarm_member_keys`**, or verification silently goes false. | per-member `count(*)` on `swarm_recommendations`/`swarm_memos` matches the pre-upgrade capture, and `/api/swarm/sessions/<id>` reports takes as `verified` |
 
-Two properties worth knowing before you look at check 7 and worry:
+> **AC6 is the one with a silent failure mode.** Verification is
+> `payload` + `signature` + the pubkey reached through
+> `swarm_member_keys.member_id`. The signed bytes contain the *historical*
+> `memberId`, which is correct provenance and must not be rewritten — but if
+> the key row is not repointed to the new id, every take for that member
+> reports unverified with no error anywhere.
 
-- **Old links do not break.** Lookups resolve `WHERE handle = $ref OR id =
-  $ref`, preferring the handle (`domain.ts:147-148`), so a URL built from
-  the id still resolves after the handle moves. The change is additive.
-- **An administrator's choice is never overwritten.** Derivation runs *only*
-  from the untouched default, deliberately, so that a handle someone set on
-  purpose does not move without being asked (issue #562 decision 1). The one
-  accepted edge: a handle explicitly set to its own id is indistinguishable
-  from an untouched one and will be re-derived.
-
-What check 7 is actually for is different and still worth failing on: a
-handle that is not *saveable* (`MEMBER_HANDLE_RE`), which the admin surface
-could never write again. A UUID-shaped handle passes that check — it is
-lowercase hex and hyphens — so it is untidy, not broken.
+**If any AC fails, the release has not been achieved** — that is a postflight
+failure in the §2 sense: patch, cut the next rc, and re-run preflight before
+redeploying. Do not tag `v0.2.2`.
 
 ### Diagnosing check 11
 
