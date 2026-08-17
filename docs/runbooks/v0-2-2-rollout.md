@@ -1559,6 +1559,45 @@ and never `$?`.
 | 11 | Site serves prerendered HTML | `curl -s http://127.0.0.1:<port>/swarm/ \| grep -o '<title>[^<]*'` | Not the home page's title. **"Assembly did not run" is not a possible cause here** — see the diagnosis below. |
 | 12 | Swarm schedules state | `psql "$DATABASE_URL" -c "SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;"` | five rows, **all `enabled = f`** — expected under the demo composition (§6.5). Compare against §5.4's capture: the difference is what this boot clobbered, and it is not coming back on its own. Drive sessions manually. |
 
+### Expected, not damage — handles stop matching ids
+
+**Some members' `handle` will differ from their `id` after cutover. That is
+this release shipping, not the upgrade corrupting data.** Do not "repair" it.
+
+`0030` backfills `handle = id`, and that equality doubles as the *"nobody has
+set a handle yet"* sentinel — the column is `NOT NULL`, so there is no unset
+value to look for (`backend/src/swarm/handle.ts`, `handleIsUnset`). When a
+member is then accepted or re-registered, a still-unset handle is derived
+from its **name** (`backend/src/swarm/domain.ts:1003`, `:1199`): `#594`
+separated identity from public handle and `#612` derives the handle at
+acceptance, both in this delta (§1).
+
+Observed in §5.3b's rehearsal against production data — after migration plus
+one boot:
+
+```
+athena      → athena          (name slugifies to the same string)
+robotmoney  → robot-money
+woon        → noop-analyst
+<uuid ids>  → <same uuid>     (never seated this boot, so still the default)
+```
+
+Two properties worth knowing before you look at check 7 and worry:
+
+- **Old links do not break.** Lookups resolve `WHERE handle = $ref OR id =
+  $ref`, preferring the handle (`domain.ts:147-148`), so a URL built from
+  the id still resolves after the handle moves. The change is additive.
+- **An administrator's choice is never overwritten.** Derivation runs *only*
+  from the untouched default, deliberately, so that a handle someone set on
+  purpose does not move without being asked (issue #562 decision 1). The one
+  accepted edge: a handle explicitly set to its own id is indistinguishable
+  from an untouched one and will be re-derived.
+
+What check 7 is actually for is different and still worth failing on: a
+handle that is not *saveable* (`MEMBER_HANDLE_RE`), which the admin surface
+could never write again. A UUID-shaped handle passes that check — it is
+lowercase hex and hyphens — so it is untidy, not broken.
+
 ### Diagnosing check 11
 
 The old remedy — *"`bun run static:assemble` did not run"* — is **unreachable on
