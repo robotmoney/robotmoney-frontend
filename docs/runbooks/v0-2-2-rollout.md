@@ -18,8 +18,10 @@ cites it.** Where the two disagree, the contradiction is called out inline under
 
 ## 0. Read this first — three facts that change what "upgrade" means here
 
-Each is verified at `ccf983f`, and each invalidates something an operator would
-otherwise assume.
+Each was first verified at `ccf983f` and re-verified on 2026-08-17 against
+`origin/releases-0.2.x` (`d852329`) — every file cited below is unchanged
+between the two — and each invalidates something an operator would otherwise
+assume. Re-check them against the tip you pin in §1 before you rely on them.
 
 1. **`bun smoke` boots a DEMO-shaped stack, not a production one.** It always
    appends `docker-compose.demo.yml` (`scripts/lib/demo-main.ts:284-288`, which
@@ -345,8 +347,18 @@ git show v0.2.1:backend/src/api/auth.ts | sed -n '58,63p'
 #   }
 ```
 
-At `ccf983f` that line is a bare `return false` (`auth.ts:64`). So the current
-boot's `ADMIN_TOKEN` (§12.0) still reaches the admin surface today, and the
+In v0.2.2 that line is a bare `return false` (`auth.ts:64`). This is a property
+of the release, not of one commit — `backend/src/api/auth.ts` is byte-identical
+between `ccf983f` and `origin/releases-0.2.x` as of 2026-08-17 — but confirm it
+on the tip you pinned in §1 rather than on any SHA named here:
+
+```bash
+git show <the §1 tip>:backend/src/api/auth.ts | sed -n '59,66p'
+#   if (claimed.length > 0) { … return false; }   # ← no ADMIN_TOKEN fallback
+```
+
+So the current boot's `ADMIN_TOKEN` (§12.0) still reaches the admin surface
+today, and the
 upgrade is what takes it away. That access is not a fix — `v0.2.1` has neither
 `/api/admin/password-change` nor `/api/admin/password-recover` (both arrive in
 this delta) — but it means you are triaging, not stranded. §12.2 is the fix.
@@ -431,7 +443,10 @@ PREFLIGHT_DATABASE_URL='postgres://rm_readonly:<pw>@<host>:25060/defaultdb?sslmo
   bun scripts/preflight-upgrade.ts
 ```
 
-**Run it from a checkout at `ccf983f`.** The script compares
+**Run it from a checkout at the release tip you pinned in §1** — the SHA
+`git rev-parse origin/releases-0.2.x` printed, which is the commit you will tag
+as `v0.2.2`. Verify before you run: `git rev-parse HEAD` in that checkout must
+print it. The script compares
 `backend/migrations/` on disk against `schema_migrations` in the database; run
 from the wrong tag and the pending list is wrong.
 
@@ -474,7 +489,7 @@ downgrades the last two to warnings — **do not make that the normal path.**
 | `role-privileges` / `role-write-grants` | The role is a superuser, or holds write grants / table ownership. | Provision §3's role and re-run. |
 | `server-version` | Server is < PG 11, where `0030`'s `ADD COLUMN` rewrites the table under `ACCESS EXCLUSIVE`. | Upgrade the cluster. (A **WARN** here just means "not 17"; the suite targets 17.) |
 | `extensions` | `pgcrypto` absent; `0001_backends.sql:4` needs `gen_random_uuid()`. | `CREATE EXTENSION IF NOT EXISTS pgcrypto;` as `doadmin`. |
-| `schema-migrations` | Either no `schema_migrations` at all (wrong database), or **orphans**: files recorded in the database that are absent from `backend/migrations/`. | Orphans mean the **database is ahead of the checkout** — you are on the wrong tag. Stop and check out `ccf983f`. |
+| `schema-migrations` | Either no `schema_migrations` at all (wrong database), or **orphans**: files recorded in the database that are absent from `backend/migrations/`. | Orphans mean the **database is ahead of the checkout** — you are on the wrong tag. Stop and check out the §1 release tip. |
 | `rm-worker-role` | `rm_worker` missing and `0029_admin_passkey.sql` pending. | Gate D above. |
 | `handle-namespace` | One member's `handle` is another member's `id`. | Run **one printed statement per line, all of them**. Each moves the **HOLDER** — the member named *first* on the line. Updating the shadowed member reports `UPDATE 1` and fixes nothing (`backend/src/db/handle-namespace.ts:113-123`). A mutual collision prints two lines and needs two updates. |
 | `blocking-xacts` | A transaction older than 60s is open. | `SELECT pg_terminate_backend(<pid>);` and re-run. Stop the worker first. |
@@ -715,7 +730,11 @@ credentials, so it does not need §5.2's encryption).
 
 This section replaces the "set `AUTOMATION_TOKEN` and `SWARM_PUBLIC_BASE_URL`
 before cutover" plan. **Both of those steps are impossible through the operator's
-workflow at `ccf983f`.** Verified by tracing the spawn environment, not assumed.
+workflow.** Verified by tracing the spawn environment, not assumed — first at
+`ccf983f`, re-verified 2026-08-17 against `origin/releases-0.2.x` (`d852329`),
+where `scripts/stack/stack.ts`, `scripts/stack/config.ts`,
+`scripts/lib/demo-main.ts` and `docker-compose.yml` are all byte-identical to
+`ccf983f`. The mechanism is structural, not a commit-local accident.
 
 ### 6.1 Why: how environment reaches the api container under `bun smoke`
 
@@ -819,7 +838,9 @@ unreadable `.env` is a fatal exit 1 before anything starts.
 Optional, and genuinely honoured because they are in `DEMO_COMPOSE_PASSTHROUGH`.
 **`scripts/lib/demo-main.ts:427-444` is the authoritative list** — read it there,
 not here, before concluding anything is unconfigurable. Reproduced verbatim at
-`ccf983f`, all sixteen names:
+`origin/releases-0.2.x` (`d852329`, 2026-08-17) — sixteen names, unchanged
+since `ccf983f`. Re-derive on your tag rather than trusting this block:
+`git show <the §1 tip>:scripts/lib/demo-main.ts | sed -n '427,444p'`.
 
 ```
 BASE_RPC_URL
@@ -899,9 +920,21 @@ deployment.md §2.1, "FIRST: find the project name".
 
 ```bash
 git fetch --tags origin
-git checkout v0.2.2          # after it is cut at ccf983f
-git rev-parse HEAD           # MUST print ccf983f…
+git checkout v0.2.2          # after it is cut, at the §1 tip
+git rev-parse HEAD           # MUST print the SHA you wrote down in §1
 ```
+
+Compare it against the SHA you recorded, not against any commit named in this
+file — every SHA written here is a snapshot, and the release branch has already
+moved past several of them:
+
+```bash
+test "$(git rev-parse HEAD)" = "<the SHA you wrote down in §1>" && echo OK
+```
+
+A mismatch means the tag was cut somewhere other than the commit you gated in
+§4 and §6, and you are shipping something you never ran those gates against.
+Stop.
 
 ### 7.3 The invocation
 
@@ -1115,7 +1148,10 @@ docker compose -p "$RM_PROJECT" exec -T api ls -l /srv/frontend/swarm/index.html
   `<route>/index.html` for each. A route missing from the sitemap is silently
   never prerendered, assembly still exits `0`, and the api falls back to the
   home-page shell. Confirm with
-  `grep -c '<loc>' frontend/public/sitemap.xml` (expect 37 at `ccf983f`) and
+  `grep -c '<loc>' frontend/public/sitemap.xml` — 37 on `origin/releases-0.2.x`
+  (`d852329`, 2026-08-17), unchanged since `ccf983f`, but re-derive it on your
+  tag (`git show <the §1 tip>:frontend/public/sitemap.xml | grep -c '<loc>'`)
+  rather than treating 37 as a constant — and
   `grep -o '<loc>[^<]*' frontend/public/sitemap.xml | grep '/swarm'`.
 - **A stale container.** The api container predates this checkout's assembly —
   `docker compose -p "$RM_PROJECT" ps` and compare `CREATED` against the boot.
@@ -1165,8 +1201,9 @@ Re-run verification 3, 4 and 11.
 - **`admin_credential` stays claimed** — but rolling back *does* restore
   `ADMIN_TOKEN` access to it, non-destructively. `v0.2.1`'s `isPrivileged()`
   falls back to the env token from inside the claimed branch
-  (`git show v0.2.1:backend/src/api/auth.ts`, line 62); `ccf983f`'s is a bare
-  `return false` (`auth.ts:64`). So a rollback is itself a remedy for an admin
+  (`git show v0.2.1:backend/src/api/auth.ts`, line 62); v0.2.2's is a bare
+  `return false` (`auth.ts:64` — identical at `ccf983f` and at
+  `origin/releases-0.2.x`, 2026-08-17). So a rollback is itself a remedy for an admin
   lockout discovered after cutover — read the new boot's token with §12.0 and
   sign in. It buys triage time; it does not give you a durable v0.2.2
   credential, which still needs §12.2. A rollback is **not** a Gate A remedy:
@@ -1248,10 +1285,19 @@ Tracked separately. No rollout action; note it if a browser console shows
 policy violations after cutover so it is not mistaken for a regression of this
 release.
 
-### 10.4 `bun smoke` has no CI coverage at `ccf983f`
+### 10.4 `bun smoke` has no CI coverage
 
-No workflow under `.github/workflows/` invokes `bun smoke` or `--smoke`. The
-smoke boot path is exercised by unit tests
+Still true on `origin/releases-0.2.x` (`d852329`) as of 2026-08-17, not just at
+`ccf983f`: no workflow under `.github/workflows/` invokes `bun smoke` or
+`--smoke`. Re-check on your tag — it is one grep, and a green CI badge is
+otherwise easy to mistake for coverage of this path:
+
+```bash
+git grep -nE '(bun +smoke|--smoke)' <the §1 tip> -- .github/workflows/
+# no output → the cutover is still the first real execution of this path
+```
+
+The smoke boot path is exercised by unit tests
 (`scripts/tests/unit/smoke-mode.test.ts`) but not end-to-end in CI. Treat the
 cutover as the first real execution of this path for this release, and keep §9
 within reach.
