@@ -7,7 +7,7 @@
 //     to 'pending' — no orphaned 'running' row owned by a stopped worker, and
 //     the zombie's eventual completion is discarded.
 // Runs in the required backend-integration job against ephemeral Postgres.
-import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { test, expect, afterEach, beforeAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { LANES } from "../src/worker/lanes.ts";
@@ -37,6 +37,23 @@ beforeEach(async () => {
   await sql`DELETE FROM job_schedules`;
 });
 
+// Every handle this file starts, so no loop can outlive the test that made it.
+// `sql` is a live binding (db/client.ts): a worker still polling after this
+// file's afterAll would issue its next query against whatever database the NEXT
+// file swapped in — and since support/clean-db.ts now DROPs the clone it left,
+// against one that no longer exists. Structural, not incidental to test
+// ordering: stop() is idempotent, so the explicit stops inside the tests stay.
+const started: WorkerHandle[] = [];
+function launch(opts: Parameters<typeof startWorker>[0]): WorkerHandle {
+  const w = startWorker(opts);
+  started.push(w);
+  return w;
+}
+afterEach(async () => {
+  hangGate.open(); // release anything still parked in the hung handler
+  await Promise.all(started.splice(0).map((w) => w.stop()));
+});
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const fastOpts = { idlePollMs: 25, schedulerTickMs: 60_000, reaperTickMs: 60_000 };
 
@@ -52,7 +69,7 @@ async function waitForStatus(id: number, status: string, ms: number): Promise<vo
 
 test("idle shutdown: all lanes signaled together exit bounded with no orphaned work", async () => {
   const workers: WorkerHandle[] = [LANES.swarm, LANES.analytics, LANES.research].map((lane) =>
-    startWorker({ lane, workerId: `idle-${lane.name}`, ...fastOpts, shutdownTimeoutMs: 5000 }));
+    launch({ lane, workerId: `idle-${lane.name}`, ...fastOpts, shutdownTimeoutMs: 5000 }));
   await sleep(150); // loops spinning idle
 
   const t0 = Date.now();
@@ -66,7 +83,7 @@ test("idle shutdown: all lanes signaled together exit bounded with no orphaned w
 });
 
 test("active shutdown: in-flight job finishes, exactly one terminal job_runs row, no orphaned running job", async () => {
-  const worker = startWorker({ lane: LANES.analytics, workerId: "active-analytics", ...fastOpts, shutdownTimeoutMs: 5000 });
+  const worker = launch({ lane: LANES.analytics, workerId: "active-analytics", ...fastOpts, shutdownTimeoutMs: 5000 });
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('test.shutdown_slow', '{}') RETURNING id`;
   await waitForStatus(id, "running", 3000);
 
@@ -85,7 +102,7 @@ test("active shutdown: in-flight job finishes, exactly one terminal job_runs row
 });
 
 test("hung handler: bounded exit at the deadline, job released to pending (never orphaned), zombie write discarded", async () => {
-  const worker = startWorker({ lane: LANES.research, workerId: "hung-research", ...fastOpts, shutdownTimeoutMs: 500 });
+  const worker = launch({ lane: LANES.research, workerId: "hung-research", ...fastOpts, shutdownTimeoutMs: 500 });
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_shutdown_hang', '{}') RETURNING id`;
   await waitForStatus(id, "running", 3000);
 

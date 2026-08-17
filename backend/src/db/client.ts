@@ -36,7 +36,19 @@ export let sql = makePool(config.databaseUrl);
 // to the database everyone else just left. db/worker-client.ts owns a second
 // long-lived pool and exports its own setDatabase() for the same reason —
 // worker/** may not import this module, so it cannot be rebuilt from here.
+//
+// REFUSED OUTSIDE `ephemeral`. Being a test seam is a claim about where it may
+// run, and an exported function that silently re-points a deployed process's
+// database at an attacker-chosen or merely mistaken URL is not a claim worth
+// making on a comment alone. `config.env` fails closed to "prod" when RM_ENV is
+// unset (config.ts), so the guard is on by default everywhere it matters.
 export async function setDatabase(url: string): Promise<void> {
+  if (config.env !== "ephemeral") {
+    throw new Error(
+      `db/client.setDatabase() is a test-only seam and refuses to run under RM_ENV=${config.env}. ` +
+        "Point the process at a different database with DATABASE_URL and restart it.",
+    );
+  }
   process.env.DATABASE_URL = url;
   config.databaseUrl = url;
   const previous = sql;

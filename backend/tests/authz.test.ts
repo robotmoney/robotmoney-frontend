@@ -1,7 +1,6 @@
 import { test, expect, afterEach } from "bun:test";
 import { config } from "../src/config.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
-import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 // privileged() reads config at call time, so we flip config per test (restored after).

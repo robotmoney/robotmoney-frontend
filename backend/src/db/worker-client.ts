@@ -56,7 +56,21 @@ export let sql = makePool(process.env.WORKER_DATABASE_URL || config.databaseUrl)
 // The WORKER_DATABASE_URL fallback is deliberately NOT re-applied: the caller
 // is naming the database this process must now use, and tests never provision
 // the restricted `rm_worker` role's URL.
+//
+// Which is exactly why this REFUSES OUTSIDE `ephemeral`. Dropping that fallback
+// is a privilege change, not just a redirect: a call in a deployed worker would
+// move the process off the restricted `rm_worker` role
+// (migrations/0016_worker_role.sql:42) and onto the owner role in
+// `config.databaseUrl` — silently undoing the analytics write boundary that
+// tests/analytics-worker-role.test.ts exists to prove. `config.env` fails
+// closed to "prod" when RM_ENV is unset (config.ts).
 export async function setDatabase(url: string): Promise<void> {
+  if (config.env !== "ephemeral") {
+    throw new Error(
+      `db/worker-client.setDatabase() is a test-only seam and refuses to run under RM_ENV=${config.env}. ` +
+        "Point the worker at a different database with WORKER_DATABASE_URL and restart it.",
+    );
+  }
   const previous = sql;
   sql = makePool(url);
   await previous.end({ timeout: 5 });

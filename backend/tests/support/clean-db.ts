@@ -18,11 +18,22 @@
 // GRANULARITY is per FILE, not per test: a CREATE DATABASE per test would
 // dominate the suite's runtime. Within a file, unique ids remain the right tool.
 //
-// Teardown is deliberately just "point the pool back at the shared database":
-// preload.ts's afterAll `docker rm -f`s the whole container, so dropping the
-// per-file databases would be work with no observable effect. Restoring the
-// pool is not optional though — a file that does NOT opt in must still see the
-// shared database it has always seen.
+// TEARDOWN drops the clone as soon as nothing is pointing at it any more, and
+// restores the shared pool. Both halves matter, for different reasons:
+//
+//  - Restoring the pool is correctness: a file that does NOT opt in must still
+//    see the shared database it has always seen.
+//  - Dropping is CAPACITY. An earlier version of this file argued dropping was
+//    pointless because preload.ts's afterAll `docker rm -f`s the container.
+//    That is true about cleanup and wrong about PEAK: the clones are never
+//    released until the container dies, so the run's disk high-water mark is
+//    the SUM of every clone it ever made. Measured at 174 databases / ~2.0 GB
+//    for one suite run, growing linearly with every test added to a
+//    useCleanDatabasePerTest file. A runner that hits a full disk gets a
+//    Postgres PANIC mid-suite, attributed to whichever test was unlucky.
+//    Dropping keeps at most one clone alive at a time. It is cheap because the
+//    container runs with fsync=off (preload.ts): DROP DATABASE ... WITH (FORCE)
+//    measures 5-30ms here, against the ~10s once observed under fsync.
 import { afterAll, beforeAll, beforeEach } from "bun:test";
 // Both long-lived pools have to move together, or the API side and the queue
 // side of a test end up in different databases. Held as namespaces, not
@@ -64,25 +75,76 @@ function databaseName(testFile: string): string {
   return `rmt_${slug}_${++created}`;
 }
 
+// The clone both pools are currently pointing at, so the next swap can release
+// it. Module-global because `bun test` runs every file in one process, one file
+// at a time — at most one clone is ever live.
+let live: string | null = null;
+
+// A throwaway maintenance connection: CREATE/DROP DATABASE cannot run on the
+// shared pool's own database, and must not run through it either.
+function adminConnection() {
+  return postgres(urlFor("postgres"), { max: 1, onnotice: () => {} });
+}
+
+async function drop(admin: ReturnType<typeof adminConnection>, database: string): Promise<void> {
+  // WITH (FORCE) rather than a bare DROP: a handle that outlived its file (a
+  // worker loop, a client built at call time) would otherwise hold the database
+  // open and turn cleanup into a hard failure. Terminating it is the correct
+  // outcome — the file that started it was supposed to stop it — and it is also
+  // the faster form (5ms vs 30ms measured).
+  await admin.unsafe(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+}
+
+// The invariant the whole harness rests on. `cloneAndUse` moves two independent
+// pools in sequence, with no transaction around the pair: if the first swap
+// throws, the API side and the queue side are left in DIFFERENT databases and
+// nothing downstream notices — the failure shape is a FALSE GREEN, because
+// "the worker left nothing behind" assertions (worker-shutdown.test.ts,
+// worker-lease.test.ts) pass trivially against a database the worker never
+// wrote to. Ask both handles where they actually are.
+async function assertBothPoolsAgree(expected: string): Promise<void> {
+  const [api] = (await client.sql`SELECT current_database() AS db`) as unknown as { db: string }[];
+  const [queue] = (await workerClient.sql`SELECT current_database() AS db`) as unknown as { db: string }[];
+  if (api.db !== expected || queue.db !== expected) {
+    throw new Error(
+      `tests/support/clean-db.ts: pools disagree — api=${api.db} queue=${queue.db}, expected ${expected}. ` +
+        "Every assertion in this file would be running against the wrong database.",
+    );
+  }
+}
+
 async function cloneAndUse(testFile: string): Promise<void> {
   const database = databaseName(testFile);
-  // A throwaway maintenance connection: CREATE DATABASE cannot run on the
-  // shared pool's own database, and must not run through it either.
-  const admin = postgres(urlFor("postgres"), { max: 1, onnotice: () => {} });
+  const previous = live;
+  const admin = adminConnection();
   try {
     // Nothing may be connected to the template during the copy. Only preload.ts
     // ever connects to it, and it disconnected before handing the template over.
     await admin.unsafe(`CREATE DATABASE "${database}" TEMPLATE "${template}"`);
+    await client.setDatabase(urlFor(database));
+    await workerClient.setDatabase(urlFor(database));
+    live = database;
+    await assertBothPoolsAgree(database);
+    // Only now is the previous clone genuinely idle: both pools have just been
+    // rebuilt against the new one, and setDatabase() ended the old pools.
+    if (previous) await drop(admin, previous);
   } finally {
     await admin.end({ timeout: 5 });
   }
-  await client.setDatabase(urlFor(database));
-  await workerClient.setDatabase(urlFor(database));
 }
 
 async function restoreSharedDatabase(): Promise<void> {
+  const previous = live;
+  live = null;
   await client.setDatabase(baseUrl);
   await workerClient.setDatabase(baseUrl);
+  if (!previous) return;
+  const admin = adminConnection();
+  try {
+    await drop(admin, previous);
+  } finally {
+    await admin.end({ timeout: 5 });
+  }
 }
 
 /**
@@ -106,8 +168,9 @@ export function useCleanDatabase(testFile: string): void {
  * make test 4's admission a spurious 409, and no amount of unique ids fixes
  * that.
  *
- * Measured at ~30ms per clone on this schema (a template copy is a file-level
- * copy, not a re-migration), so a 15-test file pays well under a second. Prefer
+ * Measured at ~30ms per clone plus ~5ms to release the previous one on this
+ * schema (a template copy is a file-level copy, not a re-migration), so a
+ * 15-test file pays well under a second. Prefer
  * useCleanDatabase() anyway: reach for this only when a per-file database
  * genuinely is not enough. A file using this must not do database setup in its
  * own `beforeAll` — the next clone would discard it.

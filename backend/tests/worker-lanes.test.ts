@@ -10,7 +10,7 @@
 //     non-overlapping ownership and exactly one terminal job_runs row;
 //   - priority is preserved WITHIN a lane.
 // Runs in the required backend-integration job against ephemeral Postgres.
-import { test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { test, expect, afterEach, beforeAll, afterAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
@@ -31,6 +31,22 @@ function gate() {
 
 const executed: string[] = []; // "<kind>:<jobId>" per handler execution
 let researchGate = gate();
+
+// Every handle this file starts. The per-test `finally` blocks below already
+// stop theirs; this is the structural backstop, so a loop can never outlive the
+// file. `sql` is a live binding (db/client.ts) and support/clean-db.ts DROPs a
+// clone once the next file takes over, so a straggler would query a database
+// that no longer exists. stop() is idempotent, so the two do not conflict.
+const started: WorkerHandle[] = [];
+function launch(opts: Parameters<typeof startWorker>[0]): WorkerHandle {
+  const w = startWorker(opts);
+  started.push(w);
+  return w;
+}
+afterEach(async () => {
+  researchGate.open(); // release anything still parked in the blocking handler
+  await Promise.all(started.splice(0).map((w) => w.stop()));
+});
 
 const savedRegime = () => handlers["regime.classify"];
 let realRegime: (typeof handlers)[string];
@@ -128,7 +144,7 @@ test("starvation: a blocked research job cannot prevent swarm or regime work (fu
   try {
     // The configured topology: one worker per lane, all polling fast.
     for (const lane of [LANES.swarm, LANES.analytics, LANES.research]) {
-      workers.push(startWorker({
+      workers.push(launch({
         lane, workerId: `starve-${lane.name}`, idlePollMs: 25,
         schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 4000,
       }));
@@ -154,7 +170,7 @@ test("reserved capacity: every research slot full → a swarm job is still immed
   const workers: WorkerHandle[] = [];
   try {
     // Fill EVERY research slot (one research worker = one slot) with blocked work.
-    workers.push(startWorker({
+    workers.push(launch({
       lane: LANES.research, workerId: "cap-research", idlePollMs: 25,
       schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 4000,
     }));
@@ -166,7 +182,7 @@ test("reserved capacity: every research slot full → a swarm job is still immed
     expect(await processOneJob({ lane: LANES.research, workerId: "cap-research-extra" })).toBe(false);
     expect(await jobStatus(swarm)).toBe("pending");
     // ...and the reserved swarm lane claims it immediately.
-    workers.push(startWorker({
+    workers.push(launch({
       lane: LANES.swarm, workerId: "cap-swarm", idlePollMs: 25,
       schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 4000,
     }));

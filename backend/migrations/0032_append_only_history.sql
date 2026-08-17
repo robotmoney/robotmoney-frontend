@@ -12,6 +12,24 @@
 --
 -- A comment is not an invariant. This is the invariant.
 --
+-- WHAT IT IS NOT: TAMPER-EVIDENCE. Read this before treating the tables below
+-- as an audit trail that cannot be doctored. The guard raises the cost of
+-- accidental and casual erasure — the fixture, the repair script, the 3am
+-- `psql` — which is the threat issue #684 actually names. It does not survive
+-- an operator who means it, and there is no hash chain to notice afterwards:
+--
+--   * The role in DATABASE_URL OWNS these tables, so it can
+--     `ALTER TABLE ... DISABLE TRIGGER` or `DROP TRIGGER` and then delete
+--     freely. (Verified on a live database, not inferred.)
+--   * `DROP TABLE` is not a DELETE or a TRUNCATE and no trigger of either kind
+--     fires for it.
+--   * UPDATE is permitted BY DESIGN (see below). A row can therefore be
+--     rewritten in place, and nothing here detects that it was.
+--
+-- Making any of those detectable is a different mechanism (event triggers, a
+-- non-owner role, an append-only replica, per-row hashing). Do not let this
+-- header be read as a claim that they are already covered.
+--
 -- WHAT THIS DOES. A statement-level BEFORE trigger on each protected table
 -- that raises on DELETE and on TRUNCATE. Three properties matter and each is
 -- deliberate:
