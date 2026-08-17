@@ -18,8 +18,10 @@ cites it.** Where the two disagree, the contradiction is called out inline under
 
 ## 0. Read this first — three facts that change what "upgrade" means here
 
-Each is verified at `ccf983f`, and each invalidates something an operator would
-otherwise assume.
+Each was first verified at `ccf983f` and re-verified on 2026-08-17 against
+`origin/releases-0.2.x` (`d852329`) — every file cited below is unchanged
+between the two — and each invalidates something an operator would otherwise
+assume. Re-check them against the tip you pin in §1 before you rely on them.
 
 1. **`bun smoke` boots a DEMO-shaped stack, not a production one.** It always
    appends `docker-compose.demo.yml` (`scripts/lib/demo-main.ts:284-288`, which
@@ -49,32 +51,88 @@ otherwise assume.
 | | |
 |---|---|
 | Currently in production | tag **`v0.2.1`** = `5970f2d` |
-| Target | **`releases-0.2.x @ 7de3871`**, to be tagged **`v0.2.2`** |
-| Delta | **21 commits** (`git rev-list --count v0.2.1..7de3871` → `21`) |
+| Target | branch **`releases-0.2.x`** — its tip at the moment you run |
+| What you cut and deploy | **`v0.2.2-rc.N`** at that tip (§7.2). **Not `v0.2.2`** |
+| `v0.2.2` | cut only after §8's postflight is clean, at the deployed rc's commit (§8, last step) |
+| Delta | **resolve it yourself, below.** No count written in this file is authoritative |
+
+**The bare `v0.2.2` tag does not exist while you are executing this runbook, and
+cannot.** A version tag records what has been proven in production, so it is cut
+after both preflight and postflight, never before —
+[`docs/technical/release-runbooks.md` §2](../technical/release-runbooks.md)
+("Version tags and release candidates") owns that policy end to end, including
+what happens when preflight or postflight fails. Read it once before you start;
+this runbook executes it and does not restate it.
+
+Which `N`: `git tag -l 'v0.2.2*'` and `git ls-remote --tags origin | grep v0.2.2`
+are both empty (checked 2026-08-17, this worktree and origin), so the next tag is
+**`v0.2.2-rc.0`**. Re-run both before you cut — a previous attempt that failed
+preflight or postflight will have consumed rc numbers, and yours is the highest
+existing `N` plus one.
+
+The target is a **branch, not a pinned SHA**. This section has already gone
+stale twice by pinning one (first `main @ ccf983f` / "14 commits", then
+`releases-0.2.x @ 7de3871` / "21 commits"), and it will go stale again — the
+branch is still receiving commits from `main`. Resolve the tip and the delta
+at execution time:
 
 ```bash
 git fetch --tags origin
-git log --oneline v0.2.1..7de3871      # expect exactly 21 lines
+git rev-parse origin/releases-0.2.x                  # ← the tip you will tag as v0.2.2-rc.N
+git rev-list --count v0.2.1..origin/releases-0.2.x   # ← the delta count
+git log --oneline v0.2.1..origin/releases-0.2.x      # ← the delta itself
 ```
+
+Write down the SHA `git rev-parse` printed and use **that one SHA** for the
+whole rollout — every gate below, the `v0.2.2-rc.N` tag you cut in §7.2, the
+`git rev-parse HEAD` check on the deployed checkout, and the `v0.2.2` tag you
+cut in §8 once postflight is clean must all refer to it. If the branch moves
+mid-rollout, you are gating one commit and shipping another. `v0.2.2` landing on
+the same commit as the final rc is the expected outcome, not double-tagging to
+clean up (release-runbooks.md §2).
 
 ### Branching model
 
 Feature PRs are reviewed and merged against `main` — never opened directly
-against `releases-0.2.x`. `releases-0.2.x` carries only the commits this
-release actually needs: they are cherry-picked onto it from `main`, plus
-small nit-fix commits made directly on the release branch during rollout
-(this edit is one of the latter). This is the intended model, not a
-workaround — if a `main` commit is missing from the delta below, that is
-expected unless the missing commit is release-blocking.
+against `releases-0.2.x`. The standing convention
+([`docs/technical/release-runbooks.md` §1](../technical/release-runbooks.md))
+is that a release branch then carries only what the release needs:
+cherry-picks from `main`, plus small nit-fix commits made directly on the
+branch during rollout.
 
-### What is in the delta
+**What is actually true for v0.2.2:** `releases-0.2.x` was cut whole from
+`main`, not assembled by cherry-pick — at the cut, the release scope *was*
+everything on `main`. It is being kept in step with `main` by fast-forward
+rather than by selective pick, so it currently carries no commit that is not
+also on `main`. That stops being true the moment a fix lands directly on the
+branch, so check rather than assume:
 
-This grew past the original 14-commit cut at `ccf983f`: the runbook itself
-(`7c6f659`, #618) and six further commits have since landed. Notably
-`7b1abbf` (#628) is now in — §10.2 used to flag that fix as "not yet
-merged"; it has landed and that section is updated below.
+```bash
+git log --oneline origin/main..origin/releases-0.2.x   # branch-only commits
+```
+
+Empty ⇒ the branch is a strict subset of `main`, and there is nothing owed to
+`main` (release-runbooks.md §6, backporting). Anything listed is a fix that
+exists only here and must be backported.
+
+`release/v0.2.2-rollout` is **retired** and is not this branch. It was the
+head branch of PR #618, squash-merged into `main` as `7c6f659` and deleted
+from origin on merge; no ref to it survives. If you find it named anywhere —
+including in #660's header — the reference is stale, and `releases-0.2.x` is
+what it means.
+
+### What is in the delta — snapshot, 2026-08-17
+
+> **Informational, not authoritative.** On 2026-08-17 `releases-0.2.x` was at
+> `d852329`, 22 commits ahead of `v0.2.1`, and is expected to be
+> fast-forwarded further before the tag is cut. Re-derive with
+> `git log --oneline v0.2.1..origin/releases-0.2.x` above before trusting any
+> count or assuming a commit below is the tip. The list is here so you can
+> recognise *what kind* of release this is; the command tells you what you are
+> actually shipping.
 
 ```
+d852329 docs: document the release branch/runbook/tracking-issue process…      (#666)
 7de3871 docs(technical): canonical design for analytics data self-healing…      (#664)
 7b92a8c feat(pipeline): self-healing gap detection and backfill for every…      (#615)
 b9cd90b fix(pipeline): floor-seed idempotency test times out at the 5s…         (#632)
@@ -308,8 +366,18 @@ git show v0.2.1:backend/src/api/auth.ts | sed -n '58,63p'
 #   }
 ```
 
-At `ccf983f` that line is a bare `return false` (`auth.ts:64`). So the current
-boot's `ADMIN_TOKEN` (§12.0) still reaches the admin surface today, and the
+In v0.2.2 that line is a bare `return false` (`auth.ts:64`). This is a property
+of the release, not of one commit — `backend/src/api/auth.ts` is byte-identical
+between `ccf983f` and `origin/releases-0.2.x` as of 2026-08-17 — but confirm it
+on the tip you pinned in §1 rather than on any SHA named here:
+
+```bash
+git show <the §1 tip>:backend/src/api/auth.ts | sed -n '59,66p'
+#   if (claimed.length > 0) { … return false; }   # ← no ADMIN_TOKEN fallback
+```
+
+So the current boot's `ADMIN_TOKEN` (§12.0) still reaches the admin surface
+today, and the
 upgrade is what takes it away. That access is not a fix — `v0.2.1` has neither
 `/api/admin/password-change` nor `/api/admin/password-recover` (both arrive in
 this delta) — but it means you are triaging, not stranded. §12.2 is the fix.
@@ -394,7 +462,10 @@ PREFLIGHT_DATABASE_URL='postgres://rm_readonly:<pw>@<host>:25060/defaultdb?sslmo
   bun scripts/preflight-upgrade.ts
 ```
 
-**Run it from a checkout at `ccf983f`.** The script compares
+**Run it from a checkout at the release tip you pinned in §1** — the SHA
+`git rev-parse origin/releases-0.2.x` printed, which is the commit you will tag
+as `v0.2.2-rc.N` (§7.2). Verify before you run: `git rev-parse HEAD` in that checkout must
+print it. The script compares
 `backend/migrations/` on disk against `schema_migrations` in the database; run
 from the wrong tag and the pending list is wrong.
 
@@ -437,7 +508,7 @@ downgrades the last two to warnings — **do not make that the normal path.**
 | `role-privileges` / `role-write-grants` | The role is a superuser, or holds write grants / table ownership. | Provision §3's role and re-run. |
 | `server-version` | Server is < PG 11, where `0030`'s `ADD COLUMN` rewrites the table under `ACCESS EXCLUSIVE`. | Upgrade the cluster. (A **WARN** here just means "not 17"; the suite targets 17.) |
 | `extensions` | `pgcrypto` absent; `0001_backends.sql:4` needs `gen_random_uuid()`. | `CREATE EXTENSION IF NOT EXISTS pgcrypto;` as `doadmin`. |
-| `schema-migrations` | Either no `schema_migrations` at all (wrong database), or **orphans**: files recorded in the database that are absent from `backend/migrations/`. | Orphans mean the **database is ahead of the checkout** — you are on the wrong tag. Stop and check out `ccf983f`. |
+| `schema-migrations` | Either no `schema_migrations` at all (wrong database), or **orphans**: files recorded in the database that are absent from `backend/migrations/`. | Orphans mean the **database is ahead of the checkout** — you are on the wrong tag. Stop and check out the §1 release tip. |
 | `rm-worker-role` | `rm_worker` missing and `0029_admin_passkey.sql` pending. | Gate D above. |
 | `handle-namespace` | One member's `handle` is another member's `id`. | Run **one printed statement per line, all of them**. Each moves the **HOLDER** — the member named *first* on the line. Updating the shadowed member reports `UPDATE 1` and fixes nothing (`backend/src/db/handle-namespace.ts:113-123`). A mutual collision prints two lines and needs two updates. |
 | `blocking-xacts` | A transaction older than 60s is open. | `SELECT pg_terminate_backend(<pid>);` and re-run. Stop the worker first. |
@@ -678,7 +749,11 @@ credentials, so it does not need §5.2's encryption).
 
 This section replaces the "set `AUTOMATION_TOKEN` and `SWARM_PUBLIC_BASE_URL`
 before cutover" plan. **Both of those steps are impossible through the operator's
-workflow at `ccf983f`.** Verified by tracing the spawn environment, not assumed.
+workflow.** Verified by tracing the spawn environment, not assumed — first at
+`ccf983f`, re-verified 2026-08-17 against `origin/releases-0.2.x` (`d852329`),
+where `scripts/stack/stack.ts`, `scripts/stack/config.ts`,
+`scripts/lib/demo-main.ts` and `docker-compose.yml` are all byte-identical to
+`ccf983f`. The mechanism is structural, not a commit-local accident.
 
 ### 6.1 Why: how environment reaches the api container under `bun smoke`
 
@@ -782,7 +857,9 @@ unreadable `.env` is a fatal exit 1 before anything starts.
 Optional, and genuinely honoured because they are in `DEMO_COMPOSE_PASSTHROUGH`.
 **`scripts/lib/demo-main.ts:427-444` is the authoritative list** — read it there,
 not here, before concluding anything is unconfigurable. Reproduced verbatim at
-`ccf983f`, all sixteen names:
+`origin/releases-0.2.x` (`d852329`, 2026-08-17) — sixteen names, unchanged
+since `ccf983f`. Re-derive on your tag rather than trusting this block:
+`git show <the §1 tip>:scripts/lib/demo-main.ts | sed -n '427,444p'`.
 
 ```
 BASE_RPC_URL
@@ -858,13 +935,57 @@ demo-only services and leaves them behind as orphans, which is exactly the
 leftover you came here to clear. `--remove-orphans` covers the gap. See
 deployment.md §2.1, "FIRST: find the project name".
 
-### 7.2 Pull the tag
+### 7.2 Cut `v0.2.2-rc.N` and check it out
+
+**You deploy a release candidate, not `v0.2.2`.** The bare version tag is cut
+only after §8's postflight passes (release-runbooks.md §2). Nothing else in this
+runbook creates a tag, so this is the step that makes the thing you are about to
+check out exist.
 
 ```bash
+cd <checkout>
 git fetch --tags origin
-git checkout v0.2.2          # after it is cut at ccf983f
-git rev-parse HEAD           # MUST print ccf983f…
+git tag -l 'v0.2.2*'                          # local rcs;  N = highest + 1, else 0
+git ls-remote --tags origin | grep v0.2.2     # the same question, asked of origin
 ```
+
+Cut it on the release branch, at the SHA you wrote down in §1 — **never on
+`main`** (release-runbooks.md §2, last paragraph). Confirm the SHA is on the
+branch before you tag it:
+
+```bash
+SHA=<the SHA you wrote down in §1>
+git merge-base --is-ancestor "$SHA" origin/releases-0.2.x && echo "on releases-0.2.x"
+
+git tag -a v0.2.2-rc.<N> "$SHA" -m 'v0.2.2 release candidate <N>'
+git push origin v0.2.2-rc.<N>
+```
+
+(`v0.2.1` and both its rcs are lightweight tags — `git cat-file -t v0.2.1` prints
+`commit`. Annotated is the better record of who cut what when, and nothing in
+this repo reads the object type.)
+
+If §4's preflight already ran against an rc you cut then — which is how
+release-runbooks.md §5 step 1 says preflight is supposed to run — the tag exists
+already; skip the two commands above and go straight to the checkout. Cutting it
+here instead changes nothing about what ships: the tag is a name for the commit
+you already gated, and the `git rev-parse HEAD` check below is what proves that.
+
+```bash
+git checkout v0.2.2-rc.<N>
+git rev-parse HEAD           # MUST print the SHA you wrote down in §1
+```
+
+Compare it against the SHA you recorded, not against any commit named in this
+file — every SHA written here is a snapshot, and the release branch has already
+moved past several of them:
+
+```bash
+test "$(git rev-parse HEAD)" = "<the SHA you wrote down in §1>" && echo OK
+```
+
+A mismatch means the rc was cut somewhere other than the commit you gated in §4
+and §6, and you are shipping something you never ran those gates against. Stop.
 
 ### 7.3 The invocation
 
@@ -1078,11 +1199,49 @@ docker compose -p "$RM_PROJECT" exec -T api ls -l /srv/frontend/swarm/index.html
   `<route>/index.html` for each. A route missing from the sitemap is silently
   never prerendered, assembly still exits `0`, and the api falls back to the
   home-page shell. Confirm with
-  `grep -c '<loc>' frontend/public/sitemap.xml` (expect 37 at `ccf983f`) and
+  `grep -c '<loc>' frontend/public/sitemap.xml` — 37 on `origin/releases-0.2.x`
+  (`d852329`, 2026-08-17), unchanged since `ccf983f`, but re-derive it on your
+  tag (`git show <the §1 tip>:frontend/public/sitemap.xml | grep -c '<loc>'`)
+  rather than treating 37 as a constant — and
   `grep -o '<loc>[^<]*' frontend/public/sitemap.xml | grep '/swarm'`.
 - **A stale container.** The api container predates this checkout's assembly —
   `docker compose -p "$RM_PROJECT" ps` and compare `CREATED` against the boot.
   The fix is §7.3 again, never `docker compose restart` (§11 step 6's box).
+
+### Only when all twelve checks are clean — tag `v0.2.2`
+
+This is the last step of the rollout. The version tag goes on the **exact commit
+that is running and verified in production** — the rc you deployed in §7.2, which
+is the SHA from §1. Take it from the running deployment, not from the branch,
+which may have moved:
+
+```bash
+cd <checkout>
+git rev-parse HEAD                       # the deployed commit; still the §1 SHA
+git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/releases-0.2.x \
+  && echo "on releases-0.2.x"            # the tag goes on the release branch, never main
+
+git tag -a v0.2.2 "$(git rev-parse HEAD)" -m 'v0.2.2 — verified in production'
+git push origin v0.2.2
+git rev-parse v0.2.2 v0.2.2-rc.<N>       # the two MUST print the same SHA
+```
+
+Those two tags naming one commit is the expected end state, not duplication to
+clean up (release-runbooks.md §2).
+
+⛔ **A failed check is not a reason to tag anyway.** Any check above that is not
+clean means the release goes back around the loop: patch it on `releases-0.2.x`,
+cut `v0.2.2-rc.<N+1>`, run **preflight again** against that rc, redeploy, and
+re-run this whole section. `v0.2.2` cannot be cut at a commit that was never
+deployed and verified, so a fix that lands after the deployed rc always costs
+another rc — it cannot be "rolled into the final tag" (release-runbooks.md §2).
+If the failure is bad enough to need production back on the old code first, that
+is §9, and it is not an alternative to the patch-and-new-rc loop.
+
+Then check every postflight box on the release tracking issue (#660), and check
+`git log --oneline origin/main..origin/releases-0.2.x` for fixes made on the
+branch during the rollout that are owed back to `main` (§1, "Branching model";
+release-runbooks.md §6).
 
 ---
 
@@ -1108,11 +1267,25 @@ trigger defaults `handle := id` (`0030_swarm_member_handle.sql:41`), and all six
 `backend/scripts/v0-seed-bootstrap.ts:237`. So v0.2.1 code writing to a v0.2.2
 schema produces valid rows, and the `NOT NULL` on `handle` cannot bite.
 
+**Roll back to the last artifact that was actually deployed and running** — not
+to "v0.2.2 minus the bug", which does not exist as a deployed thing. On a first
+v0.2.2 attempt that is `v0.2.1`, and the commands below are literal. If an
+earlier `v0.2.2-rc.<N-1>` was deployed and healthy before this attempt, that rc
+is the last known-good artifact and is what you check out instead; substitute it
+for `v0.2.1` in the two commands below and expect its own SHA from
+`git rev-parse`. "What rollback does NOT undo" applies to either target — every
+v0.2.2 rc carries the same four migrations — with **one exception**: an rc is
+v0.2.2 code, so it does *not* restore `ADMIN_TOKEN` access to a claimed
+credential. Only `v0.2.1` does (`auth.ts:64` is a bare `return false` on every
+rc). If the trigger you are rolling back for is the admin lockout, the target is
+`v0.2.1`. Rolling back never cuts or moves a tag; the way forward is still §8's
+loop: patch, next rc, preflight again.
+
 ```bash
 cd <checkout>
 bun run demo:down
-git checkout v0.2.1
-git rev-parse HEAD                     # MUST print 5970f2d…
+git checkout v0.2.1                    # or the last deployed, healthy v0.2.2-rc.<N-1>
+git rev-parse HEAD                     # MUST print 5970f2d… (or that rc's SHA)
 echo "CI=[$CI]"                        # MUST be empty
 DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
 BOOT_STATUS=$?; echo "rollback boot exit=$BOOT_STATUS"   # capture it here (§7.3)
@@ -1128,8 +1301,9 @@ Re-run verification 3, 4 and 11.
 - **`admin_credential` stays claimed** — but rolling back *does* restore
   `ADMIN_TOKEN` access to it, non-destructively. `v0.2.1`'s `isPrivileged()`
   falls back to the env token from inside the claimed branch
-  (`git show v0.2.1:backend/src/api/auth.ts`, line 62); `ccf983f`'s is a bare
-  `return false` (`auth.ts:64`). So a rollback is itself a remedy for an admin
+  (`git show v0.2.1:backend/src/api/auth.ts`, line 62); v0.2.2's is a bare
+  `return false` (`auth.ts:64` — identical at `ccf983f` and at
+  `origin/releases-0.2.x`, 2026-08-17). So a rollback is itself a remedy for an admin
   lockout discovered after cutover — read the new boot's token with §12.0 and
   sign in. It buys triage time; it does not give you a durable v0.2.2
   credential, which still needs §12.2. A rollback is **not** a Gate A remedy:
@@ -1211,10 +1385,19 @@ Tracked separately. No rollout action; note it if a browser console shows
 policy violations after cutover so it is not mistaken for a regression of this
 release.
 
-### 10.4 `bun smoke` has no CI coverage at `ccf983f`
+### 10.4 `bun smoke` has no CI coverage
 
-No workflow under `.github/workflows/` invokes `bun smoke` or `--smoke`. The
-smoke boot path is exercised by unit tests
+Still true on `origin/releases-0.2.x` (`d852329`) as of 2026-08-17, not just at
+`ccf983f`: no workflow under `.github/workflows/` invokes `bun smoke` or
+`--smoke`. Re-check on your tag — it is one grep, and a green CI badge is
+otherwise easy to mistake for coverage of this path:
+
+```bash
+git grep -nE '(bun +smoke|--smoke)' <the §1 tip> -- .github/workflows/
+# no output → the cutover is still the first real execution of this path
+```
+
+The smoke boot path is exercised by unit tests
 (`scripts/tests/unit/smoke-mode.test.ts`) but not end-to-end in CI. Treat the
 cutover as the first real execution of this path for this release, and keep §9
 within reach.

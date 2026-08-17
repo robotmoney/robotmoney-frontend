@@ -1,14 +1,15 @@
 # Release process — branches, runbooks, and tracking issues
 
-> **Status: standing convention, partially followed today.** This describes
-> how a release is *meant* to ship — a release branch, a runbook committed to
-> it, and a GitHub tracking issue with preflight/postflight checklists. The
-> v0.2.2 rollout, the one release currently in flight, deviates from part of
-> it: its tracking issue (#660) states explicitly that rollout work is on
-> `release/v0.2.2-rollout`, not a `releases-0.2.x` branch, and flags that as a
-> known deviation rather than a change to the convention. No `releases-A.B.x`
-> branch exists in this repo as of this writing. Treat the branch-naming rule
-> below as the target, not a claim that it is in effect right now.
+> **Status: in effect.** This describes how a release ships — a release
+> branch, a runbook committed to it, and a GitHub tracking issue with
+> preflight/postflight checklists. `releases-0.2.x` exists on origin and is
+> the branch cutting v0.2.2, the one release currently in flight; no tag has
+> been cut on it yet — not `v0.2.2`, and not even `v0.2.2-rc.0` (§2).
+>
+> `release/v0.2.2-rollout` is **retired** — it was a pre-convention PR head
+> branch (#618), squash-merged into `main` as `7c6f659` and deleted from
+> origin on merge. It holds no unmerged work. Any surviving reference to it,
+> including in #660's header, is stale; read it as `releases-0.2.x`.
 
 This is not the process for landing ordinary feature work — that is PR review
 against `main`, covered by [CONTRIBUTING.md](../../CONTRIBUTING.md) and the CI
@@ -33,12 +34,78 @@ reviewed and merged via PR against `main`, exactly as this document's intro
 paragraph says. Once a release's scope is decided, the branch receives only
 (a) the specific commits cherry-picked from `main` that the release needs,
 and (b) small incidental nit-fix commits made directly on the branch while
-getting it out the door (see §5, Backporting). A release is **never tagged
+getting it out the door (see §6, Backporting). A release is **never tagged
 directly on `main`** — the tag lands on the `releases-A.B.x` branch, so
 `main` keeps moving with ordinary merges while the release line is frozen
-except for the fixes it specifically needs.
+except for the fixes it specifically needs. This applies to every tag the
+release produces, release candidates included (§2).
 
-## 2. Per-release runbook
+Cherry-picking is what the branch needs *once `main` has moved past the
+release scope*. A branch cut while the release scope is still exactly "all of
+`main`" is legitimately cut whole and kept in step by fast-forward — that is
+how `releases-0.2.x` was cut and is being carried
+([`docs/runbooks/v0-2-2-rollout.md` §1](../runbooks/v0-2-2-rollout.md),
+"Branching model"). Selective cherry-pick starts at the point the branch and
+`main` must diverge, not at the cut.
+
+## 2. Version tags and release candidates
+
+A version tag `vA.B.C` is **never** cut before **both** a completed preflight
+and a completed postflight (§5). The version tag records what has been *proven
+in production*, not what is *intended for release*. Everything before that
+point is a release candidate, tagged `vA.B.C-rc.N`, `N` counting from 0.
+
+The cycle, run entirely on the release's `releases-A.B.x` branch (§1):
+
+1. Cut `vA.B.C-rc.N` at the tip you intend to ship.
+2. Run preflight against that rc. **Preflight fails** → fix, cut
+   `vA.B.C-rc.(N+1)`, return to step 2.
+3. **Preflight passes** → deploy that rc to production.
+4. Run postflight. **Postflight fails** → patch, cut `vA.B.C-rc.(N+1)`, and go
+   back through preflight (step 2) before deploying again. Every patch needed
+   to reach a correct system consumes another rc number.
+5. **Postflight clean** → tag `vA.B.C` at the exact commit that is running and
+   verified in production — i.e. the final rc's commit.
+
+Two consequences, stated outright because each one looks like a mistake and
+neither is:
+
+- **`vA.B.C` and the final `vA.B.C-rc.N` point at the same commit.** That is
+  expected and correct, not duplication to clean up. Step 5 has no other
+  commit available to it — the version tag names what production is running.
+- **`vA.B.C` can never be cut at a commit that was not actually deployed and
+  verified.** A fix that lands after the last deployed rc requires a new rc
+  and another pass through steps 2–4; it cannot be "rolled into the final
+  tag."
+
+rc tags obey §1's branch rule exactly as the release tag does: they are cut on
+`releases-A.B.x`, never on `main`.
+
+### Precedent — v0.2.1
+
+This is a newly written-down convention, not a newly invented one. v0.2.1
+already ran it, undocumented (`git log -1 --format='%h %ci %s' <tag>`):
+
+- `v0.2.1-rc.0` → `c2b9afc`, 2026-08-07
+- `v0.2.1-rc.1` → `5970f2d`, 2026-08-08
+- `v0.2.1` → `5970f2d`, 2026-08-08 — **the same commit as `rc.1`**
+
+That shared-commit final tag is the norm this section describes, not an
+anomaly in the tag history. One honest limit on the precedent: v0.2.1 predates
+the `releases-A.B.x` convention and is reachable from `main`
+(`git merge-base --is-ancestor v0.2.1 origin/main` succeeds, as it does for
+both rc tags). It is precedent for the **rc numbering**, not for the branch
+placement rule — that rule starts with v0.2.2.
+
+### What this means for v0.2.2
+
+`git tag -l 'v0.2.2*'` is empty: no preflight has run, nothing has been
+deployed, so no candidate exists yet. The next tag on `releases-0.2.x` is
+therefore **`v0.2.2-rc.0`**, cut at the tip the rollout intends to ship.
+`v0.2.2` itself does not get cut until #660's postflight checklist (§4) is
+satisfied against production.
+
+## 3. Per-release runbook
 
 Each release has an operator runbook committed under `docs/runbooks/`. The
 current example is
@@ -51,7 +118,7 @@ copy-pasteable, every claim verified against a specific commit SHA rather
 than described from memory.
 
 The runbook is the **definitive, agent-executable procedure** for that
-release — not the tracking issue (§3), and not tribal knowledge held by
+release — not the tracking issue (§4), and not tribal knowledge held by
 whoever last did a rollout. The tracking issue's checklists exist to gate
 progress through the runbook, not to duplicate or replace its content. By
 convention the runbook lives on the release's `releases-A.B.x` branch,
@@ -64,7 +131,7 @@ Filenames under `docs/runbooks/` are kebab-case
 not `v0.2.2-rollout.md`, precisely because a `.` in the filename stem fails
 that check.
 
-## 3. Per-release GitHub tracking issue
+## 4. Per-release GitHub tracking issue
 
 Each release has one GitHub tracking issue carrying the label
 `release:vX.Y.Z` — for example #660 (`release:v0.2.2`) and #661
@@ -95,15 +162,15 @@ writing, is still Phase-only — Objective and the two checklists get added
 once its rollout begins.)
 
 The Phases tasklist is not just status tracking: it is the hard precondition
-checked before preflight is allowed to start — see §4, step 0.
+checked before preflight is allowed to start — see §5, step 0.
 
-## 4. Process flow
+## 5. Process flow
 
 ### 0. Precondition — all features closed
 
 **Preflight cannot start while the release still has open Phase or feature
 issues.** Every Phase/feature issue linked from the release's tracking
-issue's Phases tasklist (§3) must be closed before an agent may begin, or
+issue's Phases tasklist (§4) must be closed before an agent may begin, or
 even suggest beginning, preflight. This is a hard precondition, not a soft
 guideline: one open Phase or feature issue is enough to block preflight
 outright, with no exception for "the remaining work doesn't touch the
@@ -117,28 +184,33 @@ report the gap and stop.
 
 In order, once the precondition above is satisfied:
 
-1. **Preflight.** An agent dry-runs the runbook against production,
-   read-only wherever the runbook allows it. Any bug the dry-run turns up —
-   a wrong command, a stale assumption, a missing step — gets fixed with a
-   commit directly to the `releases-A.B.x` branch (updating the runbook, or
-   the code it exercises), not deferred to a follow-up. As each preflight
-   gate passes for real, its box gets checked on the tracking issue.
+1. **Preflight.** Preflight always runs against a specific release candidate
+   — `vA.B.C-rc.N`, cut on the branch first (§2, step 1). An agent dry-runs
+   the runbook against production, read-only wherever the runbook allows it.
+   Any bug the dry-run turns up — a wrong command, a stale assumption, a
+   missing step — gets fixed with a commit directly to the `releases-A.B.x`
+   branch (updating the runbook, or the code it exercises), not deferred to a
+   follow-up; that fix costs a new rc and a fresh pass through this step
+   (§2, step 2). As each preflight gate passes for real, its box gets checked
+   on the tracking issue.
 2. **Cutover.** Only once every preflight box on the tracking issue is
-   checked does an agent execute the actual production cutover, following
-   the runbook step by step. This is the only step of the three that
-   touches production write paths.
+   checked does an agent deploy that rc, following the runbook step by step.
+   This is the only step of the three that touches production write paths.
 3. **Postflight.** An agent confirms three things against the live system:
-   every feature the release's objective (§3) called for is actually
+   every feature the release's objective (§4) called for is actually
    present, no damage was done to the database, and the database is in the
    state the objective describes. Each postflight box on the tracking issue
-   gets checked as its corresponding verification passes.
+   gets checked as its corresponding verification passes. A failure here
+   sends the release back around §2's loop — patch, next rc, preflight again
+   before any redeploy. Only when every postflight box is checked is
+   `vA.B.C` tagged, at the deployed rc's commit (§2, step 5).
 
 The entire upgrade — preflight, cutover, and postflight — is **agent-executed
 end to end**. No human runs commands against the production server directly;
 a human's role is authorizing the release and reading the tracking issue's
 checklists, not typing commands into a production shell.
 
-## 5. Backporting
+## 6. Backporting
 
 Fixes discovered directly on the `releases-A.B.x` branch during rollout —
 during preflight dry-runs or the cutover itself — get merged back to `main`.
@@ -150,3 +222,13 @@ instead of on `main` first. A fix discovered on `releases-A.B.x` is exactly
 the kind of "nit" §1 already expects the branch to accumulate; backporting it
 is what keeps that branch's fixes from being silently lost the moment the
 branch is done being the active release line.
+
+The outstanding backport debt is a command, never a sentence in a document:
+
+```bash
+git log --oneline origin/main..origin/releases-A.B.x
+```
+
+Empty means the branch is a strict subset of `main` and nothing is owed.
+Every commit listed is a fix that exists only on the release branch and must
+be carried back to `main`.
