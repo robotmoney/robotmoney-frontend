@@ -1588,7 +1588,7 @@ and never `$?`.
 | 6 | Every member has a handle | `psql "$DATABASE_URL" -c "SELECT count(*) FROM swarm_members WHERE handle IS NULL;"` | `0` (`SET NOT NULL` guarantees it; this catches a partial apply) |
 | 7 | Handles are saveable | `psql "$DATABASE_URL" -c "SELECT id, handle FROM swarm_members WHERE handle !~ '^[a-z0-9]+(-[a-z0-9]+)*$' OR length(handle) > 80;"` | 0 rows. Any row here is a member the admin surface can never re-save (§4, `handle-shape`). Fix with `UPDATE swarm_members SET handle = '<kebab-case>' WHERE id = '<id>';` — **move the handle, never the id.** |
 | 8 | Archive data was adopted, not overwritten | `psql "$DATABASE_URL" -c "SELECT count(*) FROM swarm_recommendations;"` | ≥ the pre-upgrade count from §5.3. The archive initializer **adopts**: `classifyDatabase` returns `mode: "adopt"` for the archive initializer on populated data (`backend/scripts/db-preflight.ts:158`) — insert-if-missing, fill only `NULL` columns, else report drift. Existing rows win; the signed `payload`/`signature` columns are never rewritten. |
-| 9 | `admin_credential` untouched by the boot | `psql "$DATABASE_URL" -c "SELECT count(*), (recovery_hash IS NULL) FROM admin_credential GROUP BY 2;"` | The **count** must equal the `0` from §2's pre-cutover check. (This is the first point in the runbook where `recovery_hash` is a legal thing to select: the column exists only after `0029` applied.) **No seed path ever writes this table.** |
+| 9 | `admin_credential` untouched by the boot | `psql "$DATABASE_URL" -c "SELECT count(*) AS rows, count(*) FILTER (WHERE recovery_hash IS NOT NULL) AS with_recovery FROM admin_credential;"` | `rows = 0` and `with_recovery = 0`, matching §2's pre-cutover check. **Use this form, not `GROUP BY`** — see the box below. (This is the first point in the runbook where `recovery_hash` is a legal thing to select: the column exists only after `0029` applied.) **No seed path ever writes this table.** |
 | 10 | Admin surface reachable, and claimed | This is the expected path: §2's pre-cutover check found `rows = 0`, so **run §12.1 now — prompt the operator to claim the credential.** This is a mandatory step, not a spot check: until it runs, the one-time claim is open to whoever reaches the surface first. (Unexpected path: if §2's check found `rows = 1` — it should not have — stop and investigate; this runbook does not carry a remedy for it.) | `/api/admin/is-claimed` returns `{"claimed":true}` and you hold both the password and a recovery code. |
 | 11 | Site serves prerendered HTML | `curl -s http://127.0.0.1:<port>/swarm/ \| grep -o '<title>[^<]*'` | Not the home page's title. **"Assembly did not run" is not a possible cause here** — see the diagnosis below. |
 | 12 | Swarm schedules state | `psql "$DATABASE_URL" -c "SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;"` | five rows, **all `enabled = f`** — expected under the demo composition (§6.5). Compare against §5.4's capture: the difference is what this boot clobbered, and it is not coming back on its own. Drive sessions manually. |
@@ -1637,6 +1637,19 @@ Where those references should land instead is tracked separately (#687).
 | **AC4** | **No member carries a derived-suffix handle.** `woon-2` and anything shaped `<stem>-<n>` is a **failure**: it means derivation ran where an exact handle was required. | `SELECT id, handle FROM swarm_members WHERE handle ~ '-[0-9]+$';` → **0 rows** |
 | **AC5** | **Demo/smoke tooling still works by handle.** A member is resolvable by handle through the API, and the demo/smoke path finds its member id by handle rather than a hardcoded literal — so no tooling depends on a slug id continuing to exist. | `curl -s "$API/api/swarm/members/robot-money"` returns that member (**not** `robotmoney`, which no longer resolves — see above); `bun scripts/demo-frontend-check.ts` passes; a smoke boot seats its roster |
 | **AC6** | **History stayed attached across the re-id.** Take, memo and key counts per member are unchanged, and signatures still verify — the re-id must carry every FK, **including `swarm_member_keys`**, or verification silently goes false. | per-member `count(*)` on `swarm_recommendations`/`swarm_memos` matches the pre-upgrade capture, and `/api/swarm/sessions/<id>` reports takes as `verified` |
+
+> ⚠ **Check 9 must not use `GROUP BY`, and the reason is a false pass.** An
+> earlier form was
+> `SELECT count(*), (recovery_hash IS NULL) FROM admin_credential GROUP BY 2;`
+> against an instruction to confirm "the count equals 0". On the **expected**
+> state — an unclaimed credential, zero rows — a `GROUP BY` has no group to
+> emit, so the query returns **`(0 rows)`**: no count at all, nothing to compare
+> to `0`, and output an operator can reasonably read as an error or as the query
+> having failed. The aggregate form above always returns exactly one row, so
+> "expect 0" is a value you can actually see. This is the same class of trap as
+> §8.0's checks 4/6/7/9, where the correct pre-upgrade answer is an error rather
+> than a number — a check whose right answer looks like a malfunction is a check
+> that gets misread at 3am.
 
 > **AC6 is the one with a silent failure mode.** Verification is
 > `payload` + `signature` + the pubkey reached through
