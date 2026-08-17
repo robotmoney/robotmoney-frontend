@@ -430,7 +430,16 @@ async function checkHandleShape(db: Db, { record }: Checker): Promise<void> {
   );
 }
 
-async function runChecks(db: Db, checker: Checker): Promise<void> {
+/**
+ * Exported so restore-check.ts can run the SAME release-specific checks
+ * against a locally restored dump, before this file's main() ever touches
+ * a live database (docs/runbooks/*.md §4/§5: the dump is checked first, the
+ * live replica second). blocking-xacts is included for both targets even
+ * though it is only meaningful live — against a freshly restored local
+ * container with no concurrent connections it trivially PASSes, which is
+ * correct, just uninteresting there.
+ */
+export async function runChecks(db: Db, checker: Checker): Promise<void> {
   await checkServerVersion(db, checker);
   await checkExtensions(db, checker);
   const pending = await checkPendingMigrations(db, checker);

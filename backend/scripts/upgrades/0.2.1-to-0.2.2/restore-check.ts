@@ -1,8 +1,12 @@
 // Restore-verify the encrypted Gate C backup (docs/runbooks/*.md §5) into a
-// THROWAWAY local Postgres container. Touches nothing on production — no
-// network path to it at all once the encrypted files are read from disk.
-// TypeScript port of the original restore-check-local.sh: same steps, using
-// Bun.spawn for the docker/gpg/pg_restore/psql processes this inherently
+// THROWAWAY local Postgres container, THEN run this release's full preflight
+// checks (preflight.ts's runChecks) against that restored copy. Touches
+// nothing on production — no network path to it at all once the encrypted
+// files are read from disk. This is deliberately the FIRST place preflight's
+// checks run: the runbook's process is dump -> restore -> check the dump ->
+// only then check the live replica (§4), never production first.
+//
+// Uses Bun.spawn for the docker/gpg/pg_restore/psql processes this inherently
 // needs (there is no JS-native pg_dump-format reader) and the `postgres` npm
 // client for the verification queries, so results are structured instead of
 // parsed back out of psql's text output.
@@ -15,14 +19,16 @@
 //     rm-globals-<STAMP>.sql.gpg        — §5.1/§5.2's encrypted pg_dumpall --globals-only
 //     .backup-passphrase                — §5.2's gpg passphrase
 //
-// Exit codes: 0 = restore verified, 1 = a verification query found a problem,
+// Exit codes: 0 = restore verified AND all preflight checks pass/warn,
+// 1 = a verification query or a preflight check FAILed,
 // 2 = could not run (missing files, docker/gpg/pg_restore failure).
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
-import { columnExists } from "../../lib/checks.ts";
+import { columnExists, createChecker, printVerdict } from "../../lib/checks.ts";
+import { runChecks } from "./preflight.ts";
 
 const NAME = "restore-check-0.2.2";
 const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
@@ -183,11 +189,26 @@ async function main(backupDirArg?: string): Promise<number> {
       } else {
         log("  swarm_members.handle absent — this backup predates migration 0030 (expected pre-upgrade)");
       }
+
+      log("");
+      log("running this release's preflight checks against the restored dump");
+      const checker = createChecker(`[${NAME}] `);
+      await runChecks(db, checker);
+      const preflightCode = printVerdict(checker.results, {
+        logPrefix: `[${NAME}] `,
+        okAll: `[${NAME}] VERDICT: DUMP SAFE TO UPGRADE`,
+        okWithWarnings: `[${NAME}] VERDICT: DUMP SAFE TO UPGRADE`,
+        blocked: `[${NAME}] VERDICT: DUMP BLOCKED`,
+      });
+      if (preflightCode !== 0) {
+        err("a preflight check failed against the restored dump — do not proceed to the live replica (§4) until this is clean");
+        return 1;
+      }
     } finally {
       await db.end({ timeout: 5 });
     }
 
-    log("restore verified");
+    log("restore verified and dump-based preflight is clean — safe to proceed to §4's live replica check");
     return 0;
   } finally {
     log(`cleaning up: docker rm -f ${container}`);

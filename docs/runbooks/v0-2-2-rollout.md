@@ -215,13 +215,20 @@ nothing more. Each gate needs the section before it to have run, and the admin
 gate is **last**: it is the only one whose remedy is destructive, and the only
 one that requires §5's backup to already exist.
 
+**Production is checked LAST, not first.** Every preflight-shaped check runs
+twice: once against a locally restored copy of the backup (§5.3, before any
+live database — including the replica — is ever touched), and only once that
+is clean does the SAME check run again against the live read replica (§4).
+Nothing here ever runs preflight against the primary; the primary is not
+even reachable from `.env.readonly` under this runbook's process (§3).
+
 | Order | Gate | Cannot be answered until | Where the answer comes from |
 |---|---|---|---|
-| 1 | **Gate B** — pre-flight verdict | §3 (the read-only role) and §4 | `backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts` exit code |
-| 2 | **Gate D** — the `rm_worker` role exists | §4 | the pre-flight's `rm-worker-role` check |
-| 3 | **Gate E** — no long-running transactions | §4 | the pre-flight's `blocking-xacts` check |
-| 4 | **Gate C** — backup proven restorable | §5, including §5.3's restore | §5.3 |
-| 5 | **Gate A** — admin lockout ⛔ | §5's backup exists (it is the undo for Gate A's remedy) | the query in this section |
+| 1 | **Gate C** — backup taken, restored, and clean against the dump | §5.1/§5.2 (dump) and §5.3 (restore + dump-based preflight) | `restore-check.ts` exit code |
+| 2 | **Gate B** — pre-flight verdict against the LIVE replica | Gate C clean, then §3 (the replica's read-only role) and §4 | `backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts` exit code, run against the replica |
+| 3 | **Gate D** — the `rm_worker` role exists | §4's live run | the pre-flight's `rm-worker-role` check |
+| 4 | **Gate E** — no long-running transactions | §4's live run | the pre-flight's `blocking-xacts` check |
+| 5 | **Gate A** — admin lockout ⛔ | Gate C's backup exists (it is the undo for Gate A's remedy) | the query in this section |
 
 Gate A is still the one that can strand you permanently. It is last anyway,
 because its only forward path for a lost password is a **write** to
@@ -266,12 +273,15 @@ gate below is void**. `DATABASE_URL` does not survive into a new
 terminal — re-export and re-assert in each one, including the shells you use
 for §8 and §11.
 
-### Gate B — pre-flight verdict (order 1)
+### Gate B — pre-flight verdict against the live replica (order 2)
 
-Run §3, then §4. **`VERDICT: BLOCKED` is a no-go.** Warnings are a go with your
-eyes open.
+Run §3, then §4 — only after Gate C is green. **`VERDICT: BLOCKED` is a
+no-go.** Warnings are a go with your eyes open. This is the same set of
+checks Gate C already ran against the restored dump; running them again here
+is what catches drift between when the dump was taken and right now, and it
+is the only time any of this runs against a live database.
 
-### Gate D — the `rm_worker` role exists (order 2)
+### Gate D — the `rm_worker` role exists (order 3)
 
 ```sql
 SELECT rolname FROM pg_roles WHERE rolname = 'rm_worker';
@@ -294,21 +304,33 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO rm
 REVOKE INSERT, UPDATE, DELETE ON raw_indicator_history, regime_snapshots, research_signals FROM rm_worker;
 ```
 
-These are **writes**: run them as `doadmin`, not as `rm_readonly`. Then re-run
-§4 so Gate B is green against the repaired cluster.
+These are **writes**: run them as `doadmin`, not as `rm_readonly` — this is a
+change on the primary, since roles are cluster-wide and there is only one
+`rm_worker` regardless of which node you query it from ([[no-agent-writes-to-primary-db]]
+applies: run this yourself, do not ask an agent to). Then re-run §4 so Gate B
+is green against the repaired cluster.
 
-### Gate E — no long-running transactions (order 3)
+### Gate E — no long-running transactions (order 4)
 
 Covered by the pre-flight's `blocking-xacts` check (§4). A transaction older than
 60s queues in front of `0030`'s `ACCESS EXCLUSIVE` lock, and every reader
 arriving after that queues behind **both**. This one goes stale: re-run §4's
-pre-flight immediately before §7.3, not only at the top of the window.
+pre-flight immediately before §7.3, not only at the top of the window. It is
+only meaningful against the live replica — the dump-based run in §5.3
+trivially passes it (a freshly restored local container has no concurrent
+connections), which is correct, just uninformative there.
 
-### Gate C — backup proven restorable (order 4)
+### Gate C — backup taken, restored, and clean against the dump (order 1, run FIRST)
 
-Run §5 including §5.3's verification. **A dump you have not restored is not a
-backup.** No-go until the restore check passes. Gate A's remedy has no undo
-without it.
+Run §5. §5.1/§5.2 take and encrypt the dump; §5.3 (`restore-check.ts`)
+restores it into a throwaway **local** Postgres container and then runs this
+release's full preflight checks against that restored copy — the same checks
+Gate B runs later, just against the dump instead of the replica, and before
+any live database is touched at all. **A dump you have not restored is not a
+backup**, and now neither is one you have not run preflight against. No-go
+until `restore-check.ts` exits `0`. Gate A's remedy has no undo without the
+backup existing, which is why Gate A stays last regardless of Gate C moving
+first.
 
 ### Gate A — admin lockout ⛔ THE BLOCKER (order 5, run LAST)
 
@@ -384,10 +406,31 @@ this delta) — but it means you are triaging, not stranded. §12.2 is the fix.
 
 ---
 
-## 3. Provision the read-only role
+## 3. Provision the read-only role — on the primary, used only via the replica
 
-The pre-flight and the dump must both run as a role that **cannot write**. Do
-this once, as `doadmin`, against the production cluster.
+The pre-flight and the dump must both run as a role that **cannot write**.
+Production has a dedicated **read-only replica node** (a separate DO Managed
+Postgres resource, its own hostname, streaming from the primary) — that
+replica, not the primary, is what `.env.readonly` points at and what every
+`rm_readonly` connection in this runbook actually uses.
+
+> 🔴 **`.env.readonly` must never name the primary's host.** This is enforced
+> by policy, not by a technical block: Postgres roles are cluster-wide catalog
+> objects, replicated from the primary to the replica byte-for-byte — there is
+> only ONE `rm_readonly`, and it is created via the primary (below) because
+> that is the only place `CREATE ROLE` can run at all (the replica is
+> structurally read-only, at the WAL-replay level, for every write INCLUDING
+> `CREATE ROLE` — this holds even for `doadmin`, which is not a true
+> superuser on DO's replica either way). The same credentials therefore *would*
+> still authenticate against the primary if you pointed them there. Nothing
+> stops that technically; the process stops it by never doing it. Always take
+> the replica's hostname from DO's dashboard/API for the read-only node
+> specifically, and confirm the `target:` line `backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts`
+> prints (§4) names the replica before trusting anything downstream of it.
+
+Provisioning is still a **write**, so it still runs as `doadmin` against the
+primary, once ([[no-agent-writes-to-primary-db]] applies — this is an
+operator action, not something to hand an agent execute-and-forget):
 
 > 🔴 **Restrict the password's alphabet to `[A-Za-z0-9._~-]`** for the manual
 > `psql` spot-check below and for §5's dump commands, both of which build or
@@ -410,9 +453,6 @@ this once, as `doadmin`, against the production cluster.
 ```sql
 CREATE ROLE rm_readonly LOGIN PASSWORD '<generate a strong one>';
 
--- PG14+. Use THIS, not GRANT SELECT ON ALL TABLES.
-GRANT pg_read_all_data TO rm_readonly;
-
 GRANT CONNECT ON DATABASE defaultdb TO rm_readonly;
 GRANT USAGE ON SCHEMA public TO rm_readonly;
 
@@ -420,28 +460,58 @@ GRANT USAGE ON SCHEMA public TO rm_readonly;
 ALTER ROLE rm_readonly SET default_transaction_read_only = on;
 ```
 
-> **Why `pg_read_all_data` and never `GRANT SELECT ON ALL TABLES IN SCHEMA
-> public`.** `ON ALL TABLES` is a **one-shot expansion**: Postgres resolves it to
-> the tables that exist at that instant and writes individual grants. Every table
-> a future migration creates is invisible to that role — and it fails
-> **silently**, because `pg_dump` simply omits what it cannot read. You get a
-> dump that restores cleanly and is missing tables. `pg_read_all_data` is a role
-> membership evaluated at query time, so it covers tables that do not exist yet.
+> 🔴 **`GRANT pg_read_all_data TO rm_readonly;` does NOT work here — verified
+> 2026-08-17.** That is the textbook PG14+ recipe (see the box below for why
+> it would be preferable), but `doadmin` on DO Managed Postgres is not a true
+> superuser and does not hold `ADMIN OPTION` on the predefined
+> `pg_read_all_data` role, so granting it fails: `42501: permission denied to
+> grant role "pg_read_all_data" — Only roles with the ADMIN option on role
+> "pg_read_all_data" may grant this role.` Use the explicit-grant fallback
+> instead, immediately after the block above:
+>
+> ```sql
+> GRANT SELECT ON ALL TABLES IN SCHEMA public TO rm_readonly;
+> GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_readonly;
+> ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO rm_readonly;
+> ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO rm_readonly;
+> ```
 
-Verify the role is genuinely read-only before trusting it:
+> **Why `pg_read_all_data` would be preferable, if `doadmin` could grant it,
+> and never `GRANT SELECT ON ALL TABLES IN SCHEMA public` alone.** `ON ALL
+> TABLES` is a **one-shot expansion**: Postgres resolves it to the tables that
+> exist at that instant and writes individual grants. Every table a future
+> migration creates is invisible to that role — and it fails **silently**,
+> because `pg_dump` simply omits what it cannot read. You get a dump that
+> restores cleanly and is missing tables. `pg_read_all_data` is a role
+> membership evaluated at query time, so it covers tables that do not exist
+> yet; the `ALTER DEFAULT PRIVILEGES` pair above is the next-best substitute —
+> it covers tables *this role's future self* would have created, which is not
+> the same guarantee, but is the closest `doadmin` can actually grant. Re-run
+> the grant block above after any migration that a normal role (not
+> `doadmin`) creates new tables under, to be safe.
+
+Verify the role is genuinely read-only before trusting it — against the
+**replica's** hostname:
 
 ```bash
-psql "postgres://rm_readonly:<pw>@<host>:25060/defaultdb?sslmode=require" \
+psql "postgres://rm_readonly:<pw>@<replica-host>:25060/defaultdb?sslmode=require" \
   -c "SHOW transaction_read_only;" \
   -c "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication FROM pg_roles WHERE rolname = current_user;"
 ```
 
 Expect `on`, then five `f`. Anything else and §4 will refuse to run anyway.
+`transaction_read_only = on` here is doubly guaranteed on the replica — the
+role's own `ALTER ROLE ... SET default_transaction_read_only = on` above, AND
+the replica's structural inability to accept writes regardless of role. Belt
+and suspenders: keep the role-level setting anyway, since §4's checks (and
+this same role) may in principle be pointed at a non-replica target by
+mistake, and the role-level belt is what catches that.
 
 > **Port 25060, never 25061.** `25060` is DigitalOcean's direct session port.
 > `25061` is PgBouncer in **transaction** pooling mode, which does not hold a
 > session across statements — that breaks `pg_dump`'s repeatable-read snapshot
-> and can produce a torn dump. Use `25060` for everything in §3, §4 and §5.
+> and can produce a torn dump. Use `25060` for everything in §3, §4 and §5,
+> on whichever node (primary for provisioning, replica for everything else).
 >
 > **CONTRADICTS deployment.md §4.3**, which says *"For the HA cluster, prefer the
 > **connection-pool** URI (PgBouncer) if enabled. Migrations (D9) run with this
@@ -450,11 +520,18 @@ Expect `on`, then five `f`. Anything else and §4 will refuse to run anyway.
 
 ---
 
-## 4. Pre-flight: `backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts`
+## 4. Pre-flight against the live replica: `backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts`
 
-A read-only dry run against **live production**, executed by `rm_readonly`,
-before you pull anything. It refuses to run on a session it cannot prove is
-read-only, and every query in it is a `SELECT`.
+⛔ **Do not run this section until Gate C (§5.3) is green.** This is the SAME
+script `restore-check.ts` already ran against the restored dump — running it
+again here, against the live replica, is what catches drift since the dump
+was taken. It is the only step in this runbook that queries a live database
+before cutover.
+
+A read-only dry run against the **live read-only replica**, executed by
+`rm_readonly`, before you pull anything. It refuses to run on a session it
+cannot prove is read-only, and every query in it is a `SELECT` — doubly so
+here, since the replica itself cannot accept a write regardless of role (§3).
 
 ### Run it
 
@@ -624,23 +701,40 @@ mkdir -p ~/rm-backup-v022 && cd ~/rm-backup-v022   # OUTSIDE the checkout (§5.2
 set -o pipefail                          # MANDATORY — see the box below
 umask 077                                # the file is a credential store
 
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+STAMP="$(TZ=UTC date +%Y%m%dT%H%M%SZ)"
+echo "$STAMP" > .last-stamp              # restore-check.ts (§5.3) reads this
 
 # rm_readonly's password, scoped to THIS command only.
+# <replica-host>: the read-only replica from §3, NEVER the primary — the dump
+# is a read, and the replica is where every read in this runbook happens.
 PGPASSWORD='<rm_readonly password>' pg_dump \
-  --host=<host> --port=25060 --username=rm_readonly --dbname=defaultdb \
+  --host=<replica-host> --port=25060 --username=rm_readonly --dbname=defaultdb \
   --format=custom --compress=9 --no-owner --no-privileges \
   --file="rm-preupgrade-${STAMP}.dump"
 echo "pg_dump exit=$?"
 
 # Roles are NOT in the dump above. This is a separate, required artifact —
-# and a DIFFERENT role, so a DIFFERENT password.
+# and a DIFFERENT role, so a DIFFERENT password. Verified against the
+# PRIMARY on 2026-08-17 (doadmin, with -l defaultdb — see the box below for
+# why). Whether pg_dumpall --globals-only also works against the replica's
+# endpoint (it is a pure catalog READ, so there is no structural reason it
+# should not) has not been verified — test it yourself before relying on it,
+# and prefer the replica if it works, to keep doadmin off the primary
+# connection during routine backups entirely.
 PGPASSWORD='<doadmin password>' pg_dumpall \
-  --host=<host> --port=25060 --username=doadmin \
+  --host=<primary-host> --port=25060 --username=doadmin --database=defaultdb \
   --globals-only --no-role-passwords \
   --file="rm-globals-${STAMP}.sql"
 echo "pg_dumpall exit=$?"
 ```
+
+> **`--database=defaultdb`, not the default `template1`.** DO Managed
+> Postgres's `pg_hba.conf` rejects connections to `template1` from outside
+> its own network path — verified 2026-08-17: omitting this flag fails with
+> `FATAL: pg_hba.conf rejects connection for host ..., user "doadmin",
+> database "template1"`. `pg_dumpall`'s `-l`/`--database` flag picks the
+> database it connects through to enumerate globals; it does not change what
+> gets dumped (globals are cluster-wide either way).
 
 The `~/.pgpass` alternative, if you prefer no secrets on the command line —
 `chmod 600` it or libpq ignores the file silently:
@@ -690,85 +784,47 @@ shred -u "rm-globals-${STAMP}.sql"
 Do not put either file in the checkout, in `.agents/`, or anywhere a compose
 bind mount can reach.
 
-### 5.3 The verification that PROVES it restores
+### 5.3 The verification that PROVES it restores — and that it is safe to upgrade
 
-A dump you have not restored is a hypothesis.
-
-Every command here is `doadmin`. **Use `doadmin`'s password, not
-`rm_readonly`'s** — §5.1's box explains why the distinction is invisible until
-it hangs. Set it once for this block only:
+A dump you have not restored is a hypothesis. And a dump that restores but
+was never checked against this release's migrations is only half proven.
 
 ```bash
-export PGPASSWORD='<doadmin password>'   # unset it again at the end of §5.3
+cd <checkout>/backend
+bun scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts ~/rm-backup-v022
 ```
 
-```bash
-# Scratch database on the SAME cluster (or a local PG of the same major).
-createdb --host=<host> --port=25060 --username=doadmin rm_restore_check
+This is `restore-check.ts` (docs above it in the file explain the full
+mechanism). What it does, entirely with Docker and your own encrypted files —
+**no `doadmin`, no primary, no production connection of any kind**:
 
-# Roles first — the restore needs them to exist.
-psql --host=<host> --port=25060 --username=doadmin --dbname=rm_restore_check \
-     --set ON_ERROR_STOP=on -f "rm-globals-${STAMP}.sql"
+1. Starts a throwaway local `postgres:18` container (matching production's
+   major version) with its own freshly generated, local-only superuser —
+   nothing borrowed from `.env`/`.env.readonly`.
+2. Decrypts and loads just the `rm_readonly`/`rm_worker` role definitions out
+   of `rm-globals-<STAMP>.sql.gpg` (the rest of a real globals dump is DO
+   Managed Postgres's own internal cluster role graph — `_doadmin_*`,
+   `_dodb*`, `avn_*` GUCs — which a vanilla container can't replicate and
+   which nothing here needs).
+3. Decrypts and `pg_restore`s `rm-preupgrade-<STAMP>.dump.gpg`.
+4. Prints row counts for the tables that matter (`swarm_recommendations` is
+   the SIGNED take table — payload `jsonb NOT NULL`, signature `text NOT
+   NULL`, `0004_committee.sql:38-40`, renamed `0025:70`) and the
+   handle/id-namespace invariant, column-existence-checked first — a
+   pre-cutover backup correctly reports `swarm_members.handle absent`
+   (migration `0030` has not applied to this data yet) rather than throwing.
+5. **Then runs this release's full preflight checks** (the same
+   `runChecks` §4 runs, imported directly) **against the restored copy** —
+   this is what makes Gate C a real preflight pass, not just a structural
+   restore check.
+6. Tears the container down (`docker rm -f`), win or lose.
 
-pg_restore --host=<host> --port=25060 --username=doadmin --dbname=rm_restore_check \
-           --no-owner --no-privileges --exit-on-error \
-           "rm-preupgrade-${STAMP}.dump"
-echo "pg_restore exit=$?"     # MUST be 0
-```
-
-Then prove the contents, not just the exit code:
-
-```sql
-\c rm_restore_check
-
--- 1. Row counts match production for the tables that matter.
---    swarm_recommendations is the SIGNED take table (payload jsonb NOT NULL,
---    signature text NOT NULL — 0004_committee.sql:38-40, renamed 0025:70).
-SELECT 'swarm_members' t, count(*) FROM swarm_members
-UNION ALL SELECT 'swarm_recommendations', count(*) FROM swarm_recommendations
-UNION ALL SELECT 'swarm_sessions', count(*) FROM swarm_sessions
-UNION ALL SELECT 'admin_credential', count(*) FROM admin_credential
-UNION ALL SELECT 'schema_migrations', count(*) FROM schema_migrations;
-
--- 2. Roles survived the globals restore.
-SELECT rolname FROM pg_roles WHERE rolname IN ('rm_worker', 'rm_readonly');
-
--- 3. The namespace invariant — ONLY once this backup is already post-0030.
---    Do not name `handle` blind; check first. See the box below.
-SELECT EXISTS (
-  SELECT 1 FROM information_schema.columns
-  WHERE table_schema = 'public' AND table_name = 'swarm_members' AND column_name = 'handle'
-) AS has_handle;
--- has_handle = f — this runbook's pre-cutover backup: expected, stop here,
---   see the box below. Do NOT run the query below; it throws 42703.
--- has_handle = t — a backup taken after 0030 has applied (e.g. re-verifying
---   post-cutover): now run this, and expect 0 rows.
---   SELECT a.id AS holder, a.handle, b.id AS shadowed
---   FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id;
-```
-
-> ⚠ **Check 3's `handle` query does not apply to a pre-upgrade backup, and
-> throws `column "handle" does not exist` (`42703`) if you run it anyway.**
-> `swarm_members.handle` is added by migration `0030`, which has not applied
-> to the data in this dump — that is the entire point of a backup taken
-> *before* cutover. This is the same landmine Gate A already documents for
-> `recovery_hash` (§2, Gate A): a verification query written assuming
-> post-migration schema, run against a pre-migration snapshot. `has_handle =
-> f` here is the expected, healthy result for this backup, not a failure —
-> the literal namespace-invariant query only becomes meaningful again against
-> a backup taken after cutover (e.g. while validating §9's rollback path).
-
-Run the same against production and compare. `has_handle` should read `f` on
-production too, pre-upgrade — that match is what proves the restore is
-faithful, not a discrepancy to chase. Only then is Gate C green.
-
-> **DESTRUCTIVE.** Drop the scratch database when done — it is a second
-> plaintext copy of every credential above.
-> `dropdb --host=<host> --port=25060 --username=doadmin rm_restore_check`
->
-> Then `unset PGPASSWORD` — it is `doadmin`'s, and §5.1's box explains what it
-> does to the next command that meant to use a different role. §5.4 below uses
-> `DATABASE_URL` (§2.0) instead.
+Exit `0` means both the restore and the dump-based preflight are clean —
+**only then is Gate C green**, and only then does §4 run against the live
+replica. Exit `1` means a verification query or a preflight check found a
+real problem; exit `2` means it could not run at all (missing files, Docker
+failure). Nothing here is destructive and nothing needs manual cleanup — the
+throwaway container is gone whether the run succeeds or fails.
 
 ### 5.4 🔴 IRREVERSIBLE — capture the swarm schedule rows, which no restore returns
 
