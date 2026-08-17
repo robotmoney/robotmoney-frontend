@@ -60,8 +60,24 @@ export interface RestoredContainer {
 
 const IMAGE = "postgres:18"; // matches production's 18.x major version (server-version check)
 const LOCAL_USER = "restore_check";
-const LOCAL_PASSWORD = "throwaway-local-only";
 const LOCAL_DB = "rm_restore_check";
+
+/**
+ * Per-run password for the twin's superuser (docs/runbooks/*.md §5.3b.2 T4).
+ *
+ * Generated, never a constant. This container holds a COMPLETE copy of
+ * production — admin_credential hashes, session tokens, member access keys and
+ * emails — so the only thing that made a hardcoded password tolerable was T3's
+ * non-routable bind. Two independent controls beat one control propping up
+ * another: a leaked or mis-specified bind address should not also hand over a
+ * password that is printed in the repo.
+ *
+ * Never logged. Callers get it on the returned RestoredContainer and pass it
+ * through PGPASSWORD / a connection string.
+ */
+function generateLocalPassword(): string {
+  return `rk_${crypto.randomUUID().replaceAll("-", "")}`;
+}
 // Only these two roles matter to anything downstream (Gate D's rm-worker-role
 // check, the role query in §5.3) — the rest of a real globals dump is DO
 // Managed Postgres's internal cluster role graph (_doadmin_*, _dodb*,
@@ -105,6 +121,7 @@ export async function restoreBackupIntoContainer(
 ): Promise<RestoredContainer | { error: string; container?: string }> {
   const bindHost = opts.bindHost ?? "127.0.0.1";
   const container = `rm-restore-${backup.stamp}-${Math.random().toString(36).slice(2, 8)}`;
+  const localPassword = generateLocalPassword();
   log(`starting throwaway Postgres (${IMAGE})`);
   const runCode = await run(
     [
@@ -116,7 +133,7 @@ export async function restoreBackupIntoContainer(
       "-e",
       `POSTGRES_USER=${LOCAL_USER}`,
       "-e",
-      `POSTGRES_PASSWORD=${LOCAL_PASSWORD}`,
+      `POSTGRES_PASSWORD=${localPassword}`,
       "-e",
       `POSTGRES_DB=${LOCAL_DB}`,
       "-p",
@@ -138,7 +155,7 @@ export async function restoreBackupIntoContainer(
   log(`listening on ${bindHost}:${hostPort}`);
 
   const connArgs = [`--host=${bindHost}`, `--port=${hostPort}`, `--username=${LOCAL_USER}`];
-  const env = { ...process.env, PGPASSWORD: LOCAL_PASSWORD };
+  const env = { ...process.env, PGPASSWORD: localPassword };
 
   // Probe over the SAME path the work below uses: host -> published port ->
   // auth -> a real query. NOT `docker exec ... pg_isready`, which answers a
@@ -199,7 +216,7 @@ export async function restoreBackupIntoContainer(
     host: bindHost,
     port: Number(hostPort),
     username: LOCAL_USER,
-    password: LOCAL_PASSWORD,
+    password: localPassword,
     database: LOCAL_DB,
   };
 }

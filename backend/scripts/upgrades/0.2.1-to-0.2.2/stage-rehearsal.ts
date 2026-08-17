@@ -52,6 +52,15 @@ async function spawn(cmd: string[], opts: { cwd?: string; env?: Record<string, s
   return proc.exited;
 }
 
+/**
+ * How long the boot gets to reach readiness (§5.3b.1 G3). Generous on purpose:
+ * a cold run pulls base images and compiles before a single container starts.
+ * This is a DEADLINE, not an estimate — exceeding it is a failure (G1), never
+ * a reason to wait longer.
+ */
+const READY_DEADLINE_MS = 20 * 60 * 1000;
+const READY_POLL_MS = 5_000;
+
 interface DemoState {
   project: string;
   apiPort: number;
@@ -143,6 +152,8 @@ async function main(backupDirArg?: string): Promise<number> {
   // backup.stamp has uppercase T/Z (ISO 8601 basic format).
   const project = `rm_stage_rehearsal_${backup.stamp.toLowerCase()}`;
   let worktreeAdded = false;
+  // Declared out here so the finally block can stop it on EVERY exit path (G6).
+  let bootProc: Bun.Subprocess | null = null;
 
   try {
     log(`creating isolated worktree at ${worktree}`);
@@ -176,35 +187,66 @@ async function main(backupDirArg?: string): Promise<number> {
     // §7.3's box: CI unset, or the boot tears itself down on exit.
     const { CI: _ci, ...envWithoutCi } = process.env as Record<string, string | undefined>;
     const bootEnv = { ...envWithoutCi, DEMO_PROJECT: project };
-    const bootCode = await spawn(["bun", "scripts/demo.ts", "--smoke", "--external-pg", "--no-tui"], {
+    // SUPERVISED, NOT AWAITED (§5.3b.1 G2). With CI unset this boot never
+    // self-terminates BY DESIGN: it falls past demo-main's CI-gated exits
+    // (scripts/lib/demo-main.ts:1175, :1212) into the LIVE steady-state loop
+    // and cycles swarm sessions forever. That is correct for §7.3, where the
+    // stack must stay up serving production — so awaiting it here hangs the
+    // rehearsal permanently, which is exactly what it used to do. Setting CI
+    // is NOT the fix: a truthy CI tears the stack down regardless of exit
+    // code, leaving the frontend checks below nothing to hit.
+    bootProc = Bun.spawn(["bun", "scripts/demo.ts", "--smoke", "--external-pg", "--no-tui"], {
       cwd: worktree,
       env: bootEnv,
+      stdout: "inherit",
+      stderr: "inherit",
+      stdin: "ignore",
     });
-    log(`boot exit=${bootCode}`);
-    if (bootCode !== 0) {
-      err("boot failed — this release's migrations did not apply cleanly against production-shaped data, or the stack did not come up healthy");
-      return 1;
-    }
+    let bootExit: number | null = null;
+    void bootProc.exited.then((c) => {
+      bootExit = c;
+    });
 
     const stateFile = join(worktree, ".agents", "demo-state.json");
-    if (!existsSync(stateFile)) {
-      err(`boot exited 0 but ${stateFile} is missing — cannot find the api port`);
-      return 2;
+    log(`waiting for readiness (deadline ${Math.round(READY_DEADLINE_MS / 60000)}m): ${stateFile} + GET /health`);
+    const startedAt = Date.now();
+    let ready: DemoState | null = null;
+    let lastNote = "";
+    while (Date.now() - startedAt < READY_DEADLINE_MS) {
+      // Fail fast rather than burning the whole deadline: with CI unset a
+      // boot that exits AT ALL has failed (a healthy one runs forever).
+      if (bootExit !== null) {
+        err(`boot exited ${bootExit} before becoming ready — this release's migrations did not apply cleanly against production-shaped data, or the stack did not come up`);
+        return 1;
+      }
+      if (existsSync(stateFile)) {
+        try {
+          const state = JSON.parse(readFileSync(stateFile, "utf8")) as DemoState;
+          if (state?.apiPort) {
+            const health = await fetch(`http://127.0.0.1:${state.apiPort}/health`).catch(() => null);
+            if (health?.ok) {
+              ready = state;
+              break;
+            }
+            lastNote = `api port ${state.apiPort} not healthy yet (${health?.status ?? "no response"})`;
+          }
+        } catch {
+          lastNote = "demo-state.json present but not yet parseable";
+        }
+      } else {
+        lastNote = "demo-state.json not written yet (still building/starting)";
+      }
+      await Bun.sleep(READY_POLL_MS);
     }
-    const state = JSON.parse(readFileSync(stateFile, "utf8")) as DemoState;
-    const backendUrl = `http://127.0.0.1:${state.apiPort}`;
-    log(`stack is up: project=${state.project} api=${backendUrl}`);
 
-    log("checking /health");
-    const health = await fetch(`${backendUrl}/health`).catch((e) => {
-      err(`GET /health failed: ${e instanceof Error ? e.message : e}`);
-      return null;
-    });
-    if (!health || !health.ok) {
-      err(`/health returned ${health?.status ?? "no response"}`);
+    if (!ready) {
+      // G1: a deadline miss is a FAILURE, never a reason to keep waiting.
+      err(`not ready within ${Math.round(READY_DEADLINE_MS / 60000)}m — last state: ${lastNote || "no signal"}`);
       return 1;
     }
-    log(`/health: ${health.status}`);
+
+    const backendUrl = `http://127.0.0.1:${ready.apiPort}`;
+    log(`ready after ${Math.round((Date.now() - startedAt) / 1000)}s: project=${ready.project} api=${backendUrl} (/health OK)`);
 
     log("running scripts/demo-frontend-check.ts against the booted stack (same checks CI runs)");
     const checkCode = await spawn(["bun", "scripts/demo-frontend-check.ts"], {
@@ -219,9 +261,43 @@ async function main(backupDirArg?: string): Promise<number> {
     log("VERDICT: migrated and booted clean, frontend checks pass — this release is safe to run against production-shaped data");
     return 0;
   } finally {
+    // G6: unconditional, and in this order — every path lands here, including
+    // a readiness timeout and an unhandled throw. G5 makes promptness part of
+    // the contract: the stack runs production's model on a funded key and
+    // authors real takes on a timer, so a leftover stack is a leaking meter.
     log("tearing down");
+
+    // 1. Stop the supervisor's child FIRST. demo-down while the boot is still
+    //    live races its own orchestration, and a surviving boot keeps spending.
+    if (bootProc) {
+      try {
+        bootProc.kill();
+        await bootProc.exited;
+      } catch {
+        /* already gone */
+      }
+    }
+
     if (worktreeAdded) {
-      await spawn(["bun", "scripts/demo-down.ts"], { cwd: worktree }).catch(() => {});
+      // 2. DEMO_PROJECT explicitly: demo-down resolves the project from state,
+      //    and this still has to work when the boot died before writing it.
+      await spawn(["bun", "scripts/demo-down.ts"], {
+        cwd: worktree,
+        env: { ...process.env, DEMO_PROJECT: project },
+      }).catch(() => {});
+      // 3. demo-down deliberately KEEPS volumes (they outlive a stack restart).
+      //    For a rehearsal they are pure litter — and member_home_* volumes
+      //    hold agent working state from a production-data run.
+      try {
+        const ls = Bun.spawnSync(["docker", "volume", "ls", "-q", "--filter", `name=${project}`]);
+        const vols = new TextDecoder().decode(ls.stdout).split("\n").map((v) => v.trim()).filter(Boolean);
+        if (vols.length) {
+          Bun.spawnSync(["docker", "volume", "rm", ...vols]);
+          log(`removed ${vols.length} leftover volume(s)`);
+        }
+      } catch {
+        /* best effort */
+      }
       await spawn(["git", "worktree", "remove", "--force", worktree], { cwd: repoRoot }).catch(() => {});
     }
     teardownContainer(restored.container, log);

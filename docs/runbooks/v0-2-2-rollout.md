@@ -874,11 +874,9 @@ mechanism). What it does, entirely with Docker and your own encrypted files —
 **no `doadmin`, no primary, no production connection of any kind**:
 
 1. Starts a throwaway local `postgres:18` container (matching production's
-   major version) with its own local-only superuser — nothing borrowed from
-   `.env`/`.env.readonly`, and no production credential anywhere in the path
-   (§5.3b.2 T1). That superuser's password is currently a **constant, not
-   generated**; §5.3b.2 T4 says it should be per-run and records this as an
-   open deviation.
+   major version) with its own freshly generated, local-only superuser —
+   nothing borrowed from `.env`/`.env.readonly`, and no production credential
+   anywhere in the path (§5.3b.2 T1, T4).
 2. Decrypts and loads just the `rm_readonly`/`rm_worker` role definitions out
    of `rm-globals-<STAMP>.sql.gpg` (the rest of a real globals dump is DO
    Managed Postgres's own internal cluster role graph — `_doadmin_*`,
@@ -965,12 +963,17 @@ What it does:
    `bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI` unset, a
    scoped `DEMO_PROJECT` (lowercased — Compose project names reject the
    uppercase `T`/`Z` in the backup's own timestamp).
-5. On a clean boot, reads the worktree's `.agents/demo-state.json` for the
-   api's published port, checks `/health`, then runs
-   `scripts/demo-frontend-check.ts` against it — the same route/content
-   checks CI runs on every boot, not a bespoke probe.
-6. Tears down: `demo-down.ts`, `git worktree remove --force`, the throwaway
-   Postgres container.
+5. **Supervises** that boot rather than waiting for it to exit (G2 — it never
+   would), polling the worktree's `.agents/demo-state.json` for the api's
+   published port and `GET /health` on it until both answer, against G3's
+   deadline. A boot that exits at all fails the run immediately, since a
+   healthy `CI`-unset boot runs forever.
+6. Once ready, runs `scripts/demo-frontend-check.ts` against that port — the
+   same route/content checks CI runs on every boot, not a bespoke probe.
+7. Tears down on **every** exit path (G6): stops the supervised boot first,
+   then `demo-down.ts` with an explicit `DEMO_PROJECT`, the `member_home_*`
+   volumes `demo-down` deliberately keeps, `git worktree remove --force`, and
+   the throwaway Postgres container.
 
 Exit `0` means the migration ran for real, the stack came up healthy, and the
 frontend checks passed against production-shaped data.
@@ -999,33 +1002,40 @@ section states the intent and the script is what gets fixed.
 | `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), or a frontend check failed. |
 | `2` | Could not run at all — missing/undecryptable backup files, no `OPENCODE_API_KEY` (§5.3b's box), Docker/git failure. Says nothing about the release. |
 
-> ⚠ **Known deviation, 2026-08-17 — `stage-rehearsal.ts` violates G1, G5 and G6.**
-> It `await`s the boot process instead of supervising it (G2), so against a
-> `CI`-unset boot it **hangs forever**: it never reaches its `/health` check,
-> its frontend checks, or its teardown, while the stack keeps cycling
-> sessions and spending. Observed directly on 2026-08-17 — 7+ minutes with no
-> progress past `booting:`, 5 analytics cycles, 3 swarm sessions, killed and
-> torn down by hand.
->
-> **Until that is fixed, do not treat a long-running invocation as progress,
-> and do not leave it unattended.** If it has printed nothing after
-> `booting:` for longer than a cold build should take, it is hung, not
-> working: kill it, then clean up by hand or G6's leftovers will keep
-> spending —
->
-> ```bash
-> cd <worktree printed by the run> && DEMO_PROJECT=<project printed by the run> bun run demo:down
-> git -C <checkout> worktree remove --force <worktree>
-> docker rm -f <the rm-restore-* container>
-> docker volume ls -q | grep <project>        # member_home_* volumes survive demo:down
-> ```
->
-> The parts of the run **before** the hang are still valid evidence, and were
-> confirmed clean on 2026-08-17: all four migrations applied to
-> production-shaped data, and §8's checks 2/4/5/6/7/8 all passed against the
-> resulting database (trigger `tgenabled = A`, zero null handles, zero
-> namespace violations, `swarm_recommendations` above its pre-upgrade
-> baseline). What is unproven is everything G3–G4 covers.
+✅ **Conformant as of 2026-08-17, and executed end to end for the first
+time.** The contract above was written against a script that could not
+satisfy it: `stage-rehearsal.ts` `await`ed the boot instead of supervising it
+(G2), so against a `CI`-unset boot it **hung forever** — never reaching its
+`/health` check, its frontend checks, or its teardown, while the stack kept
+cycling sessions on a funded key. Observed directly: 7+ minutes with no
+progress past `booting:`, 5 analytics cycles, 3 live swarm sessions, killed
+and torn down by hand. That is why §5.3b's own text used to say the rehearsal
+had never completed — it could not have.
+
+The script now supervises the boot and polls `demo-state.json` + `/health`
+against G3's deadline, fails fast if the boot exits at all (with `CI` unset a
+healthy boot never does), and tears down the stack, the leftover volumes,
+the worktree and the container on every exit path. First clean run:
+
+```
+ready after 10s: project=… api=http://127.0.0.1:32771 (/health OK)
+VERDICT: migrated and booted clean, frontend checks pass
+EXIT=0
+```
+
+with zero containers, volumes, worktrees or processes surviving. The
+migration evidence from the earlier hung run stands unchanged and was
+re-confirmed here: all four migrations applied to production-shaped data, and
+§8's checks 2/4/5/6/7/8 all pass against the resulting database (trigger
+`tgenabled = A`, zero null handles, zero namespace violations,
+`swarm_recommendations` above its pre-upgrade baseline).
+
+> **Reading a run.** "Still running" is only ever legitimate *before*
+> readiness, and only up to G3's deadline — a cold first build genuinely
+> takes minutes. After `ready after …s` the remaining steps are fast. A run
+> that prints nothing past `booting:` for longer than a cold build should
+> take is hung, not working; that is now a bug to report, not a state to
+> wait out.
 
 #### 5.3b.2 Contract — the digital twin is production data, and must be treated that way
 
@@ -1040,7 +1050,7 @@ tokens, member access keys and every stored email address — the same inventory
 | **T1** | **No production credential is used or needed.** The twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run *for real* with no production secret in play. It is also why `doadmin` is irrelevant to §5.3/§5.3b: the migrations apply to the twin, and at real cutover (§7) they apply as the application's writer from `DATABASE_URL` — `doadmin` applies migrations at no point in this runbook. |
 | **T2** | **The twin's superuser is a true superuser, and that is fine.** It holds more Postgres privilege than `doadmin` does (DO withholds real superuser — §3's `pg_read_all_data` box is that limit in action), yet near-zero risk: it reaches one disposable container and dies with it. | Privilege and blast radius are independent. Do not reason about this credential by its power; reason about the state it can reach. |
 | **T3** | **The published port must bind a non-routable address** — `127.0.0.1`, or the Docker bridge gateway when sibling containers must reach it (§5.3b). **Never `0.0.0.0`.** | Docker inserts its own iptables rules ahead of ufw/firewalld, so a `0.0.0.0` bind can be reachable from outside the host *even when the firewall looks closed* (verified 2026-08-17). Given T4, the bind address is the only thing standing between a production-data copy and the internet. |
-| **T4** | **The twin's password must be generated per run, not a constant.** | `restore-container.ts` currently hardcodes `LOCAL_USER = "restore_check"` / `LOCAL_PASSWORD = "throwaway-local-only"`, and §5.3's prose claimed the superuser was "freshly generated" — it was not. A predictable password is acceptable *only* while T3 holds perfectly; making it unpredictable removes the dependence of one control on another, costs nothing, and makes the documented claim true. **Deviation as of 2026-08-17: the constant is still in place.** |
+| **T4** | **The twin's password must be generated per run, not a constant.** | A predictable password is acceptable *only* while T3 holds perfectly; making it unpredictable removes the dependence of one control on another and costs nothing. **Conformant as of 2026-08-17.** `restore-container.ts` previously hardcoded `LOCAL_PASSWORD = "throwaway-local-only"` while §5.3's prose claimed the superuser was "freshly generated" — it was not. It now is: generated per run, never logged, passed to callers on `RestoredContainer`. |
 
 ### 5.4 🔴 IRREVERSIBLE — capture the swarm schedule rows, which no restore returns
 
