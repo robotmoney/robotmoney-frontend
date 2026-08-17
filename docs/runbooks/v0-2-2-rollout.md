@@ -1165,6 +1165,40 @@ rollback, not the override.
 
 ## 8. Post-cutover verification
 
+### 8.0 Dry-run this section before cutover — prove the checks discriminate
+
+**Do this once, read-only, against still-`v0.2.1` production, before §7 runs —
+not a spot check, a self-test of the checks below.** The point is exactly what
+Gate A's own history already proves the hard way (§2, Gate A): a check that
+*looks* like it answers the right question can instead throw an error that
+gets misread as a pass, or silently return an empty result that means
+nothing yet. Run every SQL-shaped check from §8's table now, as `rm_readonly`
+(§3/§4's role — this is safe, it cannot write), and confirm what you see
+matches what is documented here — verified 2026-08-17 against production:
+
+| # | Check | Result running TODAY, pre-upgrade | What it means |
+|---|---|---|---|
+| 2 | migrations recorded | `0 rows` | Correct negative signal — none of the four are applied yet. |
+| 4 | handle namespace violation | `ERROR: column a.handle does not exist` (`42703`) | **Expected.** `handle` does not exist until `0030` applies. This is not a bug in the query and not something to "fix" pre-upgrade — running it today MUST error this way. If it instead returns `0 rows` today, you are pointed at an already-migrated database (wrong tag, or production has already been cut over) — treat that the way §2.0 treats a `psql ""` false pass: stop and re-verify what you are connected to. |
+| 5 | namespace trigger `ENABLE ALWAYS` | `0 rows` | Correct — the trigger does not exist until `0031`. A `pg_trigger` lookup by name degrades gracefully to empty, unlike a column reference. |
+| 6 | members missing handle | `ERROR: column "handle" does not exist` (`42703`) | **Expected**, same reason as check 4. |
+| 7 | unsaveable handles | `ERROR: column "handle" does not exist` (`42703`) | **Expected**, same reason as check 4. |
+| 8 | `swarm_recommendations` baseline | `547` rows (2026-08-17; re-derive on your own run — this is a point-in-time count, not a constant) | This is the number check 8 compares against post-upgrade (`≥` this). Write down your own count now; you cannot recover it from a rolled-back or already-upgraded database. |
+| 9 | `admin_credential` untouched | `ERROR: column "recovery_hash" does not exist` (`42703`) | **Expected — and previously undocumented here.** This is the exact same landmine Gate A already documents at length (§2, Gate A: *"Do not name `recovery_hash` in this query"*) — `0029_admin_auth_recovery.sql` has not applied yet, so the column does not exist. Check 9 as written names it directly and WILL throw pre-upgrade. Do not read this error as a release failure; it is the correct pre-upgrade state. Re-run check 9 verbatim only after §7.4's migrations have applied — post-upgrade it must return rows, not an error. |
+| 12 | swarm schedules baseline | five rows, all `enabled = f` (2026-08-17) | This is exactly what §5.4 asks you to capture — do it here too, so you have it recorded in two places before the boot in §7 can clobber it. |
+
+Checks 1, 3, 10, 11 are not dry-runnable this way: 1 depends on the boot's own
+exit code, 3 and 11 hit the running api's HTTP surface (whose `/health` shape
+and prerendered routes are §8's post-upgrade behavior, not something that
+exists to check pre-upgrade), and 10 depends on Gate A's claim state, already
+established separately in §2.
+
+**If any check above does not match its documented result** — in particular,
+if check 4/6/7/9 do *not* error, or check 2 is not empty — stop. You are not
+looking at the pre-upgrade database this runbook assumes, and every check
+number in §8's table below needs re-deriving before you trust it after
+cutover.
+
 Discover the project first — you pinned it, so it is `rm_prod`. `DATABASE_URL`
 must be loaded and asserted in **this** shell too, or every `psql` below grades
 the wrong database (§2.0):
