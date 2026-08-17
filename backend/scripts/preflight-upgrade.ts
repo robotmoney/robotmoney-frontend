@@ -363,11 +363,14 @@ async function checkServerVersion(db: Db): Promise<void> {
     return;
   }
   const major = Math.floor(v.num / 10000);
-  if (major !== 17) {
+  // Production runs 18 (DigitalOcean managed, confirmed 2026-08-17); CI/local
+  // (docker-compose.yml:141) still pins 17. Both are known-good — anything
+  // else is genuinely untested.
+  if (major !== 17 && major !== 18) {
     record(
       "server-version",
       "WARN",
-      `PostgreSQL ${v.version} — the test suite and CI run 17; behaviour is untested here`,
+      `PostgreSQL ${v.version} — CI runs 17 and production runs 18; behaviour is untested here`,
       "Match the client pg_dump major version to this server when taking the pre-upgrade dump.",
     );
     return;
