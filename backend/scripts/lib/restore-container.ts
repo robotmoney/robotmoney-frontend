@@ -28,9 +28,23 @@ export function resolveBackupFiles(backupDirArg?: string): BackupFiles | { error
   const stamp = readFileSync(stampFile, "utf8").trim();
   const dumpEnc = join(backupDir, `rm-preupgrade-${stamp}.dump.gpg`);
   const globalsEnc = join(backupDir, `rm-globals-${stamp}.sql.gpg`);
+  for (const f of [dumpEnc, globalsEnc]) {
+    if (!existsSync(f)) return { error: `missing ${f} — run §5.1's pg_dump/pg_dumpall, then §5.2's gpg` };
+  }
+  // Called out separately because its absence has a specific, non-obvious
+  // cause: encrypting with a bare interactive `gpg --symmetric` (as an early
+  // revision of §5.2 showed) leaves no passphrase file, and decryption here
+  // is non-interactive by design. The fix is to re-read §5.2, not to guess.
   const passphraseFile = join(backupDir, ".backup-passphrase");
-  for (const f of [dumpEnc, globalsEnc, passphraseFile]) {
-    if (!existsSync(f)) return { error: `missing ${f}` };
+  if (!existsSync(passphraseFile)) {
+    return {
+      error:
+        `missing ${passphraseFile} — decryption here is non-interactive ` +
+        `(gpg --batch --passphrase-file). Encrypt per §5.2, which generates this file and ` +
+        `passes it to both gpg calls; a bare interactive 'gpg --symmetric' does not create it. ` +
+        `If the backup is archived with the passphrase held elsewhere (§5.2 says it should be), ` +
+        `restore it to this directory for the duration of this run.`,
+    };
   }
   return { stamp, dumpEnc, globalsEnc, passphraseFile };
 }

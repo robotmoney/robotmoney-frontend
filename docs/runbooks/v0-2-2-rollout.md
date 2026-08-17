@@ -777,6 +777,32 @@ The `~/.pgpass` alternative, if you prefer no secrets on the command line —
 > **Match the client major version to the server.** `pg_dump` refuses a server
 > newer than itself. The pre-flight's `server-version` check prints the server
 > version; use a `pg_dump` of at least that major.
+>
+> **Concretely: production is PostgreSQL 18 (18.6, confirmed by Gate B on
+> 2026-08-17), and no current distro ships an 18 client by default** —
+> Ubuntu 24.04's `postgresql-client` is 16, which fails here with
+> `server version mismatch`. Installing the distro package and discovering
+> that at 3am is a bad trade for two minutes now, so check first and add
+> PGDG if needed:
+>
+> ```bash
+> pg_dump --version        # must be >= the server major (18)
+>
+> # If it is older, add the PostgreSQL APT repo (Debian/Ubuntu):
+> sudo install -d /usr/share/postgresql-common/pgdg
+> sudo curl -sSf -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+>   https://www.postgresql.org/media/keys/ACCC4CF8.asc
+> . /etc/os-release && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+>   https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+>   | sudo tee /etc/apt/sources.list.d/pgdg.list
+> sudo apt-get update && sudo apt-get install -y postgresql-client-18
+> pg_dump --version        # re-check: PGDG's postinst repoints /usr/bin
+> ```
+>
+> `restore-check.ts` restores into `postgres:18` (`restore-container.ts`'s
+> `IMAGE`) precisely so the restore target matches production's major — a
+> client older than 18 cannot produce a dump that container will accept
+> either, so this is one requirement, not two.
 
 ### 5.2 🔴 The dump is a credential store — encrypt it at rest
 
@@ -791,12 +817,44 @@ reversible form:
 - `admin_webauthn_challenge` — live claim challenges.
 - Swarm member access keys, and every stored email address.
 
+**Use a passphrase FILE, not gpg's interactive prompt.** `restore-check.ts`
+and `stage-rehearsal.ts` decrypt non-interactively with
+`gpg --batch --passphrase-file <backupDir>/.backup-passphrase`
+(`backend/scripts/lib/restore-container.ts`), and `resolveBackupFiles()`
+refuses to start without that exact file. An earlier revision of this
+section showed a bare `gpg --symmetric`, which prompts and writes no such
+file — follow that literally and §5.3 exits `2` before it restores anything,
+so **Gate C could not pass as written.** Generate the passphrase first and
+hand it to both `gpg` calls:
+
 ```bash
-gpg --symmetric --cipher-algo AES256 "rm-preupgrade-${STAMP}.dump"
+umask 077
+# The passphrase itself. Same alphabet rule as §3 — this one is also typed
+# by hand during a recovery, so keep it shell-safe.
+LC_ALL=C tr -dc 'A-Za-z0-9._~-' </dev/urandom | head -c 48 > .backup-passphrase
+echo >> .backup-passphrase
+
+gpg --batch --yes --passphrase-file .backup-passphrase \
+    --symmetric --cipher-algo AES256 "rm-preupgrade-${STAMP}.dump"
 shred -u "rm-preupgrade-${STAMP}.dump"       # or: rm -P on macOS
-gpg --symmetric --cipher-algo AES256 "rm-globals-${STAMP}.sql"
+gpg --batch --yes --passphrase-file .backup-passphrase \
+    --symmetric --cipher-algo AES256 "rm-globals-${STAMP}.sql"
 shred -u "rm-globals-${STAMP}.sql"
 ```
+
+> 🔴 **The passphrase file must not stay next to the dumps at rest.** The
+> tooling requires it *inside* `backupDir` while it runs, which means that
+> for the duration of §5.3/§5.3b the key and the ciphertext sit in one
+> directory — copy that directory anywhere and the encryption has bought you
+> nothing. That co-location is an execution-time requirement, not a storage
+> layout. **When the Gate C run is done, move `.backup-passphrase` somewhere
+> the dumps are not** (a password manager, a separate host), and restore it
+> to `backupDir` only for the minutes a later run needs it. Verify what you
+> are about to archive:
+>
+> ```bash
+> ls -a ~/rm-backup-v022     # .backup-passphrase must NOT travel with the .gpg files
+> ```
 
 Do not put either file in the checkout, in `.agents/`, or anywhere a compose
 bind mount can reach.
@@ -914,16 +972,37 @@ v0.2.1's too. Any operator toggle you have made to those five rows is
 time (§9, §6.5).
 
 The prior values are therefore an evidence artifact, not a curiosity. Take it
-now, with the rest of the backup, against production:
+now, with the rest of the backup. This is a pure `SELECT`, so it runs as
+`rm_readonly` against the **replica** like every other pre-cutover read in
+this runbook — **not** as the application's writer. An earlier revision used
+`psql "$DATABASE_URL"` here, which is the one production write credential,
+reached for at the one point in preflight where nothing needs it; §2's rule
+is that preflight never touches the primary and never uses the writer.
 
 ```bash
-psql "$DATABASE_URL" -c \
+# Same connection §4 uses, read out of .env.readonly. One helper, so a
+# password containing '=' survives (only the FIRST '=' separates key/value).
+rokey() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" <checkout>/.env.readonly | head -1; }
+
+export PGHOST="$(rokey host)"       PGPORT="$(rokey port)"
+export PGUSER="$(rokey username)"   PGPASSWORD="$(rokey password)"
+export PGDATABASE="$(rokey database)" PGSSLMODE=require
+
+# Prove it is the replica and the read-only role before trusting the output.
+psql -X -Atc "SELECT current_user, inet_server_addr(), current_database();"
+
+psql -X -c \
   "SELECT kind, cron, enabled, timezone, payload FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;" \
   | tee "rm-swarm-schedules-${STAMP}.txt"
 ```
 
-Expect five rows. This file is the **only** record of what the boot is about to
-clobber; restoring those values afterwards is a manual `UPDATE` per row, and you
+Expect five rows. **Verified 2026-08-17** against the replica as `rm_readonly`:
+five rows, all `enabled = f`, `payload` `{}` except
+`swarm.publish_brief`'s `{"windowMinutes": 60}` — matching §8.0's check-12
+baseline, which is the point of capturing it in both places.
+
+This file is the **only** record of what the boot is about to clobber;
+restoring those values afterwards is a manual `UPDATE` per row, and you
 cannot write it without this output. Keep it with the dump (it holds no
 credentials, so it does not need §5.2's encryption).
 
