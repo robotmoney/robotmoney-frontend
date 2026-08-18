@@ -212,6 +212,13 @@ checklists, not typing commands into a production shell.
 
 ## 6. Backporting
 
+**Not a go/no-go gate.** §5's preflight/cutover/postflight loop never checks
+backport debt, and an outstanding backport is never a reason to hold up,
+fail, or re-run any step of §5. Backporting is engineering hygiene owed once
+`vA.B.C` is tagged and `releases-A.B.x` stops being the active release line —
+it is a concern for whoever picks up work on `main` next, not for the agent
+executing the rollout.
+
 Fixes discovered directly on the `releases-A.B.x` branch during rollout —
 during preflight dry-runs or the cutover itself — get merged back to `main`.
 This is not a new rule invented for releases: it is the same standing
