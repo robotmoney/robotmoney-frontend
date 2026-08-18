@@ -97,19 +97,30 @@ export const SMOKE_SUBJECTS: readonly { id: string; name: string }[] = Object.fr
 ]);
 
 /**
- * The three personas the archive restores, by member id and display name —
+ * The three personas the archive restores, by public HANDLE and display name —
  * the ONLY members a smoke session may seat.
  *
  * This is an allowlist, not a cap: a persistent database can carry members from
  * an earlier demo boot or from a real onboarding, and a smoke boot must seat
- * NONE of them. Their names are the archive's own (`woon` is displayed as
- * "Noop analyst" after import), so the list is a fact about the archive rather
- * than a preference.
+ * NONE of them. Their names are the archive's own (the archive's `woon` is
+ * displayed as "Noop analyst" after import), so the list is a fact about the
+ * archive rather than a preference.
+ *
+ * HANDLE, NOT ID (issue #685). These used to be the ids `athena`, `robotmoney`
+ * and `woon` — the archive's own slugs, which the importer wrote straight into
+ * the primary key. Member ids are generated per deployment now
+ * (`crypto.randomUUID()`), so a smoke boot has no way to know one in advance
+ * and a hardcoded slug matches nothing: the allowlist has to name members by
+ * the one key that IS stable across deployments. The handles are derived from
+ * the display names by the single `slugifyMemberName` algorithm, which is why
+ * "Robot Money" is `robot-money` and not `robotmoney`, and why the archive's
+ * `woon` is `noop-analyst` — leaving the bare `woon` handle for the member
+ * actually named Woon.
  */
-export const SMOKE_MEMBERS: readonly { id: string; name: string }[] = Object.freeze([
-  Object.freeze({ id: "athena", name: "Athena" }),
-  Object.freeze({ id: "robotmoney", name: "Robot Money" }),
-  Object.freeze({ id: "woon", name: "Noop analyst" }),
+export const SMOKE_MEMBERS: readonly { handle: string; name: string }[] = Object.freeze([
+  Object.freeze({ handle: "athena", name: "Athena" }),
+  Object.freeze({ handle: "robot-money", name: "Robot Money" }),
+  Object.freeze({ handle: "noop-analyst", name: "Noop analyst" }),
 ]);
 
 export function scenarioPlan(smoke: boolean): ScenarioPlan {
@@ -180,10 +191,15 @@ export function adoptRestoredRoster(
     present: true,
   }));
   if (plan.kind === "smoke") {
-    const expected = SMOKE_MEMBERS.map((m) => m.id).sort().join(",");
-    const actual = adopted.map((m) => m.memberId).sort().join(",");
+    // Compared by HANDLE (issue #685). The adopted rows carry whatever id this
+    // deployment generated, so an id comparison could only ever be satisfied by
+    // a seed that hardcoded slug ids — the thing this issue removes. The handle
+    // is the stable public key, and `rosterMembers()` reads it off the admin
+    // API's `handle` field alongside the id it seats members with.
+    const expected = SMOKE_MEMBERS.map((m) => m.handle).sort().join(",");
+    const actual = result.adopt.map((m) => m.handle ?? m.id).sort().join(",");
     if (actual !== expected) {
-      throw new Error(`smoke initializer expected restored IC identities [${expected}], got [${actual || "none"}]`);
+      throw new Error(`smoke initializer expected restored IC handles [${expected}], got [${actual || "none"}]`);
     }
   }
   return [...seated.map((m) => ({ ...m })), ...adopted];

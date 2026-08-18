@@ -22,7 +22,17 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 // filled. See support/clean-db.ts.
 useCleanDatabasePerTest(import.meta.file);
 
-const MEMBER_IDS = ["athena", "robotmoney", "woon"];
+// HANDLES, not ids (issue #685). Both writers this file drives — the roster
+// seed and the v0 archive importer — generate `crypto.randomUUID()` ids now, so
+// there is no member id an orchestration test can name in advance. The handle
+// is derived from the display name by one algorithm, which is why "Robot Money"
+// is `robot-money` and the archive's `woon` (displayed "Noop analyst") is
+// `noop-analyst`.
+const MEMBER_HANDLES = ["athena", "robot-money", "noop-analyst"];
+// handle -> the archive's own slug, which is also the published avatar
+// basename: canonicalizeAvatar() rewrites the directory, never the filename.
+const HANDLE_TO_ARCHIVE_ID: Record<string, string> = { athena: "athena", "robot-money": "robotmoney", "noop-analyst": "woon" };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SUBJECT_IDS = ["robotmoney-allocation", "robotmoney-treasury", "robotmoney-vault", "woon"];
 
 // Expected v0-seed summary, derived from the committed archive rather than
@@ -119,7 +129,7 @@ test("cold DB: all three steps run, v0-seed inserts the archive's full manifest 
 
   expect(reports.some((r) => r.failing)).toBe(false);
 
-  const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
+  const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES})`;
   expect(n).toBe(3);
 });
 
@@ -138,7 +148,7 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
   delete process.env.ANALYTICS_TOKEN;
 
   await runProdBootstrap();
-  await sql`UPDATE swarm_members SET tagline = 'MUTATED for prod-bootstrap orchestration test' WHERE id = 'athena'`;
+  await sql`UPDATE swarm_members SET tagline = 'MUTATED for prod-bootstrap orchestration test' WHERE handle = 'athena'`;
 
   const reports = await runProdBootstrap();
   // No fail-fast: migrations and the edgar step still ran even though v0-seed drifted.
@@ -174,7 +184,7 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
   expect(reports.some((r) => r.failing)).toBe(false);
 
   // Never silently overwritten.
-  const [{ tagline }] = await sql<{ tagline: string }[]>`SELECT tagline FROM swarm_members WHERE id = 'athena'`;
+  const [{ tagline }] = await sql<{ tagline: string }[]>`SELECT tagline FROM swarm_members WHERE handle = 'athena'`;
   expect(tagline).toBe("MUTATED for prod-bootstrap orchestration test");
 });
 
@@ -259,7 +269,7 @@ test("a restored namespace violation halts the run before ANY write, with both m
     // The archive members are the proof nothing was written: this test's
     // database starts empty and a completed run always reinstates all three.
     const [{ n }] = await sql<{ n: number }[]>`
-      SELECT COUNT(*)::int AS n FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
+      SELECT COUNT(*)::int AS n FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES})`;
     expect(n).toBe(0);
   } finally {
     // Repair by UPDATE, not DELETE. Migration 0032 makes swarm_members
@@ -310,10 +320,13 @@ test("SWARM_SEED_ROSTER=1: the roster is seated by step 1, and step 2 still repo
 
   const reports = await runProdBootstrap();
 
-  // The seeder really did run first — otherwise this asserts nothing.
-  const seated = await sql<{ id: string }[]>`
-    SELECT id FROM swarm_members WHERE id IN ('athena', 'robotmoney') ORDER BY id`;
-  expect(seated.map((r) => r.id)).toEqual(["athena", "robotmoney"]);
+  // The seeder really did run first — otherwise this asserts nothing. Found by
+  // HANDLE (issue #685): the seed generates the ids, so naming them here would
+  // only pass against the slug-id seed this release removes.
+  const seated = await sql<{ id: string; handle: string }[]>`
+    SELECT id, handle FROM swarm_members WHERE handle IN ('athena', 'robot-money') ORDER BY handle`;
+  expect(seated.map((r) => r.handle)).toEqual(["athena", "robot-money"]);
+  for (const r of seated) expect(r.id, `${r.handle} must hold a generated id`).toMatch(UUID_RE);
 
   const v0seed = reportFor(reports, "v0-seed:bootstrap");
   expect(v0seed.summary).toContain("0 drift");
@@ -326,10 +339,10 @@ test("SWARM_SEED_ROSTER=1: the roster is seated by step 1, and step 2 still repo
   expect(reports.some((r) => r.failing)).toBe(false);
 
   // All three archive members are present, all on the canonical avatar path.
-  const rows = await sql<{ id: string; avatar: Record<string, unknown> }[]>`
-    SELECT id, avatar FROM swarm_members WHERE id = ANY(${MEMBER_IDS}) ORDER BY id`;
+  const rows = await sql<{ handle: string; avatar: Record<string, unknown> }[]>`
+    SELECT handle, avatar FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES}) ORDER BY handle`;
   expect(rows.length).toBe(3);
-  for (const r of rows) expect(r.avatar.path).toBe(`/avatars/swarm/${r.id}.jpg`);
+  for (const r of rows) expect(r.avatar.path).toBe(`/avatars/swarm/${HANDLE_TO_ARCHIVE_ID[r.handle]}.jpg`);
 
   // And a second convergence run is still clean, in that same ordering.
   const second = await runProdBootstrap();

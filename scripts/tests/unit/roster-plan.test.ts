@@ -246,7 +246,13 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
   test("the three restored personas are seated, by id", () => {
     const plan = planAdoptions(RESTORED, new Set(), smokeFilter);
     expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
-    expect([...SMOKE_MEMBERS].map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
+    // The ALLOWLIST is spelled in handles, not ids (issue #685): member ids are
+    // generated per deployment now, so a literal id list here could only be
+    // satisfied by a seed that hardcoded slugs. The ids above are this test's
+    // own fixtures — planAdoptions itself matches on NAME and never reads the
+    // allowlist's key.
+    expect([...SMOKE_MEMBERS].map((m) => m.handle).sort()).toEqual(["athena", "noop-analyst", "robot-money"]);
+    expect([...SMOKE_MEMBERS].some((m) => "id" in m)).toBe(false);
   });
 
   test("every persisted member outside the three is REJECTED — including demo characters with committed keys", () => {
