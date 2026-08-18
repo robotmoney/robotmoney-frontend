@@ -9,7 +9,7 @@
 // existing row — that lets the scheduler own slot bookkeeping and lets an
 // operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
-import { seedLiveRoster, pruneToLiveRoster } from "../swarm/roster-seed.ts";
+import { seedLiveRoster, pruneToLiveRoster, backfillMemberHandles } from "../swarm/roster-seed.ts";
 import { seedDemoProjects } from "../projects/demo-seed.ts";
 import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
@@ -308,6 +308,19 @@ export async function seed(): Promise<void> {
   // SWARM_SEED_ROSTER_PRUNE=1 alone can never retire the whole roster and seat
   // nothing in its place. Set it for the one convergence run, not in the
   // standing config.
+  // Every member whose handle is still the 0030 default gets the handle its
+  // display name derives to. UNGATED and unconditional, unlike the roster
+  // seeding below: this is not a deployment-shaping choice, it is the reader of
+  // a signal 0030 already writes, and a member without a readable handle is
+  // simply an unfinished migration. Nothing else will ever fill these in — the
+  // other derivation sites fire on acceptance/registration events that a
+  // long-admitted member has already passed. Idempotent, so a boot with nothing
+  // to do stays silent.
+  const derivedHandles = await backfillMemberHandles();
+  if (derivedHandles > 0) {
+    console.log(`derived ${derivedHandles} swarm member handle(s) that were still at migration 0030's default`);
+  }
+
   if (process.env.SWARM_SEED_ROSTER === "1") {
     const seated = await seedLiveRoster();
     console.log(`seeded swarm live roster (${seated} member(s), profile copy from the committed manifests)`);
