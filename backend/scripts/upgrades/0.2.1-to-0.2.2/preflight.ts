@@ -80,19 +80,22 @@ async function checkServerVersion(db: Db, { record }: Checker): Promise<void> {
       "server-version",
       "FAIL",
       `PostgreSQL ${v.version} — 0030's ADD COLUMN is not an instant catalog-only operation before 11`,
-      "Upgrade the cluster to 11+ (the suite targets 17) before applying 0030; on <11 the ADD COLUMN rewrites swarm_members under ACCESS EXCLUSIVE.",
+      "Upgrade the cluster to 11+ (the suite targets 18) before applying 0030; on <11 the ADD COLUMN rewrites swarm_members under ACCESS EXCLUSIVE.",
     );
     return;
   }
   const major = Math.floor(v.num / 10000);
-  // Production runs 18 (DigitalOcean managed, confirmed 2026-08-17); CI/local
-  // (docker-compose.yml:141) still pins 17. Both are known-good — anything
-  // else is genuinely untested.
+  // Production runs 18 (DigitalOcean managed, confirmed 2026-08-17), and since
+  // issue #691 so do the backend test suite and the restore twin — both pinned
+  // by backend/scripts/lib/postgres-image.ts. 17 is still tolerated without a
+  // warning because the demo / single-box stack (docker-compose.yml's
+  // `postgres` service) is on it and a preflight may legitimately be pointed at
+  // one; anything outside {17,18} is genuinely untested.
   if (major !== 17 && major !== 18) {
     record(
       "server-version",
       "WARN",
-      `PostgreSQL ${v.version} — CI runs 17 and production runs 18; behaviour is untested here`,
+      `PostgreSQL ${v.version} — the suite and production both run 18; behaviour is untested here`,
       "Match the client pg_dump major version to this server when taking the pre-upgrade dump.",
     );
     return;

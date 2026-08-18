@@ -14,6 +14,15 @@ import {
   stackLabels,
   stackProjectName,
 } from "../../scripts/stack/naming.ts";
+// The SHARED ephemeral-Postgres pin, owned by scripts/lib/ because the rollout
+// tooling's digital twin (scripts/lib/restore-container.ts) needs the identical
+// image and this file needs it too. It used to be a private literal here, one
+// major behind that twin and behind production, so every migration was
+// validated against a server it would never run on (issue #691). Importing
+// backend/tests -> backend/scripts/lib is an established edge
+// (tests/restore-container.test.ts), and this module is a leaf: two constants,
+// no imports, no side effects.
+import { POSTGRES_IMAGE, POSTGRES_MAJOR } from "../scripts/lib/postgres-image.ts";
 
 function freePort(): Promise<number> {
   return new Promise((res, rej) => {
@@ -51,7 +60,7 @@ const up = Bun.spawnSync([
   "docker", "run", "-d", "--rm", "--name", name,
   ...labelFlags,
   "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
-  "-p", `${port}:5432`, "postgres:17-alpine",
+  "-p", `${port}:5432`, POSTGRES_IMAGE,
   // Durability off. This database exists for the length of one `bun test` and
   // is `docker rm -f`d afterwards, so crash recovery has nothing to recover;
   // what these buy is the checkpoint. CREATE/DROP DATABASE each force one, and
@@ -97,7 +106,35 @@ await client.setDatabase(`postgres://robotmoney:robotmoney@localhost:${port}/pos
 await client.sql.unsafe(`CREATE DATABASE "${process.env.RM_TEST_TEMPLATE_DB}" TEMPLATE robotmoney`);
 await client.setDatabase(baseUrl);
 
-console.log(`[tests] ephemeral postgres ready on :${port} (${name}, env=${environment.class}/${environment.hash})`);
+// Report the SERVER's own version, not the tag we asked for, and refuse to run
+// the suite if its major is not the one this repo pins (issue #691).
+//
+// The tag and the server can disagree — a stale local copy of the pinned tag
+// that a registry re-pointed, a mirrored/retagged image, or a DATABASE_URL
+// that some future caller overrides before this file loads. The failure mode being
+// closed off is not "the wrong image was named"; it is the SILENT one this
+// issue found: the whole suite validating migrations against a major that
+// production does not run, going green, and nothing anywhere saying which
+// version it ran on. Printing it in the startup line means the next mismatch
+// is visible in every single run's log instead of waiting for an audit; the
+// throw means it is visible whether or not anyone reads the log.
+const [server] = (await client.sql`
+  SELECT current_setting('server_version')           AS version,
+         current_setting('server_version_num')::int  AS num
+`) as unknown as { version: string; num: number }[];
+const serverMajor = Math.floor(server.num / 10000);
+if (serverMajor !== POSTGRES_MAJOR) {
+  throw new Error(
+    `ephemeral postgres is PostgreSQL ${server.version} (major ${serverMajor}) but ${POSTGRES_IMAGE} ` +
+      `is pinned to major ${POSTGRES_MAJOR} — the suite must run the major production runs. ` +
+      `See backend/scripts/lib/postgres-image.ts.`,
+  );
+}
+
+console.log(
+  `[tests] ephemeral postgres ready on :${port} (${name}, env=${environment.class}/${environment.hash}, ` +
+    `image=${POSTGRES_IMAGE}, server=PostgreSQL ${server.version})`,
+);
 
 afterAll(async () => {
   await client.closeDb();

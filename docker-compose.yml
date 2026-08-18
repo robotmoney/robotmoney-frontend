@@ -138,6 +138,18 @@ x-worker-env: &worker-env
 
 services:
   postgres:
+    # DELIBERATELY NOT the same pin as backend/scripts/lib/postgres-image.ts,
+    # which is 18 because it stands in for production (DO Managed Postgres,
+    # 18.6) in the test harness and the rollout tooling's digital twin. This
+    # service is neither: it is the demo / single-box stack, and it owns a
+    # PERSISTENT data directory — the `pgdata` volume below, or a host dir
+    # under `bun run demo -- --pg-data`, whose documented contract is that the
+    # same value on a later boot resumes the same data (docs/architecture.md
+    # "Postgres data location"). A data directory initialised by one major is
+    # not readable by another, so moving this to 18 is a dump-and-restore for
+    # every existing demo box, not a string edit. It needs to be its own piece
+    # of work; do not bump it here in passing (issue #691 was scoped to the
+    # harness on purpose).
     image: postgres:17-alpine
     logging: *default-logging
     environment:
