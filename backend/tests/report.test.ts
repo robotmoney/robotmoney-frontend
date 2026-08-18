@@ -7,6 +7,12 @@ import { saveRegimeSnapshots } from "../src/analytics/store/regime-store.ts";
 import type { RegimeSnapshot } from "../src/analytics/analyze/regime.ts";
 import { fetchRegimeSnapshots } from "../src/analytics/report/projections.ts";
 import { getRegimeSnapshots } from "../src/api/routes/dashboards.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 function snap(date: string, composite: number): RegimeSnapshot {
   return {
@@ -17,7 +23,6 @@ function snap(date: string, composite: number): RegimeSnapshot {
 }
 
 test("fetchRegimeSnapshots: chronological history + latest = most recent", async () => {
-  await sql`DELETE FROM regime_snapshots`;
   // insert out of order to prove the projection sorts chronologically.
   await saveRegimeSnapshots([
     snap("1991-03-03", 0.3),
@@ -33,7 +38,6 @@ test("fetchRegimeSnapshots: chronological history + latest = most recent", async
 });
 
 test("getRegimeSnapshots route clamps range to [1, 3650]", async () => {
-  await sql`DELETE FROM regime_snapshots`;
   await saveRegimeSnapshots([
     snap("1991-03-01", 0.1),
     snap("1991-03-02", 0.2),

@@ -1,21 +1,15 @@
-import { test, expect, afterEach, beforeAll } from "bun:test";
+import { test, expect, afterEach } from "bun:test";
 import { config } from "../src/config.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
-import { sql } from "../src/db/client.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
 
 // privileged() reads config at call time, so we flip config per test (restored after).
 const orig = { adminToken: config.adminToken, allowInsecure: config.allowInsecure };
 afterEach(() => { config.adminToken = orig.adminToken; config.allowInsecure = orig.allowInsecure; });
 
-// These tests register net-new members through the privileged register route and
-// expect 201. SWARM_ROSTER_CAP is now hard-enforced (an over-cap register is
-// refused with a 409, surfaced by the route), and all swarm test files share
-// ONE ephemeral Postgres, so a roster left full by an earlier-running file would
-// make these registrations 409. Reset the roster so this file admits from empty,
-// independent of file order.
-beforeAll(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per file, cloned from the migrated template — the roster this
+// file admits into is its own, with no reset of anyone else's rows.
+useCleanDatabase(import.meta.file);
 
 const REG = "/api/swarm/register"; // privileged + non-destructive
 function regReq(headers: Record<string, string> = {}) {

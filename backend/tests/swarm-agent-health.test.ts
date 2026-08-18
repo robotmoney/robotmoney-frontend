@@ -4,7 +4,7 @@
 // stdout. Both are now recorded on a durable, queryable, append-only event
 // log (swarm_agent_health_events) and exposed admin-only via
 // GET /api/swarm/admin/agent-health.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,7 @@ import { canonicalizeSubmission } from "@robotmoney/contract";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -26,17 +27,9 @@ const sessionDate = (s: Record<string, unknown>): string =>
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
-// All swarm test files share ONE ephemeral Postgres (tests/preload.ts).
-// SWARM_ROSTER_CAP is hard-enforced on every transition-to-active, so a
-// roster left full by an earlier-running file (in whatever order bun
-// discovers test files — this is NOT guaranteed to match local runs) would
-// make this file's registerMember() calls 409 instead of admitting. Start
-// from a clean roster, matching the same convention swarm.test.ts /
-// swarm-claim.test.ts / swarm-roster-cap.test.ts / swarm-admin-
-// surface.test.ts already use.
-beforeAll(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per file, cloned from the migrated template — the roster this
+// file admits into is its own, with no reset of anyone else's rows.
+useCleanDatabase(import.meta.file);
 
 async function activeMember() {
   const id = rid("m");

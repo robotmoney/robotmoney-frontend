@@ -37,8 +37,13 @@ const name = stackProjectName("pgtest", environment);
 // applies to every other container must be passed explicitly here.
 const labelFlags = dockerLabelFlags(stackLabels(environment, name));
 
+const baseUrl = `postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`;
 // Must be set BEFORE any module reads config.databaseUrl / creates the pool.
-process.env.DATABASE_URL = `postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`;
+process.env.DATABASE_URL = baseUrl;
+// The template a test file clones to get a clean database of its own; see
+// tests/support/clean-db.ts. Published through the environment because preload
+// and the helper are separate modules with no import edge between them.
+process.env.RM_TEST_TEMPLATE_DB = "robotmoney_tmpl";
 process.env.RM_ENV = "ephemeral";
 process.env.SWARM_NOTIFICATION_EMAIL_FROM = "swarm-test@robotmoney.invalid";
 
@@ -47,6 +52,15 @@ const up = Bun.spawnSync([
   ...labelFlags,
   "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
   "-p", `${port}:5432`, "postgres:17-alpine",
+  // Durability off. This database exists for the length of one `bun test` and
+  // is `docker rm -f`d afterwards, so crash recovery has nothing to recover;
+  // what these buy is the checkpoint. CREATE/DROP DATABASE each force one, and
+  // tests/support/clean-db.ts issues a CREATE per test file — with fsync on,
+  // a single DROP DATABASE was observed taking 10s once the run had built up
+  // dirty buffers, which is how a correct test starts failing on a timeout.
+  "-c", "fsync=off",
+  "-c", "synchronous_commit=off",
+  "-c", "full_page_writes=off",
 ]);
 if (up.exitCode !== 0) {
   throw new Error(`tests require Docker+Postgres but the container failed to start:\n${up.stderr.toString()}`);
@@ -56,10 +70,26 @@ process.on("exit", () => { try { Bun.spawnSync(["docker", "rm", "-f", name]); } 
 // migrate() retries a real SELECT 1 until the server accepts connections.
 const { migrate } = await import("../src/db/migrate.ts");
 await migrate();
+
+// Snapshot the migrated schema as a TEMPLATE database, so any test file can
+// clone a clean one for itself in tens of milliseconds instead of re-running
+// the migrations (tests/support/clean-db.ts). `CREATE DATABASE ... TEMPLATE x`
+// fails while any session is connected to x — including ours — so the pool is
+// parked on the maintenance database `postgres` for the duration of the copy
+// and handed straight back. DATABASE_URL is unchanged either side of this: a
+// file that does not opt into a clean database sees exactly the shared,
+// migrated `robotmoney` it always saw.
+// Held as a namespace, not destructured: `sql` is a live binding that
+// setDatabase() reassigns, and destructuring would freeze this file's view of
+// it at the pool that is about to be closed.
+const client = await import("../src/db/client.ts");
+await client.setDatabase(`postgres://robotmoney:robotmoney@localhost:${port}/postgres`);
+await client.sql.unsafe(`CREATE DATABASE "${process.env.RM_TEST_TEMPLATE_DB}" TEMPLATE robotmoney`);
+await client.setDatabase(baseUrl);
+
 console.log(`[tests] ephemeral postgres ready on :${port} (${name}, env=${environment.class}/${environment.hash})`);
 
-const { closeDb } = await import("../src/db/client.ts");
 afterAll(async () => {
-  await closeDb();
+  await client.closeDb();
   Bun.spawnSync(["docker", "rm", "-f", name]);
 });

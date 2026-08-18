@@ -27,6 +27,7 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -34,16 +35,12 @@ const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const sessionDate = (s: Record<string, unknown>): string =>
   s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
 
-// Every swarm test file shares ONE ephemeral Postgres (tests/preload.ts), and
-// SWARM_ROSTER_CAP is hard-enforced on every transition-to-active. This file
-// seats ~13 members across its tests, so a beforeAll reset would run it into
-// the cap partway through and turn real assertions into spurious "roster full"
-// failures. Reset per test instead: no test here reads another's rows, and the
-// CASCADE also clears member keys, takes and agent-health events, which is what
-// makes the health-event counters below unambiguous.
-beforeEach(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per TEST, cloned from the migrated template. Per-test, not
+// per-file: countActiveMembers() is global and SWARM_ROSTER_CAP is enforced on
+// every transition-to-active, so members seated by one test would make the
+// next test's admission a spurious 409. Unique ids cannot fix that; a clean
+// database can.
+useCleanDatabasePerTest(import.meta.file);
 
 async function activeMember() {
   const id = rid("m");

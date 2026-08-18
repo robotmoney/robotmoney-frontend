@@ -12,12 +12,16 @@ import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
-beforeEach(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per TEST, cloned from the migrated template. Per-test, not
+// per-file: countActiveMembers() is global and SWARM_ROSTER_CAP is enforced on
+// every transition-to-active, so members seated by one test would make the
+// next test's admission a spurious 409. Unique ids cannot fix that; a clean
+// database can.
+useCleanDatabasePerTest(import.meta.file);
 
 async function post(path: string, body: unknown) {
   const req = new Request(`http://test${path}`, {

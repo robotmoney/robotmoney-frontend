@@ -7,21 +7,18 @@
 // (ic.updateMemberProfile) and over the real HTTP dispatcher (handleSwarm)
 // so a route-level regression (path parsing, bearer extraction, JSON body
 // validation) is caught too, not just the domain function in isolation.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
-// Shares the one ephemeral Postgres the other swarm test files use
-// (tests/preload.ts) — same isolation convention as swarm.test.ts /
-// swarm-waitlist.test.ts / swarm-claim.test.ts: start from a clean
-// roster so this file's admissions are order-independent.
-beforeAll(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per file, cloned from the migrated template — the roster this
+// file admits into is its own, with no reset of anyone else's rows.
+useCleanDatabase(import.meta.file);
 
 // registerMember is the privileged apply+activate shortcut (demo/E2E harness) —
 // it mints an ACTIVE member with an ACTIVE key + bearer token in one shot, the

@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import {
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -52,12 +53,12 @@ async function challengeFor(memberId: string) {
   return response!.body as ic.TokenClaimChallenge;
 }
 
-beforeEach(async () => {
-  await sql`DELETE FROM jobs WHERE kind IN (
-    'swarm.send_application_received_notification',
-    'swarm.send_activation_notification')`;
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per TEST, cloned from the migrated template. Per-test, not
+// per-file: countActiveMembers() is global and SWARM_ROSTER_CAP is enforced on
+// every transition-to-active, so members seated by one test would make the
+// next test's admission a spurious 409. Unique ids cannot fix that; a clean
+// database can.
+useCleanDatabasePerTest(import.meta.file);
 
 test("activation persists an email outbox and the executed fake transport delivers it", async () => {
   const applicant = await applyAndActivate("notify");

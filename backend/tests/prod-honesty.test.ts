@@ -21,6 +21,12 @@ import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { liveDataSource } from "../src/analytics/access/data-source.ts";
 import { seededProvider } from "../src/analytics/access/provider.ts";
 import { saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 const ASOF = "2026-06-29";
 
@@ -65,7 +71,6 @@ test(
   async () => {
     // Reset the raw floor + snapshots so this run is deterministic.
     await sql`DELETE FROM raw_indicator_history`;
-    await sql`DELETE FROM regime_snapshots`;
 
     // Seed a SMALL, REAL persisted floor for two indicators only. Every OTHER
     // registry indicator has NO history at all → must be excluded + warned.
