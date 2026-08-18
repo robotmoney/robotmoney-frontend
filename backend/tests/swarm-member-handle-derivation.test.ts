@@ -278,18 +278,22 @@ test("registerMember derives on creation and NEVER on the idempotent re-registra
   expect(await handleOf(id)).toBe("helios");
 });
 
-test("the admin manual add derives from the name, and the operator's memberId still resolves", async () => {
-  const memberId = rid("manual");
+test("the admin manual add derives from the name, and the MINTED memberId still resolves", async () => {
   const { publicKeyB64 } = await generateKeyPair();
+  // No memberId in the body since issue #690 — the route mints one and refuses
+  // a body that names one. The derivation rule under test is unchanged: the
+  // handle is the slug of the DISPLAY NAME, never the id.
   const added = await callAdmin("POST", ROUTES.swarm.admin.members, {
-    memberId,
     name: "Noop Analyst",
     publicKey: publicKeyB64,
   });
   expect(added.status).toBe(201);
   expect(added.body.member.handle).toBe("noop-analyst");
-  expect(added.body.member.id).toBe(memberId);
+  const memberId = added.body.member.id as string;
+  expect(memberId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect(await handleOf(memberId)).toBe("noop-analyst");
+  // The id is still a public reference: getMember resolves handle OR id, which
+  // is what keeps a link published under the id alive after any later rename.
   expect((await getMemberRoute(memberId)).body.id).toBe(memberId);
 });
 

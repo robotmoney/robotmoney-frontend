@@ -1105,16 +1105,28 @@ test("swarm admin: inactive filter, manual-add credential reveal, and reactivate
   await expect(page.getByRole("cell", { name: "Nova", exact: true })).toHaveCount(0);
 
   // Manual-add: drive the form to completion and assert the one-time reveal.
+  // Issue #690 — there is NO member-id field any more: the backend mints the id
+  // and 400s on a body that names one, so a form still collecting it would send
+  // every operator a 400 they cannot act on.
   await page.getByTestId("new-member-toggle").click();
-  await page.getByTestId("member-id").fill("newmember");
+  await expect(page.getByTestId("member-id")).toHaveCount(0);
   await page.getByTestId("member-name").fill("New Member");
   await page.getByTestId("member-public-key").fill("pubkey-abc");
   await page.getByTestId("member-reason").fill("Manually adding this member for coverage.");
+  const addPost = page.waitForRequest(
+    (r) => r.method() === "POST" && new URL(r.url()).pathname === "/api/swarm/admin/members",
+  );
   await page.getByTestId("member-submit").click();
+  // The REQUEST is asserted, not just the rendered result: "the field is gone
+  // from the DOM" would still pass if the submit handler kept sending one.
+  expect(JSON.parse((await addPost).postData() ?? "{}")).not.toHaveProperty("memberId");
 
   const addToken = page.getByTestId("credential-token");
   await expect(addToken).toBeVisible();
   await expect(addToken).toHaveText("member-bearer-token-abc123");
+  // The id in the reveal is the SERVER's (the mock returns `new-member`), which
+  // is the only place the operator can learn what their member was seated as.
+  await expect(page.getByTestId("credential-modal")).toContainText("new-member");
   await page.getByTestId("credential-dismiss").click();
   await expect(page.getByTestId("credential-modal")).not.toBeVisible();
 

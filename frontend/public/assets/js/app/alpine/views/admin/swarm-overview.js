@@ -51,13 +51,14 @@ function validateTopic(form) {
   return errors;
 }
 
+// No `memberId` (issue #690): the backend mints the id and refuses a body that
+// carries one, so the form must not collect or send it.
 function emptyMemberForm() {
-  return { memberId: "", name: "", publicKey: "", contactEmail: "", lens: "", reason: "" };
+  return { name: "", publicKey: "", contactEmail: "", lens: "", reason: "" };
 }
 
 function validateManualMember(form) {
   const errors = {};
-  if (!form.memberId?.trim()) errors.memberId = "Member id is required.";
   if (!form.name?.trim()) errors.name = "Name is required.";
   if (!form.publicKey?.trim()) errors.publicKey = "Public key is required.";
   const reasonErr = reasonError(form.reason);
@@ -206,7 +207,8 @@ export function registerAdminSwarmOverview(Alpine) {
       this.memberSubmitting = true;
       try {
         const body = {
-          memberId: this.memberForm.memberId,
+          // Deliberately NO memberId (issue #690) — the route 400s on the field
+          // rather than quietly seating the member under a generated id.
           name: this.memberForm.name,
           publicKey: this.memberForm.publicKey,
           // Backend field is `contact`, not `contactEmail`
@@ -218,7 +220,10 @@ export function registerAdminSwarmOverview(Alpine) {
         const res = await api.adminPost(ROUTES.swarm.admin.members, this._token(), body);
         this.showMemberForm = false;
         // addMemberAdmin() returns `token` at the top level, not `credential.token`.
-        this.credentialReveal = { memberId: this.memberForm.memberId, token: res.token || "" };
+        // The id comes off the RESPONSE (issue #690) — it is minted by the
+        // server, so the form has nothing to echo back and the operator would
+        // otherwise never see the id their new member was actually seated under.
+        this.credentialReveal = { memberId: res.member?.id || "", token: res.token || "" };
         this.memberForm = emptyMemberForm();
         await this.loadAll();
       } catch (e) {

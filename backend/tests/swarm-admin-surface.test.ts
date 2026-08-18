@@ -104,16 +104,20 @@ test("topics: create validates fields, edit is versioned (409 stale_version), de
 
 // ── AC3: member activation/manual-add/reactivation/key rotation ────────────
 test("members: manual add mints a one-time credential; deactivate revokes keys; reactivate + rotate mint fresh credentials", async () => {
-  const memberId = rid("madd");
   const { publicKeyB64 } = await generateKeyPair();
-  const added = await admin.addMemberAdmin({ memberId, name: "Manual Member", publicKey: publicKeyB64 });
+  const added = await admin.addMemberAdmin({ name: "Manual Member", publicKey: publicKeyB64 });
   expect(added.status).toBe(201);
+  // Issue #690: the id is minted by addMemberAdmin, so the RESPONSE is where it
+  // comes from — there is no caller-chosen string to assert against any more.
+  const memberId = (added as any).member.id as string;
   const token1 = (added as any).token as string;
   expect(typeof token1).toBe("string");
   expect(await ic.memberIdForToken(token1)).toBe(memberId);
 
-  // duplicate memberId → 409
-  expect((await admin.addMemberAdmin({ memberId, name: "x", publicKey: publicKeyB64 })).status).toBe(409);
+  // Duplicate detection moved from the id to the public key (issue #690): the
+  // id can no longer repeat, and re-submitting the same credential is what an
+  // operator double-submitting the add form actually does.
+  expect((await admin.addMemberAdmin({ name: "x", publicKey: publicKeyB64 })).status).toBe(409);
 
   // Reads never expose key material.
   const listed = (await admin.listMembersAdmin()).find((m: any) => m.id === memberId);

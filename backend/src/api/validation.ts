@@ -298,7 +298,54 @@ export function parseExpectedVersion(body: JsonObject | null): number | null {
   return typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : null;
 }
 
-export function parseManualMember(body: JsonObject | null): {
+// ── Admin manual member add (issues #152, #690) ─────────────────────────────
+// The member id is NOT an input. addMemberAdmin mints it with
+// `crypto.randomUUID()` and returns it as `member.id`, the same way applyMember
+// mints one for the public front door.
+//
+// WHY THE FIELD IS REFUSED RATHER THAN IGNORED. Until #690 `memberId` WAS the
+// primary key this route inserted, so an existing client that still sends one
+// is asking for something the route no longer does. Silently dropping it and
+// answering `201 Created` would hand that client a member under a different id
+// than the one it just named and, in every case seen so far, went on to use —
+// the admin surface's own credential modal did exactly that. A 400 naming the
+// field is the only answer that cannot be mistaken for success.
+export const MANUAL_MEMBER_ID_REJECTED =
+  "memberId is not accepted: the member id is generated and returned as member.id";
+export const MANUAL_MEMBER_REQUIRED = "name and publicKey required";
+
+export type ManualMemberParse =
+  | { ok: true; data: { name: string; publicKey: string; lens?: string; contact?: string } }
+  | { ok: false; error: string };
+
+export function parseManualMember(body: JsonObject | null): ManualMemberParse {
+  if (!body) return { ok: false, error: MANUAL_MEMBER_REQUIRED };
+  // Key PRESENCE, not truthiness: `{ memberId: "" }` and `{ memberId: null }`
+  // are still a client asking to choose the id, and both must be told so.
+  if (Object.prototype.hasOwnProperty.call(body, "memberId")) {
+    return { ok: false, error: MANUAL_MEMBER_ID_REJECTED };
+  }
+  const name = requiredString(body, "name", 200);
+  const publicKey = requiredString(body, "publicKey", 1000);
+  if (!name || !publicKey) return { ok: false, error: MANUAL_MEMBER_REQUIRED };
+  return {
+    ok: true,
+    data: { name, publicKey, lens: optionalString(body, "lens", 500), contact: optionalString(body, "contact", 320) },
+  };
+}
+
+// ── Privileged register shortcut (POST /api/swarm/register) ─────────────────
+// SPLIT OFF FROM parseManualMember BY ISSUE #690, deliberately rather than by
+// oversight. The two routes shared one parser only because they happened to
+// take the same fields; they do NOT have the same contract about the id.
+//
+// `registerMember` is the demo/E2E apply+activate shortcut and its whole point
+// is `ON CONFLICT (id) DO UPDATE` — re-running the harness with the same
+// memberId must land on the same member rather than seat a second one. So the
+// caller-supplied id is load-bearing HERE and must keep being accepted, while
+// the admin add path above no longer takes one at all. Narrowing the roster
+// seed and the demo harness onto handles is #685's job, not this one.
+export function parseRegisterMember(body: JsonObject | null): {
   memberId: string; name: string; publicKey: string; lens?: string; contact?: string;
 } | null {
   if (!body) return null;
