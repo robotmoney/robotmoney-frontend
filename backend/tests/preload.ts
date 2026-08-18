@@ -61,6 +61,16 @@ const up = Bun.spawnSync([
   "-c", "fsync=off",
   "-c", "synchronous_commit=off",
   "-c", "full_page_writes=off",
+  // LOGICAL replication has to be available in this container, because one
+  // behaviour of migration 0032 can only be tested through it: an apply worker
+  // removes rows via ExecSimpleRelationDelete, with NO statement, so a
+  // statement-level trigger is never fired and rows leave a protected table
+  // silently. tests/append-only-replication.test.ts builds a real publisher and
+  // subscriber database inside THIS instance and replicates a DELETE between
+  // them. `wal_level` is not settable at runtime, so it belongs here or the
+  // test cannot exist — and it must FAIL rather than skip if it is missing,
+  // which is what that file asserts first.
+  "-c", "wal_level=logical",
 ]);
 if (up.exitCode !== 0) {
   throw new Error(`tests require Docker+Postgres but the container failed to start:\n${up.stderr.toString()}`);

@@ -82,6 +82,10 @@ test("cold DB: all three steps run, v0-seed inserts the archive's full manifest 
   expect(reports.map((r) => r.name)).toEqual([
     "handle-namespace",
     "migrations",
+    // Runs AFTER migrations, because migrate() is what installs the guard it
+    // verifies (issue #684). Probing before would report "not applied" on every
+    // cold boot and prove nothing.
+    "append-only-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
   ]);
@@ -93,6 +97,15 @@ test("cold DB: all three steps run, v0-seed inserts the archive's full manifest 
   const migrations = reportFor(reports, "migrations");
   expect(migrations.status).toBe("success");
   expect(migrations.failing).toBe(false);
+
+  // The guard step PROBES — it attempts a delete on every protected table and
+  // requires migration 0032's own refusal message — so a success here is
+  // evidence the freshly migrated database really refuses deletion, not that a
+  // count of rows in pg_trigger came out right.
+  const appendOnly = reportFor(reports, "append-only-guard");
+  expect(appendOnly.status).toBe("success");
+  expect(appendOnly.failing).toBe(false);
+  expect(appendOnly.summary).toContain("armed");
 
   const v0seed = reportFor(reports, "v0-seed:bootstrap");
   expect(v0seed.status).toBe("success");
@@ -132,6 +145,10 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
   expect(reports.map((r) => r.name)).toEqual([
     "handle-namespace",
     "migrations",
+    // Runs AFTER migrations, because migrate() is what installs the guard it
+    // verifies (issue #684). Probing before would report "not applied" on every
+    // cold boot and prove nothing.
+    "append-only-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
   ]);
@@ -258,6 +275,10 @@ test("a restored namespace violation halts the run before ANY write, with both m
   expect(repaired.map((r) => r.name)).toEqual([
     "handle-namespace",
     "migrations",
+    // Runs AFTER migrations, because migrate() is what installs the guard it
+    // verifies (issue #684). Probing before would report "not applied" on every
+    // cold boot and prove nothing.
+    "append-only-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
   ]);

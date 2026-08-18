@@ -15,13 +15,14 @@
 // in this list. Adding a file here is allowed — it just has to be a decision
 // somebody wrote down, which is the point.
 //
-// The table list is imported from append-only-enforcement.test.ts rather than
-// copied: that file and migrations/0032_append_only_history.sql are the spec,
-// and a third copy would be a third thing to forget.
+// The table list is imported from src/db/append-only-guard.ts rather than
+// copied: that module and migrations/0032_append_only_history.sql are the spec
+// (and an executed test asserts the two agree), so a third copy would be a
+// third thing to forget.
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { APPEND_ONLY_TABLES } from "./append-only-enforcement.test.ts";
+import { APPEND_ONLY_TABLES } from "../src/db/append-only-guard.ts";
 
 // Scanned from the REPOSITORY root, not backend/. The statement this guard is
 // really aimed at — a hand-run `psql` — is not written in application code; it
@@ -46,12 +47,21 @@ const ALLOWED: Record<string, string> = {
 
   // Statements written to be REFUSED — the assertion is the refusal itself.
   "backend/tests/append-only-enforcement.test.ts": "asserts the guard raises",
+  "backend/tests/append-only-guard-check.test.ts": "builds a DISARMED database on purpose and deletes from it",
+  "backend/tests/append-only-replication.test.ts": "replicates a DELETE to prove the row-level guard catches it",
   "backend/tests/append-only-no-new-deletes.test.ts": "this file (the table names are the subject)",
   "backend/tests/swarm-admin-regime.test.ts": "asserts a session delete is refused 0A000",
   "backend/tests/analytics-worker-role.test.ts": "asserts the restricted role is denied 42501",
+  "backend/tests/api-boot-handle-namespace-guard.test.ts": "rolls schema_migrations back to build a pre-0032 database",
 
   // The migration that installs the guard names every table it protects.
   "backend/migrations/0032_append_only_history.sql": "installs the guard",
+
+  // The runtime check. Its probe statement is built by interpolation, so it
+  // carries no literal table name — but the list of protected tables lives here
+  // and a future edit that spells one out next to a DELETE should not have to
+  // fight the guard about it.
+  "backend/src/db/append-only-guard.ts": "declares the protected set; the probe interpolates the table name",
 };
 
 const TABLES = APPEND_ONLY_TABLES.join("|");

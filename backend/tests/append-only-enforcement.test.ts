@@ -29,7 +29,10 @@
 // run, in a database cloned for this file alone, so a pass here is a property
 // of the migrated schema and nothing else.
 import { expect, test, describe, beforeAll } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
+import { APPEND_ONLY_TABLES, triggerNames } from "../src/db/append-only-guard.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 // Own database, cloned from the migrated template. This file SEEDS the
@@ -39,43 +42,15 @@ import { useCleanDatabase } from "./support/clean-db.ts";
 useCleanDatabase(import.meta.file);
 
 /**
- * Tables holding the immutable record. A row here is a historical fact:
- * signed takes and the memos they cite, the sessions that produced them, the
- * members who authored them, the audit trail, the analytics series other
- * numbers are derived from, and the migration ledger itself.
- *
- * NOT listed, and each for a stated reason — this list is the spec, so an
- * exclusion has to justify itself here rather than be silently absent:
- *
- *  - `admin_session`, `admin_webauthn_challenge`, `swarm_claim_challenges`:
- *    ephemeral auth state whose PURPOSE is to be consumed or expire. A
- *    WebAuthn challenge that cannot be deleted is a replay window.
- *  - `swarm_member_keys`: rotated on re-registration (swarm/domain.ts).
- *  - `jobs`, `job_runs`, `job_schedules`: queue/coordination churn.
- *  - `raw_indicator_history`: re-derivable from its external sources, and it
- *    has a live repair path that deletes calendar-invalid rows —
- *    `verifySeedProvenance(db, clean = true)`
- *    (analytics/store/seed-provenance.ts:59), a documented one-time
- *    production cleanup. Protecting this table breaks that tool, and the data
- *    it holds can be re-fetched; signed takes cannot.
- *
- * Extending the list is one edit here plus one line in the migration — if the
- * boundary should move, move it deliberately.
+ * The protected set. Imported, never copied — the canonical list and the full
+ * per-table reasoning (including why each sibling history table is protected or
+ * deliberately excluded) live in src/db/append-only-guard.ts, next to the
+ * runtime check that probes them. Migration 0032 carries its own copy because
+ * an applied migration has to be self-contained SQL; the two are held in
+ * agreement by an executed test below, not by prose.
  */
-export const APPEND_ONLY_TABLES = [
-  "swarm_members",
-  "swarm_recommendations",
-  "swarm_memos",
-  "swarm_sessions",
-  "swarm_briefs",
-  "swarm_subjects",
-  "swarm_session_events",
-  "swarm_applications",
-  "audit_log",
-  "agent_activity_log",
-  "regime_snapshots",
-  "schema_migrations",
-] as const;
+export { APPEND_ONLY_TABLES };
+
 
 type Table = (typeof APPEND_ONLY_TABLES)[number];
 type Raised = { message: string; code: string | null } | null;
@@ -142,6 +117,16 @@ beforeAll(async () => {
   await sql`
     INSERT INTO swarm_session_events (session_id, to_state, action, actor)
     VALUES (${SESSION}, 'scheduled', 'convene', 'append-only-test')`;
+  // The attendance roster for that same session, and the portfolio state its
+  // takes were made about — both added to the protected set in review, and both
+  // seeded here so the "the rows survive" assertions below are about real data
+  // rather than an empty table (which would pass for the wrong reason).
+  await sql`
+    INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
+    VALUES (${SESSION}, ${MEMBER}, 'Append Only Member', 'append-only', 'expected')`;
+  await sql`
+    INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd)
+    VALUES (${SUBJECT}, '2031-01-02', 1234.5)`;
   await sql`INSERT INTO swarm_applications (payload) VALUES ('{}'::jsonb)`;
   await sql`INSERT INTO audit_log (actor, action) VALUES ('append-only-test', 'probe')`;
   await sql`INSERT INTO agent_activity_log (action_type, status) VALUES ('probe', 'success')`;
@@ -161,19 +146,99 @@ describe("append-only: every protected table holds data that cannot be removed",
     }
   });
 
-  test("the guard is installed on every protected table, as ENABLE ALWAYS", async () => {
+  test("BOTH guards are installed on every protected table, at the right level, as ENABLE ALWAYS", async () => {
+    // TWO triggers per table, and the pair is the point (issue #684 round 2):
+    //
+    //   <t>_append_only      STATEMENT — catches TRUNCATE and `DELETE WHERE false`
+    //   <t>_append_only_row  ROW       — catches a removal with NO STATEMENT
+    //                                    behind it: a logical-replication apply
+    //                                    (ExecSimpleRelationDelete) and a delete
+    //                                    aimed at an inheritance parent.
+    //
+    // The first version of migration 0032 had only the statement-level one and
+    // claimed, in its own header, to cover replication. It did not: a statement
+    // trigger is never FIRED by an apply worker, so `ENABLE ALWAYS` never even
+    // came into it. This test pins the level as well as the presence, because
+    // "a trigger exists" was exactly the evidence that let the wrong one ship.
+    //
     // tgenabled: 'O' = origin only (silently skipped under
-    // session_replication_role='replica'), 'A' = ALWAYS. A guard that is only
-    // 'O' is absent during exactly the restore that would erase history.
+    // session_replication_role='replica'), 'D' = disabled, 'R' = replica only,
+    // 'A' = ALWAYS. Anything but 'A' is absent during the restore or apply that
+    // would erase history. tgtype bit 0 set = FOR EACH ROW.
     const rows = (await sql`
-      SELECT c.relname::text AS table_name, t.tgenabled::text AS enabled
-      FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
-      WHERE NOT t.tgisinternal AND t.tgname = c.relname || '_append_only'
-    `) as unknown as { table_name: string; enabled: string }[];
-    const installed = new Map(rows.map((r) => [r.table_name, r.enabled]));
+      SELECT c.relname::text AS table_name, t.tgname::text AS trigger_name,
+             t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row,
+             p.proname::text AS function_name
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_proc p ON p.oid = t.tgfoid
+      WHERE NOT t.tgisinternal
+    `) as unknown as { table_name: string; trigger_name: string; enabled: string; is_row: boolean; function_name: string }[];
+    const installed = new Map(rows.map((r) => [`${r.table_name}.${r.trigger_name}`, r]));
     for (const table of APPEND_ONLY_TABLES) {
-      expect(installed.get(table), `${table} must carry an append-only trigger`).toBe("A");
+      const names = triggerNames(table);
+      const stmt = installed.get(`${table}.${names.statement}`);
+      const row = installed.get(`${table}.${names.row}`);
+      expect(stmt, `${table} must carry the STATEMENT-level append-only trigger`).toBeDefined();
+      expect(row, `${table} must carry the ROW-level append-only trigger`).toBeDefined();
+      expect(stmt!.is_row, `${names.statement} must be FOR EACH STATEMENT`).toBe(false);
+      expect(row!.is_row, `${names.row} must be FOR EACH ROW`).toBe(true);
+      expect(stmt!.enabled, `${names.statement} must be ENABLE ALWAYS`).toBe("A");
+      expect(row!.enabled, `${names.row} must be ENABLE ALWAYS`).toBe("A");
+      expect(stmt!.function_name).toBe("rm_append_only_guard");
+      expect(row!.function_name).toBe("rm_append_only_guard");
     }
+  });
+
+  test("the migration's protected array and src/db/append-only-guard.ts's list are the same set", () => {
+    // Migration 0032 cannot import the constant — an applied migration is a
+    // frozen artefact and its SQL has to be self-contained — so the two copies
+    // are kept honest here rather than by a comment asking someone to remember.
+    // A table added to one and not the other is a table nobody protects.
+    const ddl = readFileSync(join(import.meta.dir, "..", "migrations", "0032_append_only_history.sql"), "utf8");
+    const block = ddl.match(/protected text\[\] := ARRAY\[([\s\S]*?)\];/);
+    expect(block, "migration 0032 must still declare its protected array in the shape this test reads").not.toBeNull();
+    const inMigration = [...block![1]!.replace(/--.*$/gm, "").matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
+    expect(inMigration.length, "the array must not have been parsed as empty").toBeGreaterThan(0);
+    expect([...inMigration].sort()).toEqual([...APPEND_ONLY_TABLES].sort());
+  });
+
+  test("a DELETE through an INHERITANCE PARENT is refused (the row-level trigger's other job)", async () => {
+    // A parent-targeted DELETE produces no statement for the child, so the
+    // statement-level trigger never fires and `DELETE 2` used to succeed
+    // against a protected child with the guard completely silent (measured on
+    // 17 and 18; TRUNCATE on the same parent WAS caught). Latent in this schema
+    // — pg_inherits is empty after every migration — but it is the same
+    // no-statement shape as a replication apply, and the row-level trigger
+    // closes both. Built here rather than asserted about, because "no migration
+    // uses INHERITS today" is a fact about today.
+    await sql.unsafe(`CREATE TABLE rm_inherit_probe (LIKE audit_log)`);
+    await sql.unsafe(`ALTER TABLE audit_log INHERIT rm_inherit_probe`);
+    try {
+      const before = await counts();
+      const raised = await attempt(`DELETE FROM rm_inherit_probe`);
+      // The refusal names the CHILD (TG_TABLE_NAME is where the row lives),
+      // which is also the operator-useful answer.
+      expectGuardRefused(raised, "audit_log", "DELETE", "DELETE via an inheritance parent");
+      expect(await counts(), "a refused inherited DELETE must not have removed anything").toEqual(before);
+    } finally {
+      await sql.unsafe(`ALTER TABLE audit_log NO INHERIT rm_inherit_probe`);
+      await sql.unsafe(`DROP TABLE rm_inherit_probe`);
+    }
+  });
+
+  test("the refusal says WHICH trigger refused it, so the two are distinguishable in the field", async () => {
+    // The primary message is byte-stable (every assertion in this repo pins it),
+    // so the statement/row distinction rides in DETAIL. Without it, a report of
+    // "0032 refused something" cannot tell you whether the half that only
+    // matters under replication is actually working.
+    let detail: string | null = null;
+    try {
+      await sql.unsafe(`DELETE FROM audit_log WHERE false`);
+    } catch (e) {
+      detail = (e as { detail?: string }).detail ?? null;
+    }
+    expect(detail).toMatch(/refused by trigger audit_log_append_only, STATEMENT level/);
   });
 
   for (const table of APPEND_ONLY_TABLES as readonly Table[]) {
@@ -269,5 +334,76 @@ describe("append-only: every protected table holds data that cannot be removed",
     expect(row.name).toBe("Append Probe 2");
     // Deliberately NOT cleaned up: this database is thrown away at the end of
     // the run, and deleting the probe is the exact operation under test.
+  });
+});
+
+// ── DOCUMENTED RESIDUALS, EXECUTED ──────────────────────────────────────────
+//
+// Migration 0032's header states, in prose, what the guard does NOT stop. Prose
+// decays; these run. Each test below asserts a LIMIT rather than a guarantee,
+// which is unusual and deliberate: the failure mode this whole issue is about
+// is a rationale that stopped being true without anyone noticing, and the
+// header's replication claim was exactly that. If one of these ever goes red,
+// the guard got STRONGER and the header is now understating it — fix the
+// header, then delete the test.
+describe("append-only: the limits the migration header claims, held to the same standard", () => {
+  test("UPDATE can blank every column of every row — 'history rows are not removed' is the claim, not immutability", async () => {
+    // The one that most easily gets over-read. A protected table can be emptied
+    // of MEANING while its row count never changes, and nothing here detects
+    // it. Stated in the header; asserted here so the statement is checkable.
+    const id = `append-only-update-residual-${crypto.randomUUID()}`;
+    await sql`INSERT INTO swarm_members (id, name, status) VALUES (${id}, 'Original Name', 'inactive')`;
+    await sql`UPDATE swarm_members SET name = '', lens = NULL WHERE id = ${id}`;
+    const [row] = await sql`SELECT name, lens FROM swarm_members WHERE id = ${id}`;
+    expect(row.name).toBe("");
+    expect(row.lens).toBeNull();
+  });
+
+  test("DELETE FROM jobs is permitted and BLANKS provenance on a protected row it never touched", async () => {
+    // `jobs` is deliberately unprotected (queue churn), and it carries
+    // ON DELETE SET NULL edges INTO protected tables. So the guard preserves
+    // the audit row and loses the fact that row recorded about which job did
+    // it. Demonstrated on the real schema rather than reasoned about, because
+    // the edge is easy to add and easy to forget.
+    const [job] = (await sql`
+      INSERT INTO jobs (kind, payload) VALUES ('append-only.residual', '{}'::jsonb) RETURNING id
+    `) as unknown as { id: number }[];
+    const [entry] = (await sql`
+      INSERT INTO audit_log (actor, action, job_id) VALUES ('append-only-test', 'provenance', ${job!.id})
+      RETURNING id
+    `) as unknown as { id: number }[];
+
+    await sql`DELETE FROM jobs WHERE id = ${job!.id}`;
+
+    const [after] = (await sql`SELECT job_id FROM audit_log WHERE id = ${entry!.id}`) as unknown as
+      { job_id: number | null }[];
+    expect(after!.job_id, "the audit row survives; the job it names does not, and the link is now NULL").toBeNull();
+  });
+
+  test("DROP TABLE is not a DELETE and is not a TRUNCATE — no trigger of either kind fires", async () => {
+    // The bluntest bypass, and the reason the header refuses to call any of
+    // this tamper-evidence. Run on a table this file creates, so the assertion
+    // costs nothing: the point is that the OWNER can do it, not that audit_log
+    // specifically is droppable.
+    await sql.unsafe(`CREATE TABLE rm_drop_residual (LIKE audit_log)`);
+    await sql.unsafe(
+      `CREATE TRIGGER rm_drop_residual_append_only BEFORE DELETE OR TRUNCATE ON rm_drop_residual
+       FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard()`,
+    );
+    await sql.unsafe(`ALTER TABLE rm_drop_residual ENABLE ALWAYS TRIGGER rm_drop_residual_append_only`);
+    expect(await attempt(`DELETE FROM rm_drop_residual`), "the guard is genuinely armed on it").not.toBeNull();
+    // …and it goes anyway.
+    expect(await attempt(`DROP TABLE rm_drop_residual`)).toBeNull();
+    const [{ gone }] = (await sql`SELECT to_regclass('public.rm_drop_residual') IS NULL AS gone`) as unknown as
+      { gone: boolean }[];
+    expect(gone).toBe(true);
+  });
+
+  test("protecting schema_migrations removes the migration-rollback lever", async () => {
+    // Intended, and unmentioned until now: `DELETE FROM schema_migrations
+    // WHERE name = '…'` is how you force a migration to re-run, and it now
+    // raises. Forcing one requires dropping the trigger first.
+    const raised = await attempt(`DELETE FROM schema_migrations WHERE name = '0001_init.sql'`);
+    expectGuardRefused(raised, "schema_migrations", "DELETE", "the rollback lever");
   });
 });

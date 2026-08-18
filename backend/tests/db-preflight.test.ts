@@ -31,11 +31,11 @@ test("empty database → bootstrap, on a genuinely fresh (unmigrated) database",
   const db = postgres(tmpUrl.toString(), { max: 1, onnotice: () => {} });
   try {
     const r = await classifyDatabase("archive", db);
-    expect(r).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [] });
+    expect(r).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [] });
     // Same result regardless of initializer — EMPTY bootstraps either way,
     // the adopt/refuse split only matters once tables exist.
     const r2 = await classifyDatabase("simulation", db);
-    expect(r2).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [] });
+    expect(r2).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [] });
     // And the invariant re-check is silent on a database whose schema does not
     // have swarm_members yet — this step runs BEFORE migrate, so "the table is
     // missing" is a migration's business, not an integrity violation.
@@ -116,6 +116,7 @@ test("a restored violation is DETECTED and the boot is refused, with both member
     tables: 55,
     census: [{ table: "swarm_members", rows: 12 }],
     handleNamespaceConflicts: conflicts,
+    appendOnlyProblems: [],
   });
   const refusalAt = lines.findIndex((l) => l.includes("REFUSING the boot"));
   expect(refusalAt).toBeGreaterThanOrEqual(0);
@@ -145,7 +146,7 @@ test("parseInitializer fails closed — only an explicit archive flag can adopt"
 
 test("the three reports say what will happen, not just what was found", () => {
   const bootstrap = reportLines("db:5432/x", {
-    mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [],
+    mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [],
   }).join("\n");
   expect(bootstrap).toContain("empty");
   expect(bootstrap).toContain("migrate + seed + archive restore");
@@ -155,6 +156,7 @@ test("the three reports say what will happen, not just what was found", () => {
     tables: 55,
     census: [{ table: "raw_indicator_history", rows: 116427 }],
     handleNamespaceConflicts: [],
+    appendOnlyProblems: [],
   }).join("\n");
   expect(adopt).toContain("adopting as existing production data");
   expect(adopt).toContain("idempotent and deduplicated");
@@ -169,8 +171,59 @@ test("the three reports say what will happen, not just what was found", () => {
     tables: 55,
     census: [{ table: "raw_indicator_history", rows: 116427 }],
     handleNamespaceConflicts: [],
+    appendOnlyProblems: [],
   }).join("\n");
   expect(refuse).toContain("REFUSING a simulation boot");
   expect(refuse).toContain("bun smoke");
   expect(refuse).toContain("Nothing has been written");
+});
+
+test("an ADOPTED database whose append-only guard is disarmed is refused, and the report says why", async () => {
+  // The preflight's job is to decide whether the boot's next step — migrate,
+  // seed, archive restore, every one of them a WRITE — should happen at all. A
+  // database that records migration 0032 as applied and no longer refuses
+  // deletion fails that test for the same reason a namespace violation does:
+  // everything written past this point goes into tables that can be silently
+  // emptied.
+  //
+  // Built on its own throwaway database, because the fixture disarms the guard
+  // and the shared suite database must keep its.
+  const base = new URL(config.databaseUrl);
+  const dbName = `tmp_preflight_disarmed_${crypto.randomUUID().slice(0, 8)}`;
+  const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
+  await admin.unsafe(`CREATE DATABASE ${dbName} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
+  await admin.end();
+
+  const url = new URL(base.toString());
+  url.pathname = `/${dbName}`;
+  const db = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  try {
+    // Armed first — the control, so "refused" below cannot be a fact about
+    // this helper rather than about the guard.
+    const armed = await classifyDatabase("archive", db);
+    expect(armed.appendOnlyProblems).toEqual([]);
+    expect(reportLines("db:5432/x", armed).join("\n")).not.toContain("append-only guard");
+
+    // One statement, function ownership only, catalog untouched.
+    await db.unsafe(
+      `CREATE OR REPLACE FUNCTION rm_append_only_guard() RETURNS trigger
+       LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN OLD; END IF; RETURN NULL; END $$;`,
+    );
+
+    const disarmed = await classifyDatabase("archive", db);
+    expect(disarmed.mode).toBe("adopt");
+    expect(disarmed.appendOnlyProblems.length).toBeGreaterThan(0);
+    const report = reportLines("db:5432/x", disarmed).join("\n");
+    expect(report).toContain("REFUSING the boot: the append-only guard");
+    expect(report).toContain("a DELETE was ACCEPTED");
+    expect(report).toContain("Nothing has been written");
+  } finally {
+    await db.end();
+    const cleanup = postgres(base.toString(), { max: 1, onnotice: () => {} });
+    try {
+      await cleanup.unsafe(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+    } finally {
+      await cleanup.end();
+    }
+  }
 });

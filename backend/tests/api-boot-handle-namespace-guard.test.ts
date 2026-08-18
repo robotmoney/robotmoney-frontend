@@ -1,5 +1,8 @@
 // The PRODUCTION boot path refuses a restored handle/id namespace violation
-// (issue #602).
+// (issue #602) — and, since issue #684, a database whose append-only guard has
+// been disarmed. Both guards live on the same entrypoint, run against the same
+// spawned process, and are graded here to the same standard, so the file covers
+// the pair rather than only the one it is named after.
 //
 // WHAT MAKES THIS THE PRODUCTION PATH. docker-compose.yml's api service runs
 // `command: ["bun", "run", "src/api/index.ts"]`, and that is the whole bring-up
@@ -503,12 +506,23 @@ test(
       // a restart loop) but says which of the two boots this was.
       const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
       expect(health.status).toBe(200);
-      expect((await health.json()).handle_namespace).toBe("unchecked");
+      const body = await health.json();
+      expect(body.handle_namespace).toBe("unchecked");
+      // The SECOND boot guard (issue #684) sits behind this one against the
+      // same locked table, and it must reach the same conclusion for the same
+      // reason. It nearly did not: its probe is a `DELETE ... WHERE false`,
+      // which blocks on an ACCESS EXCLUSIVE lock and comes back as
+      // `57014 canceling statement due to statement timeout` — and a first
+      // version treated any error as evidence, classified that as "the guard is
+      // gone" and REFUSED THE BOOT. A lock on one table would have taken the
+      // whole site down. Silence is "unchecked", never "disarmed".
+      expect(body.append_only_guard).toBe("unchecked");
 
       booted.proc.kill();
       await booted.proc.exited;
       const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
       expect(stderr).toContain("handle/id namespace guard could NOT run");
+      expect(stderr).toContain("append-only guard check could NOT run");
       expect(stderr).toContain("UNCHECKED");
       expect(stderr).not.toContain("REFUSING");
     } finally {
@@ -687,6 +701,103 @@ test(
     const booted = await bootAndServe(urlFor(dbName));
     booted.proc.kill();
     await booted.proc.exited;
+  },
+  120_000,
+);
+
+// ── The SECOND boot guard: the append-only guard must be armed (issue #684) ──
+//
+// Same entrypoint, same production path, and it is graded the same way: a
+// database that records migration 0032 as applied and no longer honours it must
+// not be served, and everything else must still boot.
+//
+// The disarmed database is built the way an owner would actually build it — one
+// `CREATE OR REPLACE FUNCTION` — precisely because that is the state a trigger
+// inventory cannot see. Every trigger still exists here, on every table, all
+// reporting tgenabled='A'.
+
+const DISARM_GUARD = `
+CREATE OR REPLACE FUNCTION rm_append_only_guard() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN OLD; END IF; RETURN NULL; END $$;`;
+
+test(
+  "a database whose append-only guard has been disarmed: the api exits non-zero and binds no port",
+  async () => {
+    const dbName = await createThrowawayDb("disarmed");
+    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    try {
+      await applyAllMigrations(db);
+
+      // Control FIRST: the same database, untouched, boots and serves and says
+      // so at /health. Without this, the refusal below is also satisfied by an
+      // api that refuses every database.
+      const armed = await bootAndServe(urlFor(dbName));
+      const armedHealth = await (await fetch(`http://127.0.0.1:${armed.port}/health`)).json();
+      expect(armedHealth.append_only_guard).toBe("armed");
+      armed.proc.kill();
+      await armed.proc.exited;
+
+      await db.unsafe(DISARM_GUARD);
+      // The catalog is untouched — this is the whole point of the fixture.
+      const [{ n }] = (await db`
+        SELECT count(*)::int AS n FROM pg_trigger
+        WHERE NOT tgisinternal AND tgname LIKE '%\_append\_only%' AND tgenabled = 'A'
+      `) as unknown as { n: number }[];
+      expect(n, "every trigger is still installed and still ENABLE ALWAYS").toBeGreaterThan(0);
+
+      const port = await freePort();
+      const proc = spawnApi(urlFor(dbName), port, true);
+      const exitCode = await proc.exited;
+      const stderr = await new Response(proc.stderr as ReadableStream).text();
+
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("REFUSING the boot: the append-only guard");
+      expect(stderr).toContain("a DELETE was ACCEPTED");
+      expect(stderr).toContain("will NOT start");
+      expect(await portIsBound(port)).toBe(false);
+
+      // The documented escape hatch serves anyway, loudly, and says so at
+      // /health for the whole life of the process — an override left set must
+      // not be indistinguishable from a healthy boot.
+      const overridden = await bootAndServe(urlFor(dbName), { RM_ALLOW_UNARMED_APPEND_ONLY_GUARD: "1" });
+      const health = await (await fetch(`http://127.0.0.1:${overridden.port}/health`)).json();
+      expect(health.status).toBe("ok");
+      expect(health.append_only_guard).toBe("disarmed");
+      overridden.proc.kill();
+      await overridden.proc.exited;
+      expect(await new Response(overridden.proc.stderr as ReadableStream).text()).toContain("OVERRIDE");
+    } finally {
+      await db.end();
+    }
+  },
+  120_000,
+);
+
+test(
+  "a database that predates migration 0032 boots normally — 'not applied' is not 'disarmed'",
+  async () => {
+    // An ordinary first boot, and the distinction that lets the guard above
+    // afford to fail closed. `docker compose up -d` starts this process against
+    // whatever database exists; refusing one that simply has not been migrated
+    // yet would make the guard an outage on every fresh deployment.
+    const dbName = await createThrowawayDb("pre0032");
+    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    try {
+      await applyAllMigrations(db);
+      // Roll the ledger back to before 0032 and remove what it installed — the
+      // shape of a database whose migrate() has not run yet.
+      await db.unsafe(`ALTER TABLE schema_migrations DISABLE TRIGGER USER`);
+      await db`DELETE FROM schema_migrations WHERE name = '0032_append_only_history.sql'`;
+      await db.unsafe(`DROP FUNCTION rm_append_only_guard() CASCADE`);
+
+      const booted = await bootAndServe(urlFor(dbName));
+      const health = await (await fetch(`http://127.0.0.1:${booted.port}/health`)).json();
+      expect(health.append_only_guard).toBe("not_applied");
+      booted.proc.kill();
+      await booted.proc.exited;
+    } finally {
+      await db.end();
+    }
   },
   120_000,
 );
