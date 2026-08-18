@@ -7,32 +7,23 @@
 // is not a passing test — `bun test`'s type-stripping means a renamed export
 // or a dropped await would still typecheck-green and run-red, undetected.
 //
-// WITHOUT a database, this file exercises `main()`'s two upfront guards (both
-// return 2 BEFORE connectReadOnly is ever called) and the pure `redactedTarget`
-// helper.
+// Without a database: main()'s two upfront guards and the pure
+// redactedTarget helper.
 //
-// AGAINST a live database, since issue #633/PR #677 (bd0e20b), the "main()
-// against live Postgres roles" block below provisions a real role PAIR on the
-// suite's ephemeral Postgres — backend/tests/preload.ts sets DATABASE_URL to it
-// and that role owns the database, so it can CREATE ROLE — and drives main()
-// end to end through each: a SELECT-only role clears gateReadOnly and main()
-// resolves 0, a role holding INSERT/UPDATE/DELETE trips its role-write-grants
-// check and main() resolves 1. Because that database is fully migrated, the
-// passing run also EXECUTES every downstream check — checkServerVersion,
+// Against the live ephemeral Postgres (since #633/PR #677, bd0e20b): a
+// SELECT-only role PASSES gateReadOnly (main() → 0); an INSERT/UPDATE/DELETE
+// role trips it (main() → 1). Because that DB is fully migrated, the passing
+// run also executes every downstream check — checkServerVersion,
 // checkExtensions, checkPendingMigrations, checkWorkerRole,
 // checkHandleNamespace, checkAdminCredential, checkSwarmMembersSize,
-// checkBlockingActivity, checkHandleShape — all of which record PASS, bar
-// admin-credential's 0-rows WARN, which does not move the exit code.
+// checkBlockingActivity, checkHandleShape — all PASS (admin-credential WARNs
+// on 0 rows, which doesn't move the exit code).
 //
-// WHAT REMAINS RUNBOOK-ONLY (docs/runbooks/v0-2-2-rollout.md): the assertion
-// here is main()'s aggregate exit code, not any per-check status, and a
-// freshly-migrated near-empty database cannot produce a pending or orphaned
-// migration, a missing rm_worker, a handle/id collision, a 50k-row
-// swarm_members or a 60s-old transaction — so every non-PASS branch of those
-// checks is still unexecuted. So are gateReadOnly's other two rejection paths
-// (a writeable SESSION; a privileged ROLE — both test roles are plain LOGIN
-// roles with no attributes), PREFLIGHT_ALLOW_PRIVILEGED=1's WARN downgrade,
-// connectReadOnly's pooled-port fallback, and the cannot-connect → 2 path.
+// Runbook-only (docs/runbooks/v0-2-2-rollout.md): every non-PASS branch of
+// those checks (a fresh near-empty DB can't produce them), gateReadOnly's
+// other two rejection paths (writeable session; privileged role),
+// PREFLIGHT_ALLOW_PRIVILEGED=1's WARN downgrade, the pooled-port fallback,
+// and the cannot-connect → 2 path.
 import { afterEach, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { main, redactedTarget } from "../scripts/preflight-upgrade.ts";
 import postgres from "postgres";
