@@ -4,6 +4,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
 import postgres from "postgres";
+// Pin the image to the same version the harness uses; see
+// backend/scripts/lib/postgres-image.ts for the version and the -alpine
+// variant that production-equivalent tests run.
+import { POSTGRES_IMAGE } from "../scripts/lib/postgres-image.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0033_swarm_member_uuid_ids.sql";
@@ -50,7 +54,7 @@ beforeAll(async () => {
   const up = Bun.spawnSync([
     "docker", "run", "-d", "--rm", "--name", containerName,
     "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
-    "-p", `${port}:5432`, "postgres:17-alpine",
+    "-p", `${port}:5432`, POSTGRES_IMAGE,
   ]);
   if (up.exitCode !== 0) {
     throw new Error(
