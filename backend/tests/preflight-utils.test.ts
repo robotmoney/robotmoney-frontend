@@ -5,8 +5,8 @@
 // real database connection (urlFromDiscreteEnv, redactedTarget,
 // runPreflightMain's guards) and gateReadOnly's PASS/BLOCKED paths for real,
 // against two roles provisioned on the suite's ephemeral Postgres (matching
-// the coverage backend/tests/preflight-upgrade.test.ts had at #677, before
-// this file split out of it).
+// the coverage the pre-split, now-deleted monolithic preflight test had at
+// #677, before this file split out of it).
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
