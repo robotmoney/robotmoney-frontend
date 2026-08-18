@@ -37,7 +37,9 @@
 --   * An FK `ON DELETE CASCADE` from an unprotected parent — the RI cascade
 --     issues a real `DELETE FROM ONLY "public"."child"`, so this holds if the
 --     schema later grows such an edge, not merely because it has none today.
---   * `session_replication_role` set to 'replica', 'local' or 'origin'.
+--   * `session_replication_role` set to 'replica', 'local' or 'origin' IN AN
+--     ORDINARY SQL SESSION. (Not the same thing as a replication apply — see
+--     property 3 below.)
 --   * A LOGICAL-REPLICATION APPLY of a row DELETE (see property 1 below) and of
 --     a TRUNCATE.
 --   * A DELETE issued against an INHERITANCE PARENT of a protected table.
@@ -142,14 +144,22 @@
 --      possible (src/db/append-only-guard.ts issues `DELETE ... WHERE false`).
 --
 --   3. ENABLE ALWAYS on BOTH, not plain ENABLE.
---      `session_replication_role = 'replica'` — what a restore and a
---      logical-replication apply run as — silently SKIPS ordinary triggers.
---      Migration 0031 learned this for the handle namespace and used
---      `FOR EACH ROW` (0031:184), which is why its claim held; this file copied
---      the ENABLE ALWAYS clause, changed the trigger level to STATEMENT, and
---      kept citing 0031 as the precedent. The rationale stopped being true and
---      nothing noticed. Hence the executed test above rather than a third
---      restatement of the lesson.
+--      An ORDINARY SQL SESSION that has set `session_replication_role =
+--      'replica'` — `pg_restore --disable-triggers`, and any hand-run psql that
+--      sets it — silently SKIPS ordinary ('O') triggers. ENABLE ALWAYS is what
+--      keeps both levels present for that session.
+--      DO NOT read this as covering a logical-replication APPLY. An apply
+--      worker shares the replica role SETTING but not the mechanism: it has no
+--      statement, so the statement-level trigger is never fired whatever its
+--      tgenabled says, and only property 1's row-level trigger reaches it.
+--      Conflating the two is precisely how the gap shipped — migration 0031
+--      learned the ENABLE ALWAYS lesson for the handle namespace using
+--      `FOR EACH ROW` (0031:184), which is why ITS claim held; this file copied
+--      the clause, changed the level to STATEMENT, and kept citing 0031 as the
+--      precedent. The rationale stopped being true and nothing noticed. Hence
+--      the two executed tests (an ordinary replica-role session in
+--      append-only-enforcement.test.ts, a real apply worker in
+--      append-only-replication.test.ts) rather than a third restatement.
 --
 -- WHAT THIS DOES NOT DO. It does not freeze the tables. INSERT and UPDATE are
 -- untouched: the invariant is "history rows are not removed", not "the table is

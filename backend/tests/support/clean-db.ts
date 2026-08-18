@@ -62,6 +62,11 @@ function urlFor(database: string): string {
   return url.toString();
 }
 
+// The shared database's own name — what both pools must be back on once a file
+// that opted in has finished. Parsed here rather than hardcoded so it tracks
+// whatever preload.ts set.
+const sharedDatabase = new URL(baseUrl).pathname.replace(/^\//, "");
+
 // A valid, attributable Postgres identifier: lowercase, ≤63 bytes, no dots or
 // dashes. The counter keeps two files with the same basename (tests/foo.test.ts
 // and tests/api/foo.test.ts) from colliding.
@@ -121,13 +126,25 @@ async function cloneAndUse(testFile: string): Promise<void> {
     // Nothing may be connected to the template during the copy. Only preload.ts
     // ever connects to it, and it disconnected before handing the template over.
     await admin.unsafe(`CREATE DATABASE "${database}" TEMPLATE "${template}"`);
-    await client.setDatabase(urlFor(database));
-    await workerClient.setDatabase(urlFor(database));
+    // Recorded the INSTANT it exists, before anything that can throw. `live` is
+    // the only handle this module keeps on a clone, so a setDatabase() rejection
+    // between CREATE and the old assignment site used to strand this database
+    // for the rest of the run — the failing hook is loud, but the clone it
+    // leaked was not, and the run's disk high-water mark is the sum of every
+    // clone it never released.
     live = database;
-    await assertBothPoolsAgree(database);
-    // Only now is the previous clone genuinely idle: both pools have just been
-    // rebuilt against the new one, and setDatabase() ended the old pools.
-    if (previous) await drop(admin, previous);
+    try {
+      await client.setDatabase(urlFor(database));
+      await workerClient.setDatabase(urlFor(database));
+      await assertBothPoolsAgree(database);
+    } finally {
+      // In `finally`, not after the assertion: the previous clone is idle either
+      // way — both pools were told to move off it, and drop() is WITH (FORCE)
+      // precisely so a handle that did not let go is terminated rather than
+      // allowed to block cleanup. Leaving it behind because the NEW clone failed
+      // its check leaks a database for a reason that has nothing to do with it.
+      if (previous) await drop(admin, previous);
+    }
   } finally {
     await admin.end({ timeout: 5 });
   }
@@ -135,15 +152,41 @@ async function cloneAndUse(testFile: string): Promise<void> {
 
 async function restoreSharedDatabase(): Promise<void> {
   const previous = live;
-  live = null;
-  await client.setDatabase(baseUrl);
-  await workerClient.setDatabase(baseUrl);
-  if (!previous) return;
-  const admin = adminConnection();
   try {
-    await drop(admin, previous);
+    // BOTH swaps are attempted, and `live` is cleared only once they have been.
+    // Ordering matters here in a way it does not read as if it does: clearing
+    // `live` first and then letting the api swap throw would leave the QUEUE
+    // pool still pointing at `previous` — a clone this function is about to
+    // DROP — which is the same api/queue divergence assertBothPoolsAgree()
+    // exists to catch, on the one path that never called it. Collect and
+    // rethrow rather than short-circuit, so one failing swap cannot decide that
+    // the other never happens.
+    const failures: unknown[] = [];
+    for (const swap of [() => client.setDatabase(baseUrl), () => workerClient.setDatabase(baseUrl)]) {
+      try {
+        await swap();
+      } catch (err) {
+        failures.push(err);
+      }
+    }
+    live = null;
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "tests/support/clean-db.ts: restoring the shared database failed");
+    }
+    // The invariant, asserted on teardown too. A file that opted in has to hand
+    // the next file BOTH pools on the shared database; until now that was only
+    // checked on the way in, so a divergence introduced on the way out would
+    // surface as an inexplicable failure in some later file instead of here.
+    await assertBothPoolsAgree(sharedDatabase);
   } finally {
-    await admin.end({ timeout: 5 });
+    if (previous) {
+      const admin = adminConnection();
+      try {
+        await drop(admin, previous);
+      } finally {
+        await admin.end({ timeout: 5 });
+      }
+    }
   }
 }
 

@@ -20,7 +20,7 @@
 // (and an executed test asserts the two agree), so a third copy would be a
 // third thing to forget.
 import { expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { APPEND_ONLY_TABLES } from "../src/db/append-only-guard.ts";
 
@@ -78,19 +78,48 @@ const DESTRUCTIVE = new RegExp(
 // Scan CODE, not prose: every one of these tables is named in comments that
 // explain why it must NOT be deleted, and a guard that fired on its own
 // rationale would be untenable. SQL's `--` line comments are stripped too.
-function codeOnly(file: string): string {
-  return readFileSync(file, "utf8")
+//
+// MARKDOWN IS ALMOST ALL PROSE, and stripping `/* */`, `//` and `--` removes
+// NONE of it — so widening SCANNED to `.md` (which is right: a runbook step is
+// exactly where a hand-run psql statement gets written down) handed this guard
+// 48 committed files it reads as if they were SQL. This very file advertises
+// the verbatim `TRUNCATE swarm_recommendations, swarm_briefs, swarm_sessions
+// RESTART IDENTITY CASCADE` as the string to watch for; the next doc, review
+// artefact, or postmortem that QUOTES it would turn a required job red with no
+// code change, and nothing in the offender list would distinguish a citation
+// from a regression.
+//
+// So for Markdown, keep ONLY what is inside fenced code blocks and discard the
+// prose around it. That preserves the entire reason `.md` is scanned — a
+// copy-paste runbook step lives in a fence — while a sentence ABOUT a statement
+// is no longer a statement. Everything else keeps the previous behaviour.
+const FENCE = /^[ \t]*(?:```|~~~)[^\n]*\n([\s\S]*?)^[ \t]*(?:```|~~~)/gm;
+
+function stripToCode(text: string, file: string): string {
+  const source = file.endsWith(".md") ? [...text.matchAll(FENCE)].map((m) => m[1]).join("\n") : text;
+  return source
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:])\/\/.*$/gm, "$1")
     .replace(/^\s*--.*$/gm, "");
+}
+
+function codeOnly(file: string): string {
+  return stripToCode(readFileSync(file, "utf8"), file);
 }
 
 // Vendored, generated, or binary trees: nothing in them is source somebody
 // writes a psql statement into, and walking them would only make this slower.
 // Everything else in the repo is scanned.
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", "brand-assets", "recyclebin"]);
+// Skipped by repo-relative PATH, not by bare directory name, so the exemption
+// cannot silently widen to some other `code-review/` added elsewhere later.
+// `docs/code-review/` is where review artefacts are written, and a review of
+// THIS guard quotes the statements it forbids by definition — the fenced-block
+// rule above is not enough there, because a review quotes SQL in a fence.
+const SKIP_PATHS = new Set(["docs/code-review"]);
 // `.md` and `.yml` are in the list on purpose: a runbook step and a workflow
-// step are both places a destructive statement gets written down.
+// step are both places a destructive statement gets written down. See
+// stripToCode() for why `.md` is read fenced-blocks-only.
 const SCANNED = [".ts", ".tsx", ".sql", ".sh", ".md", ".yml", ".yaml"];
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -99,7 +128,16 @@ function walk(dir: string, out: string[] = []): string[] {
     // Dot-directories are noise (.venv, .cache) with one exception that matters.
     if (entry.startsWith(".") && entry !== ".github") continue;
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, out);
+    if (SKIP_PATHS.has(relative(root, full))) continue;
+    // lstat, never stat: stat() FOLLOWS symlinks, so one dangling link anywhere
+    // under the repo root would throw and abort the entire walk — turning this
+    // guard off by way of a hard error, in a tree that now spans the whole
+    // repository rather than four backend/ subdirectories. Nothing tracked in
+    // git here is a symlink, so skipping them costs no coverage and also rules
+    // out a symlinked-directory cycle walking forever.
+    const stat = lstatSync(full);
+    if (stat.isSymbolicLink()) continue;
+    if (stat.isDirectory()) walk(full, out);
     else if (SCANNED.some((ext) => entry.endsWith(ext))) out.push(full);
   }
   return out;
@@ -141,4 +179,30 @@ test("the guard's pattern actually matches the statements it forbids", () => {
   // …and does not fire on an unprotected table or on a plain SELECT.
   expect([...`DELETE FROM jobs WHERE id = 1`.matchAll(DESTRUCTIVE)].length).toBe(0);
   expect([...`SELECT * FROM audit_log`.matchAll(DESTRUCTIVE)].length).toBe(0);
+});
+
+// The Markdown rule NARROWS what this guard reads, so it has to be shown that it
+// narrowed the right half. A weakening that also stopped catching runbook steps
+// would look identical from the offender list (still empty) — which is the
+// silent-pass shape this whole file exists to prevent.
+test("Markdown is read as fenced code only — a runbook STEP still fires, a sentence ABOUT it does not", () => {
+  const table = APPEND_ONLY_TABLES[0]!;
+  const fired = (doc: string) => [...stripToCode(doc, "docs/x.md").matchAll(DESTRUCTIVE)].length;
+
+  // The reason `.md` is scanned at all: a copy-paste step in a runbook.
+  expect(fired(["# Runbook", "", "```sh", `psql -c 'DELETE FROM ${table}'`, "```", ""].join("\n")))
+    .toBeGreaterThan(0);
+  expect(fired(["```sql", `TRUNCATE ${table} CASCADE;`, "```"].join("\n"))).toBeGreaterThan(0);
+  // Indented inside a list item, which is how half the runbooks are written.
+  expect(fired(["1. Do this:", "", "   ```sh", `   psql -c 'DELETE FROM ${table}'`, "   ```"].join("\n")))
+    .toBeGreaterThan(0);
+
+  // …and the citations that used to be indistinguishable from a regression.
+  expect(fired(`The guard refuses \`DELETE FROM ${table}\` and \`TRUNCATE ${table}\`.`)).toBe(0);
+  expect(fired(`We removed the old \`TRUNCATE ${table} RESTART IDENTITY CASCADE\` call in #684.`)).toBe(0);
+  // Prose around a fence is still discarded; the fence itself is still read.
+  expect(fired([`Never run \`DELETE FROM ${table}\`. Instead:`, "", "```sh", "echo safe", "```"].join("\n"))).toBe(0);
+
+  // Non-Markdown is untouched by the fence rule — a bare .sql/.sh step still fires.
+  expect([...stripToCode(`DELETE FROM ${table};`, "x.sql").matchAll(DESTRUCTIVE)].length).toBeGreaterThan(0);
 });

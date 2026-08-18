@@ -41,8 +41,19 @@ beforeEach(async () => {
 // `sql` is a live binding (db/client.ts): a worker still polling after this
 // file's afterAll would issue its next query against whatever database the NEXT
 // file swapped in — and since support/clean-db.ts now DROPs the clone it left,
-// against one that no longer exists. Structural, not incidental to test
-// ordering: stop() is idempotent, so the explicit stops inside the tests stay.
+// against one that no longer exists.
+//
+// STOPPING IS NOT DRAINING, and awaiting stop() alone would NOT make that
+// structural. stop() resolves at shutdownTimeoutMs with loops still pending
+// (runtime.ts doStop) and it is memoized (`stopPromise ??=`), so for the hung
+// handle below — whose test already called stop() and had it time out at 500ms
+// — this hook would await an already-settled promise and wait for precisely
+// nothing. The reason that has been safe is that the test body opens the gate
+// and sleeps 300ms first, which is exactly the incidental test ordering this
+// comment used to disclaim. So await drained() too: it is not memoized and it
+// awaits the loop promises themselves, turning "no loop outlives this file"
+// into something enforced rather than asserted. stop() is idempotent, so the
+// explicit stops inside the tests stay.
 const started: WorkerHandle[] = [];
 function launch(opts: Parameters<typeof startWorker>[0]): WorkerHandle {
   const w = startWorker(opts);
@@ -51,7 +62,9 @@ function launch(opts: Parameters<typeof startWorker>[0]): WorkerHandle {
 }
 afterEach(async () => {
   hangGate.open(); // release anything still parked in the hung handler
-  await Promise.all(started.splice(0).map((w) => w.stop()));
+  const handles = started.splice(0);
+  await Promise.all(handles.map((w) => w.stop()));
+  await Promise.all(handles.map((w) => w.drained(10_000)));
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -122,4 +135,28 @@ test("hung handler: bounded exit at the deadline, job released to pending (never
   expect(after.status).toBe("pending"); // not stomped to 'succeeded'
   const [{ n }] = await sql`SELECT count(*)::int n FROM job_runs WHERE job_id = ${id}`;
   expect(n).toBe(0); // no duplicate/phantom terminal record
+});
+
+test("stop() resolving is NOT proof the loops exited — drained() is, and it fails loudly when they have not", async () => {
+  // The gap this file's afterEach used to paper over. Both halves are asserted
+  // because the dangerous one is the FIRST: a hook that awaits stop() and calls
+  // that a drain guarantee is making a claim the runtime does not honour, and
+  // the symptom of being wrong is not a failure here — it is a query from an
+  // escaped loop against a database some LATER file already dropped.
+  const worker = launch({ lane: LANES.research, workerId: "drain-research", ...fastOpts, shutdownTimeoutMs: 300 });
+  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_shutdown_hang', '{}') RETURNING id`;
+  await waitForStatus(id, "running", 3000);
+
+  await worker.stop(); // bounded — returns at shutdownTimeoutMs with the handler still parked
+  const t0 = Date.now();
+  await worker.stop(); // memoized — returns instantly, having waited for nothing
+  expect(Date.now() - t0).toBeLessThan(100);
+
+  // The drain loop is demonstrably still alive at this point, and drained()
+  // refuses to pretend otherwise.
+  await expect(worker.drained(300)).rejects.toThrow(/still had loops running/);
+
+  // …and once the handler is released it drains for real, well inside the budget.
+  hangGate.open();
+  await worker.drained(5000);
 });

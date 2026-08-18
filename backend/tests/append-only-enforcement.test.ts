@@ -287,12 +287,22 @@ describe("append-only: every protected table holds data that cannot be removed",
     });
 
     test(`a replica-role session cannot delete from ${table}`, async () => {
-      // session_replication_role='replica' is what a restore or a
-      // logical-replication apply runs as, and it silently skips ordinary
-      // triggers. 0031 already learned this lesson for the handle namespace
-      // (ENABLE ALWAYS); the append-only guard has to hold under the same
-      // condition for EVERY table or a restore can erase history without
-      // raising.
+      // WHAT THIS PROVES, PRECISELY: an ORDINARY SQL SESSION that has set
+      // session_replication_role='replica' — `pg_restore --disable-triggers`,
+      // and any hand-run psql that sets it — still cannot delete. That setting
+      // silently skips ordinary ('O') triggers, so without ENABLE ALWAYS the
+      // guard would be absent for exactly that session. 0031 learned this for
+      // the handle namespace; it has to hold for EVERY table here.
+      //
+      // WHAT IT DOES NOT PROVE, and the distinction is the reason this whole
+      // round-2 issue exists: it is NOT a logical-replication apply. An apply
+      // WORKER shares the replica ROLE setting but not the mechanism — it
+      // removes rows through ExecSimpleRelationDelete with NO STATEMENT behind
+      // them, so a statement-level trigger is never fired at all, whatever its
+      // tgenabled says. Reading this test as covering replication is what let
+      // the row-level gap ship. The apply path is a different file:
+      // tests/append-only-replication.test.ts, which builds a real
+      // publisher/subscriber pair.
       const before = await counts();
       let raised: Raised = null;
       try {
