@@ -49,6 +49,7 @@
 // src/swarm/v0-archive.ts for why that key is published rather than secret.)
 // (wired as `bun run v0-seed:bootstrap` in package.json, and reached from the
 // repo root via `bun run bootstrap` -> backend prod-bootstrap)
+import { slugifyMemberName } from "../src/swarm/handle.ts";
 import { canonicalizeSubmission, signMessage } from "../src/lib/signing.ts";
 import { sql, closeDb, jsonValue } from "../src/db/client.ts";
 import {
@@ -205,17 +206,52 @@ export function canonicalizeAvatar(avatar: unknown): unknown {
   return { ...(avatar as Record<string, unknown>), path: CANONICAL_AVATAR_PREFIX + path.slice(V0_AVATAR_PREFIX.length) };
 }
 
+/**
+ * archive member id (a published slug) -> the id THIS database holds for it.
+ *
+ * Issue #685. The archive names members by slug and every legacy take
+ * references that slug, but the slug is a HANDLE, not an id: ids are generated
+ * per deployment (`crypto.randomUUID()`), so the importer cannot assume its own
+ * ids exist here. Before this map, `processMember` inserted `id = m.id`
+ * directly, which welded the archive to a slug-id namespace — and once the
+ * roster seed generates UUIDs, that INSERT is refused by migration 0031: the
+ * handle is already held by the seeded row, so the id would address a second
+ * member.
+ *
+ * Populated by processMember (which runs before any take), read by processTake.
+ * Rebuilt per run so a second call in the same process cannot reuse stale ids.
+ */
+const archiveIdToDbId = new Map<string, string>();
+
+/** The db id for an archive member slug, or null if it was never seated. */
+function resolveDbMemberId(archiveId: string): string | null {
+  return archiveIdToDbId.get(archiveId) ?? null;
+}
+
 async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> {
   if (m.id === "woon") {
     m.name = "Noop analyst";
   }
 
-  const existing = (
+  // The handle comes from the DISPLAY NAME, by the same algorithm every member
+  // gets — no per-member exceptions, and in particular NOT the archive's own
+  // slug. `slugifyMemberName` is the single implementation
+  // (src/swarm/handle.ts); reusing the archive id here would give one class of
+  // member a handle no other member could have earned, and would re-weld the
+  // archive to a slug namespace. Note the archive's "woon" was renamed to
+  // "Noop analyst" above, so it correctly derives `noop-analyst`.
+  const handle = slugifyMemberName(m.name);
+  const found = (
     await sql`
-      SELECT status, name, tagline, lens, mandate, biases, voice_md, mode, submit, operator, avatar
-      FROM swarm_members WHERE id = ${m.id}
+      SELECT id, status, name, tagline, lens, mandate, biases, voice_md, mode, submit, operator, avatar
+      FROM swarm_members WHERE handle = ${handle}
     `
-  )[0] as Record<string, unknown> | undefined;
+  )[0] as (Record<string, unknown> & { id: string }) | undefined;
+  // Generated, never the archive slug — see archiveIdToDbId.
+  const dbId = found?.id ?? crypto.randomUUID();
+  archiveIdToDbId.set(m.id, dbId);
+
+  const existing = found as Record<string, unknown> | undefined;
 
   const avatar = canonicalizeAvatar(m.avatar);
   const fields: FieldSpec[] = [
@@ -234,9 +270,9 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
 
   if (!existing) {
     await sql`
-      INSERT INTO swarm_members (id, status, name, tagline, lens, mandate, biases, voice_md, mode, submit, operator, avatar)
+      INSERT INTO swarm_members (id, handle, status, name, tagline, lens, mandate, biases, voice_md, mode, submit, operator, avatar)
       VALUES (
-        ${m.id}, ${m.status ?? "inactive"}, ${m.name}, ${m.tagline ?? null}, ${m.lens ?? null}, ${m.mandate ?? null},
+        ${dbId}, ${handle}, ${m.status ?? "inactive"}, ${m.name}, ${m.tagline ?? null}, ${m.lens ?? null}, ${m.mandate ?? null},
         ${sql.json(jsonValue(m.biases ?? null))}, ${m.voice_md ?? ""}, ${m.mode ?? null},
         ${sql.json(jsonValue(m.submit ?? null))}, ${m.operator ?? null}, ${sql.json(jsonValue(avatar))}
       )
@@ -261,17 +297,17 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
   const fillable = fields.filter((f) => existing[f.column] === null && (f.expected ?? null) !== null);
   for (const f of fillable) {
     const value = (f.kind === "json" ? sql.json(jsonValue(f.expected as never)) : f.expected) as never;
-    await sql`UPDATE swarm_members SET ${sql(f.column)} = ${value} WHERE id = ${m.id}`;
+    await sql`UPDATE swarm_members SET ${sql(f.column)} = ${value} WHERE id = ${dbId}`;
     existing[f.column] = f.expected;
   }
   if (fillable.length > 0) {
     console.log(
-      `[v0-seed-bootstrap] swarm_members id=${m.id}: filled ${fillable.length} empty column(s) from the archive — ` +
+      `[v0-seed-bootstrap] swarm_members handle=${handle} (id=${dbId}): filled ${fillable.length} empty column(s) from the archive — ` +
         fillable.map((f) => f.column).join(", "),
     );
   }
 
-  const rowDrifts = diffRow("swarm_members", `id=${m.id}`, fields, existing);
+  const rowDrifts = diffRow("swarm_members", `handle=${handle}`, fields, existing);
   if (rowDrifts.length === 0) return "unchanged";
   drifts.push(...rowDrifts);
   return "drift";
@@ -500,10 +536,18 @@ async function processTake(
   // happened to return. Revision 1 is the row this importer wrote — archived
   // sessions are long since aggregated and so can never acquire an amendment —
   // which is what keeps the drift comparison honest.
+  // The FK points at THIS database's member id; the signed payload above keeps
+  // the archive's own slug as `memberId` (issue #685). That split is the whole
+  // point: the signature is over bytes naming the archive identity — who
+  // actually authored the take — while the column has to reference a row that
+  // exists here. Rewriting the payload to the new id would invalidate it, and
+  // no private key exists to re-sign with.
+  const memberDbId = resolveDbMemberId(take.member_id) ?? take.member_id;
+
   const existing = (
     await sql`
       SELECT stance, confidence, body, nonce, payload, signature, received_at
-      FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${take.member_id}
+      FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${memberDbId}
       ORDER BY revision ASC LIMIT 1
     `
   )[0] as Record<string, unknown> | undefined;
@@ -527,7 +571,7 @@ async function processTake(
       INSERT INTO swarm_recommendations
         (session_id, member_id, subject_id, date, nonce, stance, confidence, body, payload, signature, verified, received_at)
       VALUES (
-        ${sessionId}, ${take.member_id}, ${sess.subject_id}, ${sess.date}, ${nonce},
+        ${sessionId}, ${memberDbId}, ${sess.subject_id}, ${sess.date}, ${nonce},
         ${take.stance ?? null}, ${take.confidence ?? null}, ${take.body ?? null},
         ${sql.json(jsonValue(submission))}, ${signature}, false, ${receivedAt}
       )
@@ -629,6 +673,7 @@ async function processBrief(brief: V0Brief, drifts: Drift[]): Promise<RowOutcome
 // database, and returns a structured result — no process.exitCode side
 // effect, so a caller (test or CLI) decides what to do with the outcome.
 export async function runV0SeedBootstrap(): Promise<V0BootstrapResult> {
+  archiveIdToDbId.clear();
   const { payload, manifest } = await loadV0Archive();
   console.log(
     `[v0-seed-bootstrap] loaded archive: sourceRepo=${manifest.sourceRepo} sourceCommit=${manifest.sourceCommit} ` +
@@ -668,7 +713,11 @@ export async function runV0SeedBootstrap(): Promise<V0BootstrapResult> {
   // Current live roster (post member-processing above) — used to validate
   // every legacy_takes[].member_id below without crashing on a dangling
   // reference (warn only).
-  const knownMemberIds = new Set((await sql<{ id: string }[]>`SELECT id FROM swarm_members`).map((r) => r.id));
+  // Validate against the ARCHIVE ids the member pass resolved (issue #685):
+  // legacy_takes[].member_id is an archive slug, so checking it against the
+  // database's `id` column would reject every take the moment ids became
+  // generated UUIDs.
+  const knownMemberIds = new Set(archiveIdToDbId.keys());
 
   // ── 3. Sessions + their takes (FK to subjects and members) ───────────────
   // Takes are processed inline per session, immediately after the session row

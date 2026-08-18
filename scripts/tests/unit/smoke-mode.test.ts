@@ -80,10 +80,45 @@ describe("smoke mode decisions", () => {
   });
 
   test("restored roster adoption returns fresh seats with no cross-run leakage", () => {
-    const roster = SMOKE_MEMBERS.map((member) => ({ ...member, lens: null, status: "active" }));
+    // GENERATED ids, matching what a real deployment now serves (issue #685):
+    // the allowlist is keyed on handle, and the seat it produces carries the
+    // opaque id the database actually holds. A fixture that reused the handle
+    // as the id would hide a lookup still keyed on the slug.
+    const ids = new Map(SMOKE_MEMBERS.map((m) => [m.handle, crypto.randomUUID()]));
+    const roster = SMOKE_MEMBERS.map((member) => ({
+      ...member,
+      id: ids.get(member.handle)!,
+      lens: null,
+      status: "active",
+    }));
     const first = adoptRestoredRoster(scenarioPlan(true), roster);
     first.push({ memberId: "leak", name: "Leak", lens: "bad", bias: 0, present: true });
     const second = adoptRestoredRoster(scenarioPlan(true), roster);
-    expect(second.map((member) => member.memberId).sort()).toEqual(SMOKE_MEMBERS.map((member) => member.id).sort());
+    expect(second.map((member) => member.memberId).sort()).toEqual([...ids.values()].sort());
+  });
+
+  // The AC in issue #685: nothing in the smoke lookup path may name a member by
+  // a slug id. A roster whose ids are opaque still seats exactly the three
+  // restored personas — which is only possible if the allowlist matched on
+  // handle.
+  test("smoke adoption seats the roster from opaque ids alone", () => {
+    const roster = SMOKE_MEMBERS.map((member) => ({
+      ...member,
+      id: crypto.randomUUID(),
+      lens: null,
+      status: "active",
+    }));
+    const seated = adoptRestoredRoster(scenarioPlan(true), roster);
+    expect(seated.map((m) => m.name).sort()).toEqual(["Athena", "Noop analyst", "Robot Money"]);
+    expect(seated.map((m) => m.memberId).sort()).toEqual(roster.map((m) => m.id).sort());
+    // NEGATIVE CONTROL. The same three personas, same display names, but
+    // carrying the archive's PRE-#685 slugs as handles. The allowlist must
+    // refuse them — if it passed, the check would be matching on name (which
+    // the adoption filter already covers) rather than on the derived handle.
+    const legacy = roster.map((m) => ({
+      ...m,
+      handle: { Athena: "athena", "Robot Money": "robotmoney", "Noop analyst": "woon" }[m.name]!,
+    }));
+    expect(() => adoptRestoredRoster(scenarioPlan(true), legacy)).toThrow(/expected restored IC handles/);
   });
 });

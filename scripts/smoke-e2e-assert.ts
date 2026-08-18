@@ -45,9 +45,11 @@ async function getJson<T>(path: string): Promise<T> {
 // Session ids are UUIDs (migration 0022), never ordinals — ordering is by the
 // (date, generatedAt, id) triple the backend itself orders and paginates by.
 interface SessionListItem { id: string; date: string; subjectId: string; subjectName: string | null; state: string; generatedAt: string }
-interface Take { memberId: string; memberName: string; archival?: boolean; verified?: boolean }
+interface Take { memberId: string; memberHandle?: string; memberName: string; archival?: boolean; verified?: boolean }
 interface SessionDetail { session: { id: string; state: string }; takes: Take[] }
-interface Member { id: string; name: string; status: string }
+// `handle` is optional on the wire (contract/src/swarm.d.ts): the shipped
+// static archive JSON predates the field and puts the handle in `id`.
+interface Member { id: string; handle?: string; name: string; status: string }
 
 async function allSessions(): Promise<SessionListItem[]> {
   const out: SessionListItem[] = [];
@@ -94,14 +96,19 @@ async function main(): Promise<void> {
   // 3. Exactly the three restored personas on the active roster.
   const roster = await getJson<{ members: Member[] }>(ROUTES.swarm.members);
   const active = roster.members.filter((m) => m.status === "active");
-  const expectedMembers = new Map(SMOKE_MEMBERS.map((m) => [m.id, m.name]));
+  // By HANDLE, not id (issue #685): member ids are generated per deployment
+  // (`crypto.randomUUID()`), so a smoke run has none to compare against — a
+  // list of literal ids here could only pass against a seed that hardcoded
+  // slugs. `handle` falls back to `id` on the wire for a pre-0030 row.
+  const memberHandle = (m: Member) => m.handle ?? m.id;
+  const expectedMembers = new Map(SMOKE_MEMBERS.map((m) => [m.handle, m.name]));
   check(
-    active.map((m) => m.id).sort().join(",") === [...expectedMembers.keys()].sort().join(","),
-    `active member ids are exactly [${[...expectedMembers.keys()].sort().join(", ")}] (got [${active.map((m) => m.id).sort().join(", ")}])`,
+    active.map(memberHandle).sort().join(",") === [...expectedMembers.keys()].sort().join(","),
+    `active member handles are exactly [${[...expectedMembers.keys()].sort().join(", ")}] (got [${active.map(memberHandle).sort().join(", ")}])`,
   );
-  for (const [id, name] of expectedMembers) {
-    const m = active.find((x) => x.id === id);
-    check(m?.name === name, `member ${id} displays as "${name}" (got ${JSON.stringify(m?.name ?? null)})`);
+  for (const [handle, name] of expectedMembers) {
+    const m = active.find((x) => memberHandle(x) === handle);
+    check(m?.name === name, `member ${handle} displays as "${name}" (got ${JSON.stringify(m?.name ?? null)})`);
   }
 
   const ordered = [...published].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
@@ -116,8 +123,8 @@ async function main(): Promise<void> {
     `newest published session ${newest.id} (${newest.date}/${newest.subjectId}) carries a live, non-archival take`,
   );
   check(
-    liveTakes.some((t) => expectedMembers.has(t.memberId)),
-    `that live take was submitted by a restored persona (got [${liveTakes.map((t) => t.memberId).join(", ") || "none"}])`,
+    liveTakes.some((t) => expectedMembers.has(t.memberHandle ?? t.memberId)),
+    `that live take was submitted by a restored persona (got [${liveTakes.map((t) => t.memberHandle ?? t.memberId).join(", ") || "none"}])`,
   );
   check(
     liveTakes.every((t) => t.verified === true),

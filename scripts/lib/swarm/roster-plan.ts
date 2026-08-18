@@ -35,6 +35,14 @@ export function admissionDelayMs(admittedSoFar: number, firstMs: number, interva
 /** One roster row as the admin members route reports it. */
 export interface RosterRow {
   id: string;
+  /**
+   * The member's public handle (issue #685). OPTIONAL because `id` is what
+   * seats a member and what every child row is keyed on — a caller that only
+   * has an id is still a valid RosterRow — but it is the only key an ALLOWLIST
+   * can be written against, now that ids are generated per deployment
+   * (`crypto.randomUUID()`) rather than being the archive's own slug.
+   */
+  handle?: string;
   name: string;
   lens?: string | null;
   status: string;
