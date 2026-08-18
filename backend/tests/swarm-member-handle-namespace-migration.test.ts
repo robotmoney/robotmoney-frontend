@@ -26,6 +26,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
 import postgres from "postgres";
+// The SHARED ephemeral-Postgres pin (issue #691). This file provisions a
+// container of its own, so it is one of the sites that has to stay on the
+// major production runs; it must never hold its own literal again — that is
+// exactly how the harness fell a major behind. See
+// backend/scripts/lib/postgres-image.ts for the version and the -alpine
+// decision, and backend/tests/postgres-version-parity.test.ts, which fails if
+// a literal reappears anywhere under backend/tests/.
+import { POSTGRES_IMAGE } from "../scripts/lib/postgres-image.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0031_swarm_member_handle_namespace.sql";
@@ -91,7 +99,7 @@ beforeAll(async () => {
   const up = Bun.spawnSync([
     "docker", "run", "-d", "--rm", "--name", containerName,
     "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
-    "-p", `${port}:5432`, "postgres:17-alpine",
+    "-p", `${port}:5432`, POSTGRES_IMAGE,
   ]);
   if (up.exitCode !== 0) {
     throw new Error(
