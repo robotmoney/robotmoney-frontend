@@ -18,11 +18,12 @@
 // exactly three places in the tree — domain.ts and two PUBLISHED docs pages —
 // and in no backend test at all, so the contract could be changed with nothing
 // going red. These are the tests that were missing.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -31,12 +32,9 @@ const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const sessionDate = (s: Record<string, unknown>): string =>
   s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
 
-// Shared ephemeral Postgres across every swarm test file; SWARM_ROSTER_CAP is
-// hard-enforced on transition-to-active, so start from a clean roster rather
-// than inheriting whatever an earlier file left behind.
-beforeAll(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per file, cloned from the migrated template — the roster this
+// file admits into is its own, with no reset of anyone else's rows.
+useCleanDatabase(import.meta.file);
 
 async function activeMember() {
   const id = rid("m");

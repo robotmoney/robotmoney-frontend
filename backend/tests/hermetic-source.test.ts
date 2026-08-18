@@ -10,6 +10,12 @@ import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { liveDataSource } from "../src/analytics/access/data-source.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { sql } from "../src/db/client.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -55,7 +61,6 @@ test("hermeticDataSource is deterministic (same series across runs)", async () =
 // fed the hermetic source — with the network hard-banned for the whole run.
 test("runAnalytics(hermetic) persists regime + research OFFLINE (demo/e2e path)", async () => {
   const ASOF = new Date().toISOString().slice(0, 10);
-  await sql`DELETE FROM regime_snapshots`;
   await sql`DELETE FROM raw_indicator_history`;
   await sql`DELETE FROM research_signals WHERE date = ${ASOF}`;
 

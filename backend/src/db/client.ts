@@ -2,13 +2,59 @@ import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { config } from "../config.ts";
 
+function makePool(url: string): postgresTypes.Sql<{}> {
+  return postgres(url, {
+    max: Number(process.env.PG_POOL_MAX ?? 10),
+    onnotice: () => {}, // silence NOTICE spam (e.g. "table already exists")
+  });
+}
+
 // Single shared connection pool. postgres.js gives us tagged-template SQL with
 // parameterization and easy access to raw queries (needed for FOR UPDATE
 // SKIP LOCKED in the task queue).
-export const sql = postgres(config.databaseUrl, {
-  max: Number(process.env.PG_POOL_MAX ?? 10),
-  onnotice: () => {}, // silence NOTICE spam (e.g. "table already exists")
-});
+//
+// `let`, not `const`, for exactly one reason: setDatabase() below. Importers
+// use `import { sql }`, an ESM live binding, so they observe the rebuilt pool
+// without re-importing. Nothing in production ever reassigns it.
+export let sql = makePool(config.databaseUrl);
+
+// Point the process at a different database: rebuild this pool, and move the
+// URL every other pool is built from.
+//
+// TEST SEAM. `bun test` runs every backend test file in ONE process sharing one
+// module cache, so this module's pool — created at import time from
+// DATABASE_URL — is the single pool all ~129 test files use. That is what made
+// the suite a dirty-database-reuse harness: the only cleanup available to a
+// fixture was DELETE/TRUNCATE, which migration 0032 now refuses on the
+// append-only tables. tests/support/clean-db.ts calls this in `beforeAll` to
+// give a file its own database cloned from a migrated template, and again in
+// `afterAll` to hand the shared database back. Production never calls it.
+//
+// Moving `config.databaseUrl` (and DATABASE_URL with it) is not incidental:
+// db/handle-namespace.ts builds its guard client from `config.databaseUrl` at
+// CALL time, so a redirect that skipped it would leave that one client talking
+// to the database everyone else just left. db/worker-client.ts owns a second
+// long-lived pool and exports its own setDatabase() for the same reason —
+// worker/** may not import this module, so it cannot be rebuilt from here.
+//
+// REFUSED OUTSIDE `ephemeral`. Being a test seam is a claim about where it may
+// run, and an exported function that silently re-points a deployed process's
+// database at an attacker-chosen or merely mistaken URL is not a claim worth
+// making on a comment alone. `config.env` fails closed to "prod" when RM_ENV is
+// unset (config.ts), so the guard is on by default everywhere it matters.
+export async function setDatabase(url: string): Promise<void> {
+  if (config.env !== "ephemeral") {
+    throw new Error(
+      `db/client.setDatabase() is a test-only seam and refuses to run under RM_ENV=${config.env}. ` +
+        "Point the process at a different database with DATABASE_URL and restart it.",
+    );
+  }
+  process.env.DATABASE_URL = url;
+  config.databaseUrl = url;
+  const previous = sql;
+  sql = makePool(url);
+  await previous.end({ timeout: 5 });
+}
 
 // A database handle store writers accept: either the shared pool or a
 // transaction handle from sql.begin (postgres.js's TransactionSql does not

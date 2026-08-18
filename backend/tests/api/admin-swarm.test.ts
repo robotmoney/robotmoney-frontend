@@ -3,25 +3,21 @@
 // same idiom as routes/admin.ts). Runs against the ephemeral Postgres from
 // tests/preload.ts. Also asserts documented 200/201/404/409 envelopes and
 // that a path this handler does not own falls through as null.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import { generateKeyPair } from "../../src/lib/signing.ts";
 import { handleSwarmAdmin } from "../../src/api/routes/swarm-admin.ts";
 import { sql } from "../../src/db/client.ts";
 import { ROUTES } from "@robotmoney/contract";
+import { useCleanDatabase } from "../support/clean-db.ts";
 
 const PROD = { adminToken: "s3cret-swarm-admin-token", allowInsecure: false } as const;
 const INSECURE = { adminToken: null, allowInsecure: true } as const;
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
-// All swarm test files share ONE ephemeral Postgres (tests/preload.ts). With
-// SWARM_ROSTER_CAP now hard-enforced on every transition-to-active, a roster
-// left full by an earlier-running file would make this file's manual member add
-// return 409 instead of the expected 201. Reset the roster so this file admits
-// its own members from empty, independent of file order.
-beforeAll(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per file, cloned from the migrated template — the roster this
+// file admits into is its own, with no reset of anyone else's rows.
+useCleanDatabase(import.meta.file);
 
 function req(method: string, path: string, opts: { token?: string; body?: unknown; rawBody?: string } = {}): Request {
   const headers: Record<string, string> = { "Content-Type": "application/json" };

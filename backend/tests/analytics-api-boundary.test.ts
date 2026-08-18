@@ -23,6 +23,12 @@ import { sql } from "../src/db/client.ts";
 import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { processOneJob } from "../src/worker/loop.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 const SRC = join(import.meta.dir, "..", "src");
 
@@ -125,9 +131,13 @@ test(
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
       process.env.ANALYTICS_TOKEN = TOKEN;
 
-      await sql`TRUNCATE jobs, job_runs RESTART IDENTITY CASCADE`;
-      await sql`DELETE FROM regime_snapshots`;
-      await sql`DELETE FROM research_signals`;
+      // Empty the queue: a clean database still carries seed()'s production
+      // cold-start jobs, and processOneJob() claims the oldest eligible job, not
+      // this test's. Ordered DELETEs, not TRUNCATE ... CASCADE — audit_log,
+      // swarm_session_events and analytics_runs reference jobs(id), and CASCADE
+      // truncates a referencing table whole regardless of ON DELETE SET NULL.
+      await sql`DELETE FROM job_runs`;
+      await sql`DELETE FROM jobs`;
       const asof = new Date().toISOString().slice(0, 10);
       // Direct insertion is test-only. No supported API/admin/scheduler path can
       // create these legacy consumer jobs after D25.

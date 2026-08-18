@@ -29,6 +29,12 @@ import { runAnalytics } from "../src/analytics/index.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { liveDataSource } from "../src/analytics/access/data-source.ts";
 import { saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 function addDays(iso: string, days: number): string {
   const [y, m, d] = iso.split("-").map(Number);
@@ -172,7 +178,6 @@ test(
   "runAnalytics (LIVE path): an indicator whose real floor is older than the forward-fill horizon is served as visibly degraded, not current",
   async () => {
     await sql`DELETE FROM raw_indicator_history`;
-    await sql`DELETE FROM regime_snapshots`;
 
     const asof = "2026-06-29";
     const STALE_ID = "T10Y2Y";

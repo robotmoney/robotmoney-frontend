@@ -12,13 +12,19 @@
 //    ADMIN_TOKEN is revoked, and allowInsecure no longer opens the gate;
 //  • the claim is one-time: a second claim is 409 until an operator deletes
 //    the row.
-import { test, expect, describe, beforeEach, afterAll } from "bun:test";
+import { test, expect, describe } from "bun:test";
 import { createHash } from "node:crypto";
 import { sql } from "../../src/db/client.ts";
 import { handleAdmin, type AdminAuthConfig } from "../../src/api/routes/admin.ts";
 import { handleAdminWebauthn } from "../../src/api/routes/admin-webauthn.ts";
 import { isPrivileged } from "../../src/api/auth.ts";
 import { hashKey } from "../../src/lib/keys.ts";
+import { useCleanDatabasePerTest } from "../support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 const CFG: AdminAuthConfig = { adminToken: "s3cret-admin-token", allowInsecure: false };
 const PASSWORD = "operator-chosen-password"; // ≥ 12 chars
@@ -50,22 +56,6 @@ const passwordRecoverReq = (recoveryCode: unknown, newPassword: unknown) =>
 const isClaimedReq = () => new Request("http://localhost/api/admin/is-claimed", { method: "GET" });
 
 describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
-  beforeEach(async () => {
-    await sql`DELETE FROM admin_credential`;
-    await sql`DELETE FROM admin_passkey`;
-    await sql`DELETE FROM admin_session`;
-    await sql`DELETE FROM admin_webauthn_challenge`;
-    await sql`DELETE FROM audit_log WHERE action IN ('claim_admin_credential', 'change_admin_password', 'recover_admin_password')`;
-  });
-
-  afterAll(async () => {
-    await sql`DELETE FROM admin_credential`;
-    await sql`DELETE FROM admin_passkey`;
-    await sql`DELETE FROM admin_session`;
-    await sql`DELETE FROM admin_webauthn_challenge`;
-    await sql`DELETE FROM audit_log WHERE action IN ('claim_admin_credential', 'change_admin_password', 'recover_admin_password')`;
-  });
-
   test("full lifecycle: unclaimed setup token → claim → durable credential survives restart", async () => {
     // Unclaimed: probe says so, and the env token authorizes (pre-claim behaviour).
     expect(await call(isClaimedReq())).toEqual({ status: 200, body: { claimed: false } });

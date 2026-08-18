@@ -2058,3 +2058,81 @@ leaves it on.
 - **No override ("fail-closed means fail-closed").** Defensible for a
   configuration gate; not for a data gate whose repair path runs through the
   database the operator may not be able to reach.
+
+---
+
+## D35 — `robotmoney.network` is the canonical origin; `robotmoney.net` is retained for mail and for the deploy subdomains (issues #592, #603, #628)
+
+**Decision.** The canonical public origin is `https://robotmoney.network`.
+`robotmoney.net` is **not** decommissioned. Three classes of reference, and the
+split between them is deliberate rather than unfinished work:
+
+- **Canonical web surface → `.network`.** `ORIGIN` in
+  `frontend/public/assets/js/app/seo.js` and `scripts/prerender.ts`,
+  `sitemap.xml`, `robots.txt`'s `Sitemap:`, `llms.txt`, `index.html`'s
+  canonical/OpenGraph/JSON-LD, `SWARM_ONBOARDING_SKILL_URL` in
+  `contract/src/swarm-application.js`, and the operator-facing docs. Before #603
+  both apexes served `canonical → https://robotmoney.net/`: the new domain told
+  every crawler that its canonical identity was the flagged old one, which is
+  the opposite of the move's purpose.
+- **Mail stays `.net`.** `robotmoney.network` publishes a **NULL MX** (`0 .`,
+  RFC 7505) — a positive declaration that the domain accepts no mail.
+  `robotmoney.net` has Google Workspace (`smtp.google.com`). So `hi@`, `swarm@`,
+  `noreply@`, `research@`, `SWARM_NOTIFICATION_EMAIL_FROM`, and the AgentMail
+  mapping `swarm@robotmoney.net → swarm@notify.robotmoney.net` all stay. A
+  migrated address does not degrade, it hard-bounces, and the two that would
+  break first are the member key-rotation escape hatch
+  (`recoveryMailto()`, `static-views.js`) and the waitlist POST fallback
+  (`apply-form.js`) — the paths that exist precisely for an operator who is
+  already locked out or already hitting an API error.
+- **Deploy and ingress subdomains stay `.net`.** `site.`, `swarm.`, `app.` and
+  `staging.` are on the `.net` zone under D13's host-based routing, with D29's
+  api process serving the cutover host. The Cloudflare API token is scoped to
+  the `robotmoney.net` zone (`docs/runbooks/deployment.md`). Rewriting these in
+  a runbook produces hostnames that do not resolve, so the runbook and
+  `cloudflared.config.example.yml` keep them.
+
+**Why this needs writing down.** `robotmoney.net` is a strict substring of
+`robotmoney.network`. Two consequences, both of which have already bitten:
+
+- The half-match is not hypothetical and it is not only a replace-direction
+  hazard: `scripts/prerender.ts` once spelled the host out next to `ORIGIN`, and
+  when the site moved, `robotmoney.net` matched *inside* `robotmoney.network`,
+  captured `work/…` as the route, and prerendered every page into an `ork/`
+  directory. The fix there is the pattern to copy — **derive the host from
+  `ORIGIN` rather than respelling it** — because a second literal is what rots.
+  Where a literal is unavoidable, match `robotmoney\.net(?!work)`; a bare
+  `s/robotmoney\.net/robotmoney.network/` yields `robotmoney.networkwork`.
+- No repo-wide guard currently enforces that lookahead.
+  `scripts/tests/unit/api-reference-no-dead-hosts.test.ts` asserts
+  `/swarm\.(?:staging\.)?robotmoney\.net/i` without it, which is safe only
+  because no `swarm.*.robotmoney.network` host exists — it would false-positive
+  on the live host the day one does.
+- More expensively: the substring makes a "finish the rename" pass look like
+  tidy-up while it breaks mail delivery and tunnel ingress. The remaining `.net`
+  strings are load-bearing, not residue, and nothing in the diff says so. A
+  reader who greps for the old host and finds ~113 hits will otherwise conclude
+  the migration stalled and complete it.
+
+**Not done here.** The apex `robotmoney.net → robotmoney.network` 301 (RM-57) is
+deliberately deferred behind RM-41. Unknown paths still answer **200** rather
+than 404 (`backend/src/api/static.ts` — "so nothing 404s"), so redirecting the
+apex now would funnel the old domain's inherited reputation flags onto ~100 dead
+URLs and register them as soft 404s. `frontend/prod/_redirects` is **inert** —
+Netlify/Pages syntax, and we serve from a Bun process behind cloudflared, so
+nothing parses it; it is kept and marked rather than deleted because it
+documents intended host policy. Real redirects belong in Cloudflare rules or the
+app router.
+
+**Rejected alternatives.**
+
+- **Move mail to `.network` with the site.** Needs MX/SPF/DKIM provisioning and
+  a Workspace domain move, and during the cutover every published support
+  address bounces silently — for no user-visible gain, since the address is
+  read from the page rather than typed from the domain.
+- **Rename the deploy subdomains too, for consistency.** The zone, its token
+  and D13's routing are all `.net`-scoped; consistency here buys nothing and
+  costs a broken ingress plus a runbook that cannot be followed.
+- **Delete `_redirects` outright.** It is the only written statement of intended
+  host policy; deleting it loses that, whereas marking it inert prevents the
+  actual failure (someone adding a rule that never fires).

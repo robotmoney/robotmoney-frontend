@@ -15,6 +15,12 @@ import net from "node:net";
 import { sql } from "../src/db/client.ts";
 import { runProdBootstrap, type StepReport } from "../scripts/prod-bootstrap.ts";
 import { loadV0Archive } from "../src/swarm/v0-archive.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 const MEMBER_IDS = ["athena", "robotmoney", "woon"];
 const SUBJECT_IDS = ["robotmoney-allocation", "robotmoney-treasury", "robotmoney-vault", "woon"];
@@ -36,17 +42,6 @@ beforeAll(async () => {
   delete process.env.V0_ARCHIVE_SIGNING_KEY;
 });
 
-async function cleanArchiveRows(): Promise<void> {
-  // Reverse dependency order: everything that FKs to subjects/sessions goes
-  // first, or the subject delete below trips a foreign-key violation.
-  await sql`DELETE FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_briefs WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_subject_snapshots WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_sessions WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_subjects WHERE id = ANY(${SUBJECT_IDS})`;
-  await sql`DELETE FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
-}
-
 const origAnalyticsToken = process.env.ANALYTICS_TOKEN;
 const origAnalyticsApiUrl = process.env.ANALYTICS_API_URL;
 const origSeedRoster = process.env.SWARM_SEED_ROSTER;
@@ -60,14 +55,8 @@ function restoreEnv(): void {
   else process.env.SWARM_SEED_ROSTER = origSeedRoster;
 }
 
-beforeEach(async () => {
-  await cleanArchiveRows();
-  restoreEnv();
-});
-afterEach(async () => {
-  await cleanArchiveRows();
-  restoreEnv();
-});
+beforeEach(restoreEnv);
+afterEach(restoreEnv);
 
 function reportFor(reports: StepReport[], name: string): StepReport {
   const r = reports.find((r) => r.name === name);
@@ -93,6 +82,10 @@ test("cold DB: all three steps run, v0-seed inserts the archive's full manifest 
   expect(reports.map((r) => r.name)).toEqual([
     "handle-namespace",
     "migrations",
+    // Runs AFTER migrations, because migrate() is what installs the guard it
+    // verifies (issue #684). Probing before would report "not applied" on every
+    // cold boot and prove nothing.
+    "append-only-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
   ]);
@@ -104,6 +97,15 @@ test("cold DB: all three steps run, v0-seed inserts the archive's full manifest 
   const migrations = reportFor(reports, "migrations");
   expect(migrations.status).toBe("success");
   expect(migrations.failing).toBe(false);
+
+  // The guard step PROBES — it attempts a delete on every protected table and
+  // requires migration 0032's own refusal message — so a success here is
+  // evidence the freshly migrated database really refuses deletion, not that a
+  // count of rows in pg_trigger came out right.
+  const appendOnly = reportFor(reports, "append-only-guard");
+  expect(appendOnly.status).toBe("success");
+  expect(appendOnly.failing).toBe(false);
+  expect(appendOnly.summary).toContain("armed");
 
   const v0seed = reportFor(reports, "v0-seed:bootstrap");
   expect(v0seed.status).toBe("success");
@@ -143,6 +145,10 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
   expect(reports.map((r) => r.name)).toEqual([
     "handle-namespace",
     "migrations",
+    // Runs AFTER migrations, because migrate() is what installs the guard it
+    // verifies (issue #684). Probing before would report "not applied" on every
+    // cold boot and prove nothing.
+    "append-only-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
   ]);
@@ -250,13 +256,17 @@ test("a restored namespace violation halts the run before ANY write, with both m
     expect(step.summary).toContain("handle/id namespace violation");
     // What main() turns into a non-zero process exit code.
     expect(reports.some((r) => r.failing)).toBe(true);
-    // The archive members are the proof nothing was written: they are deleted
-    // before each test and a completed run always reinstates all three.
+    // The archive members are the proof nothing was written: this test's
+    // database starts empty and a completed run always reinstates all three.
     const [{ n }] = await sql<{ n: number }[]>`
       SELECT COUNT(*)::int AS n FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
     expect(n).toBe(0);
   } finally {
-    await sql`DELETE FROM swarm_members WHERE id = ANY(${[holder, shadowed]})`;
+    // Repair by UPDATE, not DELETE. Migration 0032 makes swarm_members
+    // append-only, so renaming the colliding handle is the ONLY repair an
+    // operator has for this violation — which makes it the repair worth
+    // proving the orchestrator accepts.
+    await sql`UPDATE swarm_members SET handle = ${`${holder}-h`} WHERE id = ${holder}`;
   }
 
   // The repaired database runs to completion through the same entrypoint.
@@ -265,6 +275,10 @@ test("a restored namespace violation halts the run before ANY write, with both m
   expect(repaired.map((r) => r.name)).toEqual([
     "handle-namespace",
     "migrations",
+    // Runs AFTER migrations, because migrate() is what installs the guard it
+    // verifies (issue #684). Probing before would report "not applied" on every
+    // cold boot and prove nothing.
+    "append-only-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
   ]);

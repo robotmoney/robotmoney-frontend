@@ -9,12 +9,13 @@
 //
 // Runs against the ephemeral Postgres from tests/preload.ts (already fully
 // migrated).
-import { beforeAll, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeApplication, canonicalizeSubmission } from "@robotmoney/contract";
+import { useCleanDatabase } from "./support/clean-db.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -28,16 +29,9 @@ async function signedApply(name: string) {
   return { memberId: (applied as { memberId: string }).memberId, applied };
 }
 
-// All swarm test files share ONE ephemeral Postgres (tests/preload.ts). With
-// SWARM_ROSTER_CAP now hard-enforced on every transition-to-active, a roster
-// left full by an earlier-running file would make this file's first member
-// admission 409. Reset the roster so this file admits its own members from empty,
-// independent of file order. The suite's shared-swarm assertions here are all
-// containment/`>=` (arrayContaining, rosterSize >= 2), so a clean start still
-// satisfies them.
-beforeAll(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per file, cloned from the migrated template — the roster this
+// file admits into is its own, with no reset of anyone else's rows.
+useCleanDatabase(import.meta.file);
 
 async function activeMember(name = "member") {
   const id = rid("m");

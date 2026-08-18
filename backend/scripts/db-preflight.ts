@@ -79,6 +79,7 @@ import {
   handleNamespaceRefusalLines,
   type NamespaceDb,
 } from "../src/db/handle-namespace.ts";
+import { appendOnlyRefusalLines, checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
 
 export { handleNamespaceConflicts };
 
@@ -121,6 +122,14 @@ export interface PreflightResult {
    *  adopted, one operator-readable sentence each. Empty on a clean database
    *  and on one whose schema predates the `handle` column. */
   handleNamespaceConflicts: string[];
+  /** Problems found by the append-only guard's runtime check (issue #684):
+   *  migration 0032 recorded as applied while deletion is no longer refused.
+   *  Empty on an armed database and on one that predates the migration — the
+   *  check is a probe (`DELETE ... WHERE false`), not a trigger inventory,
+   *  because replacing rm_append_only_guard()'s body disarms every table while
+   *  leaving the catalog looking correct. Read-only in every outcome: the probe
+   *  matches no rows whether or not it is refused. */
+  appendOnlyProblems: string[];
 }
 
 /** Parse --initializer=… out of argv. Missing or unrecognised ⇒ simulation —
@@ -153,12 +162,15 @@ export async function classifyDatabase(initializer: BootInitializer, db: Preflig
     FROM information_schema.tables
     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
   `) as unknown as { count: number }[];
-  if (count === 0) return { mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [] };
+  if (count === 0) {
+    return { mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [] };
+  }
   return {
     mode: initializer === "archive" ? "adopt" : "refuse",
     tables: count,
     census: await censusSample(db),
     handleNamespaceConflicts: await handleNamespaceConflicts(db),
+    appendOnlyProblems: (await checkAppendOnlyGuard(db)).problems,
   };
 }
 
@@ -201,6 +213,10 @@ export function reportLines(target: string, r: PreflightResult): string[] {
     lines.push(...handleNamespaceRefusalLines(r.handleNamespaceConflicts, "[db-preflight]"));
     lines.push(`[db-preflight] Nothing has been written.`);
   }
+  if (r.appendOnlyProblems.length > 0) {
+    lines.push(...appendOnlyRefusalLines(r.appendOnlyProblems, "[db-preflight]"));
+    lines.push(`[db-preflight] Nothing has been written.`);
+  }
   return lines;
 }
 
@@ -210,7 +226,14 @@ export async function main(): Promise<void> {
   // An adopted database that already violates the invariant is refused too: the
   // boot's next step is migrate + seed, and every writer past this point would
   // be writing on top of a public reference that addresses two members.
-  const refused = result.mode === "refuse" || result.handleNamespaceConflicts.length > 0;
+  const refused =
+    result.mode === "refuse" ||
+    result.handleNamespaceConflicts.length > 0 ||
+    // Same reasoning as the namespace conflicts above: the boot's next step is
+    // migrate + seed, and adopting a database whose history guard is recorded
+    // as applied but no longer refuses deletion means every writer past this
+    // point is writing into tables that can be silently emptied.
+    result.appendOnlyProblems.length > 0;
   const emit = refused ? console.error : console.log;
   for (const line of reportLines(target, result)) emit(line);
   if (refused) process.exitCode = 1;

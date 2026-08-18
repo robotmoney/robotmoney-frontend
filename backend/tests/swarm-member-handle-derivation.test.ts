@@ -28,7 +28,7 @@
 // Shares the one ephemeral Postgres every other swarm test file uses
 // (tests/preload.ts). A missing Docker/Postgres fails that preload loudly;
 // nothing here skips.
-import { test, expect, beforeEach } from "bun:test";
+import { test, expect } from "bun:test";
 import { canonicalizeApplication, ROUTES, path as routePath } from "@robotmoney/contract";
 import * as ic from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
@@ -38,15 +38,17 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 const ADMIN_CFG = { adminToken: "s3cret-swarm-admin-token", allowInsecure: false } as const;
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
-// SWARM_ROSTER_CAP is hard-enforced on every transition-to-active and this file
-// seats several members per test.
-beforeEach(async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-});
+// Own database per TEST, cloned from the migrated template. Per-test, not
+// per-file: countActiveMembers() is global and SWARM_ROSTER_CAP is enforced on
+// every transition-to-active, so members seated by one test would make the
+// next test's admission a spurious 409. Unique ids cannot fix that; a clean
+// database can.
+useCleanDatabasePerTest(import.meta.file);
 
 async function callSwarm(req: Request): Promise<{ status: number; body: any }> {
   // api/index.ts sanitizes ANY escaped exception into `500 {"error":"internal

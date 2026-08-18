@@ -46,6 +46,29 @@ export interface WorkerHandle {
   readonly lane: Lane;
   /** Idempotent bounded shutdown (safe to call from several signal handlers). */
   stop(): Promise<void>;
+  /**
+   * Await the actual EXIT of every internal loop, and throw if they are still
+   * running after `timeoutMs`.
+   *
+   * `stop()` deliberately does NOT give this guarantee: it resolves at
+   * `shutdownTimeoutMs` with loops still pending (that bound is the whole point
+   * — a hung handler must not block process exit), and it is MEMOIZED, so a
+   * second `stop()` on a handle whose first one timed out awaits an
+   * already-settled promise and waits for nothing at all.
+   *
+   * In production that is correct and nothing needs this. In TESTS it is not:
+   * `db/client.ts`'s `sql` is a live binding, so a drain loop that outlives its
+   * file issues its next query against whichever database the NEXT file swapped
+   * in — and `tests/support/clean-db.ts` DROPs the clone it left, so against one
+   * that no longer exists. A test that wants "no loop outlives this file" as a
+   * structural fact rather than an incidental consequence of how long its body
+   * happened to sleep has to await the loops themselves.
+   *
+   * Not memoized: every call awaits the live loop promises. Bounded and LOUD —
+   * a leak becomes a named failure here rather than a confusing error attributed
+   * to some later file.
+   */
+  drained(timeoutMs?: number): Promise<void>;
 }
 
 export function startWorker(opts: WorkerOptions): WorkerHandle {
@@ -267,10 +290,30 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
     console.log(`worker ${workerId} (lane=${lane.name}) stopped`);
   }
 
+  // See WorkerHandle.drained(). Every loop's sleep() is abort-aware (it resolves
+  // on `stopped`), so once stop() has fired the only thing that can still hold a
+  // loop open is a handler that has not returned — which is exactly the leak
+  // worth reporting rather than waiting out.
+  async function drain(timeoutMs: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      Promise.allSettled(loops).then(() => true as const),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+    ]);
+    clearTimeout(timer);
+    if (!settled) {
+      throw new Error(
+        `worker ${workerId} (lane=${lane.name}) still had loops running ${timeoutMs}ms after drain() was called. ` +
+          "stop() is bounded and memoized, so it does not prove the loops exited; something is still holding one open.",
+      );
+    }
+  }
+
   let stopPromise: Promise<void> | null = null;
   return {
     workerId,
     lane,
     stop: () => (stopPromise ??= doStop()),
+    drained: (timeoutMs = shutdownTimeoutMs + 5_000) => drain(timeoutMs),
   };
 }

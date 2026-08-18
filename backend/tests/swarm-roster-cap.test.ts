@@ -15,12 +15,11 @@ import * as admin from "../src/swarm/admin.ts";
 import { canonicalizeApplication } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { sql } from "../src/db/client.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
 
-// Isolate: own the swarm_members table so countActiveMembers() reflects only
-// the members this test admits (CASCADE clears the dependent key/application rows).
-async function resetRoster() {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
-}
+// Own database per file, so countActiveMembers() reflects only the members this
+// test admits — and nothing has to be erased to make that true.
+useCleanDatabase(import.meta.file);
 
 // Onboard a member through the REAL public path (apply → activate), signing
 // the canonical application payload the way an rmpc-equipped agent would. The
@@ -47,8 +46,6 @@ async function memberVersion(id: string): Promise<number> {
 }
 
 test("every transition-to-active path hard-blocks admissions past SWARM_ROSTER_CAP", async () => {
-  await resetRoster();
-
   // ── Fill the roster to EXACTLY the cap through the real apply → activate gate ─
   const capMembers: Awaited<ReturnType<typeof onboard>>[] = [];
   for (let i = 0; i < SWARM_ROSTER_CAP; i++) {

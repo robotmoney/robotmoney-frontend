@@ -5,6 +5,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
+import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
@@ -58,6 +59,27 @@ assertNoVaultAddressCollision();
 // RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1 turns the refusal into a loud warning.
 await assertHandleNamespaceClean();
 
+// Append-only guard check (issue #684): refuse to serve a database whose
+// migration 0032 triggers are recorded as applied but are no longer refusing
+// deletion. Same population path as the namespace guard above — a pg_restore
+// loads rows before the post-data section installs triggers, and the restored
+// schema_migrations already names 0032, so migrate() will never re-apply it —
+// plus one the namespace guard has no analogue for: the role in DATABASE_URL
+// owns rm_append_only_guard(), so a single CREATE OR REPLACE disarms all of it
+// while every trigger still exists and still reads tgenabled='A'.
+//
+// It therefore ATTEMPTS A DELETE (`... WHERE false`, which removes nothing in
+// either outcome) and requires the guard's own message, instead of counting
+// triggers — an inventory passes cleanly against a fully disarmed database.
+//
+// Bounded by the same short-lived client the namespace guard uses, for the same
+// reason: this sits between the process and its port. A database that has never
+// had 0032 applied is NOT refused (that is an ordinary first boot); one that
+// records it as applied and does not honour it is. Outcome at /health
+// (`append_only_guard`), and RM_ALLOW_UNARMED_APPEND_ONLY_GUARD=1 turns the
+// refusal into a loud warning.
+await assertAppendOnlyGuardArmed();
+
 const server = Bun.serve({
   port: config.apiPort,
   async fetch(req, server) {
@@ -100,7 +122,19 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       // STATUS CODE stays 200 in every case on purpose: the compose healthcheck
       // keys on `.ok`, and failing it because a database was slow at boot would
       // trade a wrong-attribution risk for a restart loop.
-      return json({ status: "ok", env: config.env, db, handle_namespace: handleNamespaceGuardOutcome() });
+      return json({
+        status: "ok",
+        env: config.env,
+        db,
+        handle_namespace: handleNamespaceGuardOutcome(),
+        // "armed" | "disarmed" | "not_applied" | "unavailable" | "unchecked".
+        // Reported for the same reason as handle_namespace: a log line is not a
+        // detection path here (nothing scrapes container logs, and the json-file
+        // buffer rotates), and "disarmed" is reachable while serving via
+        // RM_ALLOW_UNARMED_APPEND_ONLY_GUARD=1. The status CODE stays 200 in
+        // every case — the compose healthcheck keys on `.ok`.
+        append_only_guard: appendOnlyGuardOutcome(),
+      });
     }
 
     if (pathname === ROUTES.comments.list && req.method === "GET") {

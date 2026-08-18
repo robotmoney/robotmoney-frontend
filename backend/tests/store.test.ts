@@ -11,6 +11,10 @@ import {
 import type { RegimeSnapshot } from "../src/analytics/analyze/regime.ts";
 import { persistResearchSignal } from "../src/analytics/store/research-store.ts";
 import type { ResearchPayload } from "../src/analytics/analyze/research.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
+
+// Own database per file, cloned from the migrated template (support/clean-db.ts).
+useCleanDatabase(import.meta.file);
 
 const DATE = "1990-01-15"; // unique date, no collision with seeded/suite rows
 
@@ -29,7 +33,6 @@ function snap(composite: number): RegimeSnapshot {
 }
 
 test("saveRegimeSnapshots: round-trips and upserts (no duplicate on re-save)", async () => {
-  await sql`DELETE FROM regime_snapshots WHERE date = ${DATE}`;
   await saveRegimeSnapshots([snap(0.5)]);
 
   const [row] = await sql`SELECT * FROM regime_snapshots WHERE date = ${DATE}`;
@@ -51,8 +54,6 @@ test("saveRegimeSnapshots: round-trips and upserts (no duplicate on re-save)", a
 
 test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, version, rich indicators)", async () => {
   const RDATE = "1990-02-20"; // unique date, no collision with other tests/seeds
-  await sql`DELETE FROM regime_snapshots WHERE date = ${RDATE}`;
-
   const richIndicators = [
     {
       id: "T10Y2Y",

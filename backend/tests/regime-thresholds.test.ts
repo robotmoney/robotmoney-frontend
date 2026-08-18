@@ -10,7 +10,7 @@
 //     only when the stored label is NULL, and never writes synthetic rows;
 //   * synthetic backfill is demo-gated (refused under RM_ENV=prod) and reserved
 //     for the demo fixture path (ensureDemoSubjectFixtures).
-import { test, expect, afterEach, afterAll } from "bun:test";
+import { test, expect, afterEach } from "bun:test";
 import { classifyRegime, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
 import { classifyRegime as classifierLabel } from "../src/analytics/analyze/regime.ts";
 import { config } from "../src/config.ts";
@@ -20,21 +20,17 @@ import {
   buildRegimeSummary,
   ensureDemoSubjectFixtures,
 } from "../src/swarm/domain.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// Own database per TEST, cloned from the migrated template: these tests each
+// start from an empty table, which used to mean wiping one the previous test
+// filled. See support/clean-db.ts.
+useCleanDatabasePerTest(import.meta.file);
 
 const origEnv = config.env;
 afterEach(() => {
   (config as { env: string }).env = origEnv;
 });
-
-// Leave the shared table populated for any later suite that assumes demo
-// fixtures can top it up (backfill is idempotent, so this is just tidiness).
-afterAll(async () => {
-  await backfillRegimeHistory(new Date().toISOString().slice(0, 10));
-});
-
-async function resetSnapshots() {
-  await sql`DELETE FROM regime_snapshots`;
-}
 
 async function snapshotCount(): Promise<number> {
   const [{ n }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM regime_snapshots`;
@@ -73,8 +69,11 @@ test("swarm domain labeling path (buildRegimeSummary NULL-label fallback) uses t
     [0.7, "risk_on"],
     [0.3, "risk_off"],
   ] as const) {
-    await resetSnapshots();
-    await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-01', ${composite}, NULL)`;
+    // Upsert, because the loop deliberately reuses one date: correcting the day's
+    // composite is an UPDATE, which is what "append-only" leaves available (and
+    // what the production write path does anyway).
+    await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-01', ${composite}, NULL)
+              ON CONFLICT (date) DO UPDATE SET composite = EXCLUDED.composite, regime = NULL`;
     const summary = await buildRegimeSummary("2026-07-01", 1);
     expect(summary.regime).toBe(expected);
     // The stored (real) point in history is labeled by the same rule.
@@ -85,7 +84,6 @@ test("swarm domain labeling path (buildRegimeSummary NULL-label fallback) uses t
 // ── AC: live path reads STORED labels and never re-derives over them ─────────
 
 test("buildRegimeSummary echoes a contrarian STORED label instead of re-deriving it", async () => {
-  await resetSnapshots();
   // 0.60 is "neutral" under canon — store the contrarian label on purpose.
   await sql`
     INSERT INTO regime_snapshots (date, composite, regime, macro_regime, onchain_regime, factor_regime)
@@ -99,7 +97,6 @@ test("buildRegimeSummary echoes a contrarian STORED label instead of re-deriving
 });
 
 test("LIVE aggregation path: buildRegimeSummary writes NO synthetic rows when regime_snapshots is sparse", async () => {
-  await resetSnapshots();
   await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-03', 0.52, 'neutral')`;
   await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-04', 0.61, 'neutral')`;
   const before = await snapshotCount();
@@ -121,7 +118,6 @@ test("LIVE aggregation path: buildRegimeSummary writes NO synthetic rows when re
 // ── AC: synthetic backfill is demo-gated ─────────────────────────────────────
 
 test("demo-gated backfill still seeds >= 8 persisted points, labeled by the canonical classifier", async () => {
-  await resetSnapshots();
   expect(config.env).not.toBe("prod"); // tests run under RM_ENV=ephemeral
   await backfillRegimeHistory("2026-07-05");
   expect(await snapshotCount()).toBeGreaterThanOrEqual(8);
@@ -136,7 +132,6 @@ test("demo-gated backfill still seeds >= 8 persisted points, labeled by the cano
 });
 
 test("demo fixture path (ensureDemoSubjectFixtures) keeps demo sparklines at >= 8 persisted points", async () => {
-  await resetSnapshots();
   await ensureDemoSubjectFixtures("regime_thresholds_subj", "Threshold Subject", "2026-07-06");
   expect(await snapshotCount()).toBeGreaterThanOrEqual(8);
   const summary = await buildRegimeSummary("2026-07-06");
@@ -144,7 +139,6 @@ test("demo fixture path (ensureDemoSubjectFixtures) keeps demo sparklines at >= 
 });
 
 test("backfillRegimeHistory REFUSES to write synthetic rows under RM_ENV=prod", async () => {
-  await resetSnapshots();
   (config as { env: string }).env = "prod";
   await backfillRegimeHistory("2026-07-07");
   expect(await snapshotCount()).toBe(0);

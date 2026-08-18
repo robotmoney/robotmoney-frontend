@@ -49,6 +49,7 @@
 import { migrate } from "../src/db/migrate.ts";
 import { sql, closeDb } from "../src/db/client.ts";
 import { checkHandleNamespace, handleNamespaceRefusalLines } from "../src/db/handle-namespace.ts";
+import { appendOnlyRefusalLines, checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
 import { runV0SeedBootstrap } from "./v0-seed-bootstrap.ts";
 import { bootstrapEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
 import { resolveAnalyticsApiConfig } from "../src/analytics/api-client.ts";
@@ -134,6 +135,50 @@ async function runMigrationsStep(): Promise<StepResult> {
     status: "success",
     summary: `${newly.length} new migration(s) applied (${after.size} total)`,
   };
+}
+
+// ── Step 1b: append-only guard check ─────────────────────────────────────────
+//
+// AFTER migrations, not before, and that is the whole difference from the
+// namespace precheck above: migrate() is what INSTALLS this guard, so a check
+// run first would report "not applied" on every first boot and prove nothing.
+// Run after, it answers the question that matters on a restored database —
+// migration 0032 is recorded as applied, so is it actually refusing deletion?
+//
+// It probes (`DELETE ... WHERE false`, which matches nothing in either outcome)
+// rather than counting triggers, because `CREATE OR REPLACE FUNCTION
+// rm_append_only_guard() ... RETURN NULL` is one statement available to this
+// very connection and leaves the catalog looking perfect. See
+// src/db/append-only-guard.ts.
+//
+// FAILING, not warning: every remaining step writes history into these tables,
+// and writing history into a database that will silently accept its deletion is
+// worse than stopping. It does NOT halt the run, though — unlike the namespace
+// precheck, nothing here is corrupt, so the seeds are still allowed to report.
+
+async function runAppendOnlyGuardStep(): Promise<StepResult> {
+  const result = await checkAppendOnlyGuard(sql);
+  if (result.status === "disarmed") {
+    for (const line of appendOnlyRefusalLines(result.problems, "[prod-bootstrap]")) console.error(line);
+    return {
+      status: "failed",
+      summary: `${result.problems.length} append-only guard problem(s)`,
+      failing: true,
+    };
+  }
+  if (result.status === "unavailable") {
+    return { status: "failed", summary: `database not queryable: ${result.detail}`, failing: true };
+  }
+  if (result.status === "not_applied") {
+    // migrate() ran immediately before this and did not install 0032. That is
+    // only possible if the file is missing from this build.
+    return {
+      status: "failed",
+      summary: `${"0032_append_only_history.sql"} is still not recorded after migrate() — the migration is missing from this build`,
+      failing: true,
+    };
+  }
+  return { status: "success", summary: "append-only guard armed (delete refused on every protected table)" };
 }
 
 // ── Step 2: v0-seed:bootstrap ────────────────────────────────────────────────
@@ -251,7 +296,10 @@ async function runEdgarSeedStep(): Promise<StepResult> {
 
 // ── Fixed step list ──────────────────────────────────────────────────────────
 
+const APPEND_ONLY_STEP: Step = { name: "append-only-guard", run: runAppendOnlyGuardStep };
+
 const initializationSteps: Step[] = [
+  APPEND_ONLY_STEP,
   { name: "v0-seed:bootstrap", run: runV0SeedStep },
   { name: "edgar-seed:bootstrap", run: runEdgarSeedStep },
 ];

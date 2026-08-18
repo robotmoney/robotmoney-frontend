@@ -1,4 +1,4 @@
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect } from "bun:test";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { SWARM_ROSTER_CAP, getRosterCapacityStatus } from "../src/swarm/domain.ts";
@@ -8,10 +8,14 @@ import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { canonicalizeApplication } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
-beforeAll(async () => {
-  await sql`TRUNCATE swarm_members, swarm_waitlist, swarm_notification_outbox, jobs RESTART IDENTITY CASCADE`;
-});
+// Own database per TEST, cloned from the migrated template. Per-test, not
+// per-file: countActiveMembers() is global and SWARM_ROSTER_CAP is enforced on
+// every transition-to-active, so members seated by one test would make the
+// next test's admission a spurious 409. Unique ids cannot fix that; a clean
+// database can.
+useCleanDatabasePerTest(import.meta.file);
 
 function req(method: string, path: string, body?: unknown): Request {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -70,7 +74,6 @@ test("POST /api/swarm/waitlist — input validation & privacy bounds", async () 
 });
 
 test("getRosterCapacityStatus() — returns active count, cap, and available seats seam", async () => {
-  await sql`TRUNCATE swarm_members RESTART IDENTITY CASCADE`;
   let status = await getRosterCapacityStatus();
   expect(status.cap).toBe(SWARM_ROSTER_CAP);
   expect(status.active).toBe(0);
@@ -83,7 +86,6 @@ test("getRosterCapacityStatus() — returns active count, cap, and available sea
 });
 
 test("notify-on-seat-open — enqueues outbox + worker jobs on member deactivation and stamps notified_at", async () => {
-  await sql`TRUNCATE swarm_members, swarm_waitlist, swarm_notification_outbox, jobs RESTART IDENTITY CASCADE`;
 
   process.env.SWARM_NOTIFICATION_EMAIL_FROM = "noreply@robotmoney.net";
 
