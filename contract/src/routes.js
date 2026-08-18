@@ -173,7 +173,11 @@ export const ROUTES = {
       subjectUpdate: "/api/swarm/admin/subjects/:id/update", // POST — versioned edit (409 stale_version)
       subjectDeactivate: "/api/swarm/admin/subjects/:id/deactivate", // POST — versioned deactivate
 
-      members: "/api/swarm/admin/members", // GET list (all statuses, redacted) / POST manual add
+      // GET list (all statuses, redacted) / POST manual add.
+      // POST body is { name, publicKey, lens?, contact? } — issue #690: the id is
+      // GENERATED server-side and returned as `member.id`; a body carrying
+      // `memberId` is refused with 400, never silently given a different id.
+      members: "/api/swarm/admin/members",
       applications: "/api/swarm/admin/applications", // GET ?status= — application review queue
       memberReview: "/api/swarm/admin/members/:id/review", // POST { decision: approve|reject }
       memberUpdate: "/api/swarm/admin/members/:id/update", // POST — versioned profile edit (409 stale_version)

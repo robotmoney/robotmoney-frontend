@@ -13,7 +13,7 @@ import { jsonValue, sql } from "../../db/client.ts";
 import {
   CONTACT_EMAIL_RE,
   parseApply,
-  parseManualMember,
+  parseRegisterMember,
   parsePositiveNumber,
   parseSigningDraft,
   parseSubmission,
@@ -249,7 +249,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // harness. Privileged because it can rotate/replace an existing member's key.
   if (m === "POST" && p === C.register) {
     if (!(await privileged())) return { status: 403, body: { error: "onboarding requires admin authorization" } };
-    const b = parseManualMember(await readJsonObject(req));
+    const b = parseRegisterMember(await readJsonObject(req));
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
     // registerMember now enforces SWARM_ROSTER_CAP; a refused over-cap

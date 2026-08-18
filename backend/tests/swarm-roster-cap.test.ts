@@ -67,7 +67,7 @@ test("every transition-to-active path hard-blocks admissions past SWARM_ROSTER_C
 
   // ── Admin manual add of a brand-new id is ALSO refused with 409 when full ──
   const addFull = await admin.addMemberAdmin({
-    memberId: "admin_over",
+    // No memberId (issue #690) — the id is minted inside addMemberAdmin.
     name: "admin_over",
     publicKey: (await generateKeyPair()).publicKeyB64,
   });
@@ -102,7 +102,6 @@ test("every transition-to-active path hard-blocks admissions past SWARM_ROSTER_C
 
   // Refill the single freed seat with a fresh admin add → back to the cap.
   const refill = await admin.addMemberAdmin({
-    memberId: "refill",
     name: "refill",
     publicKey: (await generateKeyPair()).publicKeyB64,
   });

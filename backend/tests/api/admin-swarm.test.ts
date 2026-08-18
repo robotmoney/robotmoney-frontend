@@ -15,6 +15,12 @@ const INSECURE = { adminToken: null, allowInsecure: true } as const;
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
+// Issue #690. Deliberately the RFC-4122 v4 shape rather than "any 36 chars":
+// the point of the change is that this route mints ids the same way
+// crypto.randomUUID() does on the public apply path, and a laxer pattern would
+// still pass for a slug an operator smuggled through.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 // Own database per file, cloned from the migrated template — the roster this
 // file admits into is its own, with no reset of anyone else's rows.
 useCleanDatabase(import.meta.file);
@@ -118,14 +124,17 @@ test("topics: missing required fields → 400; missing expectedVersion on update
 });
 
 test("members: manual add (201, one-time token) → list is redacted → review/deactivate/rotate route through", async () => {
-  const memberId = rid("rmember");
   const { publicKeyB64 } = await generateKeyPair();
   const add = await call(
-    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { memberId, name: "Route Member", publicKey: publicKeyB64 } }),
+    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Route Member", publicKey: publicKeyB64 } }),
     PROD,
   );
   expect(add?.status).toBe(201);
   expect(typeof (add!.body as any).token).toBe("string");
+  // Issue #690: the id is the server's, and the response is the ONLY place the
+  // caller can learn it — so everything downstream is keyed on what came back.
+  const memberId = (add!.body as any).member.id as string;
+  expect(memberId).toMatch(UUID_RE);
 
   const list = await call(req("GET", "/api/swarm/admin/members", { token: PROD.adminToken }), PROD);
   expect(list?.status).toBe(200);
@@ -152,6 +161,143 @@ test("members: manual add (201, one-time token) → list is redacted → review/
   );
   expect(rotate?.status).toBe(200);
   expect(typeof (rotate!.body as any).token).toBe("string");
+});
+
+// ── The admin add path can no longer manufacture an id (issue #690) ─────────
+//
+// SWARM_ROSTER_CAP is 10 and this file's clean database is shared by every test
+// in it, so a test that seats members and walks away spends seats the later
+// `members: update …` tests need. Each #690 test hands its seats back the way
+// an operator would — through the real deactivate route, which is also a small
+// extra proof that a member created without a caller-supplied id is an ordinary
+// member the rest of the admin surface can drive by the id it was given.
+async function releaseSeat(id: string): Promise<void> {
+  const res = await call(
+    req("POST", `/api/swarm/admin/members/${id}/deactivate`, { token: PROD.adminToken, body: { expectedVersion: 1 } }),
+    PROD,
+  );
+  if (res?.status !== 200) throw new Error(`releaseSeat(${id}) failed: ${JSON.stringify(res)}`);
+}
+
+//
+// WHAT THIS PROTECTS. `addMemberAdmin` used to INSERT `input.memberId` as the
+// primary key, validated only as a non-empty string under 100 characters. That
+// was the last way to create a member whose id is a human slug, and a slug id
+// is not cosmetic: migration 0031 refuses a handle equal to ANOTHER member's
+// id (so an id of `woon` bars the member actually named Woon from ever holding
+// `woon`), and migration 0030's `handle = id` sentinel makes such a member read
+// as "handle unset" forever. Every assertion below goes over the REAL route and
+// then reads the row back out of Postgres — a 201 envelope has never been proof
+// of what landed in the column.
+
+test("members: the manual add mints a UUID id — the caller cannot name one, and a body that tries is refused", async () => {
+  const { publicKeyB64 } = await generateKeyPair();
+
+  // 1. THE TAP IS CLOSED. A body naming an id is a 400 with its own sentence,
+  //    not a 201 under some other id, and not the generic "required" message.
+  const slug = "woon";
+  const named = await call(
+    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { memberId: slug, name: "Woon", publicKey: publicKeyB64 } }),
+    PROD,
+  );
+  expect(named?.status).toBe(400);
+  expect((named!.body as any).error).toBe("memberId is not accepted: the member id is generated and returned as member.id");
+  // Refused, not half-written: no member under that id, and none created at all
+  // under some substituted id either (the key is still free below).
+  expect((await sql`SELECT id FROM swarm_members WHERE id = ${slug}`).length).toBe(0);
+
+  // 2. An EMPTY/NULL memberId is the same request, and gets the same answer —
+  //    the parser tests key presence, not truthiness, so a client that clears
+  //    the field rather than removing it is not silently let through.
+  for (const value of ["", null]) {
+    const blank = await call(
+      req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { memberId: value, name: "Woon", publicKey: publicKeyB64 } }),
+      PROD,
+    );
+    expect(blank?.status).toBe(400);
+    expect((blank!.body as any).error).toBe("memberId is not accepted: the member id is generated and returned as member.id");
+  }
+
+  // 3. WITHOUT the field it is created, and the id in the DATABASE is a UUID.
+  const ok = await call(
+    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Woon", publicKey: publicKeyB64 } }),
+    PROD,
+  );
+  expect(ok?.status).toBe(201);
+  const id = (ok!.body as any).member.id as string;
+  expect(id).toMatch(UUID_RE);
+  const [row] = await sql<{ id: string; handle: string }[]>`SELECT id, handle FROM swarm_members WHERE id = ${id}`;
+  expect(row!.id).toMatch(UUID_RE);
+
+  // 4. THE HANDLE IS UNCHANGED BY ALL THIS — still slugified from the display
+  //    name, and NOT the id sentinel migration 0030 stamps at INSERT time.
+  expect(row!.handle).toBe("woon");
+  expect(row!.handle).not.toBe(row!.id);
+  // …and the audit row records the id that was actually seated, not the one
+  // the caller asked for (there is no longer any such thing).
+  const [entry] = await sql<{ scope: any }[]>`
+    SELECT scope FROM audit_log WHERE action = 'member_manual_add' AND scope->>'memberId' = ${id}`;
+  expect(entry!.scope.handle).toBe("woon");
+
+  await releaseSeat(id);
+});
+
+test("members: two adds with the SAME display name both get UUID ids and the derived-handle suffix — no id collision to trip over", async () => {
+  const first = await call(
+    req("POST", "/api/swarm/admin/members", {
+      token: PROD.adminToken,
+      body: { name: "Noop Analyst", publicKey: (await generateKeyPair()).publicKeyB64 },
+    }),
+    PROD,
+  );
+  const second = await call(
+    req("POST", "/api/swarm/admin/members", {
+      token: PROD.adminToken,
+      body: { name: "Noop Analyst", publicKey: (await generateKeyPair()).publicKeyB64 },
+    }),
+    PROD,
+  );
+  expect(first?.status).toBe(201);
+  expect(second?.status).toBe(201);
+  const a = (first!.body as any).member;
+  const b = (second!.body as any).member;
+  expect(a.id).toMatch(UUID_RE);
+  expect(b.id).toMatch(UUID_RE);
+  expect(a.id).not.toBe(b.id);
+  // Issue #562's collision rule, untouched by #690: the lowest free numeric
+  // suffix, never a refusal.
+  expect(a.handle).toBe("noop-analyst");
+  expect(b.handle).toBe("noop-analyst-2");
+
+  await releaseSeat(a.id);
+  await releaseSeat(b.id);
+});
+
+test("members: duplicate detection moved to the public key — the same credential twice is a 409, and seats nobody", async () => {
+  const { publicKeyB64 } = await generateKeyPair();
+  const first = await call(
+    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Twice Over", publicKey: publicKeyB64 } }),
+    PROD,
+  );
+  expect(first?.status).toBe(201);
+
+  // The realistic accident the old `memberId already registered` 409 caught: an
+  // operator submitting the add form twice. With the id minted server-side the
+  // id can no longer be the duplicate signal, so the KEY is — and it is the
+  // better signal anyway, because two members sharing a public key make every
+  // signed take ambiguous about who produced it.
+  const again = await call(
+    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Twice Over", publicKey: publicKeyB64 } }),
+    PROD,
+  );
+  expect(again?.status).toBe(409);
+  expect((again!.body as any).error).toContain("publicKey already belongs to a member");
+
+  const seated = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM swarm_member_keys WHERE public_key = ${publicKeyB64}`;
+  expect(seated[0]!.n).toBe(1);
+
+  await releaseSeat((first!.body as any).member.id as string);
 });
 
 test("applications: GET list (200), optionally filtered by ?status=", async () => {
@@ -202,15 +348,14 @@ test("insecure config (RM_ALLOW_INSECURE/ephemeral) opens the surface without a 
 // test means is now a real question: `id` is what every route path and audit
 // row below is keyed on, `handle` is only ever the published URL segment.
 async function seatMember(): Promise<{ id: string; handle: string }> {
-  const memberId = rid("emember");
   const { publicKeyB64 } = await generateKeyPair();
   const add = await call(
-    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { memberId, name: "Before", publicKey: publicKeyB64 } }),
+    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Before", publicKey: publicKeyB64 } }),
     PROD,
   );
   // Fail loudly rather than let a bogus id flow into a confusing 404 later.
   if (add?.status !== 201) throw new Error(`seatMember(): manual add failed: ${JSON.stringify(add)}`);
-  return { id: memberId, handle: (add.body as any).member.handle as string };
+  return { id: (add.body as any).member.id as string, handle: (add.body as any).member.handle as string };
 }
 
 const updateMember = (id: string, body: unknown) =>

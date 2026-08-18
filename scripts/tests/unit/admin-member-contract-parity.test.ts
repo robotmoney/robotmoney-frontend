@@ -312,3 +312,103 @@ describe("AdminMember (contract) matches toMemberAdmin() (backend) key-for-key �
     );
   });
 });
+
+// ── The manual-add REQUEST shape, and what the contract says about it (#690) ─
+//
+// The block above holds the RESPONSE projection to its declared type. This one
+// holds the REQUEST to the thing the contract tells a client about it, which is
+// the half issue #690 changed: `POST /api/swarm/admin/members` used to take the
+// member's primary key as a caller-supplied string, and that is where every
+// human-slug member id came from.
+//
+// WHY HERE. Same reason as the parity block: the two sides of this promise live
+// in `backend/` and `contract/`, whose workflows are each path-gated, and
+// `unit.yml` is the only test-executing job with no paths filter. A PR that
+// re-added `memberId` to `ManualMemberInput` without touching `contract/` — or
+// that rewrote the route comment while leaving the backend alone — would skip
+// whichever of the two gated jobs it did not touch.
+//
+// WHAT THIS IS NOT. It is a CONSISTENCY guard between two source files, not
+// coverage of the behaviour: the id being minted, the 400 on a body that names
+// one, the derived handle and the residual 409 are all asserted against a real
+// database over the real route in backend/tests/api/admin-swarm.test.ts and
+// backend/tests/swarm-member-handle.test.ts. Those are the executed-in-CI
+// assertions; this one only stops the two declarations drifting apart.
+const validationPath = join(repoRoot, "backend", "src", "api", "validation.ts");
+const contractRoutesPath = join(repoRoot, "contract", "src", "routes.js");
+const validationSource = readFileSync(validationPath, "utf8");
+const contractRoutesSource = readFileSync(contractRoutesPath, "utf8");
+
+/** The keys a named interface declares, by parse — same rules as declaredKeys. */
+function interfaceKeys(source: string, name: string): string[] {
+  const sf = parse("admin.ts", source);
+  let decl: ts.InterfaceDeclaration | undefined;
+  const visit = (n: ts.Node): void => {
+    if (ts.isInterfaceDeclaration(n) && n.name.text === name) decl = n;
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  if (!decl) throw new Error(`no \`interface ${name}\` in the parsed source`);
+  return decl.members.map((m) => {
+    if (!ts.isPropertySignature(m) || !ts.isIdentifier(m.name)) {
+      throw new Error(`${name} member is not a plain property signature: ${m.getText(sf)}`);
+    }
+    return m.name.text;
+  });
+}
+
+describe("the admin manual-add request takes no member id (issue #690)", () => {
+  test("the parse is non-vacuous — a renamed interface throws rather than reporting an empty key set", () => {
+    expect(interfaceKeys(backendSource, "ManualMemberInput").length).toBeGreaterThanOrEqual(2);
+    expect(() => interfaceKeys(backendSource, "ManualMemberInputV2")).toThrow(/no `interface ManualMemberInputV2`/);
+  });
+
+  test("ManualMemberInput declares name/publicKey and NOT memberId", () => {
+    const keys = interfaceKeys(backendSource, "ManualMemberInput");
+    expect(keys).toContain("name");
+    expect(keys).toContain("publicKey");
+    expect(keys).not.toContain("memberId");
+  });
+
+  test("the must-fail control: re-adding the field to ManualMemberInput is caught", () => {
+    const regressed = editInRegion(
+      backendSource,
+      "export interface ManualMemberInput {",
+      "  name: string;\n",
+      "  memberId: string;\n  name: string;\n",
+    );
+    expect(regressed).not.toBe(backendSource);
+    expect(interfaceKeys(regressed, "ManualMemberInput")).toContain("memberId");
+  });
+
+  test("addMemberAdmin mints the id itself, and the shared register parser is a SEPARATE function", () => {
+    // `crypto.randomUUID()` inside addMemberAdmin is the whole fix; the split
+    // parser is what stops it being undone by the demo/E2E register route,
+    // which legitimately still takes a caller-supplied id.
+    const addMember = backendSource.slice(backendSource.indexOf("export async function addMemberAdmin("));
+    expect(addMember.slice(0, addMember.indexOf("\nexport "))).toContain("crypto.randomUUID()");
+    expect(validationSource).toContain("export function parseRegisterMember(");
+    expect(validationSource).toContain("export function parseManualMember(");
+  });
+
+  test("the route's own comment in contract/src/routes.js says the id is generated and the field refused", () => {
+    const at = contractRoutesSource.indexOf('members: "/api/swarm/admin/members"');
+    expect(at).toBeGreaterThan(0);
+    // The comment block immediately above the entry — 400 characters back is
+    // comfortably inside it and well short of the previous route's entry.
+    const preamble = contractRoutesSource.slice(Math.max(0, at - 400), at);
+    expect(preamble).toContain("#690");
+    expect(preamble).toContain("GENERATED");
+    expect(preamble).toContain("memberId");
+  });
+
+  test("the vendored frontend copy of routes.js carries the same sentence — check-contract only proves it is CURRENT, not that it says this", () => {
+    const vendored = readFileSync(
+      join(repoRoot, "frontend", "public", "assets", "js", "app", "contract", "routes.js"),
+      "utf8",
+    );
+    const at = vendored.indexOf('members: "/api/swarm/admin/members"');
+    expect(at).toBeGreaterThan(0);
+    expect(vendored.slice(Math.max(0, at - 400), at)).toContain("#690");
+  });
+});

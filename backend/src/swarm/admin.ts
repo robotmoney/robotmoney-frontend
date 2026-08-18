@@ -15,7 +15,6 @@ import {
   activateMember,
   aggregateSession as domainAggregateSession,
   assertRosterCapacity,
-  HANDLE_NAMESPACE_CONFLICT,
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
   countActiveMembersTx,
@@ -224,77 +223,89 @@ export async function listApplicationsAdmin(status?: string) {
   return rows;
 }
 
+// NO `memberId` (issue #690). The id is minted by addMemberAdmin below, exactly
+// as applyMember mints it for the public front door, and there is no way to ask
+// for a particular one. The route's parser (parseManualMember) REFUSES a body
+// that still carries the field rather than dropping it, so no client is told
+// "201 created" about an id it did not get back.
 export interface ManualMemberInput {
-  memberId: string;
   name: string;
   publicKey: string;
   lens?: string;
   contact?: string;
 }
 
+// The 409 this path answers a duplicate credential with (issue #690). See the
+// probe below for why the public key is what "duplicate" now means here.
+export const MANUAL_MEMBER_KEY_CONFLICT =
+  "publicKey already belongs to a member; rotate that member's key instead of adding a second one";
+
 // Admin manual add: creates an ACTIVE member + ACTIVE key + one-time bearer
 // token in a single transaction, bypassing the public apply/activate flow.
 // The token is returned ONLY in this response — never persisted or re-readable.
 export async function addMemberAdmin(input: ManualMemberInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
-  // UNIQUENESS, probed across BOTH namespaces (issue #596), for the same reason
-  // updateMemberAdmin checks both: since migration 0030 a new member's id is
-  // ALSO its default handle, so an id equal to another member's handle trips
-  // swarm_members_handle_key inside the transaction below and escapes as a
-  // sanitized 500. The two collisions get two different sentences because they
-  // ask the operator for two different things — pick another id, or rename the
-  // member currently published under this name.
-  const existing = (await sql<{ id: string }[]>`
-    SELECT id FROM swarm_members
-    WHERE id = ${input.memberId} OR handle = ${input.memberId}
-    ORDER BY (id = ${input.memberId}) DESC
-    LIMIT 1`)[0];
-  if (existing) {
-    return existing.id === input.memberId
-      ? err(409, "memberId already registered")
-      : err(409, HANDLE_NAMESPACE_CONFLICT);
-  }
-  const token = `tok_${input.memberId}_${crypto.randomUUID()}`;
+  // THE ID IS MINTED HERE (issue #690), never supplied. Until #690 this route
+  // INSERTed a caller-supplied string as the primary key, which is how members
+  // whose id is a human slug came to exist — and a slug id is not cosmetic:
+  // migration 0031 refuses a handle equal to ANOTHER member's id (so an id of
+  // `woon` bars the member actually named Woon from ever holding `woon`), and
+  // migration 0030's `handle = id` sentinel makes such a member read as
+  // "handle unset" forever, re-derived at every acceptance. `crypto.randomUUID()`
+  // is the same mint applyMember uses (domain.ts), so both admission paths now
+  // produce ids of one shape and the public `handle` is the only readable name.
+  const memberId = crypto.randomUUID();
+  // UNIQUENESS. The old probe asked whether the caller's chosen id was already
+  // taken as an id or a handle. With a freshly minted UUID neither question has
+  // an answer worth asking, so duplicate detection moves to the one thing the
+  // caller still names that IS an identity: the public key. Two members sharing
+  // a key make every signed take ambiguous about who produced it, and the same
+  // refusal already guards the public path (applyMember). It is also what keeps
+  // the realistic accident — an operator submitting the add form twice — a 409
+  // rather than two members with one credential between them.
+  const existingKey = (await sql<{ member_id: string }[]>`
+    SELECT member_id FROM swarm_member_keys WHERE public_key = ${input.publicKey} LIMIT 1`)[0];
+  if (existingKey) return err(409, MANUAL_MEMBER_KEY_CONFLICT);
+  const token = `tok_${memberId}_${crypto.randomUUID()}`;
   try {
     return await sql.begin(async (tx) => {
       // Capacity gate: a brand-new active member must fit under SWARM_ROSTER_CAP.
       const cap = await assertRosterCapacity(tx);
       if (!cap.ok) return err(cap.status, cap.error);
-      // The INSERT still names NO handle, so migration 0030's trigger stamps
-      // `handle := id` — and that is DELIBERATE, not an oversight left over
-      // from before issue #562 (the derivation is the UPDATE two statements
-      // below). Inserting the derived handle directly would have removed the
-      // only PHYSICAL guard this path has against the concurrent rename #596
-      // covers: with `handle = id` the create contends for
-      // swarm_members_handle_key against an uncommitted `UPDATE … SET handle =
-      // <this memberId>` and blocks on it, so the loser gets a 409. With a
-      // name-derived handle there is no index conflict at all, 0031's trigger
-      // body is a plain READ COMMITTED SELECT that cannot see the other
-      // transaction, and BOTH writes would commit — creating exactly the
-      // ambiguous handle/id pair 0031 exists to forbid. Closing that window
-      // needs a namespace-wide lock and is explicitly out of scope for #562, so
-      // this path keeps the guard it already had and derives afterwards.
+      // The INSERT names NO handle, so migration 0030's trigger stamps
+      // `handle := id` — the UUID — and the UPDATE two statements below moves it
+      // to the name-derived handle. Before #690 that two-step also served as a
+      // physical guard: `handle = id` put the create inside
+      // swarm_members_handle_key against a concurrent uncommitted rename TO the
+      // caller's chosen id (#596). That guard is now moot, because nobody
+      // renames a member to a freshly minted UUID — the only handle this create
+      // can contend for is the DERIVED one, and it contends for it in the
+      // UPDATE, which is where the catch below picks the loser up.
       await tx`
         INSERT INTO swarm_members (id, status, name, lens, contact_email, applied_at, activated_at)
-        VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now(), now())`;
+        VALUES (${memberId}, 'active', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now(), now())`;
       // Issue #562: the manual add seats an ACTIVE member in one shot, so it is
-      // its own derivation point — nothing accepts this member later. The
-      // operator's `memberId` stays the immutable identity and keeps resolving
-      // as a public reference (getMember reads both names); what changes is
-      // that the URL the member is published under now reads like its name.
-      const handle = await deriveMemberHandle(tx, { memberId: input.memberId, name: input.name });
+      // its own derivation point — nothing accepts this member later. Unchanged
+      // by #690: the id it derives FOR is now a UUID rather than an operator's
+      // string, but the handle is still `slugifyMemberName(name)` plus the
+      // lowest free numeric suffix, and the id remains the immutable identity
+      // that keeps resolving as a public reference (getMember reads both names).
+      const handle = await deriveMemberHandle(tx, { memberId, name: input.name });
       const derived = await tx`
-        UPDATE swarm_members SET handle = ${handle} WHERE id = ${input.memberId} RETURNING *`;
+        UPDATE swarm_members SET handle = ${handle} WHERE id = ${memberId} RETURNING *`;
       await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash)
-               VALUES (${input.memberId}, ${input.publicKey}, true, ${hashKey(token)})`;
-      await audit(actor, "member_manual_add", { memberId: input.memberId, handle }, tx);
+               VALUES (${memberId}, ${input.publicKey}, true, ${hashKey(token)})`;
+      await audit(actor, "member_manual_add", { memberId, handle }, tx);
       return { ok: true, status: 201, member: toMemberAdmin(derived[0]), token };
     });
   } catch (e) {
-    // The probe above is a READ COMMITTED snapshot, so it cannot see a rename
-    // or an admission that commits between it and the INSERT. That surviving
-    // race is a real 409, not a 500: the loser is told the same thing the
-    // probe would have told it. Anything else rethrows untouched.
-    if (isHandleUniqueViolation(e)) return err(409, HANDLE_NAMESPACE_CONFLICT);
+    // deriveMemberHandle's probe is a READ COMMITTED snapshot, so it cannot see
+    // a rename that commits between it and the UPDATE above. The loser of that
+    // race is refused by swarm_members_handle_key (or 0031's trigger) and gets
+    // the SAME sentence the rename path's lost race gets, because it is the
+    // same situation from the other side: the public name is gone, try again
+    // (a retry re-derives and takes the next free suffix). Anything else
+    // rethrows untouched rather than being described as a naming conflict.
+    if (isHandleUniqueViolation(e)) return err(409, "handle already taken");
     throw e;
   }
 }

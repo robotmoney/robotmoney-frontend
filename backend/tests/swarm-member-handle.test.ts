@@ -394,30 +394,38 @@ test("POST /api/swarm/members/:ref/profile refuses a handle (400) but accepts th
 // routes, because a 500 is a transport-level outcome: exercising the domain
 // function directly would only ever show you an exception.
 
-test("POST /api/swarm/admin/members: a memberId already published as another member's handle is a 409, not a 500", async () => {
+test("POST /api/swarm/admin/members: the conflict class is GONE — the route refuses to take an id at all (issue #690)", async () => {
   const a = await activeMember();
   expect((await admin.updateMemberAdmin(a.id, await versionOf(a.id), { handle: CONTENDED })).status).toBe(200);
 
   const { publicKeyB64 } = await generateKeyPair();
-  const clash = await adminAddMemberRoute({ memberId: CONTENDED, name: "Impostor", publicKey: publicKeyB64 });
 
-  // THE ASSERTION. `500` here is the pre-fix behaviour, and it is what an
-  // operator saw for a perfectly ordinary naming mistake.
-  expect(clash.status).toBe(409);
-  expect(clash.body.error).toBe(HANDLE_CONFLICT);
-
-  // Refused, not half-written: no second row, and the contended name still
-  // resolves to the member that actually holds it.
+  // This USED to be the interesting case: a caller-supplied id equal to another
+  // member's published handle, answered with a 409 rather than the sanitized
+  // 500 an escaped 23505 became. Since #690 the id is minted server-side and
+  // the field is refused outright, so the collision cannot be reached from here
+  // — and the answer is a 400 that names the field, never a silent substitution.
+  const named = await adminAddMemberRoute({ memberId: CONTENDED, name: "Impostor", publicKey: publicKeyB64 });
+  expect(named.status).toBe(400);
+  expect(named.body.error).toBe("memberId is not accepted: the member id is generated and returned as member.id");
   expect(await memberCount()).toBe(1);
   expect(((await getMemberRoute(CONTENDED))!.body as any).id).toBe(a.id);
 
-  // The id-namespace collision keeps its OWN words. The two 409s ask the
-  // operator for different things — pick another id, versus rename the member
-  // currently published under this name — so they must not collapse into one
-  // message just because both are uniqueness failures.
-  const dup = await adminAddMemberRoute({ memberId: a.id, name: "Impostor", publicKey: publicKeyB64 });
-  expect(dup.status).toBe(409);
-  expect(dup.body.error).toBe("memberId already registered");
+  // The same body WITHOUT the field is created, and lands beside the contended
+  // name rather than on top of it: the derived handle takes the next free
+  // suffix (issue #562's rule), and the published name still resolves to `a`.
+  const created = await adminAddMemberRoute({ name: "Noop Analyst", publicKey: publicKeyB64 });
+  expect(created.status).toBe(201);
+  expect(created.body.member.id).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  expect(created.body.member.handle).toBe(`${CONTENDED}-2`);
+  expect(((await getMemberRoute(CONTENDED))!.body as any).id).toBe(a.id);
+
+  // The 23505 → 409 mapping itself is NOT orphaned by this: registerMember
+  // still takes a caller-supplied id (the demo/E2E shortcut), and the test
+  // below drives the same conflict through it. The admin path's own residual
+  // race — on the DERIVED handle — is driven further down this file.
 });
 
 test("POST /api/swarm/register: the same conflict, answered the same way — ON CONFLICT (id) never covered the handle index", async () => {
@@ -467,14 +475,17 @@ async function waitUntilBlockedOn(fragment: string, whatItProves: string): Promi
   );
 }
 
-test("the race a probe cannot close — a rename committing between probe and INSERT — is still a 409, never a 500", async () => {
+test("the race a probe cannot close — a rename committing between derivation and UPDATE — is still a 409, never a 500", async () => {
   const a = await activeMember();
   const { publicKeyB64 } = await generateKeyPair();
 
-  // Hold an UNCOMMITTED rename of `a` to the contended name. Under READ
-  // COMMITTED the create's probe cannot see it, which is exactly the window a
-  // probe can never close: widening the SELECT fixes the common case and this
-  // one still needs the 23505 mapping underneath it.
+  // REPOINTED BY ISSUE #690. The window used to be probe→INSERT, because the
+  // INSERT carried the caller's chosen id into swarm_members_handle_key. The id
+  // is a fresh UUID now, so the INSERT contends for nothing — the create's only
+  // contended write is the UPDATE that installs the DERIVED handle, and
+  // deriveMemberHandle's SELECT is the probe that cannot see an uncommitted
+  // rename. Same class of race, one statement later; the 23505 → 409 mapping
+  // underneath it is what this test still exists to prove.
   let renameApplied!: () => void;
   let commitRename!: () => void;
   const renameLanded = new Promise<void>((resolve) => { renameApplied = resolve; });
@@ -486,16 +497,20 @@ test("the race a probe cannot close — a rename committing between probe and IN
   });
   await renameLanded;
 
-  const create = adminAddMemberRoute({ memberId: CONTENDED, name: "Racer", publicKey: publicKeyB64 });
-  // Deterministic, not a sleep: the create is provably past its probe and
+  // "Noop Analyst" derives to CONTENDED — which the uncommitted rename above is
+  // about to take.
+  const create = adminAddMemberRoute({ name: "Noop Analyst", publicKey: publicKeyB64 });
+  // Deterministic, not a sleep: the create is provably past its derivation and
   // parked on the handle index before the rename is allowed to commit.
-  await waitUntilBlockedOn("INSERT INTO swarm_members", "the probe→INSERT race");
+  await waitUntilBlockedOn("UPDATE swarm_members SET handle", "the derive→UPDATE race");
   commitRename();
   await renamer;
 
   const raced = await create;
   expect(raced.status).toBe(409);
-  expect(raced.body.error).toBe(HANDLE_CONFLICT);
+  // The SAME sentence the rename path's lost race gets, because it is the same
+  // situation from the other side: the public name is gone, try again.
+  expect(raced.body.error).toBe("handle already taken");
 
   // The loser wrote nothing; the winner owns the name.
   expect(await memberCount()).toBe(1);
