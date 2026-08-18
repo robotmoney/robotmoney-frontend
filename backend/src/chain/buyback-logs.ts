@@ -10,7 +10,7 @@
 // adds any NEW live swaps keyed on tx_hash. On a table/read failure it degrades
 // honestly rather than fabricating rows. Per #50: 'stub'/'stale'/'seed' are
 // never presented as live chain data.
-import { config, resolveBuybackConfig, resolveBaseRpcSource, type BaseRpcSource } from "../config.ts";
+import { config, resolveBuybackConfig, resolveBaseRpcSource, WETH_USDC_POOL, type BaseRpcSource } from "../config.ts";
 import { sql } from "../db/client.ts";
 import {
   decodeUint256,
@@ -21,7 +21,7 @@ import {
   type EthLog,
   type RpcCallOptions,
 } from "./base-rpc-client.ts";
-import { fetchGeckoTokenPriceUsd } from "./token-prices.ts";
+import { fetchGeckoDailyCloseUsd } from "./token-prices.ts";
 import { ttlCached } from "./ttl-cache.ts";
 
 // keccak256("Transfer(address,address,uint256)") — the standard ERC-20 Transfer
@@ -141,12 +141,14 @@ export function _resetBuybackCacheForTests(): void {
 // --- Live indexer (worker/handlers/buybacks.ts) ------------------------------
 // Refreshes buyback_swaps from Base via eth_getLogs: ROBOTMONEY Transfer events
 // INTO the primary prop wallet, joined to the paired WETH-out leg for the input
-// amount, priced via GeckoTerminal for the USD value. Only persists a row when
-// the FULL picture is known (WETH spent, USD value, ROBOTMONEY received, block
-// date) — an unpaired transfer is skipped, never back-filled with an invented
-// number. Skips entirely under a non-live source (hermetic demo/CI never reaches
-// a live log indexer). Bounded per run so a single refresh never scans an
-// unbounded block range on a rate-limited public RPC.
+// amount, priced via GeckoTerminal for the USD value AT THE SWAP'S OWN BLOCK
+// TIME. An unpaired transfer is skipped rather than back-filled with an invented
+// input amount; a swap whose historical price cannot be read is persisted with a
+// NULL value_usd — absence, which the migration's "a value is NEVER fabricated"
+// invariant asks for, not a substituted number. Skips entirely under a non-live
+// source (hermetic demo/CI never reaches a live log indexer). Bounded per run so
+// a single refresh never scans an unbounded block range on a rate-limited public
+// RPC.
 function topicAddress(address: string): string {
   return "0x" + encodeAddressArg(address);
 }
@@ -157,14 +159,33 @@ function rpcOpts(): RpcCallOptions {
 
 // eth_blockNumber / eth_getBlockByNumber go through the shared base-rpc-client
 // transport (no private JSON-RPC client here — one transport for the whole app).
-const blockDateCache = new Map<number, string>();
-async function blockDate(blockNumber: number): Promise<string> {
-  const hit = blockDateCache.get(blockNumber);
+// Both the calendar day (persisted as occurred_on) and the raw unix timestamp
+// (which selects the historical price candle) come from the SAME block read, so
+// a row's date and its price can never describe different days.
+const blockTimeCache = new Map<number, { day: string; ts: number }>();
+async function blockTime(blockNumber: number): Promise<{ day: string; ts: number }> {
+  const hit = blockTimeCache.get(blockNumber);
   if (hit) return hit;
   const block = await ethGetBlockByNumber(blockNumber, rpcOpts());
-  const day = new Date(parseInt(block.timestamp, 16) * 1000).toISOString().slice(0, 10);
-  blockDateCache.set(blockNumber, day);
-  return day;
+  const ts = parseInt(block.timestamp, 16);
+  const at = { day: new Date(ts * 1000).toISOString().slice(0, 10), ts };
+  blockTimeCache.set(blockNumber, at);
+  return at;
+}
+
+// WETH/USD at a swap's own block time, from the settled daily candle of the
+// deepest Base WETH/USDC pool. Returns null — never a substitute price — when
+// the candle cannot be read, so the caller persists an honest NULL value_usd.
+async function wethPriceUsdAt(blockTimestamp: number): Promise<number | null> {
+  try {
+    return await fetchGeckoDailyCloseUsd(WETH_USDC_POOL, blockTimestamp);
+  } catch (err) {
+    console.warn(
+      `buyback-logs: no historical WETH price for ${new Date(blockTimestamp * 1000).toISOString().slice(0, 10)}, persisting value_usd NULL:`,
+      err,
+    );
+    return null;
+  }
 }
 
 // Sum the WETH transferred OUT of the primary wallet within a single tx's block
@@ -212,17 +233,12 @@ export async function indexBuybacks(): Promise<IndexResult> {
 
   const chunk = Number(process.env.BUYBACK_LOG_CHUNK ?? "9000");
   const maxChunks = Number(process.env.BUYBACK_MAX_CHUNKS ?? "25");
-  const floor = Number(process.env.BUYBACK_FROM_BLOCK ?? "0");
-  if (floor <= 0) {
-    // Scanning from genesis on Base (tens of millions of blocks) at a bounded
-    // maxChunks*chunk per run would take hundreds of runs to crawl to the buyback
-    // era. The cursor below still guarantees eventual progress, but a realistic
-    // floor near the ROBOTMONEY deployment is required for the live feed to catch
-    // up in reasonable time — say so loudly rather than silently crawling.
-    console.warn(
-      "buyback-logs: BUYBACK_FROM_BLOCK is unset/0 — the live indexer will crawl from block 0 and may take many runs to reach the buyback era; set BUYBACK_FROM_BLOCK to a block near ROBOTMONEY deployment.",
-    );
-  }
+  // The scan floor is the committed BUYBACK_FROM_BLOCK constant (config.ts), not
+  // an env read: a bounded per-run scan starting at block 0 would spend ~51 days
+  // of empty eth_getLogs calls before reaching the buyback era. With no env read
+  // there is no value to malform, so the old NaN path — which slipped past the
+  // `floor <= 0` warning and froze the chunk loop permanently — cannot recur.
+  const floor = cfg.fromBlock;
 
   let indexed = 0;
   let scannedToBlock: number | null = null;
@@ -245,11 +261,13 @@ export async function indexBuybacks(): Promise<IndexResult> {
     );
     const latest = await ethBlockNumber(rpcOpts());
 
-    // Price the WETH input leg once per run (best-available spot; a just-executed
-    // swap is recent so current WETH price ≈ swap price). A price failure aborts
-    // the run's persistence — no live row is written without a USD value.
-    const wethPriceUsd = await fetchGeckoTokenPriceUsd(cfg.wethToken);
-
+    // NOTE: no per-run spot price is read here. A single current-spot price used
+    // for every row was defensible only while the scan stayed near the chain
+    // head; with the floor set (BUYBACK_FROM_BLOCK) the very first runs backfill
+    // ~5 months of history, and stamping today's WETH price on a swap from March
+    // is a fabricated value_usd — ~13.5% wrong at the seeded buybacks alone
+    // (~$1,884.55 today vs ~$2,179.3 then). Each row is priced from its own
+    // block's day candle below, cached per day so a many-swap day costs one call.
     for (let c = 0; c < maxChunks && from <= latest; c++) {
       const to = Math.min(from + chunk - 1, latest);
       const logs: EthLog[] = await ethGetLogs(
@@ -265,11 +283,19 @@ export async function indexBuybacks(): Promise<IndexResult> {
         const blockNumber = parseInt(log.blockNumber, 16);
         const logIndex = parseInt(log.logIndex, 16);
         const robotmoneyReceived = Number(decodeUint256(log.data)) / WEI_18;
-        // Only persist a fully-determined buyback: paired WETH-out + USD + date.
+        // An unpaired transfer still yields no row — the WETH input amount is not
+        // recoverable and would have to be invented.
         const wethSpent = await wethSpentForTx(cfg.wethToken, cfg.primaryWallet, blockNumber, log.transactionHash);
         if (wethSpent == null) continue;
-        const occurredOn = await blockDate(blockNumber);
-        const valueUsd = Math.round(wethSpent * wethPriceUsd * 100) / 100;
+        const at = await blockTime(blockNumber);
+        const occurredOn = at.day;
+        // Priced at THIS swap's block time, not the run's. An unavailable candle
+        // gives NULL: the swap itself is real and fully attested (hash, block,
+        // amounts), so dropping it would lose a true row, while writing a
+        // stand-in USD number would be exactly the fabrication migration 0015
+        // forbids. NULL says "this row's USD value is unknown".
+        const wethPriceUsd = await wethPriceUsdAt(at.ts);
+        const valueUsd = wethPriceUsd == null ? null : Math.round(wethSpent * wethPriceUsd * 100) / 100;
         // Idempotent on the tx_hash natural key: a re-scan (overlap/reorg) never
         // duplicates a swap. NOTE: a single tx emitting multiple ROBOTMONEY-in
         // legs records only the first (robotmoney_received slightly undercounts

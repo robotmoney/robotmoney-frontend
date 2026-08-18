@@ -12,7 +12,15 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { jsonValue, sql } from "../../src/db/client.ts";
-import { resolveVaultAdapters, isPlaceholderAddress, resolveBuybackConfig, resolveTrackedAssets, resolvePropWallets } from "../../src/config.ts";
+import { fileURLToPath } from "node:url";
+import {
+  resolveVaultAdapters,
+  isPlaceholderAddress,
+  resolveBuybackConfig,
+  resolveTrackedAssets,
+  resolvePropWallets,
+  BUYBACK_FROM_BLOCK,
+} from "../../src/config.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../../src/chain/base-rpc-client.ts";
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
 import { _resetBuybackCacheForTests, indexBuybacks } from "../../src/chain/buyback-logs.ts";
@@ -385,10 +393,12 @@ test("allocation: with the row absent, getAllocation falls back to the swarm see
 // ── buyback indexer: persisted scan cursor (regression: stuck-at-floor) ──────
 test("buyback indexer advances a persisted scan cursor across empty windows and resumes past it (never restarts from the floor)", async () => {
   process.env.BASE_RPC_SOURCE = "live";
-  process.env.BUYBACK_FROM_BLOCK = "1000";
   process.env.BUYBACK_LOG_CHUNK = "100";
   process.env.BUYBACK_MAX_CHUNKS = "3"; // 3×100 = 300 blocks covered per run
-  const LATEST = 100_000; // far beyond one run's reach → cursor must carry across runs
+  // The floor is the committed constant now (#640 removed the env override), so
+  // the windows are expressed relative to it.
+  const FLOOR = BUYBACK_FROM_BLOCK;
+  const LATEST = FLOOR + 100_000; // far beyond one run's reach → cursor must carry across runs
   // Empty-log chain: eth_blockNumber → tip, eth_getLogs → [] (no buybacks found),
   // gecko → a WETH price. If progress depended on finding a row, the cursor would
   // never move; this proves it advances on scan coverage alone.
@@ -408,19 +418,194 @@ test("buyback indexer advances a persisted scan cursor across empty windows and 
     await sql`DELETE FROM buyback_scan_state`;
     const r1 = await indexBuybacks();
     const c1 = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
-    // from=floor 1000; three 100-block chunks → last window ends at 1299.
-    expect(r1.scannedToBlock).toBe(1299);
-    expect(Number(c1[0]!.b)).toBe(1299);
+    // from=FLOOR; three 100-block chunks → last window ends at FLOOR+299.
+    expect(r1.scannedToBlock).toBe(FLOOR + 299);
+    expect(Number(c1[0]!.b)).toBe(FLOOR + 299);
 
     const r2 = await indexBuybacks();
     const c2 = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
-    // Resumes at cursor+1 (1300), NOT the floor → advances another 300 blocks.
-    expect(r2.scannedToBlock).toBe(1599);
-    expect(Number(c2[0]!.b)).toBe(1599);
+    // Resumes at cursor+1 (FLOOR+300), NOT the floor → advances another 300.
+    expect(r2.scannedToBlock).toBe(FLOOR + 599);
+    expect(Number(c2[0]!.b)).toBe(FLOOR + 599);
+  } finally {
+    for (const k of ["BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
+    await sql`DELETE FROM buyback_scan_state`;
+    _resetBuybackCacheForTests();
+  }
+});
+
+// ── buyback scan floor: a committed mainnet constant (#640) ─────────────────
+// Before this, the floor was `Number(process.env.BUYBACK_FROM_BLOCK ?? "0")` — an
+// env read no compose file could deliver, whose default cost ~51 days of empty
+// scanning before reaching the buyback era. The env read is now GONE, so the old
+// NaN hazard (a "43,741,600" typo skipped the `floor <= 0` warning and then froze
+// the chunk loop forever) is impossible by construction rather than by parsing:
+// there is no longer a value that can be supplied, therefore none to malform.
+test("the buyback floor is a committed constant with no env read anywhere in source", async () => {
+  expect(BUYBACK_FROM_BLOCK).toBe(43_741_600); // block of the earliest seeded buyback swap
+  expect(resolveBuybackConfig({}).fromBlock).toBe(BUYBACK_FROM_BLOCK);
+  // An override no longer exists, so setting one must change nothing.
+  expect(resolveBuybackConfig({ BUYBACK_FROM_BLOCK: "1000" }).fromBlock).toBe(BUYBACK_FROM_BLOCK);
+  // And the name appears in no executable line under src/ — a comment may still
+  // explain the removal, but a read would resurrect the hazard.
+  const srcDir = fileURLToPath(new URL("../../src/", import.meta.url));
+  const grep = Bun.spawnSync(["grep", "-rn", "process.env.BUYBACK_FROM_BLOCK", srcDir]);
+  const hits = new TextDecoder().decode(grep.stdout)
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .filter((line) => !/^[^:]*:\d+:\s*(\/\/|\*)/.test(line)); // prose about the removal is fine
+  expect(hits).toEqual([]);
+});
+
+test("buyback indexer: a fresh database scans from the committed constant, never from block 0", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.BUYBACK_FROM_BLOCK = "1000"; // must be IGNORED: the read is gone
+  process.env.BUYBACK_LOG_CHUNK = "100";
+  process.env.BUYBACK_MAX_CHUNKS = "2";
+  const LATEST = BUYBACK_FROM_BLOCK + 10_000;
+  const scanned: Array<{ from: number; to: number }> = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("geckoterminal.com")) {
+      const addrs = (u.split("/token_price/")[1] ?? "x").toLowerCase().split(",");
+      return new Response(JSON.stringify({ data: { attributes: { token_prices: Object.fromEntries(addrs.map((a) => [a, "2000"])) } } }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body)) as { method: string; params: any[] };
+    if (body.method === "eth_blockNumber") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x" + LATEST.toString(16) }), { status: 200 });
+    if (body.method === "eth_getLogs") {
+      const p = body.params[0] as { fromBlock: string; toBlock: string };
+      scanned.push({ from: parseInt(p.fromBlock, 16), to: parseInt(p.toBlock, 16) });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
+    }
+    throw new Error(`unexpected ${body.method}`);
+  }) as unknown as typeof fetch;
+  try {
+    await sql`DELETE FROM buyback_scan_state`; // fresh DB: no cursor, and every seed row has block_number NULL
+    const r = await indexBuybacks();
+    // The RPC-visible window, not just the return value: the very first
+    // eth_getLogs must open at the buyback era, not at genesis (and not at the
+    // stale env value either).
+    expect(scanned[0]).toEqual({ from: BUYBACK_FROM_BLOCK, to: BUYBACK_FROM_BLOCK + 99 });
+    expect(scanned).toHaveLength(2); // BUYBACK_MAX_CHUNKS
+    expect(r.scannedToBlock).toBe(BUYBACK_FROM_BLOCK + 199);
   } finally {
     for (const k of ["BUYBACK_FROM_BLOCK", "BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
     await sql`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
+  }
+});
+
+// ── historical pricing: each swap valued at its OWN block time (#640) ───────
+// Setting the floor is what makes this bite: the first runs backfill ~5 months,
+// and the old code read ONE current spot price per run and stamped it on every
+// row (`buyback-logs.ts` :250/:272 before this change). At the seeded buybacks
+// that is ~$2,179.3 actual vs ~$1,884.55 today — a ~13.5% fabricated value_usd,
+// against migration 0015's own "a value is NEVER fabricated" invariant.
+const HISTORIC_BLOCK = BUYBACK_FROM_BLOCK + 10;
+const HISTORIC_TS = 1_774_270_000; // inside the 2026-03-23 UTC day (bucket 1774224000)
+const HISTORIC_DAY = "2026-03-23";
+const DAY_CLOSE = 2179.3; // that day's settled WETH/USD close
+const TODAY_SPOT = 1884.55; // what the old per-run spot read would have used
+const SWAP_TX = "0x00000000000000000000000000000000000000000000000000000000000640a1";
+const WETH_OUT = 116_534_000_000_000_000n; // 0.116534 WETH, the seeded trade size
+const ROBOTMONEY_IN = 18_450_000n * 10n ** 18n;
+
+// One historical buyback in a single scanned window. `ohlcv` decides what the
+// daily-candle endpoint does, which is the only thing these two cases differ on.
+function mockHistoricBuyback(ohlcv: "ok" | "unavailable") {
+  const calls = { ohlcv: 0, spot: 0 };
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("/ohlcv/")) {
+      calls.ohlcv += 1;
+      if (ohlcv === "unavailable") return new Response("nope", { status: 400 });
+      // [bucketTs, open, high, low, close, volume] — the real 2026-03-23 candle
+      // shape, close pinned to the value the seeded rows imply.
+      return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [[1_774_224_000, 2052.63, 2188.0, 2026.51, DAY_CLOSE, 1234]] } } }), { status: 200 });
+    }
+    if (u.includes("geckoterminal.com")) {
+      calls.spot += 1; // today's spot: reading it at all is the bug under test
+      const addrs = (u.split("/token_price/")[1] ?? "x").toLowerCase().split(",");
+      return new Response(JSON.stringify({ data: { attributes: { token_prices: Object.fromEntries(addrs.map((a) => [a, String(TODAY_SPOT)])) } } }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body)) as { method: string; params: any[] };
+    if (body.method === "eth_blockNumber") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x" + (BUYBACK_FROM_BLOCK + 50).toString(16) }), { status: 200 });
+    if (body.method === "eth_getBlockByNumber") {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { timestamp: "0x" + HISTORIC_TS.toString(16) } }), { status: 200 });
+    }
+    if (body.method === "eth_getLogs") {
+      const p = body.params[0] as { address: string; fromBlock: string; toBlock: string };
+      const inWindow = parseInt(p.fromBlock, 16) <= HISTORIC_BLOCK && HISTORIC_BLOCK <= parseInt(p.toBlock, 16);
+      if (!inWindow) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
+      // The WETH leg query pins fromBlock == toBlock == the swap's block; the
+      // ROBOTMONEY leg query spans the whole chunk.
+      const isWethLeg = p.fromBlock === p.toBlock;
+      const log = {
+        blockNumber: "0x" + HISTORIC_BLOCK.toString(16),
+        logIndex: "0x1",
+        transactionHash: SWAP_TX,
+        data: word(isWethLeg ? WETH_OUT : ROBOTMONEY_IN),
+      };
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [log] }), { status: 200 });
+    }
+    throw new Error(`unexpected ${body.method}`);
+  }) as unknown as typeof fetch;
+  return calls;
+}
+
+async function indexOneHistoricSwap(ohlcv: "ok" | "unavailable") {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.BUYBACK_LOG_CHUNK = "100";
+  process.env.BUYBACK_MAX_CHUNKS = "1";
+  const calls = mockHistoricBuyback(ohlcv);
+  await sql`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
+  await sql`DELETE FROM buyback_scan_state`;
+  const result = await indexBuybacks();
+  const rows = await sql<{ occurred_on: Date; weth_spent: string; value_usd: string | null }[]>`
+    SELECT occurred_on, weth_spent::text, value_usd::text FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}
+  `;
+  return { calls, result, row: rows[0] };
+}
+
+async function cleanupHistoricSwap() {
+  for (const k of ["BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
+  await sql`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
+  await sql`DELETE FROM buyback_scan_state`;
+  _resetBuybackCacheForTests();
+  _resetTokenPriceCacheForTests();
+}
+
+test("buyback indexer: a historical swap is valued at ITS OWN block's WETH price, not the current spot", async () => {
+  try {
+    const { calls, result, row } = await indexOneHistoricSwap("ok");
+    expect(result.indexed).toBe(1);
+    expect(row!.occurred_on.toISOString().slice(0, 10)).toBe(HISTORIC_DAY);
+    // 0.116534 WETH × 2179.3 = $253.96, reproducing the $253.97 migration 0015
+    // records for this trade size on this day (its implied price is 2179.38 —
+    // a daily candle cannot be finer than the day). Today's spot gives $219.61,
+    // which is the ~13.5% fabrication this replaces.
+    expect(Number(row!.value_usd)).toBe(253.96);
+    expect(Math.round(0.116534 * TODAY_SPOT * 100) / 100).toBe(219.61); // what the old code would have written
+    expect(Number(row!.value_usd)).not.toBe(219.61);
+    // And the run must not have consulted the current spot endpoint at all.
+    expect(`ohlcv:${calls.ohlcv >= 1} spot:${calls.spot}`).toBe("ohlcv:true spot:0");
+  } finally {
+    await cleanupHistoricSwap();
+  }
+});
+
+test("buyback indexer: an unavailable historical price persists the swap with a NULL value_usd, never an invented one", async () => {
+  try {
+    const { calls, result, row } = await indexOneHistoricSwap("unavailable");
+    // The swap itself is fully attested (hash, block, amounts) so it is kept…
+    expect(result.indexed).toBe(1);
+    expect(Number(row!.weth_spent)).toBeCloseTo(0.116534, 6);
+    // …and its USD value is recorded as UNKNOWN rather than back-filled from
+    // today's spot, which the mock would happily have served.
+    expect(row!.value_usd).toBeNull();
+    expect(calls.spot).toBe(0);
+  } finally {
+    await cleanupHistoricSwap();
   }
 });
 
