@@ -11,10 +11,11 @@ import { sql } from "../../src/db/client.ts";
 import {
   resolvePropWallets,
   resolveTrackedAssets,
-  resolveSp500,
   resolvePriceSource,
   assertNoVaultAddressCollision,
   config,
+  SP500_SIZE,
+  SP500_TICKER,
 } from "../../src/config.ts";
 import {
   fetchWalletBalances,
@@ -49,7 +50,9 @@ const A = {
 };
 
 const ENV_KEYS = [
-  "BASE_RPC_SOURCE", "PRICE_SOURCE", "PROP_WALLET_ADDRESSES", "SP500_SIZE",
+  // SP500_SIZE/SP500_TICKER are RETIRED knobs (issue #641) — kept in the cleanup
+  // list because the #641 case plants them to prove they are no longer read.
+  "BASE_RPC_SOURCE", "PRICE_SOURCE", "PROP_WALLET_ADDRESSES", "SP500_SIZE", "SP500_TICKER",
   "USDC_ADDRESS", "ZYFAI_SS1_ADDRESS", "GIZA_SS1_ADDRESS", "WETH_ADDRESS",
   "ROBOTMONEY_ADDRESS", "BNKR_ADDRESS", "AAVE_AUSDC_ADDRESS",
   "BASE_RPC_RETRY_BASE_MS", "BASE_RPC_MAX_RETRIES", "BASE_RPC_MAX_CONCURRENCY",
@@ -66,7 +69,9 @@ function setBaseEnv(extra: Record<string, string> = {}) {
   process.env.WETH_ADDRESS = A.WETH;
   process.env.ROBOTMONEY_ADDRESS = A.ROBOTMONEY;
   process.env.BNKR_ADDRESS = A.BNKR;
-  process.env.SP500_SIZE = "0.633";
+  // No SP500_SIZE here: issue #641 made the size a committed constant
+  // (config.ts SP500_SIZE) and dropped the env override entirely, so setting it
+  // would suggest a knob that no longer exists.
   for (const [k, v] of Object.entries(extra)) process.env[k] = v;
 }
 
@@ -483,7 +488,6 @@ test("BNKR (issue #148): the REAL baked default address (no BNKR_ADDRESS overrid
   process.env.GIZA_SS1_ADDRESS = A.GIZA;
   process.env.WETH_ADDRESS = A.WETH;
   process.env.ROBOTMONEY_ADDRESS = A.ROBOTMONEY;
-  process.env.SP500_SIZE = "0.633";
 
   const bnkrAsset = resolveTrackedAssets().find((a) => a.symbol === "BNKR")!;
   expect(bnkrAsset.address).toBe("0x22af33fe49fd1fa80c7149773dde5890d3c76f3b");
@@ -522,16 +526,54 @@ test("AC4: config-time guard fails startup if a prop wallet collides with the va
   expect(resolveTrackedAssets().some((t) => t.address === vaultLc)).toBe(false);
 });
 
-test("AC5: wallet addresses, tracked-asset table, and SP500 size are all config-resolved from env (no handler/view literal)", () => {
+test("AC5: wallet addresses and the tracked-asset table are config-resolved from env, and the SP500 size/ticker from committed constants (no handler/view literal)", () => {
   expect(resolvePropWallets({ PROP_WALLET_ADDRESSES: "0xAaA,0xBbB" })).toEqual(["0xaaa", "0xbbb"]);
   const assets = resolveTrackedAssets({ WETH_ADDRESS: "0xWeThAddr".toLowerCase() });
   expect(assets.map((a) => a.symbol)).toEqual(["USDC", "ZYFAI-SS1", "GIZA-SS1", "WETH", "ETH", "ROBOTMONEY", "BNKR", "SP500"]);
   // Stable→Protocol→Agent→Stocks group/colour order preserved.
   expect(assets.map((a) => a.group)).toEqual(["Stable", "Stable", "Stable", "Protocol", "Protocol", "Agent", "Agent", "Stocks"]);
   expect(assets.map((a) => a.color)).toEqual(["#10b981", "#10b981", "#10b981", "#f59e0b", "#f59e0b", "#3b82f6", "#3b82f6", "#8b5cf6"]);
-  expect(resolveSp500({ SP500_SIZE: "1.25", SP500_TICKER: "SPY" })).toEqual({ size: 1.25, ticker: "SPY" });
+  // The SP500 size/ticker are committed constants since issue #641 (see the
+  // dedicated case below), no longer env-resolved.
+  expect([SP500_SIZE, SP500_TICKER]).toEqual([0.6330, "^GSPC"]);
   expect(resolvePriceSource({ PRICE_SOURCE: "stub" })).toBe("stub");
   expect(() => resolvePriceSource({ PRICE_SOURCE: "bogus" })).toThrow(/invalid PRICE_SOURCE/);
+});
+
+// Issue #641: SP500_SIZE / SP500_TICKER were env overrides that NO deployed
+// container could ever receive — docker-compose.yml's `environment:` block is an
+// allowlist (no compose file has an `env_file:`, backend/Dockerfile sets no ENV)
+// and neither key was in it. A knob nothing can turn is not configuration, so
+// both became committed constants and the overrides were dropped outright, the
+// same way ROBOTMONEY_ADDRESS/WETH_ADDRESS/BUYBACK_PRIMARY_WALLET are baked
+// (config.ts) — that allowlist is reserved for secrets and operator escape
+// hatches.
+//
+// This asserts the constants are what the LIVE PATHS actually read, by planting
+// the retired variables in the environment and running the real handler: a
+// leftover `process.env.SP500_SIZE` on some box must have no effect whatsoever.
+test("issue #641: the SP500 size and ticker are committed constants — the retired env overrides have no effect on the live path", async () => {
+  expect(SP500_SIZE).toBe(0.6330);
+  expect(SP500_TICKER).toBe("^GSPC");
+
+  setBaseEnv();
+  // The retired keys, planted with values that would be unmistakable if read.
+  process.env.SP500_SIZE = "999";
+  process.env.SP500_TICKER = "SPY";
+  const fx = stubFixtures();
+  fx.sp500Price = 4700;
+  mockChain(fx);
+
+  // chain/wallet-balances.ts's `config` leg reads the SIZE constant…
+  const r = await fetchWalletBalances();
+  const sp500 = r.holdings.find((h) => h.symbol === "SP500")!;
+  expect(sp500.amount).toBeCloseTo(SP500_SIZE, 6);
+  expect(sp500.amount).not.toBe(999);
+  // …and chain/token-prices.ts prices it on the TICKER constant: the mocked
+  // yahoo transport answers whatever symbol it is asked for, so a priced leg at
+  // the fixture close proves the yahoo path ran with the constant, not "SPY".
+  expect(sp500.priceUsd).toBeCloseTo(4700, 6);
+  expect(sp500.valueUsd).toBeCloseTo(SP500_SIZE * 4700, 6);
 });
 
 test("AC7: the handler builds its path from the shared ROUTES constant", async () => {

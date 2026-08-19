@@ -14,7 +14,7 @@
 // Open Question 9 (GeckoTerminal OHLCV may not reach back to Mar 18 for illiquid
 // ROBOTMONEY/BNKR): the seeded rows ARE the carried-forward history.
 import type { PriceSource, TrackedAsset } from "../config.ts";
-import { resolveSp500 } from "../config.ts";
+import { SP500_TICKER } from "../config.ts";
 import { UA } from "../analytics/extract/http.ts";
 import { withFetchCache } from "../analytics/extract/fetch-cache.ts";
 import { fetchYahoo } from "../analytics/extract/yahoo.ts";
@@ -346,7 +346,7 @@ export async function fetchAssetPriceUsd(
   }
 
   if (asset.priceKind === "yahoo") {
-    return fetchSp500PriceUsd(resolveSp500().ticker);
+    return fetchSp500PriceUsd(SP500_TICKER);
   }
   // gecko: native ETH is priced off WETH's address (canonical wrapped price).
   if (!asset.address) throw new Error(`token-prices: ${asset.symbol} has no address for a gecko price read`);

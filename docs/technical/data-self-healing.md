@@ -409,9 +409,9 @@ be settled before the driver is written.
 
 **The asymmetry that decides it.** The *price* is recoverable: `fetchYahoo(symbol,
 startUnix, endUnix, timeoutMs)` (`backend/src/analytics/extract/yahoo.ts:44`)
-already takes a range. The *position size* is not: `resolveSp500()` reads
-`SP500_SIZE` (`backend/src/config.ts:267-273`) as a single present-tense
-constant, with no history and no positions API to derive one from. Multiplying
+already takes a range. The *position size* is not: it is the committed
+`SP500_SIZE` constant (`backend/src/config.ts`, since #641), a single
+present-tense value with no history and no positions API to derive one from. Multiplying
 today's size by a past price does not approximate a past value — it **fabricates
 a quantity** and then presents it beside genuinely-read legs.
 
@@ -2193,12 +2193,16 @@ wrong number:
   here; the characterization of the live production impact is **#642's finding**,
   not an independent verification by this document.)*
 - **SP500 sizing (#641) — a plausible dollar figure with no staleness signal.**
-  `readChainAmounts` sets `{ ok: true, amount: resolveSp500().size }`
-  unconditionally for the `config` valuation kind
-  (`backend/src/chain/wallet-balances.ts:93`, inside `:87-102`), so an unset or
-  stale `SP500_SIZE` never degrades to `stale` the way a failed chain read does.
-  The default is a hardcoded `0.6330` (`backend/src/config.ts:267-273`).
-  *(Verified in this checkout.)*
+  `readChainAmounts` sets `{ ok: true, amount: SP500_SIZE }` unconditionally for
+  the `config` valuation kind (`backend/src/chain/wallet-balances.ts`), so a
+  stale size never degrades to `stale` the way a failed chain read does.
+  *(Verified in this checkout.)* **#641 resolved only half of this**: it made
+  `SP500_SIZE` a committed constant (`backend/src/config.ts`) and dropped the env
+  override, which no container could receive anyway, so drift is now at least
+  visible in a reviewed diff. The DTO still carries no signal distinguishing a
+  stale size from a live read — deliberately, because an honest one needs a
+  stated-at date to travel with the size (recorded at the `config` leg in
+  `wallet-balances.ts`), which is a design question this section owns.
 
 **Why this belongs here rather than only in #647.** Each of the three produces a
 value that a source comparison either cannot see — SP500's *size* has no source
@@ -2289,8 +2293,8 @@ keep.
   skip it, not approximate.** The price is recoverable from Yahoo —
   `fetchYahoo(symbol, startUnix, endUnix,
   timeoutMs)` (`backend/src/analytics/extract/yahoo.ts:44`) already takes a
-  range — but the position *size* is a single present-tense constant,
-  `resolveSp500()` reading `SP500_SIZE` (`backend/src/config.ts:267-273`), with
+  range — but the position *size* is a single present-tense constant, the
+  committed `SP500_SIZE` (`backend/src/config.ts`, since #641), with
   no history and no positions API. Multiplying today's size by a past price
   **fabricates a quantity**. (A 365-day `^GSPC` call returned 252
   points: weekends and holidays are absent and would need forward-filling

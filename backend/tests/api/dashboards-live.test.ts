@@ -20,6 +20,8 @@ import {
   resolveTrackedAssets,
   resolvePropWallets,
   BUYBACK_FROM_BLOCK,
+  BUYBACK_LOG_CHUNK,
+  BUYBACK_MAX_CHUNKS,
 } from "../../src/config.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../../src/chain/base-rpc-client.ts";
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
@@ -393,12 +395,13 @@ test("allocation: with the row absent, getAllocation falls back to the swarm see
 // ── buyback indexer: persisted scan cursor (regression: stuck-at-floor) ──────
 test("buyback indexer advances a persisted scan cursor across empty windows and resumes past it (never restarts from the floor)", async () => {
   process.env.BASE_RPC_SOURCE = "live";
-  process.env.BUYBACK_LOG_CHUNK = "100";
-  process.env.BUYBACK_MAX_CHUNKS = "3"; // 3×100 = 300 blocks covered per run
-  // The floor is the committed constant now (#640 removed the env override), so
-  // the windows are expressed relative to it.
+  // The floor is the committed constant now (#640 removed the env override), and
+  // window size / per-run window count are committed constants since issue #641
+  // (config.ts BUYBACK_LOG_CHUNK / BUYBACK_MAX_CHUNKS), so this case reads them
+  // rather than pinning small values through env that no longer exists.
   const FLOOR = BUYBACK_FROM_BLOCK;
-  const LATEST = FLOOR + 100_000; // far beyond one run's reach → cursor must carry across runs
+  const RUN_SPAN = BUYBACK_LOG_CHUNK * BUYBACK_MAX_CHUNKS; // blocks covered per run
+  const LATEST = FLOOR + RUN_SPAN * 3; // far beyond one run's reach → cursor must carry across runs
   // Empty-log chain: eth_blockNumber → tip, eth_getLogs → [] (no buybacks found),
   // gecko → a WETH price. If progress depended on finding a row, the cursor would
   // never move; this proves it advances on scan coverage alone.
@@ -418,17 +421,17 @@ test("buyback indexer advances a persisted scan cursor across empty windows and 
     await sql`DELETE FROM buyback_scan_state`;
     const r1 = await indexBuybacks();
     const c1 = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
-    // from=FLOOR; three 100-block chunks → last window ends at FLOOR+299.
-    expect(r1.scannedToBlock).toBe(FLOOR + 299);
-    expect(Number(c1[0]!.b)).toBe(FLOOR + 299);
+    // from=FLOOR; BUYBACK_MAX_CHUNKS windows of BUYBACK_LOG_CHUNK blocks.
+    expect(r1.scannedToBlock).toBe(FLOOR + RUN_SPAN - 1);
+    expect(Number(c1[0]!.b)).toBe(FLOOR + RUN_SPAN - 1);
 
     const r2 = await indexBuybacks();
     const c2 = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
-    // Resumes at cursor+1 (FLOOR+300), NOT the floor → advances another 300.
-    expect(r2.scannedToBlock).toBe(FLOOR + 599);
-    expect(Number(c2[0]!.b)).toBe(FLOOR + 599);
+    // Resumes at cursor+1, NOT the floor → advances another full run span.
+    expect(r2.scannedToBlock).toBe(FLOOR + RUN_SPAN * 2 - 1);
+    expect(Number(c2[0]!.b)).toBe(FLOOR + RUN_SPAN * 2 - 1);
   } finally {
-    for (const k of ["BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
+    for (const k of ["BASE_RPC_SOURCE"]) delete process.env[k];
     await sql`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
@@ -460,8 +463,8 @@ test("the buyback floor is a committed constant with no env read anywhere in sou
 test("buyback indexer: a fresh database scans from the committed constant, never from block 0", async () => {
   process.env.BASE_RPC_SOURCE = "live";
   process.env.BUYBACK_FROM_BLOCK = "1000"; // must be IGNORED: the read is gone
-  process.env.BUYBACK_LOG_CHUNK = "100";
-  process.env.BUYBACK_MAX_CHUNKS = "2";
+  // BUYBACK_LOG_CHUNK / BUYBACK_MAX_CHUNKS are committed constants now (#641),
+  // so env overrides for them would also be ignored.
   const LATEST = BUYBACK_FROM_BLOCK + 10_000;
   const scanned: Array<{ from: number; to: number }> = [];
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
@@ -485,11 +488,52 @@ test("buyback indexer: a fresh database scans from the committed constant, never
     // The RPC-visible window, not just the return value: the very first
     // eth_getLogs must open at the buyback era, not at genesis (and not at the
     // stale env value either).
-    expect(scanned[0]).toEqual({ from: BUYBACK_FROM_BLOCK, to: BUYBACK_FROM_BLOCK + 99 });
-    expect(scanned).toHaveLength(2); // BUYBACK_MAX_CHUNKS
-    expect(r.scannedToBlock).toBe(BUYBACK_FROM_BLOCK + 199);
+    expect(scanned[0]).toEqual({ from: BUYBACK_FROM_BLOCK, to: BUYBACK_FROM_BLOCK + BUYBACK_LOG_CHUNK - 1 });
+    expect(scanned).toHaveLength(2); // two windows to reach LATEST
+    expect(r.scannedToBlock).toBe(BUYBACK_FROM_BLOCK + 10_000);
   } finally {
-    for (const k of ["BUYBACK_FROM_BLOCK", "BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
+    for (const k of ["BASE_RPC_SOURCE", "BUYBACK_FROM_BLOCK"]) delete process.env[k];
+    await sql`DELETE FROM buyback_scan_state`;
+    _resetBuybackCacheForTests();
+  }
+});
+
+// Issue #641: BUYBACK_LOG_CHUNK / BUYBACK_MAX_CHUNKS were env overrides that no
+// deployed container could ever receive — docker-compose.yml's `environment:`
+// block is an allowlist (no compose file has an `env_file:`, backend/Dockerfile
+// sets no ENV) and neither key was in it, so the "tuning knob" could only ever
+// hold its inline default anyway. Both are committed constants now and the
+// overrides are gone. Asserted against the LIVE INDEXER rather than a parser: the
+// planted values would produce a single 1-block window, so a run that covers the
+// full constant-derived span proves the constants are what the scan loop reads.
+test("issue #641: the buyback scan bounds are committed constants — the retired env overrides have no effect on the indexer", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.BUYBACK_LOG_CHUNK = "1";
+  process.env.BUYBACK_MAX_CHUNKS = "1";
+  const RUN_SPAN = BUYBACK_LOG_CHUNK * BUYBACK_MAX_CHUNKS;
+  const LATEST = BUYBACK_FROM_BLOCK + RUN_SPAN * 2;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("geckoterminal.com")) {
+      const addrs = (u.split("/token_price/")[1] ?? "x").toLowerCase().split(",");
+      return new Response(JSON.stringify({ data: { attributes: { token_prices: Object.fromEntries(addrs.map((a) => [a, "2000"])) } } }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body)) as { method: string };
+    if (body.method === "eth_blockNumber") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x" + LATEST.toString(16) }), { status: 200 });
+    if (body.method === "eth_getLogs") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
+    throw new Error(`unexpected ${body.method}`);
+  }) as unknown as typeof fetch;
+  try {
+    await sql`DELETE FROM buyback_scan_state`;
+    const r = await indexBuybacks();
+    expect(r.scannedToBlock).toBe(BUYBACK_FROM_BLOCK + RUN_SPAN - 1);
+    // Not the 1-block window the planted env would have produced.
+    expect(r.scannedToBlock).not.toBe(BUYBACK_FROM_BLOCK);
+    // The committed values themselves: 9000 is deliberate margin under the 10k
+    // eth_getLogs range cap common public providers impose (see config.ts).
+    expect([BUYBACK_LOG_CHUNK, BUYBACK_MAX_CHUNKS]).toEqual([9000, 25]);
+  } finally {
+    for (const k of ["BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
     await sql`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
@@ -555,8 +599,9 @@ function mockHistoricBuyback(ohlcv: "ok" | "unavailable") {
 
 async function indexOneHistoricSwap(ohlcv: "ok" | "unavailable") {
   process.env.BASE_RPC_SOURCE = "live";
-  process.env.BUYBACK_LOG_CHUNK = "100";
-  process.env.BUYBACK_MAX_CHUNKS = "1";
+  // BUYBACK_LOG_CHUNK / BUYBACK_MAX_CHUNKS are committed constants now (#641);
+  // the mock window is wide enough that the first 9000-block window contains
+  // HISTORIC_BLOCK, so no env override is needed.
   const calls = mockHistoricBuyback(ohlcv);
   await sql`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
   await sql`DELETE FROM buyback_scan_state`;
@@ -568,7 +613,7 @@ async function indexOneHistoricSwap(ohlcv: "ok" | "unavailable") {
 }
 
 async function cleanupHistoricSwap() {
-  for (const k of ["BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
+  delete process.env.BASE_RPC_SOURCE;
   await sql`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
   await sql`DELETE FROM buyback_scan_state`;
   _resetBuybackCacheForTests();
