@@ -508,11 +508,10 @@ test("buyback indexer: a fresh database scans from the committed constant, never
 // full constant-derived span proves the constants are what the scan loop reads.
 test("issue #641: the buyback scan bounds are committed constants — the retired env overrides have no effect on the indexer", async () => {
   process.env.BASE_RPC_SOURCE = "live";
-  process.env.BUYBACK_FROM_BLOCK = "1000";
   process.env.BUYBACK_LOG_CHUNK = "1";
   process.env.BUYBACK_MAX_CHUNKS = "1";
   const RUN_SPAN = BUYBACK_LOG_CHUNK * BUYBACK_MAX_CHUNKS;
-  const LATEST = 1000 + RUN_SPAN * 2;
+  const LATEST = BUYBACK_FROM_BLOCK + RUN_SPAN * 2;
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("geckoterminal.com")) {
@@ -527,14 +526,14 @@ test("issue #641: the buyback scan bounds are committed constants — the retire
   try {
     await sql`DELETE FROM buyback_scan_state`;
     const r = await indexBuybacks();
-    expect(r.scannedToBlock).toBe(1000 + RUN_SPAN - 1);
+    expect(r.scannedToBlock).toBe(BUYBACK_FROM_BLOCK + RUN_SPAN - 1);
     // Not the 1-block window the planted env would have produced.
-    expect(r.scannedToBlock).not.toBe(1000);
+    expect(r.scannedToBlock).not.toBe(BUYBACK_FROM_BLOCK);
     // The committed values themselves: 9000 is deliberate margin under the 10k
     // eth_getLogs range cap common public providers impose (see config.ts).
     expect([BUYBACK_LOG_CHUNK, BUYBACK_MAX_CHUNKS]).toEqual([9000, 25]);
   } finally {
-    for (const k of ["BUYBACK_FROM_BLOCK", "BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
+    for (const k of ["BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
     await sql`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
