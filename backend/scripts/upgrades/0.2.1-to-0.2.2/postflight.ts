@@ -26,11 +26,13 @@ const THIS_RELEASE_MIGRATIONS = [
   "0029_admin_passkey.sql",
   "0030_swarm_member_handle.sql",
   "0031_swarm_member_handle_namespace.sql",
+  "0032_append_only_history.sql",
+  "0033_swarm_member_uuid_ids.sql",
 ] as const;
 
 const baseUrlArg = process.argv.find((a) => a.startsWith("--base-url="))?.slice("--base-url=".length);
 
-// check 2 — all four migrations recorded
+// check 2 — all six migrations recorded
 async function checkMigrationsRecorded(db: Db, { record }: Checker): Promise<void> {
   const rows = (await db`
     SELECT name FROM schema_migrations WHERE name = ANY(${THIS_RELEASE_MIGRATIONS})
