@@ -1259,12 +1259,12 @@ a file alongside the backup artifacts (e.g.
 - Result for every §8 check (check 1–12)
 - All §8.1 acceptance criteria explicitly ticked or failed
 
-**5. Acceptance criteria checklist**
-- [ ] All features in #660 Objective are present and working
-- [ ] No unexpected schema drift (only migrations `0028`–`0031` applied)
-- [ ] Member counts after migration match baseline (§5.0)
-- [ ] Zero null or incorrect handles (§8.1)
-- [ ] `swarm_recommendations` count ≥ baseline
+**5. Acceptance criteria** (mark each PASS or FAIL with evidence)
+- All features in #660 Objective are present and working
+- No unexpected schema drift (only migrations `0028`–`0031` applied)
+- Member counts after migration match baseline (§5.0)
+- Zero null or incorrect handles (§8.1)
+- `swarm_recommendations` count ≥ baseline
 
 **6. Issues found**
 List any failures, unexpected output, or observations encountered during the
