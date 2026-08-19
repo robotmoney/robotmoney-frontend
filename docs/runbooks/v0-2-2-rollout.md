@@ -59,7 +59,7 @@ assume. Re-check them against the tip you pin in §1 before you rely on them.
 **The bare `v0.2.2` tag does not exist while you are executing this runbook, and
 cannot.** A version tag records what has been proven in production, so it is cut
 after both preflight and postflight, never before —
-[`docs/technical/release-runbooks.md` §2](../technical/release-runbooks.md)
+[`docs/technical/release-runbooks.md` §3](../technical/release-runbooks.md)
 ("Version tags and release candidates") owns that policy end to end, including
 what happens when preflight or postflight fails. Read it once before you start;
 this runbook executes it and does not restate it.
@@ -89,7 +89,7 @@ whole rollout — every gate below, the `v0.2.2-rc.N` tag you cut in §7.2, the
 cut in §8 once postflight is clean must all refer to it. If the branch moves
 mid-rollout, you are gating one commit and shipping another. `v0.2.2` landing on
 the same commit as the final rc is the expected outcome, not double-tagging to
-clean up (release-runbooks.md §2).
+clean up (release-runbooks.md §3).
 
 ### Branching model
 
@@ -196,6 +196,25 @@ f51a8fe feat: admin auth: segregate automation and strict setup token           
   `swarm_members` (`0030`, `0031`).
 
 Treat this as a minor release with a manual auth migration attached.
+
+### Policy alignment
+
+The foundational release workflow is defined in
+[`docs/technical/release-runbooks.md` §4](../technical/release-runbooks.md)
+(gates §§4.1–4.9). The table below maps each policy gate to the section of
+this runbook that executes it.
+
+| Policy gate | What it requires | Runbook section |
+|---|---|---|
+| **§4.1** Pre-cutover backup | Encrypted dump + globals dump, verified restore | §5.1–§5.3 |
+| **§4.2** Schema-migration preflight | All migrations idempotent and reversible | §4 (preflight) |
+| **§4.3** Digital-twin rehearsal | Full runbook against restored twin; any failure blocks | §5.5 |
+| **§4.4** Stage rehearsal report | Written report with acceptance criteria; gate before §7 | §5.6 |
+| **§4.5** Go/no-go sign-off | Operator sign-off after stage rehearsal report passes | §2 |
+| **§4.6** Cutover execution | Versioned RC tag, then migrate + boot | §7 |
+| **§4.7** Postflight verification | All §8 checks + §8.1 acceptance criteria pass | §8 |
+| **§4.8** Postflight failure → rollback | Default: restore pre-upgrade dump; override requires sign-off | §9 |
+| **§4.9** Production rollout report | Filed before closing the tracking issue | §13 |
 
 ---
 
@@ -674,6 +693,45 @@ sufficient here** — it recovers the cluster, not a file you can inspect, diff,
 restore into a scratch database to prove the release is reversible. Take a local
 dump as well.
 
+### 5.0 Record pre-upgrade baseline
+
+Before taking the dump, capture a lightweight read-only baseline from the
+replica (§3). This baseline is your reference for postflight comparison (§8)
+and rollback verification (§9).
+
+```bash
+# Load read-only replica credentials from §3's .env.readonly
+rokey() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" <checkout>/.env.readonly | head -1; }
+
+export PGHOST="$(rokey host)"       PGPORT="$(rokey port)"
+export PGUSER="$(rokey username)"   PGPASSWORD="$(rokey password)"
+export PGDATABASE="$(rokey database)" PGSSLMODE=require
+
+# Prove you are on the replica and the read-only role before capturing output.
+psql -X -Atc "SELECT current_user, inet_server_addr(), current_database();"
+
+BASELINE_FILE="pre-upgrade-baseline-$(date +%Y%m%dT%H%M%S).txt"
+{
+  echo "=== baseline captured at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+  echo ""
+  echo "--- schema_migrations ---"
+  psql -X -c "SELECT id FROM schema_migrations ORDER BY id;"
+  echo ""
+  echo "--- member count ---"
+  psql -X -Atc "SELECT count(*) AS member_count FROM swarm_members;"
+  echo ""
+  echo "--- handle_type distribution ---"
+  psql -X -c "SELECT handle_type, count(*) FROM swarm_members GROUP BY handle_type ORDER BY 1;"
+  echo ""
+  echo "--- vault_address sample (first 5) ---"
+  psql -X -c "SELECT id, vault_address FROM swarm_members ORDER BY id LIMIT 5;"
+} | tee "$BASELINE_FILE"
+echo "baseline saved → $BASELINE_FILE"
+```
+
+This baseline is your reference for postflight comparison (§8) and rollback
+verification (§9).
+
 ### 5.1 The dump
 
 > 🔴 **`cd` out of the checkout first.** §4 left you in `<checkout>/backend`, and
@@ -1132,6 +1190,84 @@ This file is the **only** record of what the boot is about to clobber;
 restoring those values afterwards is a manual `UPDATE` per row, and you
 cannot write it without this output. Keep it with the dump (it holds no
 credentials, so it does not need §5.2's encryption).
+
+### 5.5 Digital-twin rehearsal
+
+⛔ **This is a blocking gate.** Do not proceed to §7 until the twin run exits
+`0` and every acceptance criterion in §5.6 is met.
+
+Restore the backup (§5.3's `restore-check.ts`, then §5.3b's
+`stage-rehearsal.ts`) into a local Postgres container and run the full runbook
+against it in sequence:
+
+1. **Preflight (§4)** — run `restore-check.ts` (Gate C) first, then §4's live
+   checks against the restored twin. Any failure is blocking. Follow the fix
+   loop: patch, cut the next rc, restore a fresh dump, rehearse again.
+2. **Cutover (§7)** — run `stage-rehearsal.ts`, which executes the exact §7.3
+   boot command (`bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI`
+   unset) against the migrated twin. Any failure is blocking.
+3. **Postflight (§8)** — run every §8 check **and** every §8.1 acceptance
+   criterion against the twin after the boot reaches readiness. Any failure is
+   blocking — do not carry a known-failing AC into a production cutover on the
+   theory that production will behave differently.
+
+The twin holds real production rows. An AC failure on the twin is an AC failure
+in production; it is the same data. Treat a failing twin the same as a failing
+production cutover: diagnose, patch, cut the next rc, re-rehearse from step 1.
+
+```bash
+cd <checkout>/backend
+# Step 1 — preflight against the twin
+bun scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts ~/rm-backup-v022
+
+# Steps 2+3 — cutover + postflight against the twin
+bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022
+# After EXIT=0: run every §8 check and §8.1 ACs against the twin's published port
+```
+
+### 5.6 Stage rehearsal report
+
+⛔ **Gate: do not proceed to §7 until this report exists and all criteria pass.**
+
+Produce a written report covering the twin rehearsal just completed. Save it to
+a file alongside the backup artifacts (e.g.
+`stage-rehearsal-report-<STAMP>.md`). The report must include:
+
+**1. Twin setup**
+- RC tag and SHA deployed to the twin
+- Backup stamp used (`rm-preupgrade-<STAMP>.dump.gpg`)
+- `restore-check.ts` exit code and any notable output
+
+**2. Preflight results (§4 on the twin)**
+- All Gate A–D results (pass / fail / note)
+- Exit code of `restore-check.ts`
+
+**3. Cutover results (§7 on the twin)**
+- `stage-rehearsal.ts` exit code
+- Time to readiness (`ready after …s`)
+- Frontend check verdict
+
+**4. Postflight results (§8 on the twin)**
+- Result for every §8 check (check 1–12)
+- All §8.1 acceptance criteria explicitly ticked or failed
+
+**5. Acceptance criteria checklist**
+- [ ] All features in #660 Objective are present and working
+- [ ] No unexpected schema drift (only migrations `0028`–`0031` applied)
+- [ ] Member counts after migration match baseline (§5.0)
+- [ ] Zero null or incorrect handles (§8.1)
+- [ ] `swarm_recommendations` count ≥ baseline
+
+**6. Issues found**
+List any failures, unexpected output, or observations encountered during the
+rehearsal. For each: description, disposition (fixed before proceed / carry to
+§10 known-broken / blocking).
+
+**7. Go/no-go**
+State explicitly: **GO** or **NO-GO**, with reason.
+
+**8. Operator sign-off**
+> Rehearsal completed by: __________ Date: __________ Sign-off: __________
 
 ---
 
@@ -1782,6 +1918,13 @@ release-runbooks.md §6).
 
 ## 9. Rollback
 
+> **Default rollback policy** (per `docs/technical/release-runbooks.md §4.8`):
+> a postflight failure on production defaults to full rollback by restoring the
+> pre-upgrade dump from §5.1. The operator makes the final call, but full
+> rollback is the standard procedure. An operator may choose an alternate
+> remediation only by recording the override reason, the alternate plan, and a
+> second sign-off in the production rollout report (§13).
+
 ### Triggers — roll back if any of these are true
 
 - Verification 3 reports `overridden`, or 4 returns rows you cannot repair now.
@@ -2132,3 +2275,80 @@ to open `/admin` and complete the claim now, using this boot's setup token
 (§12.0). The claim UI itself walks through the rest — setup token, new
 password, the one-time recovery code — nothing further about that flow
 belongs in this runbook.
+
+---
+
+## 13. Production rollout report
+
+Produce a written report immediately after the production cutover completes —
+pass or fail. Save it to a file in the same directory as the backup artifacts
+(e.g. `production-rollout-report-<STAMP>.md`) and attach it to issue #660.
+
+The report must include:
+
+### RC deployed
+
+```
+Tag:    v0.2.2-rc.<N>
+SHA:    <git rev-parse HEAD on the production host>
+Branch: releases-0.2.x
+```
+
+### Timeline
+
+| Step | Wall-clock time | Notes |
+|---|---|---|
+| Stage rehearsal gate passed (§5.6) | | |
+| Go/no-go sign-off (§2) | | |
+| Cutover started (§7.2 tag cut) | | |
+| Stack live (§7.3 boot ready) | | |
+| Postflight completed (§8) | | |
+| `v0.2.2` tagged (§8, last step) OR rollback decision | | |
+
+### Postflight result
+
+State one of:
+- **PASS** — all §8 checks and §8.1 acceptance criteria met. Final `v0.2.2`
+  tag cut at `<SHA>`.
+- **FAIL → rollback** — describe which check(s) failed, rollback procedure
+  followed, and whether the restore was verified clean (§9 procedure steps
+  completed).
+- **FAIL → override** — ONLY if the operator chose an alternate remediation
+  instead of full rollback. Must include: the override reason, the alternate
+  plan, and the second sign-off (required by §9 and §4.8).
+
+### Rollback details (if applicable)
+
+- Dump restored: `rm-preupgrade-<STAMP>.dump.gpg`
+- Restore verified clean: yes / no
+- Schema state post-rollback (migrations applied):
+- Admin access restored via `ADMIN_TOKEN`: yes / no / N/A
+
+### Final version tag commands
+
+If postflight passed, record the exact commands that were run to cut the final
+`v0.2.2` tag and push it to origin:
+
+```bash
+git tag -a v0.2.2 <SHA> -m "v0.2.2"
+git push origin v0.2.2
+```
+
+### Backport TODO
+
+Run after the release is tagged and verified:
+
+```bash
+git log --oneline origin/main..origin/releases-0.2.x   # commits owed to main
+# Cherry-pick each listed commit to main per the release-runbooks.md §6 backport procedure.
+```
+
+### Operator sign-off
+
+> Production rollout completed by: __________ Date: __________ Sign-off: __________
+>
+> Final `v0.2.2` tag exists on `releases-0.2.x`: yes / no
+> Issue #660 closed: yes / not yet
+
+The release tracking issue (#660) is closed only after this report is filed
+and the final `v0.2.2` tag exists on `releases-0.2.x`.
