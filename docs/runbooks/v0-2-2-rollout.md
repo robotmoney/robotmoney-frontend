@@ -751,7 +751,7 @@ echo "pg_dumpall exit=$?"
 > ```bash
 > grep -cE '^CREATE ROLE' "rm-globals-${STAMP}.sql"          # expect the cluster's role count
 > grep -E '^(CREATE|ALTER) ROLE (rm_readonly|rm_worker)\b' "rm-globals-${STAMP}.sql"
-> tail -1 "rm-globals-${STAMP}.sql"   # must be the "dump complete" marker, not a truncated line
+> tail -3 "rm-globals-${STAMP}.sql" | grep -c 'dump complete'  # must be 1 (PG 18 appends a trailing blank line)
 > ```
 
 The `~/.pgpass` alternative, if you prefer no secrets on the command line —
@@ -1295,7 +1295,7 @@ unset (`demoPassthroughEnv`, `:446-453`).
 
 ## 7. Cutover
 
-> **IRREVERSIBLE from here.** The migrations have no down files (verified: 39
+> **IRREVERSIBLE from here.** The migrations have no down files (verified: 41
 > `.sql` files under `backend/migrations/`, none matching
 > `down|rollback|revert|undo`). Rollback is code-only — see §9.
 
@@ -1381,7 +1381,7 @@ and §6, and you are shipping something you never ran those gates against. Stop.
 
 > 🔴 **IRREVERSIBLE.** This command is not a dry run and there is no "boot and
 > look first" mode. It writes to production three times before you can inspect
-> anything: the four migrations (§7.4), `seed()` rewriting the five `swarm.*`
+> anything: the six migrations (§7.4), `seed()` rewriting the five `swarm.*`
 > schedule rows (§6.5, §5.4), and the **archive initializer** — `prod-bootstrap.ts`
 > run as `docker compose run --rm … api bun run scripts/prod-bootstrap.ts
 > --already-migrated` (`scripts/lib/demo-main.ts:1136-1140`) — which adopts and
@@ -1435,7 +1435,7 @@ before the first write, not after it"*. Everything else in the diagram is
 test-asserted; that element is asserted by reading.
 
 **No service of the new stack starts if `migrate` fails** — services are step 6,
-migrate is step 5. The four new migrations apply here:
+migrate is step 5. The six new migrations apply here:
 
 | File | Effect | Why it cannot fail |
 |---|---|---|
@@ -1443,6 +1443,8 @@ migrate is step 5. The four new migrations apply here:
 | `0029_admin_passkey.sql` | passkey/session/challenge tables + 3 `REVOKE`s | Additive. **Requires `rm_worker`** — Gate D. |
 | `0030_swarm_member_handle.sql` | `ADD COLUMN IF NOT EXISTS handle` (`:24`), backfill `handle = id` (`:28`), `SET NOT NULL` (`:30`), default-handle `BEFORE INSERT` trigger (`:47-49`), `CREATE UNIQUE INDEX` (`:53`) | The unique index **cannot** collide: the backfill sets `handle = id`, and `id` is the primary key. |
 | `0031_swarm_member_handle_namespace.sql` | namespace `DO` block (`:84-98`) + `BEFORE INSERT OR UPDATE` trigger (`:182-184`), then `ENABLE ALWAYS` (`:195`) | On a clean v0.2.1 jump the `DO` block **cannot fire**: immediately after `0030` every row has `handle = id`, so `b.id = a.handle AND b.id <> a.id` is unsatisfiable. |
+| `0032_append_only_history.sql` | `rm_append_only_guard()` trigger on the five historical tables (recommendations, briefs, sessions, memo_votes, member_keys) — prevents DELETE and TRUNCATE | Additive. Installs a trigger function and fires it on existing tables; no row rewriting, no column DDL. |
+| `0033_swarm_member_uuid_ids.sql` | UPDATE-only re-keying of every non-UUID `swarm_members.id` plus seven child FKs; resets 0030's default handle; remaps `swarm_subjects.linked_member_id` | UPDATE-only — nothing deleted. Child FKs are made `DEFERRABLE` for the transaction and restored, never dropped/re-added, so their definitions (including three `ON DELETE CASCADE`s) cannot come back subtly different. Signatures survive: `payload` + `signature` verified empirically. |
 
 **Both `0029` files apply.** The runner keys on the **full filename**
 (`schema_migrations(name text PRIMARY KEY)`, `backend/src/db/migrate.ts:34`;
@@ -1581,7 +1583,7 @@ and never `$?`.
 | # | Check | Command | Expected |
 |---|---|---|---|
 | 1 | Boot exited clean | `echo "$BOOT_STATUS"` — the variable captured on §7.3's own command line. **Not `echo $?`**: by the time you reach §8 that reports `demo:status`, not the boot, and it will read `0` after a failed cutover. | `0`. On a TTY without `--no-tui` this proves nothing (§7.3). If `BOOT_STATUS` is unset you did not capture it; you cannot recover it, so re-run §7.3 (it is idempotent — migrations resume, seed and adopt are idempotent) rather than assume. |
-| 2 | All four migrations recorded | `psql "$DATABASE_URL" -c "SELECT name FROM schema_migrations WHERE name LIKE '0029%' OR name LIKE '003%' ORDER BY 1;"` | four rows: `0029_admin_auth_recovery.sql`, `0029_admin_passkey.sql`, `0030_swarm_member_handle.sql`, `0031_swarm_member_handle_namespace.sql` |
+| 2 | All six migrations recorded | `psql "$DATABASE_URL" -c "SELECT name FROM schema_migrations WHERE name LIKE '0029%' OR name LIKE '003%' ORDER BY 1;"` | six rows: `0029_admin_auth_recovery.sql`, `0029_admin_passkey.sql`, `0030_swarm_member_handle.sql`, `0031_swarm_member_handle_namespace.sql`, `0032_append_only_history.sql`, `0033_swarm_member_uuid_ids.sql` |
 | 3 | Namespace guard ran and was clean | `curl -s "http://127.0.0.1:$(docker compose -p "$RM_PROJECT" port api 8787 \| cut -d: -f2)/health"` | `"handle_namespace":"clean"`. **`"unchecked"` means the guard could not run — this boot proves nothing.** `"overridden"` means you are serving a violation. |
 | 4 | No violation in the data | `psql "$DATABASE_URL" -c "SELECT a.id, a.handle, b.id FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id;"` | 0 rows |
 | 5 | Namespace trigger is `ENABLE ALWAYS` | `psql "$DATABASE_URL" -c "SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger';"` | `A`. `O` means a `DISABLE`/`ENABLE` cycle downgraded it and the replica-role bypass `0031` closes is open again. |
@@ -1631,11 +1633,11 @@ Where those references should land instead is tracked separately (#687).
 
 | AC | Requirement | Verify |
 |---|---|---|
-| **AC1** | **Every member id is a UUID.** Members whose id was a human slug (`athena`, `robotmoney`, `woon`) are re-identified; `46bed5c1…`, `b4cc55fd…`, `f7ee9a6a…` already comply and must be left alone. | `SELECT id FROM swarm_members WHERE id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';` → **0 rows** |
+| **AC1** | **Every member id is a UUID.** Members whose id was a human slug (`athena`, `robotmoney`, `woon`) are re-identified; `46bed5c1…` (Woon), `b4cc55fd…` (nat), `f7ee9a6a…` (Maximus) already comply and must be left alone. Note: the slug `woon` was Noop Analyst's id, not Woon's. | `SELECT id FROM swarm_members WHERE id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';` → **0 rows** |
 | **AC2** | **Every handle is the derived one.** `slugifyMemberName(name)` for every member, with no exceptions: `Athena`→`athena`, `Robot Money`→`robot-money`, `Noop Analyst`→`noop-analyst`, `Woon`→`woon`, `Maximus`→`maximus`, `nat`→`nat`. | `SELECT name, handle FROM swarm_members ORDER BY name;` — every row must equal the derivation, and the six above are what a clean run produced against a production dump |
 | **AC3** | **No member is left at `0030`'s default.** A handle still equal to its own id means the backfill never reached that member — the failure mode that would have left `Maximus`, `nat` and `Woon` at UUID handles, since the other derivation sites only fire on acceptance/registration events they had already passed. | `SELECT id, handle FROM swarm_members WHERE handle = id;` → **0 rows**. Manifest **filenames are not handles** and deliberately do not move (`robotmoney.json` stays), so do not compare handles against that directory |
 | **AC4** | **No member carries a derived-suffix handle.** `woon-2` and anything shaped `<stem>-<n>` is a **failure**: it means derivation ran where an exact handle was required. | `SELECT id, handle FROM swarm_members WHERE handle ~ '-[0-9]+$';` → **0 rows** |
-| **AC5** | **Demo/smoke tooling still works by handle.** A member is resolvable by handle through the API, and the demo/smoke path finds its member id by handle rather than a hardcoded literal — so no tooling depends on a slug id continuing to exist. | `curl -s "$API/api/swarm/members/robot-money"` returns that member (**not** `robotmoney`, which no longer resolves — see above); `bun scripts/demo-frontend-check.ts` passes; a smoke boot seats its roster |
+| **AC5** | **Demo/smoke tooling still works by handle.** A member is resolvable by handle through the API, and the demo/smoke path finds its member id by handle rather than a hardcoded literal — so no tooling depends on a slug id continuing to exist. | `curl -s "$API/api/swarm/members/robot-money"` returns that member (**not** `robotmoney` — the API returns HTTP 200 with a null body for non-existent members, standing behavior; the frontend URL `/swarm/members/robotmoney` may 404 — see above); `bun scripts/demo-frontend-check.ts` passes; a smoke boot seats its roster |
 | **AC6** | **History stayed attached across the re-id.** Take, memo and key counts per member are unchanged, and signatures still verify — the re-id must carry every FK, **including `swarm_member_keys`**, or verification silently goes false. | per-member `count(*)` on `swarm_recommendations`/`swarm_memos` matches the pre-upgrade capture, and `/api/swarm/sessions/<id>` reports takes as `verified` |
 
 > ⚠ **Check 9 must not use `GROUP BY`, and the reason is a false pass.** An
@@ -1669,12 +1671,15 @@ Two changes land together, and **neither works alone** (branch
 
 | | delivers |
 |---|---|
-| Migration `0032_swarm_member_uuid_ids.sql` | AC1 — re-identifies every non-UUID member. `UPDATE` only: the seven child FKs are made `DEFERRABLE` for the transaction and restored, never dropped/re-added, so their definitions (including three `ON DELETE CASCADE`s) cannot come back subtly different |
+| Migration `0033_swarm_member_uuid_ids.sql` | AC1 — re-identifies every non-UUID member. `UPDATE` only: the seven child FKs are made `DEFERRABLE` for the transaction and restored, never dropped/re-added, so their definitions (including three `ON DELETE CASCADE`s) cannot come back subtly different |
 | `backfillMemberHandles()`, called unconditionally from `seed()` | AC2/AC3 — derives a handle for every member still at `0030`'s default |
 
 **Order is not optional.** Migrations run before `seed()`, which is the only
-correct sequence: run the backfill first and `woon` is still an id, so the
-member named Woon is permanently handed `woon-2`.
+correct sequence: if `seed()` ran first while slug ids (including `woon`) are
+still present, 0031's namespace trigger would refuse `woon` as a handle for the
+member named Woon — it matches another member's id — and Woon would be
+permanently handed `woon-2`. Running 0033 first removes the slug ids, so every
+handle is derived cleanly from the member name.
 
 Two things the implementation had to discover, recorded because a reimplementation
 will hit both: `SET CONSTRAINTS ALL IMMEDIATE` is required before restoring the
@@ -1698,10 +1703,28 @@ all still attached, zero orphans across all seven child tables,
 `linked_member_id` remapped, **40/40 sampled signatures still verified**, no FK
 left `DEFERRABLE`, all three `ON DELETE CASCADE`s preserved.
 
-⚠ **Not yet merged.** Both branches pass in isolation but the test suite shares
-one ephemeral database and interferes through mutable state (#688), which blocks
-this and #684. Re-run these ACs on the twin from the actual rc before cutover
-rather than trusting this block.
+> **Name↔id note (verified 2026-08-19):** The slug id `woon` belonged to
+> **Noop Analyst** (v0 archive import), not to the member named Woon — the real
+> third party self-registered and already held UUID `46bed5c1…`. Migration 0033
+> re-identified exactly the three slug-id members (Athena, Noop Analyst, Robot
+> Money) and left the three UUID members (Woon, Maximus, nat) untouched. The
+> AC1 list below names handles, not ids.
+
+**Re-verified against the actual rc.6 twin on 2026-08-19:**
+
+- 0033 remapped three slug ids (`athena`→`172155e5`, `woon`→`0ef3c38e`,
+  `robotmoney`→`c5e402af`), left three UUID ids untouched
+  (`f7ee9a6a`/`46bed5c1`/`b4cc55fd`).
+- AC2: all six handles correct. AC3: no `-N` suffix, idempotent (0 changes).
+- AC6: **every member's takes recomputed at read time** via the stored public
+  key — athena 100/100, noop-analyst 100/100, robot-money 100/100, woon 34/34,
+  maximus 37/37 — zero orphans, zero `DEFERRABLE` FKs, all three
+  `ON DELETE CASCADE` preserved.
+- `linked_member_id` remapped, `swarm_member_keys` orphan count 0.
+
+⚠ **Merged to main.** The two branches (#685, #684) landed via commit
+`9e29770`/`d0b0d1f`. The staging rehearsal against the actual rc.6 confirms
+the ACs above hold on production data.
 
 ### Diagnosing check 11
 
