@@ -3207,9 +3207,15 @@ Acceptance:
 - Activating an applicant uses the existing pending public key, marks the
   application approved, and returns a new bearer token exactly once. The UI
   presents a copy-and-dismiss panel and cannot retrieve the token later.
-- Manual add requires member id, name, public key, and optional profile/contact
-  fields. It creates an active member, one active key, and returns a bearer token
-  exactly once.
+- Manual add requires name, public key, and optional profile/contact fields. It
+  creates an active member, one active key, and returns a bearer token exactly
+  once. It does NOT take a member id (issue #690): the id is generated with
+  `crypto.randomUUID()` — the same mint the public apply path uses — and returned
+  as `member.id`, so the admin surface is no longer a way to create a member
+  whose id is a human slug. A body still carrying `memberId` is refused with a
+  400 naming the field rather than seated under a different id. Duplicate
+  detection is on the public key, not the id: re-submitting a credential that
+  already belongs to a member is a 409.
 - Deactivate changes the member to `inactive` and deactivates all member keys in
   the same transaction. Existing recommendations and roster snapshots remain.
 - Reactivate requires a new public key. It inserts a new active key, keeps old
@@ -3567,7 +3573,7 @@ state is 409, accepted queue work is 202, and successful synchronous mutation is
 | `POST /api/admin/swarm/subjects/:id/deactivate` | deactivate topic |
 | `GET /api/admin/swarm/members` | all statuses/applications |
 | `GET /api/admin/swarm/members/:id` | private admin member projection |
-| `POST /api/admin/swarm/members` | manual active member add |
+| `POST /api/admin/swarm/members` | manual active member add — `{ name, publicKey, lens?, contact? }`; the id is GENERATED (`crypto.randomUUID()`) and returned as `member.id`, and a body carrying `memberId` is refused with 400 (issue #690) |
 | `PATCH /api/admin/swarm/members/:id` | profile fields only |
 | `POST /api/admin/swarm/members/:id/activate` | activate applicant |
 | `POST /api/admin/swarm/members/:id/deactivate` | deactivate and revoke keys |

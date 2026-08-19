@@ -91,9 +91,11 @@ export async function handleSwarmAdmin(
   if (segs[0] === "members") {
     if (segs.length === 1 && m === "GET") return { status: 200, body: { members: await admin.listMembersAdmin() } };
     if (segs.length === 1 && m === "POST") {
+      // The parser owns the message: a body that names `memberId` is refused
+      // with its own sentence (issue #690), never folded into "required".
       const parsed = parseManualMember(await readJsonObject(req));
-      if (!parsed) return { status: 400, body: { error: "memberId, name, and publicKey required" } };
-      return fromResult(await admin.addMemberAdmin(parsed));
+      if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
+      return fromResult(await admin.addMemberAdmin(parsed.data));
     }
     if (segs.length === 3) {
       const id = decodeURIComponent(segs[1]!);

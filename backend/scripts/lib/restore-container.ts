@@ -11,6 +11,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+// The SHARED ephemeral-Postgres pin. This file used to own the string; it does
+// not any more, because the test harness needs the same one and the two drifted
+// (issue #691). Everything about which major and why -alpine is not used lives
+// in that module.
+import { POSTGRES_IMAGE } from "./postgres-image.ts";
 
 export interface BackupFiles {
   stamp: string;
@@ -58,7 +63,7 @@ export interface RestoredContainer {
   database: string;
 }
 
-const IMAGE = "postgres:18"; // matches production's 18.x major version (server-version check)
+const IMAGE = POSTGRES_IMAGE; // matches production's 18.x major version (server-version check)
 const LOCAL_USER = "restore_check";
 const LOCAL_DB = "rm_restore_check";
 

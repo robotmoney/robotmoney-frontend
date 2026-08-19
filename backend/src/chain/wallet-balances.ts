@@ -15,7 +15,7 @@ import {
   resolvePriceSource,
   resolvePropWallets,
   resolveTrackedAssets,
-  resolveSp500,
+  SP500_SIZE,
   type BaseRpcSource,
   type PriceSource,
   type TrackedAsset,
@@ -87,10 +87,35 @@ const PRICE_VENDOR: Record<string, string> = { usdc: "pinned", gecko: "geckoterm
 async function readChainAmounts(assets: TrackedAsset[], wallets: string[]): Promise<Map<string, ChainAmount>> {
   const out = new Map<string, ChainAmount>();
 
-  // config (SP500): off-chain size from config, no derivatives-venue positions
-  // API — never a chain read, so never affected by an RPC failure.
+  // config (SP500): off-chain size from the committed SP500_SIZE constant, no
+  // derivatives-venue positions API — never a chain read, so never affected by an
+  // RPC failure, and `ok: true` unconditionally.
+  //
+  // THE KNOWN GAP (issue #641), recorded here rather than fixed here. `ok: true`
+  // means "this number was available", NOT "this number is current": a size that
+  // has gone stale renders as a plausible dollar figure and never degrades to
+  // 'stale' the way a failed chain read does. That is a real defect and it is NOT
+  // closed by #641 — surfacing it is deliberately left as follow-up, because the
+  // honest fix is not a local edit:
+  //   - `Provenance` is not a DTO-local label. It is PERSISTED (the enumeration
+  //     documented on wallet_balance_samples.provenance, migration 0014), rolled
+  //     up per day by loadHistory()/historyProvenance, and rendered by the
+  //     frontend legend, so a 'config' member is a storage + contract + UI change,
+  //     and it would relabel a leg whose PRICE really was read live.
+  //   - An `asOf` for the size would have to be INVENTED. Nothing records when the
+  //     owner last stated it; the only available timestamps are process/deploy
+  //     start, which describe the container rather than the number — precisely the
+  //     plausible-but-fabricated signal this codebase refuses to emit
+  //     (docs/technical/data-self-healing.md §10). A real fix needs a stated-at
+  //     date to travel WITH the size, which is a design question, not a patch.
+  // What #641 does change: the size is now a committed constant instead of an env
+  // override no container could receive, so drift is at least VISIBLE — it moves
+  // in a reviewed diff with a date attached, not silently inside one droplet's
+  // environment. The disclosure question stays with the parent #647 / PD7, where
+  // the "what a detector consumes must carry whether the value was computable"
+  // argument already lives.
   for (const a of assets) {
-    if (a.valuationKind === "config") out.set(a.symbol, { ok: true, amount: resolveSp500().size });
+    if (a.valuationKind === "config") out.set(a.symbol, { ok: true, amount: SP500_SIZE });
   }
   const reads: KeyedAssetRead[] = assets
     .filter((a) => a.valuationKind !== "config")

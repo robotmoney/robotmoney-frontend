@@ -288,6 +288,15 @@ export async function activeMemberCount(targetUrl: string = backendUrl()): Promi
  */
 export interface RosterMember {
   id: string;
+  /**
+   * The member's public handle, as the admin route reports it (issue #685).
+   * Carried alongside `id` — never instead of it — because seating a member
+   * still keys on the id every child row holds, while an allowlist can only be
+   * written against the handle: ids are generated per deployment now, so no
+   * caller can name one in advance. Falls back to `id`, which is exactly what
+   * migration 0030 backfilled for a row that predates handles.
+   */
+  handle: string;
   name: string;
   lens: string | null;
   status: string;
@@ -298,11 +307,19 @@ export async function rosterMembers(targetUrl: string = backendUrl(), automation
   try {
     const r = await fetch(`${targetUrl}${ROUTES.swarm.admin.members}`, { headers: getAutomationHeaders(automationToken) });
     if (!r.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${r.status}`);
-    const body = await responseJson(r) as { members?: { id?: string; name?: string; lens?: string | null; status?: string }[] };
+    const body = await responseJson(r) as {
+      members?: { id?: string; handle?: string; name?: string; lens?: string | null; status?: string }[];
+    };
     if (!Array.isArray(body.members)) throw new Error("admin members response has no members array");
     return body.members
       .filter((m) => m?.id && m?.name)
-      .map((m) => ({ id: String(m.id), name: String(m.name), lens: m.lens ?? null, status: String(m.status ?? "") }));
+      .map((m) => ({
+        id: String(m.id),
+        handle: String(m.handle ?? m.id),
+        name: String(m.name),
+        lens: m.lens ?? null,
+        status: String(m.status ?? ""),
+      }));
   } catch (err) {
     console.error(`[e2e] rosterMembers: ${err instanceof Error ? err.message : err}`);
     return null;

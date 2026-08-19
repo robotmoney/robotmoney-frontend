@@ -54,9 +54,35 @@
 // be a maintenance cost with no reader.
 import { sql, jsonValue } from "../db/client.ts";
 import { toMember } from "./projections.ts";
+import { deriveMemberHandle, handleIsUnset } from "./handle.ts";
 
 export interface RosterSeedMember {
-  id: string;
+  /**
+   * The member's PUBLIC handle, and the key this seed upserts on (issue #685).
+   *
+   * NOT an id. `id` is opaque and generated (`crypto.randomUUID()`), exactly as
+   * self-serve registration has always done (swarm/domain.ts). Hardcoding a
+   * human-readable id here is what kept the slug-id class alive, and — because
+   * the upsert's conflict target was `id` — it silently REVERTED any migration
+   * that re-identified a seeded member: the next boot matched nothing and
+   * inserted a rival row holding no history.
+   *
+   * Handles are unique (`swarm_members_handle_key`, migration 0030), which is
+   * what makes them a usable conflict target.
+   */
+  handle: string;
+  /**
+   * The archive manifest this row is copied from:
+   * `frontend/public/data/swarm/manifests/members/<manifest>.json`.
+   *
+   * Deliberately SEPARATE from `handle`. The manifest name is a published
+   * artifact key that must not move (renaming the file changes the static
+   * fallback path), while the handle is derived from the display name and can
+   * legitimately differ — "Robot Money" slugifies to `robot-money` while its
+   * manifest has always been `robotmoney.json`. Collapsing the two would force
+   * a file rename to fix a handle, or a wrong handle to keep a filename.
+   */
+  manifest: string;
   name: string;
   tagline: string;
   lens: string;
@@ -67,12 +93,13 @@ export interface RosterSeedMember {
   avatar: { path: string; source_url: string | null; credit: string };
 }
 
-// Copied from frontend/public/data/swarm/manifests/members/<id>.json.
+// Copied from frontend/public/data/swarm/manifests/members/<manifest>.json.
 // Keep field values byte-identical to the manifest; the drift test compares
 // them literally.
 export const LIVE_ROSTER: RosterSeedMember[] = [
   {
-    id: "athena",
+    handle: "athena",
+    manifest: "athena",
     name: "Athena",
     tagline: "Risk officer. Reads the composite. Looks for what breaks.",
     lens: "quant risk",
@@ -84,7 +111,10 @@ export const LIVE_ROSTER: RosterSeedMember[] = [
     avatar: { path: "/avatars/swarm/athena.jpg", source_url: null, credit: "Athena brand mark" },
   },
   {
-    id: "robotmoney",
+    // slugifyMemberName("Robot Money") === "robot-money"; the manifest file is
+    // and stays robotmoney.json. See RosterSeedMember.manifest.
+    handle: "robot-money",
+    manifest: "robotmoney",
     name: "Robot Money",
     tagline: "Reads chain. Cites mechanism. Closes positions.",
     lens: "institutional treasury",
@@ -97,7 +127,12 @@ export const LIVE_ROSTER: RosterSeedMember[] = [
   },
 ];
 
-export const LIVE_ROSTER_IDS: readonly string[] = LIVE_ROSTER.map((m) => m.id);
+/**
+ * The handles the live roster claims. Replaces the old LIVE_ROSTER_IDS (issue
+ * #685): ids are generated per deployment now, so a compile-time list of them
+ * cannot exist — the stable, human-meaningful key is the handle.
+ */
+export const LIVE_ROSTER_HANDLES: readonly string[] = LIVE_ROSTER.map((m) => m.handle);
 
 // Upsert the house members and their profile copy. Returns how many rows the
 // roster states (so the caller can log what it seated).
@@ -113,11 +148,31 @@ export const LIVE_ROSTER_IDS: readonly string[] = LIVE_ROSTER.map((m) => m.id);
 // Idempotent: re-running changes nothing once the rows match.
 export async function seedLiveRoster(): Promise<number> {
   for (const m of LIVE_ROSTER) {
+    // Conflict on HANDLE, not id (issue #685). An EXISTING row keeps the id it
+    // already has — `id` is deliberately absent from the UPDATE SET list —
+    // which is what makes a re-id migration survive the next boot instead of
+    // being reverted-and-duplicated.
+    //
+    // THE ID IS RESOLVED FIRST, and this is not an optimisation. Migration
+    // 0031's namespace trigger is BEFORE INSERT OR UPDATE, and Postgres fires
+    // the INSERT trigger on the proposed row BEFORE the ON CONFLICT arbiter
+    // ever runs. Production's shape after 0030 is `handle = id` ('athena' /
+    // 'athena'), so an unconditional `VALUES (crypto.randomUUID(), 'athena')`
+    // proposes a row whose handle equals ANOTHER member's id — the very
+    // condition 0031 exists to refuse — and the seed dies with SQLSTATE 23505
+    // on every boot of exactly the deployment this issue is meant to keep
+    // working. Reusing the id already on file makes NEW.id equal that member's
+    // id, which the trigger excludes as "the row itself".
+    //
+    // The generated UUID is therefore reached only on the INSERT branch — a
+    // member this deployment has not seated before — and is never a literal.
+    const found = (await sql<{ id: string }[]>`SELECT id FROM swarm_members WHERE handle = ${m.handle}`)[0];
+    const id = found?.id ?? crypto.randomUUID();
     await sql`
-      INSERT INTO swarm_members (id, status, name, tagline, lens, mandate, biases, mode, operator, avatar)
-      VALUES (${m.id}, 'active', ${m.name}, ${m.tagline}, ${m.lens}, ${m.mandate},
+      INSERT INTO swarm_members (id, handle, status, name, tagline, lens, mandate, biases, mode, operator, avatar)
+      VALUES (${id}, ${m.handle}, 'active', ${m.name}, ${m.tagline}, ${m.lens}, ${m.mandate},
               ${sql.json(jsonValue(m.biases))}, ${m.mode}, ${m.operator}, ${sql.json(jsonValue(m.avatar))})
-      ON CONFLICT (id) DO UPDATE SET
+      ON CONFLICT (handle) DO UPDATE SET
         status = 'active',
         name = EXCLUDED.name,
         tagline = EXCLUDED.tagline,
@@ -162,7 +217,7 @@ export async function pruneToLiveRoster(): Promise<string[]> {
   const retired = await sql<{ id: string }[]>`
     UPDATE swarm_members
        SET status = 'inactive', version = version + 1, updated_at = now()
-     WHERE status = 'active' AND id <> ALL(${[...LIVE_ROSTER_IDS]})
+     WHERE status = 'active' AND handle <> ALL(${[...LIVE_ROSTER_HANDLES]})
      RETURNING id`;
   return retired.map((r) => r.id);
 }
@@ -172,6 +227,56 @@ export async function pruneToLiveRoster(): Promise<string[]> {
 // serve rather than what was written.
 export async function readLiveRoster() {
   const rows = await sql`
-    SELECT * FROM swarm_members WHERE id = ANY(${[...LIVE_ROSTER_IDS]}) ORDER BY id`;
+    SELECT * FROM swarm_members WHERE handle = ANY(${[...LIVE_ROSTER_HANDLES]}) ORDER BY handle`;
   return rows.map(toMember);
+}
+
+// ── Handle backfill ────────────────────────────────────────────────────────
+//
+// Give every member whose handle is still UNSET the handle its display name
+// derives to. This is the missing reader of a signal migration 0030 already
+// sets: because `swarm_members.handle` is NOT NULL there is no null to mean
+// "nobody chose one", so 0030 writes `handle = id` and `handleIsUnset()` treats
+// that equality as the sentinel.
+//
+// WHY IT IS NEEDED AT ALL. Every other place a handle gets derived fires on an
+// EVENT — acceptApplication, registerMember, addMemberAdmin. A member admitted
+// before this release already passed those events, so none of them will ever
+// fire for it again: Maximus, nat and the member named Woon would keep a
+// UUID-shaped handle indefinitely and /swarm/members/maximus would never
+// resolve. The sentinel was a flag nothing read.
+//
+// ONE ALGORITHM, NO EXCEPTIONS. It calls the same deriveMemberHandle() the
+// event paths call, which is why this is TypeScript in seed() and not SQL in a
+// migration: slugifyMemberName() does NFKD normalisation and combining-mark
+// stripping that a hand-rolled SQL version would get subtly wrong, and a second
+// implementation is a second thing to drift.
+//
+// NEVER overwrites a deliberate choice (#562 decision 1): a handle somebody set
+// on purpose is a published URL, and moving it unasked is the failure that rule
+// exists to prevent. Only the untouched default is filled in.
+//
+// ORDERING. Run this AFTER any migration that re-identifies members. Derivation
+// probes both namespaces, so while a human slug is still some member's id the
+// member whose name derives to it is pushed to `<stem>-2` — which is exactly
+// the defect this release exists to remove. Migrations run before seed(), so the
+// default order is already correct.
+//
+// Idempotent: returns how many handles it wrote, and 0 on every later run.
+export async function backfillMemberHandles(): Promise<number> {
+  const rows = await sql<{ id: string; handle: string | null; name: string }[]>`
+    SELECT id, handle, name FROM swarm_members ORDER BY applied_at NULLS FIRST, id`;
+
+  let written = 0;
+  for (const row of rows) {
+    if (!handleIsUnset(row)) continue;
+    // Derived one at a time, inside its own statement, so each derivation sees
+    // the handles the previous ones just claimed — two members sharing a name
+    // must not both be handed the same stem.
+    const handle = await deriveMemberHandle(sql, { memberId: row.id, name: row.name });
+    if (handle === row.handle) continue;
+    await sql`UPDATE swarm_members SET handle = ${handle} WHERE id = ${row.id}`;
+    written += 1;
+  }
+  return written;
 }

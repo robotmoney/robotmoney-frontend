@@ -14,7 +14,7 @@
 // Open Question 9 (GeckoTerminal OHLCV may not reach back to Mar 18 for illiquid
 // ROBOTMONEY/BNKR): the seeded rows ARE the carried-forward history.
 import type { PriceSource, TrackedAsset } from "../config.ts";
-import { resolveSp500 } from "../config.ts";
+import { SP500_TICKER } from "../config.ts";
 import { UA } from "../analytics/extract/http.ts";
 import { withFetchCache } from "../analytics/extract/fetch-cache.ts";
 import { fetchYahoo } from "../analytics/extract/yahoo.ts";
@@ -121,6 +121,7 @@ export function _resetTokenPriceCacheForTests(): void {
   geckoPending.clear();
   geckoPriceCache.reset();
   geckoOpenBatch = null;
+  geckoDailyCloseCache.clear();
 }
 
 // Deterministic hermetic fixtures (PRICE_SOURCE=stub). Recognizable, stable
@@ -146,35 +147,113 @@ const STUB_PRICES: Record<string, number> = {
 // The final object guard also shields against a stale on-disk envelope from
 // the pre-batch code, which cached a bare number under the same single-address
 // URL key — that degrades to a per-leg miss and self-heals at TTL expiry.
+// One retry/deadline budget shared by every GeckoTerminal endpoint this file
+// reads (the batched token_price above and the daily OHLCV below), so a second
+// endpoint cannot quietly acquire a laxer rate-limit policy than the first.
+// `label` only shapes the error text; the hard-status message is byte-identical
+// to the pre-extraction one so the resilience suite's status assertions hold.
+async function geckoFetchJson(url: string, timeoutMs: number, label: string): Promise<unknown> {
+  const deadline = Date.now() + timeoutMs;
+  const retries = geckoMaxRetries();
+  for (let attempt = 0; ; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error(`geckoterminal: ${label} timeout`);
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(remaining),
+      headers: { "user-agent": UA, accept: "application/json" },
+    });
+    if (res.ok) return await res.json();
+    if (!GECKO_TRANSIENT_STATUSES.has(res.status) || attempt >= retries) {
+      throw new Error(`${res.status} ${res.statusText} for ${url}`);
+    }
+    const wait = retryAfterMs(res.headers.get("retry-after"), attempt + 1);
+    if (wait >= deadline - Date.now()) {
+      throw new Error(`geckoterminal: ${label} retry budget exhausted after HTTP ${res.status}`);
+    }
+    await sleep(wait);
+  }
+}
+
 async function fetchGeckoTokenPricesUsdUncached(addresses: string[], timeoutMs: number): Promise<Record<string, string>> {
   const url = `${GECKOTERMINAL_BASE}/simple/networks/base/token_price/${addresses.join(",")}`;
-  const deadline = Date.now() + timeoutMs;
   const body = await (withFetchCache("json", url, async () => {
-    const retries = geckoMaxRetries();
-    for (let attempt = 0; ; attempt++) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new Error(`geckoterminal: price timeout for ${addresses.join(",")}`);
-      const res = await fetch(url, {
-        signal: AbortSignal.timeout(remaining),
-        headers: { "user-agent": UA, accept: "application/json" },
-      });
-      if (res.ok) {
-        const j = (await res.json()) as {
-          data?: { attributes?: { token_prices?: Record<string, string> } };
-        };
-        return j?.data?.attributes?.token_prices ?? {};
-      }
-      if (!GECKO_TRANSIENT_STATUSES.has(res.status) || attempt >= retries) {
-        throw new Error(`${res.status} ${res.statusText} for ${url}`);
-      }
-      const wait = retryAfterMs(res.headers.get("retry-after"), attempt + 1);
-      if (wait >= deadline - Date.now()) {
-        throw new Error(`geckoterminal: price retry budget exhausted after HTTP ${res.status} for ${addresses.join(",")}`);
-      }
-      await sleep(wait);
-    }
+    const j = (await geckoFetchJson(url, timeoutMs, `price for ${addresses.join(",")}`)) as {
+      data?: { attributes?: { token_prices?: Record<string, string> } };
+    };
+    return j?.data?.attributes?.token_prices ?? {};
   }) as Promise<unknown>);
   return typeof body === "object" && body !== null ? (body as Record<string, string>) : {};
+}
+
+// --- Historical daily price (issue #640) -------------------------------------
+// GeckoTerminal daily OHLCV for a pool — the SAME vendor and host as the spot
+// read above, a different endpoint:
+//   GET /networks/base/pools/{pool}/ohlcv/day?before_timestamp={ts}&limit=1&currency=usd
+//   → { data: { attributes: { ohlcv_list: [[bucketTs, open, high, low, close, volume]] } } }
+//
+// Returns the CLOSE of the UTC day containing `atUnixSeconds`. Why the close and
+// not the open/mid: it is the day's settled price, the same convention the rest
+// of this repo's daily series use, and a daily candle cannot be finer than the
+// day anyway — the buyback swaps this prices sit inside a single candle's range
+// (the 2026-03-23 bucket 1774224000 spans 2026.51–2188.00 and the seeded rows
+// imply ~2179.3). It is a bounded, disclosed approximation of a historical fact,
+// which is categorically different from stamping TODAY's spot on a months-old
+// swap — see indexBuybacks.
+//
+// `before_timestamp` is normalized to the END of that UTC day so every swap in a
+// day produces ONE url: the url is both the withFetchCache key and the in-memory
+// memo key, so a catch-up scan that finds twenty swaps across three days costs
+// three upstream candles, not twenty. Throws when no candle covers the day, so
+// the caller records an honest NULL rather than substituting another day's price.
+const DAY_SECONDS = 86_400;
+const geckoDailyCloseCache = new Map<string, Promise<number>>();
+
+export async function fetchGeckoDailyCloseUsd(
+  pool: string,
+  atUnixSeconds: number,
+  timeoutMs = 8000,
+): Promise<number> {
+  const dayStart = Math.floor(atUnixSeconds / DAY_SECONDS) * DAY_SECONDS;
+  const url =
+    `${GECKOTERMINAL_BASE}/networks/base/pools/${pool.toLowerCase()}/ohlcv/day` +
+    `?before_timestamp=${dayStart + DAY_SECONDS - 1}&limit=1&currency=usd`;
+  const memo = geckoDailyCloseCache.get(url);
+  if (memo) return memo;
+
+  const request = (async () => {
+    // Serialized behind the same single-flight slot as the spot batch: the
+    // keyless quota is per-IP across endpoints, and a catch-up scan asks for
+    // many candles.
+    await acquireGeckoSlot();
+    try {
+      const body = await (withFetchCache("json", url, async () => {
+        const j = (await geckoFetchJson(url, timeoutMs, `ohlcv for ${pool}@${dayStart}`)) as {
+          data?: { attributes?: { ohlcv_list?: unknown[][] } };
+        };
+        return j?.data?.attributes?.ohlcv_list ?? [];
+      }) as Promise<unknown>);
+      const candle = Array.isArray(body) ? (body[0] as unknown[] | undefined) : undefined;
+      const bucket = Number(candle?.[0]);
+      const close = Number(candle?.[4]);
+      // The bucket must be the requested day: `before_timestamp` returns the
+      // most recent candle at or before it, so a pool with a gap would silently
+      // hand back an OLDER day's price for this swap.
+      if (bucket !== dayStart || !Number.isFinite(close) || close <= 0) {
+        throw new Error(`geckoterminal: no daily candle for ${pool} at ${new Date(dayStart * 1000).toISOString().slice(0, 10)}`);
+      }
+      return close;
+    } finally {
+      releaseGeckoSlot();
+    }
+  })();
+
+  // A settled day's candle never changes, so it is memoized for the life of the
+  // process; TODAY's candle is still forming and is deliberately not memoized.
+  if (dayStart < Math.floor(Date.now() / 1000 / DAY_SECONDS) * DAY_SECONDS) {
+    geckoDailyCloseCache.set(url, request);
+    request.catch(() => geckoDailyCloseCache.delete(url)); // never memoize a failure
+  }
+  return request;
 }
 
 // Join (or open) the batch that is currently accepting addresses. The opener
@@ -267,7 +346,7 @@ export async function fetchAssetPriceUsd(
   }
 
   if (asset.priceKind === "yahoo") {
-    return fetchSp500PriceUsd(resolveSp500().ticker);
+    return fetchSp500PriceUsd(SP500_TICKER);
   }
   // gecko: native ETH is priced off WETH's address (canonical wrapped price).
   if (!asset.address) throw new Error(`token-prices: ${asset.symbol} has no address for a gecko price read`);

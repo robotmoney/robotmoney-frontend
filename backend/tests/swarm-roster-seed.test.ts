@@ -34,7 +34,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LIVE_ROSTER, LIVE_ROSTER_IDS, pruneToLiveRoster, readLiveRoster, seedLiveRoster } from "../src/swarm/roster-seed.ts";
+import { LIVE_ROSTER, LIVE_ROSTER_HANDLES, pruneToLiveRoster, readLiveRoster, seedLiveRoster } from "../src/swarm/roster-seed.ts";
 import { getMembers } from "../src/swarm/domain.ts";
 import { seed } from "../src/db/seed.ts";
 import { sql } from "../src/db/client.ts";
@@ -47,8 +47,8 @@ useCleanDatabasePerTest(import.meta.file);
 
 const MANIFEST_DIR = join(import.meta.dir, "..", "..", "frontend", "public", "data", "swarm", "manifests", "members");
 
-function manifest(id: string): Record<string, any> {
-  return JSON.parse(readFileSync(join(MANIFEST_DIR, `${id}.json`), "utf8"));
+function manifest(name: string): Record<string, any> {
+  return JSON.parse(readFileSync(join(MANIFEST_DIR, `${name}.json`), "utf8"));
 }
 
 // Throwaway off-roster members the prune tests insert. Deliberately prefixed
@@ -59,6 +59,23 @@ const FIXTURE_IDS = ["prune-fixture-draco", "prune-fixture-helios", "prune-fixtu
 async function statusOf(id: string): Promise<string | null> {
   const rows = await sql<{ status: string }[]>`SELECT status FROM swarm_members WHERE id = ${id}`;
   return rows.length ? rows[0]!.status : null;
+}
+
+// Roster members are addressed by handle now (issue #685): their ids are
+// generated per deployment, so no test can name one.
+async function statusOfHandle(handle: string): Promise<string | null> {
+  const rows = await sql<{ status: string }[]>`SELECT status FROM swarm_members WHERE handle = ${handle}`;
+  return rows.length ? rows[0]!.status : null;
+}
+
+// The id this deployment generated for a roster handle. Every assertion about a
+// roster member's id has to go through here — asserting against the handle
+// string itself would be vacuous now that the two namespaces are disjoint
+// (migration 0031), and would still pass if the seed reverted to slug ids.
+async function idOfHandle(handle: string): Promise<string> {
+  const rows = await sql<{ id: string }[]>`SELECT id FROM swarm_members WHERE handle = ${handle}`;
+  if (rows.length !== 1) throw new Error(`expected exactly one swarm_members row with handle=${handle}, found ${rows.length}`);
+  return rows[0]!.id;
 }
 
 const origFlag = process.env.SWARM_SEED_ROSTER;
@@ -74,8 +91,8 @@ afterEach(async () => {
 test("LIVE_ROSTER matches the committed manifests field for field", () => {
   expect(LIVE_ROSTER.length).toBeGreaterThan(0);
   for (const seeded of LIVE_ROSTER) {
-    const source = manifest(seeded.id);
-    expect(source.id).toBe(seeded.id);
+    const source = manifest(seeded.manifest);
+    expect(source.id, "the manifest's id field must match its filename").toBe(seeded.manifest);
     expect(source.status).toBe("active"); // a retired manifest must not stay on the live roster
     expect(source.name).toBe(seeded.name);
     expect(source.tagline).toBe(seeded.tagline);
@@ -95,7 +112,7 @@ test("LIVE_ROSTER matches the committed manifests field for field", () => {
 // both fail here.
 test("woon stays a committed manifest and stays off the seeded roster", () => {
   expect(manifest("woon").name).toBe("Woon");
-  expect(LIVE_ROSTER_IDS).not.toContain("woon");
+  expect(LIVE_ROSTER_HANDLES).not.toContain("woon");
 });
 
 test("seeding seats the roster with the published profile copy", async () => {
@@ -104,10 +121,12 @@ test("seeding seats the roster with the published profile copy", async () => {
   // Read back through the REAL members query (status='active' filter and the
   // toMember projection), scoped to the roster so a sibling suite's rows
   // cannot make this assertion pass or fail for the wrong reason.
-  const served = (await getMembers()).filter((m) => LIVE_ROSTER_IDS.includes(m.id));
-  expect(served.map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
+  // `handle` is optional on the wire (contract/src/swarm.d.ts) because the
+  // shipped static archive JSON predates the field and carries it in `id`.
+  const served = (await getMembers()).filter((m) => LIVE_ROSTER_HANDLES.includes(m.handle ?? m.id));
+  expect(served.map((m) => m.handle).sort()).toEqual([...LIVE_ROSTER_HANDLES].sort());
 
-  const athena = served.find((m) => m.id === "athena")!;
+  const athena = served.find((m) => m.handle === "athena")!;
   expect(athena.name).toBe("Athena");
   expect(athena.lens).toBe("quant risk");
   expect(athena.tagline).toBe("Risk officer. Reads the composite. Looks for what breaks.");
@@ -116,7 +135,7 @@ test("seeding seats the roster with the published profile copy", async () => {
   expect(athena.biases).toEqual(["pro-diversification", "pro-drawdown-survival", "anti-reflexivity", "skeptical-of-illiquidity"]);
   expect(athena.avatar).toEqual({ path: "/avatars/swarm/athena.jpg", source_url: null, credit: "Athena brand mark" });
 
-  const rm = served.find((m) => m.id === "robotmoney")!;
+  const rm = served.find((m) => m.handle === "robot-money")!;
   expect(rm.name).toBe("Robot Money");
   expect(rm.lens).toBe("institutional treasury");
   expect(rm.tagline).toBe("Reads chain. Cites mechanism. Closes positions.");
@@ -133,9 +152,9 @@ test("re-seeding is idempotent and repairs drifted copy", async () => {
   // A deployment whose copy was edited by hand (or left null by an older
   // seed) is corrected by the next run: the manifest is the source of truth
   // for the profile columns, which is what makes a re-run the fix.
-  await sql`UPDATE swarm_members SET tagline = 'stale', status = 'inactive' WHERE id = 'athena'`;
+  await sql`UPDATE swarm_members SET tagline = 'stale', status = 'inactive' WHERE handle = 'athena'`;
   await seedLiveRoster();
-  const athena = (await readLiveRoster()).find((m) => m.id === "athena")!;
+  const athena = (await readLiveRoster()).find((m) => m.handle === "athena")!;
   expect(athena.tagline).toBe("Risk officer. Reads the composite. Looks for what breaks.");
   expect(athena.status).toBe("active");
 });
@@ -145,12 +164,14 @@ test("seeding leaves credentials and lifecycle timestamps alone", async () => {
 
   // A seeded member holds no token: it cannot submit a take until an operator
   // issues one through the normal admin path.
-  const keys = await sql`SELECT member_id FROM swarm_member_keys WHERE member_id = ANY(${[...LIVE_ROSTER_IDS]})`;
+  const keys = await sql`
+    SELECT member_id FROM swarm_member_keys
+    WHERE member_id IN (SELECT id FROM swarm_members WHERE handle = ANY(${[...LIVE_ROSTER_HANDLES]}))`;
   expect(keys.length).toBe(0);
 
   const rows = await sql<{ id: string; applied_at: Date | null; activated_at: Date | null; key_hash: string | null; public_key: string | null }[]>`
     SELECT id, applied_at, activated_at, key_hash, public_key
-    FROM swarm_members WHERE id = ANY(${[...LIVE_ROSTER_IDS]}) ORDER BY id`;
+    FROM swarm_members WHERE handle = ANY(${[...LIVE_ROSTER_HANDLES]}) ORDER BY handle`;
   expect(rows.length).toBe(LIVE_ROSTER.length);
   for (const r of rows) {
     expect(r.applied_at).toBeNull();
@@ -175,7 +196,7 @@ test("SWARM_SEED_ROSTER gates the seeding: inert unset, seats when =1", async ()
 
   process.env.SWARM_SEED_ROSTER = "1";
   await seed();
-  expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
+  expect((await readLiveRoster()).map((m) => m.handle).sort()).toEqual([...LIVE_ROSTER_HANDLES].sort());
 });
 
 // ── The Contract half (issue #530): pruneToLiveRoster ────────────────────────
@@ -192,7 +213,8 @@ test("prune retires off-roster members to inactive and never deletes them", asyn
     "prune-fixture-helios",
   ]);
   // The roster is what the prune converges TO, so it is never in the sweep.
-  for (const id of LIVE_ROSTER_IDS) expect(retired).not.toContain(id);
+  // Compared by RESOLVED id, because that is what pruneToLiveRoster() returns.
+  for (const h of LIVE_ROSTER_HANDLES) expect(retired).not.toContain(await idOfHandle(h));
 
   // The ROWS SURVIVE. Published sessions reference their takes by member id
   // (swarm_recommendations.member_id has no ON DELETE CASCADE), so a
@@ -207,9 +229,11 @@ test("prune retires off-roster members to inactive and never deletes them", asyn
   // What /api/swarm/members serves is exactly what changed: getMembers()
   // filters on status='active', so the retired members drop out of the
   // directory while the roster stays in it.
-  const servedIds = (await getMembers()).map((m) => m.id);
+  const served = await getMembers();
+  const servedIds = served.map((m) => m.id);
+  const servedHandles = served.map((m) => m.handle);
   for (const id of FIXTURE_IDS) expect(servedIds).not.toContain(id);
-  for (const id of LIVE_ROSTER_IDS) expect(servedIds).toContain(id);
+  for (const h of LIVE_ROSTER_HANDLES) expect(servedHandles).toContain(h);
 
   // Idempotent: a second run finds nothing left to retire.
   expect(await pruneToLiveRoster()).toEqual([]);
@@ -232,9 +256,9 @@ test("prune never retires a live-roster member", async () => {
   await seedLiveRoster();
 
   const retired = await pruneToLiveRoster();
-  for (const id of LIVE_ROSTER_IDS) expect(retired).not.toContain(id);
-  for (const id of LIVE_ROSTER_IDS) expect(await statusOf(id)).toBe("active");
-  expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
+  for (const h of LIVE_ROSTER_HANDLES) expect(retired).not.toContain(await idOfHandle(h));
+  for (const h of LIVE_ROSTER_HANDLES) expect(await statusOfHandle(h)).toBe("active");
+  expect((await readLiveRoster()).map((m) => m.handle).sort()).toEqual([...LIVE_ROSTER_HANDLES].sort());
 });
 
 // The gate, driven through the REAL seed() entry point `bun run migrate`
@@ -256,7 +280,7 @@ test("SWARM_SEED_ROSTER_PRUNE gates the pruning: inert alone, inert unset, retir
   process.env.SWARM_SEED_ROSTER = "1";
   delete process.env.SWARM_SEED_ROSTER_PRUNE;
   await seed();
-  expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
+  expect((await readLiveRoster()).map((m) => m.handle).sort()).toEqual([...LIVE_ROSTER_HANDLES].sort());
   expect(await statusOf("prune-fixture-draco")).toBe("active");
 
   process.env.SWARM_SEED_ROSTER_PRUNE = "0";
@@ -268,6 +292,6 @@ test("SWARM_SEED_ROSTER_PRUNE gates the pruning: inert alone, inert unset, retir
   process.env.SWARM_SEED_ROSTER_PRUNE = "1";
   await seed();
   expect(await statusOf("prune-fixture-draco")).toBe("inactive");
-  for (const id of LIVE_ROSTER_IDS) expect(await statusOf(id)).toBe("active");
-  expect((await readLiveRoster()).map((m) => m.id)).toEqual([...LIVE_ROSTER_IDS].sort());
+  for (const h of LIVE_ROSTER_HANDLES) expect(await statusOfHandle(h)).toBe("active");
+  expect((await readLiveRoster()).map((m) => m.handle).sort()).toEqual([...LIVE_ROSTER_HANDLES].sort());
 });
