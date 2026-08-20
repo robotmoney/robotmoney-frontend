@@ -838,13 +838,17 @@ and `backend/tests/api/admin-surface.test.ts:165`, which check the value is one
 of `A`/`B`/`C` — not that anything acts on it. *(Verified against `main` at
 `7b92a8c`: `grep -rn remediationClass backend/src contract/src`.)*
 
-This is a pattern, not an accident. `backend/scripts/seed-provenance-verify.ts`
-has a real executed CI test (`backend/tests/seed-provenance-verify.test.ts:5`
-imports its `main`) and **no production caller** — no boot path, deploy gate, or
-cron (filed as #638). `forward_fill_expired` is computed and shipped in a DTO
-and alarms nothing. This codebase repeatedly ships a correct mechanism and never
-wires it up, which is the failure mode this design must not repeat: **every
-acceptance criterion should assert the caller, not just the mechanism.**
+This was a pattern, not an accident, and one instance of it is now fixed.
+`backend/scripts/seed-provenance-verify.ts` had a real executed CI test
+(`backend/tests/seed-provenance-verify.test.ts:5` imports its `main`) and
+**no production caller** — no boot path, deploy gate, or cron (filed as #638,
+closed by D38: its callable core, `runSeedProvenanceVerify()`, now runs as
+`prod-bootstrap.ts`'s `seed-provenance:verify` step on every deploy).
+`remediationClass` and `forward_fill_expired` remain unwired — the latter is
+computed and shipped in a DTO and alarms nothing. This codebase has repeatedly
+shipped a correct mechanism and never wired it up, which is the failure mode
+this design must not repeat: **every acceptance criterion should assert the
+caller, not just the mechanism.**
 
 ### 3.1 Where the source plans are now tracked
 

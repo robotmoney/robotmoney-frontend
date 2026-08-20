@@ -2,7 +2,7 @@
 // against the SAME ephemeral Postgres the rest of the suite uses (per-PR CI,
 // no network). Exercises the CLI script's exit-code contract directly.
 import { test, expect, beforeEach } from "bun:test";
-import { main } from "../scripts/seed-provenance-verify.ts";
+import { main, runSeedProvenanceVerify } from "../scripts/seed-provenance-verify.ts";
 import { sql } from "../src/db/client.ts";
 import { saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
 
@@ -48,4 +48,21 @@ test("--clean deletes exactly the calendar-invalid seed rows, leaving valid seed
     { indicator: "ICSA", date: "2026-08-08", source: "seed" },
     { indicator: "T10Y2Y", date: "2026-08-10", source: "live" },
   ]);
+});
+
+// Issue #638: this script previously had no production caller — only the CLI
+// main() this test file already exercised above. The real caller is
+// prod-bootstrap.ts's "seed-provenance:verify" step (tests/prod-bootstrap.test.ts
+// covers that wiring end-to-end); this asserts the callable core itself,
+// independent of main()'s console/exit-code CLI shell.
+test("runSeedProvenanceVerify is a callable core, independent of the CLI's console/exit-code shell", async () => {
+  await saveRawIndicatorHistory({ ICSA: [{ date: "2026-08-10", value: 215000 }] }, sql, "seed"); // Monday — INVALID
+
+  const report = await runSeedProvenanceVerify(true);
+  expect(report.invalid).toEqual([{ indicatorId: "ICSA", date: "2026-08-10", value: 215000 }]);
+  expect(report.deleted).toBe(1);
+
+  const [{ n }] = await sql`
+    SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'ICSA' AND source = 'seed'`;
+  expect(n).toBe(0);
 });

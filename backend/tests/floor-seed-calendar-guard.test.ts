@@ -4,8 +4,9 @@
 // unrepresentable in the committed vendored floor going forward. Runs in the
 // required backend.yml bun test job, no network.
 import { test, expect } from "bun:test";
-import { validateFloorCalendar } from "../src/analytics/extract/floor-seed-calendar.ts";
+import { validateFloorCalendar, sourceCalendar } from "../src/analytics/extract/floor-seed-calendar.ts";
 import { loadRawFloorSeed, DEFAULT_FLOOR_SEED_PATH } from "../src/analytics/extract/floor-seed.ts";
+import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import type { RawIndicatorHistory } from "../src/analytics/types.ts";
 
 test("rejects a non-Saturday ICSA row and a weekend DXY row (named violations)", () => {
@@ -45,4 +46,31 @@ test("missing fixture path fails loudly — never silently skips", async () => {
   await expect(
     loadRawFloorSeed("/nonexistent/floor-seed-calendar-guard-fixture.csv.gz"),
   ).rejects.toThrow(/floor seed not found/);
+});
+
+// Issue #637: DXY's derivation prose once claimed "weekly" while D6 and
+// sourceCalendar() both established DTWEXBGS is business-daily. Lock in the
+// enforced calendar directly, independent of the prose-scan below.
+test("DXY's enforced calendar is business_day, never weekly_saturday", () => {
+  expect(sourceCalendar("DXY")).toBe("business_day");
+});
+
+// Guards against the #637 defect class recurring for any other indicator:
+// derivation prose claiming a weekly cadence must agree with the calendar
+// sourceCalendar() actually enforces for that id, and vice versa.
+test("every indicator's derivation prose agrees with its enforced source calendar", () => {
+  const contradictions: string[] = [];
+  for (const ind of INDICATORS) {
+    const prose = ind.derivation ?? "";
+    const claimsWeekly = /\bweekly\b/i.test(prose);
+    const calendar = sourceCalendar(ind.id);
+    const enforcesWeekly = calendar === "weekly_saturday";
+    if (claimsWeekly !== enforcesWeekly) {
+      contradictions.push(
+        `${ind.id}: derivation ${claimsWeekly ? "claims" : "does not claim"} weekly cadence, ` +
+          `but sourceCalendar() returns "${calendar}" (derivation: ${JSON.stringify(prose)})`,
+      );
+    }
+  }
+  expect(contradictions).toEqual([]);
 });

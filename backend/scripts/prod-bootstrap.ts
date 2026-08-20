@@ -4,7 +4,7 @@
 // dependency order, and renders live per-step status with plain ANSI escape
 // codes (no new terminal-UI dependency).
 //
-// Steps (fixed, not a generic pluggable framework — there are exactly four):
+// Steps (fixed, not a generic pluggable framework — there are exactly five):
 //   0. handle-namespace     — src/db/handle-namespace.ts's
 //                              checkHandleNamespace(). Read-only, and the ONE
 //                              step that halts the run: see the fail-fast note
@@ -25,6 +25,18 @@
 //                              unreachable — that is the expected shape of a
 //                              DB-only bootstrap context (e.g. a migration
 //                              job with no api process running).
+//   4. seed-provenance:verify — scripts/seed-provenance-verify.ts's
+//                              runSeedProvenanceVerify(clean=true). Direct-SQL,
+//                              like v0-seed. Deletes any persisted
+//                              source='seed' raw_indicator_history row dated
+//                              on a day its source could never have
+//                              published (issue #616/D6) — the one-time
+//                              production cleanup for a database seeded
+//                              BEFORE the #616 purge regeneration landed.
+//                              Runs LAST: it is a pure integrity sweep over
+//                              whatever source='seed' rows exist once the
+//                              earlier steps have run, order-independent
+//                              (D38, issue #638).
 //
 // Every step is attempted even if an earlier one failed (no fail-fast) — same
 // "attempt everything, decide the outcome at the end" principle
@@ -54,6 +66,7 @@ import { runV0SeedBootstrap } from "./v0-seed-bootstrap.ts";
 import { bootstrapEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
 import { resolveAnalyticsApiConfig } from "../src/analytics/api-client.ts";
 import { envSecret } from "../src/lib/env-secret.ts";
+import { runSeedProvenanceVerify } from "./seed-provenance-verify.ts";
 
 type StepStatus = "success" | "failed" | "warning" | "skipped";
 
@@ -294,6 +307,27 @@ async function runEdgarSeedStep(): Promise<StepResult> {
   }
 }
 
+// ── Step 4: seed-provenance:verify ──────────────────────────────────────────
+//
+// Direct-SQL (db/client.ts, same as v0-seed), not the HTTP-API pattern
+// edgar-seed:bootstrap uses — deleting calendar-invalid rows is exactly the
+// "migration/import tooling" access the analytics persistence boundary
+// reserves for src/db/**-adjacent scripts (tests/analytics-api-boundary.test.ts),
+// not something the worker's restricted `rm_worker` role can do: migration
+// 0016 revokes DELETE on raw_indicator_history from that role, so this cannot
+// live behind the job queue (see D38).
+//
+// clean=true: this step is the cleanup, not just the report. --clean-less
+// reporting is scripts/seed-provenance-verify.ts's CLI-only mode, for an
+// operator who wants to inspect the rows before they are gone.
+async function runSeedProvenanceStep(): Promise<StepResult> {
+  const { invalid, deleted } = await runSeedProvenanceVerify(true);
+  if (invalid.length === 0) {
+    return { status: "success", summary: "no calendar-invalid source='seed' rows found" };
+  }
+  return { status: "success", summary: `cleaned ${deleted} calendar-invalid source='seed' row(s) (issue #616/#638)` };
+}
+
 // ── Fixed step list ──────────────────────────────────────────────────────────
 
 const APPEND_ONLY_STEP: Step = { name: "append-only-guard", run: runAppendOnlyGuardStep };
@@ -302,6 +336,7 @@ const initializationSteps: Step[] = [
   APPEND_ONLY_STEP,
   { name: "v0-seed:bootstrap", run: runV0SeedStep },
   { name: "edgar-seed:bootstrap", run: runEdgarSeedStep },
+  { name: "seed-provenance:verify", run: runSeedProvenanceStep },
 ];
 
 export interface ProdBootstrapOptions {

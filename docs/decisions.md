@@ -2394,3 +2394,96 @@ when a silent regression would otherwise ship unnoticed.
   price airdropped tokens into the fund's NAV. The set stays an allowlist.
 - **A new provenance value for idle-only legs.** See above.
 - **Refusing the boot on an empty list.** See above.
+
+---
+
+## D38 — `seed-provenance-verify` runs as a `prod-bootstrap.ts` deploy step, not a worker cron (issue #638)
+
+**Decision.** `backend/scripts/seed-provenance-verify.ts`'s core logic is
+split out into an exported `runSeedProvenanceVerify(clean)`, and
+`backend/scripts/prod-bootstrap.ts` calls it (`clean=true`) as a fourth,
+final `seed-provenance:verify` step alongside `v0-seed:bootstrap` and
+`edgar-seed:bootstrap`. It runs on every `bun run bootstrap` /
+`prod-bootstrap.ts --already-migrated` invocation — the same real deploy path
+`docker-compose`'s `Stack.up()` already drives for the `archive` scenario
+(`scripts/lib/demo-main.ts`) and the one `bun run bootstrap` (root
+`package.json`) drives standalone. `main()` stays as a thin CLI wrapper around
+the same core, for the manual/CI usage `backend/tests/seed-provenance-verify.test.ts`
+already exercised.
+
+**Why not the `ops.repair_gaps` worker cron (issue #638's suggested "natural
+home").** `worker/handlers/repair.ts` was investigated first, and rejected on
+two independent, structural grounds, not preference:
+
+- **The database refuses the write.** Migration `0016_worker_role.sql`
+  provisions the worker's restricted `rm_worker` role and explicitly
+  `REVOKE`s `INSERT, UPDATE, DELETE ON raw_indicator_history` (and the other
+  analytics tables) from it — by design, per issue #106: the worker keeps
+  queue-scoped access only, and analytics-table writes are reserved for the
+  API process's role. `verifySeedProvenance`'s `clean=true` path is a `DELETE
+  FROM raw_indicator_history`. Run under `rm_worker` in a real deployment
+  (one with `WORKER_DATABASE_URL` actually pointed at the restricted role,
+  which is the point of #106), every cleanup attempt would fail with a
+  permission error — the opposite of "a pre-#630 database actually gets
+  repaired."
+- **The source-level boundary refuses the import.** `tests/analytics-api-
+  boundary.test.ts` scans `src/worker/**` and fails the suite on any import of
+  an `analytics/store/**` writer (`IMPORT_STORE`), and separately asserts only
+  `api/`, `analytics/store/`, `db/`, and `demo/` may import one at all.
+  `seed-provenance.ts` (the module `verifySeedProvenance` lives in) is exactly
+  such a writer. Wiring it into `worker/handlers/repair.ts` — or any
+  `worker/**` module — would have failed that guard outright, not passed it
+  with a caveat.
+
+Both facts hold specifically because `raw_indicator_history` is an
+**analytics** table under the #106 persistence boundary — the same boundary
+`ops.repair_gaps` itself respects by only ever enqueueing `wallet.backfill_day`
+jobs, which write `wallet_balance_samples`/`wallet_sleeve_samples` (non-analytics,
+`rm_worker`-writable tables), never `raw_indicator_history` directly. A cron
+handler that needs to mutate an analytics table is not a variant of the #709
+pattern; it is the thing #106 exists to keep out of the worker.
+
+**Why `prod-bootstrap.ts` is the correct home instead.** It already imports
+`db/client.ts` directly (the unrestricted owner pool) and already runs
+direct-SQL, one-time production data-bootstrap pipelines in the same file —
+`v0-seed:bootstrap` is the named precedent this step's Direct-SQL pattern
+follows, per that step's own comment. `seed-provenance-verify.ts`'s own header
+comment already called itself "the one-time PRODUCTION-side cleanup for a
+database that was seeded BEFORE [the #616] regeneration landed" — the same
+one-time-pipeline shape `prod-bootstrap.ts` was built to orchestrate — before
+anything actually ran it there. Running it on every deploy rather than on a
+separate cadence matches that one-time-cleanup shape exactly: idempotent,
+converges in one pass (no reason to expect *new* calendar-invalid `source='seed'`
+rows to appear later — `applyRawFloorSeed` gap-fills, it never re-seeds a row
+that already exists — so a later cron tick would find nothing this step has
+not already found), and covers every real boot instead of waiting on a
+schedule.
+
+**Consequences.**
+
+- `docs/technical/data-self-healing.md`'s §3 pattern-of-unwired-mechanisms
+  passage is updated to reflect this one instance closed, while leaving
+  `remediationClass` and `forward_fill_expired` — genuinely still unwired —
+  as-is.
+- `backend/tests/prod-bootstrap.test.ts` gained the new step to its fixed
+  step-name assertions and a dedicated test inserting a calendar-invalid
+  `source='seed'` row and asserting the deploy run cleans it.
+- A future analytics-table repair mechanism should default to this same
+  home (an idempotent `prod-bootstrap.ts` step) rather than the worker queue,
+  unless it can operate entirely on `rm_worker`-writable tables the way
+  `wallet.backfill_day` does.
+
+**Rejected alternatives.**
+
+- **`ops.repair_gaps` / `worker/handlers/repair.ts`.** See above — refused
+  by both the DB role's `REVOKE` and the source-boundary test.
+- **A new standalone cron process** (a sibling to `src/producer/index.ts`),
+  scheduling `runSeedProvenanceVerify` on its own timer against `db/client.ts`
+  directly. Workable, but a wholly new long-running process (with its own
+  liveness/health surface) is a disproportionate answer to a cleanup that
+  converges after its first successful run — the deploy-step shape already
+  gives every real database a repair opportunity without adding a component.
+- **A new authenticated `/api/analytics/*` route**, called by the existing
+  producer or an operator script. Rejected for the same reason: this is a
+  direct-SQL cleanup in the `v0-seed:bootstrap` shape, not an ingestion path
+  that needs the analytics HTTP boundary's provider-credential semantics.

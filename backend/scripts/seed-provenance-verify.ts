@@ -16,12 +16,30 @@
 // Usage:
 //   bun run scripts/seed-provenance-verify.ts           # report only
 //   bun run scripts/seed-provenance-verify.ts --clean    # report + delete
-import { verifySeedProvenance } from "../src/analytics/store/seed-provenance.ts";
+//
+// runSeedProvenanceVerify() below is the callable core (D38, issue #638) —
+// the twin of v0-seed-bootstrap.ts's runV0SeedBootstrap()/main() split, and
+// this file's own doc comment above already called it "one-time PRODUCTION-
+// side cleanup" long before anything actually ran it there. main() is the CLI
+// wrapper around it, kept for manual/CI use (tests/seed-provenance-verify.test.ts
+// calls main() directly); prod-bootstrap.ts's "seed-provenance:verify" step is
+// the real runtime caller, invoking the core function in-process on every
+// deploy.
+import { verifySeedProvenance, type SeedProvenanceRow } from "../src/analytics/store/seed-provenance.ts";
 import { sql, closeDb } from "../src/db/client.ts";
+
+export interface SeedProvenanceVerifyReport {
+  invalid: SeedProvenanceRow[]; // calendar-invalid source='seed' rows found
+  deleted: number; // rows actually deleted (only nonzero when clean=true)
+}
+
+export async function runSeedProvenanceVerify(clean = false): Promise<SeedProvenanceVerifyReport> {
+  return verifySeedProvenance(sql, clean);
+}
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const clean = argv.includes("--clean");
-  const { invalid, deleted } = await verifySeedProvenance(sql, clean);
+  const { invalid, deleted } = await runSeedProvenanceVerify(clean);
 
   if (invalid.length === 0) {
     console.log("[seed-provenance-verify] clean — no calendar-invalid source='seed' rows found");
