@@ -353,6 +353,40 @@ test("GET research-signals/dates: analytics-provider-only, validates `since`, an
   expect(forKey).toEqual(["2026-02-01", "2026-02-05"]); // 2026-01-01 excluded — before `since`
 });
 
+// issue #646, closing #614 AC4's Class A bullet: the producer's Class A
+// catch-up read side. No DATABASE_URL on that process either, and this route
+// is driven by the SAME shared gap detector GET /api/admin/gaps reads
+// (ops/gap-detector.ts) rather than a bespoke presence query — must fail
+// against pre-#646 main, where this route does not exist at all.
+test("GET raw-history/gaps: analytics-provider-only, validates `since`, and returns only interior gap dates on/after it", async () => {
+  prodAuth();
+  expect((await call(req("GET", `${A.rawHistoryGaps}?since=2018-01-01`)))?.status).toBe(401); // no credential
+  expect((await call(req("GET", `${A.rawHistoryGaps}?since=2018-01-01`, undefined, "wrong-token")))?.status).toBe(403);
+  expect((await call(req("GET", `${A.rawHistoryGaps}?since=2018-01-01`, undefined, ADMIN)))?.status).toBe(403); // ADMIN_TOKEN is not a substitute
+  expect((await call(req("GET", A.rawHistoryGaps, undefined, TOKEN)))?.status).toBe(400); // missing `since`
+  expect((await call(req("GET", `${A.rawHistoryGaps}?since=not-a-date`, undefined, TOKEN)))?.status).toBe(400);
+
+  // Table-level presence (gap-detector.ts's SCOPE note): any indicator's row
+  // on a date counts as that DATE being present. This file shares one
+  // database across every test in it (support/clean-db.ts), so other tests'
+  // rows are also live here — assert on THIS gap's presence/absence rather
+  // than an exact full array, which would be a moving target.
+  const ind = `IND_${rid()}`;
+  await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES
+    ('2018-01-01', ${ind}, 1), ('2018-01-02', ${ind}, 2), ('2018-01-04', ${ind}, 4)`;
+
+  const full = await call(req("GET", `${A.rawHistoryGaps}?since=2018-01-01`, undefined, TOKEN));
+  expect(full?.status).toBe(200);
+  expect((full?.body as { dates: string[] }).dates).toContain("2018-01-03");
+
+  // `since` after the gap excludes it, and excludes every earlier date.
+  const filtered = await call(req("GET", `${A.rawHistoryGaps}?since=2018-01-04`, undefined, TOKEN));
+  expect(filtered?.status).toBe(200);
+  const filteredDates = (filtered?.body as { dates: string[] }).dates;
+  expect(filteredDates).not.toContain("2018-01-03");
+  for (const d of filteredDates) expect(d >= "2018-01-04").toBe(true);
+});
+
 // ── POST /api/analytics/telemetry (issue #151) — same analytics-provider-only
 // boundary as every mutation above, just with its own DTO shape (a run with
 // stages/warnings/artifacts) rather than a natural-key batch.

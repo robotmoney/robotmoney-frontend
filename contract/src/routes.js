@@ -222,6 +222,13 @@ export const ROUTES = {
     // producer's own read side for catch-up: it has no DATABASE_URL, so this
     // is the only way it can tell which recent days it needs to re-run.
     researchSignalDates: "/api/analytics/research-signals/dates",
+    // GET ?since=YYYY-MM-DD — which raw_indicator_history interior gap dates
+    // exist on/after `since` (issue #646, closing #614 AC4's Class A bullet).
+    // The read side of the producer's INDICATOR catch-up: same shape as
+    // researchSignalDates above, one series (Class A) instead of two signal
+    // keys, driven by the shared gap detector (ops/gap-detector.ts) instead
+    // of a bespoke presence query.
+    rawHistoryGaps: "/api/analytics/raw-history/gaps",
     // POST — retired control-plane path; authenticated callers receive 409 and
     // no consumer schedule/job mutation. Retained so old clients fail closed.
     researchEligibility: "/api/analytics/research-eligibility",

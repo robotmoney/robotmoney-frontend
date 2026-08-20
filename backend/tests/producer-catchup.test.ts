@@ -70,6 +70,7 @@ test("catchUpMissedResearchDays: repairs exactly the missing days via the inject
       expect(since).toBe(iso(14));
       return present;
     },
+    loadRawHistoryGapDates: async () => [],
   };
   const repaired: string[] = [];
   const runner = async (asof: string) => {
@@ -95,6 +96,7 @@ test("catchUpMissedResearchDays: a repair failure for one day does not stop the 
     saveRegimeSnapshots: async () => {},
     saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => [],
+    loadRawHistoryGapDates: async () => [],
   };
   const attempted: string[] = [];
   const runner = async (asof: string) => {
@@ -115,6 +117,7 @@ test("catchUpMissedResearchDays: a read failure is swallowed — never throws, r
     saveRegimeSnapshots: async () => {},
     saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => { throw new Error("network unreachable"); },
+    loadRawHistoryGapDates: async () => [],
   };
   const missing = await catchUpMissedResearchDays({ persistence, now: () => NOW });
   expect(missing).toEqual([]);
@@ -138,6 +141,7 @@ test("catchUpMissedResearchDays: running it twice converges — the second pass 
       const [signalKey, date] = s.split("|") as [string, string];
       return { signalKey, date };
     }),
+    loadRawHistoryGapDates: async () => [],
   };
   const runner = async (asof: string) => {
     for (const key of RESEARCH_SIGNAL_TELEMETRY_KEYS) store.add(`${key}|${asof}`);

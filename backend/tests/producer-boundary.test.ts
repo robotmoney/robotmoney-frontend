@@ -18,6 +18,7 @@ function recordingPersistence(): AnalyticsPersistence {
     async saveRegimeSnapshots() {},
     async saveResearchSignal() {},
     async loadResearchSignalDates() { return []; },
+    async loadRawHistoryGapDates() { return []; },
   };
 }
 
