@@ -124,8 +124,17 @@ export function replaceFloorSeedAtomically(seedPath: string, generated: { gz: Bu
 // Preserve list (unrecoverable spans — a live fetch alone cannot rebuild
 // them):
 //   - HY_OAS: FRED serves BAMLH0A0HYM2 only as a trailing ~3y window
-//     regardless of the `cosd` start-date override (D7) — pre-window history
-//     exists only in the persisted floor.
+//     regardless of the `cosd` start-date override — pre-window history exists
+//     only in the persisted floor. Verified directly (not merely asserted):
+//     the above review's finding D7 (§14.4) hit the anonymous
+//     fredgraph.csv?id=BAMLH0A0HYM2&cosd=2010-01-01 endpoint and got rows
+//     starting 2023-08-15 (787 observations), not 2010. [That D-number is
+//     THIS review doc's own finding numbering, unrelated to docs/decisions.md's
+//     D-series — issue #634.] Re-verify anytime the truncation window is in
+//     question: `RUN_LIVE_FETCHERS=1 bun test backend/tests/fetchers-live.test.ts`
+//     hits the real endpoint; backend/tests/api/regime-fetchers.test.ts pins the
+//     documented behavior with a mocked response and proves the merge below
+//     still recovers pre-window history from the committed floor.
 //   - NEW_TOKENS: GeckoTerminal exposes only the live 24h firehose, no bulk-
 //     history endpoint — the accumulated daily series exists only because
 //     every past run appended one more point.
