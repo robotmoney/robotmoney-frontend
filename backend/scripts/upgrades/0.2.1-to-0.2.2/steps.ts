@@ -153,10 +153,10 @@ export const STEPS: RolloutStep[] = [
     actor: "agent",
     requires: [],
     dependsOn: [],
-    artifacts: ["pre-upgrade-baseline-*.txt"],
+    artifacts: ["pre-upgrade-baseline-*.txt", "member-baseline-*.json"],
     ttlHours: 48,
     verify: "§5.0's psql block, then: where.ts --record P3.baseline",
-    note: "§8 and §9 both grade against this file; an empty one verifies nothing.",
+    note: "§8, §9 and AC6 all grade against these; they cannot be recovered from an upgraded or rolled-back database.",
   },
   {
     id: "P3.backup",
@@ -309,8 +309,8 @@ export const STEPS: RolloutStep[] = [
     actor: "operator",
     requires: ["P8.postflight-prod"],
     dependsOn: [],
-    verify: "AC1-AC5 run inside postflight; verify AC6 by hand, then: where.ts --record P8.acceptance",
-    note: "AC1-AC5 are automated (postflight §8.1 checks). AC6 is not: it needs §5.0's per-member baseline, and its failure mode is silent.",
+    verify: "AC1-AC6 run inside postflight; confirm each PASSed, then: where.ts --record P8.acceptance",
+    note: "All six are automated. AC6 needs POSTFLIGHT_MEMBER_BASELINE=§5.0's member-baseline-<STAMP>.json, or its count half WARNs instead of passing.",
   },
   {
     id: "P9.tag",

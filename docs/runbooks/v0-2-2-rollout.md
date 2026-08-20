@@ -810,6 +810,7 @@ actor:       agent
 ttl:         48h
 artifacts:
   - pre-upgrade-baseline-*.txt
+  - member-baseline-*.json
 verify:      §5.0's psql block, then: where.ts --record P3.baseline
 ```
 
@@ -2079,7 +2080,7 @@ host-role:   cutover
 actor:       operator
 requires:
   - P8.postflight-prod
-verify:      AC1-AC5 run inside postflight; verify AC6 by hand, then: where.ts --record P8.acceptance
+verify:      AC1-AC6 run inside postflight; confirm each PASSed, then: where.ts --record P8.acceptance
 ```
 
 **These are the release's objective, not a spot check. `EXIT=0` from any
@@ -2145,18 +2146,26 @@ Where those references should land instead is tracked separately (#687).
 > the key row is not repointed to the new id, every take for that member
 > reports unverified with no error anywhere.
 
-> **AC1–AC5 are automated; AC6 is not.** `postflight.ts` now runs AC1–AC5 as
+> **AC1–AC6 are automated.** `postflight.ts` now runs AC1–AC5 as
 > named checks (`ac1-member-uuid`, `ac2-handle-derived`, `ac3-no-default-handle`,
 > `ac4-no-derived-suffix`, `ac5-handle-resolves`), so they are evaluated
 > wherever postflight runs — including against the digital twin inside §5.3b's
 > rehearsal (G8), which is where §5.5 requires them and where they were
 > previously impossible to run: the twin exists only between readiness and
 > teardown. AC2 calls the real `slugifyMemberName` rather than a paraphrase of
-> it. **AC6 stays manual**, deliberately: it compares per-member counts against
-> §5.0's pre-upgrade capture and re-verifies signatures through
-> `swarm_member_keys`, and a version of it that passed without that baseline
-> would be worse than an honest manual step — its failure mode is already
-> silent. Postflight emits it as a WARN naming what it needs.
+> it.
+>
+> **AC6 (`ac6-history-attached`) has two halves**, because only one of them
+> needs prior state. The half that does — per-member take/memo/key counts —
+> reads §5.0's `member-baseline-<STAMP>.json` through
+> `POSTFLIGHT_MEMBER_BASELINE`, keyed by member **name**, since the id is
+> exactly what `0033` changes. The half that does not is the guard for AC6's
+> silent mode: every signed take must still resolve an **active** public key
+> through `swarm_member_keys.member_id`, because verification is recomputed
+> from payload + signature + that key (`projections.ts:185`) — a key row left
+> pointing at the old id yields `verified: false` on every take with no error
+> anywhere. Run without the baseline, AC6 still performs that guard and WARNs
+> that the counts went unchecked; it never passes on partial evidence.
 
 **If any AC fails, the release has not been achieved** — that is a postflight
 failure in the §2 sense: patch, cut the next rc, and re-run preflight before

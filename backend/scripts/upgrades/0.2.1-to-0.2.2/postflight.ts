@@ -17,6 +17,7 @@
 //
 // Exit codes: 0 = clean, 1 = a check failed, 2 = could not run.
 
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { columnExists, tableExists } from "../../lib/checks.ts";
@@ -286,11 +287,10 @@ async function checkPrerenderedRoute(_db: Db, { record }: Checker): Promise<void
 // digital twin, which exists only between the rehearsal's readiness and its
 // teardown. AC1-AC5 are the runbook's own queries, verbatim in intent.
 //
-// AC6 is NOT here, on purpose. It compares per-member take/memo counts against
-// a pre-upgrade capture and re-verifies signatures through swarm_member_keys —
-// it needs a baseline artifact this script is not given, and a version that
-// silently passed without one would be worse than an honest manual step. It is
-// reported as a WARN naming what it needs.
+// AC6 needs a pre-upgrade capture (§5.0's member-baseline-<STAMP>.json, via
+// POSTFLIGHT_MEMBER_BASELINE) for its count half. Without it, it still runs the
+// half that needs no prior state — the key-resolution guard — and WARNs that
+// the counts went unchecked, rather than passing on partial evidence.
 
 /** AC1 — every member id is a UUID. Prerequisite for AC2: a slug id both reads
  *  as "handle unset" (handle = id) and squats the handle namespace (0031). */
@@ -437,13 +437,104 @@ async function checkAc5ResolvableByHandle(db: Db, { record }: Checker): Promise<
   record("ac5-handle-resolves", "PASS", `/api/swarm/members/${member.handle} → 200 with the right member`);
 }
 
-/** AC6 — not automated here; see the block comment above. */
-function noteAc6({ record }: Checker): void {
+/**
+ * AC6 — history stayed attached across the re-id.
+ *
+ * Keyed by member NAME, not id: the id is exactly what `0033` changes, so it
+ * cannot be the join key between a pre-upgrade capture and a post-upgrade
+ * database. Names do not move.
+ *
+ * Three things, because AC6 has two halves and the second one fails silently:
+ *   1. per-member take/memo counts match §5.0's capture — nothing was orphaned;
+ *   2. per-member key counts match — the `swarm_member_keys` repoint happened;
+ *   3. every signed take can still resolve an active public key. This is the
+ *      one that catches the silent mode the runbook warns about: verification
+ *      is recomputed from payload + signature + the pubkey reached through
+ *      `swarm_member_keys.member_id` (projections.ts:185), so a key row left
+ *      pointing at the OLD id yields public_key = null and `verified: false`
+ *      on every take, with no error raised anywhere.
+ *
+ * Without the baseline this can still do (3), which needs no prior state — so
+ * a missing baseline degrades the check, it does not skip it.
+ */
+async function checkAc6HistoryAttached(db: Db, { record }: Checker): Promise<void> {
+  const orphaned = (await db`
+    SELECT count(*)::int AS n
+    FROM swarm_recommendations r
+    LEFT JOIN swarm_member_keys k ON k.member_id = r.member_id AND k.active
+    WHERE r.signature IS NOT NULL AND k.id IS NULL
+  `) as unknown as { n: number }[];
+  const unresolvable = orphaned[0]?.n ?? 0;
+  if (unresolvable > 0) {
+    record(
+      "ac6-history-attached",
+      "FAIL",
+      `${unresolvable} signed take(s) cannot resolve an active public key — swarm_member_keys was not repointed`,
+      "This is AC6's silent failure: every affected take reports verified:false with no error. The release has not been achieved (§8.1).",
+    );
+    return;
+  }
+
+  const baselinePath = process.env.POSTFLIGHT_MEMBER_BASELINE;
+  if (!baselinePath) {
+    record(
+      "ac6-history-attached",
+      "WARN",
+      "signed takes all resolve a key, but per-member counts were NOT compared (no POSTFLIGHT_MEMBER_BASELINE)",
+      "Set POSTFLIGHT_MEMBER_BASELINE=<§5.0's member-baseline-<STAMP>.json> to compare take/memo/key counts per member. Without it AC6 is only half checked.",
+    );
+    return;
+  }
+
+  let baseline: Record<string, { recs: number; memos: number; keys: number }>;
+  try {
+    baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
+  } catch (e) {
+    record(
+      "ac6-history-attached",
+      "FAIL",
+      `cannot read POSTFLIGHT_MEMBER_BASELINE (${baselinePath}): ${e instanceof Error ? e.message : e}`,
+      "Capture it with §5.0's baseline block before the cutover; it cannot be recovered from an already-upgraded database.",
+    );
+    return;
+  }
+
+  const rows = (await db`
+    SELECT m.name,
+           (SELECT count(*) FROM swarm_recommendations r WHERE r.member_id = m.id)::int AS recs,
+           (SELECT count(*) FROM swarm_memos mo WHERE mo.member_id = m.id)::int         AS memos,
+           (SELECT count(*) FROM swarm_member_keys k WHERE k.member_id = m.id)::int     AS keys
+    FROM swarm_members m ORDER BY m.name
+  `) as unknown as { name: string; recs: number; memos: number; keys: number }[];
+
+  const drift: string[] = [];
+  for (const [name, want] of Object.entries(baseline)) {
+    const got = rows.find((r) => r.name === name);
+    if (!got) {
+      drift.push(`  ${name}: present pre-upgrade, MISSING now`);
+      continue;
+    }
+    for (const field of ["recs", "memos", "keys"] as const) {
+      if (got[field] !== want[field]) drift.push(`  ${name}.${field}: ${want[field]} → ${got[field]}`);
+    }
+  }
+  for (const r of rows) {
+    if (!(r.name in baseline)) drift.push(`  ${r.name}: not in the pre-upgrade capture`);
+  }
+
+  if (drift.length > 0) {
+    record(
+      "ac6-history-attached",
+      "FAIL",
+      [`per-member history moved across the re-id (${drift.length} discrepancy/ies):`, ...drift],
+      "Takes, memos or keys were orphaned by the re-id. The release has not been achieved (§8.1).",
+    );
+    return;
+  }
   record(
     "ac6-history-attached",
-    "WARN",
-    "not automated — per-member take/memo counts and signature verification are a manual §8.1 step",
-    "Compare per-member count(*) on swarm_recommendations/swarm_memos against §5.0's pre-upgrade capture, and confirm /api/swarm/sessions/<id> reports takes as verified. A missed swarm_member_keys repoint fails SILENTLY (every take reports unverified, no error anywhere).",
+    "PASS",
+    `all ${rows.length} members' take/memo/key counts match the pre-upgrade capture, and every signed take resolves an active key`,
   );
 }
 
@@ -465,7 +556,7 @@ async function runChecks(db: Db, checker: Checker): Promise<void> {
   await checkAc3NoDefaultHandles(db, checker);
   await checkAc4NoDerivedSuffix(db, checker);
   await checkAc5ResolvableByHandle(db, checker);
-  noteAc6(checker);
+  await checkAc6HistoryAttached(db, checker);
 }
 
 export async function main(): Promise<number> {
