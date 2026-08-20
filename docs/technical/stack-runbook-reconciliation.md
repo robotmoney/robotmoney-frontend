@@ -5,8 +5,9 @@ Whether the runbook policy's goals survive changing the deployment vendor to
 
 Inputs: [`release-runbooks.md`](./release-runbooks.md) (foundational policy),
 [`../runbooks/deployment.md`](../runbooks/deployment.md) (standing topology and
-credentials), and the verified behaviour in
-[`stack-orchestrator.md`](./stack-orchestrator.md).
+credentials), and the verified behaviour in the field guide,
+[`stack-orchestrator.md`](./stack-orchestrator.md) — which carries the mechanism
+this document only cites.
 
 > **Section references.** A bare `§` is a section of *this* document. References
 > to the other two are always qualified — `policy §4.3`, `deployment.md §7` —
@@ -26,15 +27,16 @@ into the per-release runbook — the obligation each one imposes is unchanged (�
 |---|---|---|
 | **Reproducibility** — the procedure is written, not remembered | **Better** | The spec file is a versioned artifact. Today nothing describes what staging *is*. |
 | **Rehearsal fidelity** — prove on a twin before prod | **Better** | `backup restore --from <prod>` makes the twin a *whole-stack* twin, not a database twin. Repositories are interchangeable across compose and k8s. |
-| **Recoverability** — always able to get back | **Better**, once §4.2 is adopted | Data: restic snapshots + `backup restore`. Code: immutable published tags make rollback a pointer change — but only if we opt out of the default tag. |
+| **Recoverability** — always able to get back | **Better**, once §4.2 is adopted | Data: restic snapshots + `backup restore`. Code: published images are commit-addressed, so rollback is a pointer change — but only if we publish rather than stage locally. |
 | **Auditability** — reports, sign-off, go/no-go | **Same** | Human artifacts; the platform is neutral. |
 | **Agent execution** — no human at a production shell | **Same or better** | A CLI plus a kubeconfig, with no interactive step. |
 | **No silent drift** — Git is the source of truth | **Same, conditional** | Holds only with the deployment-directory discipline in §4.1. |
 
-Recoverability is the only row that is not met by stack's defaults: its data
-axis is native, its **code** axis is not, because the default image tag is
-mutable. §4.2 shows that closing it is a definition-level choice rather than
-tooling we would have to build. Nothing below is an obstacle to a policy goal.
+Recoverability is the only row that depends on a choice we have not yet made:
+its data axis is native, and its **code** axis is native *too* — but only on the
+published-image path. The local staging path, which is what an unconfigured
+deployment uses, is mutable and cannot roll back. §4.2 is that choice. Nothing
+below is an obstacle to a policy goal.
 
 ## Where the change lands
 
@@ -107,7 +109,7 @@ All gate numbers in this table are the policy's.
 | §4.2 baseline | `stack manage --dir <d> backup now`, plus the app-specific state capture the objective names |
 | §4.3 backup smoke | `backup now` → `backup list` → `backup restore` into a scratch deployment |
 | §4.4 twin | `deploy` + `start` + `backup restore --from <prod>` (§2 above) |
-| §4.7 cutover | `prepare` → publish the version tag → edit the reference → `manage update` (§4.2) |
+| §4.7 cutover | `prepare --publish-images` from a clean release checkout → `manage update` against the durable deployment directory (§4.1, §4.2) |
 | §4.8 rollback | Code: point the reference at the previous version tag → `update`. Data: stop → `backup restore` → start (§4.3). Two axes, reasoned about separately. |
 
 ---
@@ -163,25 +165,41 @@ rather than a contradiction: the spec becomes the Git-tracked truth, and the
 deployment directory becomes identified state that CI attaches to rather than
 recreates.
 
-### 4.2. Rollback has two axes — reference published tags, not `:stack`
+### 4.2. Rollback has two axes — publish images, don't stage them
 
-Policy §4.8 defines rollback as restoring the pre-upgrade dump.
-That is the **data** axis, and stack serves it well (`backup restore`, with the
-§4.3 caveat).
+Policy §4.8 defines rollback as restoring the pre-upgrade dump. That is the
+**data** axis, and stack serves it well (`backup restore`, with the §4.3 caveat).
 
-The **code** axis depends entirely on how the composefile names its image, and
-the default is the wrong choice for a release process.
+The **code** axis is served too, but only on the published-image path, and the
+difference is invisible until you need it.
 
-`remote_tag_for_image_unique` (`deploy/images.py:117`) rewrites a reference to a
-private mutable staging tag — `…/robotmoney/api:deploy-8bd8e312` — **only when
-the tag is one of `LOCALLY_BUILT_TAGS = ("local", "stack")`**. Any other
-reference is returned verbatim and treated as a published image, digest-locked
-in `stack.lock`.
+**Published images are commit-addressed.** `stack prepare --publish-images
+--image-registry ghcr.io` pushes under a name taken from `stack.yml` with the
+registry host prefixed, and **a tag that is the recipe repo's commit hash**.
+Pulling needs no configuration at all: `prepare` computes the hash of the
+checkout in front of it, pulls that image if it exists, and builds only if it
+does not. A production host sets `--build-policy prebuilt-remote` so it fails
+rather than quietly building from source.
 
-So `image: robotmoney/api:stack` opts into mutability. New content arrives under
-an unchanged reference, there is no earlier tag to point back at, and rollback
-degrades into rebuild-and-re-push. Referencing a **published version tag**
-instead makes rollback a pointer change. Verified end to end:
+That gives the release process exactly what policy §4.8 assumes, for free:
+
+- every release is an immutable artifact identified by the commit it came from;
+- rollback is checking out the previous release commit and running `update` — a
+  pointer change, no rebuild;
+- "what is running" is answerable from the Deployment, and maps to a commit.
+
+One condition: **the tag is a plain commit hash only for a clean checkout with a
+committed lock file.** A dirty tree or uncommitted `stack.lock` yields a
+`stackdev-<hash>` instead. Release builds must run from a clean tree, and
+`stack.lock` must be committed — which is a release-branch discipline the policy
+already has machinery for.
+
+**The unpublished path cannot do any of this.** With no published image,
+`push-images` stages the local build under a private *mutable* per-deployment tag
+(`…:deploy-<id>`). New content arrives under an unchanged reference, so there is
+nothing earlier to point back at — and stack cannot tell whether content changed,
+so **every** `update`, including a no-op, forces a re-pull and restarts the whole
+app tier. Verified, switching between two immutable tags to show the contrast:
 
 ```
 ### roll FORWARD
@@ -192,25 +210,21 @@ deploy-api: image …/robotmoney/api:v0-2-3 -> …/robotmoney/api:v0-2-2
 deploy-api: unchanged
 ```
 
-That third line is the second dividend. On the staging tag, stack cannot tell
-whether content changed, so **every** `update` — including a no-op — forces a
-re-pull and restarts the whole app tier. On an immutable tag a no-op is
-genuinely `unchanged`, and only the services that actually changed roll. Blast
-radius becomes proportionate to the change, which is what policy §4.7 and §4.8
-both assume.
+That third line is the second dividend: blast radius becomes proportionate to the
+change, which is what policy §4.7 and §4.8 both assume.
 
-**The recommendation, then:** pod composefiles reference
-`<registry>/robotmoney/api:<version>`, CI publishes that tag at release time,
-and the version in the composefile is the thing a release changes. It also makes
-the deployed version legible from the spec — `kubectl get deploy -o
-jsonpath=…image` answers "what is running" without inspecting digests.
+**The decision, then:** publish to `ghcr.io` from CI on every `main` build, and
+deploy published images everywhere except a developer laptop. The plan's §3.1
+carries this; it reverses that plan's original DO Container Registry choice,
+because auto-discovery only works when the registry matches the git host.
 
 Two properties remain true regardless and belong in policy §4.8:
 
 - The axes roll independently and must be reasoned about independently: a
   migration that ran is not undone by rolling the image back.
 - Rolling back to a version whose schema expectations differ from the live
-  database is the case policy §4.8's default (restore the dump) exists for.
+  database is exactly the case policy §4.8's default — restore the dump — exists
+  for.
 
 ### 4.3. `backup restore` does not orchestrate, but policy §4.7 says "agent-executed"
 
@@ -263,9 +277,11 @@ Either way the inventory changes on the k8s path:
 - **A kubeconfig credential appears**, best supplied as
   `--kube-config env:KUBECONFIG_DATA` from a GitHub Environment secret rather
   than a file copied into the deployment directory.
-- **Registry credentials become load-bearing**, because `--image-registry` is
-  mandatory for a k8s target (verified: importing into the node's containerd
-  does not satisfy it).
+- **Registry credentials become load-bearing**, because a reachable registry is
+  mandatory for a k8s target — verified: importing into the node's containerd
+  does not satisfy the check. Publishing to `ghcr.io` (§4.2) keeps this cheap:
+  Actions' own `GITHUB_TOKEN` authenticates it with `packages: write`, so no
+  long-lived registry credential joins the inventory.
 
 ### 4.5. There is no `staging` value for `RM_ENV`
 

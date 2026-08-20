@@ -1,99 +1,102 @@
-# Using the `stack` orchestrator with this app
+# `stack` orchestrator — field guide
 
-Working notes for driving [bozemanpass/stack](https://github.com/bozemanpass/stack)
-against robotmoney. **Every claim here was executed, not read.** Where the
-upstream documentation and the tool disagree, the tool is recorded and the
-disagreement is noted, because several of these differences fail *silently*.
+How [bozemanpass/stack](https://github.com/bozemanpass/stack) behaves when driven
+against *this* application. **Every claim here was executed, not read.** Where
+the upstream documentation and the tool disagree, the tool is recorded and the
+disagreement noted — several of these differences fail *silently*, which is the
+reason this document exists.
 
 - **Tool version:** `stack 2.0.0-1177d1b-202608201522`
 - **Verified against:** k3s `v1.36.2+k3s1`, single node, `local-path` default StorageClass
 - **Date:** 2026-08-20
-- **Environment:** see [`../../.stack-env/README.md`](../../.stack-env/README.md)
+- **Environment:** [`../../.stack-env/README.md`](../../.stack-env/README.md)
 
-Companion to the plan in
-[`../plans/stack-k8s-staging-deployment.md`](../plans/stack-k8s-staging-deployment.md).
+**This document is a reference, not a plan.** It records how the tool behaves.
+What we intend to do about it is [`../plans/stack-k8s-staging-deployment.md`](../plans/stack-k8s-staging-deployment.md);
+how it meets the release policy is
+[`stack-runbook-reconciliation.md`](./stack-runbook-reconciliation.md).
 
 ---
 
-## 1. Paths in `stack.yml` are repo-root-relative
+# A. Authoring a stack for this repo
 
-Both `containers[].path` and `pods[].path` resolve against the **repo root**,
-not against `stack.yml`'s own directory. Our `stack.yml` lives at
-`stacks/robotmoney/stack.yml`, so its entries read:
+## 1. Every path in `stack.yml` is repo-root-relative
+
+Both `containers[].path` and `pods[].path` resolve against the **repository
+root**, never against `stack.yml`'s own directory. Ours lives at
+`stacks/robotmoney/stack.yml`, so:
 
 ```yaml
 containers:
-  - name: robotmoney/api
+  - name: robotmoney/robotmoney-api
     path: ./stacks/robotmoney/containers/api   # NOT ./containers/api
 pods:
   - name: data
     path: ./stacks/robotmoney/pods/data
 ```
 
-This is consistent with the upstream todo example, where `stack.yml` sits in
-`stacks/todo/` and the single pod is `path: .` — the repo root, where that
-repo's `composefile.yml` actually lives.
-
-Get it wrong for a pod and `stack validate` says so cleanly:
+The upstream skill states the rule outright, and `stack validate` catches the
+pod case cleanly:
 
 ```
 error: pod 'data' names no readable pod file
   (looked at <repo>/pods/data/composefile.yml) [pod-file-missing]
 ```
 
-## 1a. A build script is named in `container.yml`, never in `stack.yml`
+There is no convention requiring a particular directory name. `stack-files/` is
+the only name the tool looks for on its own — see §2.
 
-This one cost the most time, because the failure is silent in the place you
-look first.
+## 2. A build script is named in `container.yml`, never in `stack.yml`
 
-A stack.yml container entry carries **only** `name`, `ref`, `path`, `wrapper`,
+This cost the most time, because the failure is silent exactly where you look
+first.
+
+A `stack.yml` container entry carries **only** `name`, `ref`, `path`, `wrapper`,
 `wrapper-ref`, `content-root` (`build_util.py:37-51`). There is **no `build`
-field**. Writing one there is not an error and not a warning — it is simply
-dropped, and `stack prepare` falls back to `default-build.sh`, which expects a
-`Dockerfile` sitting in `path`:
+field**. Writing one there is neither an error nor a warning — it is dropped, and
+`prepare` falls back to `default-build.sh`, which expects a `Dockerfile` in
+`path`:
 
 ```
 ERROR: failed to solve: failed to read dockerfile: open Dockerfile: no such file or directory
-ERROR: .../container-build/default-build.sh robotmoney/api:stack .../stacks/robotmoney/containers/api failed with rc=1
+ERROR: .../container-build/default-build.sh robotmoney/api:stack .../containers/api failed with rc=1
 ```
 
-`build` **is** a field of `ContainerSpec` (`build_util.py:78`) and it is read
-from exactly one place: a `container.yml` in the container's `path`
-(`build_util.py:122`). So the working shape is two files:
+`build` *is* a `ContainerSpec` field (`build_util.py:78`), read from exactly one
+place: a `container.yml` in the container's `path` (`build_util.py:122`). So the
+working shape is two files:
 
 ```yaml
-# stacks/robotmoney/stack.yml       — points at the recipe directory
+# stacks/robotmoney/stack.yml — where the recipe lives
 containers:
-  - name: robotmoney/api
+  - name: robotmoney/robotmoney-api
     path: ./stacks/robotmoney/containers/api
 ```
 ```yaml
-# stacks/robotmoney/containers/api/container.yml — names the recipe
+# stacks/robotmoney/containers/api/container.yml — what the recipe is
 container:
-  name: robotmoney/api
+  name: robotmoney/robotmoney-api
   build: build.sh          # resolved against THIS file's directory
   content-root: .
 ```
 
 `container.yml` keys are `name`, `ref`, `build`, `wrapper`, `wrapper-ref`,
-`content-root`, all under a required top-level `container:` section — a missing
-section is the one case that does error out loudly (`build_util.py:116`).
+`content-root`, under a required top-level `container:` section — a missing
+section is the one case that errors loudly (`build_util.py:116`).
 
-> **Rule of thumb:** `stack.yml` says *where the recipe lives*;
-> `container.yml` says *what the recipe is*. Upstream `docs/stack-files.md`
-> documents neither `build` nor this split.
+There is also a **convention path** that needs no `container.yml`:
+`<repo>/stack-files/containers/<name-with-slashes-as-dashes>/build.sh`
+(`constants.py:81`, `build_containers.py:140-146`). We use the explicit
+`container.yml` instead, because it keeps the recipe beside the stack that owns
+it.
 
-## 2. Why we need `build:` at all
+### Why we need a build script at all
 
 `backend/Dockerfile` copies `contract/` — the shared HTTP contract — from
 **outside** `backend/`, so its build context must be the repo root while its
-recipe lives at `backend/Dockerfile`. `content-root` cannot express "recipe
-here, context there"; that is exactly the split
-[`build_util.py:65-74`](https://github.com/bozemanpass/stack) documents in its
-own docstring. So we hand `stack` a build script and set the context ourselves.
-
-The contract a build script must honour (from
-`bozemanpass/stack-wrapper-static-content/build.sh`):
+recipe lives at `backend/Dockerfile`. `content-root` cannot express "recipe here,
+context there"; `build_util.py:65-74` documents that exact split in its own
+docstring. The contract a build script honours:
 
 | Variable | Meaning |
 |---|---|
@@ -102,32 +105,114 @@ The contract a build script must honour (from
 | `STACK_CONTAINER_BUILD_TAG` | image tag, `<name>:stack` |
 | `STACK_CONTAINER_BASE_DIR` | where `build-base.sh` lives; source it first |
 
-Ours is `stacks/robotmoney/containers/api/build.sh`.
-
 ## 3. Composefiles reference built images by tag, never `build:`
 
-This is the single biggest shape difference from `docker-compose.yml`. `stack`
-builds the container named in `stack.yml` and tags it; the pod composefile then
-refers to that tag:
+The single biggest shape difference from `docker-compose.yml`:
 
 ```yaml
 services:
   api:
-    image: robotmoney/api:stack     # NOT `build:`
+    image: robotmoney/robotmoney-api:stack     # NOT `build:`
 ```
 
-`stack prepare` also writes a **`stack.lock`**, pinning external images to
-digests — observed on our first run:
+The `:stack` tag is the contract linking `stack.yml` to the composefile, and
+`stack validate` checks it. Off-the-shelf images (`postgres:17-alpine`) need
+**no** `containers:` entry at all — they are digest-locked into `stack.lock` on
+first prepare:
 
 ```
 Locking postgres:17-alpine to sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
 ```
 
-## 4. Backup annotations are position-sensitive and fail silently
+## 4. Container names: shared namespace, project-specific name
 
-`@stack backup-exclude` **must trail the volume line**. On its own line above
-it, it parses as an ordinary comment, is dropped, and `stack init` emits an
-empty exclude list without complaint:
+A name is `<namespace>/<name>`. The **namespace is the image-registry namespace**
+— for a GitHub-hosted project, the owning organization, so `robotmoney` is
+correct. The **name half must be project-specific**: the namespace is shared by
+every repo in the org, so `robotmoney/api` is the anti-pattern the upstream skill
+names explicitly. Nothing validates it; getting it wrong simply yields an image
+nobody can find again.
+
+> **Pending change.** Our definition currently declares `robotmoney/api`. It
+> should be `robotmoney/robotmoney-api`. Renaming means a rebuild and a re-push,
+> so it is scheduled with the other definition corrections rather than done in
+> passing.
+
+## 5. Composefile rules that differ from our compose habits
+
+- **`ports:` is not what makes a service addressable.** Every service answers to
+  its own name across pods on both targets — on k8s via a headless Service when
+  no port is declared. Publishing a port merely to obtain a hostname is a
+  mistake, and on compose `--map-ports-to-host` would then expose it. Declare a
+  port only where something must actually reach it (for us: `api`).
+- **List container ports bare** (`- "8787"`). Host mapping is decided at `init`
+  time by `--map-ports-to-host`; never hardcode a host port.
+- **Env precedence is `config.env` → `env_file:` → inline `environment:`, later
+  wins.** An inline literal therefore **beats** anything the deployer passes with
+  `--config`. Anything an operator should choose must be *forwarded* —
+  `SOME_VAR=${SOME_VAR}` — not defaulted. `stack deploy` warns when an inline
+  literal shadows a differing `config.env` key.
+- **Secrets are not composefile environment entries.** Declare them in
+  `stack.yml`; stack delivers them to every container. Declaring a secret also
+  strips any leftover hardcoded default for it from the deployed composefile.
+
+---
+
+# B. What `stack init` generates
+
+## 6. Secrets: `generate` vs `external`, and a wider blast radius
+
+```yaml
+secrets:
+  POSTGRES_PASSWORD:        # generated per deployment
+  OPENCODE_API_KEY:
+    external: true          # must be supplied: --secret NAME=env:CI_VAR
+```
+
+`external: true` means the counterpart lives outside the deployment, so a
+generated value would be useless; it must be given a reference at `init`.
+Everything else stack generates per deployment, which is strictly better than a
+hand-set `ADMIN_TOKEN`.
+
+**The blast radius is wider than ours is today.** `docker-compose.yml`'s
+`environment:` blocks are an explicit allowlist — no `env_file:`, no `ENV` in the
+Dockerfile — so a variable not named in a service's block never reaches it.
+stack inverts this: a declared secret reaches *every* container. Consequences:
+
+- `analytics-producer` no longer needs `ANALYTICS_TOKEN_FILE`; it gets
+  `ANALYTICS_TOKEN` by injection, and `backend/src/producer/index.ts:23` already
+  accepts either form.
+- The worker lanes now receive `ADMIN_TOKEN` although only `api` authenticates
+  HTTP. Not a vulnerability, but strictly wider — a conscious acceptance, not a
+  discovery.
+
+## 7. Ingress routes come from a trailing comment, and cross pod boundaries
+
+```yaml
+    ports:
+      - "8787"   # @stack http-proxy /
+```
+
+Declared in `pods/app/composefile.yml`, it resolves against the whole deployment
+— the generated spec names the service without qualifying it by pod:
+
+```yaml
+network:
+  http-proxy:
+   - host-name: rm-adhoc.localhost
+     routes:
+      - path: /
+        proxy-to: api:8787
+```
+
+Confirming that pods share one service namespace, which is what lets
+`analytics-producer` (workers pod) reach `http://api:8787` (app pod) unchanged.
+
+## 8. Backup annotations are position-sensitive and fail silently
+
+`@stack backup-exclude` **must trail the volume line**. On its own line above it,
+it parses as an ordinary comment, is dropped, and `init` emits an empty exclude
+list without complaint:
 
 ```yaml
 # WRONG — silently ignored, produces `backup: exclude: []`
@@ -140,114 +225,197 @@ volumes:
   - pgdata:/var/lib/postgresql/data   # @stack backup-exclude
 ```
 
-The consequence is not cosmetic. Without the exclusion, K8up file-copies a
-**live** Postgres data directory, and the repository accumulates snapshots that
-look restorable and are not. The real artifact is the logical dump, and *those*
-annotations are line-position-independent because they attach to the service:
+Not cosmetic: without the exclusion K8up file-copies a **live** Postgres data
+directory, and the repository accumulates snapshots that look restorable and are
+not. The real artifact is the logical dump, whose annotations attach to the
+service and are position-independent:
 
 ```yaml
     # @stack backup-command pg_dump -U robotmoney -d robotmoney --clean --if-exists
     # @stack backup-file-extension sql
 ```
 
-Verify by reading the generated spec, every time:
+**Read the generated spec after every `init`.** It is the only place that shows
+whether an annotation landed:
 
 ```yaml
 backup:
   exclude:
    - pgdata            # <- if this is [], the annotation did not land
-  commands:
-    postgres:
-      command: pg_dump -U robotmoney -d robotmoney --clean --if-exists
-      file-extension: sql
 ```
 
-## 5. `--http-proxy-clusterissuer` defaults to `letsencrypt-prod`
+## 9. `--http-proxy-clusterissuer` defaults to `letsencrypt-prod`
 
-Omitting the flag does **not** mean "no issuer". `stack init` writes:
+Omitting the flag does **not** mean "no issuer". `init` writes
+`cluster-issuer: letsencrypt-prod` — on a cluster with cert-manager, a request to
+the production Let's Encrypt endpoint, with production rate limits. Pass
+`--http-proxy-clusterissuer ""` to omit the key entirely, which is what an ad-hoc
+deployment wants until DNS actually resolves. Provisioned clusters carry both a
+production and a staging ClusterIssuer (§22).
+
+---
+
+# C. What the Kubernetes translation actually does
+
+Read off live objects in namespace `stack-d6b992128bd8e312`, from a deployment
+reaching `{"status":"ok","db":"up"}`.
+
+## 10. `API_PORT` — the one that bites hardest
+
+**Kubernetes injects legacy service-link environment variables** named
+`<SERVICE>_PORT` for every Service in the namespace. Our api Service is called
+`api`, so every container receives:
+
+```
+API_PORT=tcp://10.43.230.60:8787
+POSTGRES_PORT=tcp://10.43.240.132:5432
+```
+
+`backend/src/config.ts:553` is `Number(process.env.API_PORT ?? 8787)`. `??` only
+catches `null`/`undefined`; `Number("tcp://10.43.230.60:8787")` is `NaN`, so Bun
+binds a **random** port — observed `:34529` — while the Service still targets
+8787. Nothing routes, ever, and the failure is invisible:
+
+```
+NAME                          READY   STATUS    RESTARTS   AGE
+deploy-api-857f4d847d-rwzxm   1/1     Running   0          66s
+```
+
+Fix: declare `API_PORT: "8787"` explicitly in the composefile — an explicitly
+declared env var wins over a service link. This **contradicts
+`docker-compose.yml`**, which deliberately removed `API_PORT` because there it
+made a host `.env` value look effective while compose overrode it. Both decisions
+are right for their target; the reason must be written in both places or someone
+will "clean up" the k8s one.
+
+> **App-side follow-up, independent of stack.** `Number(...)` on an unvalidated
+> env var that Kubernetes is known to populate is a footgun. A `Number.isFinite`
+> guard in `config.ts` turns a silent mis-bind into a loud refusal, which is this
+> repo's house style anyway.
+
+## 11. `command:` becomes `args:`, and `$` is treated differently per field
+
+Compose `command:` lands in the container's **`args`**, with `command` left
+`null` so the image `ENTRYPOINT` stands.
+
+| Field | Compose `${VAR}` substituted at manifest-generation time? |
+|---|---|
+| `environment:` values | **Yes** |
+| `command:` values | **No** — passed through literally |
+
+That combination is a trap. A secret referenced from `environment:` is
+substituted *at generation time*, when the secret does not exist yet, so it
+renders **empty**:
 
 ```yaml
-     cluster-issuer: letsencrypt-prod
+# WRONG — becomes postgres://robotmoney:@postgres:5432/robotmoney
+environment:
+  DATABASE_URL: postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney
 ```
 
-On a cluster with cert-manager installed, that is a request for a real
-certificate from the production Let's Encrypt endpoint — with production rate
-limits. Pass `--http-proxy-clusterissuer ""` to omit the key entirely, which is
-what an ad-hoc or staging deployment wants until DNS actually resolves.
+Secrets arrive as `secretKeyRef`, resolved by the kubelet at container start,
+long after the manifest was written. The two never meet. This is by design — the
+upstream skill says plainly: "have the app read it from the environment rather
+than embedding a password in a connection URL."
 
-## 6. Ingress routes come from a comment, and cross pod boundaries
-
-The `@stack http-proxy` annotation trails a `ports:` entry:
+`backend/src/config.ts:552` takes `DATABASE_URL` as `required(...)` and accepts
+no `PGHOST`/`PGUSER`/`PGPASSWORD` parts, so *for us* the URL must be assembled in
+the container, in `command:`, where `$` survives:
 
 ```yaml
-    ports:
-      - "8787"   # @stack http-proxy /
+command:
+  - sh
+  - -c
+  - |
+    export DATABASE_URL="postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney"
+    exec bun run src/api/index.ts
 ```
 
-Declared in `pods/app/composefile.yml`, it resolves against the whole
-deployment — the generated spec names the service without qualifying it by pod:
+**Do not write `$$` here.** Compose's usual escape is not unescaped by this
+translation — `$${POSTGRES_PASSWORD}` reaches the container verbatim, where `sh`
+reads `$$` as its own PID and builds a garbage URL. Verified both ways.
+
+## 12. `healthcheck:` becomes a livenessProbe — and only that
 
 ```yaml
-network:
-  http-proxy:
-   - host-name: rm-adhoc.localhost
-     routes:
-      - path: /
-        proxy-to: api:8787
+healthcheck:
+  test: ["CMD", "bun", "-e", "..."]
+  interval: 15s
+  timeout: 5s
+  retries: 3
+  start_period: 40s
+```
+```json
+"livenessProbe": {
+  "exec": {"command": ["bun", "-e", "..."]},
+  "periodSeconds": 15, "timeoutSeconds": 5,
+  "failureThreshold": 3, "initialDelaySeconds": 40
+}
 ```
 
-That confirms pods share one service namespace, which is what lets
-`analytics-producer` (workers pod) reach `http://api:8787` (app pod) unchanged.
+`readinessProbe` and `startupProbe` are **absent**. Two consequences to decide
+about before staging:
 
-## 7. Secrets are deployment-wide — a real change in blast radius
+- **No readiness gate.** A pod joins its Service's endpoints as soon as the
+  container starts, so traffic can arrive before the api can serve it. Under
+  compose this did not matter — the api was the only thing behind the port.
+- **`start_period` maps to `initialDelaySeconds` on liveness**, strictly weaker
+  than a `startupProbe`: a boot slower than 40s is killed rather than granted
+  more time.
 
-`docker-compose.yml`'s `environment:` blocks are an explicit **allowlist**: there
-is no `env_file:`, `backend/Dockerfile` sets no `ENV`, so a variable not named
-in a service's block never reaches that container. `stack` inverts this: a
-declared secret is "delivered to every container of the deployment."
+`depends_on: condition: service_healthy` has no k8s equivalent and is dropped. In
+practice api and workers crash-loop until Postgres answers — it works, but it is
+noisy, and migrations must not rely on the ordering ("Still open", item 1).
 
-Practical consequences for us:
+## 13. Secrets land as `secretKeyRef`, never as literals
 
-- `analytics-producer` no longer needs `ANALYTICS_TOKEN_FILE`. It gets
-  `ANALYTICS_TOKEN` by injection, and `backend/src/producer/index.ts:23` already
-  accepts either form.
-- The worker lanes now receive `ADMIN_TOKEN` even though only `api`
-  authenticates HTTP. Not a vulnerability, but it is strictly wider than today
-  and should be a conscious acceptance, not a discovery.
-
-`generate` vs `external` is the meaningful distinction:
-
-```yaml
-secrets:
-  POSTGRES_PASSWORD:        # generated per deployment
-  OPENCODE_API_KEY:
-    external: true          # must be supplied: --secret NAME=env:CI_VAR
+```
+POSTGRES_PASSWORD = {'secretKeyRef': {'key': 'POSTGRES_PASSWORD', 'name': 'stack-secrets'}}
+ADMIN_TOKEN       = {'secretKeyRef': {'key': 'ADMIN_TOKEN', 'name': 'stack-secrets'}}
 ```
 
-## 8. Rough edges worth knowing
+One `stack-secrets` Secret per namespace holds all seven of ours — four
+generated, three external. Generated values are real; `POSTGRES_PASSWORD` came
+out 32 bytes. The secret handling is sound; it simply cannot participate in
+YAML-time string building (§11).
 
-- **`stack chart` crashes** with an unhandled `FileNotFoundError` traceback on a
-  stack whose pod file is missing, where `stack validate` reports the same
-  condition cleanly. Run `validate` first; treat a `chart` traceback as "go read
-  the validate output", not as a broken stack.
-- **`--image-registry` omission is a warning at `init` and a hard stop at
-  `start`.** `stack init` only warns:
-  `WARN: --image-registry not specified: locally built images can only be
-  deployed if they are published to a container registry the cluster can reach`.
-  `stack manage start` then refuses outright:
+## 14. Volumes become PVCs, 2G by default
 
-  ```
-  ERROR: Cannot resolve image robotmoney/api:stack for deployment: it is not
-  published to a registry and the spec has no image-registry to stage it through.
-  ```
+`pgdata` bound on the `local-path` default StorageClass at **2G** — the
+documented default when the spec gives no
+`resources.volumes.<name>.reservations.storage`. On a remote cluster `init`
+leaves volumes unmapped and the default StorageClass decides where data lives.
 
-  **Importing the image into the cluster's containerd does not help.**
-  `docker save robotmoney/api:stack | k3s ctr images import -` succeeds, the
-  image is listed by `k3s ctr images ls`, and `start` still refuses — the check
-  is in the tool, not a pull failure in the cluster. For a k8s target a
-  reachable registry is mandatory, full stop.
+## 15. `_static` must be baked into the image
 
-## 10. `deploy` and `start` do different jobs
+With no bind mount, `/srv/frontend` is empty. The api starts happily, logs
+`serving static frontend from /srv/frontend`, and then:
+
+```
+GET /health -> {"status":"ok","env":"demo","db":"up", ...}
+GET /       -> HTTP 500
+```
+
+The assembled `_static` has to be a layer in the api image, not a mount.
+
+## 16. `RM_ENV` has no `staging` value
+
+`backend/src/config.ts:539` pins `VALID_ENVS = ["ephemeral", "demo", "prod"]` and
+throws otherwise:
+
+```
+error: invalid RM_ENV "staging" — expected one of ephemeral | demo | prod
+```
+
+The staging environment must run **`RM_ENV=prod`** semantics, including
+`PROJECTS_SOURCE=live`, which prod fails closed without. The ad-hoc box runs
+`demo` deliberately, to stay off those fail-closed paths.
+
+---
+
+# D. Lifecycle
+
+## 17. `deploy` and `start` do different jobs
 
 `stack deploy` materializes a **deployment directory** and does not touch the
 cluster:
@@ -262,227 +430,84 @@ rm-adhoc/
   compose/composefile-{data,app,workers}.yml
 ```
 
-The composefiles are copied **verbatim**, comments and all — no translation
-happens here. For a k8s target there is no `secrets.env` on disk (values live in
-the cluster `stack-secrets` Secret), which is the behaviour upstream documents.
+Composefiles are copied **verbatim**, comments and all — no translation happens
+here. For a k8s target there is no `secrets.env` on disk; values live in the
+cluster Secret. The translation happens at `stack manage start`, so **`deploy`
+succeeding tells you nothing about whether the manifests are valid.**
 
-The k8s translation happens at `stack manage start`. That means **`deploy`
-succeeding tells you nothing about whether the manifests are valid** — the
-questions about probes and secret interpolation below cannot be answered until
-`start` runs.
+The `cluster-id` is identity: it determines the namespace *and* the restic
+repository path. Every `deploy` mints a new one — see
+[`stack-runbook-reconciliation.md`](./stack-runbook-reconciliation.md) §4.1 for
+why that matters to a release pipeline. `stop` halts workloads and keeps the
+deployment; `destroy` ends it, and only `destroy --delete-volumes` removes the
+namespace.
 
-## 9. Command reference, as the binary actually reports it
+## 18. A reachable registry is mandatory for a k8s target
 
-Corrections to the upstream docs summary:
-
-- `--deploy-to` accepts **`compose | k8s | k8s-kind`** (the docs show only the
-  first two).
-- `--map-ports-to-host` has **six** modes: `any-variable-random` (docker
-  default), `localhost-same`, `any-same`, `localhost-fixed-random`,
-  `any-fixed-random`, `k8s-clusterip-same` (k8s default).
-- `--secret NAME=REFERENCE` where reference is
-  `generate | env:VAR | file:PATH | env-file:VAR | exec:COMMAND`.
-- `stack fetch repo <host>/<org>/<repo>` clones to
-  `$STACK_REPO_BASE_DIR/<host>/<org>/<repo>`.
-
----
-
-# Part II — what the k8s translation actually does
-
-Everything below was read off live objects in namespace
-`stack-d6b992128bd8e312` on the k3s cluster, from a deployment that reaches
-`{"status":"ok","db":"up"}`.
-
-## 11. `API_PORT` — the one that will bite hardest
-
-**Kubernetes injects legacy service-link environment variables** named
-`<SERVICE>_PORT` for every Service in the namespace. Our api Service is called
-`api`, so every container in the deployment receives:
+`init` only warns:
 
 ```
-API_PORT=tcp://10.43.230.60:8787
-POSTGRES_PORT=tcp://10.43.240.132:5432
+WARN: --image-registry not specified: locally built images can only be deployed
+if they are published to a container registry the cluster can reach
 ```
 
-`backend/src/config.ts:553` is:
-
-```ts
-apiPort: Number(process.env.API_PORT ?? 8787),
-```
-
-`??` only catches `null`/`undefined`. `Number("tcp://10.43.230.60:8787")` is
-`NaN`, Bun binds a **random** port — observed `:34529` — while the Service still
-targets 8787. Nothing routes, ever. And the failure is invisible:
+`start` then refuses outright:
 
 ```
-NAME                          READY   STATUS    RESTARTS   AGE
-deploy-api-857f4d847d-rwzxm   1/1     Running   0          66s
+ERROR: Cannot resolve image robotmoney/api:stack for deployment: it is not
+published to a registry and the spec has no image-registry to stage it through.
 ```
 
-The fix is to declare `API_PORT: "8787"` explicitly in the composefile; an
-explicitly declared env var wins over a service link. Note this **contradicts
-`docker-compose.yml`**, which deliberately removed `API_PORT` because there it
-made a host `.env` value look effective while compose overrode it. Both
-decisions are right for their target; the reason has to be written down in both
-places or someone will "clean up" the k8s one.
+**Importing into the cluster's containerd does not help.**
+`docker save … | k3s ctr images import -` succeeds, `k3s ctr images ls` lists
+it, and `start` still refuses — the check is in the tool, not a pull failure in
+the cluster.
 
-> Worth a follow-up in the app itself: `Number(...)` on an unvalidated env var
-> that k8s is known to populate is a footgun independent of stack. A
-> `Number.isFinite` guard in `config.ts` would turn a silent mis-bind into a
-> loud refusal, which is this repo's house style anyway.
+## 19. Image identity is commit-addressed, and discovery needs no configuration
 
-## 12. `command:` becomes `args:`, and `$` is treated differently there
+This is the mechanism that makes releases and rollbacks work, and it is easy to
+miss because the *unpublished* path behaves differently.
 
-Compose `command:` lands in the k8s container's **`args`**, with `command` left
-`null` (the image `ENTRYPOINT` stands).
+**Publishing** is one flag on the build:
 
-More important, **substitution rules differ by field**:
-
-| Field | Compose `${VAR}` substitution at manifest-generation time? |
-|---|---|
-| `environment:` values | **Yes** |
-| `command:` values | **No** — passed through literally |
-
-That combination produces the trap below. A secret referenced in
-`environment:` is substituted *at generation time*, when the secret does not
-exist yet, so it renders **empty** — silently:
-
-```yaml
-# WRONG — becomes postgres://robotmoney:@postgres:5432/robotmoney
-environment:
-  DATABASE_URL: postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney
+```sh
+stack prepare --stack ./stacks/robotmoney --publish-images --image-registry ghcr.io
 ```
 
-Secrets arrive as `secretKeyRef`, resolved by the kubelet at container start —
-long after the manifest was written. The two never meet. Assemble the URL in
-the container instead, in `command:`, where `$` survives:
+**Pulling needs no configuration on the deploying side.** Discovery is a lookup
+on two things:
 
-```yaml
-# RIGHT — single $, in command:, expanded by the container's shell
-command:
-  - sh
-  - -c
-  - |
-    export DATABASE_URL="postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney"
-    exec bun run src/api/index.ts
-```
+- the **name** — taken verbatim from `stack.yml` with the registry host prefixed,
+  the registry inferred from the recipe repo's git host (`github.com` → `ghcr.io`);
+- the **tag** — the **commit hash of the recipe repo**, which for a project
+  carrying its own stack directory is simply this repo.
 
-**Do not write `$$` here.** Compose's usual escape is *not* unescaped by this
-translation — `$${POSTGRES_PASSWORD}` is delivered to the container verbatim,
-where `sh` reads `$$` as its own PID and builds a garbage URL. Verified both
-ways.
+So `prepare` computes the hash of the checkout in front of it, looks for
+`ghcr.io/<container-name>:<hash>`, pulls it if present and builds only if not —
+the default `as-needed` build policy. A production host that must never build
+uses **`--build-policy prebuilt-remote`**, which fails rather than falling back.
 
-`backend/src/config.ts:552` takes `DATABASE_URL` as `required(...)` and accepts
-no `PGHOST`/`PGUSER`/`PGPASSWORD` parts, so runtime assembly is the only option
-for us.
+Repo identity lives entirely in the tag, which is why the name is free-form and
+why one commit can produce several images.
 
-## 13. `healthcheck:` becomes a livenessProbe — and *only* that
+A **clean** checkout with a committed lock file yields that plain commit hash; a
+dirty tree or uncommitted lock yields a `stackdev-<hash>` derived from the lock
+content (`build_util.py:216-234`). **Committing `stack.lock` is what stabilizes
+the version to a commit hash** — so a release build must run from a clean tree.
 
-```yaml
-healthcheck:
-  test: ["CMD", "bun", "-e", "..."]
-  interval: 15s
-  timeout: 5s
-  retries: 3
-  start_period: 40s
-```
+**The unpublished path is different and mutable.** When no published image
+exists, `push-images` stages the local build under a private per-deployment tag,
+`…/robotmoney/api:deploy-<id>`. Only `("local", "stack")` are treated as locally
+built (`deploy/images.py:31`); every other reference passes through verbatim.
+That distinction decides upgrade blast radius — §20.
 
-becomes
-
-```json
-"livenessProbe": {
-  "exec": {"command": ["bun", "-e", "..."]},
-  "periodSeconds": 15, "timeoutSeconds": 5,
-  "failureThreshold": 3, "initialDelaySeconds": 40
-}
-```
-
-`readinessProbe` and `startupProbe` are **ABSENT**. Two consequences worth
-deciding about before staging:
-
-- **No readiness gate.** A pod joins its Service's endpoints as soon as the
-  container starts, so traffic can arrive before the api can serve it. Under
-  compose this did not matter; the api was the only thing behind the port.
-- **`start_period` maps to `initialDelaySeconds` on liveness**, which is
-  strictly weaker than a `startupProbe`: a boot slower than 40s gets killed
-  rather than granted more time.
-
-`depends_on: condition: service_healthy` has no k8s equivalent and is dropped —
-as expected. In practice the api and workers crash-loop until Postgres answers,
-which works but is noisy.
-
-## 14. Secrets land as `secretKeyRef`, never as literals
-
-The generated Deployment carries no secret values:
-
-```
-POSTGRES_PASSWORD = {'secretKeyRef': {'key': 'POSTGRES_PASSWORD', 'name': 'stack-secrets'}}
-ADMIN_TOKEN       = {'secretKeyRef': {'key': 'ADMIN_TOKEN', 'name': 'stack-secrets'}}
-```
-
-One `stack-secrets` Secret per namespace holds all seven of ours (four
-generated, three `external`). Generated values are real — `POSTGRES_PASSWORD`
-came out 32 bytes. This is the good half of §12: the secret handling is sound,
-it just cannot participate in YAML-time string building.
-
-## 15. Volumes, and what `start` does with a 404
-
-`pgdata` became a **bound PVC** on the `local-path` default StorageClass at
-**2G** — the documented default when the spec gives no
-`resources.volumes.<name>.reservations.storage`.
-
-`stack manage start` **exits non-zero with a bare `404 page not found`** on this
-cluster, *after* successfully applying every workload:
-
-```
-ERROR: Exception thrown bringing stack up: (404)
-HTTP response body: 404 page not found
-```
-
-**This is a missing prerequisite, not a tool defect.** The cluster has Gateway
-API CRDs (from Traefik) but no Gateway for an HTTPRoute to attach to. The
-upstream provisioning script creates one — `stirlingbridge/machine-provisioning`
-`scripts/k3s-node.sh` installs k3s together with cert-manager, K8up, the Gateway
-API, a Gateway named **`stack-gateway`** in `kube-system`, and Let's Encrypt
-ClusterIssuers. Our ad-hoc k3s predates that script and has none of it (§19).
-
-The Deployments, Services, Secret and PVC are all created regardless. **Treat a
-404 from `start` as "ingress not published", not "deployment failed"** — but
-check, because the exit code cannot distinguish them.
-
-## 16. `_static` must be baked into the image — confirmed
-
-With no bind mount, `/srv/frontend` is empty in the container. The api starts
-happily and logs `serving static frontend from /srv/frontend`, then answers:
-
-```
-GET /health -> {"status":"ok","env":"demo","db":"up", ...}
-GET /       -> HTTP 500
-```
-
-So the plan's §3.1 conclusion holds, now with evidence: the assembled `_static`
-has to be a layer in `robotmoney/api`, not a mount.
-
-## 17. `RM_ENV` has no `staging` value
-
-`backend/src/config.ts:539` pins `VALID_ENVS = ["ephemeral", "demo", "prod"]`
-and throws otherwise:
-
-```
-error: invalid RM_ENV "staging" — expected one of ephemeral | demo | prod
-```
-
-The staging environment must therefore run **`RM_ENV=prod`** semantics —
-including `PROJECTS_SOURCE=live`, which prod fails closed without. The ad-hoc
-box here runs `demo` deliberately, to stay off those fail-closed paths.
-
-## 18. Upgrades: `update` is content-only, and the image tag decides its blast radius
+## 20. `update` is content-only, and the image reference decides its blast radius
 
 `stack manage --dir <d> update` converges the running deployment on its
 deployment directory. It applies **image references, environment values and
-secret values, and nothing else**. Structural change — services added or
-removed, ports, volume mounts, resource requests/limits, replicas — is refused
-outright, with the whole diff computed before anything is written:
+secret values, and nothing else.** Structural change — services added or removed,
+ports, volume mounts, resource requests/limits, replicas — is refused outright,
+with the whole diff computed before anything is written:
 
 ```
 ERROR: update only applies image, environment and secret changes, but the
@@ -491,93 +516,126 @@ deployment's shape has changed:
 Re-create the deployment to apply these.
 ```
 
-Skipping the push is caught rather than silently deploying stale code:
-`The local build of X is newer than the staged image: run '… push-images' and
-update again to deploy it.` A changed secret restarts every service, announced
-as `secrets: changed; restarting all services`. Rollouts go through the
-Deployment's normal rolling update via a `restartedAt` annotation that is
-*merged*, not assigned, so it does not strip the K8up backup annotations.
+Skipping the push is caught rather than silently deploying stale code: *"The
+local build of X is newer than the staged image: run '… push-images' and update
+again to deploy it."* A changed secret restarts every service
+(`secrets: changed; restarting all services`). Rollouts use the Deployment's
+normal rolling update via a `restartedAt` annotation that is *merged*, not
+assigned, so it does not strip the K8up backup annotations.
 
-**The consequential choice is the image tag**, because it decides whether an
-upgrade is targeted or total:
-
-| Composefile reference | `update` behaviour |
+| Image reference | `update` behaviour |
 |---|---|
-| `robotmoney/api:stack` | Rewritten to a mutable `…:deploy-<id>` staging tag. Content arrives under an unchanged reference, so **every** update — including a no-op — forces a re-pull and restarts the whole app tier. No earlier tag exists to roll back to. |
-| `<registry>/robotmoney/api:<version>` | Passed through verbatim and digest-locked in `stack.lock`. A no-op reports `unchanged`; only genuinely changed services roll; rollback is a pointer change. |
+| `robotmoney/robotmoney-api:stack`, unpublished | Rewritten to the mutable `…:deploy-<id>` staging tag. Content arrives under an unchanged reference, so **every** update — including a no-op — forces a re-pull and restarts the whole app tier. Nothing earlier to roll back to. |
+| A published, commit-addressed reference (§19) | Verbatim and digest-locked. A no-op reports `unchanged`; only genuinely changed services roll; rollback is a pointer change. |
 
-Only `("local", "stack")` are treated as locally-built
-(`deploy/images.py:31`); everything else is a published reference. For a release
-process, reference a published version tag. See
-[`stack-runbook-reconciliation.md`](./stack-runbook-reconciliation.md) §5.2.
+Verified, switching a service between two immutable tags:
 
-Related: a **clean** checkout with a committed lock file yields a
-commit-addressed image tag; a dirty tree or uncommitted lock yields a
-`stackdev-<hash>` tag derived from the lock content (`build_util.py:216-234`).
-Committing `stack.lock` is what stabilizes the version to a plain commit hash.
+```
+### roll FORWARD
+deploy-api: image …/robotmoney/api:v0-2-2 -> …/robotmoney/api:v0-2-3
+### ROLL BACK — no rebuild
+deploy-api: image …/robotmoney/api:v0-2-3 -> …/robotmoney/api:v0-2-2
+### no-op
+deploy-api: unchanged
+```
 
-**Superseded in part by §19.** The mutable `deploy-<id>` tag is the *staging*
-path, used when no published image exists. The published path is already
-commit-addressed and immutable, and is the grain of the tool.
-
-## 19. The upstream skills change several answers here
-
-`bozemanpass/no-paas` is a Claude Code plugin marketplace, and
-`bozemanpass/stack` carries an authoritative `skills/deploy-with-stack/SKILL.md`.
-It confirms most of what is recorded above — the repo-root `path` rule, secrets
-as deployment-wide env vars, cross-pod service DNS — and corrects or supersedes
-four things.
-
-**Image discovery is automatic and commit-addressed.** Publishing is
-`stack prepare --publish-images --image-registry ghcr.io`. Pulling needs no
-configuration at all: the name is the container name with the registry host
-prefixed (git host inferred, `github.com` → `ghcr.io`) and **the tag is the
-commit hash of the recipe repo**. `prepare` computes the hash of the checkout in
-front of it, pulls that image if it exists and builds only if it does not.
-`--build-policy prebuilt-remote` fails rather than falling back, which is what a
-production host wants. This is a better answer than the version-tag scheme in
-[`stack-runbook-reconciliation.md`](./stack-runbook-reconciliation.md) §4.2: it
-is immutable by construction and needs no composefile edit per release.
-
-**Do not embed a secret in a connection URL.** The skill is explicit: "have the
-app read it from the environment rather than embedding a password in a
-connection URL." Our §12 workaround is still required — `config.ts:552` takes
-`DATABASE_URL` as `required(...)` and accepts no parts — but it is a workaround
-for *our* app's shape, not a gap in the tool.
-
-**Forward deployer-facing values, do not default them.** Env precedence is
-`config.env` → `env_file:` → inline `environment:`, later wins. So an inline
-literal **beats** anything the deployer supplies with `--config`. Anything an
-operator should choose must be written `SOME_VAR=${SOME_VAR}`, not given a
-default. Our composefiles currently hardcode `RM_ENV` and friends inline, which
-makes them unoverridable at deploy time.
-
-**Container names: the namespace is the registry namespace, the name is
-project-specific.** For a GitHub-hosted project the namespace is the owning org
-— `robotmoney` is right — but the skill warns against a generic second half:
-"make the name project-specific rather than `api` or `frontend`", since the
-namespace is shared across every repo in the org. Ours is `robotmoney/api`,
-which is the named anti-pattern. Nothing validates it; getting it wrong just
-yields an image that can never be found again.
-
-Also worth noting: the skill's pipeline is `stack build containers` → `init` →
-`deploy` → `manage`; `ports:` is **not** required for a service to be
-addressable (every service answers to its own name across pods, via a headless
-Service on k8s), so publishing a port merely to get a hostname is a mistake;
-and off-the-shelf images need no `containers:` entry at all.
+For a release process, deploy published images (§19). The staging tag is a
+development convenience.
 
 ---
 
-## Still open
+# E. The wider toolchain
 
-1. **Migrations** — unresolved and now demonstrated: the api boots against a
-   database with no `schema_migrations` table and serves anyway, logging
-   `this boot is UNCHECKED`. `pre_start_command` / `post_start_command` run on
-   the *deployer* and cannot reach a cluster-internal Postgres. See §5 of the
-   plan for the three candidate shapes.
-2. **Ingress** — needs a cluster with a working Gateway or a plain Ingress path
-   (§15), plus cert-manager before TLS means anything.
-3. **Backups** — needs K8up on the cluster. The annotations are correct in the
-   spec (§4); nothing has been backed up or restored yet, and per the plan a
-   backup is not proven until something has been restored from it.
-4. **Readiness** — whether to add explicit probes to the spec (§13).
+## 21. The upstream skills are authoritative — install them
+
+`bozemanpass/no-paas` is a Claude Code plugin marketplace, and
+`bozemanpass/stack` carries `skills/deploy-with-stack/SKILL.md`.
+
+```
+/plugin marketplace add bozemanpass/no-paas
+/plugin install bpi-stack@no-paas
+/plugin install stirlingbridge-machine@no-paas
+/plugin install machine-provisioning@no-paas
+/plugin install no-paas-toolchain@no-paas
+```
+
+The skill confirms the repo-root path rule (§1), deployment-wide secrets (§6),
+cross-pod service DNS (§7), and the no-secrets-in-URLs design (§11). It is the
+source for §4 (naming), §5 (composefile rules) and §19 (image discovery), all of
+which corrected earlier assumptions in this branch.
+
+## 22. Cluster prerequisites come from `machine-provisioning`, not from stack
+
+stack **emits** ingress and backup resources; it does not install the controllers
+they need. `stirlingbridge/machine-provisioning`'s `scripts/k3s-node.sh` installs
+k3s together with:
+
+- **cert-manager** and Let's Encrypt ClusterIssuers (production and staging)
+- **K8up** — required for backups; a backup-enabled deploy to a cluster without
+  it fails recognizably at deploy time
+- **the Gateway API**, keeping k3s's bundled Traefik as the implementation, with
+  a Gateway named **`stack-gateway`** in `kube-system` for workloads to attach
+  HTTPRoutes to
+- `--nginx-ingress` instead provisions the legacy Ingress API; ingress-nginx is
+  noted upstream as retired, so the Gateway API is the default path
+
+This explains the ad-hoc cluster's failure mode: `stack manage start` exits
+non-zero with a bare `404 page not found` **after** applying every workload,
+because the CRDs exist but no Gateway does.
+
+```
+ERROR: Exception thrown bringing stack up: (404)
+HTTP response body: 404 page not found
+```
+
+Deployments, Services, Secret and PVC are all created regardless. **Treat a 404
+from `start` as "ingress not published", not "deployment failed"** — but check,
+because the exit code cannot distinguish them.
+
+The full toolchain is `stirlingbridge/machine` (create the VM — DigitalOcean
+among its targets) → `machine-provisioning` (make it a Docker host or a k8s
+node) → `stack` (deploy onto it).
+
+---
+
+# Appendix — command surface, and rough edges
+
+Corrections to the upstream docs summary, from the binary itself:
+
+- `--deploy-to` accepts **`compose | k8s | k8s-kind`** (the docs show two).
+- `--map-ports-to-host` has **six** modes: `any-variable-random` (docker
+  default), `localhost-same`, `any-same`, `localhost-fixed-random`,
+  `any-fixed-random`, `k8s-clusterip-same` (k8s default).
+- `--secret NAME=REFERENCE`, reference being
+  `generate | env:VAR | file:PATH | env-file:VAR | exec:COMMAND`.
+- `--kube-config` takes the same reference forms, so CI can pass
+  `env:KUBECONFIG_DATA` rather than a file.
+- `stack fetch repo <host>/<org>/<repo>` clones to
+  `$STACK_REPO_BASE_DIR/<host>/<org>/<repo>`.
+- Both `stack prepare` and `stack build containers` build; the skill's pipeline
+  is `build containers` → `init` → `deploy` → `manage`.
+
+**`stack chart` crashes** with an unhandled `FileNotFoundError` traceback when a
+pod file is missing, where `validate` reports the same condition cleanly. Run
+`validate` first and treat a `chart` traceback as "go read the validate output".
+
+**Unimplemented upstream**, so not available to a runbook that assumes them:
+`backup status`, `backup prune`, `backup check`, and
+`backup list --from <deployment>`.
+
+---
+
+# Still open
+
+1. **Migrations.** Demonstrated, not resolved: the api boots against a database
+   with no `schema_migrations` table and serves anyway, logging `this boot is
+   UNCHECKED`. `pre_start_command` / `post_start_command` are host-side scripts
+   run by the *deployer* and cannot reach a cluster-internal Postgres. Candidate
+   shapes are in the plan, §5.
+2. **Ingress and TLS.** Needs a cluster provisioned per §22. Nothing here has
+   served over TLS yet.
+3. **Backups.** Needs K8up. The annotations are correct in the spec (§8), but
+   nothing has been backed up or restored — and a backup is not proven until
+   something has been restored from it.
+4. **Readiness.** Whether to declare explicit probes rather than accept
+   liveness-only (§12).
