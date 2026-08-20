@@ -2253,3 +2253,144 @@ cache and a per-day checkpoint and inserts **no rows**.
   #648 records that the column splices two different measurements. It is skipped,
   and a repaired day carries no SP500 row — honest sparseness, which
   `WalletHistoryPoint` already documents.
+
+---
+
+## D37 — Strategy-account positions are baked constants split by valuation standard; an idle-only NAV is disclosed, not refused (issue #642)
+
+**Decision.** Four parts, all in `backend/src/config.ts` and
+`backend/src/chain/wallet-valuation.ts`:
+
+1. The strategy positions are **baked constants**. The five
+   `STRATEGY_VAULT_*_ADDRESS` env reads and the `STRATEGY_VAULT_CANDIDATES` env
+   indirection are removed, and nothing is added to `docker-compose.yml`,
+   `x-worker-env`, or `.env.example`.
+2. They are split by **valuation standard**, not lumped in one list.
+   `STRATEGY_VAULTS` holds only verified ERC-4626 shares, read as
+   `convertToAssets(balanceOf(account))`. `STRATEGY_UNDERLYING_POSITIONS` holds
+   positions whose `balanceOf` is already denominated in the underlying and are
+   summed directly, never converted.
+3. `cUSDCv3` is **excluded from both lists**.
+4. An idle-USDC-only NAV is **disclosed per leg** as
+   `WalletHolding.strategyNavIdleOnly`, persisted by the sampler (migration
+   0032) so the zero-RPC request path can serve it; an empty position list is a
+   boot **warning**, never a refusal.
+
+**Context — and a retraction.** The previous design (#120/#145) required an
+owner-maintained vault list delivered through five env keys, justified by this
+sentence, which reached `config.ts` as settled fact:
+
+> the agent rotates vaults every 1-2 days per the #120 investigation
+
+**That claim is withdrawn.** It originates as the auto-loop's own *default
+rationale* in decision issue #145, whose checkboxes were never ticked by the
+owner. It was auto-applied at the seven-day timeout and then written into a
+source comment citing #120 — which established no such thing; #120's finding was
+that both addresses revert on `balanceOf`, and its stated deliverable, owner
+confirmation of the correct valuation, never arrived. Every later repetition,
+including `docs/technical/data-self-healing.md` §10.1, traced back to that one
+sentence. This is worth recording as a failure mode in its own right: an
+auto-applied default acquired the authority of a verified finding purely by
+being written down in code and then cited.
+
+**Verified on-chain (Base mainnet, 2026-08-16)** — the facts that replace it:
+
+| Account | State |
+|---|---|
+| ZYFAI-SS1 `0xC125…976D` | 0.000044 USDC, airdrop spam (`AGENT`, `SHOPEE`, `OCTA`), **no position at all** |
+| GIZA-SS1 `0x8E5c…8795` | `gtUSDCp`, `steakUSDC`, `aBasUSDC`, `cUSDCv3` held **simultaneously**, all dust |
+
+| Address | Standard | Evidence | Placement |
+|---|---|---|---|
+| `gtUSDCp` `0xee8f…4b61` | ERC-4626 | `decimals()` 18, `asset()` = USDC | vault list |
+| `steakUSDC` `0xbeef…83b2` | ERC-4626 | `decimals()` 18, `asset()` = USDC | vault list |
+| `aBasUSDC` `0x4e65…c0ab` | Aave aToken | `decimals()` 6, `asset()` **reverts** | underlying list |
+| `cUSDCv3` `0xb125…eb2f` | Compound III Comet | `decimals()` 6, `asset()` **reverts** | excluded |
+
+Holding four candidates at once is a portfolio, not a rotation. Present NAV
+impact of the whole defect is **≈ $0** — this is a correctness fix, not a
+recovery of misvalued capital.
+
+**Why constants and not env keys.** The env mechanism could not work at all: no
+compose `environment:` block named any of the five keys, and that block is the
+only delivery path (no `env_file:`, no Dockerfile `ENV`), so the list was
+unconditionally empty in every containerized deployment. Given the addresses are
+stable, on-chain-verifiable facts rather than per-deployment configuration, the
+owner ruled against adding keys to the allowlist — which is reserved for secrets
+and operator escape hatches — and for the treatment `resolveRobotmoneyToken()`
+and `resolveWeth()` already use: bake the real address, review a change to it.
+
+**Why the split is the actual bug fix.** `convertToAssets` is an ERC-4626
+method. Two of the five original candidates do not implement it, and on Base a
+call to it reverts. A reverted sub-call fails its whole key, so the moment
+anyone had populated the old uniform list with `aBasUSDC` or `cUSDCv3`, both
+strategy legs would have degraded to `'stale'` — reproducing the exact #120
+failure the vault list existed to fix. The undeliverable env keys were, in that
+sense, the only thing preventing the design from failing. Guarded by
+`backend/tests/api/wallet-balances.test.ts`, which asserts from decoded
+Multicall3 sub-calls that `convertToAssets` reaches the ERC-4626 vault and
+nothing else; it fails against a uniform implementation.
+
+**Why `aBasUSDC` is valued inside the strategy leg rather than as its own
+series.** An aToken rebases 1:1 with its underlying, which is the rule
+`valuationKind: "aave"` / `resolveAaveATokens()` already applies to a
+*prop-wallet* aToken leg; this applies that same rule to a position held by the
+smart account. Routing it through `resolveAaveATokens()` literally would surface
+it as a ninth top-level series, splitting one account's NAV across two chart
+lines and breaking the eight-fixed-series shape asserted in the `WalletBalances`
+DTO and `frontend/test/browser/performance-view.spec.ts`. GIZA-SS1's aToken
+balance is part of GIZA-SS1's NAV, so it belongs inside that leg.
+
+**Why `cUSDCv3` is excluded rather than given a Comet path.** It is not
+ERC-4626, so it cannot join the vault list. A Comet path would require knowing
+how Comet denominates `balanceOf`, and that was **not** verified on-chain — so
+writing one would mean inventing a valuation rather than applying a checked one,
+which is the same class of mistake as the rotation claim. The position is dust,
+so exclusion costs ≈ $0 while a guess risks a wrong number in the fund's NAV.
+Revisit if a Comet balance ever becomes material; the test asserts the address
+is never touched until then.
+
+**Why an idle-only NAV is disclosed, and why as a field.** ZYFAI-SS1 holds
+nothing, so its NAV is idle dust — a real, non-reverting read that rendered
+identically to a working strategy leg. `strategyNavIdleOnly` is derived from the
+read (not from configuration, which is now a compile-time constant and would
+disclose nothing) and is three-valued: `true` idle-only, `false` a position
+contributed, **absent** for not-applicable or not-known — a degraded read, a
+seeded row, a pre-0032 sample. It is not a new `WalletHoldingProvenance` value
+because provenance answers *where the number came from* and that answer is
+unchanged; folding composition into that enum would silently re-bucket the leg
+for every consumer of `historyProvenance` and the non-live badge, and #145
+recorded that the owner declined a distinct provenance for these legs.
+
+**Why warn and not refuse.** The sibling guard
+`assertNoVaultAddressCollision()` throws because a collision **double-counts**:
+arithmetically wrong, unservable. An idle-only NAV is merely incomplete.
+Refusing to boot would take down the `api` — which also serves the entire static
+frontend (D29) — plus all three worker lanes and every unrelated pipeline they
+run, for a condition the site has survived since launch. With the lists now
+baked, the warning fires only if a code change empties them, which is precisely
+when a silent regression would otherwise ship unnoticed.
+
+**Consequences.**
+
+- Migration 0032 adds `wallet_balance_samples.strategy_nav_idle_only`, nullable
+  and three-valued. A `NOT NULL DEFAULT false` would have asserted "positions
+  contributed" about thousands of historical rows nobody measured that way.
+- The request path still makes zero RPC calls (issue #118); it echoes what the
+  sampler recorded rather than recomputing.
+- `docs/technical/data-self-healing.md` §10.1 is corrected, with the original
+  text retained so the correction is auditable.
+- Both accounts being effectively empty is an **owner** question — wrong
+  addresses, capital moved, or legs wound down — and is explicitly out of scope.
+
+**Rejected alternatives.**
+
+- **Making the five env keys deliverable** (the original plan for this issue,
+  built and then reverted). It would have shipped a working delivery path for a
+  list that should not be operator-configured, and left the non-ERC-4626 revert
+  waiting for whoever populated it first.
+- **On-chain discovery of the position set.** ZYFAI-SS1 holds airdrop spam
+  (`AGENT`, `SHOPEE`, `OCTA`); a "value everything this account holds" scan would
+  price airdropped tokens into the fund's NAV. The set stays an allowlist.
+- **A new provenance value for idle-only legs.** See above.
+- **Refusing the boot on an empty list.** See above.

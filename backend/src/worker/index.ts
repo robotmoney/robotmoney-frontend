@@ -6,9 +6,16 @@
 // here instead of silently claiming every kind — the compose topology gives
 // each lane its own container (worker-swarm / worker-analytics /
 // worker-research; see docker-compose.yml).
+import { warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { closeDb } from "../db/worker-client.ts";
 import { resolveLane } from "./lanes.ts";
 import { startWorker } from "./runtime.ts";
+
+// Empty strategy-vault list → loud warning, never a refusal to boot (issue
+// #642, decision D37). This lane runs the wallet SAMPLER (handlers/wallet.ts),
+// which writes the persisted history /allocation and /performance read, so an
+// unconfigured list here silently bakes idle-USDC-only NAV into that history.
+warnIfStrategyVaultsUnconfigured();
 
 const worker = startWorker({ lane: resolveLane(process.env.WORKER_LANE) });
 

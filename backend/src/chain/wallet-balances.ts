@@ -45,6 +45,12 @@ export interface WalletHolding {
   valueUsd: number | null;
   priceSource: string; // 'pinned' (USDC) | 'geckoterminal' | 'yahoo'
   provenance: Provenance;
+  // issue #642: `true` on a `strategy` leg whose account held NO tracked
+  // position, so its NAV is idle USDC only; `false` when a position
+  // contributed; absent when not applicable or not known. See
+  // contract/src/dashboards.d.ts for the full contract and why this is a
+  // separate field rather than a new provenance value.
+  strategyNavIdleOnly?: boolean;
 }
 
 export interface WalletHistoryPoint {
@@ -76,6 +82,30 @@ export interface WalletBalances {
 }
 
 const PRICE_VENDOR: Record<string, string> = { usdc: "pinned", gecko: "geckoterminal", yahoo: "yahoo" };
+
+// issue #642: NAV-completeness disclosure for the `strategy` legs. A strategy
+// leg whose account holds nothing in any configured position values as idle
+// USDC only — a real, non-reverting read, but not an ordinary one: the account
+// is supposed to be deployed, and the number says nothing about whether the
+// position list is right, the capital moved, or the leg was wound down.
+// ZYFAI-SS1 is exactly this case on-chain today (0.000044 USDC and no position
+// at all), so before #642 /allocation and /performance rendered "an empty
+// account" and "a working strategy" identically.
+//
+// Derived from the READ, not from configuration: with the vault/underlying
+// lists now baked constants (config.ts), a config-derived flag would be a
+// compile-time constant `false` and would disclose nothing.
+function strategyNavDisclosure(
+  asset: TrackedAsset,
+  chainAmount: ChainAmount,
+): { strategyNavIdleOnly?: boolean } {
+  if (asset.valuationKind !== "strategy") return {};
+  // A FAILED read is not an idle-only read — it is a degraded one, already
+  // labelled 'stale'. Claiming "no positions" from a reverted call would be
+  // asserting a fact the chain never gave us.
+  if (!chainAmount.ok) return {};
+  return { strategyNavIdleOnly: (chainAmount.strategyPositions ?? 0) === 0 };
+}
 
 // Read EVERY asset's on-chain amount in at most TWO eth_calls via the SHARED
 // Multicall3 batched reader (wallet-valuation.ts — the 429-storm fix, finding
@@ -168,6 +198,7 @@ async function valueAsset(
     group: asset.group,
     color: asset.color,
     priceSource: PRICE_VENDOR[asset.priceKind] ?? asset.priceKind,
+    ...strategyNavDisclosure(asset, chainAmount),
   };
   const valued = await valueLeg(asset, chainAmount, source, priceSource);
   if (valued.ok) {
@@ -294,9 +325,9 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
   // Latest sample per symbol. The (sample_date, symbol) upsert keeps one row per
   // symbol per UTC day, so "newest sample_date wins" is the last scheduled read.
   const rows = await sql<
-    { symbol: string; amount: string | null; price_usd: string | null; value_usd: string | null; provenance: string; sampled_at: Date }[]
+    { symbol: string; amount: string | null; price_usd: string | null; value_usd: string | null; provenance: string; strategy_nav_idle_only: boolean | null; sampled_at: Date }[]
   >`
-    SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, sampled_at
+    SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at
       FROM wallet_balance_samples
      ORDER BY symbol, sample_date DESC, sampled_at DESC
   `;
@@ -305,14 +336,22 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
   // Iterate resolveTrackedAssets() (NOT the samples table) so ordering and the
   // chain/group/color/priceSource metadata the table doesn't store are preserved.
   const holdings: WalletHolding[] = assets.map((a) => {
+    const row = latest.get(a.symbol);
     const base = {
       symbol: a.symbol,
       chain: "base" as const,
       group: a.group,
       color: a.color,
       priceSource: PRICE_VENDOR[a.priceKind] ?? a.priceKind,
+      // issue #642 — this is the feed the HTTP route serves, so the
+      // idle-USDC-only disclosure has to reach it too. It cannot be recomputed
+      // here (zero RPC on the request path, issue #118), so it is echoed from
+      // what the sampler recorded (migration 0032). NULL — a pre-0032 row, a
+      // seeded row, a leg with no sample yet, or a non-strategy symbol — stays
+      // ABSENT rather than becoming `false`: "not known" is not "positions
+      // contributed".
+      ...(row?.strategy_nav_idle_only == null ? {} : { strategyNavIdleOnly: row.strategy_nav_idle_only }),
     };
-    const row = latest.get(a.symbol);
     if (!row) {
       // No scheduled sample yet for this symbol → honest 'stale' with null
       // values (never fabricate a number the schedule hasn't produced).

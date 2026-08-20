@@ -2191,17 +2191,40 @@ wrong number:
   `MAX(block_number)` are null — so on a fresh database `from` is `NaN`,
   `from <= latest` at `:253` is false, and the chunk loop never executes. Zero
   work, no warning, indefinitely. *(Code verified in this checkout.)*
-- **`STRATEGY_VAULT_*_ADDRESS` (#642) — wrong numbers live in production now.**
-  All five keys (`backend/src/config.ts:246-251`) are undeliverable, and
-  `resolveStrategyVaults()` (`:253`) returns an empty list by default, so
-  ZYFAI-SS1 and GIZA-SS1 NAV is permanently pinned to the documented degraded
-  idle-USDC-only mode. The maintenance mechanism the #120/#145 design depends on
-  — an owner-maintained vault list, opt-in per vault, because *"the agent
-  rotates vaults every 1-2 days"* — cannot be operated in a containerized
-  deployment at all, so the accepted "drift risk" is in fact the guaranteed and
-  only behaviour. *(The key list and the empty-by-default resolver are verified
-  here; the characterization of the live production impact is **#642's finding**,
-  not an independent verification by this document.)*
+- **`STRATEGY_VAULT_*_ADDRESS` (#642) — an undeliverable knob, and a false
+  premise behind it.** *(Corrected 2026-08-16 — the original text of this bullet
+  is retained below the correction, because how it went wrong is itself an
+  instance of the failure mode this section is about.)*
+
+  All five keys were undeliverable and `resolveStrategyVaults()` returned an
+  empty list in every containerized deployment, so ZYFAI-SS1 and GIZA-SS1 NAV
+  was pinned to idle-USDC-only. **That much held up.** What did not is the
+  justification for the mechanism, and this document repeated it uncritically:
+  *"the agent rotates vaults every 1-2 days"*. On-chain verification (Base
+  mainnet, 2026-08-16) found no rotation — GIZA-SS1 holds `gtUSDCp`,
+  `steakUSDC`, `aBasUSDC` and `cUSDCv3` **simultaneously**, which is a portfolio.
+  The claim traces to the auto-loop's own default rationale in decision issue
+  **#145**, whose checkboxes were never ticked; it was auto-applied at the
+  seven-day timeout, then written into `backend/src/config.ts` citing "the #120
+  investigation" as its source. #120 established no such thing.
+
+  The corrected impact is also smaller than this bullet claimed. Both accounts
+  are effectively empty: ZYFAI-SS1 holds 0.000044 USDC and no position at all;
+  GIZA-SS1's positions are dust (`convertToAssets` returns 0 for both ERC-4626
+  legs). **Present NAV impact ≈ $0** — it was a correctness defect, not
+  "wrong numbers live in production now" as originally written here.
+
+  Fixed by baking the verified addresses as constants (no env indirection, no
+  new compose allowlist keys), splitting the ERC-4626 vault path from the
+  underlying-denominated aToken path — `aBasUSDC` and `cUSDCv3` are **not**
+  ERC-4626, so the original design would have reverted on them the moment the
+  list was populated — and disclosing an idle-only NAV per leg as
+  `WalletHolding.strategyNavIdleOnly`. See `docs/decisions.md` D35.
+
+  *The lesson for this document: "cited in a source comment" is not
+  verification. The original bullet correctly flagged its own live-impact claim
+  as #642's finding rather than its own, but it passed the rotation claim
+  through as fact because a code comment asserted it.*
 - **SP500 sizing (#641) — a plausible dollar figure with no staleness signal.**
   `readChainAmounts` sets `{ ok: true, amount: SP500_SIZE }` unconditionally for
   the `config` valuation kind (`backend/src/chain/wallet-balances.ts`), so a
@@ -2508,6 +2531,16 @@ valuation kind at `wallet-balances.ts:93`. **Not** verified here and attributed
 to their issues: #641's ~20-variable count, #642's characterization of the live
 production impact on `/allocation` and `/performance`, and #645's reconstruction
 of v0's `totalAum[]` cross-check.
+
+**Amended 2026-08-16 (#642).** The §10.1 bullet above was corrected after
+on-chain verification. Two things this "verified in this checkout" note did not
+catch, and should have: the vault-rotation premise was never checked against
+anything but the source comment that asserted it, and the live-impact
+characterization it correctly attributed to #642 turned out to be wrong (present
+NAV impact ≈ $0, not "wrong numbers live in production now"). Attributing a
+claim to its issue is weaker than verifying it, and an attributed claim can
+still be repeated as fact by everything downstream — which is what happened
+here. Where a claim drives a design decision, verify it or mark it unverified.
 
 **Read from GitHub** on 2026-08-15 with `gh issue list` and `gh issue view`: the
 state and titles of #639–#648 and #624; #645's NOT_PLANNED closure and its

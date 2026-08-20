@@ -88,6 +88,7 @@ afterEach(async () => {
 // (SP500) through fetchJson's non-ok throw. Counts every gecko/yahoo hit so
 // the tests can assert the real retry budget was actually exhausted.
 const BALANCE_OF = "0x70a08231";
+const CONVERT_TO_ASSETS = "0x07a2d13a"; // ERC-4626 convertToAssets(uint256)
 const GET_ETH_BALANCE = "0x4d2301cc"; // Multicall3 getEthBalance(address)
 const AGGREGATE3 = "0x82ad56cb"; // Multicall3 aggregate3(Call3[])
 function mockPersistent429Transport(): { gecko: number; yahoo: number } {
@@ -96,6 +97,14 @@ function mockPersistent429Transport(): { gecko: number; yahoo: number } {
     const sel = callData.slice(0, 10);
     if (sel === GET_ETH_BALANCE) return { success: true, returnData: word(50_000_000_000_000_000n) };
     if (sel === BALANCE_OF) return { success: true, returnData: word(1_000_000n) };
+    // Round-2 strategy NAV. Since issue #642 baked the real ERC-4626 vault
+    // addresses into the strategy position list, the blanket non-zero
+    // balanceOf above gives both strategy accounts vault shares, so round 2
+    // fires. It must SUCCEED here: this test is about the PRICE hosts being
+    // rate-limited while every chain AMOUNT read stays healthy, and a thrown
+    // sub-call would degrade the strategy legs for the wrong reason and mask
+    // exactly the assertion below (that pinned-$1 legs stay 'live').
+    if (sel === CONVERT_TO_ASSETS) return { success: true, returnData: word(1_000_000n) };
     throw new Error(`mock transport: unexpected sub-call selector ${sel}`);
   };
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {

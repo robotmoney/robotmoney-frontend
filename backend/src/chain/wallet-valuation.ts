@@ -26,6 +26,7 @@
 import {
   config,
   resolveStrategyVaults,
+  resolveStrategyUnderlyingPositions,
   resolveTrackedAssets,
   type BaseRpcSource,
   type PriceSource,
@@ -197,7 +198,17 @@ export const SLEEVE_DEFS: SleeveDef[] = [
 // A key's resolved chain amount: either a token amount, or a failure flag that
 // makes the caller degrade THAT key (a reverted sub-call, or the whole batch
 // throwing). Callers never see a fabricated number for a failed key.
-export type ChainAmount = { ok: true; amount: number } | { ok: false };
+//
+// `strategyPositions` (issue #642) is set ONLY for `strategy` keys and carries
+// the NON-IDLE part of the NAV — Σ vault assets + Σ underlying positions, in
+// the same 6 dp USDC units as `amount`. `0` means the account holds nothing in
+// any configured position and its NAV is idle USDC only, which is ZYFAI-SS1's
+// real on-chain state. Callers surface that as
+// WalletHolding.strategyNavIdleOnly rather than letting an idle-only reading
+// pass for an ordinary one.
+export type ChainAmount =
+  | { ok: true; amount: number; strategyPositions?: number }
+  | { ok: false };
 
 // One keyed chain read: `asset` read for each address in `wallets`, with every
 // leg's RAW word SUMMED into `key`. The aggregate feed passes all prop wallets
@@ -214,10 +225,21 @@ export interface KeyedAssetRead {
 // one balanceOf / getEthBalance sub-call per (key × wallet) for erc20/aave/
 // native legs; for `strategy` keys (issues #120/#145 — the address is the
 // agent's SMART-ACCOUNT WALLET itself, not an ERC-4626 share token) round 1
-// instead queries the ACCOUNT's idle USDC balance plus its share balance in
-// each configured vault (resolveStrategyVaults() — owner-maintained, empty by
-// default). Round 2 batches convertToAssets(shares) for every (key, vault)
-// pair with a non-zero share balance; NAV = idleUsdc + Σ vault assets.
+// instead queries the ACCOUNT's idle USDC balance, its share balance in each
+// ERC-4626 vault (resolveStrategyVaults()), and its balance in each
+// underlying-denominated position (resolveStrategyUnderlyingPositions()).
+//
+// Round 2 batches convertToAssets(shares) for every (key, VAULT) pair with a
+// non-zero share balance — and for nothing else. NAV = idleUsdc + Σ vault
+// assets + Σ underlying balances.
+//
+// THE VAULT/UNDERLYING SPLIT IS LOAD-BEARING (issue #642). convertToAssets is
+// an ERC-4626 method. aBasUSDC is an Aave aToken (asset() reverts) and cUSDCv3
+// is a Compound III Comet; calling convertToAssets on either reverts, and a
+// reverted sub-call degrades the WHOLE leg to 'stale' — the exact #120 failure
+// mode. Underlying-denominated positions therefore never enter navCalls below:
+// their round-1 balanceOf IS the underlying amount and is summed directly.
+//
 // Provenance honesty is preserved EXACTLY: a reverted sub-call (success:false)
 // fails just its key; a thrown batch fails every key (matching the old
 // all-fail path). `logLabel` names the calling feed in the degrade logs.
@@ -247,15 +269,18 @@ export async function readChainAmountsBatched(
   // matches whichever USDC contract this deployment is configured against.
   const usdcAddress = resolveTrackedAssets().find((a) => a.symbol === "USDC")?.address;
   const strategyVaults = resolveStrategyVaults();
+  const strategyUnderlying = resolveStrategyUnderlyingPositions();
 
   // ── Round 1: balance sub-calls. ────────────────────────────────────────────
   // erc20/aave/native → one balanceOf/getEthBalance per (key × wallet), summed.
-  // strategy → idle USDC balanceOf(account) + balanceOf(account) on each
-  // maintained vault (account = the strategy's own smart-account address).
+  // strategy → idle USDC balanceOf(account), + balanceOf(account) on each
+  // ERC-4626 vault (shares, converted in round 2), + balanceOf(account) on each
+  // underlying-denominated position (already USDC, never converted).
   type Leg =
     | { key: string; kind: "balance" }
     | { key: string; kind: "idleUsdc" }
-    | { key: string; kind: "vaultShare"; vaultIndex: number };
+    | { key: string; kind: "vaultShare"; vaultIndex: number }
+    | { key: string; kind: "underlying" };
   const legs: Leg[] = [];
   const calls: Call3[] = [];
   for (const r of reads) {
@@ -269,6 +294,14 @@ export async function readChainAmountsBatched(
       for (let vi = 0; vi < strategyVaults.length; vi++) {
         calls.push({ target: strategyVaults[vi]!.address, allowFailure: true, callData: encodeBalanceOfCall(account) });
         legs.push({ key: r.key, kind: "vaultShare", vaultIndex: vi });
+      }
+      // Underlying-denominated positions (aTokens): balanceOf IS the USDC
+      // amount, so these are summed straight into NAV and are deliberately NOT
+      // given a vaultIndex — nothing downstream can route them into round 2's
+      // convertToAssets batch (issue #642).
+      for (const p of strategyUnderlying) {
+        calls.push({ target: p.address, allowFailure: true, callData: encodeBalanceOfCall(account) });
+        legs.push({ key: r.key, kind: "underlying" });
       }
       continue;
     }
@@ -284,6 +317,7 @@ export async function readChainAmountsBatched(
 
   const rawSum = new Map<string, bigint>(); // erc20/aave/native keys
   const idleUsdcRaw = new Map<string, bigint>(); // strategy keys
+  const underlyingRaw = new Map<string, bigint>(); // strategy key -> Σ aToken-style balances (6dp USDC)
   const vaultSharesRaw = new Map<string, Map<number, bigint>>(); // strategy key -> vaultIndex -> shares
   const errored = new Set<string>();
   let round1: Aggregate3Result[];
@@ -308,6 +342,8 @@ export async function readChainAmountsBatched(
       rawSum.set(leg.key, (rawSum.get(leg.key) ?? 0n) + value);
     } else if (leg.kind === "idleUsdc") {
       idleUsdcRaw.set(leg.key, value);
+    } else if (leg.kind === "underlying") {
+      underlyingRaw.set(leg.key, (underlyingRaw.get(leg.key) ?? 0n) + value);
     } else if (value > 0n) {
       let byVault = vaultSharesRaw.get(leg.key);
       if (!byVault) {
@@ -364,12 +400,21 @@ export async function readChainAmountsBatched(
         out.set(r.key, { ok: true, amount: amountFrom(rawSum.get(r.key) ?? 0n, r.asset.decimals) });
         break;
       case "strategy": {
-        // NAV = idle USDC + Σ convertToAssets(shares) over the maintained vault
-        // list — 0 vaults configured degrades gracefully to idle-only, still a
-        // real non-reverting live read of the account (issues #120/#145).
+        // NAV = idle USDC + Σ convertToAssets(shares) over the ERC-4626 vaults
+        // + Σ balanceOf over the underlying-denominated positions. An account
+        // holding NONE of them values as idle-only — still a real,
+        // non-reverting live read, but an incomplete picture of an account that
+        // is supposed to be deployed, so the non-idle total travels with it as
+        // `strategyPositions` for the caller to disclose (issue #642).
         const idle = idleUsdcRaw.get(r.key) ?? 0n;
         const vaultAssets = vaultAssetsRaw.get(r.key) ?? 0n;
-        out.set(r.key, { ok: true, amount: amountFrom(idle + vaultAssets, 6) }); // underlying USDC (6 dp)
+        const underlying = underlyingRaw.get(r.key) ?? 0n;
+        const positions = vaultAssets + underlying;
+        out.set(r.key, {
+          ok: true,
+          amount: amountFrom(idle + positions, 6), // underlying USDC (6 dp)
+          strategyPositions: amountFrom(positions, 6),
+        });
         break;
       }
     }

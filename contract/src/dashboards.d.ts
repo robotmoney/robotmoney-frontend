@@ -124,6 +124,25 @@ export interface WalletHolding {
   valueUsd: number | null;
   priceSource: string; // 'pinned' | 'geckoterminal' | 'yahoo'
   provenance: WalletHoldingProvenance;
+  // issue #642 — NAV composition for the `strategy` legs (ZYFAI-SS1 /
+  // GIZA-SS1), which are valued as smart-account NAV: idle USDC + the account's
+  // ERC-4626 vault and underlying-denominated positions.
+  //
+  //   true      this sample's NAV was idle USDC ONLY — the account held nothing
+  //             in any tracked position. A real, non-reverting read, but not an
+  //             ordinary one: an empty strategy account looks identical to a
+  //             working one unless a consumer reads this field. ZYFAI-SS1 is
+  //             exactly this case on-chain today.
+  //   false     at least one position contributed to the NAV.
+  //   absent    not applicable or not known — every non-strategy holding, a
+  //             degraded read, a seeded row, and any sample persisted before
+  //             the field existed. Absent is NOT `false`.
+  //
+  // Provenance stays 'live'/'stub': the value is neither stale nor fabricated.
+  // Composition is a SEPARATE question from origin, which is why this is its
+  // own field and not a new WalletHoldingProvenance value — see docs
+  // decisions.md D35.
+  strategyNavIdleOnly?: boolean;
 }
 
 // One PERSISTED day of history — the series is deliberately sparse over the

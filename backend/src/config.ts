@@ -132,13 +132,17 @@ export function resolvePropWallets(
 //               1:1 with the underlying) → * underlying price. Config-driven and
 //               EMPTY by default (Open Q6: exact aToken/debt set is owner data —
 //               "do not assume the full legacy map"); add via AAVE_AUSDC_ADDRESS.
-//   strategy  — smart-account NAV (issues #120/#145 — `address` is the AGENT'S
-//               SMART-ACCOUNT WALLET itself, a Safe/Kernel account, NOT an
-//               ERC-4626 share token; balanceOf on it always reverts): amount =
-//               idleUsdc(account) + Σ over resolveStrategyVaults() of
-//               convertToAssets(balanceOf(account)), all 6 dp USDC. Reported
-//               plain 'live' like every other kind (owner decision: no distinct
-//               provenance/badge despite the vault list's rotation-drift risk).
+//   strategy  — smart-account NAV (issues #120/#145, corrected by #642 —
+//               `address` is the AGENT'S SMART-ACCOUNT WALLET itself, a
+//               Safe/Kernel account, NOT an ERC-4626 share token; balanceOf on
+//               it always reverts): amount = idleUsdc(account)
+//               + Σ resolveStrategyVaults() of convertToAssets(balanceOf(account))
+//               + Σ resolveStrategyUnderlyingPositions() of balanceOf(account),
+//               all 6 dp USDC. The two sums are DISTINCT paths on purpose: only
+//               verified ERC-4626 shares may reach convertToAssets. Reported
+//               plain 'live' like every other kind (#145: no distinct
+//               provenance value), with idle-only NAV disclosed per-leg as
+//               WalletHolding.strategyNavIdleOnly.
 //   config    — off-chain size from config * price (SP500; no derivatives API).
 // USDC carries priceKind 'usdc' (pinned $1); crypto legs 'gecko'; SP500 'yahoo'.
 export type ValuationKind = "erc20" | "native" | "aave" | "strategy" | "config";
@@ -224,41 +228,136 @@ export function resolveAaveATokens(
   return out;
 }
 
-// --- Strategy smart-account NAV vault list (issues #120/#145) ---------------
+// --- Strategy smart-account NAV positions (issues #120/#145, corrected by #642)
 // ZYFAI-SS1 / GIZA-SS1 are proven smart-account WALLETS (a Gnosis Safe and a
 // ZeroDev Kernel account, not ERC-20/ERC-4626 share tokens — balanceOf on the
-// account itself always reverts, permanently). The resolved decision (#145):
-// value each leg as account NAV = idle USDC(account) + Σ over a MAINTAINED
-// vault-share list of convertToAssets(balanceOf(account)), reported as plain
-// `live` (not a distinct provenance — the owner explicitly declined a special
-// value/badge despite the documented drift risk of the agent rotating to an
-// unlisted vault). This mirrors resolveAaveATokens below: owner-maintained,
-// EMPTY-safe by default, opt-in per vault via <SYMBOL>_VAULT_ADDRESS — NOT an
-// on-chain discovery mechanism (the agent rotates vaults every 1-2 days per
-// the #120 investigation, so a scanner would still need a maintained
-// candidate list; see #120's research comment for the full rationale). With
-// no vault configured, NAV degrades gracefully to idle-USDC-only (still a
-// real, non-reverting live read of the account).
+// account itself always reverts, permanently). Each leg is valued as account
+// NAV = idle USDC(account) + Σ over the positions below, all 6 dp USDC,
+// reported as plain `live` like every other kind (#145: no distinct provenance
+// value for these legs).
+//
+// WHAT #642 CORRECTED. This block previously said the list had to be
+// owner-maintained through five STRATEGY_VAULT_*_ADDRESS env keys because "the
+// agent rotates vaults every 1-2 days per the #120 investigation". BOTH halves
+// of that sentence were false, and it is worth being precise about how a false
+// statement came to be written as settled fact:
+//
+//   - #120 established no such thing. Its finding was that both addresses
+//     revert on balanceOf, and its stated deliverable — owner confirmation of
+//     the correct valuation — never arrived.
+//   - The rotation claim originates as the auto-loop's own DEFAULT RATIONALE in
+//     decision issue #145, whose checkboxes were never ticked. It was
+//     auto-applied at the 7-day timeout, then written into this comment citing
+//     #120 as its source. Nothing anywhere verified it.
+//   - The env-list mechanism it justified could not work regardless: no compose
+//     `environment:` block named any of the five keys, and that block is the
+//     only delivery path (no `env_file:`, no Dockerfile `ENV`), so the list was
+//     unconditionally empty in every containerized deployment.
+//
+// VERIFIED ON-CHAIN (Base mainnet, 2026-08-16) — these facts replace the claim:
+//
+//   - ZYFAI-SS1 (0xC125…976D) holds 0.000044 USDC plus airdrop spam (AGENT,
+//     SHOPEE, OCTA) and NO vault position of any kind.
+//   - GIZA-SS1 (0x8E5c…8795) holds gtUSDCp, steakUSDC, aBasUSDC and cUSDCv3
+//     SIMULTANEOUSLY — a portfolio, not a rotation — all of it dust
+//     (convertToAssets returns 0 for both ERC-4626 legs).
+//
+// So the addresses are stable, on-chain-verifiable facts, and they are baked
+// here as constants — the same treatment resolveRobotmoneyToken()/resolveWeth()
+// below already give their addresses. The set stays an ALLOWLIST rather than an
+// on-chain "value everything this account holds" scan precisely because of the
+// spam: a naive scan would price airdropped tokens into the fund's NAV.
 export interface StrategyVaultConfig {
   symbol: string; // e.g. "gtUSDCp" — the observed vault-share label, not a chart series
   address: string; // ERC-4626 vault contract on Base (lowercased)
 }
-const STRATEGY_VAULT_CANDIDATES: { symbol: string; envKey: string }[] = [
-  { symbol: "gtUSDCp", envKey: "STRATEGY_VAULT_GTUSDCP_ADDRESS" },
-  { symbol: "steakUSDC", envKey: "STRATEGY_VAULT_STEAKUSDC_ADDRESS" },
-  { symbol: "cUSDCv3", envKey: "STRATEGY_VAULT_CUSDCV3_ADDRESS" },
-  { symbol: "aBasUSDC", envKey: "STRATEGY_VAULT_ABASUSDC_ADDRESS" },
-  { symbol: "CSHYUSDC", envKey: "STRATEGY_VAULT_CSHYUSDC_ADDRESS" },
+
+// ERC-4626 vault shares ONLY. Every address here is read as
+// convertToAssets(balanceOf(account)), so every address here MUST implement
+// ERC-4626 — verified on Base mainnet 2026-08-16: both return decimals() = 18
+// and asset() = USDC (0x8335…2913). An address that does not implement it
+// reverts the sub-call and degrades the WHOLE leg to 'stale' (see
+// chain/wallet-valuation.ts), which is exactly the #120 failure this issue
+// exists to fix — hence the split from STRATEGY_UNDERLYING_POSITIONS below and
+// the guard test in backend/tests/api/wallet-balances.test.ts.
+const STRATEGY_VAULTS: StrategyVaultConfig[] = [
+  { symbol: "gtUSDCp", address: "0xee8f4ec5672f09119b96ab6fb59c27e1b7e44b61" },
+  { symbol: "steakUSDC", address: "0xbeefe94c8ad530842bfe7d8b397938ffc1cb83b2" },
 ];
-export function resolveStrategyVaults(
+export function resolveStrategyVaults(): StrategyVaultConfig[] {
+  return STRATEGY_VAULTS.map((v) => ({ ...v }));
+}
+
+// Positions whose balanceOf is ALREADY denominated in the underlying asset, so
+// they are summed directly and MUST NOT be sent through convertToAssets.
+//
+// aBasUSDC is Aave V3's Base USDC aToken: decimals() = 6 and asset() REVERTS
+// (verified 2026-08-16). aTokens rebase 1:1 with the underlying, which is the
+// same valuation rule `valuationKind: "aave"` / resolveAaveATokens already
+// applies to a prop-wallet aToken leg — this is that rule, applied to a
+// position held by the smart ACCOUNT rather than by a prop wallet.
+//
+// Why not a prop-wallet aave leg via resolveAaveATokens: that would surface the
+// position as its OWN top-level series, splitting one account's NAV across two
+// chart lines and turning the eight fixed labelled series into nine (a shape
+// asserted in frontend/test/browser/performance-view.spec.ts and the
+// WalletBalances DTO). GIZA-SS1's aToken balance is part of GIZA-SS1's NAV, so
+// it belongs inside that leg. See docs/decisions.md D37.
+//
+// cUSDCv3 (0xb125e6687d4313864e53df431d5425969c15eb2f) is deliberately ABSENT
+// from both lists — see D37. It is a Compound III Comet, not ERC-4626
+// (decimals() = 6, asset() reverts), so it cannot go above; and its Comet
+// balance accounting was not verified on-chain, so adding it here would be
+// inventing a valuation rather than applying a checked one. The position is
+// dust, so the cost of excluding it is ~$0 and the cost of guessing is a wrong
+// number in the fund's NAV.
+export interface StrategyUnderlyingPositionConfig {
+  symbol: string;
+  address: string; // token whose balanceOf(account) IS the underlying amount (6 dp USDC)
+}
+const STRATEGY_UNDERLYING_POSITIONS: StrategyUnderlyingPositionConfig[] = [
+  { symbol: "aBasUSDC", address: "0x4e65fe4dba92790696d040ac24aa414708f5c0ab" },
+];
+export function resolveStrategyUnderlyingPositions(): StrategyUnderlyingPositionConfig[] {
+  return STRATEGY_UNDERLYING_POSITIONS.map((p) => ({ ...p }));
+}
+
+// An EMPTY position list is a loud boot-time WARNING, never a refusal to boot
+// (issue #642, decision D37). The sibling guard assertNoVaultAddressCollision()
+// throws because a collision produces a DOUBLE-COUNTED number — arithmetically
+// wrong, and there is no honest way to serve it. An empty list is a different
+// failure: idle-USDC-only NAV is a real, non-reverting read of the account,
+// only incomplete. Refusing to boot on it would take the api — which also
+// serves the whole static frontend, per D29 — down for a condition the site
+// survived from launch, and would take the WORKER lanes down with it, stopping
+// every unrelated pipeline.
+//
+// The lists are baked constants now, so this cannot fire from a missing env
+// var; it fires if the constants above are ever emptied (a code change), which
+// is precisely when a silent regression to idle-USDC-only would otherwise ship
+// unnoticed. Runtime emptiness — an account that holds none of these positions,
+// which is ZYFAI-SS1's real state — is disclosed per-leg instead, on the wire,
+// as WalletHolding.strategyNavIdleOnly.
+//
+// Returns the warning line (also logged) when a `strategy` asset is tracked
+// with no position configured, null otherwise — the return value is what makes
+// this assertable in a test instead of only observable by eye.
+export function warnIfStrategyVaultsUnconfigured(
   env: Record<string, string | undefined> = process.env,
-): StrategyVaultConfig[] {
-  const out: StrategyVaultConfig[] = [];
-  for (const c of STRATEGY_VAULT_CANDIDATES) {
-    const address = env[c.envKey];
-    if (address) out.push({ symbol: c.symbol, address: address.toLowerCase() });
-  }
-  return out;
+  log: (message: string) => void = console.warn,
+  positionCount: number = resolveStrategyVaults().length + resolveStrategyUnderlyingPositions().length,
+): string | null {
+  const strategySymbols = resolveTrackedAssets(env)
+    .filter((a) => a.valuationKind === "strategy")
+    .map((a) => a.symbol);
+  if (strategySymbols.length === 0) return null;
+  if (positionCount > 0) return null;
+  const message =
+    `strategy NAV: no vault or underlying position configured — ${strategySymbols.join(", ")} NAV is ` +
+    "idle-USDC-only and OMITS every deployed position (issues #120/#145/#642). " +
+    "Restore STRATEGY_VAULTS / STRATEGY_UNDERLYING_POSITIONS in backend/src/config.ts.";
+  log(message);
+  return message;
 }
 
 // SP500 position size + ticker (Open Question 3 — owner data; size comes from

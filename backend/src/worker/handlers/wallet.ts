@@ -58,16 +58,23 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
     // catch-up — a leg that already degraded to 'stub'/'stale' keeps that
     // (more specific, more important) label rather than being overwritten.
     const provenance = replay === "same-bucket-catchup" && h.provenance === "live" ? "backfilled" : h.provenance;
+    // issue #642: the sampler is the ONLY place that knows whether a strategy
+    // leg's NAV came from idle USDC alone — the request path serves persisted
+    // rows with zero RPC and cannot re-derive it. `undefined` (every
+    // non-strategy leg, and any leg whose read failed) persists as NULL:
+    // not-applicable/not-known, never a fabricated `false`. See migration 0032.
+    const strategyNavIdleOnly = h.strategyNavIdleOnly ?? null;
     await sql`
       INSERT INTO wallet_balance_samples
-        (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+        (sample_date, symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at)
       VALUES
-        (${sampleDate}, ${h.symbol}, ${h.amount}, ${h.priceUsd}, ${h.valueUsd}, ${provenance}, now())
+        (${sampleDate}, ${h.symbol}, ${h.amount}, ${h.priceUsd}, ${h.valueUsd}, ${provenance}, ${strategyNavIdleOnly}, now())
       ON CONFLICT (sample_date, symbol) DO UPDATE SET
         amount     = EXCLUDED.amount,
         price_usd  = EXCLUDED.price_usd,
         value_usd  = EXCLUDED.value_usd,
         provenance = EXCLUDED.provenance,
+        strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only,
         sampled_at = EXCLUDED.sampled_at
     `;
     persisted += 1;
