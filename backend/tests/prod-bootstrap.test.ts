@@ -85,7 +85,7 @@ async function freePort(): Promise<number> {
   });
 }
 
-test("cold DB: all three steps run, v0-seed inserts the archive's full manifest counts, edgar cleanly skips without ANALYTICS_TOKEN, nothing failing", async () => {
+test("cold DB: every step runs, v0-seed inserts the archive's full manifest counts, edgar cleanly skips without ANALYTICS_TOKEN, nothing failing", async () => {
   delete process.env.ANALYTICS_TOKEN;
 
   const reports = await runProdBootstrap();
@@ -98,6 +98,9 @@ test("cold DB: all three steps run, v0-seed inserts the archive's full manifest 
     "append-only-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
+    // Runs LAST (issue #638/D38): an order-independent integrity sweep over
+    // whatever source='seed' rows exist once the earlier steps have run.
+    "seed-provenance:verify",
   ]);
 
   const namespace = reportFor(reports, "handle-namespace");
@@ -127,10 +130,35 @@ test("cold DB: all three steps run, v0-seed inserts the archive's full manifest 
   expect(edgar.failing).toBe(false);
   expect(edgar.summary).toBe("skipped: ANALYTICS_TOKEN not set");
 
+  const provenance = reportFor(reports, "seed-provenance:verify");
+  expect(provenance.status).toBe("success");
+  expect(provenance.failing).toBe(false);
+  expect(provenance.summary).toBe("no calendar-invalid source='seed' rows found");
+
   expect(reports.some((r) => r.failing)).toBe(false);
 
   const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES})`;
   expect(n).toBe(3);
+});
+
+test("seed-provenance:verify cleans a calendar-invalid source='seed' row a pre-#630 database left behind", async () => {
+  delete process.env.ANALYTICS_TOKEN;
+  // ICSA is the weekly_saturday series (D6); a Monday row is calendar-invalid
+  // — the same fixture floor-seed-calendar-guard.test.ts uses.
+  await sql`INSERT INTO raw_indicator_history (indicator, date, value, source)
+            VALUES ('ICSA', '2026-08-10', 215000, 'seed')
+            ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value, source = EXCLUDED.source`;
+
+  const reports = await runProdBootstrap();
+  const provenance = reportFor(reports, "seed-provenance:verify");
+  expect(provenance.status).toBe("success");
+  expect(provenance.failing).toBe(false);
+  expect(provenance.summary).toContain("cleaned 1 calendar-invalid source='seed' row");
+  expect(reports.some((r) => r.failing)).toBe(false);
+
+  const [{ n }] = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'ICSA' AND date = '2026-08-10'`;
+  expect(n).toBe(0);
 });
 
 test("idempotent: a second full run inserts nothing further and still reports nothing failing", async () => {
@@ -161,6 +189,7 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
     "append-only-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
+    "seed-provenance:verify",
   ]);
 
   const v0seed = reportFor(reports, "v0-seed:bootstrap");
@@ -291,6 +320,7 @@ test("a restored namespace violation halts the run before ANY write, with both m
     "append-only-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
+    "seed-provenance:verify",
   ]);
   expect(repaired.some((r) => r.failing)).toBe(false);
 
