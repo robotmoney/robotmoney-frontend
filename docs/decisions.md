@@ -2487,3 +2487,68 @@ schedule.
   producer or an operator script. Rejected for the same reason: this is a
   direct-SQL cleanup in the `v0-seed:bootstrap` shape, not an ingestion path
   that needs the analytics HTTP boundary's provider-credential semantics.
+
+---
+
+## D39 — The SP500 seed array's v0/v1 source seam is marked in place, not rewritten (issue #648, resolves PD7's seed-array half)
+
+**Decision.** `AUM["SP500"]` in `backend/src/chain/wallet-history-seed.ts` is
+**retained as-is** — all 99 entries, index 0 (`"Mar 18"`) through index 98
+(`"Jun 26"`) — and now carries an inline comment at that exact array naming the
+seam: every one of those 99 values is a v0-era Hyperliquid perp
+`accountValue/|size|` reading (`scripts/lib/hyperliquid.js:148`,
+`hourly-prices.js:155`), ported verbatim from the retired baked
+`walletPerfView`. Index 98 is the **last** Hyperliquid-sourced value in the
+SP500 column; the live daily sampler (`wallet.sample_balances`, running since
+PR #90) prices every day after the seed from v1's Yahoo `^GSPC` quote instead
+(`config.SP500_SIZE × fetchSp500PriceUsd(SP500_TICKER)`,
+`chain/token-prices.ts:366`). #648 is the seam existing with **no marker and no
+decision record**; this entry is that record, and the marker now lives beside
+the data it describes.
+
+**Why not rewrite the array to one source.** Recomputing `today's SP500_SIZE ×
+historical Yahoo ^GSPC` for the pre-launch window would not recover history —
+`SP500_SIZE` is a single present-tense constant with no position history (the
+same fact PD7 already turned into "skip, don't approximate" for the forward
+backfill, `docs/technical/data-self-healing.md` PD7). Applying that same logic
+backwards into the seed would silently swap 99 genuine v0 readings for a
+fabricated one, which is strictly worse than a splice that is at least now
+labelled. **The seed's authority is that it is what v0 actually recorded**
+(`docs/technical/data-self-healing.md` §13's finding that the ~99 seeded
+`'seed'`-labelled rows are real production output, not synthetic) — that
+authority is destroyed by "fixing" it to a single retroactive source, not
+restored.
+
+**Why not extend `WalletHoldingProvenance`.** `WalletHistoryPoint.provenance`
+(`contract/src/dashboards.d.ts`, populated by `dominantProvenance()` in
+`wallet-balances.ts`, from PR #615/#397) is **day-level**: one value —
+`live|backfilled|stale|seed|stub` — describing which pipeline stage produced a
+whole day's row across every held asset. It has no within-day, per-asset axis,
+and SP500's seam is a within-column instrument change on days that already
+carry `provenance: 'seed'` for unrelated reasons (they are seed rows). Adding a
+sixth provenance value, or a parallel field, to distinguish "seed row, SP500 leg,
+Hyperliquid" from "seed row, SP500 leg, would-be-Yahoo" describes a distinction
+that does not exist in this data (the seed's SP500 leg is uniformly
+Hyperliquid) — there is nothing to encode. The seam is between the seed array
+and the live series that follows it, not inside a single `WalletHistoryPoint`.
+
+**Scope.** This closes only the seed-array half of #648/PD7 — the half that is
+literal, static data with a knowable, fixed source. It does not decide PD7's
+forward-looking half (SP500 in the backfill), which D36's rejected-alternatives
+list already records as resolved (skip, don't approximate) and unaffected by
+this entry.
+
+**Rejected alternatives.**
+
+- **Rewrite the array to a single retroactively-computed source** (see above) —
+  fabricates 99 numbers to erase a splice that is otherwise just honestly
+  labelled.
+- **Delete the SP500 seed column entirely, starting SP500 history at the live
+  launch date.** Throws away 99 real v0 observations to avoid documenting a
+  source change; strictly less information for a cosmetic gain.
+- **A file-level comment only** (no seam marker on the array itself). Considered
+  and rejected per #648's own ask: a comment anywhere in the file is easy to
+  read once and then drift from the data as the array is edited; a comment
+  attached to the exact array carries forward with it.
+- **Extend `WalletHoldingProvenance`** (see above) — no within-day distinction
+  exists to encode; the seam is between two series, not within one point.

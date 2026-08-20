@@ -1,10 +1,9 @@
-// backend/src/chain/wallet-history-seed.ts — issue #649: every AUM series
-// must be index-aligned to LABELS (a mismatch was silently swallowed by
-// `AUM[symbol]![i]!` reading past the end as `undefined`).
+// backend/src/chain/wallet-history-seed.ts — issue #649 (per-symbol array
+// length invariant) and #648 (SP500's unmarked v0-Hyperliquid/v1-Yahoo seam).
 //
 // Fully offline: this is a pure literal-data module, no fetch/db involved.
 import { describe, expect, test } from "bun:test";
-import { AUM, LABELS } from "../src/chain/wallet-history-seed.ts";
+import { AUM, LABELS, walletHistorySeedRows } from "../src/chain/wallet-history-seed.ts";
 
 describe("#649 — every AUM series is index-aligned to LABELS", () => {
   test("LABELS has the expected 99-day pre-launch window", () => {
@@ -35,5 +34,34 @@ describe("#649 — every AUM series is index-aligned to LABELS", () => {
     for (const [symbol, series] of Object.entries(AUM)) {
       expect(series.length).not.toBeLessThan(LABELS.length);
     }
+  });
+});
+
+describe("#648 / PD7 / D39 — SP500's source seam is marked, not silently spliced", () => {
+  test("the SP500 seed array is all 99 pre-launch days (index 0-98), no more", () => {
+    expect(AUM["SP500"]!.length).toBe(99);
+  });
+
+  test("index 98 (Jun 26, the marked seam) is the last value in the seed — everything after is live-sampled Yahoo data, outside this array", () => {
+    expect(LABELS[98]).toBe("Jun 26");
+    expect(AUM["SP500"]![98]).toBe(4656);
+    // A future edit that appends more entries (shifting the seam past index
+    // 98) or removes trailing entries (pulling it before Jun 26) must update
+    // the inline seam comment in wallet-history-seed.ts and D39 — this pins
+    // the array length so that edit cannot happen silently.
+    expect(AUM["SP500"]!.length - 1).toBe(98);
+  });
+
+  test("SP500 is unheld (0, correctly sparse) before the position opens on Apr 17 (index 29)", () => {
+    for (let i = 0; i < 29; i++) expect(AUM["SP500"]![i]).toBe(0);
+    expect(LABELS[29]).toBe("Apr 17");
+    expect(AUM["SP500"]![29]).toBeGreaterThan(0);
+  });
+
+  test("walletHistorySeedRows() emits an SP500 row for every held day, none for the pre-Apr-17 gap", () => {
+    const rows = walletHistorySeedRows().filter((r) => r.symbol === "SP500");
+    expect(rows.length).toBe(99 - 29);
+    expect(rows[0]!.date).toBe("2026-04-17");
+    expect(rows[rows.length - 1]!.date).toBe("2026-06-26");
   });
 });
