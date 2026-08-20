@@ -29,18 +29,6 @@ export function registerWalletPerfView(Alpine) {
     totalAum: [],
     columns: [],
     rows: [],
-    // issue #614 AC5: "the API stops reporting source:'live' for a series
-    // that is 95% seed rows; seed, backfilled and live spans are
-    // distinguishable... the UI discloses the seam and any unrecoverable
-    // window." `source` itself stays config-resolved (whether the CURRENT
-    // sampler is wired to live RPC — a different question from this
-    // series' historical composition), so the disclosure is additive:
-    // seedShare/seamDate/gapDayCount, computed from the endpoint's
-    // historyProvenance + the dense-calendar gap count, drive seamMessage()
-    // below rather than overloading `source`'s existing meaning.
-    seedShare: 0,
-    seamDate: null,
-    gapDayCount: 0,
     init() { this.load(); },
     // ISO calendar day ("2026-03-18") → the compact "Mar 18" label.
     _fmtDay(iso) {
@@ -79,18 +67,6 @@ export function registerWalletPerfView(Alpine) {
         const days = this._denseCalendarDays(history);
         const byDate = new Map(history.map((pt) => [pt.date, pt]));
 
-        // Seam disclosure (issue #614 AC5): what fraction of the PERSISTED
-        // points are ported pre-launch seed rather than a live/backfilled
-        // sample, and where the seam between them falls.
-        const hp = data.historyProvenance || {};
-        const seedCount = hp.seed || 0;
-        this.seedShare = history.length ? seedCount / history.length : 0;
-        const firstNonSeed = history.find((pt) => pt.provenance && pt.provenance !== "seed");
-        this.seamDate = firstNonSeed ? firstNonSeed.date : null;
-        // Unrecoverable window (Class C, D16): dense calendar days minus
-        // persisted days = days this pipeline has no row for at all.
-        this.gapDayCount = days.length - history.length;
-
         this.labels = days.map((d) => this._fmtDay(d));
         this.totalAum = days.map((d) => byDate.get(d)?.totalUsd ?? null);
         this.columns = holdings.map((h) => ({ sym: h.symbol, color: assetDot(h.symbol) }));
@@ -115,25 +91,6 @@ export function registerWalletPerfView(Alpine) {
         this.destroy();
         this.$nextTick(() => this.draw());
       }
-    },
-    // issue #614 AC5: a non-null return renders the seam banner
-    // (performance.html). Threshold matches the AC's own "95% seed rows"
-    // framing (rounded down to a still-conservative "more than half" so the
-    // disclosure fires well before a series is ALMOST entirely seed, not
-    // only at the extreme).
-    seamMessage() {
-      const parts = [];
-      if (this.seedShare > 0.5) {
-        const pct = Math.round(this.seedShare * 100);
-        parts.push(
-          `${pct}% of this history is backfilled pre-launch data ported from an earlier source, not a live sample` +
-          (this.seamDate ? ` — live sampling begins ${this._fmtDay(this.seamDate)}.` : "."),
-        );
-      }
-      if (this.gapDayCount > 0) {
-        parts.push(`${this.gapDayCount} day${this.gapDayCount === 1 ? "" : "s"} in this range could not be recovered and render as gaps in the chart above.`);
-      }
-      return parts.length ? parts.join(" ") : null;
     },
     // Collapsed = last 5 snapshots; "Show All" expands to the full series.
     visibleRows() { return this.showAll ? this.rows : this.rows.slice(-5); },
