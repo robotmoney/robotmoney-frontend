@@ -279,6 +279,59 @@ test("the noindex override does not leak onto the next route", async ({ page }) 
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /^index, follow/);
 });
 
+// The inverse of the stub tests above: these two are REAL pages that were being
+// noindexed. views/media/ ships articles.html and videos.html and views/media.html
+// links to both, but seo.js had no `/media` section prefix, so each fell through
+// to NOT_FOUND_META and served "Page Not Found — Robot Money" under
+// `noindex, follow` while rendering its content perfectly well.
+const MEDIA_SECTION_ROUTES = [
+  { path: "/media/articles", title: "Articles — Robot Money Media" },
+  { path: "/media/videos", title: "Videos — Robot Money Media" },
+];
+
+for (const { path, title } of MEDIA_SECTION_ROUTES) {
+  test(`${path} is a real page and says so, rather than "Page Not Found"`, async ({ page }) => {
+    const errors = failOnBrowserErrors(page);
+    await page.goto("/");
+    await navigate(page, path);
+
+    await expect(page).toHaveTitle(title);
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /^index, follow/);
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      `https://robotmoney.network${path}`,
+    );
+
+    await expectNoBrowserErrors(errors);
+  });
+}
+
+// routes.js rewrites the pre-rename paths (issue #263 pass 2) and serves the
+// renamed page's own fragment, so an old URL returns 200 with real content —
+// which makes it a duplicate of the new URL unless it points at it. seo.js had
+// no matching rewrite, so /docs/investment-committee/* declared ITSELF
+// canonical and competed with the /docs/investment-swarm/* page it renders.
+test("a legacy /docs/investment-committee URL is canonical to its renamed address", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.goto("/");
+  await navigate(page, "/docs/investment-committee/how-it-works");
+
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    "https://robotmoney.network/docs/investment-swarm/how-it-works",
+  );
+  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute(
+    "content",
+    "https://robotmoney.network/docs/investment-swarm/how-it-works",
+  );
+  // The rewrite must not cost the page its own copy — before it, this path
+  // still reached the /docs section prefix and got a real title, and it should
+  // keep exactly that one.
+  await expect(page).toHaveTitle("How It Works — Robot Money Docs");
+
+  await expectNoBrowserErrors(errors);
+});
+
 declare global {
   interface Window {
     Chart?: {

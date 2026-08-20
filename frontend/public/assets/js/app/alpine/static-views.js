@@ -10,6 +10,7 @@ import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberMarkOrInitials } from "../lib/member-mark.js";
+import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -1414,6 +1415,18 @@ export function registerStaticViews(Alpine) {
         // UUID ("D6e430f5 D706 4325…"). This is the page onboarding hands a new
         // operator, so name the tab after the member once it is known.
         if (this.member?.name) document.title = `${this.member.name}: Robot Money Investment Swarm`;
+        // Same correction, for the address rather than the tab. This profile
+        // answers on BOTH /swarm/members/<handle> and /swarm/members/<id> —
+        // migration 0030 keeps every published id resolving on purpose — so the
+        // page is two URLs and, left alone, two indexable duplicates. Now that
+        // the record is in hand, name the handle form as the canonical one.
+        //
+        // Guarded because `handle` is undefined for a member served from the
+        // static archive manifests (see camelMember above); there the visited
+        // URL stays canonical, which is the same address the archive links to.
+        if (this.member?.handle) {
+          setCanonicalUrl(canonicalUrlFor(`/swarm/members/${this.member.handle}`));
+        }
         this.rows = await this.loadRows(memberId);
       } catch (e) {
         this.error = e.message || "Member not found";

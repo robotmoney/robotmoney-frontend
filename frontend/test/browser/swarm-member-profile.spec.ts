@@ -178,3 +178,58 @@ test("with the swarm API unreachable, all four shipped manifests still render fr
 
   await expectNoBrowserErrors(errors);
 });
+
+// The other consequence of "no URL that has ever been published stops working":
+// one member is TWO indexable URLs. The test above proves both render the same
+// record — which is the thing that makes them duplicates rather than two pages.
+// Only one of them may claim to be the address.
+test("both of a member's public URLs name the handle form as canonical", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (/\/api\/swarm\/members\/(athena|macro-desk)$/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RENAMED_ATHENA) });
+    }
+    if (/\/api\/swarm\/members\/(athena|macro-desk)\/takes$/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ takes: [] }) });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  const canonical = () => page.locator('link[rel="canonical"]').getAttribute("href");
+  const ogUrl = () => page.locator('meta[property="og:url"]').getAttribute("content");
+  const expected = "https://robotmoney.network/swarm/members/macro-desk";
+
+  // Polled, not read once: applyRouteMeta() writes the VISITED url on
+  // navigation and memberProfile.init() corrects it to the handle form after
+  // the record arrives, so the assertion has to outlast the first write.
+  //
+  // The third address is the pre-rename product name. routes.js rewrites
+  // /committee/** to /swarm/** and serves the same page, so it is a third
+  // published URL for this one member and has to converge on the same answer.
+  for (const address of ["/swarm/members/athena", "/swarm/members/macro-desk", "/committee/members/athena"]) {
+    await page.goto(address);
+    await expect(page.locator(".profile-name")).toHaveText(RENAMED_ATHENA.name);
+    await expect.poll(canonical, { message: `canonical on ${address}` }).toBe(expected);
+    await expect.poll(ogUrl, { message: `og:url on ${address}` }).toBe(expected);
+  }
+
+  await expectNoBrowserErrors(errors);
+});
+
+// The archive fallback carries no `handle` (the manifests predate the column),
+// so there is no better address to point at than the one being visited. The
+// correction must SKIP rather than emit `/swarm/members/undefined`.
+test("a member served from the static archive keeps the visited URL as canonical", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.route("**/api/swarm/**", (route) => route.abort("failed"));
+
+  await page.goto("/swarm/members/noop-analyst");
+  await expect(page.locator(".profile-name")).toBeVisible();
+  await expect
+    .poll(() => page.locator('link[rel="canonical"]').getAttribute("href"))
+    .toBe("https://robotmoney.network/swarm/members/noop-analyst");
+
+  await expectNoBrowserErrors(errors);
+});
