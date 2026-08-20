@@ -439,8 +439,13 @@ ERROR: Exception thrown bringing stack up: (404)
 HTTP response body: 404 page not found
 ```
 
-The cluster has Gateway API CRDs (from Traefik) and a `traefik` IngressClass,
-but no configured Gateway, and stack's http-proxy publication fails against it.
+**This is a missing prerequisite, not a tool defect.** The cluster has Gateway
+API CRDs (from Traefik) but no Gateway for an HTTPRoute to attach to. The
+upstream provisioning script creates one — `stirlingbridge/machine-provisioning`
+`scripts/k3s-node.sh` installs k3s together with cert-manager, K8up, the Gateway
+API, a Gateway named **`stack-gateway`** in `kube-system`, and Let's Encrypt
+ClusterIssuers. Our ad-hoc k3s predates that script and has none of it (§19).
+
 The Deployments, Services, Secret and PVC are all created regardless. **Treat a
 404 from `start` as "ingress not published", not "deployment failed"** — but
 check, because the exit code cannot distinguish them.
@@ -510,6 +515,56 @@ Related: a **clean** checkout with a committed lock file yields a
 commit-addressed image tag; a dirty tree or uncommitted lock yields a
 `stackdev-<hash>` tag derived from the lock content (`build_util.py:216-234`).
 Committing `stack.lock` is what stabilizes the version to a plain commit hash.
+
+**Superseded in part by §19.** The mutable `deploy-<id>` tag is the *staging*
+path, used when no published image exists. The published path is already
+commit-addressed and immutable, and is the grain of the tool.
+
+## 19. The upstream skills change several answers here
+
+`bozemanpass/no-paas` is a Claude Code plugin marketplace, and
+`bozemanpass/stack` carries an authoritative `skills/deploy-with-stack/SKILL.md`.
+It confirms most of what is recorded above — the repo-root `path` rule, secrets
+as deployment-wide env vars, cross-pod service DNS — and corrects or supersedes
+four things.
+
+**Image discovery is automatic and commit-addressed.** Publishing is
+`stack prepare --publish-images --image-registry ghcr.io`. Pulling needs no
+configuration at all: the name is the container name with the registry host
+prefixed (git host inferred, `github.com` → `ghcr.io`) and **the tag is the
+commit hash of the recipe repo**. `prepare` computes the hash of the checkout in
+front of it, pulls that image if it exists and builds only if it does not.
+`--build-policy prebuilt-remote` fails rather than falling back, which is what a
+production host wants. This is a better answer than the version-tag scheme in
+[`stack-runbook-reconciliation.md`](./stack-runbook-reconciliation.md) §4.2: it
+is immutable by construction and needs no composefile edit per release.
+
+**Do not embed a secret in a connection URL.** The skill is explicit: "have the
+app read it from the environment rather than embedding a password in a
+connection URL." Our §12 workaround is still required — `config.ts:552` takes
+`DATABASE_URL` as `required(...)` and accepts no parts — but it is a workaround
+for *our* app's shape, not a gap in the tool.
+
+**Forward deployer-facing values, do not default them.** Env precedence is
+`config.env` → `env_file:` → inline `environment:`, later wins. So an inline
+literal **beats** anything the deployer supplies with `--config`. Anything an
+operator should choose must be written `SOME_VAR=${SOME_VAR}`, not given a
+default. Our composefiles currently hardcode `RM_ENV` and friends inline, which
+makes them unoverridable at deploy time.
+
+**Container names: the namespace is the registry namespace, the name is
+project-specific.** For a GitHub-hosted project the namespace is the owning org
+— `robotmoney` is right — but the skill warns against a generic second half:
+"make the name project-specific rather than `api` or `frontend`", since the
+namespace is shared across every repo in the org. Ours is `robotmoney/api`,
+which is the named anti-pattern. Nothing validates it; getting it wrong just
+yields an image that can never be found again.
+
+Also worth noting: the skill's pipeline is `stack build containers` → `init` →
+`deploy` → `manage`; `ports:` is **not** required for a service to be
+addressable (every service answers to its own name across pods, via a headless
+Service on k8s), so publishing a port merely to get a hostname is a mistake;
+and off-the-shelf images need no `containers:` entry at all.
 
 ---
 
