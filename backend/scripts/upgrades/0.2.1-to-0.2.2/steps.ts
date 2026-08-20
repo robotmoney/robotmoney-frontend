@@ -107,6 +107,9 @@ const POSTFLIGHT_CODE = [
   "backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts",
   "backend/scripts/lib/postflight-utils.ts",
   "backend/scripts/lib/checks.ts",
+  // AC2 calls the real derivation rather than a paraphrase, so a change to it
+  // changes what postflight certifies.
+  "backend/src/swarm/handle.ts",
   "backend/migrations/**",
 ];
 const RESTORE_CODE = [
@@ -251,9 +254,9 @@ export const STEPS: RolloutStep[] = [
     hostRole: "stage",
     actor: "agent",
     requires: ["P5.rehearsal-boot"],
-    dependsOn: POSTFLIGHT_CODE,
-    verify: "DATABASE_URL=<twin> bun scripts/upgrades/0.2.1-to-0.2.2/postflight.ts --base-url=<twin api> --emit-receipt=P5.postflight-twin",
-    note: "Runs inside §5.3b's window, before teardown — the twin does not outlive the rehearsal.",
+    dependsOn: [...POSTFLIGHT_CODE, "backend/scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts"],
+    verify: "bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022 --emit-receipt   # G8 runs this step",
+    note: "Has no standalone command: the twin exists only between readiness and teardown, so §5.3b.1's G8 runs it inside the rehearsal.",
   },
   {
     id: "P6.report",
@@ -301,7 +304,8 @@ export const STEPS: RolloutStep[] = [
     actor: "operator",
     requires: ["P8.postflight-prod"],
     dependsOn: [],
-    verify: "§8.1's six ACs by hand, then: where.ts --record P8.acceptance",
+    verify: "AC1-AC5 run inside postflight; verify AC6 by hand, then: where.ts --record P8.acceptance",
+    note: "AC1-AC5 are automated (postflight §8.1 checks). AC6 is not: it needs §5.0's per-member baseline, and its failure mode is silent.",
   },
   {
     id: "P9.tag",

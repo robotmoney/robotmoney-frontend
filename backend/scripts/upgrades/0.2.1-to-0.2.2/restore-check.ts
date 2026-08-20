@@ -32,7 +32,7 @@ import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { columnExists, createChecker, printVerdict } from "../../lib/checks.ts";
 import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
-import { deriveHostRole, emitReceipt } from "../../lib/rollout-receipt.ts";
+import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
 import { runChecks } from "./preflight.ts";
 import { TAG_GLOB } from "./steps.ts";
 
@@ -129,6 +129,8 @@ async function run(backupDirArg?: string): Promise<number> {
  */
 async function main(backupDirArg?: string): Promise<number> {
   const startedAt = new Date().toISOString();
+  // Before the run: a restore + full preflight takes minutes.
+  const git = gitFacts(repoRoot, TAG_GLOB);
   const code = await run(backupDirArg);
   if (process.argv.includes("--emit-receipt")) {
     const backup = resolveBackupFiles(backupDirArg);
@@ -140,6 +142,7 @@ async function main(backupDirArg?: string): Promise<number> {
       repoRoot,
       tagGlob: TAG_GLOB,
       hostRole: deriveHostRole(repoRoot).role,
+      git,
       backupDir: backupDirArg,
       artifactPaths: "error" in backup ? [] : [backup.dumpEnc, backup.globalsEnc],
       note: "error" in backup ? backup.error : `stamp=${backup.stamp}`,

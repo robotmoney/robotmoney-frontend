@@ -30,7 +30,7 @@ import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { createChecker, printVerdict } from "./checks.ts";
 import type { Checker, CheckResult, Status } from "./checks.ts";
-import { collectDbIdentity, emitReceipt, summarise } from "./rollout-receipt.ts";
+import { collectDbIdentity, emitReceipt, gitFacts, summarise } from "./rollout-receipt.ts";
 import type { DbIdentity } from "./rollout-receipt.ts";
 
 export type Db = postgresTypes.Sql<{}>;
@@ -286,10 +286,15 @@ interface PreflightRunCtx {
  */
 export async function runPreflightMain(opts: RunPreflightOpts): Promise<number> {
   const ctx: PreflightRunCtx = { startedAt: new Date().toISOString(), results: [] };
+  // Captured BEFORE the run, not at emit time: if a commit lands while a long
+  // step is in flight, the receipt must describe the tree the step actually ran
+  // against.
+  const git = opts.receipt ? gitFacts(opts.receipt.repoRoot, opts.receipt.tagGlob) : undefined;
   const code = await runPreflightCore(opts, ctx);
   if (opts.receipt) {
     const { path } = emitReceipt({
       ...opts.receipt,
+      git,
       exit: code,
       // Deliberately the same three words printVerdict prints, so grepping the
       // log and reading the receipt cannot tell different stories.

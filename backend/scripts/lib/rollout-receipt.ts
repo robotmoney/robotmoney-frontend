@@ -175,6 +175,14 @@ export interface EmitReceiptSpec {
   backupDir?: string;
   db?: DbIdentity;
   checks?: CheckSummary;
+  /**
+   * Git facts captured when the step STARTED. Pass this for any step that runs
+   * long enough for HEAD to move under it — a rehearsal takes minutes, and a
+   * receipt stamped with a SHA that was committed halfway through describes a
+   * run that never happened. Omitted = captured now, which is only safe for a
+   * step that completes in one moment.
+   */
+  git?: GitFacts;
   /** Paths to hash. Missing ones are skipped — a step that produced nothing
    *  is a step where.ts will not be able to confirm, which is correct. */
   artifactPaths?: string[];
@@ -183,7 +191,7 @@ export interface EmitReceiptSpec {
 }
 
 export function emitReceipt(spec: EmitReceiptSpec): { path: string; receipt: RolloutReceipt } {
-  const g = gitFacts(spec.repoRoot, spec.tagGlob);
+  const g = spec.git ?? gitFacts(spec.repoRoot, spec.tagGlob);
   const receipt: RolloutReceipt = {
     step: spec.step,
     exit: spec.exit,

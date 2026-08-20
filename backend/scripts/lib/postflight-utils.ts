@@ -13,7 +13,7 @@ import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { createChecker, printVerdict } from "./checks.ts";
 import type { Checker, CheckResult } from "./checks.ts";
-import { collectDbIdentity, emitReceipt, summarise } from "./rollout-receipt.ts";
+import { collectDbIdentity, emitReceipt, gitFacts, summarise } from "./rollout-receipt.ts";
 import type { DbIdentity } from "./rollout-receipt.ts";
 import type { PreflightReceiptSpec } from "./preflight-utils.ts";
 
@@ -81,10 +81,12 @@ interface PostflightRunCtx {
  */
 export async function runPostflightMain(opts: RunPostflightOpts): Promise<number> {
   const ctx: PostflightRunCtx = { startedAt: new Date().toISOString(), results: [] };
+  const git = opts.receipt ? gitFacts(opts.receipt.repoRoot, opts.receipt.tagGlob) : undefined;
   const code = await runPostflightCore(opts, ctx);
   if (opts.receipt) {
     const { path } = emitReceipt({
       ...opts.receipt,
+      git,
       exit: code,
       verdict: code === 0 ? "POSTFLIGHT CLEAN" : code === 1 ? "POSTFLIGHT FAILED" : "COULD NOT RUN",
       startedAt: ctx.startedAt,

@@ -1273,16 +1273,17 @@ section states the intent and the script is what gets fixed.
 | **G2** | **It boots exactly what §7.3 boots** — `bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI` unset — and **supervises** that boot rather than waiting for it to finish. | With `CI` unset the boot **never self-terminates by design**: it falls past demo-main's CI-gated exits (`scripts/lib/demo-main.ts:1175`, `:1212`) into the LIVE steady-state loop and cycles sessions forever. That is correct for §7.3, where the stack must stay up serving production. A rehearsal that `await`s that process therefore waits forever — the two requirements are only compatible if the rehearsal supervises. Setting `CI` to escape this is **not** an acceptable fix: a truthy `CI` tears the stack down regardless of exit code (§7.3), so the frontend checks would have nothing left to hit, and the boot would no longer be the one §7.3 runs. |
 | **G3** | **Readiness is polled, with a deadline.** Ready ⇔ the worktree's `.agents/demo-state.json` exists **and** `/health` on its `apiPort` answers `200`. Not reached within the deadline ⇒ exit `1`. | Readiness is the only honest signal that migration + seed + serve all succeeded, and a deadline is what turns G1 from an intention into a property. Allow generously for a cold image build (a first build pulls base images and compiles); this is minutes, not seconds. |
 | **G4** | **Verification runs against the booted stack**: `scripts/demo-frontend-check.ts` on the published port — the same route/content checks CI runs, never a bespoke probe. | A stack that boots but serves the home-page shell for every route is a failed cutover that `/health` alone reports as green (§8 check 11). |
-| **G5** | **Spend is bounded.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack **as soon as G4 finishes** — pass or fail — and must not let the loop keep cycling. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. |
+| **G5** | **Spend is bounded.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack **as soon as verification finishes** (G4 *and* G8) — pass or fail — and must not let the loop keep cycling. G8 costs seconds; it does not license leaving the stack up for anything else. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. |
 | **G6** | **Cleanup is unconditional.** The compose stack, the git worktree, and the throwaway Postgres container are all removed on **every** exit path — success, assertion failure, readiness timeout, and an unhandled throw. | Leftovers from this script are not inert: a surviving container holds a full copy of production data (§5.3b.2), and a surviving stack keeps spending under G5. |
 | **G7** | **Isolation is absolute.** Never the real repo-root `.env`; never a production connection; the twin's port bound to a non-routable address. | The rehearsal's whole claim is that it cannot touch production. See §5.3b.2. |
+| **G8** | **Postflight runs against the twin, inside the same run** — §8's checks *and* §8.1's AC1–AC5, via `postflight.ts --emit-receipt=P5.postflight-twin`, after G4 and before teardown. A failure is exit `1`. | §5.3b.0 step 3 and §5.5 both require it, and the twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. |
 
 **Exit codes.**
 
 | Code | Meaning |
 |---|---|
 | `0` | Migrations applied for real, the stack came up healthy, and the frontend checks passed against production-shaped data. |
-| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), or a frontend check failed. |
+| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), a frontend check failed, or postflight failed against the twin (G8). |
 | `2` | Could not run at all — missing/undecryptable backup files, no `OPENCODE_API_KEY` (§5.3b's box), Docker/git failure. Says nothing about the release. |
 
 ✅ **Conformant as of 2026-08-17, and executed end to end for the first
@@ -1417,8 +1418,10 @@ depends-on:
   - backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts
   - backend/scripts/lib/postflight-utils.ts
   - backend/scripts/lib/checks.ts
+  - backend/src/swarm/handle.ts
   - backend/migrations/**
-verify:      DATABASE_URL=<twin> bun scripts/upgrades/0.2.1-to-0.2.2/postflight.ts --base-url=<twin api> --emit-receipt=P5.postflight-twin
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts
+verify:      bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022 --emit-receipt   # G8 runs this step
 ```
 
 ⛔ **This is a blocking gate.** Do not proceed to §7 until the twin run exits
@@ -1983,6 +1986,7 @@ depends-on:
   - backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts
   - backend/scripts/lib/postflight-utils.ts
   - backend/scripts/lib/checks.ts
+  - backend/src/swarm/handle.ts
   - backend/migrations/**
 verify:      bun scripts/upgrades/0.2.1-to-0.2.2/postflight.ts --base-url=<prod> --emit-receipt=P8.postflight-prod
 ```
@@ -2062,7 +2066,7 @@ host-role:   cutover
 actor:       operator
 requires:
   - P8.postflight-prod
-verify:      §8.1's six ACs by hand, then: where.ts --record P8.acceptance
+verify:      AC1-AC5 run inside postflight; verify AC6 by hand, then: where.ts --record P8.acceptance
 ```
 
 **These are the release's objective, not a spot check. `EXIT=0` from any
@@ -2127,6 +2131,19 @@ Where those references should land instead is tracked separately (#687).
 > `memberId`, which is correct provenance and must not be rewritten — but if
 > the key row is not repointed to the new id, every take for that member
 > reports unverified with no error anywhere.
+
+> **AC1–AC5 are automated; AC6 is not.** `postflight.ts` now runs AC1–AC5 as
+> named checks (`ac1-member-uuid`, `ac2-handle-derived`, `ac3-no-default-handle`,
+> `ac4-no-derived-suffix`, `ac5-handle-resolves`), so they are evaluated
+> wherever postflight runs — including against the digital twin inside §5.3b's
+> rehearsal (G8), which is where §5.5 requires them and where they were
+> previously impossible to run: the twin exists only between readiness and
+> teardown. AC2 calls the real `slugifyMemberName` rather than a paraphrase of
+> it. **AC6 stays manual**, deliberately: it compares per-member counts against
+> §5.0's pre-upgrade capture and re-verifies signatures through
+> `swarm_member_keys`, and a version of it that passed without that baseline
+> would be worse than an honest manual step — its failure mode is already
+> silent. Postflight emits it as a WARN naming what it needs.
 
 **If any AC fails, the release has not been achieved** — that is a postflight
 failure in the §2 sense: patch, cut the next rc, and re-run preflight before
