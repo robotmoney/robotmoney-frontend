@@ -8,6 +8,7 @@ interface ScheduleRow {
   payload: Record<string, unknown>;
   timezone: string;
   next_run_at: Date | null;
+  catchup_policy: "all" | "collapse-per-bucket";
 }
 
 // Catch-up is bounded per tick so one wedged schedule can't hold the
@@ -25,7 +26,7 @@ const MAX_SLOTS_PER_TICK = 1000;
 export async function tickScheduler(): Promise<number> {
   return await sql.begin(async (tx) => {
     const due = await tx<ScheduleRow[]>`
-      SELECT id, kind, cron, payload, timezone, next_run_at
+      SELECT id, kind, cron, payload, timezone, next_run_at, catchup_policy
         FROM job_schedules
        WHERE enabled AND (next_run_at IS NULL OR next_run_at <= now())
        FOR UPDATE SKIP LOCKED
@@ -49,9 +50,18 @@ export async function tickScheduler(): Promise<number> {
       // `new Date()`.
       const it = parser.parseExpression(s.cron, { tz: s.timezone, currentDate: new Date(s.next_run_at.getTime() - 1000) });
       let nextRun = new Date(s.next_run_at);
-      for (let guard = 0; guard < MAX_SLOTS_PER_TICK; guard++) {
-        const slotDate = it.next().toDate();
-        if (slotDate > now) { nextRun = slotDate; break; }
+      // Under 'collapse-per-bucket' (issue #651), a slot for a bucket we've
+      // already seen due this tick is REPLACED here instead of inserted —
+      // so only the last slot per UTC-day bucket among this batch of due
+      // slots ever reaches insertSlot(). This is per TICK-BATCH, not global
+      // per day: a backlog wide enough to overflow MAX_SLOTS_PER_TICK still
+      // finishes collapsing across a couple of ticks, same as the plain 'all'
+      // clamp above, rather than every schedule paying for a cross-tick
+      // dedupe structure this issue's use case (hours, not weeks, of
+      // same-day backlog) never needs.
+      let pendingBucket: string | null = null;
+      let pendingSlotDate: Date | null = null;
+      const insertSlot = async (slotDate: Date) => {
         const slot = slotDate.toISOString().slice(0, 16).replace(/[-:T]/g, "");
         const payload = { ...s.payload, slotAt: slotDate.toISOString() };
         const inserted = await tx`
@@ -60,6 +70,18 @@ export async function tickScheduler(): Promise<number> {
           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
           RETURNING id`;
         if (inserted.length > 0) enqueued++;
+      };
+      for (let guard = 0; guard < MAX_SLOTS_PER_TICK; guard++) {
+        const slotDate = it.next().toDate();
+        if (slotDate > now) { nextRun = slotDate; break; }
+        if (s.catchup_policy === "collapse-per-bucket") {
+          const bucket = slotDate.toISOString().slice(0, 10); // UTC calendar day
+          if (pendingBucket !== null && bucket !== pendingBucket) await insertSlot(pendingSlotDate!);
+          pendingBucket = bucket;
+          pendingSlotDate = slotDate;
+        } else {
+          await insertSlot(slotDate);
+        }
         // CLAMP (issue #614): advance the cursor to the slot just processed on
         // EVERY iteration, not only when the loop breaks on `slotDate > now`.
         // Before this fix `nextRun` never changed inside the loop body, so a
@@ -75,6 +97,12 @@ export async function tickScheduler(): Promise<number> {
         // every tick and can never be left pinned on a single stale value.
         nextRun = slotDate;
       }
+      // Flush whichever slot is the last-seen occupant of its bucket — either
+      // because the loop reached `now` (bucket is complete) or because the
+      // guard was exhausted mid-backlog (bucket is only complete so far; a
+      // later tick may still add to the SAME day, producing one more job for
+      // it — see the per-tick-batch note above).
+      if (s.catchup_policy === "collapse-per-bucket" && pendingSlotDate) await insertSlot(pendingSlotDate);
       await tx`UPDATE job_schedules SET last_enqueued_at = now(), next_run_at = ${nextRun} WHERE id = ${s.id}`;
     }
     return enqueued;
