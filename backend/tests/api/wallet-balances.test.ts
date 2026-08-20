@@ -819,9 +819,34 @@ test("sampler: a slot replayed within TODAY's still-open bucket proceeds and tag
   fx.sp500Price = 4700;
   mockChain(fx);
   const today = new Date().toISOString().slice(0, 10);
-  // 6 minutes ago — past REPLAY_SLACK_MS (5 min), but (barring a test run in
-  // the first few minutes of a UTC day) still today's UTC calendar day.
-  const sameBucketSlot = new Date(Date.now() - 6 * 60_000).toISOString();
+
+  // Anchor the slot to today's date at 00:01:00 UTC — always in today's
+  // daily bucket, always past REPLAY_SLACK_MS (5 min), and never in the
+  // future (provided the test does not run in the first 6 minutes of a UTC
+  // day). This replaces the old `Date.now() - 6 minutes` approach, which
+  // crossed yesterday's bucket boundary when CI ran in the first 6 minutes
+  // of any UTC day, causing classifySlot to return "past-bucket" and the
+  // sampler to decline rather than proceed.
+  //
+  // Edge case: if the current UTC time is before 00:06, today-at-00:01 is
+  // fewer than 5 minutes in the past, so classifySlot sees it as "on-time"
+  // rather than "same-bucket-catchup" — and the provenance stays "live"
+  // rather than being relabelled "backfilled". This is the correct runtime
+  // behavior (a slot fired 1 minute late IS on-time within REPLAY_SLACK_MS),
+  // but it makes the 'backfilled' assertion wrong. Throw loudly rather than
+  // silently producing a false green, so the failure is clearly time-related
+  // rather than looking like a logic bug.
+  const todayStartMs = new Date(`${today}T00:00:00.000Z`).getTime();
+  const msIntoDay = Date.now() - todayStartMs;
+  if (msIntoDay < 6 * 60_000) {
+    throw new Error(
+      `AC4 precondition unmet: test cannot construct a valid same-bucket slot in the first 6 minutes of a UTC day ` +
+        `(now is ${msIntoDay / 1000 | 0}s past midnight UTC). Re-run after 00:06 UTC.`,
+    );
+  }
+  // today at 00:01:00 UTC — always > 5 min in the past once we're past 00:06,
+  // and always in today's daily bucket regardless of the current hour.
+  const sameBucketSlot = `${today}T00:01:00.000Z`;
 
   const result = (await sampleWalletBalances({ slotAt: sameBucketSlot })) as { sampleDate: string; persisted: number };
   expect(result.sampleDate).toBe(today);
