@@ -1469,8 +1469,7 @@ requires:
   - P5.rehearsal-boot
   - P5.postflight-twin
 artifacts:
-  - rehearsal-report-*.md
-  - stage-rehearsal-report-*.md
+  - *rehearsal-report-*.md
 verify:      write the §5.6 report, then: where.ts --record P6.report --note GO
 ```
 
@@ -2426,7 +2425,7 @@ release-runbooks.md §6).
 ### Triggers — roll back if any of these are true
 
 - Verification 3 reports `overridden`, or 4 returns rows you cannot repair now.
-- Verification 2 shows fewer than four migrations **and** the boot is failing.
+- Verification 2 shows fewer than **six** migrations (steps.ts's `THIS_RELEASE_MIGRATIONS`) **and** the boot is failing.
 - The admin surface is unreachable post-cutover because `admin_credential` is
   claimed and nobody holds the password — most likely §12.1's claim window
   was raced, or the password was lost immediately after claiming. Roll back
@@ -2453,7 +2452,7 @@ earlier `v0.2.2-rc.<N-1>` was deployed and healthy before this attempt, that rc
 is the last known-good artifact and is what you check out instead; substitute it
 for `v0.2.1` in the two commands below and expect its own SHA from
 `git rev-parse`. "What rollback does NOT undo" applies to either target — every
-v0.2.2 rc carries the same four migrations — with **one exception**: an rc is
+v0.2.2 rc carries the same six migrations — with **one exception**: an rc is
 v0.2.2 code, so it does *not* restore `ADMIN_TOKEN` access to a claimed
 credential. Only `v0.2.1` does (`auth.ts:64` is a bare `return false` on every
 rc). If the trigger you are rolling back for is the admin lockout, the target is

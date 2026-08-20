@@ -52,8 +52,13 @@ export interface RolloutStep {
    * Empty = the step is not code-bound (an operator observation, a git tag).
    */
   dependsOn: string[];
-  /** Artifacts, relative to the backup dir. `<STAMP>` expands to .last-stamp.
-   *  Their absence demotes the step to `missing` no matter what a receipt says. */
+  /**
+   * Artifacts, relative to the backup dir. `<STAMP>` expands to .last-stamp.
+   * Their absence demotes the step to `missing` no matter what a receipt says.
+   *
+   * Patterns are ANDed: every one listed must match something. Two spellings of
+   * the same file are therefore ONE pattern, not two entries.
+   */
   artifacts?: string[];
   /** Wall-clock validity. Expiry is amber (re-run advised), not red — unlike
    *  code drift, which is red. */
@@ -263,7 +268,11 @@ export const STEPS: RolloutStep[] = [
     actor: "operator",
     requires: ["P4.preflight-live", "P5.rehearsal-boot", "P5.postflight-twin"],
     dependsOn: [],
-    artifacts: ["rehearsal-report-*.md", "stage-rehearsal-report-*.md"],
+    // ONE pattern covering both names §5.6 has used. Multiple patterns are
+    // ANDed — correct for P3.backup, where the dump and the globals must both
+    // exist — so listing the two spellings as if they were alternatives made
+    // this step permanently unrecordable. Found by trying to record it.
+    artifacts: ["*rehearsal-report-*.md"],
     verify: "write the §5.6 report, then: where.ts --record P6.report --note GO",
     note: "⛔ Blocking gate for §7 — an AC failure on the twin is an AC failure in production; it is the same data.",
   },
