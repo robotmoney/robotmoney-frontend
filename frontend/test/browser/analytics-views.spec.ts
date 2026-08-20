@@ -202,6 +202,69 @@ test("regime view surfaces the Equity factor panel even when `panels` is null (d
   await expect(page.locator(".rv__panel-card", { hasText: "Equity factor panel" })).toBeVisible();
 });
 
+// issue #624: regime.js shared wallet-perf.js's pre-fix category-axis defect —
+// charting `history` directly (one array slot per PERSISTED date) spaces points
+// by ARRAY INDEX, so a gap between two adjacent persisted rows would draw
+// compressed to one ordinary-width step instead of a real time gap. The
+// analytics pipeline currently always recomputes + upserts the FULL history
+// every run, so this fixture can't come from production data — it's a
+// synthetic 30-day excision from the vendored daily snapshot, exactly like
+// performance-view.spec.ts's AC5 gap fixture, to exercise the chart's own
+// dense-axis behaviour independent of that backend guarantee.
+const GAP_START_INDEX = 1500;
+const GAP_DAYS = 30;
+function loadRegimeStubWithGap() {
+  const dto = loadRegimeStub();
+  dto.history.splice(GAP_START_INDEX, GAP_DAYS);
+  return dto;
+}
+
+test("regime history chart occupies proportional horizontal space across a gap and renders it as a visible discontinuity (issue #624)", async ({ page }) => {
+  await stubEnvironment(page);
+  const dto = loadRegimeStubWithGap();
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(dto) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+  await expect(page.locator('canvas[x-ref="chart"]')).toBeVisible();
+
+  const expectedDenseDays = Math.round(
+    (Date.parse(dto.history[dto.history.length - 1]!.date) - Date.parse(dto.history[0]!.date)) / 86_400_000,
+  ) + 1; // inclusive of both endpoints
+
+  const chartState = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[x-ref="chart"]') as HTMLCanvasElement;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chart = (window as any).Chart.getChart(canvas);
+    return {
+      labelCount: chart.data.labels.length,
+      spanGaps: chart.data.datasets.map((d: { spanGaps: unknown }) => d.spanGaps),
+      datasetsData: chart.data.datasets.map((d: { data: (number | null)[] }) => d.data),
+    };
+  });
+
+  // The core assertion: the axis is a DENSE calendar (one slot per real
+  // calendar day across the full span), not a sparse array of only the
+  // persisted points — this is what makes the 30-day hole occupy 30 slots of
+  // horizontal space instead of collapsing to a single step.
+  expect(chartState.labelCount).toBe(expectedDenseDays);
+  expect(chartState.labelCount).toBeGreaterThan(dto.history.length);
+
+  // spanGaps must be false on every history-chart series — a `true`/`undefined`
+  // config would let Chart.js bridge the gap with an interpolated line.
+  for (const sg of chartState.spanGaps) expect(sg).toBe(false);
+
+  // The synthesized gap-region index (a calendar day strictly between the two
+  // persisted dates on either side of the hole) must be `null` in every
+  // dataset — a real discontinuity, never a fabricated/interpolated value. The
+  // vendored snapshot's daily history is contiguous before the excision, so
+  // dense-axis index === original array index up through GAP_START_INDEX.
+  const midGapIndex = GAP_START_INDEX + Math.floor(GAP_DAYS / 2);
+  for (const data of chartState.datasetsData) {
+    expect(data[midGapIndex]).toBeNull();
+  }
+});
+
 test("channel-divergence view renders the Stablecoin-vs-QQQ-flow gauge with value + read", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");

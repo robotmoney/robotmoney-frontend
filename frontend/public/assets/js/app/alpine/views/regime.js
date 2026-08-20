@@ -220,19 +220,45 @@ export function registerRegimeView(Alpine) {
     // Panel index on a history row: prefer the DTO camelCase, fall back to the
     // raw snapshot key so the chart works against either shape.
     _idx(h, panel) { const v = h[panel + "Index"]; return v != null ? v : h[panel]; },
+    // issue #624: `history` is one array slot per PERSISTED date — Chart.js's
+    // (default) category x-axis spaces slots by ARRAY INDEX, not elapsed time,
+    // so a gap between two adjacent persisted rows would draw compressed to an
+    // ordinary-width step instead of a real time gap (the same defect
+    // wallet-perf.js's AUM chart had — see _denseCalendarDays there). Currently
+    // latent (the analytics pipeline recomputes + upserts the full history
+    // every run, so `history` never actually has a hole today), but the chart
+    // itself shouldn't rely on that backend guarantee to stay honest.
+    // Synthesizing one slot per CALENDAR day between the first and last
+    // persisted date — gap days included — keeps the x-axis proportional to
+    // elapsed time regardless.
+    _denseCalendarDays(history) {
+      if (history.length === 0) return [];
+      const days = [];
+      const start = new Date(history[0].date + "T00:00:00Z");
+      const end = new Date(history[history.length - 1].date + "T00:00:00Z");
+      for (let t = start.getTime(); t <= end.getTime(); t += 86_400_000) {
+        days.push(new Date(t).toISOString().slice(0, 10));
+      }
+      return days;
+    },
 
     drawHistory() {
       const canvas = this.$refs.chart;
       if (!canvas || !window.Chart || !this.history.length) return;
-      const labels = this.history.map((h) => h.date);
-      const line = (label, data, color, o = {}) => ({ label, data, borderColor: color, backgroundColor: o.bg || "transparent", fill: !!o.fill, tension: 0.2, pointRadius: 0, borderWidth: o.bw || 1.25, yAxisID: o.axis || "y" });
+      const labels = this._denseCalendarDays(this.history);
+      const byDate = new Map(this.history.map((h) => [h.date, h]));
+      const val = (fn) => labels.map((d) => { const h = byDate.get(d); return h ? fn(h) : null; });
+      // spanGaps:false is Chart.js's own default, set explicitly (issue #624,
+      // mirroring wallet-perf.js) so a `null` gap day breaks the line instead
+      // of ever silently interpolating across it.
+      const line = (label, data, color, o = {}) => ({ label, data, borderColor: color, backgroundColor: o.bg || "transparent", fill: !!o.fill, tension: 0.2, pointRadius: 0, borderWidth: o.bw || 1.25, yAxisID: o.axis || "y", spanGaps: false });
       const ds = [
-        line("Composite", this.history.map((h) => h.composite), PALETTE.accent, { fill: true, bg: rgba(PALETTE.accent, 0.1), bw: 2 }),
-        line("Macro", this.history.map((h) => this._idx(h, "macro")), PALETTE.textMuted),
-        line("On-chain", this.history.map((h) => this._idx(h, "onchain")), PALETTE.warm),
+        line("Composite", val((h) => h.composite), PALETTE.accent, { fill: true, bg: rgba(PALETTE.accent, 0.1), bw: 2 }),
+        line("Macro", val((h) => this._idx(h, "macro")), PALETTE.textMuted),
+        line("On-chain", val((h) => this._idx(h, "onchain")), PALETTE.warm),
       ];
       const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
-      if (hasFactor) ds.push(line("Equity factor", this.history.map((h) => this._idx(h, "factor")), SERIES.emerald));
+      if (hasFactor) ds.push(line("Equity factor", val((h) => this._idx(h, "factor")), SERIES.emerald));
       const extras = this.latest?.extras || {};
       const showSpx = this.visible.spx && (extras.spx || []).length > 0;
       const showEth = this.visible.eth && (extras.eth || []).length > 0;
@@ -245,7 +271,7 @@ export function registerRegimeView(Alpine) {
           responsive: true, maintainAspectRatio: false, animation: false,
           interaction: { mode: "index", intersect: false },
           plugins: {
-            regimeBands: { enabled: this.visible.bands, regimes: this.history.map((h) => h.regime ?? null) },
+            regimeBands: { enabled: this.visible.bands, regimes: val((h) => h.regime ?? null) },
             legend: { position: "bottom", labels: { color: PALETTE.textMuted, font: MONO_FONT } },
             tooltip: { backgroundColor: rgba(PALETTE.deep, 0.95), borderColor: PALETTE.border, borderWidth: 1, titleColor: PALETTE.text, bodyColor: PALETTE.text },
           },
@@ -262,8 +288,9 @@ export function registerRegimeView(Alpine) {
 
     drawBacktests() {
       if (!this.latest?.backtest || !window.Chart || !this.$root) return;
-      const labels = this.history.map((h) => h.date);
-      const regimes = this.history.map((h) => h.regime ?? null);
+      const labels = this._denseCalendarDays(this.history);
+      const byDate = new Map(this.history.map((h) => [h.date, h]));
+      const regimes = labels.map((d) => byDate.get(d)?.regime ?? null);
       for (const canvas of this.$root.querySelectorAll("canvas[data-bt]")) {
         const key = canvas.getAttribute("data-bt");
         const strategies = this.latest.backtest[key];
