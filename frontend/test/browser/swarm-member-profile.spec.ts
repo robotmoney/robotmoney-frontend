@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { navigate } from "./navigation.ts";
 
 // Read-precedence coverage for the public member profile (/swarm/members/:ref),
 // issue #595.
@@ -232,4 +233,39 @@ test("a member served from the static archive keeps the visited URL as canonical
     .toBe("https://robotmoney.network/swarm/members/noop-analyst");
 
   await expectNoBrowserErrors(errors);
+});
+
+// memberProfile.init() names the page after the record it fetched, which means
+// it writes AFTER an await. The router tears a view down on navigation but
+// cannot cancel that in-flight fetch, so a slow member response would otherwise
+// land its title and canonical on whatever route the visitor moved on to,
+// leaving a real indexed page declaring itself a duplicate of a member profile.
+// Same cross-route leak spa.spec.ts pins for the `robots` directive.
+test("a slow member fetch does not stamp its identity on the route the visitor moved to", async ({ page }) => {
+  const FETCH_DELAY_MS = 2500;
+
+  await page.route("**/api/swarm/**", async (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (/\/api\/swarm\/members\/athena$/.test(pathname)) {
+      await new Promise((resolve) => setTimeout(resolve, FETCH_DELAY_MS));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RENAMED_ATHENA) });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  // Leave before the member resolves.
+  await page.goto("/swarm/members/athena");
+  await navigate(page, "/faq");
+
+  const FAQ_URL = "https://robotmoney.network/faq";
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", FAQ_URL);
+  const faqTitle = await page.title();
+  expect(faqTitle).not.toContain(RENAMED_ATHENA.name);
+
+  // Outlast the fetch, then confirm nothing moved. Read after the delay rather
+  // than polling for a negative, which would pass simply by being early.
+  await page.waitForTimeout(FETCH_DELAY_MS + 1500);
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", FAQ_URL);
+  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute("content", FAQ_URL);
+  expect(await page.title()).toBe(faqTitle);
 });

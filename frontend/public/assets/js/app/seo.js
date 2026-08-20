@@ -484,20 +484,38 @@ export function applyRouteMeta(pathname) {
  * Deliberately narrow: it writes the two URL-valued tags and nothing else, so
  * it cannot fight `applyRouteMeta` over title, description or robots.
  *
+ * `forPathname` is the route the caller was serving when it started. Every
+ * caller of this function is late by construction — it runs after an await —
+ * and the router does not cancel a superseded view's in-flight work
+ * (`destroyTree` cannot abort a pending promise). Without the guard, a member
+ * fetch still running when the visitor moves on lands its correction on
+ * whatever route is showing, so /faq would declare itself a duplicate of a
+ * member profile. This is the same cross-route leak spa.spec.ts already pins
+ * for the `robots` directive.
+ *
  * @param {string} url absolute URL, normally from `canonicalUrlFor`
+ * @param {string} [forPathname] skip the write if the visitor has since navigated away
  */
-export function setCanonicalUrl(url) {
+export function setCanonicalUrl(url, forPathname) {
   if (typeof document === "undefined" || !url) return;
+  if (forPathname !== undefined && normalize(location.pathname) !== normalize(forPathname)) return;
   upsert("link", "rel", "canonical", "href", url);
   upsert("meta", "property", "og:url", "content", url);
 }
 
 /**
+ * Escape a value destined for a double-quoted HTML attribute.
+ *
+ * `<` and `>` are escaped as well as `&` and `"`. They are not strictly
+ * required inside a quoted attribute, but every value passed here reaches
+ * `<head>` and one of them is derived from a request path, so the safe superset
+ * costs nothing and removes a class of question.
+ *
  * @param {string} str
  * @returns {string}
  */
 function escapeAttr(str) {
-  return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 /**
@@ -531,19 +549,39 @@ function escapeHtml(str) {
  */
 export function renderMeta(shellHtml, pathname) {
   const m = metaFor(pathname);
-  const url = canonicalUrlFor(pathname);
+  // Escaped like every other substituted value. It is derived from the request
+  // path, which for the api process's shell fallback is arbitrary attacker-
+  // controlled input: `static.ts` decodes the pathname before it gets here, so
+  // an unescaped `"` would close the attribute and everything after it would
+  // parse as markup in <head>.
+  const url = escapeAttr(canonicalUrlFor(pathname));
   const title = escapeHtml(m.title);
   const titleAttr = escapeAttr(m.title);
   const description = escapeAttr(m.description);
+  const robots = escapeAttr(m.robots || DEFAULT_ROBOTS);
 
-  return shellHtml
-    .replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`)
-    .replace(/(<meta name="description" content=")[^"]*(")/, `$1${description}$2`)
-    .replace(/(<link rel="canonical" href=")[^"]*(")/, `$1${url}$2`)
-    .replace(/(<meta name="robots" content=")[^"]*(")/, `$1${escapeAttr(m.robots || DEFAULT_ROBOTS)}$2`)
-    .replace(/(<meta property="og:title" content=")[^"]*(")/, `$1${titleAttr}$2`)
-    .replace(/(<meta property="og:description" content=")[^"]*(")/, `$1${description}$2`)
-    .replace(/(<meta property="og:url" content=")[^"]*(")/, `$1${url}$2`)
-    .replace(/(<meta name="twitter:title" content=")[^"]*(")/, `$1${titleAttr}$2`)
-    .replace(/(<meta name="twitter:description" content=")[^"]*(")/, `$1${description}$2`);
+  // Every substitution goes through a FUNCTION replacer. With a string
+  // replacement, `$&`, `$'`, "$`" and `$n` are replacement PATTERNS, and
+  // metaFor's SECTIONS branch derives its title from the raw last path segment,
+  // so a `$` in the URL would be expanded rather than inserted. `$&` re-injects
+  // the matched tag (including its quote, reopening the attribute) and `$'`
+  // inserts the entire remainder of the document, compounding across the nine
+  // replaces: a 16KB shell became 256MB for a path of six `$'`. A function's
+  // return value is always used verbatim.
+  const TAGS = [
+    [/(<meta name="description" content=")[^"]*(")/, description],
+    [/(<link rel="canonical" href=")[^"]*(")/, url],
+    [/(<meta name="robots" content=")[^"]*(")/, robots],
+    [/(<meta property="og:title" content=")[^"]*(")/, titleAttr],
+    [/(<meta property="og:description" content=")[^"]*(")/, description],
+    [/(<meta property="og:url" content=")[^"]*(")/, url],
+    [/(<meta name="twitter:title" content=")[^"]*(")/, titleAttr],
+    [/(<meta name="twitter:description" content=")[^"]*(")/, description],
+  ];
+
+  let html = shellHtml.replace(/<title>[^<]*<\/title>/, () => `<title>${title}</title>`);
+  for (const [pattern, value] of TAGS) {
+    html = html.replace(pattern, (_match, open, close) => `${open}${value}${close}`);
+  }
+  return html;
 }
