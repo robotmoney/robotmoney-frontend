@@ -110,7 +110,7 @@ export const INDICATORS: Indicator[] = [
     description:
       "A broad trade-weighted index of the US dollar against the currencies of major US trading partners. Measures dollar strength globally, not just against the major reserve currencies.",
     derivation:
-      "FRED series DTWEXBGS. Published weekly (not the daily DXY ICE futures index). We read the raw index level.",
+      "FRED series DTWEXBGS, published business-daily (not the daily DXY ICE futures index). We read the raw index level.",
     interpretation:
       "A stronger dollar tightens global financial conditions — emerging-market borrowers with dollar debt struggle, commodity prices fall, and risk assets typically suffer. A weaker dollar does the opposite. Risk-off when DXY is high or rising; risk-on when low or falling.",
   },
