@@ -1,7 +1,7 @@
 # Reconciling `stack` with the runbooks
 
-What changes, what does not, and the five collisions that need a decision
-rather than an edit.
+Whether the runbook policy's goals survive changing the deployment vendor to
+`stack` — they do — and the mechanism each goal needs in order to hold.
 
 Inputs: [`release-runbooks.md`](./release-runbooks.md) (foundational policy),
 [`../runbooks/deployment.md`](../runbooks/deployment.md) (standing topology and
