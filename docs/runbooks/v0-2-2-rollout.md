@@ -721,22 +721,36 @@ BASELINE_FILE="pre-upgrade-baseline-$(date +%Y%m%dT%H%M%S).txt"
   echo "=== baseline captured at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
   echo ""
   echo "--- schema_migrations ---"
-  psql -X -c "SELECT id FROM schema_migrations ORDER BY id;"
+  psql -X -c "SELECT name, applied_at FROM schema_migrations ORDER BY name;"
   echo ""
   echo "--- member count ---"
   psql -X -Atc "SELECT count(*) AS member_count FROM swarm_members;"
   echo ""
-  echo "--- handle_type distribution ---"
-  psql -X -c "SELECT handle_type, count(*) FROM swarm_members GROUP BY handle_type ORDER BY 1;"
+  echo "--- member identity (AC1/AC2/AC3 reference) ---"
+  psql -X -c "SELECT id, name FROM swarm_members ORDER BY name;"
   echo ""
-  echo "--- vault_address sample (first 5) ---"
-  psql -X -c "SELECT id, vault_address FROM swarm_members ORDER BY id LIMIT 5;"
+  echo "--- swarm_recommendations count (§8 check 8 reference) ---"
+  psql -X -Atc "SELECT count(*) AS swarm_recommendations FROM swarm_recommendations;"
 } | tee "$BASELINE_FILE"
 echo "baseline saved → $BASELINE_FILE"
 ```
 
 This baseline is your reference for postflight comparison (§8) and rollback
 verification (§9).
+
+> **Corrected 2026-08-20 — the first revision of this section could not run.**
+> As landed in #707 it selected `schema_migrations.id`,
+> `swarm_members.handle_type` and `swarm_members.vault_address`. None of those
+> columns exist: `schema_migrations` is `(name text PRIMARY KEY, applied_at)`
+> (`backend/src/db/migrate.ts:33-36`), and `swarm_members` has neither
+> `handle_type` nor `vault_address` at `v0.2.1` or after this release's
+> migrations — `0030` adds `handle`, and `vault_address` lives on
+> `agent_vaults`/`vault_share_price_history`. Three of the four queries raised
+> `42703` against the replica, so the "baseline" file was three errors and a
+> member count. That matters more than a typo would: §8 and §9 both treat this
+> file as the reference for postflight comparison and rollback verification, and
+> an empty baseline silently verifies nothing. The queries above are the
+> corrected set, run against the replica on 2026-08-20.
 
 ### 5.1 The dump
 
