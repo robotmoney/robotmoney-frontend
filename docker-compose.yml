@@ -120,6 +120,27 @@ x-worker-env: &worker-env
   # defaults (HTTP cache off; token-price cache 30s).
   HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
   TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
+  # Base RPC endpoint + the SHARED rate budget (issue #709 / #651).
+  # BASE_RPC_MAX_CALLS_PER_SEC is the one token bucket every chain read in the
+  # app draws from — live samplers and the gap backfill alike — because the
+  # provider meters PER-IP and a second limiter beside the first sums to 2x and
+  # 429s them both. UNSET means no pacing (today's behaviour) AND means the
+  # self-healing backfill stays off: it refuses to run unpaced, which is
+  # deliberate, because the ~0.55 calls/s figure in the design doc was measured
+  # from a developer IP and must be re-measured from this droplet before a real
+  # sweep. Setting it is how a deployment opts into repair.
+  # (BASE_RPC_URL / BASE_RPC_SOURCE are deliberately NOT added here: their
+  # absence from this allowlist is the pre-existing defect class tracked in
+  # #641/#643, and fixing it belongs there rather than riding along on this
+  # change. The code defaults they fall through to are the production values.)
+  BASE_RPC_MAX_CALLS_PER_SEC: ${BASE_RPC_MAX_CALLS_PER_SEC:-}
+  BASE_RPC_RATE_BURST: ${BASE_RPC_RATE_BURST:-}
+  # Blast-radius bounds on the repair driver (worker/handlers/repair.ts).
+  WALLET_BACKFILL_MAX_DAYS_PER_RUN: ${WALLET_BACKFILL_MAX_DAYS_PER_RUN:-}
+  WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY: ${WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY:-}
+  # Minimum spacing between GeckoTerminal OHLCV requests (a keyless 429 was
+  # observed on the 6th call in ~15s). Unrelated to the Base RPC budget above.
+  GECKO_OHLCV_MIN_INTERVAL_MS: ${GECKO_OHLCV_MIN_INTERVAL_MS:-}
   # Optional per-call inference bound (issue #537), read by
   # scripts/lib/swarm/inference.ts's timeoutMs(). Declared with a NULL value —
   # not `${OPENCODE_TIMEOUT_MS:-}` — deliberately: the `:-` form resolves to the

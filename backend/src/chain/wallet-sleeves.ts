@@ -13,6 +13,7 @@ import { sql } from "../db/client.ts";
 import {
   persistedFallbackWalletPriceReader,
   readChainAmountsBatched,
+  SLEEVE_DEFS,
   type ChainAmount,
   type KeyedAssetRead,
   type Provenance,
@@ -58,16 +59,9 @@ const defaultWalletSleeveReaders: WalletSleeveReaders = {
   priceReader: persistedFallbackWalletPriceReader,
 };
 
-interface SleeveDef {
-  name: string;
-  type: string;
-  symbols: string[];
-}
-const SLEEVE_DEFS: SleeveDef[] = [
-  { name: "Bankr", type: "primary", symbols: ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"] },
-  { name: "Stablecoin Strategy 1", type: "strategy", symbols: ["ZYFAI-SS1"] },
-  { name: "Stablecoin Strategy 2", type: "strategy", symbols: ["GIZA-SS1"] },
-];
+// SLEEVE_DEFS now lives in wallet-valuation.ts — the same module that already
+// owns everything that must stay identical between the sleeve feeds, and now
+// also the backfill (ops/wallet-backfill.ts). It was duplicated here.
 
 export const WALLET_SLEEVES_FRESHNESS_BUDGET_MS = 5 * 60_000;
 

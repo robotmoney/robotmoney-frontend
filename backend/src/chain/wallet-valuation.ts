@@ -37,6 +37,7 @@ import {
   encodeBalanceOfCall,
   encodeConvertToAssetsCall,
   encodeGetEthBalanceCall,
+  isEmptyReturnData,
   multicall3Aggregate3,
   MULTICALL3_ADDRESS,
   type Aggregate3Result,
@@ -140,13 +141,58 @@ export const persistedFallbackWalletPriceReader: WalletPriceReader = {
   },
 };
 
-function rpcOpts(): RpcCallOptions {
-  return { rpcUrl: config.baseRpcUrl };
+function rpcOpts(blockTag?: string): RpcCallOptions {
+  return blockTag === undefined ? { rpcUrl: config.baseRpcUrl } : { rpcUrl: config.baseRpcUrl, blockTag };
+}
+
+// Options for a BLOCK-ADDRESSED read (issue #709, §6.5.1). Both fields are
+// absent on every live call, and both defaults reproduce the pre-#709 behaviour
+// exactly — this is the seam the wallet backfill reads history through, not a
+// change to the live sampler.
+export interface ChainReadOptions {
+  /** Evaluate every sub-call at this block instead of "latest". */
+  blockTag?: string;
+  /**
+   * Treat a sub-call that succeeded with ZERO RETURN BYTES as a FAILURE of its
+   * key rather than decoding it to 0 (§10's silent-zero rail).
+   *
+   * `success: true` with `returnData: "0x"` means there is no contract at that
+   * address AT THAT BLOCK — the normal answer for a day before the target was
+   * deployed. On the live path that cannot happen for a configured, deployed
+   * token, and `decodeUint256` maps `0x` to `0n` by long-standing design, so
+   * this is OFF by default and the live path is untouched. For a backfill it
+   * must be ON: decoding it would not read a balance of zero, it would invent
+   * one, and a fabricated zero inside a summed AUM total is indistinguishable
+   * from a real drawdown once written.
+   */
+  strictEmptyReturn?: boolean;
 }
 
 function amountFrom(raw: bigint, decimals: number): number {
   return Number(raw) / 10 ** decimals;
 }
+
+// The sleeve layout: which prop wallet (BY INDEX into resolvePropWallets())
+// holds which symbols, and what that sleeve is called.
+//
+// This lived as THREE separate copies — the sampler
+// (worker/handlers/wallet.ts), the read path (chain/wallet-sleeves.ts) and now
+// the backfill (ops/wallet-backfill.ts). Three copies of the layout is three
+// chances for a backfilled day to disagree with a live-sampled one about which
+// (wallet, symbol) rows a day even HAS, which would show up as a permanent
+// phantom gap in the sleeve series rather than as an obvious bug. It belongs
+// here for the same reason everything else in this file does: it must stay
+// identical across the feeds.
+export interface SleeveDef {
+  name: string;
+  type: string;
+  symbols: string[];
+}
+export const SLEEVE_DEFS: SleeveDef[] = [
+  { name: "Bankr", type: "primary", symbols: ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"] },
+  { name: "Stablecoin Strategy 1", type: "strategy", symbols: ["ZYFAI-SS1"] },
+  { name: "Stablecoin Strategy 2", type: "strategy", symbols: ["GIZA-SS1"] },
+];
 
 // A key's resolved chain amount: either a token amount, or a failure flag that
 // makes the caller degrade THAT key (a reverted sub-call, or the whole batch
@@ -178,8 +224,14 @@ export interface KeyedAssetRead {
 export async function readChainAmountsBatched(
   reads: KeyedAssetRead[],
   logLabel: string,
+  readOpts: ChainReadOptions = {},
 ): Promise<Map<string, ChainAmount>> {
-  const opts = rpcOpts();
+  const opts = rpcOpts(readOpts.blockTag);
+  const strictEmpty = readOpts.strictEmptyReturn === true;
+  // A sub-call is usable only if it succeeded AND — under a block-addressed
+  // read — actually returned bytes. See ChainReadOptions.strictEmptyReturn.
+  const subCallFailed = (r: Aggregate3Result | undefined): boolean =>
+    !r || !r.success || (strictEmpty && isEmptyReturnData(r.returnData));
   const out = new Map<string, ChainAmount>();
   if (reads.length === 0) return out;
   for (const r of reads) {
@@ -247,11 +299,11 @@ export async function readChainAmountsBatched(
   for (let i = 0; i < legs.length; i++) {
     const leg = legs[i]!;
     const r = round1[i];
-    if (!r || !r.success) {
-      errored.add(leg.key); // a reverted sub-call fails the whole key (its NAV)
+    if (subCallFailed(r)) {
+      errored.add(leg.key); // a reverted (or empty, when strict) sub-call fails the whole key
       continue;
     }
-    const value = decodeUint256(r.returnData);
+    const value = decodeUint256(r!.returnData);
     if (leg.kind === "balance") {
       rawSum.set(leg.key, (rawSum.get(leg.key) ?? 0n) + value);
     } else if (leg.kind === "idleUsdc") {
@@ -291,11 +343,11 @@ export async function readChainAmountsBatched(
     for (let i = 0; i < navKeys.length; i++) {
       const r = round2[i];
       const { key } = navKeys[i]!;
-      if (!r || !r.success) {
+      if (subCallFailed(r)) {
         errored.add(key);
         continue;
       }
-      vaultAssetsRaw.set(key, (vaultAssetsRaw.get(key) ?? 0n) + decodeUint256(r.returnData));
+      vaultAssetsRaw.set(key, (vaultAssetsRaw.get(key) ?? 0n) + decodeUint256(r!.returnData));
     }
   }
 

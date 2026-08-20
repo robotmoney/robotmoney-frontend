@@ -32,12 +32,24 @@
 //     (issue #614 AC4 "Backfilled rows are distinguishable from 'live'").
 //   - A PAST bucket (a slot for yesterday, or an hour that has already
 //     closed): a read taken now cannot honestly represent that bucket at
-//     all — chain state is pinned to "latest" and prices are spot-only, so
-//     there is no way to answer "what was this on 2026-08-05" without
-//     fabricating it. This case DECLINES explicitly, with a durable,
-//     recorded reason (job_runs.output), and lets the NEXT on-time slot keep
-//     writing forward. That is D16-compliant (docs/decisions.md) — it
-//     discloses the unrecoverable window instead of fabricating a value for it.
+//     all — THIS sampler's chain state is pinned to "latest" and its prices
+//     are spot-only, so there is no way for IT to answer "what was this on
+//     2026-08-05" without fabricating it. This case DECLINES explicitly, with
+//     a durable, recorded reason (job_runs.output), and lets the NEXT on-time
+//     slot keep writing forward. That is D16-compliant (docs/decisions.md) —
+//     it discloses the unrecoverable window instead of fabricating a value.
+//
+//     WHAT CHANGED, AND WHAT DID NOT (issue #709). "There is no way to answer
+//     'what was this on 2026-08-05'" was true of the transport, not of the
+//     chain: a read at that day's own block answers it exactly, and a daily
+//     OHLCV close prices it. That is what ops/wallet-backfill.ts does, driven by
+//     the scheduled ops.repair_gaps dispatcher. The decline BELOW STANDS
+//     unchanged and is still correct — a replayed live-sampler slot is not the
+//     place to do a block-addressed historical read — but it is no longer a
+//     statement that the day is unrecoverable. The day is now REPAIRED by the
+//     backfill, which writes it as provenance='backfilled' after reading it at
+//     its own block, and the decline is simply the live sampler declining to
+//     mislabel a `latest` read as that day.
 //
 // Generous tolerance for ordinary scheduler tick lag / worker restart jitter
 // gates BOTH cases: a slot fired a few minutes late is still "now", not a

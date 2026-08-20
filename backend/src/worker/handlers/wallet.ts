@@ -25,6 +25,7 @@ import {
 import {
   persistedFallbackWalletPriceReader,
   readChainAmountsBatched,
+  SLEEVE_DEFS,
   valueLeg,
   type KeyedAssetRead,
 } from "../../chain/wallet-valuation.ts";
@@ -74,16 +75,11 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
   return { sampleDate, persisted };
 }
 
-interface SleeveDef {
-  name: string;
-  type: string;
-  symbols: string[];
-}
-const SLEEVE_DEFS: SleeveDef[] = [
-  { name: "Bankr", type: "primary", symbols: ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"] },
-  { name: "Stablecoin Strategy 1", type: "strategy", symbols: ["ZYFAI-SS1"] },
-  { name: "Stablecoin Strategy 2", type: "strategy", symbols: ["GIZA-SS1"] },
-];
+// SLEEVE_DEFS is imported from chain/wallet-valuation.ts (it was duplicated
+// here and in chain/wallet-sleeves.ts). The backfill driver writes the same
+// (wallet, symbol) rows this sampler does, and a third copy of the layout would
+// let a repaired day silently disagree with a live-sampled one about which rows
+// a day even has.
 
 export async function sampleWalletSleeves(payload: Record<string, unknown> = {}): Promise<unknown> {
   const sleeveReplay = classifySlot(payload, "daily");

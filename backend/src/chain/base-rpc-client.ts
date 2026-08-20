@@ -184,6 +184,53 @@ export function decodeAggregate3(resultHex: string): Aggregate3Result[] {
 export interface RpcCallOptions {
   rpcUrl: string;
   timeoutMs?: number;
+  /**
+   * BLOCK-ADDRESSED READS (issue #709 / docs/technical/data-self-healing.md
+   * §6.5.1). The block tag every `eth_call` / `eth_getBalance` issued through
+   * this transport is evaluated at. Omitted — which is every live caller —
+   * resolves to `"latest"` at the two call sites below, byte-for-byte the
+   * behaviour that existed before this field.
+   *
+   * This is NOT the archive indexer D16 rejected: it is a parameter on reads
+   * the app already makes, against the node it already reads (the default
+   * `https://mainnet.base.org` answers archive state queries). No new vendor,
+   * no new host, no persisted chain-event store. #709 carries the argument and
+   * the scope fence.
+   *
+   * D17 makes this module the SINGLE shared transport for every live chain
+   * feed, so this field is inherited by thirteen exported functions with zero
+   * signature changes — which is exactly why the default must stay
+   * `?? "latest"` and why a change here is reviewed as a transport change.
+   *
+   * Accepts a 0x-hex block number (see `toBlockTag`) or a tag
+   * ("latest" | "earliest" | "safe" | "finalized" | "pending").
+   */
+  blockTag?: string;
+}
+
+/** 0x-hex block-number form of `blockNumber`, for `RpcCallOptions.blockTag`. */
+export function toBlockTag(blockNumber: number): string {
+  if (!Number.isInteger(blockNumber) || blockNumber < 0) {
+    throw new Error(`invalid block number: ${blockNumber}`);
+  }
+  return "0x" + blockNumber.toString(16);
+}
+
+/**
+ * True when an `eth_call` (or an aggregate3 sub-call) returned ZERO BYTES.
+ *
+ * THE SILENT-ZERO SEAM (§10's chain rail). `0x` means "there is no contract at
+ * this address AT THIS BLOCK" — for a block-addressed read that is the normal
+ * answer for a day before the target was deployed. `decodeUint256` maps it to
+ * `0n` deliberately (see its comment) and every live caller depends on that,
+ * so this predicate exists for callers that must tell the two apart BEFORE
+ * decoding. A backfill that decodes `0x` to `0` does not read a balance of
+ * zero; it fabricates one.
+ *
+ * Live-path semantics are unchanged: nothing on the live path calls this.
+ */
+export function isEmptyReturnData(returnData: string): boolean {
+  return returnData.replace(/^0x/, "").length === 0;
 }
 
 // --- Rate-limit hardening (issue: public-Base-RPC 429 storm) ------------------
@@ -261,6 +308,106 @@ export function _resetRpcConcurrencyForTests(): void {
   waiters.length = 0;
 }
 
+// --- The shared RPC RATE budget (token bucket) -------------------------------
+// CONCURRENCY IS NOT RATE. The gate above bounds how many requests are in
+// flight; it paces nothing. On the worker's analytics lane in-flight never
+// exceeds 1 anyway (worker/loop.ts claims LIMIT 1 serially), so the gate is
+// INERT there — which is why production saw a real HTTP 429 storm from the
+// public Base RPC on 2026-08-10 (issue #651). This is the missing control: a
+// token bucket that meters CALLS PER SECOND.
+//
+// IT IS ONE BUCKET, ON PURPOSE. The provider meters PER-IP, so in-process
+// isolation cannot create budget — a backfill with its own limiter running
+// beside the live sampler sums to 2x against one per-IP bucket and guarantees
+// 429s, i.e. it would CAUSE new gaps while repairing old ones. Every read in
+// the app goes through rpcRequest, so every read — live sampler, request path,
+// and the wallet backfill (ops/wallet-backfill.ts) alike — draws from this one
+// bucket. Do not add a second limiter anywhere.
+//
+// UNSET = DISABLED, byte-for-byte today's behaviour. The measured figures
+// (~5-token bucket refilling at ~0.55 calls/s) come from a developer IP and are
+// NOT hardcoded here: PD6 requires them re-measured from the production droplet
+// before a backfill run, so the parameters are configuration and the backfill
+// driver refuses to start until they are set.
+const RATE_PER_SEC_ENV = "BASE_RPC_MAX_CALLS_PER_SEC";
+const RATE_BURST_ENV = "BASE_RPC_RATE_BURST";
+
+interface RateBudget {
+  ratePerSec: number;
+  burst: number;
+}
+
+/** The configured budget, or null when the knob is unset/blank/garbage (no
+ *  pacing at all — the pre-#709 transport). Read at CALL time like every other
+ *  knob in this file. */
+export function resolveRpcRateBudget(env: Record<string, string | undefined> = process.env): RateBudget | null {
+  const raw = env[RATE_PER_SEC_ENV];
+  if (raw === undefined || raw === "") return null;
+  const ratePerSec = Number(raw);
+  if (!Number.isFinite(ratePerSec) || ratePerSec <= 0) return null;
+  const rawBurst = env[RATE_BURST_ENV];
+  const parsedBurst = rawBurst === undefined || rawBurst === "" ? NaN : Number(rawBurst);
+  const burst = Number.isFinite(parsedBurst) && parsedBurst >= 1 ? Math.floor(parsedBurst) : Math.max(1, Math.ceil(ratePerSec));
+  return { ratePerSec, burst };
+}
+
+let bucketTokens = 0;
+let bucketLastRefillMs = 0;
+let bucketPrimed = false;
+
+function refillBucket(budget: RateBudget, now: number): void {
+  if (!bucketPrimed) {
+    // Start FULL: a cold process is not owed a penalty, and the burst is what
+    // absorbs an ordinary same-tick fan-out (one wallet sample = 2 eth_calls).
+    bucketTokens = budget.burst;
+    bucketLastRefillMs = now;
+    bucketPrimed = true;
+    return;
+  }
+  const elapsedMs = now - bucketLastRefillMs;
+  if (elapsedMs <= 0) return;
+  bucketTokens = Math.min(budget.burst, bucketTokens + (elapsedMs / 1000) * budget.ratePerSec);
+  bucketLastRefillMs = now;
+}
+
+// Wait until one token is available, then spend it. Waiters re-check after each
+// sleep rather than assuming their turn, so a herd waking together still spends
+// exactly one token each. Aborts with the request's own deadline (sleepOrAbort),
+// so pacing can never outlive the AbortController timeout.
+async function acquireRateToken(signal: AbortSignal): Promise<void> {
+  const budget = resolveRpcRateBudget();
+  if (!budget) return;
+  for (;;) {
+    refillBucket(budget, Date.now());
+    if (bucketTokens >= 1) {
+      bucketTokens -= 1;
+      return;
+    }
+    const waitMs = Math.ceil(((1 - bucketTokens) / budget.ratePerSec) * 1000);
+    await sleepOrAbort(Math.min(Math.max(waitMs, 1), MAX_BACKOFF_MS), signal);
+  }
+}
+
+// Provider-declared exhaustion (HTTP 429, or JSON-RPC -32016 — the same
+// condition on this provider) feeds BACK into the bucket rather than only into
+// the retry backoff: the bucket is drained, so the next call — this request's
+// retry or any OTHER caller's first attempt — waits out a full refill interval
+// instead of walking straight into the same wall. Without this the limiter
+// learns nothing from being told it is over budget.
+function noteRateLimitExhaustion(): void {
+  if (!resolveRpcRateBudget()) return;
+  bucketTokens = 0;
+  bucketLastRefillMs = Date.now();
+  bucketPrimed = true;
+}
+
+/** Test-only hygiene hook: forget the bucket between suites. Not used in prod. */
+export function _resetRpcRateLimiterForTests(): void {
+  bucketTokens = 0;
+  bucketLastRefillMs = 0;
+  bucketPrimed = false;
+}
+
 // Parse a Retry-After header (RFC 7231): either delta-seconds or an HTTP-date.
 // Returns the wait in ms, or null when absent/unparseable.
 function parseRetryAfterMs(header: string | null): number | null {
@@ -314,6 +461,10 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
   const retries = maxRetries();
   try {
     for (let attempt = 0; ; attempt++) {
+      // Spend a RATE token before taking a concurrency slot — a request that is
+      // only waiting for budget must not hold a slot while it waits. No-op when
+      // the budget is unconfigured (see resolveRpcRateBudget).
+      await acquireRateToken(controller.signal);
       // Acquire a concurrency slot per network attempt (and release it during any
       // backoff sleep, so a waiting request is never blocked by one that is just
       // sitting out its backoff).
@@ -335,6 +486,12 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
       if (res.ok) {
         const parsed = (await res.json()) as { result?: T; error?: { code?: number; message?: string } };
         if (parsed.error) {
+          if (parsed.error.code != null && TRANSIENT_RPC_ERROR_CODES.has(parsed.error.code)) {
+            // Told we are over budget: drain the shared bucket whether or not
+            // this particular request has retries left, so the NEXT caller pays
+            // for it too. (No-op when no budget is configured.)
+            noteRateLimitExhaustion();
+          }
           if (
             parsed.error.code != null &&
             TRANSIENT_RPC_ERROR_CODES.has(parsed.error.code) &&
@@ -354,6 +511,7 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
 
       // Non-2xx. Retry only transient statuses, only while retries remain, and
       // only if the request hasn't already been aborted by its timeout.
+      if (res.status === 429) noteRateLimitExhaustion(); // same feedback as -32016 above
       if (TRANSIENT_STATUSES.has(res.status) && attempt < retries && !controller.signal.aborted) {
         await sleepOrAbort(backoffMs(attempt + 1, res.headers.get("retry-after")), controller.signal);
         continue;
@@ -371,7 +529,9 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
 // JSON-RPC `error` field — callers (chain/vault-economics.ts) catch this and
 // degrade the response rather than propagate a 5xx or fabricate a number.
 export async function ethCall(to: string, data: string, opts: RpcCallOptions): Promise<string> {
-  const result = await rpcRequest<string>("eth_call", [{ to, data }, "latest"], opts);
+  // `?? "latest"` is the load-bearing default: a caller that passes no blockTag
+  // (every live caller) issues exactly the request it issued before #709.
+  const result = await rpcRequest<string>("eth_call", [{ to, data }, opts.blockTag ?? "latest"], opts);
   if (typeof result !== "string") throw new Error("Base RPC: missing result");
   return result;
 }
@@ -480,7 +640,9 @@ export async function multicall3Aggregate3(calls: Call3[], opts: RpcCallOptions)
 // method from eth_call — same transport/error-handling contract (throws on
 // transport/HTTP/JSON-RPC error so callers can degrade a single leg).
 export async function ethGetBalance(address: string, opts: RpcCallOptions): Promise<bigint> {
-  const result = await rpcRequest<string>("eth_getBalance", [address, "latest"], opts);
+  // Same `?? "latest"` default as ethCall — the second and last hardcoded block
+  // tag in the backend before #709.
+  const result = await rpcRequest<string>("eth_getBalance", [address, opts.blockTag ?? "latest"], opts);
   if (typeof result !== "string") throw new Error("Base RPC: missing result");
   return decodeUint256(result);
 }
