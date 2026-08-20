@@ -1,0 +1,20 @@
+# The recipe descriptor for robotmoney/api.
+#
+# WHY THIS FILE EXISTS AT ALL. `build:` is NOT a field of a stack.yml container
+# entry — StackContainer carries only name/ref/path/wrapper/wrapper-ref/
+# content-root (build_util.py:37-51), so a `build:` written in stack.yml is
+# silently ignored and `stack prepare` falls back to default-build.sh, which
+# looks for a Dockerfile in `path` and fails. `build` is only ever read from a
+# container.yml (build_util.py:122). Verified 2026-08-20, stack 2.0.0-1177d1b.
+#
+# stack finds this file at <repo>/<stack.yml container `path`>/container.yml
+# (build_util.py:334-339), which is why the stack entry's `path` must point
+# here.
+container:
+  name: robotmoney/api
+  # Resolved against THIS file's directory.
+  build: build.sh
+  # The build context our build.sh actually uses is the repo root, set
+  # explicitly there: backend/Dockerfile copies contract/ from outside
+  # backend/, so recipe and context are not the same directory.
+  content-root: .

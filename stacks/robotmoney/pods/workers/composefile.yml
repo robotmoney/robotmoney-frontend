@@ -1,0 +1,55 @@
+# workers pod — the three queue lanes plus the analytics producer.
+#
+# Lane topology is docker-compose.yml's, unchanged (issue #107): WORKER_LANE is
+# REQUIRED by the worker entrypoint and fails loudly when empty or unknown.
+# The producer is NOT a queue lane: it owns two daily crons and submits over
+# REST, so it has no DATABASE_URL and no admin credential.
+#
+# YAML anchors are used here exactly as docker-compose.yml uses them. They
+# expand at parse time, so they survive the k8s translation intact — one of the
+# few compose features that needs no work.
+x-worker-base: &worker-base
+  image: robotmoney/api:stack
+  command: ["bun", "run", "src/worker/index.ts"]
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+x-worker-env: &worker-env
+  DATABASE_URL: postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney
+  RM_ENV: staging
+  PROJECTS_SOURCE: live
+
+services:
+  worker-swarm:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      WORKER_LANE: swarm
+
+  worker-analytics:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      WORKER_LANE: analytics
+
+  worker-research:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      WORKER_LANE: research
+
+  analytics-producer:
+    image: robotmoney/api:stack
+    command: ["bun", "run", "src/producer/index.ts", "serve"]
+    environment:
+      ANALYTICS_API_URL: http://api:8787
+      # No ANALYTICS_TOKEN_FILE. docker-compose.yml delivers this as a docker
+      # file-secret at /run/secrets/analytics_token; stack secrets are env vars.
+      # backend/src/producer/index.ts:23 already accepts "ANALYTICS_TOKEN or a
+      # non-empty ANALYTICS_TOKEN_FILE", so dropping the file form costs
+      # nothing — ANALYTICS_TOKEN arrives via stack's secret injection.
+      PRODUCER_REGIME_CRON: "30 22 * * *"
+      PRODUCER_RESEARCH_CRON: "0 23 * * *"
+    depends_on:
+      - api

@@ -1,0 +1,43 @@
+name: robotmoney
+description: "Robot Money — api, worker lanes, analytics producer, Postgres"
+
+# WHY A BUILD RECIPE AND NOT A WRAPPER. The `webapp` / `node-service` wrappers
+# build a container FOR you from a source tree (see the todo example). Ours is
+# already a Dockerfile — backend/Dockerfile — and it needs the REPO ROOT as its
+# build context, because it copies `contract/` (the shared HTTP contract) from
+# outside `backend/`. `content-root` alone cannot express "recipe here, context
+# there", so containers/api/build.sh sets STACK_CONTAINER_BUILD_WORK_DIR to the
+# repo root explicitly. Same image serves the api and every worker lane; they
+# differ only by `command:`, exactly as docker-compose.yml already has it.
+#
+# `path` resolves against the REPO ROOT, and must point at the directory holding
+# this container's container.yml. The build script is named THERE, not here:
+# `build:` is not a stack.yml container field and is silently ignored if written
+# in this file. Verified 2026-08-20, stack 2.0.0-1177d1b.
+containers:
+  - name: robotmoney/api
+    path: ./stacks/robotmoney/containers/api
+
+pods:
+  - name: data
+    path: ./stacks/robotmoney/pods/data
+  - name: app
+    path: ./stacks/robotmoney/pods/app
+  - name: workers
+    path: ./stacks/robotmoney/pods/workers
+
+# Generated vs external is the meaningful line: a value whose counterpart lives
+# OUTSIDE the deployment (a vendor key) must be handed in at init with
+# `--secret NAME=env:CI_VAR`; everything else stack generates per deployment,
+# which is strictly better than today's hand-set ADMIN_TOKEN.
+secrets:
+  POSTGRES_PASSWORD:
+  ADMIN_TOKEN:
+  AUTOMATION_TOKEN:
+  ANALYTICS_TOKEN:
+  OPENCODE_API_KEY:
+    external: true
+  FRED_API_KEY:
+    external: true
+  BASE_RPC_URL:
+    external: true

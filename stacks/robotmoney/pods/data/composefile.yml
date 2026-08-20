@@ -1,0 +1,44 @@
+# data pod — Postgres owned by the deployment.
+#
+# This pod is the one production will NOT deploy when it moves to DO Managed
+# HA Postgres: drop it from the spec and hand DATABASE_URL in as an external
+# secret. That is the whole reason the stack is split into three pods.
+services:
+  postgres:
+    # Pinned to 17 to match docker-compose.yml. That pin is deliberate there
+    # (it owns a persistent data directory the demo resumes across boots), and
+    # production parity is 18.6 on DO Managed. Staging rehearses whichever
+    # major prod will run — decide once, then change it here and in
+    # docker-compose.yml together. A major bump is a dump-and-restore.
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: robotmoney
+      # POSTGRES_PASSWORD is a declared secret in stack.yml — generated at
+      # deploy time and injected into every container, so api/workers and the
+      # database agree on it without it being written into any file here.
+      POSTGRES_DB: robotmoney
+    volumes:
+      # The annotation MUST TRAIL THE VOLUME LINE ITSELF. On its own line above,
+      # it parses as an ordinary comment and is silently dropped — `stack init`
+      # then emits `backup: exclude: []` and says nothing. Verified 2026-08-20
+      # against stack 2.0.0-1177d1b.
+      #
+      # NOT OPTIONAL. Without it, K8up (k8s) / the backup container (compose)
+      # file-copies a LIVE Postgres data directory, and the repository grows a
+      # snapshot that looks restorable and is not. The real backup artifact is
+      # the logical dump below.
+      - pgdata:/var/lib/postgresql/data   # @stack backup-exclude
+    # @stack backup-command pg_dump -U robotmoney -d robotmoney --clean --if-exists
+    # @stack backup-file-extension sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U robotmoney"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      # Container port only. Nothing outside routes to Postgres — api and the
+      # worker lanes reach it by service name. On k8s this is a ClusterIP.
+      - "5432"
+
+volumes:
+  pgdata:

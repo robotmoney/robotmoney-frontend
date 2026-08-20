@@ -1,0 +1,42 @@
+# app pod — the api process. Serves BOTH the JSON API and the static frontend
+# (STATIC_DIR), so there is no reverse proxy of our own; stack's ingress is the
+# only thing in front of it.
+services:
+  api:
+    # NOT `build:`. stack builds robotmoney/api (stack.yml -> containers/api/
+    # build.sh) and tags it `<name>:stack`; the composefile references that tag.
+    # This is the single biggest shape difference from docker-compose.yml.
+    image: robotmoney/api:stack
+    command: ["bun", "run", "src/api/index.ts"]
+    environment:
+      # Assembled from the generated POSTGRES_PASSWORD secret. VERIFY: whether
+      # this interpolation survives the k8s translation, where secrets become
+      # secretKeyRef rather than compose-level substitution.
+      DATABASE_URL: postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney
+      RM_ENV: staging
+      PROJECTS_SOURCE: live
+      # ADMIN_TOKEN / AUTOMATION_TOKEN / ANALYTICS_TOKEN are declared secrets;
+      # stack injects them into every container of the deployment, so they are
+      # deliberately NOT restated here.
+      #
+      # NOTE: docker-compose.yml's `environment:` block is an explicit ALLOWLIST
+      # — it has no `env_file:` and the Dockerfile sets no ENV, so a variable
+      # not named there never reaches the container. stack's deployment-wide
+      # secret injection is the opposite default. That difference is worth
+      # stating loudly in the docs; it is a real change in blast radius.
+      STATIC_DIR: /srv/frontend
+      SWARM_SCHEDULES_ENABLED: "1"
+    ports:
+      - "8787"   # @stack http-proxy /
+    healthcheck:
+      # /health probes the database (SELECT 1), so this distinguishes "process
+      # alive" from "actually serving". `bun` rather than curl: the oven/bun
+      # image carries no curl.
+      test: ["CMD", "bun", "-e", "process.exit((await fetch('http://127.0.0.1:8787/health')).ok ? 0 : 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
