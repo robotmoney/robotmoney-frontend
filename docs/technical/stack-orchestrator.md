@@ -9,7 +9,22 @@ reason this document exists.
 - **Tool version:** `stack 2.0.0-1177d1b-202608201522`
 - **Verified against:** k3s `v1.36.2+k3s1`, single node, `local-path` default StorageClass
 - **Date:** 2026-08-20
-- **Environment:** [`../../.stack-env/README.md`](../../.stack-env/README.md)
+
+**Reproducing the environment.** The work was done in a disposable `.stack-env/`
+directory, which is gitignored and therefore not part of a checkout. To rebuild
+it: download the CLI to a local path rather than onto `PATH` (pinning the binary
+is what makes a finding reproducible later), point `STACK_REPO_BASE_DIR` at a
+scratch directory, and copy a kubeconfig in.
+
+```sh
+curl -L -o .stack-env/bin/stack \
+  https://github.com/bozemanpass/stack/releases/latest/download/stack
+chmod +x .stack-env/bin/stack
+export STACK_REPO_BASE_DIR="$PWD/.stack-env/work"
+```
+
+A k8s target additionally needs a registry the cluster can reach (§18) and, for
+ingress and backups, a cluster provisioned per §22.
 
 **This document is a reference, not a plan.** It records how the tool behaves.
 What we intend to do about it is [`../plans/stack-k8s-staging-deployment.md`](../plans/stack-k8s-staging-deployment.md);
