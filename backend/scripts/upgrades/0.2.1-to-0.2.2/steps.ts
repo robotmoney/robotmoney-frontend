@@ -17,29 +17,11 @@
 // dump is on disk — those are DERIVED by where.ts, because a derived fact
 // cannot go stale. Steps marked `derived` have no receipt at all.
 
-/**
- * Every migration this release applies, in runner order (readdir + JS sort,
- * src/db/migrate.ts:39-41). THE single source: preflight.ts and postflight.ts
- * both import this. They used to each declare their own copy and the copies
- * disagreed — postflight was corrected to six in 27ec374, preflight was not.
- *
- * §5.6 and §8's check 2 both cite this list; the test asserts each file exists
- * under backend/migrations/.
- */
-export const THIS_RELEASE_MIGRATIONS = [
-  "0029_admin_auth_recovery.sql",
-  "0029_admin_passkey.sql",
-  "0030_swarm_member_handle.sql",
-  "0031_swarm_member_handle_namespace.sql",
-  "0032_append_only_history.sql",
-  "0033_swarm_member_uuid_ids.sql",
-] as const;
-
-/** Selects this release's tags and no others (§7.2 cuts `v0.2.2-rc.N`). */
-export const TAG_GLOB = "v0.2.2*";
-
-/** The release tracking issue whose Phase tasklist gates preflight (§2). */
-export const TRACKING_ISSUE = 660;
+// Re-exported so existing importers (where.ts, the test) have one name to
+// reach for. The gate scripts import them from release.ts DIRECTLY — see that
+// file's header for why the manifest must not be in their `depends-on`.
+export { TAG_GLOB, THIS_RELEASE_MIGRATIONS, TRACKING_ISSUE } from "./release.ts";
+import { TRACKING_ISSUE } from "./release.ts";
 
 export type HostRole = "stage" | "cutover" | "any";
 export type Actor = "script" | "operator" | "agent";
@@ -97,14 +79,14 @@ export interface RolloutStep {
 // declare the files they actually execute, plus what those files read.
 const PREFLIGHT_CODE = [
   "backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts",
-  "backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts",
+  "backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts",
   "backend/scripts/lib/preflight-utils.ts",
   "backend/scripts/lib/checks.ts",
   "backend/migrations/**",
 ];
 const POSTFLIGHT_CODE = [
   "backend/scripts/upgrades/0.2.1-to-0.2.2/postflight.ts",
-  "backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts",
+  "backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts",
   "backend/scripts/lib/postflight-utils.ts",
   "backend/scripts/lib/checks.ts",
   // AC2 calls the real derivation rather than a paraphrase, so a change to it
@@ -229,6 +211,20 @@ export const STEPS: RolloutStep[] = [
     expectInRecovery: true,
     verify: "bun scripts/upgrades/0.2.1-to-0.2.2/preflight.ts --emit-receipt",
     note: "Gate E (blocking-xacts) goes stale by the minute — §2 requires a re-run immediately before §7.3 regardless of this TTL.",
+  },
+  {
+    id: "P4.postflight-dryrun",
+    phase: "P4 live preflight",
+    section: "§8.0",
+    title: "prove §8's checks discriminate against still-v0.2.1 production",
+    hostRole: "stage",
+    actor: "agent",
+    requires: ["P4.preflight-live"],
+    dependsOn: [],
+    artifacts: ["postflight-dryrun-*.txt"],
+    ttlHours: 48,
+    verify: "§8.0's table as rm_readonly against the replica, then: where.ts --record P4.postflight-dryrun",
+    note: "Checks 4/6/7/9 MUST error 42703 pre-upgrade. A check that returns 0 rows instead means you are on an already-migrated database.",
   },
   {
     id: "P5.rehearsal-boot",

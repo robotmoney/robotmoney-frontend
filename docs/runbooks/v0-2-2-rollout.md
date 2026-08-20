@@ -629,7 +629,7 @@ requires:
   - P3.gate-c
 depends-on:
   - backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts
-  - backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts
   - backend/scripts/lib/preflight-utils.ts
   - backend/scripts/lib/checks.ts
   - backend/migrations/**
@@ -1075,7 +1075,7 @@ requires:
   - P3.backup
 depends-on:
   - backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts
-  - backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts
   - backend/scripts/lib/preflight-utils.ts
   - backend/scripts/lib/checks.ts
   - backend/migrations/**
@@ -1415,7 +1415,7 @@ requires:
   - P5.rehearsal-boot
 depends-on:
   - backend/scripts/upgrades/0.2.1-to-0.2.2/postflight.ts
-  - backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts
   - backend/scripts/lib/postflight-utils.ts
   - backend/scripts/lib/checks.ts
   - backend/src/swarm/handle.ts
@@ -1983,7 +1983,7 @@ requires:
   - P7.cutover
 depends-on:
   - backend/scripts/upgrades/0.2.1-to-0.2.2/postflight.ts
-  - backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts
   - backend/scripts/lib/postflight-utils.ts
   - backend/scripts/lib/checks.ts
   - backend/src/swarm/handle.ts
@@ -1992,6 +1992,20 @@ verify:      bun scripts/upgrades/0.2.1-to-0.2.2/postflight.ts --base-url=<prod>
 ```
 
 ### 8.0 Dry-run this section before cutover — prove the checks discriminate
+
+```yaml step
+id:          P4.postflight-dryrun
+phase:       P4 live preflight
+section:     §8.0
+host-role:   stage
+actor:       agent
+ttl:         48h
+requires:
+  - P4.preflight-live
+artifacts:
+  - postflight-dryrun-*.txt
+verify:      §8.0's table as rm_readonly against the replica, then: where.ts --record P4.postflight-dryrun
+```
 
 **Do this once, read-only, against still-`v0.2.1` production, before §7 runs —
 not a spot check, a self-test of the checks below.** The point is exactly what
@@ -2005,7 +2019,7 @@ matches what is documented here — verified 2026-08-17 against production:
 
 | # | Check | Result running TODAY, pre-upgrade | What it means |
 |---|---|---|---|
-| 2 | migrations recorded | `0 rows` | Correct negative signal — none of the four are applied yet. |
+| 2 | migrations recorded | `0 rows` | Correct negative signal — none of the **six** (steps.ts's `THIS_RELEASE_MIGRATIONS`) are applied yet. An earlier revision said "four", from when this release shipped four. |
 | 4 | handle namespace violation | `ERROR: column a.handle does not exist` (`42703`) | **Expected.** `handle` does not exist until `0030` applies. This is not a bug in the query and not something to "fix" pre-upgrade — running it today MUST error this way. If it instead returns `0 rows` today, you are pointed at an already-migrated database (wrong tag, or production has already been cut over) — treat that the way §2.0 treats a `psql ""` false pass: stop and re-verify what you are connected to. |
 | 5 | namespace trigger `ENABLE ALWAYS` | `0 rows` | Correct — the trigger does not exist until `0031`. A `pg_trigger` lookup by name degrades gracefully to empty, unlike a column reference. |
 | 6 | members missing handle | `ERROR: column "handle" does not exist` (`42703`) | **Expected**, same reason as check 4. |

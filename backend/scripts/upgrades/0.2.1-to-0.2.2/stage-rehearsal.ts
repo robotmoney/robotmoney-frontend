@@ -42,7 +42,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
-import { TAG_GLOB } from "./steps.ts";
+import { TAG_GLOB } from "./release.ts";
 
 const NAME = "stage-rehearsal-0.2.2";
 const log = (msg: string) => console.log(`[${NAME}] ${msg}`);

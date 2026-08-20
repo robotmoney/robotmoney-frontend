@@ -139,6 +139,20 @@ describe("THIS_RELEASE_MIGRATIONS is the single source", () => {
     }
   });
 
+  test("release constants live in release.ts, not in the manifest", () => {
+    const steps = readFileSync(join(repoRoot, "backend", "scripts", "upgrades", "0.2.1-to-0.2.2", "steps.ts"), "utf8");
+    // steps.ts may RE-EXPORT them; declaring them would put display metadata
+    // back inside every gate's depends-on, which is what the split undid.
+    expect(/const THIS_RELEASE_MIGRATIONS\s*=/.test(steps)).toBe(false);
+    // And no gate may depend on the manifest file itself.
+    for (const step of STEPS) {
+      expect({ step: step.id, dependsOnManifest: step.dependsOn.some((g) => g.endsWith("/steps.ts")) }).toEqual({
+        step: step.id,
+        dependsOnManifest: false,
+      });
+    }
+  });
+
   test("no upgrade script declares its own copy", () => {
     for (const f of ["preflight.ts", "postflight.ts"]) {
       const src = readFileSync(join(repoRoot, "backend", "scripts", "upgrades", "0.2.1-to-0.2.2", f), "utf8");

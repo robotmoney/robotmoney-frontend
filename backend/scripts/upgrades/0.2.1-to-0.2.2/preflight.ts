@@ -25,7 +25,7 @@ import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 // The migration list lives in steps.ts, not here. This file and postflight.ts
 // each used to declare their own copy, and the copies disagreed — postflight
 // was corrected to six in 27ec374, this one was left at four. One home now.
-import { TAG_GLOB, THIS_RELEASE_MIGRATIONS } from "./steps.ts";
+import { TAG_GLOB, THIS_RELEASE_MIGRATIONS } from "./release.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 // backend/scripts/upgrades/0.2.1-to-0.2.2/ -> backend/migrations/

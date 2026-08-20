@@ -34,7 +34,7 @@ import { columnExists, createChecker, printVerdict } from "../../lib/checks.ts";
 import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
 import { runChecks } from "./preflight.ts";
-import { TAG_GLOB } from "./steps.ts";
+import { TAG_GLOB } from "./release.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 // backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>

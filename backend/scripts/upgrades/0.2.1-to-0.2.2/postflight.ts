@@ -36,7 +36,7 @@ import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import { slugifyMemberName } from "../../../src/swarm/handle.ts";
 // Shared with preflight.ts — see steps.ts. This file's copy was the correct
 // one (six migrations, 27ec374); it is here only so there is no second copy.
-import { TAG_GLOB, THIS_RELEASE_MIGRATIONS } from "./steps.ts";
+import { TAG_GLOB, THIS_RELEASE_MIGRATIONS } from "./release.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 // backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>
