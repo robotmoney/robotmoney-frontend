@@ -59,7 +59,7 @@ assume. Re-check them against the tip you pin in §1 before you rely on them.
 **The bare `v0.2.2` tag does not exist while you are executing this runbook, and
 cannot.** A version tag records what has been proven in production, so it is cut
 after both preflight and postflight, never before —
-[`docs/technical/release-runbooks.md` §2](../technical/release-runbooks.md)
+[`docs/technical/release-runbooks.md` §3](../technical/release-runbooks.md)
 ("Version tags and release candidates") owns that policy end to end, including
 what happens when preflight or postflight fails. Read it once before you start;
 this runbook executes it and does not restate it.
@@ -89,7 +89,7 @@ whole rollout — every gate below, the `v0.2.2-rc.N` tag you cut in §7.2, the
 cut in §8 once postflight is clean must all refer to it. If the branch moves
 mid-rollout, you are gating one commit and shipping another. `v0.2.2` landing on
 the same commit as the final rc is the expected outcome, not double-tagging to
-clean up (release-runbooks.md §2).
+clean up (release-runbooks.md §3).
 
 ### Branching model
 
@@ -196,6 +196,25 @@ f51a8fe feat: admin auth: segregate automation and strict setup token           
   `swarm_members` (`0030`, `0031`).
 
 Treat this as a minor release with a manual auth migration attached.
+
+### Policy alignment
+
+The foundational release workflow is defined in
+[`docs/technical/release-runbooks.md` §4](../technical/release-runbooks.md)
+(gates §§4.1–4.9). The table below maps each policy gate to the section of
+this runbook that executes it.
+
+| Policy gate | What it requires | Runbook section |
+|---|---|---|
+| **§4.1** Pre-cutover backup | Encrypted dump + globals dump, verified restore | §5.1–§5.3 |
+| **§4.2** Schema-migration preflight | All migrations idempotent and reversible | §4 (preflight) |
+| **§4.3** Digital-twin rehearsal | Full runbook against restored twin; any failure blocks | §5.5 |
+| **§4.4** Stage rehearsal report | Written report with acceptance criteria; gate before §7 | §5.6 |
+| **§4.5** Go/no-go sign-off | Operator sign-off after stage rehearsal report passes | §2 |
+| **§4.6** Cutover execution | Versioned RC tag, then migrate + boot | §7 |
+| **§4.7** Postflight verification | All §8 checks + §8.1 acceptance criteria pass | §8 |
+| **§4.8** Postflight failure → rollback | Default: restore pre-upgrade dump; override requires sign-off | §9 |
+| **§4.9** Production rollout report | Filed before closing the tracking issue | §13 |
 
 ---
 
@@ -633,6 +652,12 @@ Warnings worth stopping to read even though they exit `0`:
   `backend/src/api/validation.ts:446`, 80-char bound at `:482`). Fix after
   cutover, per §8.
 - `swarm-members-size` — above 50 000 rows, `0030` is a stall, not a blip.
+- `wedged-schedules` **WARN** — one or more enabled `job_schedules` rows have
+  `next_run_at` more than 1 hour in the past, indicating a schedule that has
+  not fired when expected. This does not block the upgrade, but an already-
+  wedged schedule will not self-heal from deployment alone. Note whether any
+  rows are flagged here; re-check in §8.2 after cutover. A schedule that
+  fires normally during §8.2 can be marked resolved.
 
 ### On the reconciliation
 
@@ -673,6 +698,45 @@ Production is DigitalOcean Managed Postgres, which has PITR. **PITR is not
 sufficient here** — it recovers the cluster, not a file you can inspect, diff, or
 restore into a scratch database to prove the release is reversible. Take a local
 dump as well.
+
+### 5.0 Record pre-upgrade baseline
+
+Before taking the dump, capture a lightweight read-only baseline from the
+replica (§3). This baseline is your reference for postflight comparison (§8)
+and rollback verification (§9).
+
+```bash
+# Load read-only replica credentials from §3's .env.readonly
+rokey() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" <checkout>/.env.readonly | head -1; }
+
+export PGHOST="$(rokey host)"       PGPORT="$(rokey port)"
+export PGUSER="$(rokey username)"   PGPASSWORD="$(rokey password)"
+export PGDATABASE="$(rokey database)" PGSSLMODE=require
+
+# Prove you are on the replica and the read-only role before capturing output.
+psql -X -Atc "SELECT current_user, inet_server_addr(), current_database();"
+
+BASELINE_FILE="pre-upgrade-baseline-$(date +%Y%m%dT%H%M%S).txt"
+{
+  echo "=== baseline captured at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+  echo ""
+  echo "--- schema_migrations ---"
+  psql -X -c "SELECT id FROM schema_migrations ORDER BY id;"
+  echo ""
+  echo "--- member count ---"
+  psql -X -Atc "SELECT count(*) AS member_count FROM swarm_members;"
+  echo ""
+  echo "--- handle_type distribution ---"
+  psql -X -c "SELECT handle_type, count(*) FROM swarm_members GROUP BY handle_type ORDER BY 1;"
+  echo ""
+  echo "--- vault_address sample (first 5) ---"
+  psql -X -c "SELECT id, vault_address FROM swarm_members ORDER BY id LIMIT 5;"
+} | tee "$BASELINE_FILE"
+echo "baseline saved → $BASELINE_FILE"
+```
+
+This baseline is your reference for postflight comparison (§8) and rollback
+verification (§9).
 
 ### 5.1 The dump
 
@@ -1119,19 +1183,99 @@ export PGDATABASE="$(rokey database)" PGSSLMODE=require
 psql -X -Atc "SELECT current_user, inet_server_addr(), current_database();"
 
 psql -X -c \
-  "SELECT kind, cron, enabled, timezone, payload FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;" \
+  "SELECT kind, cron, enabled, timezone, payload, next_run_at, last_enqueued_at FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;" \
   | tee "rm-swarm-schedules-${STAMP}.txt"
 ```
 
 Expect five rows. **Verified 2026-08-17** against the replica as `rm_readonly`:
 five rows, all `enabled = f`, `payload` `{}` except
 `swarm.publish_brief`'s `{"windowMinutes": 60}` — matching §8.0's check-12
-baseline, which is the point of capturing it in both places.
+baseline, which is the point of capturing it in both places. Also captures
+`next_run_at` and `last_enqueued_at` per row — these are the wedge-detection
+fields referenced in §4 and §8.2.
 
 This file is the **only** record of what the boot is about to clobber;
 restoring those values afterwards is a manual `UPDATE` per row, and you
 cannot write it without this output. Keep it with the dump (it holds no
 credentials, so it does not need §5.2's encryption).
+
+### 5.5 Digital-twin rehearsal
+
+⛔ **This is a blocking gate.** Do not proceed to §7 until the twin run exits
+`0` and every acceptance criterion in §5.6 is met.
+
+Restore the backup (§5.3's `restore-check.ts`, then §5.3b's
+`stage-rehearsal.ts`) into a local Postgres container and run the full runbook
+against it in sequence:
+
+1. **Preflight (§4)** — run `restore-check.ts` (Gate C) first, then §4's live
+   checks against the restored twin. Any failure is blocking. Follow the fix
+   loop: patch, cut the next rc, restore a fresh dump, rehearse again.
+2. **Cutover (§7)** — run `stage-rehearsal.ts`, which executes the exact §7.3
+   boot command (`bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI`
+   unset) against the migrated twin. Any failure is blocking.
+3. **Postflight (§8)** — run every §8 check **and** every §8.1 acceptance
+   criterion against the twin after the boot reaches readiness. Any failure is
+   blocking — do not carry a known-failing AC into a production cutover on the
+   theory that production will behave differently.
+
+The twin holds real production rows. An AC failure on the twin is an AC failure
+in production; it is the same data. Treat a failing twin the same as a failing
+production cutover: diagnose, patch, cut the next rc, re-rehearse from step 1.
+
+```bash
+cd <checkout>/backend
+# Step 1 — preflight against the twin
+bun scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts ~/rm-backup-v022
+
+# Steps 2+3 — cutover + postflight against the twin
+bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022
+# After EXIT=0: run every §8 check and §8.1 ACs against the twin's published port
+```
+
+### 5.6 Stage rehearsal report
+
+⛔ **Gate: do not proceed to §7 until this report exists and all criteria pass.**
+
+Produce a written report covering the twin rehearsal just completed. Save it to
+a file alongside the backup artifacts (e.g.
+`stage-rehearsal-report-<STAMP>.md`). The report must include:
+
+**1. Twin setup**
+- RC tag and SHA deployed to the twin
+- Backup stamp used (`rm-preupgrade-<STAMP>.dump.gpg`)
+- `restore-check.ts` exit code and any notable output
+
+**2. Preflight results (§4 on the twin)**
+- All Gate A–D results (pass / fail / note)
+- Exit code of `restore-check.ts`
+
+**3. Cutover results (§7 on the twin)**
+- `stage-rehearsal.ts` exit code
+- Time to readiness (`ready after …s`)
+- Frontend check verdict
+
+**4. Postflight results (§8 on the twin)**
+- Result for every §8 check (check 1–12)
+- All §8.1 acceptance criteria explicitly ticked or failed
+
+**5. Acceptance criteria** (mark each PASS or FAIL with evidence)
+- All features in #660 Objective are present and working
+- No unexpected schema drift (only migrations `0028`–`0031` applied)
+- Member counts after migration match baseline (§5.0)
+- Zero null or incorrect handles (§8.1)
+- `swarm_recommendations` count ≥ baseline
+
+**6. Issues found**
+List any failures, unexpected output, or observations encountered during the
+rehearsal. For each: description, disposition (fixed before proceed / carry to
+§10 known-broken / blocking).
+
+**7. Go/no-go**
+State explicitly: **GO** or **NO-GO**, with reason.
+
+**8. Operator sign-off**
+> Rehearsal completed by: __________ Date: __________ Sign-off: __________
 
 ---
 
@@ -1388,6 +1532,24 @@ and §6, and you are shipping something you never ran those gates against. Stop.
 > writes archive rows into the live database (§8 verification 8). None of it has
 > a down migration (§7 header). Do not run this before Gates B, D, E, C and A
 > are all green.
+
+> ⏱ **Downtime budget for the scheduler.** Every job in `job_schedules` that
+> is enabled records the last moment it was supposed to fire in `next_run_at`.
+> If the stack is down for longer than the schedule's cadence, `next_run_at`
+> falls behind wall-clock time and the schedule becomes wedged — it will not
+> self-fire when the stack comes back up. The risk window by cadence:
+>
+> | Schedule cadence | Wedge threshold |
+> |---|---|
+> | Per-minute (`* * * * *`) | > ~1 minute of downtime |
+> | Hourly (`0 * * * *`) | > ~1 hour of downtime |
+> | Daily | > ~1 day of downtime |
+>
+> In practice, a worker down for > ~16h40m will wedge every per-minute
+> schedule for the next ~41 days without a manual `UPDATE job_schedules SET
+> next_run_at = now() WHERE ...`. Plan for a maintenance window shorter than
+> the shortest enabled schedule's cadence, or run §8.2 immediately after boot
+> to detect and repair any wedge.
 
 ```bash
 cd <checkout>
@@ -1766,6 +1928,79 @@ docker compose -p "$RM_PROJECT" exec -T api ls -l /srv/frontend/swarm/index.html
   `docker compose -p "$RM_PROJECT" ps` and compare `CREATED` against the boot.
   The fix is §7.3 again, never `docker compose restart` (§11 step 6's box).
 
+### 8.2 Scheduler and producer liveness
+
+> **This check addresses issue #644.** §8.1 confirms the schema and data are
+> correct; this check confirms the scheduler fired and a producer wrote output
+> after the new code booted. A green `/health`, a clean `/api/admin/overview`,
+> and a continuous-looking `/performance` chart are **not** evidence these
+> passed — they can all be green while every sampler is permanently frozen.
+
+#### Check 13 — job_runs drained after boot
+
+Wait at least 2 minutes after the boot exit, then:
+
+```sql
+-- Run against the read-only replica via rm_readonly
+SELECT
+  j.kind,
+  j.next_run_at,
+  j.last_enqueued_at,
+  MAX(r.created_at) AS last_run_at,
+  COUNT(*) AS run_count_last_10m
+FROM job_schedules j
+LEFT JOIN job_runs r
+  ON r.kind = j.kind
+  AND r.created_at > NOW() - INTERVAL '10 minutes'
+WHERE j.enabled = true
+GROUP BY j.kind, j.next_run_at, j.last_enqueued_at
+ORDER BY j.kind;
+```
+
+**Expect:** every enabled `kind` row shows at least one `last_run_at` within the
+last 10 minutes. A `NULL` `last_run_at` or a `run_count_last_10m = 0` for a
+per-minute schedule that has been running for > 5 minutes means the scheduler is
+not draining — stop and investigate before tagging.
+
+**Wedge detection:** if `next_run_at` is more than 1 minute in the past for a
+per-minute schedule, it is already wedged. Repair:
+
+```sql
+-- As a privileged user (not rm_readonly) — this is a write
+UPDATE job_schedules
+SET next_run_at = NOW()
+WHERE enabled = true
+  AND next_run_at < NOW() - INTERVAL '5 minutes';
+```
+
+Re-run the detection query after 2 minutes and confirm all rows now show
+`run_count_last_10m > 0`.
+
+#### Check 14 — wallet_balance_samples written today
+
+```sql
+-- Run against the read-only replica via rm_readonly
+SELECT
+  MAX(sample_date) AS latest_sample,
+  COUNT(*) FILTER (WHERE sample_date = CURRENT_DATE) AS samples_today,
+  COUNT(*) FILTER (WHERE sample_date = CURRENT_DATE - 1) AS samples_yesterday
+FROM wallet_balance_samples;
+```
+
+**Expect:** `latest_sample` = today's date, `samples_today > 0`. A
+`samples_today = 0` with a `latest_sample` of yesterday or earlier means the
+wallet balance sampler has not run since the new code booted — the sampler is
+wedged or the worker container is not running.
+
+If this is a fresh database (e.g. the twin), `samples_today` may legitimately be
+`0` if the sampler has not fired yet. Wait the full schedule cadence and re-check.
+
+> **Note on §5.4's preflight wedge warning.** If §4's `wedged-schedules` WARN
+> flagged any rows, cross-check them here: if those same rows now show
+> `run_count_last_10m > 0`, the warning can be marked resolved. If they still
+> show no runs, the wedge persisted through the upgrade and needs the repair
+> `UPDATE` above.
+
 ### Only when all twelve checks are clean — tag `v0.2.2`
 
 This is the last step of the rollout. The version tag goes on the **exact commit
@@ -1804,6 +2039,13 @@ release-runbooks.md §6).
 ---
 
 ## 9. Rollback
+
+> **Default rollback policy** (per `docs/technical/release-runbooks.md §4.8`):
+> a postflight failure on production defaults to full rollback by restoring the
+> pre-upgrade dump from §5.1. The operator makes the final call, but full
+> rollback is the standard procedure. An operator may choose an alternate
+> remediation only by recording the override reason, the alternate plan, and a
+> second sign-off in the production rollout report (§13).
 
 ### Triggers — roll back if any of these are true
 
@@ -1961,6 +2203,38 @@ The smoke boot path is exercised by unit tests
 (`scripts/tests/unit/smoke-mode.test.ts`) but not end-to-end in CI. Treat the
 cutover as the first real execution of this path for this release, and keep §9
 within reach.
+
+### 10.5 Scheduler verification cannot substitute for heartbeat/overview checks
+
+A green `/health` endpoint and a clean `/api/admin/overview` response are not
+evidence that §8.2's scheduler and sampler checks passed. The health endpoint
+checks database connectivity and service startup, not whether scheduled jobs
+are firing. The admin overview reflects the current database state, not whether
+that state is being updated by running producers.
+
+Similarly, a continuous-looking `/performance` chart is not evidence the wallet
+balance samplers are alive — historical data from before the upgrade populates
+the chart correctly even if no new samples are being written.
+
+**Always run §8.2 explicitly.** Do not substitute heartbeat or UI checks for it.
+
+### 10.6 `BUYBACK_FROM_BLOCK` effect on indexer — if #614/#615 does not ship
+
+`BUYBACK_FROM_BLOCK` is a fixed mainnet block number. If the indexer fix in
+#614/PR #615 (`fix(chain): BUYBACK_FROM_BLOCK is a fixed mainnet fact...`) does
+not ship in this release, the buyback indexer starts from block 0 on every boot
+and rescans the entire chain history before processing new blocks. This causes a
+long startup delay and may cause `job_runs` to show no recent activity for the
+buyback-adjacent jobs during §8.2's liveness window.
+
+Check whether #614/#615 is in the `releases-0.2.x` delta:
+
+```bash
+git log --oneline v0.2.1..origin/releases-0.2.x | grep -i 'buyback\|BUYBACK_FROM_BLOCK'
+```
+
+If it is absent, expect a cold-start delay; extend §8.2's wait window before
+concluding the sampler is wedged.
 
 ---
 
@@ -2155,3 +2429,80 @@ to open `/admin` and complete the claim now, using this boot's setup token
 (§12.0). The claim UI itself walks through the rest — setup token, new
 password, the one-time recovery code — nothing further about that flow
 belongs in this runbook.
+
+---
+
+## 13. Production rollout report
+
+Produce a written report immediately after the production cutover completes —
+pass or fail. Save it to a file in the same directory as the backup artifacts
+(e.g. `production-rollout-report-<STAMP>.md`) and attach it to issue #660.
+
+The report must include:
+
+### RC deployed
+
+```
+Tag:    v0.2.2-rc.<N>
+SHA:    <git rev-parse HEAD on the production host>
+Branch: releases-0.2.x
+```
+
+### Timeline
+
+| Step | Wall-clock time | Notes |
+|---|---|---|
+| Stage rehearsal gate passed (§5.6) | | |
+| Go/no-go sign-off (§2) | | |
+| Cutover started (§7.2 tag cut) | | |
+| Stack live (§7.3 boot ready) | | |
+| Postflight completed (§8) | | |
+| `v0.2.2` tagged (§8, last step) OR rollback decision | | |
+
+### Postflight result
+
+State one of:
+- **PASS** — all §8 checks and §8.1 acceptance criteria met. Final `v0.2.2`
+  tag cut at `<SHA>`.
+- **FAIL → rollback** — describe which check(s) failed, rollback procedure
+  followed, and whether the restore was verified clean (§9 procedure steps
+  completed).
+- **FAIL → override** — ONLY if the operator chose an alternate remediation
+  instead of full rollback. Must include: the override reason, the alternate
+  plan, and the second sign-off (required by §9 and §4.8).
+
+### Rollback details (if applicable)
+
+- Dump restored: `rm-preupgrade-<STAMP>.dump.gpg`
+- Restore verified clean: yes / no
+- Schema state post-rollback (migrations applied):
+- Admin access restored via `ADMIN_TOKEN`: yes / no / N/A
+
+### Final version tag commands
+
+If postflight passed, record the exact commands that were run to cut the final
+`v0.2.2` tag and push it to origin:
+
+```bash
+git tag -a v0.2.2 <SHA> -m "v0.2.2"
+git push origin v0.2.2
+```
+
+### Backport TODO
+
+Run after the release is tagged and verified:
+
+```bash
+git log --oneline origin/main..origin/releases-0.2.x   # commits owed to main
+# Cherry-pick each listed commit to main per the release-runbooks.md §6 backport procedure.
+```
+
+### Operator sign-off
+
+> Production rollout completed by: __________ Date: __________ Sign-off: __________
+>
+> Final `v0.2.2` tag exists on `releases-0.2.x`: yes / no
+> Issue #660 closed: yes / not yet
+
+The release tracking issue (#660) is closed only after this report is filed
+and the final `v0.2.2` tag exists on `releases-0.2.x`.

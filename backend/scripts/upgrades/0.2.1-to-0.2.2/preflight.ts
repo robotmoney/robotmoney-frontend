@@ -46,6 +46,16 @@ const SWARM_MEMBERS_WARN_ROWS = 50_000;
  *  lock request queues behind BOTH. */
 const BLOCKING_XACT_SECONDS = 60;
 
+/**
+ * A schedule whose next_run_at is this many minutes in the past has missed at
+ * least one expected fire without the stack being down. This is a WARN
+ * threshold, not a hard cut-off: the precise threshold is per-schedule, but
+ * 60 minutes catches any enabled schedule that has not fired within the last
+ * hour regardless of cadence (per-minute, hourly, or daily). Reported in the
+ * runbook (§4 "Reading the output" table, §7.3 downtime budget, §8.2).
+ */
+const WEDGED_SCHEDULE_WARN_MINUTES = 60;
+
 /** backend/src/api/validation.ts:446 (MEMBER_HANDLE_RE), as a POSIX regex.
  *  Length bound from validation.ts:482 (`requiredString(body, "handle", 80)`). */
 const HANDLE_RE_SQL = "^[a-z0-9]+(-[a-z0-9]+)*$";
@@ -398,6 +408,77 @@ async function checkBlockingActivity(db: Db, { record }: Checker): Promise<void>
 }
 
 /**
+ * Checks for enabled job_schedules rows whose next_run_at is implausibly far
+ * in the past — a signal that the scheduler has not fired when expected and
+ * may be wedged. Addresses issue #644 (AC1).
+ *
+ * This is always WARN, never FAIL: a wedged schedule does not block the
+ * migration and does not prevent a safe upgrade. What it does affect is
+ * post-cutover liveness (runbook §8.2) — the operator should note any wedged
+ * rows here and verify them in §8.2 after the new code boots. If the stack
+ * has been down for longer than a schedule's cadence, next_run_at will lag
+ * behind wall-clock time and the schedule will not self-fire.
+ *
+ * The zero-write contract is preserved: this is a plain SELECT run over the
+ * same read-only connection every other check uses.
+ */
+async function checkWedgedSchedules(db: Db, { record }: Checker): Promise<void> {
+  // job_schedules is a runtime table, not created by migrations 0029–0031.
+  // On a fresh database, or one that has never booted the application, the
+  // table may not exist yet; skip gracefully.
+  const [{ exists }] = (await db`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'job_schedules'
+    ) AS exists
+  `) as unknown as { exists: boolean }[];
+  if (!exists) {
+    record(
+      "wedged-schedules",
+      "PASS",
+      "job_schedules table does not exist — skipped (no schedules to check)",
+    );
+    return;
+  }
+
+  const rows = (await db`
+    SELECT kind, next_run_at, last_enqueued_at,
+           round(extract(epoch FROM (now() - next_run_at)) / 60)::int AS lag_minutes
+    FROM job_schedules
+    WHERE enabled = true
+      AND next_run_at < now() - (${WEDGED_SCHEDULE_WARN_MINUTES} * interval '1 minute')
+    ORDER BY lag_minutes DESC
+  `) as unknown as {
+    kind: string;
+    next_run_at: Date;
+    last_enqueued_at: Date | null;
+    lag_minutes: number;
+  }[];
+
+  if (rows.length === 0) {
+    record(
+      "wedged-schedules",
+      "PASS",
+      `all enabled job_schedules have next_run_at within the last ${WEDGED_SCHEDULE_WARN_MINUTES} minutes`,
+    );
+    return;
+  }
+
+  record(
+    "wedged-schedules",
+    "WARN",
+    [
+      `${rows.length} enabled schedule(s) have next_run_at > ${WEDGED_SCHEDULE_WARN_MINUTES}m in the past — may be wedged:`,
+      ...rows.map(
+        (r) =>
+          `  ${r.kind}: next_run_at=${r.next_run_at?.toISOString() ?? "null"} (${r.lag_minutes}m ago), last_enqueued_at=${r.last_enqueued_at?.toISOString() ?? "null"}`,
+      ),
+    ],
+    `A wedged schedule will not self-fire when the stack comes back up. Note these kinds and verify in §8.2 (check 13) after cutover that job_runs shows a drain and wallet_balance_samples has today's date. Repair if needed: UPDATE job_schedules SET next_run_at = now() WHERE kind = '...'; (requires a write role — run after the upgrade, not now).`,
+  );
+}
+
+/**
  * 0030:28 backfills `handle = id` for every existing member, and installs no
  * CHECK on the shape. So an id that is not a valid handle becomes a handle the
  * admin surface can never save again: any later edit is validated against
@@ -450,6 +531,7 @@ export async function runChecks(db: Db, checker: Checker): Promise<void> {
   await checkHandleNamespace(db, checker);
   await checkAdminCredential(db, checker, pending);
   await checkSwarmMembersSize(db, checker);
+  await checkWedgedSchedules(db, checker);
   await checkBlockingActivity(db, checker);
   await checkHandleShape(db, checker);
 }
