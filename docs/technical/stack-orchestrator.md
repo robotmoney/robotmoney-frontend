@@ -471,6 +471,46 @@ The staging environment must therefore run **`RM_ENV=prod`** semantics —
 including `PROJECTS_SOURCE=live`, which prod fails closed without. The ad-hoc
 box here runs `demo` deliberately, to stay off those fail-closed paths.
 
+## 18. Upgrades: `update` is content-only, and the image tag decides its blast radius
+
+`stack manage --dir <d> update` converges the running deployment on its
+deployment directory. It applies **image references, environment values and
+secret values, and nothing else**. Structural change — services added or
+removed, ports, volume mounts, resource requests/limits, replicas — is refused
+outright, with the whole diff computed before anything is written:
+
+```
+ERROR: update only applies image, environment and secret changes, but the
+deployment's shape has changed:
+  deploy-api: containers changed
+Re-create the deployment to apply these.
+```
+
+Skipping the push is caught rather than silently deploying stale code:
+`The local build of X is newer than the staged image: run '… push-images' and
+update again to deploy it.` A changed secret restarts every service, announced
+as `secrets: changed; restarting all services`. Rollouts go through the
+Deployment's normal rolling update via a `restartedAt` annotation that is
+*merged*, not assigned, so it does not strip the K8up backup annotations.
+
+**The consequential choice is the image tag**, because it decides whether an
+upgrade is targeted or total:
+
+| Composefile reference | `update` behaviour |
+|---|---|
+| `robotmoney/api:stack` | Rewritten to a mutable `…:deploy-<id>` staging tag. Content arrives under an unchanged reference, so **every** update — including a no-op — forces a re-pull and restarts the whole app tier. No earlier tag exists to roll back to. |
+| `<registry>/robotmoney/api:<version>` | Passed through verbatim and digest-locked in `stack.lock`. A no-op reports `unchanged`; only genuinely changed services roll; rollback is a pointer change. |
+
+Only `("local", "stack")` are treated as locally-built
+(`deploy/images.py:31`); everything else is a published reference. For a release
+process, reference a published version tag. See
+[`stack-runbook-reconciliation.md`](./stack-runbook-reconciliation.md) §5.2.
+
+Related: a **clean** checkout with a committed lock file yields a
+commit-addressed image tag; a dirty tree or uncommitted lock yields a
+`stackdev-<hash>` tag derived from the lock content (`build_util.py:216-234`).
+Committing `stack.lock` is what stabilizes the version to a plain commit hash.
+
 ---
 
 ## Still open

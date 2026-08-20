@@ -10,6 +10,26 @@ credentials), and the verified behaviour in
 
 ---
 
+## Verdict
+
+**Every goal the runbook policy exists to serve is achievable with `stack` as
+the deployment vendor, and three of the six are better served than today.** The
+work is in mechanism, not in objectives — no gate has to be weakened, waived, or
+rewritten to accommodate the platform.
+
+| Goal the policy serves | Under stack | Mechanism |
+|---|---|---|
+| **Reproducibility** — the procedure is written, not remembered | **Better** | The spec file is a versioned artifact. Today nothing describes what staging *is*. |
+| **Rehearsal fidelity** — prove on a twin before prod | **Better** | `backup restore --from <prod>` makes the twin a *whole-stack* twin, not a database twin. Repositories are interchangeable across compose and k8s. |
+| **Recoverability** — always able to get back | **Better**, once §5.2 is adopted | Data: restic snapshots + `backup restore`. Code: immutable published tags make rollback a pointer change. |
+| **Auditability** — reports, sign-off, go/no-go | **Same** | Human artifacts; the platform is neutral. |
+| **Agent execution** — no human at a production shell | **Same or better** | A CLI plus a kubeconfig, with no interactive step. |
+| **No silent drift** — Git is the source of truth | **Same, conditional** | Holds only with the deployment-directory discipline in §5.1. |
+
+The single objective that is *not* natively met is code rollback, and §5.2 shows
+it is closed by a definition-level choice rather than by tooling we would have
+to build. What remains below are decisions to make, not obstacles.
+
 ## The short version
 
 The three documents sit at different altitudes, and `stack` lands on exactly
@@ -78,14 +98,15 @@ preserved and better served. Reword the parenthetical rather than the gate.
 | §4.2 baseline | `stack manage --dir <d> backup now`, plus the app-specific state capture the objective names |
 | §4.3 backup smoke | `backup now` → `backup list` → `backup restore` into a scratch deployment |
 | §4.4 twin | `deploy` + `start` + `backup restore --from <prod>` (§2 above) |
-| §4.7 cutover | `prepare` → `push-images` → `manage update` |
-| §4.8 rollback | **two axes — see §5.2. Not a single command.** |
+| §4.7 cutover | `prepare` → publish the version tag → edit the reference → `manage update` (§5.2) |
+| §4.8 rollback | Code: point the reference at the previous version tag → `update`. Data: stop → `backup restore` → start (§5.3). Two axes, reasoned about separately. |
 
 ---
 
-# The five collisions
+# The decisions
 
-These are not wording problems. Each needs a decision.
+One of these (§5.2) is resolved and only needs adopting. The other four are
+genuine decisions, none of which threatens a policy goal.
 
 ## 5.1. The deployment directory is stateful, and GitOps assumes it is not
 
@@ -122,26 +143,54 @@ rather than a contradiction: the spec becomes the Git-tracked truth, and the
 deployment directory becomes identified state that CI attaches to rather than
 recreates.
 
-## 5.2. Rollback has two axes; the policy describes one
+## 5.2. Rollback has two axes — reference published tags, not `:stack`
 
 `release-runbooks.md` §4.8 defines rollback as restoring the pre-upgrade dump.
 That is the **data** axis, and stack serves it well (`backup restore`, with the
 §5.3 caveat).
 
-There is no **code** axis primitive. Images are staged under a *mutable*
-per-deployment tag — `localhost:5000/robotmoney/api:deploy-8bd8e312` — so a new
-build arrives under the *same* reference. There is no earlier tag to point back
-at. Rolling code back means rebuilding the previous commit and re-pushing it
-under that same tag, then `update`.
+The **code** axis depends entirely on how the composefile names its image, and
+the default is the wrong choice for a release process.
 
-Consequences that must be written into §4.8 and every per-release runbook:
+`remote_tag_for_image_unique` (`deploy/images.py:117`) rewrites a reference to a
+private mutable staging tag — `…/robotmoney/api:deploy-8bd8e312` — **only when
+the tag is one of `LOCALLY_BUILT_TAGS = ("local", "stack")`**. Any other
+reference is returned verbatim and treated as a published image, digest-locked
+in `stack.lock`.
 
-- Rollback is **rebuild + re-push + update**, not a version pointer change, and
-  it therefore takes as long as a build.
-- The two axes can be rolled independently, and usually must be reasoned about
-  independently: a schema migration that ran is not undone by rolling the image.
-- `update` restarts the whole app tier every time regardless (§5.4), so a
-  rollback is never a partial-blast-radius operation.
+So `image: robotmoney/api:stack` opts into mutability. New content arrives under
+an unchanged reference, there is no earlier tag to point back at, and rollback
+degrades into rebuild-and-re-push. Referencing a **published version tag**
+instead makes rollback a pointer change. Verified end to end:
+
+```
+### roll FORWARD
+deploy-api: image …/robotmoney/api:v0-2-2 -> …/robotmoney/api:v0-2-3
+### ROLL BACK — no rebuild
+deploy-api: image …/robotmoney/api:v0-2-3 -> …/robotmoney/api:v0-2-2
+### no-op
+deploy-api: unchanged
+```
+
+That third line is the second dividend. On the staging tag, stack cannot tell
+whether content changed, so **every** `update` — including a no-op — forces a
+re-pull and restarts the whole app tier. On an immutable tag a no-op is
+genuinely `unchanged`, and only the services that actually changed roll. Blast
+radius becomes proportionate to the change, which is what §4.7 and §4.8 both
+assume.
+
+**The recommendation, then:** pod composefiles reference
+`<registry>/robotmoney/api:<version>`, CI publishes that tag at release time,
+and the version in the composefile is the thing a release changes. It also makes
+the deployed version legible from the spec — `kubectl get deploy -o
+jsonpath=…image` answers "what is running" without inspecting digests.
+
+Two properties remain true regardless and belong in §4.8:
+
+- The axes roll independently and must be reasoned about independently: a
+  migration that ran is not undone by rolling the image back.
+- Rolling back to a version whose schema expectations differ from the live
+  database is the case §4.8's default (restore the dump) exists for.
 
 ## 5.3. `backup restore` does not orchestrate, but §4.7 says "agent-executed"
 
