@@ -4,7 +4,7 @@
 // dependency order, and renders live per-step status with plain ANSI escape
 // codes (no new terminal-UI dependency).
 //
-// Steps (fixed, not a generic pluggable framework — there are exactly four):
+// Steps (fixed, not a generic pluggable framework — there are exactly five):
 //   0. handle-namespace     — src/db/handle-namespace.ts's
 //                              checkHandleNamespace(). Read-only, and the ONE
 //                              step that halts the run: see the fail-fast note
