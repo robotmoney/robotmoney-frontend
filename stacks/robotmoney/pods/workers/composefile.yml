@@ -10,15 +10,24 @@
 # few compose features that needs no work.
 x-worker-base: &worker-base
   image: robotmoney/api:stack
-  command: ["bun", "run", "src/worker/index.ts"]
+  # Same runtime assembly as the api — see pods/app/composefile.yml for why a
+  # `${POSTGRES_PASSWORD}` written into a YAML value renders EMPTY on k8s.
+  # WORKER_LANE stays a per-service `environment:` key; only the command is
+  # shared, and it reads the lane from the environment like the entrypoint does.
+  command:
+    - sh
+    - -c
+    - |
+      export DATABASE_URL="postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney"
+      exec bun run src/worker/index.ts
   depends_on:
     postgres:
       condition: service_healthy
 
 x-worker-env: &worker-env
-  DATABASE_URL: postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney
-  RM_ENV: staging
-  PROJECTS_SOURCE: live
+  # RM_ENV=demo, not "staging" — backend/src/config.ts:539 throws on any value
+  # outside ephemeral | demo | prod.
+  RM_ENV: demo
 
 services:
   worker-swarm:

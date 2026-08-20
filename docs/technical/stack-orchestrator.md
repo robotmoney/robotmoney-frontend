@@ -287,22 +287,202 @@ Corrections to the upstream docs summary:
 
 ---
 
-## Open — not yet verified
+# Part II — what the k8s translation actually does
 
-These are the questions the environment exists to answer. Nothing below should
-be quoted as fact until it has an entry above.
+Everything below was read off live objects in namespace
+`stack-d6b992128bd8e312` on the k3s cluster, from a deployment that reaches
+`{"status":"ok","db":"up"}`.
 
-1. **Do `healthcheck:` blocks become k8s probes?** Upstream
-   `k8s-deployment-enhancements.md` documents node affinity and RuntimeClass and
-   is silent on probes, `depends_on`, restart policy, resource limits, replicas.
-2. **Does `${POSTGRES_PASSWORD}` interpolation inside a `DATABASE_URL` value
-   survive the k8s translation**, where secrets become `secretKeyRef` rather
-   than compose-level substitution? If not, the api and workers need the URL
-   assembled at runtime instead.
-3. **Migrations.** `pre_start_command` / `post_start_command` run on the
-   *deployer*, so they cannot reach a cluster-internal Postgres. See §5 of the
+## 11. `API_PORT` — the one that will bite hardest
+
+**Kubernetes injects legacy service-link environment variables** named
+`<SERVICE>_PORT` for every Service in the namespace. Our api Service is called
+`api`, so every container in the deployment receives:
+
+```
+API_PORT=tcp://10.43.230.60:8787
+POSTGRES_PORT=tcp://10.43.240.132:5432
+```
+
+`backend/src/config.ts:553` is:
+
+```ts
+apiPort: Number(process.env.API_PORT ?? 8787),
+```
+
+`??` only catches `null`/`undefined`. `Number("tcp://10.43.230.60:8787")` is
+`NaN`, Bun binds a **random** port — observed `:34529` — while the Service still
+targets 8787. Nothing routes, ever. And the failure is invisible:
+
+```
+NAME                          READY   STATUS    RESTARTS   AGE
+deploy-api-857f4d847d-rwzxm   1/1     Running   0          66s
+```
+
+The fix is to declare `API_PORT: "8787"` explicitly in the composefile; an
+explicitly declared env var wins over a service link. Note this **contradicts
+`docker-compose.yml`**, which deliberately removed `API_PORT` because there it
+made a host `.env` value look effective while compose overrode it. Both
+decisions are right for their target; the reason has to be written down in both
+places or someone will "clean up" the k8s one.
+
+> Worth a follow-up in the app itself: `Number(...)` on an unvalidated env var
+> that k8s is known to populate is a footgun independent of stack. A
+> `Number.isFinite` guard in `config.ts` would turn a silent mis-bind into a
+> loud refusal, which is this repo's house style anyway.
+
+## 12. `command:` becomes `args:`, and `$` is treated differently there
+
+Compose `command:` lands in the k8s container's **`args`**, with `command` left
+`null` (the image `ENTRYPOINT` stands).
+
+More important, **substitution rules differ by field**:
+
+| Field | Compose `${VAR}` substitution at manifest-generation time? |
+|---|---|
+| `environment:` values | **Yes** |
+| `command:` values | **No** — passed through literally |
+
+That combination produces the trap below. A secret referenced in
+`environment:` is substituted *at generation time*, when the secret does not
+exist yet, so it renders **empty** — silently:
+
+```yaml
+# WRONG — becomes postgres://robotmoney:@postgres:5432/robotmoney
+environment:
+  DATABASE_URL: postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney
+```
+
+Secrets arrive as `secretKeyRef`, resolved by the kubelet at container start —
+long after the manifest was written. The two never meet. Assemble the URL in
+the container instead, in `command:`, where `$` survives:
+
+```yaml
+# RIGHT — single $, in command:, expanded by the container's shell
+command:
+  - sh
+  - -c
+  - |
+    export DATABASE_URL="postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney"
+    exec bun run src/api/index.ts
+```
+
+**Do not write `$$` here.** Compose's usual escape is *not* unescaped by this
+translation — `$${POSTGRES_PASSWORD}` is delivered to the container verbatim,
+where `sh` reads `$$` as its own PID and builds a garbage URL. Verified both
+ways.
+
+`backend/src/config.ts:552` takes `DATABASE_URL` as `required(...)` and accepts
+no `PGHOST`/`PGUSER`/`PGPASSWORD` parts, so runtime assembly is the only option
+for us.
+
+## 13. `healthcheck:` becomes a livenessProbe — and *only* that
+
+```yaml
+healthcheck:
+  test: ["CMD", "bun", "-e", "..."]
+  interval: 15s
+  timeout: 5s
+  retries: 3
+  start_period: 40s
+```
+
+becomes
+
+```json
+"livenessProbe": {
+  "exec": {"command": ["bun", "-e", "..."]},
+  "periodSeconds": 15, "timeoutSeconds": 5,
+  "failureThreshold": 3, "initialDelaySeconds": 40
+}
+```
+
+`readinessProbe` and `startupProbe` are **ABSENT**. Two consequences worth
+deciding about before staging:
+
+- **No readiness gate.** A pod joins its Service's endpoints as soon as the
+  container starts, so traffic can arrive before the api can serve it. Under
+  compose this did not matter; the api was the only thing behind the port.
+- **`start_period` maps to `initialDelaySeconds` on liveness**, which is
+  strictly weaker than a `startupProbe`: a boot slower than 40s gets killed
+  rather than granted more time.
+
+`depends_on: condition: service_healthy` has no k8s equivalent and is dropped —
+as expected. In practice the api and workers crash-loop until Postgres answers,
+which works but is noisy.
+
+## 14. Secrets land as `secretKeyRef`, never as literals
+
+The generated Deployment carries no secret values:
+
+```
+POSTGRES_PASSWORD = {'secretKeyRef': {'key': 'POSTGRES_PASSWORD', 'name': 'stack-secrets'}}
+ADMIN_TOKEN       = {'secretKeyRef': {'key': 'ADMIN_TOKEN', 'name': 'stack-secrets'}}
+```
+
+One `stack-secrets` Secret per namespace holds all seven of ours (four
+generated, three `external`). Generated values are real — `POSTGRES_PASSWORD`
+came out 32 bytes. This is the good half of §12: the secret handling is sound,
+it just cannot participate in YAML-time string building.
+
+## 15. Volumes, and what `start` does with a 404
+
+`pgdata` became a **bound PVC** on the `local-path` default StorageClass at
+**2G** — the documented default when the spec gives no
+`resources.volumes.<name>.reservations.storage`.
+
+`stack manage start` **exits non-zero with a bare `404 page not found`** on this
+cluster, *after* successfully applying every workload:
+
+```
+ERROR: Exception thrown bringing stack up: (404)
+HTTP response body: 404 page not found
+```
+
+The cluster has Gateway API CRDs (from Traefik) and a `traefik` IngressClass,
+but no configured Gateway, and stack's http-proxy publication fails against it.
+The Deployments, Services, Secret and PVC are all created regardless. **Treat a
+404 from `start` as "ingress not published", not "deployment failed"** — but
+check, because the exit code cannot distinguish them.
+
+## 16. `_static` must be baked into the image — confirmed
+
+With no bind mount, `/srv/frontend` is empty in the container. The api starts
+happily and logs `serving static frontend from /srv/frontend`, then answers:
+
+```
+GET /health -> {"status":"ok","env":"demo","db":"up", ...}
+GET /       -> HTTP 500
+```
+
+So the plan's §3.1 conclusion holds, now with evidence: the assembled `_static`
+has to be a layer in `robotmoney/api`, not a mount.
+
+## 17. `RM_ENV` has no `staging` value
+
+`backend/src/config.ts:539` pins `VALID_ENVS = ["ephemeral", "demo", "prod"]`
+and throws otherwise:
+
+```
+error: invalid RM_ENV "staging" — expected one of ephemeral | demo | prod
+```
+
+The staging environment must therefore run **`RM_ENV=prod`** semantics —
+including `PROJECTS_SOURCE=live`, which prod fails closed without. The ad-hoc
+box here runs `demo` deliberately, to stay off those fail-closed paths.
+
+---
+
+## Still open
+
+1. **Migrations** — unresolved and now demonstrated: the api boots against a
+   database with no `schema_migrations` table and serves anyway, logging
+   `this boot is UNCHECKED`. `pre_start_command` / `post_start_command` run on
+   the *deployer* and cannot reach a cluster-internal Postgres. See §5 of the
    plan for the three candidate shapes.
-4. **Getting images to k3s** — local registry, `k3s ctr images import`, or a
-   real registry.
-5. **Whether `_static` must be baked into the image** (expected: yes, no bind
-   mounts on k8s) and what that does to image size and push time.
+2. **Ingress** — needs a cluster with a working Gateway or a plain Ingress path
+   (§15), plus cert-manager before TLS means anything.
+3. **Backups** — needs K8up on the cluster. The annotations are correct in the
+   spec (§4); nothing has been backed up or restored yet, and per the plan a
+   backup is not proven until something has been restored from it.
+4. **Readiness** — whether to add explicit probes to the spec (§13).

@@ -7,14 +7,41 @@ services:
     # build.sh) and tags it `<name>:stack`; the composefile references that tag.
     # This is the single biggest shape difference from docker-compose.yml.
     image: robotmoney/api:stack
-    command: ["bun", "run", "src/api/index.ts"]
+    # DATABASE_URL IS ASSEMBLED AT CONTAINER START, NOT IN YAML.
+    #
+    # `DATABASE_URL: postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/...`
+    # does NOT work on the k8s target and does not fail either — it renders to
+    # `postgres://robotmoney:@postgres:5432/robotmoney`, with the password
+    # silently empty. Compose-level `${}` substitution happens when stack
+    # generates the manifest; the secret only arrives later, as a secretKeyRef
+    # the kubelet resolves at container start. The two never meet.
+    # Verified 2026-08-20 by reading the delivered env off the Deployment.
+    #
+    # backend/src/config.ts:552 requires DATABASE_URL itself (`required(...)`)
+    # and accepts no PGHOST/PGUSER/PGPASSWORD parts, so the shell has to build
+    # it from the injected variable.
+    command:
+      - sh
+      - -c
+      - |
+        export DATABASE_URL="postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney"
+        exec bun run src/api/index.ts
     environment:
-      # Assembled from the generated POSTGRES_PASSWORD secret. VERIFY: whether
-      # this interpolation survives the k8s translation, where secrets become
-      # secretKeyRef rather than compose-level substitution.
-      DATABASE_URL: postgres://robotmoney:${POSTGRES_PASSWORD}@postgres:5432/robotmoney
-      RM_ENV: staging
-      PROJECTS_SOURCE: live
+      # NOT "staging". backend/src/config.ts:539 pins VALID_ENVS to
+      # ephemeral | demo | prod and THROWS on anything else — this app has no
+      # staging value, so the staging environment must run `prod` semantics.
+      # `demo` here keeps the ad-hoc box off the fail-closed prod paths.
+      RM_ENV: demo
+      # MUST be set explicitly on k8s, and docker-compose.yml deliberately does
+      # NOT set it. Kubernetes injects legacy service-link variables named
+      # <SERVICE>_PORT for every service in the namespace; our service is called
+      # `api`, so the container receives API_PORT=tcp://10.43.x.x:8787.
+      # backend/src/config.ts:553 is `Number(process.env.API_PORT ?? 8787)` —
+      # `??` does not catch NaN, so the api binds a RANDOM port while the
+      # Service still targets 8787 and nothing routes. The pod reports 1/1
+      # Running throughout. An explicitly declared env var wins over a service
+      # link, which is what makes this the fix.
+      API_PORT: "8787"
       # ADMIN_TOKEN / AUTOMATION_TOKEN / ANALYTICS_TOKEN are declared secrets;
       # stack injects them into every container of the deployment, so they are
       # deliberately NOT restated here.
