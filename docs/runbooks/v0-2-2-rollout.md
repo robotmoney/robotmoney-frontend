@@ -1960,21 +1960,32 @@ SELECT
   j.kind,
   j.next_run_at,
   j.last_enqueued_at,
-  MAX(r.created_at) AS last_run_at,
-  COUNT(*) AS run_count_last_10m
+  MAX(r.started_at) AS last_run_at,
+  COUNT(r.*) AS run_count_last_10m
 FROM job_schedules j
 LEFT JOIN job_runs r
   ON r.kind = j.kind
-  AND r.created_at > NOW() - INTERVAL '10 minutes'
+  AND r.started_at > NOW() - INTERVAL '10 minutes'
 WHERE j.enabled = true
 GROUP BY j.kind, j.next_run_at, j.last_enqueued_at
 ORDER BY j.kind;
 ```
 
-**Expect:** every enabled `kind` row shows at least one `last_run_at` within the
-last 10 minutes. A `NULL` `last_run_at` or a `run_count_last_10m = 0` for a
-per-minute schedule that has been running for > 5 minutes means the scheduler is
-not draining — stop and investigate before tagging.
+**Expect:** every enabled `kind` shows `next_run_at` in the **future**. That,
+not the 10-minute run count, is the liveness signal on this deployment.
+
+> **Corrected 2026-08-20 — `run_count_last_10m` cannot be read as a pass/fail.**
+> The first revision of this check expected *"every enabled `kind` row shows at
+> least one `last_run_at` within the last 10 minutes."* Run against production,
+> **all twelve** enabled schedules report `run_count_last_10m = 0`, including
+> the ten that are perfectly healthy — because every schedule here is hourly or
+> daily cron (`projects.discover` next fires 02:00 tomorrow), not per-minute.
+> A 10-minute window is empty for almost all of them almost always, so the
+> check as written fails a healthy system. Use `next_run_at` for the verdict
+> and read `last_run_at`/`run_count_last_10m` as context.
+
+A `next_run_at` in the past by more than the schedule's own cadence is the
+wedge signal — the same condition §4's `wedged-schedules` check reports.
 
 **Wedge detection:** if `next_run_at` is more than 1 minute in the past for a
 per-minute schedule, it is already wedged. Repair:
@@ -2008,6 +2019,22 @@ wedged or the worker container is not running.
 
 If this is a fresh database (e.g. the twin), `samples_today` may legitimately be
 `0` if the sampler has not fired yet. Wait the full schedule cadence and re-check.
+
+> ⚠ **Check 14 ALREADY FAILS on production, and not because of this release.**
+> Measured 2026-08-20 against the replica, pre-cutover: `latest_sample` =
+> **2026-08-10**, `samples_today = 0`, `samples_yesterday = 0`. Both wallet
+> samplers stopped ten days ago — `wallet.sample_balances` and
+> `wallet.sample_sleeves` last succeeded on 2026-08-10 (`job_runs`) and their
+> `next_run_at` has been frozen at `2026-08-09 16:32+00` ever since, which is
+> exactly what §4's `wedged-schedules` WARN reports. Every other enabled
+> schedule is healthy.
+>
+> So a post-cutover `samples_today = 0` here is the **pre-existing** wedge, not
+> damage this upgrade did, and it must not be read as a postflight failure or a
+> rollback trigger — the same treatment #660 already gives #649 and #648. Take
+> the pre-cutover measurement above as the baseline, apply this section's repair
+> `UPDATE` after the boot, and confirm the sampler recovers. If it does not, that
+> is a separate production defect to file, not a reason to hold `v0.2.2`.
 
 > **Note on §5.4's preflight wedge warning.** If §4's `wedged-schedules` WARN
 > flagged any rows, cross-check them here: if those same rows now show
