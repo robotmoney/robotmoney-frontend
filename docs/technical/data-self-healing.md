@@ -72,7 +72,7 @@ one table; the detail follows.
 
 | PD | Question | Status | Recommendation |
 |---|---|---|---|
-| PD1 | File the archive-read `decision:` issue? | OPEN | File it |
+| PD1 | File the archive-read `decision:` issue? | FILED — **#709**, awaiting resolution | File it |
 | PD2 | D16: clarifying note, or superseding ADR? | OPEN | Clarifying cross-reference |
 | PD3 | How to record the Open Question 9 reversal? | OPEN | New `decisions.md` entry |
 | PD4 | Is quarantine compatible with D16's closed enumeration? | OPEN | Ratify the presentation-only reading |
@@ -134,11 +134,20 @@ path. That is the archive-specific backfill workstream, and it is the only work
 this decision blocks: the Class A reconciler (§6.4) makes no chain read and is
 independent of the outcome either way.
 
-**Verified state.** Re-checked with `gh issue list` on 2026-08-15: **no
-`decision:` issue for archive-capable reads exists.** The open `decision:`
-issues are **#623** (docs-diff whitespace CI check) and **#629** (Cloudflare
-dashboard access); the closed ones are #621, #583, #524, #520, #502, #447, #342,
-#228, #163, #145, and #99. None concerns chain reads.
+**Status — FILED as #709 (2026-08-20), awaiting resolution.** It carries the
+argument below, the scope fence (no indexer, no new vendor, no standing
+reconciliation loop, no independent RPC limiter, no live-path change), and the
+required failure semantics. What it still owes is the decision itself: an
+explicit approve/reject in the issue, and — on approval — a `docs/decisions.md`
+entry that also settles **PD2** (D16 clarification) and **PD3** (the
+Open-Question-9 reversal). Until that entry exists the implementation stands on
+an unratified premise, and should be read that way.
+
+**Verified state at filing time.** Re-checked with `gh issue list` on
+2026-08-15: **no `decision:` issue for archive-capable reads existed.** The open
+`decision:` issues were **#623** (docs-diff whitespace CI check) and **#629**
+(Cloudflare dashboard access); the closed ones are #621, #583, #524, #520, #502,
+#447, #342, #228, #163, #145, and #99. None concerns chain reads.
 
 **Why it is a decision and not a task.** Three recorded statements currently read
 as asserting this data is unreachable, so an implementer who simply writes the
@@ -1549,8 +1558,9 @@ with everything after it; steps 4a and 4b are genuinely parallel.
    It is not part of either workstream, and everything in §6.4 and §6.5 assumes
    its baseline. The merge half no longer blocks anything; the deploy-and-prove
    half still does, because production is where the hole is widening.
-1. **File and settle the archive-read `decision:` issue** — PD1. Nothing in
-   §6.5 except §6.5.3 starts until it lands. §6.4 does not wait on it.
+1. **File and settle the archive-read `decision:` issue** — PD1. **Filed as
+   #709 on 2026-08-20; not yet settled.** Nothing in §6.5 except §6.5.3 starts
+   until it lands. §6.4 does not wait on it.
 2. **The publication workstream (§9) — start now, in parallel with everything
    below.** It is not gated on PD1, it does not touch the dispatcher, and it
    makes §8's disclosure tractable rather than expensive — so the reconciler's

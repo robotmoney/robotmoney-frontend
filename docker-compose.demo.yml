@@ -93,6 +93,15 @@ services:
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
+      # Shared Base RPC rate budget + repair-driver bounds (issue #709). Left
+      # UNSET for the demo on purpose: the seeded ops.repair_gaps schedule is a
+      # no-op without a measured budget, so a demo boot never starts sweeping
+      # months of history against the public RPC.
+      BASE_RPC_MAX_CALLS_PER_SEC: ${BASE_RPC_MAX_CALLS_PER_SEC:-}
+      BASE_RPC_RATE_BURST: ${BASE_RPC_RATE_BURST:-}
+      WALLET_BACKFILL_MAX_DAYS_PER_RUN: ${WALLET_BACKFILL_MAX_DAYS_PER_RUN:-}
+      WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY: ${WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY:-}
+      GECKO_OHLCV_MIN_INTERVAL_MS: ${GECKO_OHLCV_MIN_INTERVAL_MS:-}
 
   worker-analytics: *demo-worker
 

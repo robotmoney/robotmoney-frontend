@@ -7,12 +7,29 @@
 // allowed (same vendor): analytics/extract/geckoterminal.ts today only counts
 // new pools, so the token_price read below is genuinely new fetcher code.
 //
-// Prices are SPOT only. Historical valuation for /performance comes from the
-// persisted wallet_balance_samples series (seeded once from the baked views.js
-// data, then accumulated forward by the daily sampler — see migration 0014 +
-// worker/handlers/wallet.ts), NOT from a re-fetched OHLCV series, which resolves
-// Open Question 9 (GeckoTerminal OHLCV may not reach back to Mar 18 for illiquid
-// ROBOTMONEY/BNKR): the seeded rows ARE the carried-forward history.
+// Prices in THIS file are SPOT only, and that has not changed.
+//
+// OPEN QUESTION 9 IS REVERSED — read this before citing the old text (issue
+// #709 / docs/technical/data-self-healing.md §6.5.2, PD3). This header used to
+// say historical valuation comes from the persisted wallet_balance_samples
+// series "NOT from a re-fetched OHLCV series", on the premise that
+// GeckoTerminal OHLCV may not reach back far enough for illiquid
+// ROBOTMONEY/BNKR. It does. Daily OHLCV candles are UTC-midnight aligned —
+// the same day key worker/handlers/wallet.ts writes as sampleDate — and one
+// request serves ~181 of them.
+//
+// So the standing arrangement is now:
+//   - the daily sampler accumulates forward and reads prices HERE, at spot;
+//   - a day the sampler MISSED is repaired by chain/historical-prices.ts, which
+//     reads that day's own close, and by ops/wallet-backfill.ts, which reads
+//     that day's own block. Repaired rows are tagged provenance='backfilled'
+//     and never overwrite a day the sampler wrote;
+//   - the pre-launch seeded rows (migration 0014) remain what they were: ported
+//     history, provenance 'seed', never a chain read.
+//
+// This file is still the only SPOT price path, and nothing here fetches a time
+// series. Do not add one here — historical-prices.ts owns that, deliberately as
+// separate code (same vendor, different endpoint, different failure semantics).
 import type { PriceSource, TrackedAsset } from "../config.ts";
 import { resolveSp500 } from "../config.ts";
 import { UA } from "../analytics/extract/http.ts";

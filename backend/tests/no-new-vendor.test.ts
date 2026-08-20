@@ -14,6 +14,14 @@ const NEW_FILES = [
   "src/chain/wallet-history-seed.ts",
   "src/worker/handlers/wallet.ts",
   "src/api/routes/dashboards.ts",
+  // The #709 backfill path. It reaches a NEW GeckoTerminal endpoint (daily
+  // OHLCV) and a historical block tag on the SAME Base RPC — same vendors,
+  // which is exactly the boundary this file exists to keep honest. Repairing
+  // history must not become the excuse that quietly adds a data vendor.
+  "src/chain/historical-prices.ts",
+  "src/chain/block-resolver.ts",
+  "src/ops/wallet-backfill.ts",
+  "src/worker/handlers/repair.ts",
 ].map((p) => join(process.cwd(), p));
 
 const FORBIDDEN = ["alchemy", "dexscreener", "coingecko", "dune", "supabase"];
@@ -45,5 +53,14 @@ test("the token-price fetcher reaches only GeckoTerminal + Yahoo hosts", () => {
     expect(ok, `unexpected host ${host} in token-prices.ts`).toBe(true);
   }
   // Sanity: it does mention the two allowed vendors.
+  expect(src.includes("geckoterminal.com")).toBe(true);
+});
+
+test("the historical-price fetcher (#709) reaches ONLY GeckoTerminal", () => {
+  const src = readFileSync(join(process.cwd(), "src/chain/historical-prices.ts"), "utf8");
+  const hosts = [...src.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]!.toLowerCase());
+  for (const host of hosts) {
+    expect(host.includes("geckoterminal.com"), `unexpected host ${host} in historical-prices.ts`).toBe(true);
+  }
   expect(src.includes("geckoterminal.com")).toBe(true);
 });

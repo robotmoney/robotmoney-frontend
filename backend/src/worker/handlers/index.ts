@@ -5,6 +5,7 @@ import { makeAnalyticsHandlers } from "./analytics.ts";
 import { refreshBuybacks } from "./buybacks.ts";
 import * as swarm from "./swarm.ts";
 import * as projects from "./projects.ts";
+import { backfillWalletDay, repairGaps } from "./repair.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "./wallet.ts";
 
@@ -32,6 +33,14 @@ export const handlers: Record<string, JobHandler> = {
   // daily prop-wallet balance sample (feeds the /performance history + last-live fallback)
   "wallet.sample_balances": sampleWalletBalances,
   "wallet.sample_sleeves": sampleWalletSleeves,
+  // The self-healing pair (issue #709). `ops.repair_gaps` is the dispatcher of
+  // docs/technical/data-self-healing.md §4 — it asks the gap detector what is
+  // missing and dispatches by remediationClass, which is what turns that field
+  // from a label into behaviour. `wallet.backfill_day` is the Class C executor:
+  // one day per job, read at that day's own block, written only if the whole
+  // day read honestly.
+  "ops.repair_gaps": repairGaps,
+  "wallet.backfill_day": backfillWalletDay,
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
   // swarm session lifecycle

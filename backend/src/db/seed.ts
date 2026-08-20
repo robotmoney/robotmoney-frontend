@@ -57,6 +57,15 @@ export const SCHEDULES: SeedSchedule[] = [
   // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
   { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Self-healing dispatcher (issue #709). Asks the gap detector what is missing
+  // and enqueues one wallet.backfill_day job per missing day, bounded per run.
+  // HOURLY rather than daily so a wide gap converges in hours instead of weeks
+  // under the per-run cap, and cheap when there is nothing to do (two detector
+  // queries and no chain read). It is a NO-OP unless the deployment has
+  // configured its shared RPC rate budget (BASE_RPC_MAX_CALLS_PER_SEC), so a
+  // demo/CI boot never starts sweeping months of history — see
+  // worker/handlers/repair.ts. Handler: worker/handlers/repair.ts.
+  { kind: "ops.repair_gaps", cron: "25 * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Swarm lifecycle rows are seeded SEPARATELY below (seedSwarmSchedules)
   // — issue #208 made their enabled/cron/window environment-configurable via
   // resolveSwarmSchedules(), and (unlike every other row here) their

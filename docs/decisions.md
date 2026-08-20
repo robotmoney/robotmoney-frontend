@@ -2136,3 +2136,120 @@ app router.
 - **Delete `_redirects` outright.** It is the only written statement of intended
   host policy; deleting it loses that, whereas marking it inert prevents the
   actual failure (someone adding a rule that never fires).
+
+---
+
+## D36 — A block tag on the reads we already issue; not the archive indexer D16 rejected (issue #709, clarifies D16, reverses Open Question 9)
+
+**Decision.** `backend/src/chain/base-rpc-client.ts`'s shared `RpcCallOptions`
+carries an optional `blockTag`, applied at the only two sites in the backend that
+hardcoded `"latest"` — `ethCall` and `ethGetBalance` — as `opts.blockTag ??
+"latest"`. The backend may therefore read historical chain state at a pinned
+block in order to **reconstruct chain-derived history it is missing**, and may
+write the result into `wallet_balance_samples` / `wallet_sleeve_samples` tagged
+`provenance='backfilled'`.
+
+**Why this is not what D16 rejected.** D16 rejected *"an archive indexer to
+reconstruct gap-free pre-launch history"* as out of scope for #84. An archive
+*indexer* means ingesting and persisting chain history yourself: a new component,
+a new store of chain events, its own reorg and consistency semantics. This is a
+parameter on reads the app already makes, against the node it already reads.
+`https://mainnet.base.org` — the default `BASE_RPC_URL` — answers archive state
+queries, and returns a correct `"0x"` (not a `latest` fallback) for a
+pre-deployment read, which is what makes the answers verifiable rather than
+merely plausible. **D16's rejection of the component stands unaltered.** What is
+corrected is an unstated premise inside it: that reconstructing the history
+requires that component. It does not.
+
+**The hole this exists to close.** The wallet/AUM series is `remediationClass:
+"C"`, and before this the field had *zero behavioural consumers* —
+`detectAllGaps` had exactly one caller, the read-only `GET /api/admin/gaps`. The
+pipeline could see its own holes and had no way to close them. The gap's width is
+`(DB bootstrap date) − 2026-06-26`, so it does not merely persist: it re-opens
+wider on every database rebuild.
+
+**Open Question 9 is reversed, explicitly.** `chain/token-prices.ts` stated that
+historical valuation comes from the persisted series *"NOT from a re-fetched
+OHLCV series"*, on the premise that GeckoTerminal OHLCV may not reach back far
+enough for illiquid ROBOTMONEY/BNKR. It does; its daily candles are
+UTC-midnight-aligned, matching the day key the sampler already writes. That
+header is amended in the same change rather than left contradicting the code.
+Same vendor, different endpoint — the `token-prices.ts` host constraint is
+unchanged and still enforced by `tests/no-new-vendor.test.ts`.
+
+**Scope fence.** Approval covers the block tag and a bounded, scheduled repair of
+detected gaps, and nothing wider:
+
+- **No archive indexer**, no persisted chain-event store, no new vendor, no new
+  host.
+- **No standing Class C reconciliation loop.** Repairing a known finite gap is a
+  different cost problem from re-verifying every chain day forever. Class C gets
+  an executor; it does not get a continuous verifier until there is a keyed
+  provider.
+- **No independent RPC limiter.** The provider meters **per-IP**, so in-process
+  isolation cannot create budget: a second limiter beside the live sampler's sums
+  to 2× against one bucket and 429s both, *causing* new gaps while repairing old
+  ones. That is the 2026-08-10 storm in #651. One token bucket lives in the
+  shared transport and every read draws from it — and note that
+  `BASE_RPC_MAX_CONCURRENCY` is **not** that control: it bounds in-flight
+  requests, and on a lane that claims one job at a time in-flight never exceeds
+  1, so it paces nothing.
+- **No live-path change.** `?? "latest"` is the default, and the silent-zero rule
+  below is armed only for block-addressed reads.
+
+**Honesty rules, carried by this decision rather than left to an implementer.**
+
+- **`success: true` with `returnData: "0x"` is a hard failure for that day, never
+  a zero.** It means there is no contract at that address at that block.
+  `decodeUint256` maps it to `0n` by long-standing design and the live path
+  depends on that; a backfill that inherits it does not read a balance of zero,
+  it invents one — and inside a summed AUM total an invented zero is
+  indistinguishable from a real drawdown once written.
+- **A day is atomic.** Round 2 (`convertToAssets` NAV) depends on round 1's
+  output, so a half-read day yields a total that is plausible and wrong. Nothing
+  is written for a day that did not read completely.
+- **A missing price fails the day** rather than valuing a real holding at zero.
+- **Repair fills holes; it never restates history.** A day the sampler already
+  wrote is never overwritten (§7.1's append-only reading).
+- **An unrepaired day keeps looking unrepaired.** A day that cannot be read
+  honestly stays in the gap report. A day that exhausts its retry ceiling stops
+  costing RPC but remains a *disclosed* gap — never interpolated.
+- **Backfilled rows stay distinguishable from `'live'`** for the life of the
+  data. `'backfilled'` was already in the DTO union via #615, so no contract
+  change was needed.
+
+**PD6 is the gate, and it is also the opt-in.** The measured budget (~5-token
+bucket refilling at ~0.55 calls/s, metered per-IP and per sub-call, structural
+batch cap 10, Multicall3 giving 27:1 leverage) was taken from a developer IP. The
+bucket's parameters are therefore **configuration, not constants**, and a live
+backfill **refuses to run** until `BASE_RPC_MAX_CALLS_PER_SEC` is set. Unset
+means no pacing (exactly the prior behaviour) *and* means the seeded
+`ops.repair_gaps` schedule is a no-op — so a demo or CI boot never sweeps months
+of history, and a deployment opts into repair by measuring its own limit.
+
+**Self-healing means scheduled, not manual.** The repair is an ordinary producer
+in the analytics lane — `ops.repair_gaps` (dispatch by `remediationClass`) and
+`wallet.backfill_day` (one day per job) — and its work list is re-derived **from
+the data** on every run, never from a cursor. Nothing about repair lives in a
+migration or a one-shot script. Migration 0033 creates a permanent date→block
+cache and a per-day checkpoint and inserts **no rows**.
+
+**Rejected alternatives.**
+
+- **Build first, record afterwards.** Three written statements (D16,
+  `token-prices.ts`'s header, #294's out-of-scope list) contradicted the work, so
+  it would have arrived at review with the record against it — the most expensive
+  moment to unwind.
+- **Abandon Class C repair and disclose the hole permanently.** Coherent and
+  honest, but it makes the AUM gap permanent *and* growing, since its width
+  re-opens on every rebuild.
+- **Give the backfill its own rate limiter so it cannot starve the sampler.**
+  Backwards: the limit is per-IP, so a second limiter doubles the offered rate
+  against one bucket. Isolation here creates contention, not headroom.
+- **A superseding ADR for D16 rather than this clarification (PD2).** D16's
+  rejection names a component this does not build; superseding it would discard a
+  judgement that remains correct.
+- **Approximate SP500 in the backfill (PD7).** It is not a chain read at all, and
+  #648 records that the column splices two different measurements. It is skipped,
+  and a repaired day carries no SP500 row — honest sparseness, which
+  `WalletHistoryPoint` already documents.

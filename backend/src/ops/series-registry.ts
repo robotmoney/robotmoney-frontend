@@ -47,8 +47,24 @@ export interface SeriesDef {
   remediationClass: RemediationClass;
 }
 
-// ── Wallet / sleeve / vault samplers (Class C — chain state pinned to
-//    "latest", spot-only prices; cannot be backfilled, issue #614 §Scope) ──
+// ── Wallet / sleeve / vault samplers (Class C — the LIVE samplers read chain
+//    state at "latest" with spot-only prices, so a sampler cannot answer for a
+//    past day; issue #614 §Scope).
+//
+//    "Class C" is NOT "unrepairable" any more (issue #709). #614's scope note
+//    read the samplers' latest-pinned transport as a property of the data, and
+//    it is a property of the transport: a read at the day's own block answers
+//    exactly what the day held, and a daily OHLCV close prices it. The two
+//    WALLET series below now have an executor — ops/wallet-backfill.ts, driven
+//    by the scheduled ops.repair_gaps dispatcher — which fills a missing day and
+//    tags it provenance='backfilled'.
+//
+//    The rest of the Class C entries below still have no executor: the vault
+//    hourly samples and the projects daily rollups are rollups of CURRENT
+//    persisted state, with no historical version to re-derive. They stay Class C
+//    and stay disclosed. `remediationClass` is a repair ROUTE, not a promise
+//    that a route exists for every series carrying the label — the dispatcher
+//    reports which series it could not handle, rather than implying it did. ──
 export const SERIES_REGISTRY: SeriesDef[] = [
   {
     key: "wallet_balance_samples",
