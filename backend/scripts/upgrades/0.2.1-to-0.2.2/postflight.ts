@@ -17,18 +17,25 @@
 //
 // Exit codes: 0 = clean, 1 = a check failed, 2 = could not run.
 
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { columnExists, tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
 import { type Db, fetchCheck, runPostflightMain } from "../../lib/postflight-utils.ts";
+import { deriveHostRole } from "../../lib/rollout-receipt.ts";
+// Shared with preflight.ts — see steps.ts. This file's copy was the correct
+// one (six migrations, 27ec374); it is here only so there is no second copy.
+import { TAG_GLOB, THIS_RELEASE_MIGRATIONS } from "./steps.ts";
 
-const THIS_RELEASE_MIGRATIONS = [
-  "0029_admin_auth_recovery.sql",
-  "0029_admin_passkey.sql",
-  "0030_swarm_member_handle.sql",
-  "0031_swarm_member_handle_namespace.sql",
-  "0032_append_only_history.sql",
-  "0033_swarm_member_uuid_ids.sql",
-] as const;
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+// backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>
+const repoRoot = join(scriptDir, "..", "..", "..", "..");
+
+/** The two steps this script can be evidence for. It must be told WHICH — a
+ *  twin rehearsal and a production postflight run the identical checks against
+ *  different databases, and a receipt that guesses would let a twin run stand
+ *  in for production. §5.5 is explicit that the twin is not production. */
+const RECEIPT_STEPS = ["P5.postflight-twin", "P8.postflight-prod"] as const;
 
 const baseUrlArg = process.argv.find((a) => a.startsWith("--base-url="))?.slice("--base-url=".length);
 
@@ -274,7 +281,19 @@ async function runChecks(db: Db, checker: Checker): Promise<void> {
 }
 
 export async function main(): Promise<number> {
-  return runPostflightMain({ name: "postflight-0.2.2", runChecks });
+  const emitArg = process.argv.find((a) => a === "--emit-receipt" || a.startsWith("--emit-receipt="));
+  let receipt;
+  if (emitArg) {
+    const step = emitArg.includes("=") ? emitArg.slice("--emit-receipt=".length) : "";
+    if (!(RECEIPT_STEPS as readonly string[]).includes(step)) {
+      console.error(`[postflight-0.2.2] --emit-receipt needs an explicit step id: ${RECEIPT_STEPS.join(" | ")}`);
+      console.error("[postflight-0.2.2] e.g. --emit-receipt=P8.postflight-prod. Refusing to guess which database this was.");
+      return 2;
+    }
+    const backupDir = process.argv.find((a) => a.startsWith("--backup-dir="))?.slice("--backup-dir=".length);
+    receipt = { step, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, backupDir };
+  }
+  return runPostflightMain({ name: "postflight-0.2.2", runChecks, receipt });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

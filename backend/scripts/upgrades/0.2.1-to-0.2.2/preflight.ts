@@ -21,19 +21,19 @@ import { fileURLToPath } from "node:url";
 import { columnExists, tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
 import { type Db, runPreflightMain } from "../../lib/preflight-utils.ts";
+import { deriveHostRole } from "../../lib/rollout-receipt.ts";
+// The migration list lives in steps.ts, not here. This file and postflight.ts
+// each used to declare their own copy, and the copies disagreed — postflight
+// was corrected to six in 27ec374, this one was left at four. One home now.
+import { TAG_GLOB, THIS_RELEASE_MIGRATIONS } from "./steps.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 // backend/scripts/upgrades/0.2.1-to-0.2.2/ -> backend/migrations/
 const migrationsDir = join(scriptDir, "..", "..", "..", "migrations");
+// backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>
+const repoRoot = join(scriptDir, "..", "..", "..", "..");
 // backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>/.env.readonly
 const envPath = join(scriptDir, "..", "..", "..", "..", ".env.readonly");
-
-const THIS_RELEASE_MIGRATIONS = [
-  "0029_admin_auth_recovery.sql",
-  "0029_admin_passkey.sql",
-  "0030_swarm_member_handle.sql",
-  "0031_swarm_member_handle_namespace.sql",
-] as const;
 
 /** Lock duration on swarm_members is proportional to row count: 0030 runs
  *  ADD COLUMN + full-table UPDATE + SET NOT NULL + CREATE UNIQUE INDEX inside
@@ -537,11 +537,21 @@ export async function runChecks(db: Db, checker: Checker): Promise<void> {
 }
 
 export async function main(overrideEnvPath?: string): Promise<number> {
+  // --emit-receipt records this run as step P4.preflight-live for where.ts.
+  // Opt-in, because runChecks is also called against a restored dump by
+  // restore-check.ts (a DIFFERENT step, Gate C) and against the twin during a
+  // rehearsal — a receipt claiming "live replica" must only be written by a run
+  // that actually was one.
+  const emit = process.argv.includes("--emit-receipt");
+  const backupDir = process.argv.find((a) => a.startsWith("--backup-dir="))?.slice("--backup-dir=".length);
   return runPreflightMain({
     envPath: overrideEnvPath ?? envPath,
     name: "preflight-0.2.2",
     allowPrivilegedEnvVar: "PREFLIGHT_ALLOW_PRIVILEGED",
     runChecks,
+    receipt: emit
+      ? { step: "P4.preflight-live", repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, backupDir }
+      : undefined,
   });
 }
 

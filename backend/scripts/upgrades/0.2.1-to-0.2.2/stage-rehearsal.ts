@@ -38,6 +38,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
+import { deriveHostRole, emitReceipt } from "../../lib/rollout-receipt.ts";
+import { TAG_GLOB } from "./steps.ts";
 
 const NAME = "stage-rehearsal-0.2.2";
 const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
@@ -304,8 +306,37 @@ async function main(backupDirArg?: string): Promise<number> {
   }
 }
 
+/**
+ * Receipt wrapper. This step's evidence is bound to APP code (steps.ts's
+ * APP_CODE globs), not to the gate scripts — which is why a commit that
+ * changes preflight.ts invalidates Gate C while leaving a boot rehearsal
+ * standing. That distinction is the whole reason receipts record a SHA.
+ */
+async function mainWithReceipt(backupDirArg?: string): Promise<number> {
+  const startedAt = new Date().toISOString();
+  const code = await main(backupDirArg);
+  if (process.argv.includes("--emit-receipt")) {
+    const backup = resolveBackupFiles(backupDirArg);
+    const { path } = emitReceipt({
+      step: "P5.rehearsal-boot",
+      exit: code,
+      verdict:
+        code === 0 ? "migrated and booted clean, frontend checks pass" : code === 1 ? "REHEARSAL FAILED" : "COULD NOT RUN",
+      startedAt,
+      repoRoot,
+      tagGlob: TAG_GLOB,
+      hostRole: deriveHostRole(repoRoot).role,
+      backupDir: backupDirArg,
+      artifactPaths: "error" in backup ? [] : [backup.dumpEnc, backup.globalsEnc],
+      note: "error" in backup ? backup.error : `stamp=${backup.stamp}`,
+    });
+    log(`receipt \u2192 ${path}`);
+  }
+  return code;
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main(process.argv[2])
+  mainWithReceipt(process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : undefined)
     .then((code) => {
       process.exitCode = code;
     })

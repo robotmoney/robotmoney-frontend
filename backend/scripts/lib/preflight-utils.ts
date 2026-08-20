@@ -29,7 +29,9 @@ import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { createChecker, printVerdict } from "./checks.ts";
-import type { Checker, Status } from "./checks.ts";
+import type { Checker, CheckResult, Status } from "./checks.ts";
+import { collectDbIdentity, emitReceipt, summarise } from "./rollout-receipt.ts";
+import type { DbIdentity } from "./rollout-receipt.ts";
 
 export type Db = postgresTypes.Sql<{}>;
 
@@ -250,6 +252,30 @@ export interface RunPreflightOpts {
   /** e.g. "PREFLIGHT_ALLOW_PRIVILEGED" */
   allowPrivilegedEnvVar: string;
   runChecks(db: Db, checker: Checker): Promise<void>;
+  /**
+   * Set by the caller when `--emit-receipt` is passed: write a rollout receipt
+   * for this run (backend/scripts/lib/rollout-receipt.ts). The receipt is what
+   * lets where.ts answer "is this gate still valid?" in a later session, so it
+   * is written on EVERY exit path — a failed preflight is evidence too.
+   */
+  receipt?: PreflightReceiptSpec;
+}
+
+export interface PreflightReceiptSpec {
+  /** Step id from the release's steps.ts manifest, e.g. "P4.preflight-live". */
+  step: string;
+  repoRoot: string;
+  tagGlob: string;
+  hostRole: string;
+  backupDir?: string;
+}
+
+/** Mutable per-run sink: the wrapper needs the connection identity and the
+ *  check results, both of which only exist inside the core's control flow. */
+interface PreflightRunCtx {
+  startedAt: string;
+  identity?: DbIdentity;
+  results: CheckResult[];
 }
 
 /**
@@ -259,6 +285,25 @@ export interface RunPreflightOpts {
  * code (0 = safe, 1 = blocked, 2 = could not run).
  */
 export async function runPreflightMain(opts: RunPreflightOpts): Promise<number> {
+  const ctx: PreflightRunCtx = { startedAt: new Date().toISOString(), results: [] };
+  const code = await runPreflightCore(opts, ctx);
+  if (opts.receipt) {
+    const { path } = emitReceipt({
+      ...opts.receipt,
+      exit: code,
+      // Deliberately the same three words printVerdict prints, so grepping the
+      // log and reading the receipt cannot tell different stories.
+      verdict: code === 0 ? "SAFE TO UPGRADE" : code === 1 ? "BLOCKED" : "COULD NOT RUN",
+      startedAt: ctx.startedAt,
+      db: ctx.identity,
+      checks: ctx.results.length ? summarise(ctx.results) : undefined,
+    });
+    console.log(`[${opts.name}] receipt \u2192 ${path}`);
+  }
+  return code;
+}
+
+async function runPreflightCore(opts: RunPreflightOpts, ctx: PreflightRunCtx): Promise<number> {
   const { envPath, name, allowPrivilegedEnvVar, runChecks } = opts;
   const log = (msg: string) => console.log(`[${name}] ${msg}`);
   const err = (msg: string) => console.error(`[${name}] ${msg}`);
@@ -299,9 +344,14 @@ export async function runPreflightMain(opts: RunPreflightOpts): Promise<number> 
     log("note: server rejected the read-only startup parameter (pooled port?);");
     log("      fell back to SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY.");
   }
+  // §2.0's identity assertion, captured rather than merely printed: a receipt
+  // that records in_recovery=false was not pointed at the replica, and
+  // where.ts can say so long after this terminal is gone.
+  ctx.identity = await collectDbIdentity(db);
   console.log("");
 
   const checker = createChecker("");
+  ctx.results = checker.results;
 
   try {
     if (!(await gateReadOnly(db, checker, allowPrivilegedEnvVar))) {
