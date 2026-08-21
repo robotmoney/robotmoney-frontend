@@ -12,7 +12,7 @@
           <!-- No aria-label: the h1 alongside carries the name, so the mark is
                decorative here rather than the only label. -->
           <div class="sv__avatar sv__avatar--xl sv__avatar--mark"
-               x-html="memberMark(member.keyFingerprint || member.id, member.name, 80)"></div>
+               x-html="memberMark(member.keyFingerprint || member.id, member.name, 80, member.avatar?.path)"></div>
           <div class="sv__profile-main">
             <p class="sv__eyebrow">ic member · <span x-text="member.lens || 'swarm lens'"></span></p>
             <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
