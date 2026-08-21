@@ -15,6 +15,7 @@ import {
   type VaultEconomicsReaders,
 } from "../src/chain/vault-economics.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "../src/worker/handlers/vault.ts";
+import { MULTICALL3_ADDRESS, decodeAggregate3Calls, encodeAggregate3Result } from "../src/chain/base-rpc-client.ts";
 import { ROUTES } from "@robotmoney/contract";
 import { getVaultEconomics } from "../src/api/routes/dashboards.ts";
 
@@ -58,6 +59,30 @@ function mockRpc(byToSelector: Record<string, string>) {
     const body = JSON.parse(String(init?.body)) as { params: [{ to: string; data: string }] };
     const { to, data } = body.params[0];
     const selector = data.slice(0, 10);
+
+    // A Multicall3 aggregate3 batch is answered sub-call by sub-call out of the
+    // SAME fixture map, so a test still states its fixtures per (to, selector)
+    // whether the caller reads singly or batches — sampleVaultAdapters batches
+    // its adapter reads since the #294 Multicall3 work. An unfixtured sub-call
+    // comes back {success:false} under allowFailure, which is how a real node
+    // reports one reverted leg without failing the whole batch, and which the
+    // sampler treats exactly as it treated a thrown single read.
+    if (to.toLowerCase() === MULTICALL3_ADDRESS.toLowerCase() && selector === AGGREGATE3_SEL) {
+      const results = decodeAggregate3Calls(data).map((c) => {
+        const subKey = `${c.target.toLowerCase()}:${c.callData.slice(0, 10)}`;
+        const sub = byToSelector[subKey];
+        if (sub === undefined) {
+          if (!c.allowFailure) throw new Error(`mockRpc: no fixture for ${subKey}`);
+          return { success: false, returnData: "0x" };
+        }
+        return { success: true, returnData: sub };
+      });
+      return new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: encodeAggregate3Result(results) }),
+        { status: 200 },
+      );
+    }
+
     const key = `${to.toLowerCase()}:${selector}`;
     const result = byToSelector[key];
     if (result === undefined) throw new Error(`mockRpc: no fixture for ${key}`);
@@ -65,6 +90,7 @@ function mockRpc(byToSelector: Record<string, string>) {
   }) as unknown as typeof fetch;
 }
 
+const AGGREGATE3_SEL = "0x82ad56cb";
 const TOTAL_ASSETS_SEL = "0x01e1d114";
 const TOTAL_SUPPLY_SEL = "0x18160ddd";
 const BALANCE_OF_SEL = "0x70a08231";
