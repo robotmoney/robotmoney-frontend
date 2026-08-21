@@ -2552,3 +2552,71 @@ this entry.
   attached to the exact array carries forward with it.
 - **Extend `WalletHoldingProvenance`** (see above) — no within-day distinction
   exists to encode; the seam is between two series, not within one point.
+
+---
+
+## D40 — Per-schedule catch-up policy; collapsed at the scheduler, not the handler (issue #651)
+
+**Decision.** `job_schedules` gets a `catchup_policy` column (`'all'` default,
+`'collapse-per-bucket'`) and `tickScheduler()`'s backlog loop reads it: under
+`'collapse-per-bucket'`, a run of missed slots that fall in the same UTC-day
+bucket collapses to just the LAST slot due that day — the intermediate slots
+are never inserted as jobs at all. `'all'` keeps every existing schedule's
+current behaviour (one job per missed slot) unchanged. Only
+`wallet.sample_balances` and `wallet.sample_sleeves` are seeded with
+`'collapse-per-bucket'` (migration 0034 applies it to existing rows too, not
+just fresh seeds).
+
+**Why this exists.** `worker/handlers/slot.ts` already classifies a same-day
+replayed slot as `same-bucket-catchup` and lets it PROCEED — correctly, since a
+live read taken today is exactly as honest for today's bucket as an on-time
+sample would have been (see slot.ts's header). But "correct to run" is not
+"cheap to run": the wallet samplers upsert a single `(sample_date, symbol)` row
+per UTC day, via a fresh live Base RPC read, every time. A per-minute schedule
+down for a few hours does dozens of live chain reads on restart to produce the
+ONE row a single read would have produced — every read past the first is pure
+RPC load for an already-decided outcome.
+
+**Why at the scheduler, not the handler.** The handler-level fix would be
+"only actually read the chain on the LAST same-bucket-catchup slot, decline the
+rest" — but that still creates and dequeues every intermediate job first; the
+waste moves from RPC calls to queue churn, and every Class-C handler would need
+its own bookkeeping to know which same-day replay is "the last one" without
+seeing the others. Collapsing in `tickScheduler()` instead means the redundant
+jobs are never created — cheaper, and the collapsing logic lives in exactly one
+place (the component that already owns "how many jobs does this backlog
+become") rather than duplicated per handler.
+
+**Why per-schedule, not global.** Most schedules are not this case. Buybacks
+indexing (`buybacks.refresh`) and the projects pipelines each do distinct work
+per occurrence — collapsing them would silently drop real catch-up work, not
+just redundant reads. Only a schedule whose result is idempotent PER DAY
+(same key, same day, regardless of which slot produced it) is safe to collapse,
+and that is a property of the schedule/handler pair, not of the scheduler
+loop — hence a column, defaulted to the safe no-op (`'all'`), rather than a
+new global behaviour.
+
+**Scope: per TICK-BATCH, not globally per day.** The collapse only merges
+slots that are due within the SAME `tickScheduler()` call. A backlog wide
+enough to overflow `MAX_SLOTS_PER_TICK` (issue #614) still finishes collapsing
+across a couple of ticks — a later tick may enqueue one more job for a day
+already partly flushed — rather than every schedule paying for a cross-tick
+dedupe structure this issue's use case (hours, not weeks, of same-day backlog)
+never needs. `slot.ts`'s existing same-bucket/past-bucket classification is
+unchanged either way; it decides what the ONE enqueued job per bucket does, not
+how many jobs get enqueued.
+
+**Rejected alternatives.**
+
+- **Decline every replayed slot past the first, at the handler.** Considered
+  above — moves the waste from RPC calls to queue churn without removing it,
+  and pushes bookkeeping into every Class-C handler individually.
+- **A dedupe key on `(kind, day)` instead of `(kind, slot)` for these two
+  schedules.** Collapses ALL same-day fires, not just backlog replay — an
+  on-time steady-state tick would also be suppressed once one had already
+  landed that day, breaking the near-real-time cadence issue #118 relies on.
+  The column only changes CATCH-UP behaviour, leaving steady-state ticking
+  exactly as it was.
+- **Make it a global scheduler default instead of per-schedule.** Wrong for
+  any schedule whose per-slot work is not day-idempotent (see "why per-schedule"
+  above) — silently drops real catch-up work rather than redundant reads.

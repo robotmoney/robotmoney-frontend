@@ -15,12 +15,18 @@ import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 import { resolveSwarmSchedules } from "../config.ts";
 
+type CatchupPolicy = "all" | "collapse-per-bucket";
+
 interface SeedSchedule {
   kind: string;
   cron: string;
   payload: Record<string, unknown>;
   timezone: string;
   enabled: boolean;
+  // Issue #651: defaults to 'all' (every missed slot gets its own catch-up
+  // job — current behaviour) when omitted. Only the wallet samplers below
+  // opt into 'collapse-per-bucket' — see migration 0034's header for why.
+  catchupPolicy?: CatchupPolicy;
 }
 
 // Keep this list small and harmless. Each kind MUST have a handler registered in
@@ -51,8 +57,15 @@ export const SCHEDULES: SeedSchedule[] = [
   // ZERO RPC). Runs EVERY MINUTE so the served payload is near-real-time; the
   // (sample_date, symbol) upsert refreshes today's row each tick (idempotent, no
   // row growth within a day). Handler: worker/handlers/wallet.ts.
-  { kind: "wallet.sample_balances", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: true },
-  { kind: "wallet.sample_sleeves", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: true },
+  //
+  // catchupPolicy 'collapse-per-bucket' (issue #651): every missed same-day
+  // slot would upsert the SAME (sample_date, symbol) row via its own live
+  // chain read — a per-minute schedule down for hours does dozens of
+  // redundant RPC reads on restart for one day's worth of data. Collapsing to
+  // the last due slot per UTC day keeps the result identical (same row, same
+  // upsert) at a fraction of the chain reads.
+  { kind: "wallet.sample_balances", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "collapse-per-bucket" },
+  { kind: "wallet.sample_sleeves", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "collapse-per-bucket" },
   // Buyback refresh (live-data contract §1) — eth_getLogs indexer that upserts
   // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
@@ -167,8 +180,8 @@ export async function seedJobSchedules(): Promise<void> {
     // inserted once and never overwritten, so the scheduler-managed columns
     // (next_run_at, last_enqueued_at, enabled) survive untouched.
     await sql`
-      INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
-      VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
+      INSERT INTO job_schedules (kind, cron, payload, timezone, enabled, catchup_policy)
+      VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled}, ${s.catchupPolicy ?? "all"})
       ON CONFLICT (kind, cron) DO NOTHING
     `;
   }

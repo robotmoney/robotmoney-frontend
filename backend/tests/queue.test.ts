@@ -151,6 +151,57 @@ test("scheduler: enqueued jobs carry the slot's own timestamp in the payload", a
   for (let i = 1; i < slots.length; i++) expect(slots[i]).toBeGreaterThan(slots[i - 1]);
 });
 
+// issue #651: per-schedule catch-up policy. 'all' (the default) is a
+// regression pin on the pre-existing behaviour above — every missed slot,
+// same-day or not, still gets its own job.
+test("scheduler: 'all' catch-up policy (default) still enqueues every missed same-day slot", async () => {
+  await sql`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','* * * * *', true, 'all')`;
+  expect(await tickScheduler()).toBe(0); // seed only, no stale fire
+  // Backdated a handful of minutes — guaranteed same UTC day short of a run
+  // starting in literally the first 8 minutes after midnight.
+  await sql`UPDATE job_schedules SET next_run_at = now() - interval '8 minutes' WHERE kind='test.ok'`;
+  const enqueued = await tickScheduler();
+  expect(enqueued).toBeGreaterThan(1); // every missed slot got its own job, none collapsed
+  const [{ c }] = await sql`SELECT count(*)::int c FROM jobs WHERE kind='test.ok'`;
+  expect(c).toBe(enqueued);
+});
+
+// issue #651: 'collapse-per-bucket' folds every missed slot that falls in the
+// SAME UTC-day bucket into exactly one job (the last one due), instead of one
+// job per missed slot — the redundant-live-read case the wallet samplers hit.
+test("scheduler: 'collapse-per-bucket' catch-up policy collapses N missed same-day slots into exactly 1", async () => {
+  await sql`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','* * * * *', true, 'collapse-per-bucket')`;
+  expect(await tickScheduler()).toBe(0); // seed only, no stale fire
+  const before = new Date();
+  // Clamped to the start of today: "now() - 8 minutes" alone can cross UTC
+  // midnight (the very case this test exists to keep separate from same-day
+  // collapsing — see the sibling cross-day test below), which would split
+  // these slots across two buckets and produce 2 jobs instead of 1.
+  await sql`UPDATE job_schedules SET next_run_at = GREATEST(now() - interval '8 minutes', date_trunc('day', now())) WHERE kind='test.ok'`;
+  expect(await tickScheduler()).toBe(1); // same-day missed slots, exactly one job enqueued
+  const rows = await sql`SELECT payload FROM jobs WHERE kind='test.ok' ORDER BY id ASC`;
+  expect(rows.length).toBe(1);
+  // The LAST due slot is the one that survives, not an earlier one.
+  const slotAt = Date.parse(rows[0].payload.slotAt);
+  expect(before.getTime() - slotAt).toBeLessThan(2 * 60_000);
+  expect(await tickScheduler()).toBe(0); // fully caught up, idempotent
+});
+
+// issue #651: collapsing is per UTC-day bucket, not global — a backlog
+// spanning several days still produces one (collapsed) job PER DAY, so
+// cross-day catch-up is unaffected by same-day collapsing.
+test("scheduler: 'collapse-per-bucket' still gives each missed UTC day its own collapsed job", async () => {
+  await sql`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','0 * * * *', true, 'collapse-per-bucket')`;
+  expect(await tickScheduler()).toBe(0); // seed only, no stale fire
+  await sql`UPDATE job_schedules SET next_run_at = now() - interval '50 hours' WHERE kind='test.ok'`;
+  expect(await tickScheduler()).toBeGreaterThan(0);
+  const rows = await sql`SELECT payload FROM jobs WHERE kind='test.ok' ORDER BY id ASC`;
+  const days = rows.map((r) => new Date(r.payload.slotAt).toISOString().slice(0, 10));
+  const uniqueDays = new Set(days);
+  expect(rows.length).toBe(uniqueDays.size); // exactly one job per distinct UTC day — no same-day duplicates
+  expect(rows.length).toBeGreaterThan(1); // 50h of hourly backlog spans multiple days
+});
+
 test("reaper: stuck running job is requeued with backoff; exhausted → dead", async () => {
   const [{ id: a }] = await sql`INSERT INTO jobs (kind, payload, status, locked_at, locked_by, attempts, max_attempts)
                                 VALUES ('test.ok','{}','running', now() - interval '10 minutes','dead-worker',1,5) RETURNING id`;
