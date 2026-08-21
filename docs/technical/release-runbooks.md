@@ -187,17 +187,33 @@ bun run twin                # capture + restore + boot on the pinned tunnel port
 
 `bun run twin` is for a twin that stays up for people to look at. It publishes
 production data on the public tunnel, so treat the unclaimed admin credential as
-a live exposure and claim it immediately; the gate itself only needs the two
-commands above.
+a live exposure and claim it immediately; the gate itself does not need it.
 
 "not a remote database" is now enforced rather than trusted: `--db twin`
 restores into a local container and points the stack at it, and the mode enum
 makes "twin" and "external" separate, non-substitutable choices.
 
-**`twin:rehearse` covers restore + boot + serve, not the whole gate.** The
-preflight and postflight steps above are version-specific and stay explicit
-commands in the per-release runbook — the driver deliberately does not run them,
-because what changes per release is exactly the part it would have to guess at.
+**Which command satisfies the gate.** `twin:rehearse` grades restore + boot +
+serve, and nothing release-specific — use it to check the twin machinery itself.
+The gate is satisfied by the release's own entry point, which runs the same
+driver and adds this release's checks plus the receipts:
+
+```bash
+bun scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
+```
+
+**Postflight runs INSIDE the rehearsal, and cannot be a step after it.** The
+twin exists only for the duration of the boot — the driver tears it down on
+every exit path — so "run postflight against the twin afterwards" is an
+instruction to race teardown from a second terminal. The release's
+`stage-rehearsal.ts` therefore hands its postflight to the driver's `onReady`
+window, between the frontend checks and teardown, and that run is what emits
+`P5.postflight-twin`. A rehearsal that cannot reach the twin to run those checks
+FAILS; it never reports a clean boot as a clean gate.
+
+Preflight stays a separate, earlier command, because it grades the dump and the
+live replica before anything is booted at all (§4.3, and the per-release
+runbook's own preflight section).
 
 ### 4.5. Stage rehearsal report
 

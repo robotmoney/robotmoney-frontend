@@ -115,13 +115,14 @@ export async function bringUpTwin(opts: {
 /**
  * Prove the stack is pointed at the twin and nothing else.
  *
- * This replaces a whole apparatus. stage-rehearsal.ts used to run the boot from
- * an isolated git worktree with a throwaway `.env`, for one reason recorded in
- * its header: `--external-pg` read DATABASE_URL from the repo-root `.env`, and
- * on a staging host that file holds PRODUCTION credentials, so pointing the boot
- * at a twin meant overwriting it. `--db twin` constructs its URL in-process and
- * writes no file, so the worktree, the symlinked node_modules and the throwaway
- * `.env` all go away.
+ * This replaces a whole apparatus. A release's stage-rehearsal.ts used to run
+ * the boot from an isolated git worktree with a throwaway `.env`, for one reason
+ * recorded in its header: `--external-pg` read DATABASE_URL from the repo-root
+ * `.env`, and on a staging host that file holds PRODUCTION credentials, so
+ * pointing the boot at a twin meant overwriting it. `--db twin` constructs its
+ * URL in-process and writes no file, so the worktree, the symlinked node_modules
+ * and the throwaway `.env` all go away. (v0.2.2's copy still has them — it is
+ * kept as it executed — so read this as "how v0.3.0 onward does it".)
  *
  * What does not go away is the risk they were insurance against: compose
  * auto-loads the repo-root `.env`, so a stale DATABASE_URL there is one

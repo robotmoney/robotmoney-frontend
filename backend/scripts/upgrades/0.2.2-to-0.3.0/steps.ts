@@ -266,7 +266,11 @@ export const STEPS: RolloutStep[] = [
     hostRole: "stage",
     actor: "agent",
     requires: ["P5.rehearsal-boot"],
-    dependsOn: [...POSTFLIGHT_CODE],
+    // stage-rehearsal.ts is in here because it is what DECIDES whether these
+    // checks run against the twin at all: it hands postflight to the shared
+    // driver's onReady window. A commit that drops that hook leaves a green
+    // rehearsal that graded nothing, so this step's evidence must die with it.
+    dependsOn: [...POSTFLIGHT_CODE, "backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts"],
     ttlHours: 72,
     verify: "bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt   # runs this step",
     note: "A twin that boots but fails postflight is a failed rehearsal, not a partial success.",
@@ -292,7 +296,7 @@ export const STEPS: RolloutStep[] = [
     actor: "agent",
     requires: ["P6.report"],
     dependsOn: [...APP_CODE],
-    verify: "DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: where.ts --record P7.cutover",
+    verify: "DEMO_PROJECT=rm_prod bun smoke -- --db external --no-tui   # then: where.ts --record P7.cutover",
     note: "The .env from §5 must be in place BEFORE this runs. Four `migrated:` lines expected, then `migrations up to date`.",
   },
   {

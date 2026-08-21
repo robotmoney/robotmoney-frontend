@@ -216,6 +216,15 @@ discards, because the previous run migrated the copy.
 `--db twin` requires `--smoke`: a restored database is populated, and the demo
 scenario's fixtures overwrite rows by design.
 
+`twin:rehearse` grades restore + boot + serve and nothing release-specific — it is
+how you check the twin machinery itself. A **release** gate is satisfied by that
+release's own entry point, which drives the same code and adds this release's
+postflight against the migrated twin plus its rollout receipts:
+
+```bash
+bun scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
+```
+
 ### Attach a prospective agent
 
 Give the external agent the API URL the running demo printed (the port is

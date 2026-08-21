@@ -2010,6 +2010,12 @@ The twin's tooling is version-agnostic and lives outside any release directory:
 unattended with the frontend checks, and `bun run twin` is the standing variant on the
 pinned tunnel port. See [release-runbooks.md §4.3–§4.4](./technical/release-runbooks.md).
 
+A release's own rehearsal (`backend/scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts`)
+drives the same shared driver and adds the half that *is* version-specific: it passes an
+`onReady` hook, so that release's postflight runs against the migrated twin between the
+frontend checks and teardown. That window has to be inside the run — the driver tears the
+twin down on every exit path — so the checks cannot be a command issued afterwards.
+
 **Postgres data location.** By default each run uses a fresh anonymous named volume
 `<project>_pgdata`, labeled `robotmoney.demo=1` (so `demo:clean` can find it). Passing
 `bun run demo -- --pg-data <host-dir>` instead bind-mounts postgres's data directory to

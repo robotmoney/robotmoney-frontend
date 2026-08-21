@@ -73,8 +73,11 @@ rollout goes silently wrong. Do not re-derive them — read
 [rollout-procedure.md §2](./rollout-procedure.md) and treat all three as in force:
 
 1. `bun smoke` boots a **demo-shaped** stack, not a production one.
-2. **`--external-pg` is mandatory** — without it you boot an empty database and
-   serve an empty site while believing the rollout worked.
+2. **`--db external` is mandatory** — without it you boot an empty database and
+   serve an empty site while believing the rollout worked. (v0.2.2 spelled this
+   `--external-pg`; that spelling still works and now prints a deprecation
+   notice. The data path is one enum flag —
+   `--db ephemeral|external|twin` — and this cutover is `external`.)
 3. `AUTOMATION_TOKEN`, `ADMIN_TOKEN` and `SWARM_PUBLIC_BASE_URL` cannot be set
    for a `bun smoke` boot; read `ADMIN_TOKEN` out of the container instead.
 
@@ -634,6 +637,7 @@ depends-on:
   - backend/scripts/lib/checks.ts
   - backend/src/db/seed.ts
   - backend/migrations/**
+  - backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts
 ttl:         72h
 verify:      bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt   # runs this step
 ```
@@ -704,7 +708,7 @@ depends-on:
   - docker-compose.demo.yml
   - package.json
   - bun.lock
-verify:      DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: where.ts --record P7.cutover
+verify:      DEMO_PROJECT=rm_prod bun smoke -- --db external --no-tui   # then: where.ts --record P7.cutover
 ```
 
 🔴 **IRREVERSIBLE.** The invocation, every flag and the reason for each, the
@@ -839,6 +843,12 @@ notes:
 **None of the four migrations has a down migration.** The runner is forward-only
 (`backend/src/db/migrate.ts` header). Rollback means restoring the Gate C dump,
 not reversing DDL.
+
+⚠ **Use `--external-pg`, not `--db external`, in the rollback boot.** The tag you
+check out is v0.2.2, whose argv parser predates the `--db` enum *and* silently
+ignored flags it did not recognise — so `--db external` there boots an empty
+ephemeral database while looking like it worked. `--external-pg` is understood by
+both. rollout-procedure.md §10 carries the same warning.
 
 **Rolling back the code without rolling back the database is survivable here,
 and that is unusual.** All four migrations are additive: v0.2.2's code does not

@@ -9,14 +9,19 @@
 // actually serves — reusing scripts/demo-frontend-check.ts, the same route and
 // content checks CI runs, not a bespoke health probe.
 //
-// WHY THIS IS NOT UNDER upgrades/<version>/. It used to be, as
-// stage-rehearsal.ts, and nothing in it was ever version-specific except its own
-// name: the restore, the readiness contract, the supervision rule and the
-// teardown order are properties of "boot a twin and check it", not of 0.2.2. A
-// release directory was therefore the one place it could not be found from, and
-// `main` — already past v0.2.2 — had no twin entry point at all. The per-release
-// scripts that ARE version-specific (preflight.ts, postflight.ts,
-// restore-check.ts) stay where they are; this is the durable half.
+// WHY THIS IS NOT UNDER upgrades/<version>/. It used to be, copied whole into
+// each release's stage-rehearsal.ts, and none of it was ever version-specific
+// except the name: the restore, the readiness contract, the supervision rule and
+// the teardown order are properties of "boot a twin and check it", not of any
+// one release. A release directory was therefore the one place it could not be
+// found from, and `main` had no twin entry point at all.
+//
+// stage-rehearsal.ts DID NOT GO AWAY. v0.3.0's is now a thin wrapper over this
+// driver that supplies its own postflight and emits P5.rehearsal-boot; v0.2.2's
+// is left exactly as it executed, because a shipped release directory is the
+// record of what that release actually checked. The per-release scripts that ARE
+// version-specific (preflight.ts, postflight.ts, restore-check.ts) stay where
+// they are; this is the durable half.
 //
 // WHAT IS DURABLE, AND WHAT THE RELEASE STILL OWNS. This driver's contract is
 // "a twin came up and served" — restore, boot, readiness, supervision, teardown

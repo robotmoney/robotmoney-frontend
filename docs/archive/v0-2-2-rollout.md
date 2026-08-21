@@ -40,7 +40,8 @@ cites it.** Where the two disagree, the contradiction is called out inline under
 > | §5.3b stage rehearsal | `bun run twin:rehearse` |
 > | §7.3's `--smoke --external-pg` against a restored copy | `bun smoke -- --db twin` |
 >
-> Use those from the **0.2.3** runbook onward; here, follow the text as written.
+> **v0.3.0 onward already uses them** — its `stage-rehearsal.ts` is a thin wrapper
+> over the shared driver. Here, follow the text as written.
 
 > **Filename note.** This file is `v0-2-2-rollout.md`, not `v0.2.2-rollout.md`.
 > `scripts/lint-docs.sh:32` enforces `^[a-z0-9]+(-[a-z0-9]+)*\.md$` on every
