@@ -29,6 +29,7 @@ export {
   DEMO_FLAGS,
   dataPathOverlayYaml,
   isPrePopulated,
+  keptDataDescription,
   ownsData,
   parseDataPath,
   usesComposePostgres,

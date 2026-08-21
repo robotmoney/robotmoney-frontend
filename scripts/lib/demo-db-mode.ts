@@ -62,6 +62,32 @@ export const BACKUP_DIR_FLAG = "--backup-dir";
 const SMOKE_FLAG = "--smoke";
 const PG_DATA_FLAG = "--pg-data";
 
+// WHAT `--pg-data <host-dir>` MEANS, and why it rides on the ephemeral variant.
+//
+// It bind-mounts the postgres data directory to <host-dir> so a rebooted demo
+// restarts from where it left off. A CLI ARGUMENT, never an env var (hard user
+// preference, 2026-07-21: no per-property env config) — the resolved value is
+// recorded in demo-state.json instead.
+//
+// Reuse constraints (also in docs/architecture.md): the same postgres major and
+// the same baked-in demo credentials; migrate + seed are idempotent
+// (backend/src/db/seed.ts uses ON CONFLICT DO NOTHING), so re-booting on old
+// data converges rather than duplicating rows.
+//
+// Bind mounts were verified EMPIRICALLY on this Linux host: the postgres image's
+// entrypoint chowns the bind dir to its own container user and inits / resumes
+// cleanly, so the documented named-volume fallback was NOT needed. The data dir
+// ends up postgres-owned on the host — manage it with your own tooling;
+// demo:clean never touches --pg-data host dirs (they are not docker volumes).
+//
+// Absent the flag, every run keeps today's fresh-per-run behaviour: a named
+// volume <project>_pgdata (labelled robotmoney.demo=1 by docker-compose.demo.yml).
+//
+// It is a PAYLOAD ON `ephemeral`, not a flag of its own, because it only means
+// anything when there IS a compose postgres container to bind. Pairing it with
+// external or twin is therefore unrepresentable rather than rejected by a
+// hand-written precedence check — which is what demo-main.ts used to carry.
+
 /**
  * The data path as REQUESTED at parse time.
  *
@@ -388,6 +414,25 @@ export function dataPathOverlayYaml(dp: ResolvedDataPath): string {
         `# restored copy of production. Container ${dp.container}, volume ${dp.volume}.\n`
       : "";
   return header + externalPgOverlayYaml(dp.redactedUrl);
+}
+
+/**
+ * What teardown kept, if anything — the parenthetical in "postgres data kept (…)".
+ *
+ * `undefined` for external, which is the case that was WRONG before the union:
+ * cleanup() named `<project>_pgdata` unconditionally, so an --external-pg boot
+ * reported keeping a volume it had never created, and pointed demo:clean at
+ * storage that does not exist. Only ephemeral has a compose volume or a bind
+ * dir; only twin has its own; external has neither.
+ */
+export function keptDataDescription(
+  dp: ResolvedDataPath,
+  project: string,
+  pgDataDir?: string,
+): string | undefined {
+  if (dp.kind === "external") return undefined;
+  if (dp.kind === "twin") return `twin volume ${dp.volume}`;
+  return pgDataDir ? `--pg-data dir ${pgDataDir}` : `volume ${project}_pgdata`;
 }
 
 /**

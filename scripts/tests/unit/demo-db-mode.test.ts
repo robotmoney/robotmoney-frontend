@@ -23,6 +23,7 @@ import { join } from "node:path";
 import {
   bannerFor,
   DB_FLAG,
+  keptDataDescription,
   DB_MODES,
   dataPathOverlayYaml,
   ownsData,
@@ -265,5 +266,27 @@ describe("the banner states the consequence of THIS mode", () => {
   test("no banner leaks a password", () => {
     expect(bannerFor(TWIN)).not.toContain("rk_secretpass");
     expect(bannerFor(EXTERNAL)).not.toContain("hunter2secret");
+  });
+});
+
+describe("keptDataDescription — what teardown actually kept", () => {
+  test("ephemeral names the compose volume", () => {
+    expect(keptDataDescription({ kind: "ephemeral" }, "p")).toBe("volume p_pgdata");
+  });
+
+  test("--pg-data names the bind dir instead", () => {
+    expect(keptDataDescription({ kind: "ephemeral" }, "p", "/srv/pg")).toBe("--pg-data dir /srv/pg");
+  });
+
+  test("twin names its OWN volume, never a pgdata it never created", () => {
+    expect(keptDataDescription(TWIN, "p")).toBe(`twin volume ${TWIN.volume}`);
+    expect(keptDataDescription(TWIN, "p")).not.toContain("pgdata");
+  });
+
+  test("external kept NOTHING — the pre-union bug was claiming otherwise", () => {
+    // cleanup() used to name `<project>_pgdata` unconditionally, so an external
+    // boot reported keeping a volume it had never created and sent demo:clean
+    // after storage that does not exist.
+    expect(keptDataDescription(EXTERNAL, "p")).toBeUndefined();
   });
 });

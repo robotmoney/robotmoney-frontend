@@ -52,6 +52,12 @@ interface DemoState {
   // pre-refactor boolean a state file written before `--db` carries.
   db?: string;
   externalPg?: boolean;
+  // Twin only: the container this boot restored production into, the volume
+  // holding that copy, and the backup it came from. The container is removed
+  // here; the VOLUME is kept, exactly as pgdata is (demo:clean reclaims it).
+  twinContainer?: string;
+  twinVolume?: string;
+  twinBackupStamp?: string;
   databaseUrl: string;
   dbUser: string;
   dbPassword: string;
@@ -122,7 +128,22 @@ if (s.analyticsTokenFile) {
   }
 }
 
-if (mode === "external") {
+if (s.twinContainer) {
+  // AFTER `compose down`, never before: the stack must stop talking to the twin
+  // before it disappears, the same ordering demo-main's cleanup() uses.
+  const rm = Bun.spawnSync(["docker", "rm", "-f", s.twinContainer], { stdout: "ignore", stderr: "ignore" });
+  console.log(
+    rm.exitCode === 0
+      ? `[demo:down] twin container ${s.twinContainer} removed.`
+      : `[demo:down] WARNING: could not remove twin container ${s.twinContainer} (already gone?).`,
+  );
+}
+
+if (mode === "twin") {
+  console.log(`[demo:down] containers + network removed for ${s.project}; the twin's restored copy of production is KEPT in volume ${s.twinVolume ?? "(unrecorded)"}`);
+  console.log(`[demo:down]   that copy holds real credential material — reclaim it with: bun run demo:clean`);
+  console.log(`[demo:down]   re-run (restores a FRESH copy from backup ${s.twinBackupStamp ?? "?"}):  bun smoke -- --db twin`);
+} else if (mode === "external") {
   // No volume, no bind dir, nothing kept — because nothing here ever owned the
   // data. Say which server the (now stopped) stack was writing to so the
   // operator knows where its rows actually went.

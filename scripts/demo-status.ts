@@ -46,6 +46,9 @@ interface DemoState {
   // dbModeFromState() reconciles the two.
   db?: string;
   externalPg?: boolean;
+  twinContainer?: string;
+  twinVolume?: string;
+  twinBackupStamp?: string;
   databaseUrl: string;
   dbUser: string;
   dbPassword: string;
@@ -132,6 +135,13 @@ if (s.logFile) console.log(`[demo:status]   log file:   ${s.logFile}`);
 if (mode === "external") {
   console.log(`[demo:status]   pg data:    EXTERNAL managed server ${s.databaseUrl} — owned by that server, NOT by this demo.`);
   console.log(`[demo:status]               demo:down and demo:clean cannot touch it; this boot's writes are permanent.`);
+} else if (mode === "twin") {
+  // NOT the pgVolume fallback below: a twin boot creates no <project>_pgdata,
+  // so naming one would send the operator after storage that does not exist
+  // while leaving the volume that DOES hold a copy of production unmentioned.
+  console.log(`[demo:status]   pg data:    TWIN volume ${s.twinVolume ?? "(unrecorded)"}  (restored from backup ${s.twinBackupStamp ?? "?"}; kept on teardown; reclaim: bun run demo:clean)`);
+  console.log(`[demo:status]               it holds a copy of production, including real credential material.`);
+  if (s.twinContainer) console.log(`[demo:status]   twin:       container ${s.twinContainer}`);
 } else if (s.pgDataDir) {
   console.log(`[demo:status]   pg data:    --pg-data ${s.pgDataDir}  (bind; resume: bun run demo -- --pg-data ${s.pgDataDir})`);
 } else {

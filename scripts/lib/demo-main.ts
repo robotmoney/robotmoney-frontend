@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./demo-external-pg.ts";
-import { bannerFor, dataPathOverlayYaml, DB_FLAG, ownsData, parseDataPath, usesComposePostgres, type ResolvedDataPath } from "./demo-db-mode.ts";
+import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, usesComposePostgres, type ResolvedDataPath } from "./demo-db-mode.ts";
+import { assertTwinIsTarget, resolveTwinDataPath, twinLeftRunningHint, twinResumeHint, twinTeardownNarration } from "./demo-twin.ts";
+import { teardownContainer } from "./restore-container.ts";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
 import { provisionDemoAnalyticsTokenAfterPreflight, removeDemoAnalyticsToken } from "./demo-secret.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
@@ -211,24 +213,19 @@ if (staticPortMode) await stagePreflight();
 // Resolved HERE, before any credential is minted or any container is created, so
 // a bad invocation or a missing DATABASE_URL fails on an untouched host rather
 // than half-way through a bring-up.
-let dataPath: ResolvedDataPath;
+let requestedDataPath: ReturnType<typeof parseDataPath>["dataPath"];
 try {
   const parsed = parseDataPath(process.argv, { envFilePath: join(repoRoot, ".env") });
-  if (parsed.dataPath.kind === "twin") throw new Error(`${DB_FLAG} twin is not wired up yet.`);
-  dataPath = parsed.dataPath;
+  requestedDataPath = parsed.dataPath;
   for (const w of parsed.warnings) console.warn(`[demo] ${w}`);
 } catch (err) {
   console.error(`[demo] FATAL: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 // Two DIFFERENT questions, and for a twin they disagree — see demo-db-mode.ts.
-const composePostgres = usesComposePostgres(dataPath);
-const reclaimable = ownsData(dataPath);
-/** The ONLY form of a non-ephemeral connection safe to print or record. */
-const redactedDbUrl = dataPath.kind === "ephemeral" ? undefined : dataPath.redactedUrl;
-// Only a non-default data path gets the banner: an ordinary `bun run demo` boots
-// its own container and has no consequence to warn about.
-if (!composePostgres) console.warn(bannerFor(dataPath));
+// Both read only the mode, so they are known before a twin has been restored.
+const composePostgres = usesComposePostgres(requestedDataPath);
+const reclaimable = ownsData(requestedDataPath);
 
 // Filled in from `docker compose port` once the containers exist — see
 // applyHostPorts() below. They are 0 until then, and nothing may publish a URL
@@ -253,6 +250,20 @@ const stackEnvironment = resolveStackEnvironment(process.env);
 // dockerEnv sets DEMO_PROJECT=project either way, so the compose label stays
 // consistent.
 const project = process.env.DEMO_PROJECT?.trim() || stackProjectName("stack", stackEnvironment);
+// A twin is restored HERE: after `project` (its container and volume carry that
+// project's labels, so demo:down and demo:clean scope to them like anything else
+// this boot created) and before `database` below, which needs its URL. The
+// restore is the expensive step, which is why every invalid invocation was
+// already refused at parse time.
+const resolvedPath = await resolveTwinDataPath(requestedDataPath, project, (m) => console.log(`[demo] ${m}`));
+const dataPath: ResolvedDataPath = resolvedPath.dataPath;
+const twinContainer = resolvedPath.container;
+/** The ONLY form of a non-ephemeral connection safe to print or record. */
+const redactedDbUrl = dataPath.kind === "ephemeral" ? undefined : dataPath.redactedUrl;
+// Only a non-default data path gets the banner: an ordinary `bun run demo` boots
+// its own container and has no consequence to warn about.
+if (!composePostgres) console.warn(bannerFor(dataPath));
+
 // The baked-in demo database credentials and the two derived URLs now come from
 // the shared stack config (scripts/stack/config.ts), which carries the
 // "127.0.0.1, never localhost" rationale for backendUrl. DB_USER/DB_PASSWORD/
@@ -300,29 +311,10 @@ if (!composePostgres) {
 }
 const researchKeys = ["channel-divergence", "late-cycle-signals"];
 
-// --- Optional resumable postgres data (issue: demo persistent volumes) --------
-// `bun run demo -- --pg-data <host-dir>` bind-mounts postgres's data directory to
-// <host-dir> so a rebooted demo restarts from where it left off. This is a CLI
-// ARGUMENT, never an env var (hard user preference, 2026-07-21: no per-property
-// env config) — the resolved value is recorded in demo-state.json instead.
-//
-// Reuse constraints (also documented in docs/architecture.md): same postgres major
-// (17) and the same baked-in demo credentials; migrate + seed are idempotent
-// (backend/src/db/seed.ts uses ON CONFLICT DO NOTHING), so re-booting on old data
-// converges rather than duplicating rows.
-//
-// Bind mounts were verified EMPIRICALLY on this Linux host: postgres:17-alpine's
-// entrypoint chowns the bind dir to its own container user and inits / resumes
-// cleanly, so the documented named-volume fallback was NOT needed. The data dir
-// ends up postgres-owned on the host — manage it with your own tooling; demo:clean
-// never touches --pg-data host dirs (they are not docker volumes).
-//
-// Absent the flag, every run keeps today's fresh-per-run behavior: an anonymous
-// named volume <project>_pgdata (labeled robotmoney.demo=1 by docker-compose.demo.yml).
-// Mutual exclusion with the other data paths is now STRUCTURAL rather than a
-// hand-written precedence check: --pg-data rides on the `ephemeral` variant of
-// the union, so pairing it with a mode that starts no postgres container is
-// unrepresentable and parseDataPath() refuses it by name.
+// --- Optional resumable postgres data (--pg-data) -----------------------------
+// Wiring only. What the flag means, why it is a CLI argument, its reuse
+// constraints and why exclusivity with the other data paths is now STRUCTURAL
+// rather than a precedence check all live with the union, in demo-db-mode.ts.
 const rawPgData = dataPath.kind === "ephemeral" ? dataPath.pgDataDir : undefined;
 const pgDataDir = rawPgData ? resolve(rawPgData) : undefined;
 if (pgDataDir) {
@@ -699,11 +691,17 @@ function cleanup(): void {
   if (r.exitCode === 0 && !removeDemoAnalyticsToken(analyticsTokenFile, project)) {
     console.log(`[demo] WARNING: refused unsafe analytics-token cleanup path ${analyticsTokenFile}`);
   }
-  const where = pgDataDir ? `--pg-data dir ${pgDataDir}` : `volume ${project}_pgdata`;
+  // The twin goes LAST, after the stack has stopped talking to it. Its VOLUME
+  // survives on purpose (the ephemeral-pgdata contract); demo:clean reclaims it.
+  if (twinContainer) {
+    teardownContainer(twinContainer, (m) => console.log(`[demo] ${m}`));
+    console.log(`[demo] ${twinTeardownNarration(dataPath)}`);
+  }
+  const where = keptDataDescription(dataPath, project, pgDataDir);
   console.log(
-    r.exitCode === 0
-      ? `[demo] containers + network removed for ${project}; postgres data kept (${where})`
-      : `[demo] teardown exited ${r.exitCode}`,
+    r.exitCode !== 0
+      ? `[demo] teardown exited ${r.exitCode}`
+      : `[demo] containers + network removed for ${project}${where ? `; postgres data kept (${where})` : ""}`,
   );
 }
 
@@ -766,14 +764,16 @@ function writeStateFile(): void {
     // checkout. `db` is what demo:down / demo:status branch on; the redacted URL
     // is provenance for a human reading the file.
     //
-    // `externalPg` is kept ALONGSIDE `db` and derived from it, for compatibility
-    // in the direction that actually bites: an OLDER demo-down.ts — from another
-    // checkout, a worktree, or a pre-refactor commit — reading a state file this
-    // boot wrote. With the boolean present it still tears down correctly; without
-    // it, it would take the pgVolume branch and send the operator after storage
-    // that does not exist.
+    // `externalPg` is written alongside `db` and derived from it — see
+    // dbModeFromState() in demo-lifecycle-env.ts for which direction of
+    // compatibility that buys and why it is the one that matters.
     db: dataPath.kind,
     externalPg: !composePostgres,
+    // Twin only: what demo:down removes and what demo:clean reclaims, plus the
+    // backup this copy came from so a rehearsal report can cite its provenance.
+    ...(dataPath.kind === "twin"
+      ? { twinContainer: dataPath.container, twinVolume: dataPath.volume, twinBackupStamp: dataPath.stamp }
+      : {}),
     databaseUrl: composePostgres ? databaseUrl : redactedDbUrl,
     dbUser: composePostgres ? DB_USER : `(${dataPath.kind} — see the banner)`,
     dbPassword: composePostgres ? DB_PASSWORD : `(${dataPath.kind} — see the banner)`,
@@ -805,6 +805,10 @@ function printResumeHint(): void {
     // dropped --static-port would resume the demo on a Docker-assigned port,
     // leaving the tunnel pointing at nothing.
     console.log(`[demo]   resume:  bun run demo --${staticPortMode ? " --static-port" : ""} ${DB_FLAG} external`);
+    return;
+  }
+  if (dataPath.kind === "twin") {
+    for (const line of twinResumeHint(dataPath)) console.log(`[demo] ${line}`);
     return;
   }
   if (pgDataDir) {
@@ -839,6 +843,7 @@ function printLeaveRunning(): void {
   console.log(`[demo]   inspect:     bun run demo:status`);
   console.log(`[demo]   logs:        docker compose -p ${project} logs -f`);
   console.log(`[demo]   tear down:   bun run demo:down`);
+  for (const line of twinLeftRunningHint(twinContainer)) console.log(`[demo] ${line}`);
 }
 
 // Ctrl-C / SIGTERM tear the stack down (containers + network) and exit, KEEPING the
@@ -1118,6 +1123,11 @@ async function main(): Promise<void> {
     hooks: { onEvent: onStackEvent },
   });
   downStack = () => stack.down();
+  // Prove the containers will dial the TWIN, not whatever repo-root .env holds.
+  // See demo-twin.ts: this assertion is what replaced stage-rehearsal's isolated
+  // git worktree, and a rehearsal that silently ran against production is the
+  // worst outcome this repo has.
+  if (dataPath.kind === "twin") assertTwinIsTarget(stack.spawnEnv, dataPath.url);
 
   async function initializeScenario(): Promise<void> {
     const step = bootstrapStepNames(smokeMode)[0]!;

@@ -145,6 +145,21 @@ export async function restoreBackupIntoContainer(
      * beside a demo.
      */
     project?: string;
+    /**
+     * A NAMED volume to hold the restored cluster, created here with the demo's
+     * labels so `demo:clean` reclaims it by the same label scoping it uses for
+     * every other volume a boot creates.
+     *
+     * Omitted (restore-check.ts) the data lives in the container's writable
+     * layer and dies with it, which is right for a check that tears down in a
+     * `finally`. A `--db twin` boot passes one because its contract is the
+     * ephemeral-pgdata contract: teardown keeps the data, demo:clean reclaims it.
+     *
+     * NOTE the volume must be created BEFORE `docker run`, because a volume
+     * auto-created by `-v` carries no labels at all — which is precisely how a
+     * copy of production becomes invisible to the tooling meant to reclaim it.
+     */
+    volume?: string;
   } = {},
 ): Promise<RestoredContainer | { error: string; container?: string }> {
   const bindHost = opts.bindHost ?? "127.0.0.1";
@@ -153,7 +168,38 @@ export async function restoreBackupIntoContainer(
   const project = opts.project ?? stackProjectName("twin", environment);
   // ROLE_LABEL last so it cannot be overridden: the reaper's liveness rule
   // depends on a twin admitting what it is. See naming.ts's ROLE_LABEL.
-  const labelFlags = dockerLabelFlags({ ...stackLabels(environment, project), [ROLE_LABEL]: TWIN_ROLE });
+  const labels = { ...stackLabels(environment, project), [ROLE_LABEL]: TWIN_ROLE };
+  const labelFlags = dockerLabelFlags(labels);
+  const volumeArgs: string[] = [];
+  if (opts.volume) {
+    // DEMO_VOLUME_LABEL ("robotmoney.demo=1") is what demo:clean filters on —
+    // docker-compose.demo.yml stamps it on pgdata, and this is the non-compose
+    // equivalent. Without it the volume is unreclaimable by the documented path.
+    const created = await run(
+      ["docker", "volume", "create", "--label", "robotmoney.demo=1", ...dockerLabelFlags(labels), opts.volume],
+      { log },
+    );
+    if (created !== 0) return { error: `docker volume create ${opts.volume} failed` };
+    // MOUNT THE PARENT, not `/var/lib/postgresql/data`. Verified empirically on
+    // this host against postgres:18: a volume at .../data makes the entrypoint
+    // EXIT 1 rather than merely ignoring it —
+    //
+    //   "Counter to that, there appears to be PostgreSQL data in:
+    //      /var/lib/postgresql/data (unused mount/volume)"
+    //
+    // PG 18 moved PGDATA into a major-version subdirectory
+    // (/var/lib/postgresql/18/docker, docker-library/postgres#1259) so that
+    // `pg_upgrade --link` does not cross a mount boundary, and the image treats
+    // a mount at the old path as a misconfiguration worth refusing. The
+    // documented 18+ configuration is a single mount at /var/lib/postgresql.
+    //
+    // NOT a contradiction of docker-compose.yml's `pgdata:/var/lib/postgresql/data`:
+    // that service is pinned to an OLDER major on purpose (see postgres-image.ts's
+    // header — a live data directory cannot be re-read by a different major, which
+    // is what the --pg-data resume contract depends on). The twin has no such
+    // constraint: it is restored fresh from a dump every boot.
+    volumeArgs.push("-v", `${opts.volume}:/var/lib/postgresql`);
+  }
   const localPassword = generateLocalPassword();
   log(`starting throwaway Postgres (${IMAGE})`);
   const runCode = await run(
@@ -172,6 +218,7 @@ export async function restoreBackupIntoContainer(
       "-p",
       `${bindHost}::5432`,
       ...labelFlags,
+      ...volumeArgs,
       IMAGE,
     ],
     { log },
