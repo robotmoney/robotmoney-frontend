@@ -75,6 +75,9 @@ function readEnvKey(file: string, key: string): string | null {
   return null;
 }
 
+/** The ONE credential file every twin/rollout command reads. */
+export const READONLY_ENV_FILE = ".env.readonly";
+
 /**
  * The funded OpenCode Zen credential, which this rehearsal REQUIRES.
  *
@@ -85,28 +88,36 @@ function readEnvKey(file: string, key: string): string | null {
  * that model choice is not neutral for swarm authorship (some families refuse
  * the persona task outright), so a green `free` run does not predict production.
  *
- * Resolution order — process env first (CI/shell), then the two dotenv files a
- * staging host actually keeps. Never falls back to a keyless model: the same
- * refuse-rather-than-substitute rule scripts/lib/onboarding-eval.ts enforces.
+ * `.env.readonly` IS THE ONLY FILE CONSULTED, and `.env` is deliberately NOT in
+ * the chain any more. On a staging host `.env` is where the application's WRITER
+ * DATABASE_URL lives, and every command in this family — twin:capture,
+ * twin:rehearse, `bun run twin`, the release preflight — is defined by NOT
+ * needing that credential. Reading `.env` made the twin tooling depend on the
+ * one file it exists to stay away from, and made "which key did that run use?"
+ * a question with two possible answers. One low-privilege file now serves the
+ * whole family, which is exactly what .env.readonly.example describes it as.
  *
- * It is passed to the boot in its ENVIRONMENT, not written to a file. That does
- * not violate the flags-not-env-vars rule, which is scoped to DATA-PATH
- * decisions (see demo-db-mode.ts): this is a credential with a documented env
- * home, handed to a child exactly as the analytics and automation tokens are.
+ * The process environment still wins, because that is how CI and a one-off shell
+ * override supply it; it is not a file and cannot be the writer credential by
+ * accident.
+ *
+ * The key is passed to the boot in its ENVIRONMENT, never written to a file.
+ * That does not violate the flags-not-env-vars rule, which is scoped to
+ * DATA-PATH decisions (see demo-db-mode.ts): this is a credential, handed to a
+ * child exactly as the analytics and automation tokens are.
  */
 export function resolveZenKey(
   env: Record<string, string | undefined> = process.env,
 ): { key: string; source: string } | { error: string } {
   const fromEnv = env.OPENCODE_API_KEY?.trim();
   if (fromEnv) return { key: fromEnv, source: "process environment" };
-  for (const rel of [".env", ".env.readonly"]) {
-    const found = readEnvKey(join(repoRoot, rel), "OPENCODE_API_KEY");
-    if (found) return { key: found, source: rel };
-  }
+  const found = readEnvKey(join(repoRoot, READONLY_ENV_FILE), "OPENCODE_API_KEY");
+  if (found) return { key: found, source: READONLY_ENV_FILE };
   return {
     error:
-      "OPENCODE_API_KEY is not set (checked the process environment, ./.env and ./.env.readonly). " +
-      "This rehearsal boots the production model, which requires a funded Zen key. Set it and re-run. " +
+      `OPENCODE_API_KEY is not set. This command reads it from ./${READONLY_ENV_FILE} (or the process ` +
+      `environment) — NOT from ./.env, which holds the writer credential this family of commands ` +
+      `deliberately does not use. Add OPENCODE_API_KEY to ./${READONLY_ENV_FILE} and re-run. ` +
       "Do NOT work around this with AGENT_MODEL=free: that rehearses a different model than production, " +
       "and model choice materially changes swarm authorship (scripts/lib/swarm/inference.ts).",
   };

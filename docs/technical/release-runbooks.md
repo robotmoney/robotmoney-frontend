@@ -152,6 +152,10 @@ them:
 bun run twin:capture     # rm_readonly -> replica; pg_dump + pg_dumpall, gpg-encrypted
 ```
 
+Every command in this family reads its credentials from **`.env.readonly`** and
+never from `.env` — a staging host's `.env` holds the writer credential, and
+these commands are defined by not needing it.
+
 `twin:capture` refuses to run against the primary (`pg_is_in_recovery()` must be
 true), refuses the application's writer credential, refuses a `pg_dump` older
 than the server, and refuses to write inside the checkout. It emits a
@@ -177,7 +181,13 @@ The twin is a named data path, not an assembly:
 ```bash
 bun smoke -- --db twin      # restore the backup, boot the real stack against it
 bun run twin:rehearse       # the same boot, unattended, plus the frontend checks
+bun run twin                # capture + restore + boot on the pinned tunnel port, and stay up
 ```
+
+`bun run twin` is for a twin that stays up for people to look at. It publishes
+production data on the public tunnel, so treat the unclaimed admin credential as
+a live exposure and claim it immediately; the gate itself only needs the two
+commands above.
 
 "not a remote database" is now enforced rather than trusted: `--db twin`
 restores into a local container and points the stack at it, and the mode enum

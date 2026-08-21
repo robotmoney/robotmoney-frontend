@@ -188,10 +188,24 @@ starts no such container is refused by name.
 ### Rehearse an upgrade against a copy of production — `--db twin`
 
 ```bash
+bun run twin                # ONE COMMAND: fresh capture + restore + boot on the PINNED tunnel port
 bun run twin:capture        # dump the read-only REPLICA, gpg-encrypted (never the primary)
-bun smoke -- --db twin      # restore that dump locally and boot the real stack against it
-bun run twin:rehearse       # the same boot, unattended, plus the frontend checks
+bun smoke -- --db twin      # restore an existing dump and boot against it (Docker-assigned port)
+bun run twin:rehearse       # one-shot rehearsal: boot + frontend checks, then tears itself down
 ```
+
+`bun run twin` is the standing one — it is to `bun run demo:stage` what production
+data is to simulation fixtures, and it takes the same pinned port cloudflared
+routes to. **It therefore publishes a copy of production on a public URL**, and
+the restored admin claim is usually UNCLAIMED, so whoever reaches the admin
+surface first takes admin on real member data. Claim it immediately, or use
+`bun smoke -- --db twin`, which is identical minus the tunnel port. Add `--reuse`
+to skip the capture and boot the backup you already have.
+
+All of these read `OPENCODE_API_KEY` from **`.env.readonly`**, never from `.env`
+— on a staging host that is where the writer credential lives, and this family of
+commands is defined by not needing it.
+
 
 The twin's data lives in a labelled named volume and follows the same contract as
 `pgdata`: teardown removes the container, **keeps** the volume, and `bun run
