@@ -91,5 +91,12 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
       );
       return dates;
     },
+    async loadRawHistoryGapDates(sinceDate: string) {
+      const { dates } = await call<{ dates: string[] }>(
+        "GET",
+        `${ROUTES.analytics.rawHistoryGaps}?since=${encodeURIComponent(sinceDate)}`,
+      );
+      return dates;
+    },
   };
 }

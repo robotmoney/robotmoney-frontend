@@ -838,17 +838,33 @@ and `backend/tests/api/admin-surface.test.ts:165`, which check the value is one
 of `A`/`B`/`C` — not that anything acts on it. *(Verified against `main` at
 `7b92a8c`: `grep -rn remediationClass backend/src contract/src`.)*
 
-This was a pattern, not an accident, and one instance of it is now fixed.
+This was a pattern, not an accident, and two instances of it are now fixed.
+
+**Update (2026-08-20, #646): Class A now has one behavioural consumer.** The
+independent producer's `catchUpMissedIndicatorDays`
+(`backend/src/producer/index.ts`) reads `GET /api/analytics/raw-history/gaps`
+— itself driven by `detectGaps` against the `raw_indicator_history` `SeriesDef`
+(`remediationClass: "A"`) — and re-fetches + gap-fills exactly the dates that
+route reports missing. `detectAllGaps`'s single production caller from the
+paragraph above is now joined by this second, narrower one (`detectGaps` on
+one series, not all ten); `GET /api/admin/gaps` remains the only reader of the
+full ten-series report. Classes B and C are unchanged by this: `remediationClass`
+still drives no *generic* dispatch — Class C's #709 executor and Class A's
+producer catch-up are each hand-wired to their one series, not driven by
+reading the field itself — and this does not touch the §6.4 Class A
+*reconciler* (source-revision detection + quarantine), which remains unfiled,
+larger-scoped work.
+
 `backend/scripts/seed-provenance-verify.ts` had a real executed CI test
 (`backend/tests/seed-provenance-verify.test.ts:5` imports its `main`) and
 **no production caller** — no boot path, deploy gate, or cron (filed as #638,
 closed by D38: its callable core, `runSeedProvenanceVerify()`, now runs as
 `prod-bootstrap.ts`'s `seed-provenance:verify` step on every deploy).
-`remediationClass` and `forward_fill_expired` remain unwired — the latter is
-computed and shipped in a DTO and alarms nothing. This codebase has repeatedly
-shipped a correct mechanism and never wired it up, which is the failure mode
-this design must not repeat: **every acceptance criterion should assert the
-caller, not just the mechanism.**
+`forward_fill_expired` remains unwired — it is computed and shipped in a DTO
+and alarms nothing. This codebase has repeatedly shipped a correct mechanism
+and never wired it up, which is the failure mode this design must not repeat:
+**every acceptance criterion should assert the caller, not just the
+mechanism.**
 
 ### 3.1 Where the source plans are now tracked
 

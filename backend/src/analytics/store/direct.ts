@@ -10,6 +10,8 @@ import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "./raw-history-
 import { applyRawFloorSeed } from "./floor-seed.ts";
 import { saveRegimeSnapshots } from "./regime-store.ts";
 import { persistResearchSignal, loadRecentResearchSignalDates } from "./research-store.ts";
+import { detectGaps } from "../../ops/gap-detector.ts";
+import { getSeriesDef } from "../../ops/series-registry.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
   loadRawHistory: () => loadRawIndicatorHistory(),
@@ -20,4 +22,12 @@ export const directAnalyticsPersistence: AnalyticsPersistence = {
   saveRegimeSnapshots: (rows) => saveRegimeSnapshots(rows),
   saveResearchSignal: (key, asof, payload) => persistResearchSignal(key, asof, payload),
   loadResearchSignalDates: (sinceDate) => loadRecentResearchSignalDates(sinceDate),
+  // Issue #646: bypasses the HTTP route for tests/demo tooling that already
+  // hold DB credentials, same split as every other method above.
+  async loadRawHistoryGapDates(sinceDate) {
+    const def = getSeriesDef("raw_indicator_history");
+    if (!def) return [];
+    const report = await detectGaps(def, sql);
+    return report.interiorGaps.map((iso) => iso.slice(0, 10)).filter((d) => d >= sinceDate);
+  },
 };

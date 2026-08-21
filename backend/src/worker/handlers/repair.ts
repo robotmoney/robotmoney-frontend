@@ -53,10 +53,14 @@ function backfillEnabled(): boolean {
  * silently omitted, so the dispatcher's coverage is visible in job_runs instead
  * of being something a reader has to infer from absence:
  *
- *   - Class A (`raw_indicator_history`) has no trigger yet. That is #646 — a
- *     criterion ticked on the closed #614 with no implementing code — and it is
- *     named in this output so the gap in the DISPATCHER is as visible as the
- *     gaps in the data.
+ *   - Class A (`raw_indicator_history`) now self-heals the same way Class B
+ *     does: the independent producer's `catchUpMissedIndicatorDays`
+ *     (src/producer/index.ts, issue #646) re-fetches the live indicator
+ *     registry and writes back only the gap dates, through
+ *     GET /api/analytics/raw-history/gaps — the same shared gap detector this
+ *     dispatcher reads, not a second notion of "which dates are missing".
+ *     Named here rather than silently omitted, same as Class B, because this
+ *     dispatcher still dispatches neither.
  *   - Class B (`research_signals`) already self-heals through the independent
  *     producer's own catch-up, which computes its own missing-days set. Unifying
  *     those two notions of "which days are missing" is tracked in §6.5.4 and is
@@ -134,7 +138,7 @@ export async function repairGaps(): Promise<unknown> {
     unhandled: {
       // Named, not omitted — an undispatched class must be as visible as an
       // unrepaired day (§14's standing warning about ticked-but-unimplemented).
-      classA: classA.length > 0 ? { series: classA, tracking: "#646 — Class A has no detection→re-fetch trigger yet" } : null,
+      classA: classA.length > 0 ? { series: classA, tracking: "producer catch-up owns Class A (#646, src/producer/index.ts::catchUpMissedIndicatorDays)" } : null,
       classB: classB.length > 0 ? { series: classB, tracking: "producer catch-up owns Class B (§6.2)" } : null,
       classC: unhandledClassC.length > 0 ? { series: unhandledClassC, tracking: "no executor for these Class C series" } : null,
     },

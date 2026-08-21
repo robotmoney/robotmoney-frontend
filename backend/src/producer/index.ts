@@ -8,6 +8,8 @@ import { analyticsApiClient, resolveAnalyticsApiConfig, type AnalyticsApiConfig 
 import { bootstrapEdgarSeed } from "../analytics/edgar-seed-loader.ts";
 import type { AnalyticsPersistence } from "../analytics/persistence.ts";
 import type { AnalyticsDataSource } from "../analytics/access/data-source.ts";
+import { INDICATORS } from "../analytics/analyze/indicators.ts";
+import type { RawIndicatorHistory } from "../analytics/types.ts";
 import { writeHeartbeat } from "../ops/heartbeat.ts";
 
 export type ProducerKind = "regime" | "research";
@@ -130,6 +132,93 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
   return missing;
 }
 
+// ── Indicator catch-up (issue #646, closing #614 AC4's Class A bullet) ──────
+// "a detected gap triggers a re-fetch that fills only missing keys" — never
+// implemented for raw_indicator_history despite the criterion being ticked on
+// the closed #614 (docs/technical/data-self-healing.md §14's standing warning
+// about exactly this pattern). raw_indicator_history is API-owned (#106): the
+// shared worker where `ops.repair_gaps` runs holds no ANALYTICS_TOKEN by
+// design (D25), so — same as Class B's research_signals self-heal above —
+// this belongs in the independent producer, the one process that both
+// computes indicator data and holds the analytics-provider credential.
+//
+// TARGETED, not a recompute: unlike Class B (a full re-run of one asof) this
+// re-fetches the whole live registry once, then keeps ONLY the points whose
+// date is an actual gap. seedRawHistory (floor-seed.ts::applyRawFloorSeed) is
+// the gap-fill-only write — existing rows always win — so handing it a wider
+// batch than the gap set would be harmless, but filtering here keeps the
+// write's intent legible and matches AC4's literal wording ("fills only
+// missing keys") rather than leaning on the store's idempotency to paper over
+// a sloppier caller.
+//
+// Bounded lookback, same rationale as CATCHUP_WINDOW_DAYS: a live registry
+// fetch (FRED/Yahoo/DefiLlama/blockchain.com/Coinmetrics/GeckoTerminal/
+// Shiller) is comfortably cheap to repeat, but this must never become an
+// unbounded historical crawl. A gap older than the window is still visible on
+// GET /api/admin/gaps for an operator to close deliberately.
+const INDICATOR_CATCHUP_WINDOW_DAYS = 14;
+
+export interface IndicatorCatchUpDeps {
+  persistence?: AnalyticsPersistence;
+  source?: AnalyticsDataSource;
+  now?: () => Date;
+}
+
+/** Best-effort, same contract as catchUpMissedResearchDays: never throws,
+ *  retried on the next pass regardless of what failed. Returns the days it
+ *  found missing (whether or not this pass actually filled each one) — a
+ *  source with no historical backfill capability for a given date leaves that
+ *  date unfilled and it is simply picked up again next pass. */
+export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}): Promise<string[]> {
+  const persistence = deps.persistence ?? analyticsApiClient();
+  const source = deps.source ?? resolveAnalyticsSource();
+  const now = (deps.now ?? (() => new Date()))();
+  const since = new Date(now.getTime() - INDICATOR_CATCHUP_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
+
+  let missing: string[];
+  try {
+    missing = await persistence.loadRawHistoryGapDates(since);
+  } catch (err) {
+    console.error(`[analytics-producer] indicator catch-up: could not read recent raw-history gap dates, skipping this pass: ${err instanceof Error ? err.message : err}`);
+    return [];
+  }
+  // No fetch at all when there is nothing to fill — avoids double-fetching the
+  // live registry against the daily regime cron, which already fetches it.
+  if (missing.length === 0) return [];
+
+  console.log(`[analytics-producer] indicator catch-up: ${missing.length} raw_indicator_history day(s) missing since ${since}, re-fetching the registry`);
+  const missingSet = new Set(missing);
+  let fetched: Record<string, { date: string; value: number }[]>;
+  try {
+    fetched = await source.fetchIndicators(INDICATORS, console);
+  } catch (err) {
+    console.error(`[analytics-producer] indicator catch-up: registry fetch failed (will retry next pass): ${err instanceof Error ? err.message : err}`);
+    return missing;
+  }
+
+  const onlyMissing: RawIndicatorHistory = {};
+  let matched = 0;
+  for (const [id, pts] of Object.entries(fetched)) {
+    const hits = pts.filter((p) => missingSet.has(p.date));
+    if (hits.length > 0) {
+      onlyMissing[id] = hits;
+      matched += hits.length;
+    }
+  }
+  if (matched === 0) {
+    console.warn(`[analytics-producer] indicator catch-up: this fetch covered none of the ${missing.length} missing day(s) — source has no history that far back for them; will retry next pass`);
+    return missing;
+  }
+
+  try {
+    const result = await persistence.seedRawHistory(onlyMissing);
+    console.log(`[analytics-producer] indicator catch-up: filled ${result.seededPoints} point(s) across ${result.indicators} indicator(s)`);
+  } catch (err) {
+    console.error(`[analytics-producer] indicator catch-up: seed write failed (will retry next pass): ${err instanceof Error ? err.message : err}`);
+  }
+  return missing;
+}
+
 async function waitForApi(cfg: AnalyticsApiConfig): Promise<void> {
   const base = cfg.baseUrl;
   const deadline = Date.now() + 120_000;
@@ -227,6 +316,12 @@ function schedule(kind: ProducerKind, cron: string): void {
         // degraded and was correctly skipped rather than published) before
         // running today. Best-effort: catchUpMissedResearchDays never throws.
         if (kind === "research") await catchUpMissedResearchDays();
+        // issue #646, closing #614 AC4's Class A bullet: same "on boot/tick"
+        // shape, paired with the "regime" tick because that is the run that
+        // owns fetchIndicators — the same registry fetch this catch-up
+        // re-issues on a gap. Best-effort: catchUpMissedIndicatorDays never
+        // throws.
+        if (kind === "regime") await catchUpMissedIndicatorDays();
         await runProducerOnce(kind, next.toISOString().slice(0, 10));
       } catch (err) {
         console.error(`[analytics-producer] ${kind} failed: ${err instanceof Error ? err.message : err}`);
@@ -246,6 +341,10 @@ export interface ProducerServeDeps {
   /** Test seam: override the boot-time catch-up call. Defaults to the real
    *  catchUpMissedResearchDays against the resolved API config. */
   catchUp?: (persistence: AnalyticsPersistence) => Promise<unknown>;
+  /** Test seam: override the boot-time indicator catch-up call (issue #646).
+   *  Defaults to the real catchUpMissedIndicatorDays against the resolved API
+   *  config — same shape as `catchUp` above, one per class. */
+  catchUpIndicators?: (persistence: AnalyticsPersistence) => Promise<unknown>;
 }
 
 /** Validate reachability + provider authorization before arming any cron.
@@ -260,6 +359,10 @@ export async function startProducerSchedules(deps: ProducerServeDeps = {}): Prom
   // right now. Best-effort: never blocks/fails the boot on a catch-up hiccup.
   const persistence = analyticsApiClient(cfg);
   await (deps.catchUp ?? ((p: AnalyticsPersistence) => catchUpMissedResearchDays({ persistence: p })))(persistence);
+  // issue #646: the Class A counterpart, same "before arming today's crons"
+  // reasoning — a restarted producer must not wait for the next regime tick
+  // to notice an indicator gap it could close right now.
+  await (deps.catchUpIndicators ?? ((p: AnalyticsPersistence) => catchUpMissedIndicatorDays({ persistence: p })))(persistence);
   const scheduleKind = deps.scheduleKind ?? schedule;
   scheduleKind("regime", deps.env?.PRODUCER_REGIME_CRON || process.env.PRODUCER_REGIME_CRON || "30 22 * * *");
   scheduleKind("research", deps.env?.PRODUCER_RESEARCH_CRON || process.env.PRODUCER_RESEARCH_CRON || "0 23 * * *");
