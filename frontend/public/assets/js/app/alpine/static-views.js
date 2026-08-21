@@ -614,6 +614,7 @@ export function registerStaticViews(Alpine) {
     copiedId: false,
     pollTimer: null,
     pulseTimer: null,
+    routeAtEntry: null,
     async init() {
       const match = location.pathname.match(/^\/swarm\/apply\/([^/]+)\/?$/);
       if (!match) {
@@ -622,6 +623,10 @@ export function registerStaticViews(Alpine) {
         return;
       }
       this.id = decodeURIComponent(match[1]);
+      // See syncTitle(): destroy() stops the poll on navigation, but it cannot
+      // cancel a refresh() that is already in flight, so the title write needs
+      // to know which route asked for it.
+      this.routeAtEntry = location.pathname;
       await this.refresh();
       this.pollTimer = setInterval(() => this.refresh(), 4000);
       // Heartbeat: only meaningful once approved, so checkPulse() self-gates.
@@ -688,6 +693,10 @@ export function registerStaticViews(Alpine) {
     // Swarm"). Same fix memberProfile already applies: name the tab after
     // the member once it is known, and after the state until then.
     syncTitle() {
+      // Skipped once the visitor has moved on. refresh() awaits two requests
+      // before reaching here, and neither is aborted by destroy(), so an
+      // unguarded write let a slow status response rename an unrelated page.
+      if (this.routeAtEntry && location.pathname !== this.routeAtEntry) return;
       const suffix = "Robot Money Investment Swarm";
       const name = this.member?.name;
       document.title = name
@@ -1000,6 +1009,11 @@ export function registerStaticViews(Alpine) {
     topN: 7,
     async init() {
       const id = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
+      // The route this component was mounted on. The fetch below is not
+      // cancelled when the router tears the view down, so a slow response would
+      // otherwise stamp a subject's name onto whatever page is showing by the
+      // time it lands. Same guard memberProfile applies for the same reason.
+      const routeAtEntry = location.pathname;
       try {
         this.subject = await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject)
           .catch(() => loadArchiveSubject(id));
@@ -1007,7 +1021,9 @@ export function registerStaticViews(Alpine) {
         // Route-level SEO titleizes the last URL segment, which for a slug like
         // "robotmoney-allocation" reads "Robotmoney Allocation". Name the tab
         // after the subject once we know what it is actually called.
-        if (this.subject?.name) document.title = `${this.subject.name}: Robot Money Investment Swarm`;
+        if (this.subject?.name && location.pathname === routeAtEntry) {
+          document.title = `${this.subject.name}: Robot Money Investment Swarm`;
+        }
         // Each side-fetch is guarded on its own: a subject with no snapshot yet
         // still has sessions worth reading, and vice versa.
         this.snapshots = await this.loadSnapshots(id);

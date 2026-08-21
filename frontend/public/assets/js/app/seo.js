@@ -257,8 +257,9 @@ const SECTIONS = [
   { prefix: "/media", suffix: "Robot Money Media" },
 ];
 
-// Legacy path aliases, mirroring the rewrites `viewFor()` performs in routes.js
-// (issue #263 pass 2, the /committee -> /swarm rename). routes.js resolves an
+// Legacy path aliases, mirroring every content-serving rewrite `viewFor()`
+// performs in routes.js (issue #263 pass 2's /committee -> /swarm rename, plus
+// the two older one-off renames below). routes.js resolves an
 // old path to the NEW path's fragment, so both addresses render the same page
 // and both return 200 — which makes every one of them a duplicate URL unless
 // something names the new address as canonical.
@@ -274,6 +275,15 @@ const LEGACY_ALIASES = [
   ["/committee", "/swarm"],
   ["/admin/committee", "/admin/swarm"],
   ["/docs/investment-committee", "/docs/investment-swarm"],
+  // Not from the /committee rename, but the same shape and the same defect:
+  // viewFor() resolves both of these to the renamed page's view, so both return
+  // 200 with the new page's content. Without an entry here they fell past every
+  // branch to NOT_FOUND_META, which is worse than a duplicate — the full
+  // treasury-allocation blog post served under "Page Not Found" and
+  // `noindex, follow`, on a URL that is still live on robotmoney.network and
+  // cited inline by the archived swarm sessions (routes.js:152,161).
+  ["/allocation2", "/performance"],
+  ["/articles/treasury-allocation", "/blog/treasury-allocation"],
 ];
 
 // The last resort in metaFor(), reached only by a path that is in no META
