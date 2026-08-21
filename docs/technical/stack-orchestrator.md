@@ -26,6 +26,12 @@ export STACK_REPO_BASE_DIR="$PWD/.stack-env/work"
 A k8s target additionally needs a registry the cluster can reach (§18) and, for
 ingress and backups, a cluster provisioned per §22.
 
+**No stack definition is committed to this repo yet.** Everything below was
+verified against a working definition built during the spike; that definition was
+deliberately not merged, because it carried mistakes this guide documents. The
+YAML here is therefore the *corrected* shape — the one Phase 1 of the plan should
+author — not a transcript of a file you can go and read.
+
 **This document is a reference, not a plan.** It records how the tool behaves.
 What we intend to do about it is [`../plans/stack-k8s-staging-deployment.md`](../plans/stack-k8s-staging-deployment.md);
 how it meets the release policy is
@@ -38,8 +44,8 @@ how it meets the release policy is
 ## 1. Every path in `stack.yml` is repo-root-relative
 
 Both `containers[].path` and `pods[].path` resolve against the **repository
-root**, never against `stack.yml`'s own directory. Ours lives at
-`stacks/robotmoney/stack.yml`, so:
+root**, never against `stack.yml`'s own directory. For a definition at
+`stacks/robotmoney/stack.yml`, that means:
 
 ```yaml
 containers:
@@ -148,10 +154,10 @@ every repo in the org, so `robotmoney/api` is the anti-pattern the upstream skil
 names explicitly. Nothing validates it; getting it wrong simply yields an image
 nobody can find again.
 
-> **Pending change.** Our definition currently declares `robotmoney/api`. It
-> should be `robotmoney/robotmoney-api`. Renaming means a rebuild and a re-push,
-> so it is scheduled with the other definition corrections rather than done in
-> passing.
+> **This is the mistake the spike made.** It declared `robotmoney/api`, built
+> and deployed under that name, and nothing objected — which is precisely the
+> failure mode: an image that works today and cannot be found again later. Use
+> `robotmoney/robotmoney-api`.
 
 ## 5. Composefile rules that differ from our compose habits
 
@@ -166,7 +172,8 @@ nobody can find again.
   wins.** An inline literal therefore **beats** anything the deployer passes with
   `--config`. Anything an operator should choose must be *forwarded* —
   `SOME_VAR=${SOME_VAR}` — not defaulted. `stack deploy` warns when an inline
-  literal shadows a differing `config.env` key.
+  literal shadows a differing `config.env` key. The spike hardcoded `RM_ENV` and
+  others inline, which would have made them unoverridable at deploy time.
 - **Secrets are not composefile environment entries.** Declare them in
   `stack.yml`; stack delivers them to every container. Declaring a secret also
   strips any leftover hardcoded default for it from the deployed composefile.

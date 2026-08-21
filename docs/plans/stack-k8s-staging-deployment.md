@@ -12,9 +12,13 @@ with Postgres owned by the deployment and backed up through K8up/restic.
 | Reach | **Staging only, in parallel.** Production stays on the current SSH + `docker compose up -d` path until staging has run several releases |
 | Postgres | **stack owns it** — in-deployment, on a PVC, backed up via K8up/restic |
 
-**Status: partially executed.** A working deployment of this app now runs on a
-local k3s cluster — six pods, `/health` returning `{"status":"ok","db":"up"}`.
-Everything below marked *verified* was executed, not designed.
+**Status: verified by spike, not yet implemented.** A working deployment of this
+app was driven onto a local k3s cluster — six pods, `/health` returning
+`{"status":"ok","db":"up"}` — so the behaviour this plan relies on is observed
+rather than assumed. **That spike definition was deliberately not merged**: it
+carried the container-naming and env-forwarding mistakes the field guide
+documents, and shipping a known-wrong definition to `main` would be an
+attractive nuisance. Phase 1 authors the corrected one.
 
 Three companions, each with a distinct job:
 
@@ -101,8 +105,8 @@ differ only by `command:`, exactly as `docker-compose.yml` already has it.
 
 **Name it `robotmoney/robotmoney-api`.** The namespace is the registry namespace
 (our GitHub org); the name half must be project-specific, because the namespace
-is shared by every repo in the org. `robotmoney/api` — what the definition
-currently says — is the named anti-pattern (field guide §4).
+is shared by every repo in the org. `robotmoney/api` — what the spike used — is
+the named anti-pattern, and nothing objected to it (field guide §4).
 
 **It must contain `_static`.** Add to `backend/Dockerfile` after the source copy:
 
@@ -312,11 +316,12 @@ answered and recorded in the field guide: probes (§12), secret interpolation
 *Gate: only the §5 migration decision remains. It is the one thing here that
 should be settled by a spike rather than by argument.*
 
-**Phase 1 — definition and image.** Correct the definition to §3.1/§3.2: rename
-the container, add the Dockerfile static layer, forward operator-facing env
-instead of defaulting it, set `API_PORT` explicitly, drop the stray `postgres`
-publish. Add the `Number.isFinite` guard to `config.ts`. `stack validate` and
-`stack check` pass.
+**Phase 1 — author the definition, and the image.** Land `stacks/robotmoney/`
+per §3.1/§3.2 — nothing is committed today. Against the spike, that means the
+corrected container name, the Dockerfile static layer, operator-facing env
+forwarded rather than defaulted, `API_PORT` set explicitly, and no stray
+`postgres` publish. Add the `Number.isFinite` guard to `config.ts`.
+`stack validate` and `stack check` pass.
 *Gate: `bun run demo` still green — the compose path must not regress, since
 `_static` would then exist both baked and bind-mounted.*
 
