@@ -208,3 +208,36 @@ describe("receipt step ids are wired to the scripts that emit them", () => {
     expect(STEPS.some((s) => s.id === stepId)).toBe(true);
   });
 });
+
+describe("the runbook names the same checks the scripts actually run", () => {
+  // The gap this closes: §6.1 and §9 are TABLES an operator reads to know what
+  // a clean run looks like, and nothing held them to the scripts. A check
+  // renamed in code and not in the table leaves the operator looking for a row
+  // that will never appear — and, worse, not looking for one that will.
+  const checkNames = (file: string): string[] => {
+    const src = readFileSync(join(repoRoot, "backend", "scripts", "upgrades", "0.2.2-to-0.3.0", file), "utf8");
+    return [...new Set([...src.matchAll(/record\(\s*"([a-z-]+)"/g)].map((m) => m[1]!))].sort();
+  };
+
+  test("§6.1 names every check preflight.ts records", () => {
+    const section = runbook.slice(
+      runbook.indexOf("### 6.1 What it checks"),
+      runbook.indexOf("### 6.2"),
+    );
+    expect({ found: section.length > 0 }).toEqual({ found: true });
+    for (const name of checkNames("preflight.ts")) {
+      expect({ name, inRunbook: section.includes(`\`${name}\``) }).toEqual({ name, inRunbook: true });
+    }
+  });
+
+  test("§9 names every check postflight.ts records", () => {
+    const section = runbook.slice(
+      runbook.indexOf("## 9. Post-cutover verification"),
+      runbook.indexOf("### Only when every check is clean"),
+    );
+    expect({ found: section.length > 0 }).toEqual({ found: true });
+    for (const name of checkNames("postflight.ts")) {
+      expect({ name, inRunbook: section.includes(`\`${name}\``) }).toEqual({ name, inRunbook: true });
+    }
+  });
+});
