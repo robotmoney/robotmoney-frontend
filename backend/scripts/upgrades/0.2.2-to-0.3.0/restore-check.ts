@@ -15,6 +15,17 @@
 // rehearsal — actually running this release's migrations for real and
 // booting the whole app against the restored data — see stage-rehearsal.ts.
 //
+// THE RESTORE MECHANICS ARE NOT HERE. Resolving the backup files, starting a
+// throwaway Postgres, loading globals, pg_restore, opening a connection and
+// tearing both down on every path live in scripts/lib/restore-container.ts's
+// withTwinContainer() and backend/scripts/lib/twin-session.ts's
+// withTwinDatabase(). Every release's copy of this script did the identical
+// five things around its own queries, and the failure-path teardown is the part
+// that must not be re-derived: a checker returning early from the middle of its
+// own try block is how a container holding a copy of production gets left
+// behind. What remains below is what IS specific to v0.3.0 — which tables to
+// count, the namespace invariant, and this release's own preflight checks.
+//
 // Usage:
 //   bun scripts/upgrades/0.2.2-to-0.3.0/restore-check.ts [backupDir]
 //   backupDir defaults to ~/rm-backup-v030. Expects, inside it:
@@ -29,10 +40,10 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import postgres from "postgres";
+import { resolveBackupFiles } from "../../../../scripts/lib/restore-container.ts";
 import { columnExists, createChecker, printVerdict } from "../../lib/checks.ts";
-import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../../../scripts/lib/restore-container.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
+import { withTwinDatabase } from "../../lib/twin-session.ts";
 import { runChecks } from "./preflight.ts";
 import { TAG_GLOB } from "./release.ts";
 
@@ -45,84 +56,63 @@ const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
 const err = (msg: string) => console.error(`[${NAME}] ${msg}`);
 
 async function run(backupDirArg?: string): Promise<number> {
-  const backup = resolveBackupFiles(backupDirArg);
-  if ("error" in backup) {
-    err(backup.error);
-    return 2;
-  }
-
-  const restored = await restoreBackupIntoContainer(backup, log);
-  if ("error" in restored) {
-    err(restored.error);
-    if (restored.container) teardownContainer(restored.container, log);
-    return 2;
-  }
-
-  try {
+  const result = await withTwinDatabase({ backupDir: backupDirArg, log }, async (db) => {
     log("verification queries");
-    const db = postgres({
-      host: restored.host,
-      port: restored.port,
-      username: restored.username,
-      password: restored.password,
-      database: restored.database,
-      max: 1,
+    const counts = (await db`
+      SELECT 'swarm_members' t, count(*) FROM swarm_members
+      UNION ALL SELECT 'swarm_recommendations', count(*) FROM swarm_recommendations
+      UNION ALL SELECT 'swarm_sessions', count(*) FROM swarm_sessions
+      UNION ALL SELECT 'admin_credential', count(*) FROM admin_credential
+      UNION ALL SELECT 'schema_migrations', count(*) FROM schema_migrations
+      UNION ALL SELECT 'wallet_balance_samples', count(*) FROM wallet_balance_samples
+      UNION ALL SELECT 'job_schedules', count(*) FROM job_schedules
+    `) as unknown as { t: string; count: string }[];
+    for (const row of counts) log(`  ${row.t}: ${row.count}`);
+
+    // The handle/id namespace invariant. For v0.2.2 this had to tolerate a
+    // pre-0030 backup, where swarm_members.handle did not exist yet. That
+    // case is gone: any dump taken from a v0.2.2 production database is
+    // post-0030 by definition, so an absent column here means the dump is
+    // NOT from the database this upgrade claims to be upgrading.
+    if (!(await columnExists(db, "swarm_members", "handle"))) {
+      err("swarm_members.handle is absent in the restored dump — this backup predates migration 0030,");
+      err("so it did not come from a v0.2.2 database. The upgrade's premise does not hold for this dump.");
+      return 1;
+    }
+    const violations = (await db.unsafe(
+      `SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
+       FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id`,
+    )) as unknown as { holder: string; handle: string; shadowed: string }[];
+    if (violations.length > 0) {
+      err(`${violations.length} handle/id namespace violation(s) in the restored copy`);
+      return 1;
+    }
+    log("  namespace invariant: 0 rows");
+
+    log("");
+    log("running this release's preflight checks against the restored dump");
+    const checker = createChecker(`[${NAME}] `);
+    await runChecks(db, checker);
+    const preflightCode = printVerdict(checker.results, {
+      logPrefix: `[${NAME}] `,
+      okAll: `[${NAME}] VERDICT: DUMP SAFE TO UPGRADE`,
+      okWithWarnings: `[${NAME}] VERDICT: DUMP SAFE TO UPGRADE`,
+      blocked: `[${NAME}] VERDICT: DUMP BLOCKED`,
     });
-    try {
-      const counts = (await db`
-        SELECT 'swarm_members' t, count(*) FROM swarm_members
-        UNION ALL SELECT 'swarm_recommendations', count(*) FROM swarm_recommendations
-        UNION ALL SELECT 'swarm_sessions', count(*) FROM swarm_sessions
-        UNION ALL SELECT 'admin_credential', count(*) FROM admin_credential
-        UNION ALL SELECT 'schema_migrations', count(*) FROM schema_migrations
-        UNION ALL SELECT 'wallet_balance_samples', count(*) FROM wallet_balance_samples
-        UNION ALL SELECT 'job_schedules', count(*) FROM job_schedules
-      `) as unknown as { t: string; count: string }[];
-      for (const row of counts) log(`  ${row.t}: ${row.count}`);
-
-      // The handle/id namespace invariant. For v0.2.2 this had to tolerate a
-      // pre-0030 backup, where swarm_members.handle did not exist yet. That
-      // case is gone: any dump taken from a v0.2.2 production database is
-      // post-0030 by definition, so an absent column here means the dump is
-      // NOT from the database this upgrade claims to be upgrading.
-      if (!(await columnExists(db, "swarm_members", "handle"))) {
-        err("swarm_members.handle is absent in the restored dump — this backup predates migration 0030,");
-        err("so it did not come from a v0.2.2 database. The upgrade's premise does not hold for this dump.");
-        return 1;
-      }
-      const violations = (await db.unsafe(
-        `SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
-         FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id`,
-      )) as unknown as { holder: string; handle: string; shadowed: string }[];
-      if (violations.length > 0) {
-        err(`${violations.length} handle/id namespace violation(s) in the restored copy`);
-        return 1;
-      }
-      log("  namespace invariant: 0 rows");
-
-      log("");
-      log("running this release's preflight checks against the restored dump");
-      const checker = createChecker(`[${NAME}] `);
-      await runChecks(db, checker);
-      const preflightCode = printVerdict(checker.results, {
-        logPrefix: `[${NAME}] `,
-        okAll: `[${NAME}] VERDICT: DUMP SAFE TO UPGRADE`,
-        okWithWarnings: `[${NAME}] VERDICT: DUMP SAFE TO UPGRADE`,
-        blocked: `[${NAME}] VERDICT: DUMP BLOCKED`,
-      });
-      if (preflightCode !== 0) {
-        err("a preflight check failed against the restored dump — do not proceed to the live replica until this is clean");
-        return 1;
-      }
-    } finally {
-      await db.end({ timeout: 5 });
+    if (preflightCode !== 0) {
+      err("a preflight check failed against the restored dump — do not proceed to the live replica until this is clean");
+      return 1;
     }
 
     log("restore verified and dump-based preflight is clean — safe to proceed to the live replica check");
     return 0;
-  } finally {
-    teardownContainer(restored.container, log);
-  }
+  });
+
+  // withTwinDatabase hands back the callback's value, or its own could-not-run
+  // error — which is exit 2, never 1: the dump was never graded.
+  if (typeof result === "number") return result;
+  err(result.error);
+  return result.code;
 }
 
 /**

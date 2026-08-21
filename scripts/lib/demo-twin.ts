@@ -197,3 +197,48 @@ export function twinLeftRunningHint(container: string | undefined): string[] {
       ]
     : [];
 }
+
+/** `docker inspect -f <format> <container>`, or "" when the daemon says no. */
+function dockerInspect(container: string, format: string): string {
+  const out = Bun.spawnSync(["docker", "inspect", "-f", format, container]);
+  return out.exitCode === 0 ? new TextDecoder().decode(out.stdout).trim() : "";
+}
+
+/**
+ * Recover a RUNNING twin's connection URL from the container itself.
+ *
+ * Deliberately not read out of `.agents/demo-state.json`: demo-main.ts redacts
+ * every non-ephemeral DATABASE_URL there because that file lives inside the
+ * checkout, and a twin's superuser password is a real credential — generated
+ * fresh per run by restore-container.ts. What the state file DOES record is the
+ * container's name, and the daemon on this host will hand back the rest. So a
+ * release's own postflight can be pointed at the twin while it is still up,
+ * without the password ever being written to disk.
+ *
+ * Returns null when the container is gone or does not answer. A caller must
+ * treat that as "this check could not run" — never as a pass.
+ */
+export function twinUrlFromContainer(
+  container: string,
+  // Injected so the assembly below is testable in the checkout-only tier; the
+  // default is the only implementation anything ships with.
+  inspect: (format: string) => string = (format) => dockerInspect(container, format),
+): string | null {
+  const host = inspect('{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostIp}}');
+  const port = inspect('{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}');
+  if (!host || !port) return null;
+
+  // The credentials are the ones restore-container.ts passed as -e on `docker
+  // run`, so the container is their only authority.
+  const env = new Map<string, string>();
+  for (const line of inspect("{{range .Config.Env}}{{println .}}{{end}}").split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq > 0) env.set(line.slice(0, eq), line.slice(eq + 1));
+  }
+  const user = env.get("POSTGRES_USER");
+  const password = env.get("POSTGRES_PASSWORD");
+  const database = env.get("POSTGRES_DB");
+  if (!user || !password || !database) return null;
+
+  return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
+}

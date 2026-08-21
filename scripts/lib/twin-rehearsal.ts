@@ -18,11 +18,19 @@
 // scripts that ARE version-specific (preflight.ts, postflight.ts,
 // restore-check.ts) stay where they are; this is the durable half.
 //
-// RESTORE + BOOT ONLY. The release gate in
-// docs/technical/release-runbooks.md §4.4 also requires preflight and postflight
-// against the twin; those stay explicit, separately-invoked runbook steps
-// because they are the part that changes per release. This driver's contract is
-// "a twin came up and served", which is exactly the part that does not.
+// WHAT IS DURABLE, AND WHAT THE RELEASE STILL OWNS. This driver's contract is
+// "a twin came up and served" — restore, boot, readiness, supervision, teardown
+// — which is exactly the part that does not change per release. The CHECKS do
+// change, so they stay with the release: preflight is a separate, earlier
+// command, and postflight is handed back through `onReady` rather than guessed
+// at here.
+//
+// WHY POSTFLIGHT IS A HOOK AND NOT A SEPARATE COMMAND. The twin exists only
+// inside this function's try block — the finally below tears it down. Telling an
+// operator to "run postflight against the twin afterwards" is therefore an
+// instruction to race a watcher against teardown from a second terminal, which
+// is not a procedure. G8 (docs/runbooks/rollout-procedure.md) makes that window
+// part of the contract instead, and `onReady` is where a release plugs into it.
 //
 // WHAT REPLACED THE ISOLATED WORKTREE. This used to `git worktree add` a
 // throwaway checkout, symlink node_modules into it and write a throwaway `.env`,
@@ -33,6 +41,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { twinUrlFromContainer } from "./demo-twin.ts";
 
 /**
  * How long the boot gets to reach readiness. Generous on purpose: a cold run
@@ -49,6 +58,8 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 interface DemoState {
   project: string;
   apiPort: number;
+  /** Written only by a `--db twin` boot — see demo-main.ts's writeStateFile(). */
+  twinContainer?: string;
 }
 
 async function spawn(
@@ -123,11 +134,28 @@ export function resolveZenKey(
   };
 }
 
+/** What a release's own checks are handed while the twin is still up. */
+export interface TwinWindow {
+  /** The booted stack's API base, e.g. http://127.0.0.1:54321. */
+  backendUrl: string;
+  /** A direct connection URL for the twin's Postgres. Never logged. */
+  databaseUrl: string;
+  log: (m: string) => void;
+  err: (m: string) => void;
+}
+
 export interface RehearsalOptions {
   /** Label for this run's log lines and its compose project. */
   name: string;
   /** Where the encrypted backup lives; defaults to restore-container.ts's default. */
   backupDir?: string;
+  /**
+   * This release's own checks, run against the migrated twin after the boot
+   * serves and BEFORE teardown (G8). Return 0 to pass; any other value fails
+   * the rehearsal. Omit it and the rehearsal grades restore + boot + serve
+   * only, which is what `bun run twin:rehearse` does.
+   */
+  onReady?: (window: TwinWindow) => Promise<number>;
 }
 
 /**
@@ -227,6 +255,26 @@ export async function runTwinRehearsal(opts: RehearsalOptions): Promise<number> 
     if (checkCode !== 0) {
       err("frontend checks failed against the migrated, booted stack");
       return 1;
+    }
+
+    if (opts.onReady) {
+      // The twin's URL is recovered from the container, not from
+      // demo-state.json, which redacts it — see twinUrlFromContainer().
+      const databaseUrl = ready.twinContainer ? twinUrlFromContainer(ready.twinContainer) : null;
+      if (!databaseUrl) {
+        // NEVER a pass. A release's checks not running is indistinguishable, in
+        // the receipt, from them running and finding nothing wrong.
+        err(
+          ready.twinContainer
+            ? `could not recover a connection URL for twin container ${ready.twinContainer} — this release's checks did not run`
+            : "the booted stack recorded no twin container — this rehearsal did not run against a twin at all",
+        );
+        return 1;
+      }
+      const hookCode = await opts.onReady({ backendUrl, databaseUrl, log, err });
+      if (hookCode !== 0) return hookCode === 2 ? 2 : 1;
+      log("VERDICT: migrated and booted clean, frontend checks pass, this release's checks are clean against the twin");
+      return 0;
     }
 
     log("VERDICT: migrated and booted clean, frontend checks pass — this release is safe to run against production-shaped data");

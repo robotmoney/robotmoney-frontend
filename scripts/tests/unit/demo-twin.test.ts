@@ -15,6 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertTwinIsTarget,
+  twinUrlFromContainer,
   twinLeftRunningHint,
   twinResumeHint,
   twinTeardownNarration,
@@ -112,5 +113,52 @@ describe("operator narration", () => {
 
   test("nothing to say when no twin was created", () => {
     expect(twinLeftRunningHint(undefined)).toEqual([]);
+  });
+});
+
+// twinUrlFromContainer — how a release's postflight reaches the twin it must
+// grade. The daemon call is injected, so what is under test is the assembly and,
+// far more importantly, every path that must NOT produce a URL: the caller
+// treats null as "this check could not run", and a wrong-but-plausible URL
+// would instead be graded as a clean twin.
+describe("twinUrlFromContainer", () => {
+  const ENV = [
+    "PATH=/usr/local/bin",
+    "POSTGRES_USER=restore_check",
+    "POSTGRES_PASSWORD=rk_9f1c2e",
+    "POSTGRES_DB=rm_restore_check",
+    "PGDATA=/var/lib/postgresql/18/docker",
+  ].join("\n");
+  const fake = (over: Record<string, string> = {}) => (format: string) => {
+    if (format.includes("HostIp")) return over.host ?? "172.17.0.1";
+    if (format.includes("HostPort")) return over.port ?? "49155";
+    return over.env ?? ENV;
+  };
+
+  test("assembles the URL the twin's own container reports", () => {
+    expect(twinUrlFromContainer("rm-restore-x", fake())).toBe(
+      "postgres://restore_check:rk_9f1c2e@172.17.0.1:49155/rm_restore_check",
+    );
+  });
+
+  test("percent-encodes credentials rather than emitting an unparseable URL", () => {
+    const env = ENV.replace("rk_9f1c2e", "rk_a/b@c");
+    expect(twinUrlFromContainer("rm-restore-x", fake({ env }))).toContain("rk_a%2Fb%40c");
+  });
+
+  test("keeps the LAST '=' of an env line inside the value", () => {
+    const env = "POSTGRES_USER=restore_check\nPOSTGRES_PASSWORD=rk_a=b\nPOSTGRES_DB=rm_restore_check";
+    expect(twinUrlFromContainer("rm-restore-x", fake({ env }))).toContain("rk_a%3Db");
+  });
+
+  test.each([
+    ["a container the daemon does not know", { host: "", port: "", env: "" }],
+    ["a container with no published 5432", { port: "" }],
+    ["a container that publishes no host address", { host: "" }],
+    ["an environment missing the password", { env: "POSTGRES_USER=u\nPOSTGRES_DB=d" }],
+    ["an environment missing the user", { env: "POSTGRES_PASSWORD=p\nPOSTGRES_DB=d" }],
+    ["an environment missing the database", { env: "POSTGRES_USER=u\nPOSTGRES_PASSWORD=p" }],
+  ])("returns null for %s", (_label, over) => {
+    expect(twinUrlFromContainer("rm-restore-x", fake(over))).toBeNull();
   });
 });

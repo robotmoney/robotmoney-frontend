@@ -209,6 +209,41 @@ describe("receipt step ids are wired to the scripts that emit them", () => {
   });
 });
 
+describe("G8 — postflight runs inside the twin's window", () => {
+  // The regression this exists to stop. stage-rehearsal.ts is now a thin
+  // wrapper over the shared driver (scripts/lib/twin-rehearsal.ts), and the
+  // driver tears the twin down in a `finally`. If the wrapper ever stops
+  // passing `onReady`, the rehearsal still goes GREEN — it just silently grades
+  // restore + boot + serve and never runs a single postflight check, while
+  // P5.postflight-twin's step still claims stage-rehearsal.ts is what produces
+  // it. That is the exact shape of evidence that is worse than none.
+  const rehearsal = readFileSync(
+    join(repoRoot, "backend", "scripts", "upgrades", "0.2.2-to-0.3.0", "stage-rehearsal.ts"),
+    "utf8",
+  );
+
+  test("the rehearsal hands this release's postflight to the driver's onReady window", () => {
+    expect({ hook: /onReady\s*:/.test(rehearsal) }).toEqual({ hook: true });
+    expect(rehearsal).toContain("0.2.2-to-0.3.0/postflight.ts");
+  });
+
+  test("the driver refuses to pass an onReady run it could not reach the twin for", () => {
+    // A hook that cannot resolve the twin's URL must FAIL the rehearsal. A
+    // "checks did not run" that exits 0 is indistinguishable, in the receipt,
+    // from "checks ran and found nothing wrong".
+    const driver = readFileSync(join(repoRoot, "scripts", "lib", "twin-rehearsal.ts"), "utf8");
+    const guard = driver.slice(driver.indexOf("if (opts.onReady)"));
+    expect({ found: guard.length > 0 }).toEqual({ found: true });
+    expect(guard.slice(0, guard.indexOf("hookCode"))).toContain("return 1;");
+  });
+
+  test("the step that claims the twin postflight names the rehearsal as its verify", () => {
+    const step = STEPS.find((s) => s.id === "P5.postflight-twin");
+    expect({ found: step !== undefined }).toEqual({ found: true });
+    expect(step!.verify).toContain("stage-rehearsal.ts");
+  });
+});
+
 describe("the runbook names the same checks the scripts actually run", () => {
   // The gap this closes: §6.1 and §9 are TABLES an operator reads to know what
   // a clean run looks like, and nothing held them to the scripts. A check
