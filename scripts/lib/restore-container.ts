@@ -306,3 +306,44 @@ export function teardownContainer(container: string, log: (m: string) => void): 
   log(`cleaning up: docker rm -f ${container}`);
   Bun.spawnSync(["docker", "rm", "-f", container]);
 }
+
+/**
+ * Restore a backup, hand the caller the running twin, and ALWAYS tear it down.
+ *
+ * Extracted because restore-check.ts and any future release's equivalent do the
+ * identical five things around their own version-specific queries: resolve the
+ * files, restore, run something, unwind on failure, tear down in a finally. The
+ * failure-path teardown is the part worth centralising — a checker that returns
+ * early from the middle of its own try block is exactly how a container holding
+ * a copy of production gets left behind.
+ *
+ * `fn` receives the running container. Its resolved value is returned verbatim;
+ * a thrown error propagates AFTER teardown has run.
+ *
+ * Returns `{ error, code: 2 }` for the could-not-run cases (missing files, a
+ * failed restore), matching the exit-code contract the upgrade scripts use:
+ * 2 = could not run, distinct from 1 = ran and found a problem.
+ */
+export async function withTwinContainer<T>(
+  opts: { backupDir?: string; log: (m: string) => void; bindHost?: string; project?: string; volume?: string },
+  fn: (restored: RestoredContainer, backup: BackupFiles) => Promise<T>,
+): Promise<T | { error: string; code: 2 }> {
+  const backup = resolveBackupFiles(opts.backupDir);
+  if ("error" in backup) return { error: backup.error, code: 2 };
+
+  const restored = await restoreBackupIntoContainer(backup, opts.log, {
+    bindHost: opts.bindHost,
+    project: opts.project,
+    volume: opts.volume,
+  });
+  if ("error" in restored) {
+    if (restored.container) teardownContainer(restored.container, opts.log);
+    return { error: restored.error, code: 2 };
+  }
+
+  try {
+    return await fn(restored, backup);
+  } finally {
+    teardownContainer(restored.container, opts.log);
+  }
+}
