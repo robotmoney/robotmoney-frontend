@@ -9,9 +9,9 @@
 //   1. --static-port   ALWAYS. This is the boot cloudflared points at, so its
 //                      host port must be the fixed one rather than whatever
 //                      Docker hands out.
-//   2. --external-pg   WHEN `.env` describes a Postgres. Otherwise the demo's
-//                      own ephemeral container, exactly as a plain `bun run
-//                      demo` would use.
+//   2. --db external   WHEN `.env` describes a Postgres. Otherwise --db
+//                      ephemeral, the demo's own container, exactly as a plain
+//                      `bun run demo` would use.
 //
 // WHY AUTO-DETECTION IS ALLOWED HERE, when the demo itself refuses to infer a
 // data path: the refusal exists so that an ambient environment variable can
@@ -23,7 +23,8 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
-import { detectEnvPostgres, EXTERNAL_PG_FLAG } from "./lib/demo-external-pg.ts";
+import { detectEnvPostgres } from "./lib/demo-external-pg.ts";
+import { DB_FLAG } from "./lib/demo-db-mode.ts";
 
 export const STATIC_PORT_FLAG = "--static-port";
 
@@ -43,11 +44,12 @@ export interface StagePlan {
  */
 export function planStageArgs(envFilePath: string, passthrough: string[] = []): StagePlan {
   const detected = detectEnvPostgres(envFilePath);
-  // Never emit a flag twice: an operator who passed --external-pg themselves
-  // gets exactly one, and passing --static-port explicitly is a no-op rather
-  // than a duplicate.
+  // Never emit a data-path flag twice: an operator who stated one themselves
+  // (either spelling) keeps theirs, and passing --static-port explicitly is a
+  // no-op rather than a duplicate.
+  const statesDataPath = passthrough.some((a) => a === DB_FLAG || a.startsWith(`${DB_FLAG}=`) || a === "--external-pg");
   const args = [STATIC_PORT_FLAG];
-  if (detected.enabled && !passthrough.includes(EXTERNAL_PG_FLAG)) args.push(EXTERNAL_PG_FLAG);
+  if (detected.enabled && !statesDataPath) args.push(DB_FLAG, "external");
   args.push(...passthrough.filter((a) => a !== STATIC_PORT_FLAG));
   return detected.enabled
     ? { args, dataPath: "external", target: detected.redactedUrl }
