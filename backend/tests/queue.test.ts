@@ -173,8 +173,12 @@ test("scheduler: 'collapse-per-bucket' catch-up policy collapses N missed same-d
   await sql`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','* * * * *', true, 'collapse-per-bucket')`;
   expect(await tickScheduler()).toBe(0); // seed only, no stale fire
   const before = new Date();
-  await sql`UPDATE job_schedules SET next_run_at = now() - interval '8 minutes' WHERE kind='test.ok'`;
-  expect(await tickScheduler()).toBe(1); // ~8 missed same-day slots, exactly one job enqueued
+  // Clamped to the start of today: "now() - 8 minutes" alone can cross UTC
+  // midnight (the very case this test exists to keep separate from same-day
+  // collapsing — see the sibling cross-day test below), which would split
+  // these slots across two buckets and produce 2 jobs instead of 1.
+  await sql`UPDATE job_schedules SET next_run_at = GREATEST(now() - interval '8 minutes', date_trunc('day', now())) WHERE kind='test.ok'`;
+  expect(await tickScheduler()).toBe(1); // same-day missed slots, exactly one job enqueued
   const rows = await sql`SELECT payload FROM jobs WHERE kind='test.ok' ORDER BY id ASC`;
   expect(rows.length).toBe(1);
   // The LAST due slot is the one that survives, not an earlier one.
