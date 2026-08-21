@@ -1,3 +1,16 @@
+# INERT. NOTHING READS THIS FILE. Do not add rules here (issue #608).
+#
+# This is Netlify / Cloudflare Pages syntax. We serve the site from a Bun
+# process behind a cloudflared tunnel (backend/src/api/static.ts), and nothing
+# in that path parses `_headers`. Cloudflare Pages Git integration, Transform
+# Rules, and legacy Page Rules are all confirmed unused (issue #670; Cloudflare
+# is DNS + observability only, docs/decisions.md D13/D29) — there is no live
+# Pages project left to read this file, for production or otherwise.
+#
+# Kept rather than deleted only because it documents the intended header
+# policy (same call PR #603 made for `frontend/prod/_redirects`). The real
+# security headers live in `shellResponse()` in `backend/src/api/static.ts`.
+# If this file ever starts reading as live config again, delete this notice.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 /*

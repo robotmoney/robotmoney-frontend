@@ -1,1 +1,14 @@
+# INERT. NOTHING READS THIS FILE. Do not add rules here (issue #608).
+#
+# This is Netlify / Cloudflare Pages syntax. It was only ever consumed by
+# scripts/cloudflare-statics.sh (removed, issue #608), which assembled a
+# `_site` deploy dir for a hosted `robotmoney-preview` Cloudflare Pages Git
+# integration. Issue #670 confirms that pipeline was never actually in use:
+# Cloudflare is DNS + observability only (docs/decisions.md D13/D29), and
+# there is no live Pages project for `preview/*`. Local `bun run preview`
+# (scripts/preview-server.ts) serves `/` as the wrapper directly — it never
+# needed this rewrite rule.
+#
+# Kept rather than deleted only because it documents the intended root
+# rewrite, same call PR #603 made for `frontend/prod/_redirects`.
 / /preview/index.html 200

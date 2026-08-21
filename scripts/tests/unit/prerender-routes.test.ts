@@ -8,7 +8,11 @@ const repoRoot = join(import.meta.dir, "../../..");
 const siteDir = join(repoRoot, "_site");
 
 beforeAll(() => {
-  execSync("bash scripts/cloudflare-statics.sh", { cwd: repoRoot, stdio: "ignore" });
+  // scripts/cloudflare-statics.sh (removed, issue #608) used to assemble this
+  // fixture; static-assembly.sh does the same copy-then-prerender over an
+  // arbitrary output dir, so point it at the same `_site` name this test
+  // already expects and cleans up.
+  execSync("bash scripts/static-assembly.sh _site", { cwd: repoRoot, stdio: "ignore" });
 });
 
 afterAll(() => {
