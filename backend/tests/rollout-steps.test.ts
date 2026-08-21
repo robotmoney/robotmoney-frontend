@@ -1,5 +1,5 @@
 // Holds the v0.2.2 rollout manifest (steps.ts) and the runbook prose
-// (docs/runbooks/v0-2-2-rollout.md) in agreement mechanically.
+// (docs/archive/v0-2-2-rollout.md) in agreement mechanically.
 //
 // WHY. Every bug this test exists to catch has already happened at least once
 // in this release:
@@ -22,7 +22,7 @@ import { STEPS, THIS_RELEASE_MIGRATIONS } from "../scripts/upgrades/0.2.1-to-0.2
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(testDir, "..", "..");
-const runbookPath = join(repoRoot, "docs", "runbooks", "v0-2-2-rollout.md");
+const runbookPath = join(repoRoot, "docs", "archive", "v0-2-2-rollout.md");
 const runbook = readFileSync(runbookPath, "utf8");
 
 /** Minimal parser for the runbook's ```yaml step blocks. Not a YAML library on

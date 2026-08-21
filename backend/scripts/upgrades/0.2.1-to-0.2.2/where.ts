@@ -2,7 +2,7 @@
 //
 // Answers, in one screen: which host am I on and what can it do, which commit
 // and rc am I at, which steps are done, which of those still COUNT, and what
-// is the next command. Read docs/runbooks/v0-2-2-rollout.md §0.0 first — this
+// is the next command. Read docs/runbooks/rollout-procedure.md §1 first — this
 // script is that section's implementation.
 //
 // It asserts nothing it cannot derive. Host role comes from the filesystem,

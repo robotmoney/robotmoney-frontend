@@ -1,10 +1,22 @@
 # v0.2.2 production rollout
 
+> **ARCHIVED 2026-08-21 — historical record, not procedure.**
+> v0.2.2 shipped on 2026-08-20 (tag `v0.2.2` = `bf63dc6`). This document is kept
+> whole because it is the *executed* record of that rollout, corrected across
+> eleven release candidates — but it describes one specific upgrade and must not
+> be followed as current procedure.
+>
+> - Release-independent mechanics were extracted to
+>   [`docs/runbooks/rollout-procedure.md`](../runbooks/rollout-procedure.md).
+> - Policy lives in [`docs/technical/release-runbooks.md`](../technical/release-runbooks.md).
+> - The current release's plan is its own runbook under `docs/runbooks/`.
+
+
 Operator runbook for taking production from **v0.2.1** to **v0.2.2**. Written to
 be executed top to bottom at 3am. Every command is copy-pasteable. Destructive
 and irreversible steps are marked **DESTRUCTIVE** / **IRREVERSIBLE**.
 
-Companion to [deployment.md](./deployment.md) — that document owns the
+Companion to [deployment.md](../runbooks/deployment.md) — that document owns the
 credential inventory (§3–§5), the compose topologies, and the handle/id
 namespace guard's full behaviour (§2.1). **This runbook does not repeat it; it
 cites it.** Where the two disagree, the contradiction is called out inline under

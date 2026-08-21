@@ -5,7 +5,7 @@
 // and has to answer "where am I, and does what I already did still count?"
 // Every previous answer to that in this repo was prose — a note in the runbook,
 // a line in a rehearsal report — and prose decays. docs/runbooks/
-// v0-2-2-rollout.md §2 carries two dead status paragraphs for exactly this
+// v0-2-2-rollout.md §2 (archived) carries two dead status paragraphs for this
 // reason, kept only as a record of what stale looked like.
 //
 // So position is never written down. It is DERIVED, every time, from three
@@ -259,7 +259,7 @@ export function summarise(results: { name: string; status: string }[]): CheckSum
  * that credential lives in the repo-root .env file (§6.5), read by
  * readFileSync — not in the environment. A box without that file cannot run
  * them at all, which is precisely the staging host's design
- * (docs/runbooks/v0-2-2-rollout.md §2).
+ * (docs/archive/v0-2-2-rollout.md §2).
  */
 export function deriveHostRole(repoRoot: string): { role: "stage" | "cutover"; why: string } {
   const envFile = join(repoRoot, ".env");

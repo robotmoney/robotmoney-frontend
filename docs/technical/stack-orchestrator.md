@@ -1,5 +1,13 @@
 # `stack` orchestrator — field guide
 
+> **Status: future-infrastructure proposal, not adopted.** `stack` is under
+> evaluation for how deployment might work at some point in the future. Nothing
+> in production uses it today, and no accepted decision in
+> [`decisions.md`](../decisions.md) stands behind it. Current production
+> procedure is [`docs/runbooks/rollout-procedure.md`](../runbooks/rollout-procedure.md)
+> plus the release's own runbook. Read this as design work, not as instructions.
+
+
 How [bozemanpass/stack](https://github.com/bozemanpass/stack) behaves when driven
 against *this* application. **Every claim here was executed, not read.** Where
 the upstream documentation and the tool disagree, the tool is recorded and the

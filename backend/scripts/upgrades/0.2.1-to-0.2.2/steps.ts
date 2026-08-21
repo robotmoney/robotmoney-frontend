@@ -4,7 +4,7 @@
 // backend/tests/rollout-steps.test.ts (which holds it and the runbook prose in
 // agreement mechanically).
 //
-// WHY A MANIFEST. docs/runbooks/v0-2-2-rollout.md is 2500 lines of prose that
+// WHY A MANIFEST. docs/archive/v0-2-2-rollout.md is 2500 lines of prose that
 // an agent has to reverse-engineer its position from. Worse, facts stated in
 // two places drift: §5.6 asked for "all Gate A–D results" after §2 had
 // abolished Gate A and renamed the rest, and THIS_RELEASE_MIGRATIONS said four

@@ -11,9 +11,11 @@ software to deploy), **DigitalOcean = compute + storage** (everything CI builds 
 runs). There is no Worker/`wrangler`, no reverse proxy, and no tunnel by default.
 
 > **⛔ Upgrading production to v0.2.2? Read
-> [the rollout runbook](./v0-2-2-rollout.md) FIRST — before anything below.**
+> [the rollout procedure](./rollout-procedure.md) and the current release's
+> runbook FIRST — before anything below.**
 > This document is the *standing* credential and topology reference;
-> [`v0-2-2-rollout.md`](./v0-2-2-rollout.md) is the *version-specific* procedure
+> [`rollout-procedure.md`](./rollout-procedure.md) plus the release's own runbook
+> is the *version-specific* procedure
 > for **v0.2.1 → v0.2.2**, and this one is **not sufficient for it**. Two of its
 > go/no-go gates decide the outcome before any instruction here applies: an
 > **admin-lockout gate** that can leave the upgrade unrecoverable, and a
@@ -100,8 +102,10 @@ bun run static:assemble        # scripts/static-assembly.sh → _static/
 which copies `frontend/public` into `_static/` and runs `scripts/prerender.ts`
 over it (`PRERENDER_DIR=_static`), writing a `<route>/index.html` for every
 `<loc>` in `frontend/public/sitemap.xml` from `seo.js`'s `metaFor` table — the
-same prerenderer `scripts/cloudflare-statics.sh` runs over `_site`, so there is
-one metadata table for both hosts. `docker-compose.yml` bind-mounts `./_static`
+same prerenderer the retired Cloudflare Pages assembly used to run over `_site`,
+so there has only ever been one metadata table. (That script,
+`scripts/cloudflare-statics.sh`, was removed in #608 — the Pages pipeline it
+served was never turned on. See architecture.md.) `docker-compose.yml` bind-mounts `./_static`
 read-only at `/srv/frontend`.
 
 **Operationally:**
@@ -258,7 +262,7 @@ that block cannot lose them silently.)
 > is honoured only by the api guard (`backend/src/db/handle-namespace.ts:476`).
 > A failing initializer throws (`scripts/stack/stack.ts:248-251`) and fails the
 > boot. On that workflow the remedy is the repair above, or rollback — not this
-> variable. See docs/runbooks/v0-2-2-rollout.md §7.5.
+> variable. See docs/runbooks/rollout-procedure.md §7.5.
 
 The api then logs the same block plus an `OVERRIDE:` line, serves anyway, and
 reports `handle_namespace: "overridden"` at `/health` for the whole life of the

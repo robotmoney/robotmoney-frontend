@@ -1,5 +1,13 @@
 # Reconciling `stack` with the runbooks
 
+> **Status: future-infrastructure proposal, not adopted.** `stack` is under
+> evaluation for how deployment might work at some point in the future. Nothing
+> in production uses it today, and no accepted decision in
+> [`decisions.md`](../decisions.md) stands behind it. Current production
+> procedure is [`docs/runbooks/rollout-procedure.md`](../runbooks/rollout-procedure.md)
+> plus the release's own runbook. Read this as design work, not as instructions.
+
+
 Whether the runbook policy's goals survive changing the deployment vendor to
 `stack` — they do — and the mechanism each goal needs in order to hold.
 
@@ -318,7 +326,7 @@ repeatedly.
 The order that respects both documents:
 
 1. Finish v0.2.2 on the existing mechanism. Change nothing in
-   `docs/runbooks/v0-2-2-rollout.md`.
+   `docs/archive/v0-2-2-rollout.md`.
 2. Land the §2 policy rewordings — they are platform-neutral improvements and
    are safe to make on `main` at any time.
 3. Decide §4.1 and §4.4 — the two genuine decisions. Both change credentials and
