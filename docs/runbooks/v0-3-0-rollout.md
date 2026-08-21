@@ -798,18 +798,27 @@ Run [rollout-procedure.md §9](./rollout-procedure.md)'s mechanics first — the
 system is alive and serving, and none of that changed. **Dry-run them before
 cutover** (rollout-procedure.md §9.1) so you know they discriminate.
 
-Then these, specific to v0.3.0. All must pass before `v0.3.0` is tagged.
+Then these, specific to v0.3.0. **Checks 1–6 and 8 are what
+`postflight.ts` runs** — one row per `record()` in the script, and
+`rollout-steps-0-3-0.test.ts` fails if this table and the script stop naming the
+same set. Check 7 is the one no script can do.
 
-| # | Check | Expected |
+```bash
+bun scripts/upgrades/0.2.2-to-0.3.0/postflight.ts --emit-receipt=P8.postflight-prod
+```
+
+All must pass before `v0.3.0` is tagged.
+
+| # | Check id | Asserts | Expected |
 |---|---|---|
-| 1 | `SELECT name FROM schema_migrations WHERE name LIKE '003%' ORDER BY name;` | Both `0032_*`, both `0033_*`, `0034_*`, `0035_*` all present |
-| 2 | `strategy_nav_idle_only` exists on `wallet_balance_samples` and is `NULL` for every pre-existing row | Additive, nothing backfilled |
-| 3 | `SELECT kind, catchup_policy FROM job_schedules ORDER BY kind;` | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3) |
-| 4 | `chain_day_blocks`, `wallet_backfill_state`, `swarm_member_avatars` exist and are empty | Three clean `CREATE TABLE`s |
-| 5 | `ops.repair_gaps` present and enabled; after :25 its `job_runs` row shows a **declined** dispatch (budget unset) or real work (budget set) — matching your §5.2 decision | §4.1 |
-| 6 | The append-only guard is still installed on all fourteen protected tables | A guard silently lost during migration is the §11.1 failure mode |
-| 7 | **A real passkey ceremony completes** against the public HTTPS origin | The §5.1 fix, verified end-to-end rather than by reading `.env` |
-| 8 | Per-minute schedules are not wedged — `next_run_at` is within one cadence of now | rollout-procedure.md §9.2's check; the cutover window is when this breaks |
+| 1 | `migrations-applied` | all four names in `schema_migrations` | Both `0032_*`, both `0033_*`, `0034_*`, `0035_*` present — the check that would catch a runner keyed on the numeric prefix |
+| 2 | `strategy-nav-column` | the column exists and nothing was backfilled | `NULL` on every pre-existing row. Non-NULL is only correct if the sampler has already run |
+| 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). **The only data write in the set** |
+| 4 | `new-tables` | the three new tables exist and are empty | Three clean `CREATE TABLE`s |
+| 5 | `repair-schedule` | the new schedule is seeded, and its behaviour matches the budget you chose | Declines each run with the budget unset, dispatches with it set — **confirm it is the world you chose** (§5.2) |
+| 6 | `append-only-intact` | the guard survived the migration | Live on all fourteen protected tables. A guard silently lost is the §11.1 failure mode |
+| 7 | ⛔ **manual — no script** | a real passkey ceremony completes against the public HTTPS origin | The §5.1 fix, verified end-to-end. Step `P8.acceptance`; reading `WEBAUTHN_ORIGIN` back out of the container proves configuration, not function |
+| 8 | `no-wedge` | the cutover window did not wedge a schedule | `next_run_at` within one cadence of now. Compare against preflight's `wedged-schedules` baseline — a pre-existing wedge is not this release's damage |
 
 > **Check 7 is the release's headline acceptance criterion.** v0.3.0's admin-auth
 > claim is that passkeys work behind the tunnel. Reading `WEBAUTHN_ORIGIN` back
