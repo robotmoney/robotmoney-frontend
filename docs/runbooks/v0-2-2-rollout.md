@@ -16,6 +16,76 @@ cites it.** Where the two disagree, the contradiction is called out inline under
 
 ---
 
+## 0.0 Where am I? — run this before reading anything else
+
+```bash
+bun run rollout:where            # human-readable
+bun run rollout:where -- --json  # same state, for an agent
+```
+
+**This document does not record your position. The probe derives it, every
+time.** Nothing below is a status field, and you should not add one: §2 already
+carries two dead status paragraphs, each of which was true for about a day, and
+they are kept there only as a record of what stale looked like. A rollout that
+spans sessions, hosts and release candidates cannot be tracked in prose.
+
+What the probe derives, and from what:
+
+| It tells you | Derived from | Never from |
+|---|---|---|
+| Which host you are on and what it can do | repo-root `.env` (§6.5), `.env.readonly` (§3) | a hostname you typed |
+| Which release you are at | `git rev-parse HEAD`, `git tag --points-at HEAD` | a SHA written in this file |
+| Which steps are done | one receipt per step, written by that step's own script | a checked box |
+| Whether those still **count** | the three axes below | when it feels recent |
+
+### The three axes — why "we cut a new rc" is not "start over"
+
+A completed step stops counting for exactly three reasons, and they are
+independent:
+
+1. **Host** — §7–§12 need the writer `DATABASE_URL` that only lives in the
+   repo-root `.env` file (§6.5). A box without that file cannot run them at
+   all; the probe marks them ⛔ rather than letting you try.
+2. **Code** — each step declares the paths it actually executes (`depends-on`
+   in its step block). A commit invalidates a step only if it lands on that
+   step's own inputs. This is what release-runbooks.md §4.4's *"the twin must
+   use the same release candidate that is planned for production"* means in
+   practice: a docs-only commit invalidates nothing, a change to `preflight.ts`
+   invalidates Gate C **and** Gate B (Gate C runs preflight's checks —
+   `restore-check.ts:33`), and a change to `backend/src/**` invalidates the
+   boot rehearsal while leaving the gates alone.
+3. **Clock** — Gate E goes stale by the minute (§2), the baseline and dump go
+   stale as production moves. Expiry is amber, not red: an expired step was
+   right when it ran. Code drift is red.
+
+### Receipts
+
+Every scripted step writes one JSON receipt to
+`~/rm-backup-v022/receipts/<step>.json` when passed `--emit-receipt`, recording
+its exit code, verdict, the SHA and rc tag it ran at, the host, the **database
+identity** it actually connected to (§2.0's assertion, captured instead of read
+and forgotten), and the SHA-256 of every artifact it produced. Steps a person
+performs by hand are attested with
+`bun run rollout:where -- --record <step> --note "..."`, and are displayed as
+attested — somebody's word, not a program's exit code.
+
+Receipts hold **no secrets**: database identity, never a credential. That is
+why they can sit unencrypted beside an encrypted credential dump (§5.2).
+
+**A receipt is evidence, not authority.** The probe re-hashes the artifacts,
+re-runs the diff and re-derives the host before it believes one. If a receipt
+and the filesystem disagree, the filesystem wins. Delete the receipts directory
+and you have lost bookkeeping, not safety — every gate can be re-run, and a
+step with no receipt is simply not done.
+
+The step blocks that follow (```` ```yaml step ````) are the machine-readable
+half of each section; `backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts` is
+their single source, and `backend/tests/rollout-steps.test.ts` fails if the two
+drift apart. Prose is still the authority on *how* and *why* — the blocks only
+carry what a program has to know.
+
+---
+
 ## 0. Read this first — three facts that change what "upgrade" means here
 
 Each was first verified at `ccf983f` and re-verified on 2026-08-17 against
@@ -219,6 +289,16 @@ this runbook that executes it.
 ---
 
 ## 2. Go/no-go gates
+
+```yaml step
+id:          P1.phases-closed
+phase:       P1 authorize
+section:     §2
+host-role:   any
+actor:       agent
+ttl:         24h
+verify:      gh issue view 660 --json body -q .body   # then: where.ts --record P1.phases-closed
+```
 
 > ⛔ **RUN THIS ENTIRE RUNBOOK FROM THE DEDICATED STAGING HOST, NOT THE
 > PRODUCTION API HOST.** §3, §4, and §5 — provisioning, live preflight, the
@@ -536,6 +616,26 @@ mistake, and the role-level belt is what catches that.
 
 ## 4. Pre-flight against the live replica: `backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts`
 
+```yaml step
+id:          P4.preflight-live
+phase:       P4 live preflight
+section:     §4
+gate:        B
+host-role:   stage
+actor:       agent
+expect-in-recovery: true
+ttl:         4h
+requires:
+  - P3.gate-c
+depends-on:
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts
+  - backend/scripts/lib/preflight-utils.ts
+  - backend/scripts/lib/checks.ts
+  - backend/migrations/**
+verify:      bun scripts/upgrades/0.2.1-to-0.2.2/preflight.ts --emit-receipt
+```
+
 ⛔ **Do not run this section until Gate C (§5.3) is green.** This is the SAME
 script `restore-check.ts` already ran against the restored dump — running it
 again here, against the live replica, is what catches drift since the dump
@@ -701,6 +801,19 @@ dump as well.
 
 ### 5.0 Record pre-upgrade baseline
 
+```yaml step
+id:          P3.baseline
+phase:       P3 backup
+section:     §5.0
+host-role:   stage
+actor:       agent
+ttl:         48h
+artifacts:
+  - pre-upgrade-baseline-*.txt
+  - member-baseline-*.json
+verify:      §5.0's psql block, then: where.ts --record P3.baseline
+```
+
 Before taking the dump, capture a lightweight read-only baseline from the
 replica (§3). This baseline is your reference for postflight comparison (§8)
 and rollback verification (§9).
@@ -721,16 +834,16 @@ BASELINE_FILE="pre-upgrade-baseline-$(date +%Y%m%dT%H%M%S).txt"
   echo "=== baseline captured at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
   echo ""
   echo "--- schema_migrations ---"
-  psql -X -c "SELECT id FROM schema_migrations ORDER BY id;"
+  psql -X -c "SELECT name, applied_at FROM schema_migrations ORDER BY name;"
   echo ""
   echo "--- member count ---"
   psql -X -Atc "SELECT count(*) AS member_count FROM swarm_members;"
   echo ""
-  echo "--- handle_type distribution ---"
-  psql -X -c "SELECT handle_type, count(*) FROM swarm_members GROUP BY handle_type ORDER BY 1;"
+  echo "--- member identity (AC1/AC2/AC3 reference) ---"
+  psql -X -c "SELECT id, name FROM swarm_members ORDER BY name;"
   echo ""
-  echo "--- vault_address sample (first 5) ---"
-  psql -X -c "SELECT id, vault_address FROM swarm_members ORDER BY id LIMIT 5;"
+  echo "--- swarm_recommendations count (§8 check 8 reference) ---"
+  psql -X -Atc "SELECT count(*) AS swarm_recommendations FROM swarm_recommendations;"
 } | tee "$BASELINE_FILE"
 echo "baseline saved → $BASELINE_FILE"
 ```
@@ -738,7 +851,34 @@ echo "baseline saved → $BASELINE_FILE"
 This baseline is your reference for postflight comparison (§8) and rollback
 verification (§9).
 
+> **Corrected 2026-08-20 — the first revision of this section could not run.**
+> As landed in #707 it selected `schema_migrations.id`,
+> `swarm_members.handle_type` and `swarm_members.vault_address`. None of those
+> columns exist: `schema_migrations` is `(name text PRIMARY KEY, applied_at)`
+> (`backend/src/db/migrate.ts:33-36`), and `swarm_members` has neither
+> `handle_type` nor `vault_address` at `v0.2.1` or after this release's
+> migrations — `0030` adds `handle`, and `vault_address` lives on
+> `agent_vaults`/`vault_share_price_history`. Three of the four queries raised
+> `42703` against the replica, so the "baseline" file was three errors and a
+> member count. That matters more than a typo would: §8 and §9 both treat this
+> file as the reference for postflight comparison and rollback verification, and
+> an empty baseline silently verifies nothing. The queries above are the
+> corrected set, run against the replica on 2026-08-20.
+
 ### 5.1 The dump
+
+```yaml step
+id:          P3.backup
+phase:       P3 backup
+section:     §5.1
+host-role:   stage
+actor:       agent
+ttl:         48h
+artifacts:
+  - rm-preupgrade-<STAMP>.dump.gpg
+  - rm-globals-<STAMP>.sql.gpg
+verify:      §5.1's pg_dump/pg_dumpall + §5.2's gpg, then: where.ts --record P3.backup
+```
 
 > 🔴 **`cd` out of the checkout first.** §4 left you in `<checkout>/backend`, and
 > these commands write to the **current directory**. Writing a plaintext
@@ -925,6 +1065,27 @@ bind mount can reach.
 
 ### 5.3 The verification that PROVES it restores — and that it is safe to upgrade
 
+```yaml step
+id:          P3.gate-c
+phase:       P3 backup
+section:     §5.3
+gate:        C
+host-role:   stage
+actor:       agent
+requires:
+  - P3.backup
+depends-on:
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts
+  - backend/scripts/lib/preflight-utils.ts
+  - backend/scripts/lib/checks.ts
+  - backend/migrations/**
+  - backend/scripts/lib/restore-container.ts
+  - backend/scripts/lib/postgres-image.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts
+verify:      bun scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts ~/rm-backup-v022 --emit-receipt
+```
+
 A dump you have not restored is a hypothesis. And a dump that restores but
 was never checked against this release's migrations is only half proven.
 
@@ -966,7 +1127,39 @@ real problem; exit `2` means it could not run at all (missing files, Docker
 failure). Nothing here is destructive and nothing needs manual cleanup — the
 throwaway container is gone whether the run succeeds or fails.
 
-### 5.3b Optional but recommended: a real stage rehearsal, not just static checks
+### 5.3b The stage rehearsal — mandatory, not optional
+
+```yaml step
+id:          P5.rehearsal-boot
+phase:       P5 twin rehearsal
+section:     §5.3b
+host-role:   stage
+actor:       agent
+requires:
+  - P3.gate-c
+depends-on:
+  - backend/src/**
+  - backend/migrations/**
+  - backend/Dockerfile
+  - frontend/**
+  - scripts/**
+  - docker-compose.yml
+  - docker-compose.demo.yml
+  - package.json
+  - bun.lock
+  - backend/scripts/lib/restore-container.ts
+  - backend/scripts/lib/postgres-image.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts
+verify:      bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022 --emit-receipt
+```
+
+> **Corrected 2026-08-20 — this section used to be headed "Optional but
+> recommended".** It is not optional and never was: §5.5 opens *"⛔ This is a
+> blocking gate. Do not proceed to §7 until the twin run exits 0"*, and
+> release-runbooks.md §4.4 makes the digital-twin rehearsal part of the
+> foundational workflow with *"any failure, warning, or unexpected state change
+> discovered on the twin is a blocking issue."* Two places said required, one
+> said optional, and the optional one was the heading an operator reads first.
 
 `restore-check.ts` proves the dump restores and that static SQL checks pass
 against it. It does **not** prove this release's actual migration code path
@@ -1081,16 +1274,17 @@ section states the intent and the script is what gets fixed.
 | **G2** | **It boots exactly what §7.3 boots** — `bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI` unset — and **supervises** that boot rather than waiting for it to finish. | With `CI` unset the boot **never self-terminates by design**: it falls past demo-main's CI-gated exits (`scripts/lib/demo-main.ts:1175`, `:1212`) into the LIVE steady-state loop and cycles sessions forever. That is correct for §7.3, where the stack must stay up serving production. A rehearsal that `await`s that process therefore waits forever — the two requirements are only compatible if the rehearsal supervises. Setting `CI` to escape this is **not** an acceptable fix: a truthy `CI` tears the stack down regardless of exit code (§7.3), so the frontend checks would have nothing left to hit, and the boot would no longer be the one §7.3 runs. |
 | **G3** | **Readiness is polled, with a deadline.** Ready ⇔ the worktree's `.agents/demo-state.json` exists **and** `/health` on its `apiPort` answers `200`. Not reached within the deadline ⇒ exit `1`. | Readiness is the only honest signal that migration + seed + serve all succeeded, and a deadline is what turns G1 from an intention into a property. Allow generously for a cold image build (a first build pulls base images and compiles); this is minutes, not seconds. |
 | **G4** | **Verification runs against the booted stack**: `scripts/demo-frontend-check.ts` on the published port — the same route/content checks CI runs, never a bespoke probe. | A stack that boots but serves the home-page shell for every route is a failed cutover that `/health` alone reports as green (§8 check 11). |
-| **G5** | **Spend is bounded.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack **as soon as G4 finishes** — pass or fail — and must not let the loop keep cycling. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. |
+| **G5** | **Spend is bounded.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack **as soon as verification finishes** (G4 *and* G8) — pass or fail — and must not let the loop keep cycling. G8 costs seconds; it does not license leaving the stack up for anything else. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. |
 | **G6** | **Cleanup is unconditional.** The compose stack, the git worktree, and the throwaway Postgres container are all removed on **every** exit path — success, assertion failure, readiness timeout, and an unhandled throw. | Leftovers from this script are not inert: a surviving container holds a full copy of production data (§5.3b.2), and a surviving stack keeps spending under G5. |
 | **G7** | **Isolation is absolute.** Never the real repo-root `.env`; never a production connection; the twin's port bound to a non-routable address. | The rehearsal's whole claim is that it cannot touch production. See §5.3b.2. |
+| **G8** | **Postflight runs against the twin, inside the same run** — §8's checks *and* §8.1's AC1–AC5, via `postflight.ts --emit-receipt=P5.postflight-twin`, after G4 and before teardown. A failure is exit `1`. | §5.3b.0 step 3 and §5.5 both require it, and the twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. |
 
 **Exit codes.**
 
 | Code | Meaning |
 |---|---|
 | `0` | Migrations applied for real, the stack came up healthy, and the frontend checks passed against production-shaped data. |
-| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), or a frontend check failed. |
+| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), a frontend check failed, or postflight failed against the twin (G8). |
 | `2` | Could not run at all — missing/undecryptable backup files, no `OPENCODE_API_KEY` (§5.3b's box), Docker/git failure. Says nothing about the release. |
 
 ✅ **Conformant as of 2026-08-17, and executed end to end for the first
@@ -1152,6 +1346,17 @@ tokens, member access keys and every stored email address — the same inventory
 
 ### 5.4 🔴 IRREVERSIBLE — capture the swarm schedule rows, which no restore returns
 
+```yaml step
+id:          P3.schedules
+phase:       P3 backup
+section:     §5.4
+host-role:   stage
+actor:       agent
+artifacts:
+  - rm-swarm-schedules-*.txt
+verify:      §5.4's psql block, then: where.ts --record P3.schedules
+```
+
 The `.dump` restores them, but **nothing in §9's rollback does**, and the very
 next boot overwrites them again. `seedSwarmSchedules()`
 (`backend/src/db/seed.ts:137-152`) issues an unconditional `UPDATE
@@ -1201,6 +1406,25 @@ credentials, so it does not need §5.2's encryption).
 
 ### 5.5 Digital-twin rehearsal
 
+```yaml step
+id:          P5.postflight-twin
+phase:       P5 twin rehearsal
+section:     §5.5
+host-role:   stage
+actor:       agent
+requires:
+  - P5.rehearsal-boot
+depends-on:
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/postflight.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts
+  - backend/scripts/lib/postflight-utils.ts
+  - backend/scripts/lib/checks.ts
+  - backend/src/swarm/handle.ts
+  - backend/migrations/**
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts
+verify:      bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022 --emit-receipt   # G8 runs this step
+```
+
 ⛔ **This is a blocking gate.** Do not proceed to §7 until the twin run exits
 `0` and every acceptance criterion in §5.6 is met.
 
@@ -1235,6 +1459,21 @@ bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022
 
 ### 5.6 Stage rehearsal report
 
+```yaml step
+id:          P6.report
+phase:       P6 go/no-go
+section:     §5.6
+host-role:   stage
+actor:       operator
+requires:
+  - P4.preflight-live
+  - P5.rehearsal-boot
+  - P5.postflight-twin
+artifacts:
+  - *rehearsal-report-*.md
+verify:      write the §5.6 report, then: where.ts --record P6.report --note GO
+```
+
 ⛔ **Gate: do not proceed to §7 until this report exists and all criteria pass.**
 
 Produce a written report covering the twin rehearsal just completed. Save it to
@@ -1247,7 +1486,9 @@ a file alongside the backup artifacts (e.g.
 - `restore-check.ts` exit code and any notable output
 
 **2. Preflight results (§4 on the twin)**
-- All Gate A–D results (pass / fail / note)
+- All **Gate C, B, D, E** results (pass / fail / note) — §2's four gates, in
+  execution order. There is no Gate A; an earlier revision of this line asked
+  for "Gate A–D" after §2 had abolished it
 - Exit code of `restore-check.ts`
 
 **3. Cutover results (§7 on the twin)**
@@ -1261,7 +1502,15 @@ a file alongside the backup artifacts (e.g.
 
 **5. Acceptance criteria** (mark each PASS or FAIL with evidence)
 - All features in #660 Objective are present and working
-- No unexpected schema drift (only migrations `0028`–`0031` applied)
+- No unexpected schema drift — exactly the six migrations this release ships,
+  and no others: `0029_admin_auth_recovery`, `0029_admin_passkey`,
+  `0030_swarm_member_handle`, `0031_swarm_member_handle_namespace`,
+  `0032_append_only_history`, `0033_swarm_member_uuid_ids`. (An earlier
+  revision said "only migrations `0028`–`0031`": `0028` is not in this delta
+  at all — §2 relies on it already existing at `v0.2.1` — and `0032`/`0033`
+  were missing. The list has one home now:
+  `THIS_RELEASE_MIGRATIONS` in `backend/scripts/upgrades/0.2.1-to-0.2.2/steps.ts`,
+  which `preflight.ts`, `postflight.ts` and §8's check 2 all read)
 - Member counts after migration match baseline (§5.0)
 - Zero null or incorrect handles (§8.1)
 - `swarm_recommendations` count ≥ baseline
@@ -1471,6 +1720,16 @@ deployment.md §2.1, "FIRST: find the project name".
 
 ### 7.2 Cut `v0.2.2-rc.N` and check it out
 
+```yaml step
+id:          P2.rc-tag
+phase:       P2 release identity
+section:     §7.2
+host-role:   any
+actor:       operator
+derived:     true
+verify:      git tag -a v0.2.2-rc.<N> <sha> -m 'v0.2.2 release candidate <N>' && git push origin v0.2.2-rc.<N>
+```
+
 **You deploy a release candidate, not `v0.2.2`.** The bare version tag is cut
 only after §8's postflight passes (release-runbooks.md §2). Nothing else in this
 runbook creates a tag, so this is the step that makes the thing you are about to
@@ -1522,6 +1781,27 @@ A mismatch means the rc was cut somewhere other than the commit you gated in §4
 and §6, and you are shipping something you never ran those gates against. Stop.
 
 ### 7.3 The invocation
+
+```yaml step
+id:          P7.cutover
+phase:       P7 cutover
+section:     §7.3
+host-role:   cutover
+actor:       agent
+requires:
+  - P6.report
+depends-on:
+  - backend/src/**
+  - backend/migrations/**
+  - backend/Dockerfile
+  - frontend/**
+  - scripts/**
+  - docker-compose.yml
+  - docker-compose.demo.yml
+  - package.json
+  - bun.lock
+verify:      DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: where.ts --record P7.cutover
+```
 
 > 🔴 **IRREVERSIBLE.** This command is not a dry run and there is no "boot and
 > look first" mode. It writes to production three times before you can inspect
@@ -1692,7 +1972,40 @@ rollback, not the override.
 
 ## 8. Post-cutover verification
 
+```yaml step
+id:          P8.postflight-prod
+phase:       P8 postflight
+section:     §8
+host-role:   cutover
+actor:       agent
+expect-in-recovery: false
+requires:
+  - P7.cutover
+depends-on:
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/postflight.ts
+  - backend/scripts/upgrades/0.2.1-to-0.2.2/release.ts
+  - backend/scripts/lib/postflight-utils.ts
+  - backend/scripts/lib/checks.ts
+  - backend/src/swarm/handle.ts
+  - backend/migrations/**
+verify:      bun scripts/upgrades/0.2.1-to-0.2.2/postflight.ts --base-url=<prod> --emit-receipt=P8.postflight-prod
+```
+
 ### 8.0 Dry-run this section before cutover — prove the checks discriminate
+
+```yaml step
+id:          P4.postflight-dryrun
+phase:       P4 live preflight
+section:     §8.0
+host-role:   stage
+actor:       agent
+ttl:         48h
+requires:
+  - P4.preflight-live
+artifacts:
+  - postflight-dryrun-*.txt
+verify:      §8.0's table as rm_readonly against the replica, then: where.ts --record P4.postflight-dryrun
+```
 
 **Do this once, read-only, against still-`v0.2.1` production, before §7 runs —
 not a spot check, a self-test of the checks below.** The point is exactly what
@@ -1706,7 +2019,7 @@ matches what is documented here — verified 2026-08-17 against production:
 
 | # | Check | Result running TODAY, pre-upgrade | What it means |
 |---|---|---|---|
-| 2 | migrations recorded | `0 rows` | Correct negative signal — none of the four are applied yet. |
+| 2 | migrations recorded | `0 rows` | Correct negative signal — none of the **six** (steps.ts's `THIS_RELEASE_MIGRATIONS`) are applied yet. An earlier revision said "four", from when this release shipped four. |
 | 4 | handle namespace violation | `ERROR: column a.handle does not exist` (`42703`) | **Expected.** `handle` does not exist until `0030` applies. This is not a bug in the query and not something to "fix" pre-upgrade — running it today MUST error this way. If it instead returns `0 rows` today, you are pointed at an already-migrated database (wrong tag, or production has already been cut over) — treat that the way §2.0 treats a `psql ""` false pass: stop and re-verify what you are connected to. |
 | 5 | namespace trigger `ENABLE ALWAYS` | `0 rows` | Correct — the trigger does not exist until `0031`. A `pg_trigger` lookup by name degrades gracefully to empty, unlike a column reference. |
 | 6 | members missing handle | `ERROR: column "handle" does not exist` (`42703`) | **Expected**, same reason as check 4. |
@@ -1758,6 +2071,17 @@ and never `$?`.
 | 12 | Swarm schedules state | `psql "$DATABASE_URL" -c "SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;"` | five rows, **all `enabled = f`** — expected under the demo composition (§6.5). Compare against §5.4's capture: the difference is what this boot clobbered, and it is not coming back on its own. Drive sessions manually. |
 
 ### 8.1 ⛔ Release acceptance criteria — member identity
+
+```yaml step
+id:          P8.acceptance
+phase:       P8 postflight
+section:     §8.1
+host-role:   cutover
+actor:       operator
+requires:
+  - P8.postflight-prod
+verify:      AC1-AC6 run inside postflight; confirm each PASSed, then: where.ts --record P8.acceptance
+```
 
 **These are the release's objective, not a spot check. `EXIT=0` from any
 script above does not satisfy them; only these queries do.** v0.2.2 exists to
@@ -1821,6 +2145,27 @@ Where those references should land instead is tracked separately (#687).
 > `memberId`, which is correct provenance and must not be rewritten — but if
 > the key row is not repointed to the new id, every take for that member
 > reports unverified with no error anywhere.
+
+> **AC1–AC6 are automated.** `postflight.ts` now runs AC1–AC5 as
+> named checks (`ac1-member-uuid`, `ac2-handle-derived`, `ac3-no-default-handle`,
+> `ac4-no-derived-suffix`, `ac5-handle-resolves`), so they are evaluated
+> wherever postflight runs — including against the digital twin inside §5.3b's
+> rehearsal (G8), which is where §5.5 requires them and where they were
+> previously impossible to run: the twin exists only between readiness and
+> teardown. AC2 calls the real `slugifyMemberName` rather than a paraphrase of
+> it.
+>
+> **AC6 (`ac6-history-attached`) has two halves**, because only one of them
+> needs prior state. The half that does — per-member take/memo/key counts —
+> reads §5.0's `member-baseline-<STAMP>.json` through
+> `POSTFLIGHT_MEMBER_BASELINE`, keyed by member **name**, since the id is
+> exactly what `0033` changes. The half that does not is the guard for AC6's
+> silent mode: every signed take must still resolve an **active** public key
+> through `swarm_member_keys.member_id`, because verification is recomputed
+> from payload + signature + that key (`projections.ts:185`) — a key row left
+> pointing at the old id yields `verified: false` on every take with no error
+> anywhere. Run without the baseline, AC6 still performs that guard and WARNs
+> that the counts went unchecked; it never passes on partial evidence.
 
 **If any AC fails, the release has not been achieved** — that is a postflight
 failure in the §2 sense: patch, cut the next rc, and re-run preflight before
@@ -1946,21 +2291,32 @@ SELECT
   j.kind,
   j.next_run_at,
   j.last_enqueued_at,
-  MAX(r.created_at) AS last_run_at,
-  COUNT(*) AS run_count_last_10m
+  MAX(r.started_at) AS last_run_at,
+  COUNT(r.*) AS run_count_last_10m
 FROM job_schedules j
 LEFT JOIN job_runs r
   ON r.kind = j.kind
-  AND r.created_at > NOW() - INTERVAL '10 minutes'
+  AND r.started_at > NOW() - INTERVAL '10 minutes'
 WHERE j.enabled = true
 GROUP BY j.kind, j.next_run_at, j.last_enqueued_at
 ORDER BY j.kind;
 ```
 
-**Expect:** every enabled `kind` row shows at least one `last_run_at` within the
-last 10 minutes. A `NULL` `last_run_at` or a `run_count_last_10m = 0` for a
-per-minute schedule that has been running for > 5 minutes means the scheduler is
-not draining — stop and investigate before tagging.
+**Expect:** every enabled `kind` shows `next_run_at` in the **future**. That,
+not the 10-minute run count, is the liveness signal on this deployment.
+
+> **Corrected 2026-08-20 — `run_count_last_10m` cannot be read as a pass/fail.**
+> The first revision of this check expected *"every enabled `kind` row shows at
+> least one `last_run_at` within the last 10 minutes."* Run against production,
+> **all twelve** enabled schedules report `run_count_last_10m = 0`, including
+> the ten that are perfectly healthy — because every schedule here is hourly or
+> daily cron (`projects.discover` next fires 02:00 tomorrow), not per-minute.
+> A 10-minute window is empty for almost all of them almost always, so the
+> check as written fails a healthy system. Use `next_run_at` for the verdict
+> and read `last_run_at`/`run_count_last_10m` as context.
+
+A `next_run_at` in the past by more than the schedule's own cadence is the
+wedge signal — the same condition §4's `wedged-schedules` check reports.
 
 **Wedge detection:** if `next_run_at` is more than 1 minute in the past for a
 per-minute schedule, it is already wedged. Repair:
@@ -1995,6 +2351,22 @@ wedged or the worker container is not running.
 If this is a fresh database (e.g. the twin), `samples_today` may legitimately be
 `0` if the sampler has not fired yet. Wait the full schedule cadence and re-check.
 
+> ⚠ **Check 14 ALREADY FAILS on production, and not because of this release.**
+> Measured 2026-08-20 against the replica, pre-cutover: `latest_sample` =
+> **2026-08-10**, `samples_today = 0`, `samples_yesterday = 0`. Both wallet
+> samplers stopped ten days ago — `wallet.sample_balances` and
+> `wallet.sample_sleeves` last succeeded on 2026-08-10 (`job_runs`) and their
+> `next_run_at` has been frozen at `2026-08-09 16:32+00` ever since, which is
+> exactly what §4's `wedged-schedules` WARN reports. Every other enabled
+> schedule is healthy.
+>
+> So a post-cutover `samples_today = 0` here is the **pre-existing** wedge, not
+> damage this upgrade did, and it must not be read as a postflight failure or a
+> rollback trigger — the same treatment #660 already gives #649 and #648. Take
+> the pre-cutover measurement above as the baseline, apply this section's repair
+> `UPDATE` after the boot, and confirm the sampler recovers. If it does not, that
+> is a separate production defect to file, not a reason to hold `v0.2.2`.
+
 > **Note on §5.4's preflight wedge warning.** If §4's `wedged-schedules` WARN
 > flagged any rows, cross-check them here: if those same rows now show
 > `run_count_last_10m > 0`, the warning can be marked resolved. If they still
@@ -2002,6 +2374,18 @@ If this is a fresh database (e.g. the twin), `samples_today` may legitimately be
 > `UPDATE` above.
 
 ### Only when all twelve checks are clean — tag `v0.2.2`
+
+```yaml step
+id:          P9.tag
+phase:       P9 close out
+section:     §8
+host-role:   cutover
+actor:       operator
+derived:     true
+requires:
+  - P8.acceptance
+verify:      git tag -a v0.2.2 <deployed sha> -m 'v0.2.2' && git push origin v0.2.2
+```
 
 This is the last step of the rollout. The version tag goes on the **exact commit
 that is running and verified in production** — the rc you deployed in §7.2, which
@@ -2050,7 +2434,7 @@ release-runbooks.md §6).
 ### Triggers — roll back if any of these are true
 
 - Verification 3 reports `overridden`, or 4 returns rows you cannot repair now.
-- Verification 2 shows fewer than four migrations **and** the boot is failing.
+- Verification 2 shows fewer than **six** migrations (steps.ts's `THIS_RELEASE_MIGRATIONS`) **and** the boot is failing.
 - The admin surface is unreachable post-cutover because `admin_credential` is
   claimed and nobody holds the password — most likely §12.1's claim window
   was raced, or the password was lost immediately after claiming. Roll back
@@ -2077,7 +2461,7 @@ earlier `v0.2.2-rc.<N-1>` was deployed and healthy before this attempt, that rc
 is the last known-good artifact and is what you check out instead; substitute it
 for `v0.2.1` in the two commands below and expect its own SHA from
 `git rev-parse`. "What rollback does NOT undo" applies to either target — every
-v0.2.2 rc carries the same four migrations — with **one exception**: an rc is
+v0.2.2 rc carries the same six migrations — with **one exception**: an rc is
 v0.2.2 code, so it does *not* restore `ADMIN_TOKEN` access to a claimed
 credential. Only `v0.2.1` does (`auth.ts:64` is a bare `return false` on every
 rc). If the trigger you are rolling back for is the admin lockout, the target is
@@ -2433,6 +2817,19 @@ belongs in this runbook.
 ---
 
 ## 13. Production rollout report
+
+```yaml step
+id:          P9.report
+phase:       P9 close out
+section:     §13
+host-role:   cutover
+actor:       operator
+requires:
+  - P9.tag
+artifacts:
+  - rollout-report-*.md
+verify:      fill in §13, then: where.ts --record P9.report
+```
 
 Produce a written report immediately after the production cutover completes —
 pass or fail. Save it to a file in the same directory as the backup artifacts

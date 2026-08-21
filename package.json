@@ -28,6 +28,7 @@
     "demo:clean": "bun scripts/demo-clean.ts",
     "demo:reap": "bun scripts/demo-reap.ts",
     "smoke": "bun scripts/demo.ts --smoke",
+    "rollout:where": "bun backend/scripts/upgrades/0.2.1-to-0.2.2/where.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check"
   },

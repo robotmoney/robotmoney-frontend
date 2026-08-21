@@ -9,7 +9,10 @@
 // `bun smoke -- --external-pg --no-tui` — so this release's actual
 // migrations run for real, not just the static checks preflight.ts makes.
 // Then verifies the site actually serves, reusing scripts/demo-frontend-check.ts
-// (the same route/content checks CI runs), not a bespoke health probe.
+// (the same route/content checks CI runs), not a bespoke health probe, and
+// finally runs §8's postflight against the migrated twin (§5.3b.0 step 3, G8)
+// while the twin still exists — the teardown below is why that cannot be a
+// separate command run afterwards.
 //
 // Runs the boot from an ISOLATED git worktree, never the checkout you are
 // sitting in: `--external-pg` reads DATABASE_URL from repo-root .env
@@ -29,15 +32,17 @@
 // Usage:
 //   bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts [backupDir]
 //
-// Exit codes: 0 = migrated and booted clean, frontend checks pass;
-// 1 = the boot or a frontend check failed; 2 = could not run (missing files,
-// docker/git failure).
+// Exit codes: 0 = migrated and booted clean, frontend checks pass, and
+// postflight is clean against the twin; 1 = the boot, a frontend check or the
+// twin postflight failed; 2 = could not run (missing files, docker/git failure).
 
 import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
+import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
+import { TAG_GLOB } from "./release.ts";
 
 const NAME = "stage-rehearsal-0.2.2";
 const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
@@ -258,7 +263,36 @@ async function main(backupDirArg?: string): Promise<number> {
       return 1;
     }
 
-    log("VERDICT: migrated and booted clean, frontend checks pass — this release is safe to run against production-shaped data");
+    // §5.3b.0 step 3 — the half that used to have nowhere to run. §5.5 mandates
+    // "every §8 check and every §8.1 AC against the twin after the boot reaches
+    // readiness", but the twin exists only inside this function's try block:
+    // the finally below tears it down. Before this, the only way to satisfy
+    // step 3 was to race a watcher against teardown from another terminal,
+    // which is not a procedure. G8 makes the window part of the contract.
+    log("running §8's postflight checks against the migrated twin (§5.3b.0 step 3)");
+    const postflightCode = await spawn(
+      [
+        "bun",
+        "scripts/upgrades/0.2.1-to-0.2.2/postflight.ts",
+        `--base-url=${backendUrl}`,
+        "--emit-receipt=P5.postflight-twin",
+        ...(backupDirArg ? [`--backup-dir=${backupDirArg}`] : []),
+      ],
+      {
+        // The MAIN checkout, not the worktree: identical code (the worktree is
+        // detached at HEAD), but the receipt's git provenance comes out right
+        // instead of recording a detached "HEAD" branch.
+        cwd: join(repoRoot, "backend"),
+        env: { ...process.env, DATABASE_URL: databaseUrl },
+      },
+    );
+    if (postflightCode !== 0) {
+      err("postflight FAILED against the migrated twin — §5.5: treat this exactly as a failed production");
+      err("cutover. Diagnose, patch, cut the next rc, re-rehearse. Do not carry it into §7.");
+      return 1;
+    }
+
+    log("VERDICT: migrated and booted clean, frontend checks pass, postflight clean against the twin");
     return 0;
   } finally {
     // G6: unconditional, and in this order — every path lands here, including
@@ -304,8 +338,42 @@ async function main(backupDirArg?: string): Promise<number> {
   }
 }
 
+/**
+ * Receipt wrapper. This step's evidence is bound to APP code (steps.ts's
+ * APP_CODE globs), not to the gate scripts — which is why a commit that
+ * changes preflight.ts invalidates Gate C while leaving a boot rehearsal
+ * standing. That distinction is the whole reason receipts record a SHA.
+ */
+async function mainWithReceipt(backupDirArg?: string): Promise<number> {
+  const startedAt = new Date().toISOString();
+  // Before the run, emphatically: this one takes minutes and boots the tree it
+  // reads HERE. A receipt stamped with a SHA committed halfway through would
+  // name a commit the rehearsal never rehearsed.
+  const git = gitFacts(repoRoot, TAG_GLOB);
+  const code = await main(backupDirArg);
+  if (process.argv.includes("--emit-receipt")) {
+    const backup = resolveBackupFiles(backupDirArg);
+    const { path } = emitReceipt({
+      step: "P5.rehearsal-boot",
+      exit: code,
+      verdict:
+        code === 0 ? "migrated and booted clean, frontend checks pass" : code === 1 ? "REHEARSAL FAILED" : "COULD NOT RUN",
+      startedAt,
+      repoRoot,
+      tagGlob: TAG_GLOB,
+      hostRole: deriveHostRole(repoRoot).role,
+      git,
+      backupDir: backupDirArg,
+      artifactPaths: "error" in backup ? [] : [backup.dumpEnc, backup.globalsEnc],
+      note: "error" in backup ? backup.error : `stamp=${backup.stamp}`,
+    });
+    log(`receipt \u2192 ${path}`);
+  }
+  return code;
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main(process.argv[2])
+  mainWithReceipt(process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : undefined)
     .then((code) => {
       process.exitCode = code;
     })

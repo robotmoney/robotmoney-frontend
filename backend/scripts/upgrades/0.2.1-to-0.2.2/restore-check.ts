@@ -27,16 +27,24 @@
 // 1 = a verification query or a preflight check FAILed,
 // 2 = could not run (missing files, docker/gpg/pg_restore failure).
 
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { columnExists, createChecker, printVerdict } from "../../lib/checks.ts";
 import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
+import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
 import { runChecks } from "./preflight.ts";
+import { TAG_GLOB } from "./release.ts";
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+// backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>
+const repoRoot = join(scriptDir, "..", "..", "..", "..");
 
 const NAME = "restore-check-0.2.2";
 const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
 const err = (msg: string) => console.error(`[${NAME}] ${msg}`);
 
-async function main(backupDirArg?: string): Promise<number> {
+async function run(backupDirArg?: string): Promise<number> {
   const backup = resolveBackupFiles(backupDirArg);
   if ("error" in backup) {
     err(backup.error);
@@ -112,8 +120,40 @@ async function main(backupDirArg?: string): Promise<number> {
   }
 }
 
+/**
+ * Wraps run() so a receipt is written on every exit path — Gate C's verdict is
+ * exactly the thing a later session needs and cannot reconstruct. The receipt
+ * names the DUMP's artifacts, not a database: what Gate C certifies is that
+ * THIS dump restores and passes preflight, so if the dump is replaced the
+ * evidence must die with it (where.ts re-hashes both files).
+ */
+async function main(backupDirArg?: string): Promise<number> {
+  const startedAt = new Date().toISOString();
+  // Before the run: a restore + full preflight takes minutes.
+  const git = gitFacts(repoRoot, TAG_GLOB);
+  const code = await run(backupDirArg);
+  if (process.argv.includes("--emit-receipt")) {
+    const backup = resolveBackupFiles(backupDirArg);
+    const { path } = emitReceipt({
+      step: "P3.gate-c",
+      exit: code,
+      verdict: code === 0 ? "DUMP SAFE TO UPGRADE" : code === 1 ? "DUMP BLOCKED" : "COULD NOT RUN",
+      startedAt,
+      repoRoot,
+      tagGlob: TAG_GLOB,
+      hostRole: deriveHostRole(repoRoot).role,
+      git,
+      backupDir: backupDirArg,
+      artifactPaths: "error" in backup ? [] : [backup.dumpEnc, backup.globalsEnc],
+      note: "error" in backup ? backup.error : `stamp=${backup.stamp}`,
+    });
+    log(`receipt \u2192 ${path}`);
+  }
+  return code;
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main(process.argv[2])
+  main(process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : undefined)
     .then((code) => {
       process.exitCode = code;
     })
