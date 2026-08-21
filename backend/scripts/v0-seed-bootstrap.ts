@@ -385,11 +385,10 @@ async function processSession(sess: V0Session, drifts: Drift[]): Promise<RowOutc
     sess.subject_name = "RM Protocol Treasury";
   }
 
-  if (sess.takes) {
-    for (const take of sess.takes) {
-      if (take.member_id === "woon") take.member_name = "Noop analyst";
-    }
-  }
+  // No per-take member_name remap here (issue #564): the FK a take resolves
+  // to already lands on the RM Protocol Labs member via processMember's own
+  // "woon" -> "Noop analyst" rename feeding resolveDbMemberId/handle lookup
+  // above. History follows the rename; there is no separate id left to fix.
 
   const existing = (
     await sql`
