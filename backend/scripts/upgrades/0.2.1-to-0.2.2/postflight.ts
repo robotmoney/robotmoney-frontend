@@ -17,18 +17,37 @@
 //
 // Exit codes: 0 = clean, 1 = a check failed, 2 = could not run.
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { columnExists, tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
 import { type Db, fetchCheck, runPostflightMain } from "../../lib/postflight-utils.ts";
+import { deriveHostRole } from "../../lib/rollout-receipt.ts";
+// The ONLY src/ import in this file, and deliberate. AC2 is "handle ===
+// slugifyMemberName(name)" — reimplementing that here would make a third copy
+// of an algorithm whose whole point is that there is one (handle.ts's header:
+// "the one place that turns 'Noop Analyst' into noop-analyst"), and a
+// paraphrase that drifts would report AC2 green while the release failed.
+// Safe despite postflight-utils.ts's no-src rule, which exists to avoid
+// src/config.ts's module-load required("DATABASE_URL"): handle.ts's only
+// import is `import type { DbHandle }`, erased at runtime under
+// verbatimModuleSyntax, so nothing is loaded and no pool is opened. Verified
+// by importing it with DATABASE_URL unset.
+import { slugifyMemberName } from "../../../src/swarm/handle.ts";
+// Shared with preflight.ts — see steps.ts. This file's copy was the correct
+// one (six migrations, 27ec374); it is here only so there is no second copy.
+import { TAG_GLOB, THIS_RELEASE_MIGRATIONS } from "./release.ts";
 
-const THIS_RELEASE_MIGRATIONS = [
-  "0029_admin_auth_recovery.sql",
-  "0029_admin_passkey.sql",
-  "0030_swarm_member_handle.sql",
-  "0031_swarm_member_handle_namespace.sql",
-  "0032_append_only_history.sql",
-  "0033_swarm_member_uuid_ids.sql",
-] as const;
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+// backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>
+const repoRoot = join(scriptDir, "..", "..", "..", "..");
+
+/** The two steps this script can be evidence for. It must be told WHICH — a
+ *  twin rehearsal and a production postflight run the identical checks against
+ *  different databases, and a receipt that guesses would let a twin run stand
+ *  in for production. §5.5 is explicit that the twin is not production. */
+const RECEIPT_STEPS = ["P5.postflight-twin", "P8.postflight-prod"] as const;
 
 const baseUrlArg = process.argv.find((a) => a.startsWith("--base-url="))?.slice("--base-url=".length);
 
@@ -260,6 +279,265 @@ async function checkPrerenderedRoute(_db: Db, { record }: Checker): Promise<void
   record("prerendered-route", "PASS", `<title>${title}</title>`);
 }
 
+// ── §8.1 release acceptance criteria ────────────────────────────────────────
+//
+// §8.1 is the release's OBJECTIVE, not a spot check: "EXIT=0 from any script
+// above does not satisfy them; only these queries do." They were manual, which
+// made them impossible to satisfy where §5.5 most needs them — against the
+// digital twin, which exists only between the rehearsal's readiness and its
+// teardown. AC1-AC5 are the runbook's own queries, verbatim in intent.
+//
+// AC6 needs a pre-upgrade capture (§5.0's member-baseline-<STAMP>.json, via
+// POSTFLIGHT_MEMBER_BASELINE) for its count half. Without it, it still runs the
+// half that needs no prior state — the key-resolution guard — and WARNs that
+// the counts went unchecked, rather than passing on partial evidence.
+
+/** AC1 — every member id is a UUID. Prerequisite for AC2: a slug id both reads
+ *  as "handle unset" (handle = id) and squats the handle namespace (0031). */
+async function checkAc1MemberIdsAreUuids(db: Db, { record }: Checker): Promise<void> {
+  const rows = (await db`
+    SELECT id::text AS id FROM swarm_members
+    WHERE id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    ORDER BY id
+  `) as unknown as { id: string }[];
+  if (rows.length === 0) {
+    record("ac1-member-uuid", "PASS", "every swarm_members.id is a UUID");
+    return;
+  }
+  record(
+    "ac1-member-uuid",
+    "FAIL",
+    [`${rows.length} member id(s) are not UUIDs — 0033 did not re-identify them:`, ...rows.map((r) => `  ${r.id}`)],
+    "The release has not been achieved (§8.1). Do not tag v0.2.2: patch, cut the next rc, re-run preflight.",
+  );
+}
+
+/** AC2 — every handle is the derived one, with no exceptions. */
+async function checkAc2HandlesAreDerived(db: Db, { record }: Checker): Promise<void> {
+  if (!(await columnExists(db, "swarm_members", "handle"))) {
+    record("ac2-handle-derived", "FAIL", "swarm_members.handle does not exist — 0030 did not apply");
+    return;
+  }
+  const rows = (await db`SELECT id::text AS id, name, handle FROM swarm_members ORDER BY name`) as unknown as {
+    id: string;
+    name: string;
+    handle: string;
+  }[];
+  const wrong = rows.filter((r) => r.handle !== slugifyMemberName(r.name));
+  if (wrong.length === 0) {
+    record(
+      "ac2-handle-derived",
+      "PASS",
+      `all ${rows.length} handles equal slugifyMemberName(name): ${rows.map((r) => `${r.name}→${r.handle}`).join(", ")}`,
+    );
+    return;
+  }
+  record(
+    "ac2-handle-derived",
+    "FAIL",
+    [
+      `${wrong.length} handle(s) are not the derivation of the member's name:`,
+      ...wrong.map((r) => `  ${r.name}: handle='${r.handle}' expected '${slugifyMemberName(r.name)}' (id ${r.id})`),
+    ],
+    "The release has not been achieved (§8.1). One algorithm, no exceptions — do not hand-pick a handle to make this pass.",
+  );
+}
+
+/** AC3 — nobody is left at 0030's `handle = id` default, which is also the
+ *  "unset" sentinel, so such a member is re-derived forever. */
+async function checkAc3NoDefaultHandles(db: Db, { record }: Checker): Promise<void> {
+  if (!(await columnExists(db, "swarm_members", "handle"))) {
+    record("ac3-no-default-handle", "FAIL", "swarm_members.handle does not exist — 0030 did not apply");
+    return;
+  }
+  const rows = (await db`
+    SELECT id::text AS id, handle FROM swarm_members WHERE handle = id::text ORDER BY id
+  `) as unknown as { id: string; handle: string }[];
+  if (rows.length === 0) {
+    record("ac3-no-default-handle", "PASS", "no member left at handle = id");
+    return;
+  }
+  record(
+    "ac3-no-default-handle",
+    "FAIL",
+    [`${rows.length} member(s) still at 0030's default (handle = id):`, ...rows.map((r) => `  ${r.id}`)],
+    "The backfill never reached these members; they read as 'handle unset' and will be re-derived forever (§8.1 AC3).",
+  );
+}
+
+/** AC4 — no `<stem>-<n>` handle: derivation ran where an exact handle was
+ *  required. This is the `woon-2` defect that reached rc.5. */
+async function checkAc4NoDerivedSuffix(db: Db, { record }: Checker): Promise<void> {
+  if (!(await columnExists(db, "swarm_members", "handle"))) {
+    record("ac4-no-derived-suffix", "FAIL", "swarm_members.handle does not exist — 0030 did not apply");
+    return;
+  }
+  const rows = (await db`
+    SELECT id::text AS id, handle FROM swarm_members WHERE handle ~ '-[0-9]+$' ORDER BY handle
+  `) as unknown as { id: string; handle: string }[];
+  if (rows.length === 0) {
+    record("ac4-no-derived-suffix", "PASS", "no member carries a derived-suffix handle");
+    return;
+  }
+  record(
+    "ac4-no-derived-suffix",
+    "FAIL",
+    [`${rows.length} member(s) carry a collision-suffixed handle:`, ...rows.map((r) => `  ${r.handle} (id ${r.id})`)],
+    "Derivation ran where an exact handle was required — the rc.5 defect (§8.1 AC4). Do not tag v0.2.2.",
+  );
+}
+
+/** AC5 — a member resolves by handle through the API. The handle is read from
+ *  the database rather than hardcoded: §8.1 names `robot-money` as an example
+ *  of the rule, and a literal here would start failing the day the roster
+ *  changes for reasons that have nothing to do with this release. */
+async function checkAc5ResolvableByHandle(db: Db, { record }: Checker): Promise<void> {
+  if (!baseUrlArg) {
+    record("ac5-handle-resolves", "WARN", "no --base-url= given — AC5's API probe skipped", "Re-run with --base-url=<api origin>.");
+    return;
+  }
+  if (!(await columnExists(db, "swarm_members", "handle"))) {
+    record("ac5-handle-resolves", "FAIL", "swarm_members.handle does not exist — 0030 did not apply");
+    return;
+  }
+  const [member] = (await db`
+    SELECT id::text AS id, handle FROM swarm_members ORDER BY handle LIMIT 1
+  `) as unknown as { id: string; handle: string }[];
+  if (!member) {
+    record("ac5-handle-resolves", "WARN", "no members to probe");
+    return;
+  }
+  const res = await fetchCheck(`${baseUrlArg}/api/swarm/members/${member.handle}`);
+  if (!res.ok) {
+    record(
+      "ac5-handle-resolves",
+      "FAIL",
+      `GET /api/swarm/members/${member.handle} → ${res.status ?? res.error}`,
+      "Tooling can no longer reach a member by handle (§8.1 AC5).",
+    );
+    return;
+  }
+  // §8.1: the API answers 200 with a NULL body for a member that does not
+  // exist, so a 200 alone proves nothing — the body must be the member.
+  let id: string | undefined;
+  try {
+    id = (JSON.parse(res.body ?? "null") as { id?: string } | null)?.id;
+  } catch {
+    /* not JSON */
+  }
+  if (id !== member.id) {
+    record(
+      "ac5-handle-resolves",
+      "FAIL",
+      `GET /api/swarm/members/${member.handle} returned 200 but id=${id ?? "null body"} (expected ${member.id})`,
+      "A 200 with a null body is this API's 'not found' — the handle did not resolve (§8.1 AC5).",
+    );
+    return;
+  }
+  record("ac5-handle-resolves", "PASS", `/api/swarm/members/${member.handle} → 200 with the right member`);
+}
+
+/**
+ * AC6 — history stayed attached across the re-id.
+ *
+ * Keyed by member NAME, not id: the id is exactly what `0033` changes, so it
+ * cannot be the join key between a pre-upgrade capture and a post-upgrade
+ * database. Names do not move.
+ *
+ * Three things, because AC6 has two halves and the second one fails silently:
+ *   1. per-member take/memo counts match §5.0's capture — nothing was orphaned;
+ *   2. per-member key counts match — the `swarm_member_keys` repoint happened;
+ *   3. every signed take can still resolve an active public key. This is the
+ *      one that catches the silent mode the runbook warns about: verification
+ *      is recomputed from payload + signature + the pubkey reached through
+ *      `swarm_member_keys.member_id` (projections.ts:185), so a key row left
+ *      pointing at the OLD id yields public_key = null and `verified: false`
+ *      on every take, with no error raised anywhere.
+ *
+ * Without the baseline this can still do (3), which needs no prior state — so
+ * a missing baseline degrades the check, it does not skip it.
+ */
+async function checkAc6HistoryAttached(db: Db, { record }: Checker): Promise<void> {
+  const orphaned = (await db`
+    SELECT count(*)::int AS n
+    FROM swarm_recommendations r
+    LEFT JOIN swarm_member_keys k ON k.member_id = r.member_id AND k.active
+    WHERE r.signature IS NOT NULL AND k.id IS NULL
+  `) as unknown as { n: number }[];
+  const unresolvable = orphaned[0]?.n ?? 0;
+  if (unresolvable > 0) {
+    record(
+      "ac6-history-attached",
+      "FAIL",
+      `${unresolvable} signed take(s) cannot resolve an active public key — swarm_member_keys was not repointed`,
+      "This is AC6's silent failure: every affected take reports verified:false with no error. The release has not been achieved (§8.1).",
+    );
+    return;
+  }
+
+  const baselinePath = process.env.POSTFLIGHT_MEMBER_BASELINE;
+  if (!baselinePath) {
+    record(
+      "ac6-history-attached",
+      "WARN",
+      "signed takes all resolve a key, but per-member counts were NOT compared (no POSTFLIGHT_MEMBER_BASELINE)",
+      "Set POSTFLIGHT_MEMBER_BASELINE=<§5.0's member-baseline-<STAMP>.json> to compare take/memo/key counts per member. Without it AC6 is only half checked.",
+    );
+    return;
+  }
+
+  let baseline: Record<string, { recs: number; memos: number; keys: number }>;
+  try {
+    baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
+  } catch (e) {
+    record(
+      "ac6-history-attached",
+      "FAIL",
+      `cannot read POSTFLIGHT_MEMBER_BASELINE (${baselinePath}): ${e instanceof Error ? e.message : e}`,
+      "Capture it with §5.0's baseline block before the cutover; it cannot be recovered from an already-upgraded database.",
+    );
+    return;
+  }
+
+  const rows = (await db`
+    SELECT m.name,
+           (SELECT count(*) FROM swarm_recommendations r WHERE r.member_id = m.id)::int AS recs,
+           (SELECT count(*) FROM swarm_memos mo WHERE mo.member_id = m.id)::int         AS memos,
+           (SELECT count(*) FROM swarm_member_keys k WHERE k.member_id = m.id)::int     AS keys
+    FROM swarm_members m ORDER BY m.name
+  `) as unknown as { name: string; recs: number; memos: number; keys: number }[];
+
+  const drift: string[] = [];
+  for (const [name, want] of Object.entries(baseline)) {
+    const got = rows.find((r) => r.name === name);
+    if (!got) {
+      drift.push(`  ${name}: present pre-upgrade, MISSING now`);
+      continue;
+    }
+    for (const field of ["recs", "memos", "keys"] as const) {
+      if (got[field] !== want[field]) drift.push(`  ${name}.${field}: ${want[field]} → ${got[field]}`);
+    }
+  }
+  for (const r of rows) {
+    if (!(r.name in baseline)) drift.push(`  ${r.name}: not in the pre-upgrade capture`);
+  }
+
+  if (drift.length > 0) {
+    record(
+      "ac6-history-attached",
+      "FAIL",
+      [`per-member history moved across the re-id (${drift.length} discrepancy/ies):`, ...drift],
+      "Takes, memos or keys were orphaned by the re-id. The release has not been achieved (§8.1).",
+    );
+    return;
+  }
+  record(
+    "ac6-history-attached",
+    "PASS",
+    `all ${rows.length} members' take/memo/key counts match the pre-upgrade capture, and every signed take resolves an active key`,
+  );
+}
+
 async function runChecks(db: Db, checker: Checker): Promise<void> {
   console.log(`[postflight-0.2.2] reminder: check 1 (boot exit code) and check 10 (admin claim) are manual — see §8.`);
   console.log("");
@@ -271,10 +549,30 @@ async function runChecks(db: Db, checker: Checker): Promise<void> {
   await checkAdminCredentialUntouched(db, checker);
   await checkPrerenderedRoute(db, checker);
   await checkSwarmSchedules(db, checker);
+  // §8.1 — the release's objective. Last, so a reader sees the mechanism
+  // checks resolve before the criteria that decide whether v0.2.2 shipped.
+  await checkAc1MemberIdsAreUuids(db, checker);
+  await checkAc2HandlesAreDerived(db, checker);
+  await checkAc3NoDefaultHandles(db, checker);
+  await checkAc4NoDerivedSuffix(db, checker);
+  await checkAc5ResolvableByHandle(db, checker);
+  await checkAc6HistoryAttached(db, checker);
 }
 
 export async function main(): Promise<number> {
-  return runPostflightMain({ name: "postflight-0.2.2", runChecks });
+  const emitArg = process.argv.find((a) => a === "--emit-receipt" || a.startsWith("--emit-receipt="));
+  let receipt;
+  if (emitArg) {
+    const step = emitArg.includes("=") ? emitArg.slice("--emit-receipt=".length) : "";
+    if (!(RECEIPT_STEPS as readonly string[]).includes(step)) {
+      console.error(`[postflight-0.2.2] --emit-receipt needs an explicit step id: ${RECEIPT_STEPS.join(" | ")}`);
+      console.error("[postflight-0.2.2] e.g. --emit-receipt=P8.postflight-prod. Refusing to guess which database this was.");
+      return 2;
+    }
+    const backupDir = process.argv.find((a) => a.startsWith("--backup-dir="))?.slice("--backup-dir=".length);
+    receipt = { step, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, backupDir };
+  }
+  return runPostflightMain({ name: "postflight-0.2.2", runChecks, receipt });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

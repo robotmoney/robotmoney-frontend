@@ -1,5 +1,17 @@
 # Release cycle & topology compatibility
 
+> **ARCHIVED 2026-08-21 — future-infrastructure proposal, never ratified.**
+> This document was always a draft: no accepted decision in `decisions.md` ever
+> stood behind it. Its §5 compatibility contract **was** live policy and has been
+> migrated to
+> [`docs/technical/release-runbooks.md` §8](../technical/release-runbooks.md).
+> What remains here — the k3s/GitOps production topology (§3, §6), the
+> per-component cadence (§4), the prior art (§7) and the open questions (§8) — is
+> a proposal for how infrastructure might work at some point in the future,
+> the same category as `docs/technical/stack-orchestrator.md` and
+> `docs/plans/stack-k8s-staging-deployment.md`. Issue #680 draws on §6 and §8.
+
+
 > **Status: draft, second pass.** Still a proposal, not a ratified spec —
 > there is no accepted decision in [decisions.md](../decisions.md) behind it
 > yet. Since the first draft, however, the topology (§3), the four ordering
@@ -81,7 +93,7 @@ environment-scoped secrets, "merge to `dev` → staging, a preflighted
 explicitly as an example to adapt) but that pipeline isn't implemented yet.
 That rc-first ordering is not this doc's invention and is not optional for
 whatever pipeline gets built: it is the standing policy in
-[`release-runbooks.md` §2](./release-runbooks.md#2-version-tags-and-release-candidates)
+[`release-runbooks.md` §2](../technical/release-runbooks.md#2-version-tags-and-release-candidates)
 — a version tag records what is proven in production, so it can never be the
 thing that triggers the deploy.
 
@@ -618,7 +630,7 @@ is declarative, in git, and reviewable — while the machinery is a script:
   is tagged only afterwards, once postflight is clean, at the exact commit
   production is running. This is not this doc's preference: it is the
   standing policy in [`release-runbooks.md`
-  §2](./release-runbooks.md#2-version-tags-and-release-candidates), which
+  §2](../technical/release-runbooks.md#2-version-tags-and-release-candidates), which
   an earlier draft of this bullet contradicted — auto-bumping on merge,
   against a reconciler that converges within a minute (below), is
   continuous deployment from `main`, and production is defined as running
@@ -679,7 +691,7 @@ is declarative, in git, and reviewable — while the machinery is a script:
   release that was actually deployed and healthy, not "this release minus
   the bug", which never existed as a deployed thing. That is the same
   target [`docs/runbooks/v0-2-2-rollout.md`
-  §9](../runbooks/v0-2-2-rollout.md) names for a manual rollback, reached
+  §9](./v0-2-2-rollout.md) names for a manual rollback, reached
   by reverting a commit instead of checking out a tag. (Schema rollback
   remains forward-fix only, per §4a — this loop doesn't change that.)
 - **Failure visibility — a dead-man's switch, git-native.** A halted
@@ -889,7 +901,7 @@ New questions raised by the §3/§6 design:
 - **Who performs the production manifest bump, and how is that actor
   authorized?** §6 settles *when* production moves — to the SHA of an rc
   that passed preflight, per [`release-runbooks.md`
-  §2](./release-runbooks.md#2-version-tags-and-release-candidates) — but
+  §2](../technical/release-runbooks.md#2-version-tags-and-release-candidates) — but
   not *who* commits the bump. Two shapes: an operator (or an agent running
   the release runbook) makes the commit as a step of the procedure, or CI
   reacts to a `v*-rc.*` tag push on `releases-A.B.x` and commits it. The
@@ -903,7 +915,7 @@ New questions raised by the §3/§6 design:
 - **Which ref the production manifests live on.** Related to the previous
   question and not settled by it: the reconciler follows "the manifest
   ref", and with production pinned to an rc cut on `releases-A.B.x`
-  ([`release-runbooks.md` §1](./release-runbooks.md#1-release-branch)),
+  ([`release-runbooks.md` §1](../technical/release-runbooks.md#1-release-branch)),
   that ref is no longer obviously `main`. Whether the reconciler tracks the
   release branch, a dedicated production ref, or a deploy repo of its own
   is open.

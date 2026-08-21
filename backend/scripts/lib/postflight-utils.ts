@@ -12,7 +12,10 @@
 import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { createChecker, printVerdict } from "./checks.ts";
-import type { Checker } from "./checks.ts";
+import type { Checker, CheckResult } from "./checks.ts";
+import { collectDbIdentity, emitReceipt, gitFacts, summarise } from "./rollout-receipt.ts";
+import type { DbIdentity } from "./rollout-receipt.ts";
+import type { PreflightReceiptSpec } from "./preflight-utils.ts";
 
 export type Db = postgresTypes.Sql<{}>;
 
@@ -58,6 +61,16 @@ export interface RunPostflightOpts {
    *  and the console.error prefix. */
   name: string;
   runChecks(db: Db, checker: Checker): Promise<void>;
+  /** Set when `--emit-receipt` is passed — see RunPreflightOpts.receipt. The
+   *  same spec shape, because a postflight receipt and a preflight receipt are
+   *  read by the same probe and must not diverge. */
+  receipt?: PreflightReceiptSpec;
+}
+
+interface PostflightRunCtx {
+  startedAt: string;
+  identity?: DbIdentity;
+  results: CheckResult[];
 }
 
 /**
@@ -67,6 +80,25 @@ export interface RunPostflightOpts {
  * checks, print the verdict, close the connection.
  */
 export async function runPostflightMain(opts: RunPostflightOpts): Promise<number> {
+  const ctx: PostflightRunCtx = { startedAt: new Date().toISOString(), results: [] };
+  const git = opts.receipt ? gitFacts(opts.receipt.repoRoot, opts.receipt.tagGlob) : undefined;
+  const code = await runPostflightCore(opts, ctx);
+  if (opts.receipt) {
+    const { path } = emitReceipt({
+      ...opts.receipt,
+      git,
+      exit: code,
+      verdict: code === 0 ? "POSTFLIGHT CLEAN" : code === 1 ? "POSTFLIGHT FAILED" : "COULD NOT RUN",
+      startedAt: ctx.startedAt,
+      db: ctx.identity,
+      checks: ctx.results.length ? summarise(ctx.results) : undefined,
+    });
+    console.log(`[${opts.name}] receipt \u2192 ${path}`);
+  }
+  return code;
+}
+
+async function runPostflightCore(opts: RunPostflightOpts, ctx: PostflightRunCtx): Promise<number> {
   const { name, runChecks } = opts;
   const log = (msg: string) => console.log(`[${name}] ${msg}`);
   const err = (msg: string) => console.error(`[${name}] ${msg}`);
@@ -87,9 +119,14 @@ export async function runPostflightMain(opts: RunPostflightOpts): Promise<number
     return 2;
   }
   log(`connected as the application's own role (DATABASE_URL)`);
+  // Which database did this actually grade? §2.0's failure mode is a psql that
+  // connects successfully to the WRONG server; recording identity makes that
+  // detectable after the fact instead of never.
+  ctx.identity = await collectDbIdentity(db);
   console.log("");
 
   const checker = createChecker("");
+  ctx.results = checker.results;
   try {
     await runChecks(db, checker);
   } catch (e) {
