@@ -19,8 +19,12 @@ type AdminAuthConfig = { adminToken: string | null; allowInsecure: boolean };
 
 // The relying party must match the page hosting the browser WebAuthn call. A
 // deployment can pin it explicitly when the API sits behind a reverse proxy;
-// otherwise the public request origin is the safe same-origin default.
-function relyingParty(url: URL): { rpID: string; expectedOrigin: string } {
+// otherwise the public request origin is the safe same-origin default. This
+// must stay a fallback rather than a header-derived value: Bun.serve here has
+// no `tls:` key (TLS is terminated upstream by cloudflared), and X-Forwarded-
+// Proto is an unauthenticated client-settable header — trusting it would let
+// any caller pick the relying-party origin (issue #617).
+export function relyingParty(url: URL): { rpID: string; expectedOrigin: string } {
   const expectedOrigin = process.env.WEBAUTHN_ORIGIN || url.origin;
   const rpID = process.env.WEBAUTHN_RP_ID || new URL(expectedOrigin).hostname;
   return { rpID, expectedOrigin };

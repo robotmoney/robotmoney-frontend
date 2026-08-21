@@ -6,7 +6,7 @@ import { createHash, createSign, generateKeyPairSync, randomBytes } from "node:c
 import { expect, test } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { isPrivileged } from "../../src/api/auth.ts";
-import { handleAdminWebauthn } from "../../src/api/routes/admin-webauthn.ts";
+import { handleAdminWebauthn, relyingParty } from "../../src/api/routes/admin-webauthn.ts";
 import { hashKey } from "../../src/lib/keys.ts";
 
 const ORIGIN = "http://localhost";
@@ -261,4 +261,31 @@ test("public authentication options clean expiry and retain a bounded challenge 
   expect(Array.from(await sql<{ count: string }[]>`SELECT count(*) FROM admin_webauthn_challenge WHERE flow = 'authentication'`)).toEqual([{ count: "32" }]);
 
   await sql`DELETE FROM admin_webauthn_challenge WHERE challenge LIKE ${`${prefix}%`} OR challenge = ${issued}`;
+});
+
+test("relyingParty() prefers WEBAUTHN_ORIGIN over the plain-HTTP request origin behind a TLS proxy", () => {
+  const savedOrigin = process.env.WEBAUTHN_ORIGIN;
+  const savedRpId = process.env.WEBAUTHN_RP_ID;
+  try {
+    // cloudflared terminates TLS and forwards to the api's plain-HTTP
+    // Bun.serve, so `url` here is exactly what production sees:
+    // http://robotmoney.network even though the browser's real origin is
+    // https://robotmoney.network. Without the env override this collapses to
+    // the wrong scheme and every ceremony fails origin verification (#617).
+    delete process.env.WEBAUTHN_ORIGIN;
+    delete process.env.WEBAUTHN_RP_ID;
+    const proxiedUrl = new URL("http://robotmoney.network/api/admin/webauthn/auth/options");
+    expect(relyingParty(proxiedUrl)).toEqual({ rpID: "robotmoney.network", expectedOrigin: "http://robotmoney.network" });
+
+    process.env.WEBAUTHN_ORIGIN = "https://robotmoney.network";
+    expect(relyingParty(proxiedUrl)).toEqual({ rpID: "robotmoney.network", expectedOrigin: "https://robotmoney.network" });
+
+    // WEBAUTHN_RP_ID stays independently overridable for a relying party
+    // whose id must differ from the origin's own hostname.
+    process.env.WEBAUTHN_RP_ID = "robotmoney.example";
+    expect(relyingParty(proxiedUrl)).toEqual({ rpID: "robotmoney.example", expectedOrigin: "https://robotmoney.network" });
+  } finally {
+    if (savedOrigin === undefined) delete process.env.WEBAUTHN_ORIGIN; else process.env.WEBAUTHN_ORIGIN = savedOrigin;
+    if (savedRpId === undefined) delete process.env.WEBAUTHN_RP_ID; else process.env.WEBAUTHN_RP_ID = savedRpId;
+  }
 });

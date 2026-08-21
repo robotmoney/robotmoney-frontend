@@ -229,6 +229,15 @@ services:
       # unset locks those routes except under RM_ALLOW_INSECURE/ephemeral.
       ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
       ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
+      # Passkey relying-party origin/host (issue #617): cloudflared terminates
+      # TLS in front of this plain-HTTP Bun server, so the request's own
+      # url.origin is http://... while the browser's real origin is
+      # https://... — WebAuthn verification compares origin including scheme
+      # and fails. relyingParty() in admin-webauthn.ts prefers these when set;
+      # unset falls back to url.origin, which is correct for a direct (no
+      # proxy) boot but wrong behind the tunnel. See .env.example.
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
       # Projects data source (backend/src/projects/access/select.ts). Unset →
       # offline fixture source (demo/dev). FAIL-CLOSED IN PROD: RM_ENV=prod
       # REQUIRES PROJECTS_SOURCE=live — the projects pipelines throw rather
