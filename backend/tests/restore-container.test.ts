@@ -1,4 +1,4 @@
-// backend/scripts/lib/restore-container.ts — resolveBackupFiles is the pure,
+// scripts/lib/restore-container.ts — resolveBackupFiles is the pure,
 // no-Docker piece (path resolution + existence checks); the rest is exercised
 // for real by backend/scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts and
 // stage-rehearsal.ts against an actual backup, which this test suite cannot
@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { resolveBackupFiles } from "../scripts/lib/restore-container.ts";
+import { resolveBackupFiles } from "../../scripts/lib/restore-container.ts";
 
 describe("resolveBackupFiles", () => {
   let dir: string;

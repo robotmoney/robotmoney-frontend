@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import net from "node:net";
 import postgres from "postgres";
 // Pin the image to the same version the harness uses; see
-// backend/scripts/lib/postgres-image.ts for the version and the -alpine
+// scripts/lib/postgres-image.ts for the version and the -alpine
 // variant that production-equivalent tests run.
-import { POSTGRES_IMAGE } from "../scripts/lib/postgres-image.ts";
+import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0033_swarm_member_uuid_ids.sql";

@@ -29,7 +29,7 @@
 
 import postgres from "postgres";
 import { columnExists, createChecker, printVerdict } from "../../lib/checks.ts";
-import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
+import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../../../scripts/lib/restore-container.ts";
 import { runChecks } from "./preflight.ts";
 
 const NAME = "restore-check-0.2.2";

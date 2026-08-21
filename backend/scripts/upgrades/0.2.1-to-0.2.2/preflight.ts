@@ -97,7 +97,7 @@ async function checkServerVersion(db: Db, { record }: Checker): Promise<void> {
   const major = Math.floor(v.num / 10000);
   // Production runs 18 (DigitalOcean managed, confirmed 2026-08-17), and since
   // issue #691 so do the backend test suite and the restore twin — both pinned
-  // by backend/scripts/lib/postgres-image.ts. 17 is still tolerated without a
+  // by scripts/lib/postgres-image.ts. 17 is still tolerated without a
   // warning because the demo / single-box stack (docker-compose.yml's
   // `postgres` service) is on it and a preflight may legitimately be pointed at
   // one; anything outside {17,18} is genuinely untested.

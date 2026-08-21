@@ -30,7 +30,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "../src/db/client.ts";
-import { POSTGRES_IMAGE, POSTGRES_MAJOR } from "../scripts/lib/postgres-image.ts";
+import { POSTGRES_IMAGE, POSTGRES_MAJOR } from "../../scripts/lib/postgres-image.ts";
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 

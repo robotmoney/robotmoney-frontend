@@ -18,11 +18,11 @@ import {
 // tooling's digital twin (scripts/lib/restore-container.ts) needs the identical
 // image and this file needs it too. It used to be a private literal here, one
 // major behind that twin and behind production, so every migration was
-// validated against a server it would never run on (issue #691). Importing
-// backend/tests -> backend/scripts/lib is an established edge
-// (tests/restore-container.test.ts), and this module is a leaf: two constants,
-// no imports, no side effects.
-import { POSTGRES_IMAGE, POSTGRES_MAJOR } from "../scripts/lib/postgres-image.ts";
+// validated against a server it would never run on (issue #691). Reached over
+// the same backend -> scripts edge as the naming import above — both modules are
+// leaves (constants and node builtins, no side effects), which is what keeps
+// that edge one-way and cheap.
+import { POSTGRES_IMAGE, POSTGRES_MAJOR } from "../../scripts/lib/postgres-image.ts";
 
 function freePort(): Promise<number> {
   return new Promise((res, rej) => {
@@ -127,7 +127,7 @@ if (serverMajor !== POSTGRES_MAJOR) {
   throw new Error(
     `ephemeral postgres is PostgreSQL ${server.version} (major ${serverMajor}) but ${POSTGRES_IMAGE} ` +
       `is pinned to major ${POSTGRES_MAJOR} — the suite must run the major production runs. ` +
-      `See backend/scripts/lib/postgres-image.ts.`,
+      `See scripts/lib/postgres-image.ts.`,
   );
 }
 
