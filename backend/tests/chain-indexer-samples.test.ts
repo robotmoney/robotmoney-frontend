@@ -9,6 +9,7 @@ import { sql } from "../src/db/client.ts";
 import { config, resolveVaultAdapters } from "../src/config.ts";
 import { sampleWalletSleeves } from "../src/worker/handlers/wallet.ts";
 import { sampleVaultAdapters } from "../src/worker/handlers/vault.ts";
+import { decodeAggregate3Calls, encodeAggregate3Result } from "../src/chain/base-rpc-client.ts";
 
 const realFetch = globalThis.fetch;
 const VAULT = config.vault.address;
@@ -47,27 +48,44 @@ function mockRpc(failAdapters: string[] = [], failAll = false) {
       const data = param.data;
       const sel = data.slice(0, 10);
 
-      if (failAdapters.some((a) => a.toLowerCase() === to)) {
-        throw new Error(`mockRpc: adapter ${to} call failed`);
-      }
+      // One sub-call's answer: null when this mock has no opinion on the
+      // selector, and a throw for an address the test asked to fail.
+      const answer = (target: string, callData: string): string | null => {
+        if (failAdapters.some((a) => a.toLowerCase() === target.toLowerCase())) {
+          throw new Error(`mockRpc: adapter ${target} call failed`);
+        }
+        const s = callData.slice(0, 10);
+        if (s === TOTAL_ASSETS_SEL) return word(28_000_000_000n);
+        if (s === BALANCE_OF_SEL) return word(1_000_000n);
+        if (s === CONVERT_TO_ASSETS_SEL) return word(1_000_000n);
+        if (s === GET_ETH_BALANCE_SEL) return word(50_000_000_000_000_000n);
+        return null;
+      };
 
       if (sel === AGGREGATE3_SEL) {
-        // Aggregate3 mock: return success for all
-        const decodeResult = [{ success: true, returnData: word(1_000_000_000n) }];
-        const encodeResult = "0x0000000000000000000000000000000000000000000000000000000000000020" +
-          "0000000000000000000000000000000000000000000000000000000000000001" +
-          "0000000000000000000000000000000000000000000000000000000000000020" +
-          "0000000000000000000000000000000000000000000000000000000000000001" +
-          word(1_000_000_000n).slice(2);
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: encodeResult }), { status: 200 });
+        // Answer the batch sub-call by sub-call, as the real Multicall3 does: a
+        // sub-call the test failed comes back {success:false} under allowFailure
+        // instead of failing the whole batch. sampleVaultAdapters reads its
+        // adapters through this path now that the #294 batching landed, so the
+        // per-adapter failure injection has to be expressed here to still bite.
+        const results = decodeAggregate3Calls(data).map((c) => {
+          try {
+            const rd = answer(c.target, c.callData);
+            return rd === null ? { success: false, returnData: "0x" } : { success: true, returnData: rd };
+          } catch (err) {
+            if (!c.allowFailure) throw err;
+            return { success: false, returnData: "0x" };
+          }
+        });
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: encodeAggregate3Result(results) }),
+          { status: 200 },
+        );
       }
 
-      if (sel === TOTAL_ASSETS_SEL) {
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: word(28_000_000_000n) }), { status: 200 });
-      }
-
-      if (sel === BALANCE_OF_SEL) {
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: word(1_000_000n) }), { status: 200 });
+      const single = answer(to, data);
+      if (single !== null) {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: single }), { status: 200 });
       }
     }
 

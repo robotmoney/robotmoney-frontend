@@ -1283,9 +1283,18 @@ degrade rules) those feeds were built against is the
   never a 5xx. The **sampling** side (`vault.sample_share_price`,
   `vault.sample_adapters` worker jobs, `backend/src/worker/handlers/vault.ts`)
   is the only code that still performs the `totalAssets()`/`totalSupply()`/
-  per-adapter `eth_call`s, each independently isolated (`Promise.allSettled`)
-  so one adapter's failed read never erases another's persisted value, and a
-  thrown read persists no row rather than a fabricated zero. Both jobs get a
+  per-adapter `eth_call`s. `vault.sample_adapters` reads EVERY configured
+  adapter in **one** `eth_call` via Multicall3 `aggregate3` (the same batching
+  `wallet-valuation.ts` uses), not one read each: three separate reads per tick
+  against the free public Base RPC is the per-IP burst that 429s on the shared
+  CI runner (#285/#287) and leaves the adapters unsampled. Each sub-call still
+  carries `allowFailure`, so one adapter's reverted read never erases another's
+  persisted value, and an unreadable read persists no row rather than a
+  fabricated zero. A tick that could not read every configured adapter returns
+  a DEGRADED result (`{ ok: false }`, §worker loop) rather than a success, so
+  the worker's exponential-backoff retry re-reads within the same slot instead
+  of leaving the hour unsampled until the next cron tick.
+  Both jobs get a
   boot-time one-shot enqueue mirroring `wallet.sample_balances`'s cold start.
   A 30s in-process cache still sits in front of the request-path reads.
 - **Config, not on-chain discovery** — `config.vault` (`backend/src/config.ts`)
@@ -1321,8 +1330,9 @@ degrade rules) those feeds were built against is the
   `(vault_address, adapter_address, sample_hour)`, upserted by the hourly
   `vault.sample_adapters` job (`backend/src/worker/handlers/vault.ts`, seeded
   in `db/seed.ts`). Each row carries `balance_usd`, `configured`, and
-  `provenance` (`'live' | 'stub' | 'stale' | 'seed'`); a thrown per-adapter
-  read persists no row, leaving the previous sample intact.
+  `provenance` (`'live' | 'stub' | 'stale' | 'seed'`); an adapter whose batched
+  `totalAssets()` sub-call reverted, returned empty, or could not be read at all
+  persists no row, leaving the previous sample intact.
 - **`GET /api/dashboards/vault-economics`** (`ROUTES.dashboards.vaultEconomics`,
   `backend/src/api/routes/dashboards.ts`) returns
   `{ asOf, stale, source, tvlUsd, sharePrice, totalShares, idleUsdc, apy7d, adapters }`
