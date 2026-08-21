@@ -15,9 +15,6 @@
 # documents the one host that opted in. The documented prod topology is still
 # apex/`www` (marketing → DO Spaces CDN), `swarm.`, and `app.`.
 #
-# D35 lists this file as one that keeps `site.robotmoney.net`. It no longer
-# does; update that bullet to match.
-#
 # NEVER COMMIT the credentials JSON that `cloudflared tunnel create` writes to
 # ~/.cloudflared/<uuid>.json. It is a tunnel-wide bearer credential; this file
 # only records its PATH.

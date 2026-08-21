@@ -80,7 +80,7 @@ work.
 **`robotmoney.net` cuts over onto the `api` process** (decision
 [D29](../decisions.md#d29--the-api-process-static_dir-is-the-cutover-host-for-robotmoneynet-and-its-deploy-path-prerenders-per-route-html-issue-480)),
 which co-serves the marketing SPA from `STATIC_DIR` with no reverse proxy
-(D11/D13) — the shape the cutover origin `site.robotmoney.net` already runs
+(D11/D13) — the shape the cutover origin `robotmoney.network` already runs
 behind the connector in §3.3. **Cloudflare Pages is not a production host
 here**: §1 disables Cloudflare git integration, the §3.1 token carries no Pages
 permission, and the one Pages project (`robotmoney-preview`, D20) has automatic
@@ -428,7 +428,7 @@ Worker, and marketing is reached DNS-only so Cloudflare does not cache it.)
 There is **no tunnel by default** (§1) — the default is proxied DNS + DO Cloud
 Firewall. A host may nonetheless opt into a `cloudflared` connector as the
 zero-public-ingress hardening ARCHITECTURE §4 describes, and one does today:
-`site.robotmoney.net`.
+`robotmoney.network`.
 
 Because the connector is **host-side software with no presence in
 `docker-compose*.yml`**, its configuration is checked in as
