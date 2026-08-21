@@ -17,7 +17,8 @@ runs). There is no Worker/`wrangler`, no reverse proxy, and no tunnel by default
 > for **v0.2.1 → v0.2.2**, and this one is **not sufficient for it**. Two of its
 > go/no-go gates decide the outcome before any instruction here applies: an
 > **admin-lockout gate** that can leave the upgrade unrecoverable, and a
-> **mandatory `--external-pg`** — without it the cutover silently boots an empty
+> **mandatory `--db external`** (spelled `--external-pg` in that runbook, still
+> accepted) — without it the cutover silently boots an empty
 > database and serves it as production. Neither is decided here.
 
 ---

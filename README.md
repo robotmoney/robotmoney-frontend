@@ -111,7 +111,7 @@ the equivalent `bun run demo -- …` so the choice is always reproducible by han
 
 - **`--static-port` always** — this is the boot a tunnel points at, so it takes
   the fixed host port rather than whatever Docker hands out.
-- **`--external-pg` when `.env` describes a Postgres** — otherwise the demo's own
+- **`--db external` when `.env` describes a Postgres** — otherwise the demo's own
   ephemeral container, exactly as a plain `bun run demo` would use. An `.env`
   that is missing, has no database, or has an unusable one falls back quietly;
   nothing about probing may fail a boot.
@@ -121,16 +121,31 @@ documented job and it announces the choice before anything starts. `bun run demo
 -- …` stays fully explicit. Extra flags pass through: `bun run demo:stage --
 --no-tui`.
 
-### Use a managed Postgres instead of the ephemeral container
+### Which database a boot runs against — `--db`
 
-By default the demo runs its own throwaway `postgres` container and a
-fresh-per-run `pgdata` volume. `--external-pg` runs it against a managed server
-instead, and starts **no postgres container at all** — no service, no volume, no
-published pg port:
+One flag, three named data paths. The default is unchanged:
+
+| Mode | What it is | Who owns the data |
+|---|---|---|
+| `--db ephemeral` *(default)* | the demo's own throwaway `postgres` container + fresh-per-run `pgdata` volume | this boot |
+| `--db external` | a managed server whose address comes from `.env`; **no postgres container at all** | somebody else — teardown cannot undo a thing |
+| `--db twin` | a local container restored from an encrypted production dump | this boot, and the copy outlives it |
+
+They are one flag rather than three booleans because the two questions that
+matter — *where does postgres live* and *who owns the data* — are not the same
+question, and a twin is the case that separates them: it dials a URL like
+`external` does, but every write lands in a copy this boot may reclaim.
 
 ```bash
-bun run demo -- --external-pg
+bun run demo -- --db external
 ```
+
+`--external-pg` still works as a deprecated spelling of `--db external`, with a
+warning.
+
+Unknown flags are now **errors**. `bun run demo -- --fixed-ports` used to be
+silently ignored and boot the default data path looking healthy; it now refuses
+before anything starts.
 
 The connection details come from **`.env`**, which the flag reads directly (not
 from the ambient environment — a stray exported `host` must never decide which
@@ -166,8 +181,26 @@ password-redacted URL.
 Refusals are loud, never a silent fall back to the throwaway container: a
 missing `.env`, an unparseable or non-`postgres://` URL, or a URL pointing at
 `postgres`/`localhost` (which inside a container means the container itself)
-each fail the boot with the reason. `--external-pg` and `--pg-data` are mutually
-exclusive.
+each fail the boot with the reason. `--pg-data` applies only to `--db ephemeral`
+— it bind-mounts that container's data directory, so pairing it with a mode that
+starts no such container is refused by name.
+
+### Rehearse an upgrade against a copy of production — `--db twin`
+
+```bash
+bun run twin:capture        # dump the read-only REPLICA, gpg-encrypted (never the primary)
+bun smoke -- --db twin      # restore that dump locally and boot the real stack against it
+bun run twin:rehearse       # the same boot, unattended, plus the frontend checks
+```
+
+The twin's data lives in a labelled named volume and follows the same contract as
+`pgdata`: teardown removes the container, **keeps** the volume, and `bun run
+demo:clean` reclaims it. It holds real credential material, so reclaim it when
+you are done. Every boot restores fresh — re-running does not resume, it
+discards, because the previous run migrated the copy.
+
+`--db twin` requires `--smoke`: a restored database is populated, and the demo
+scenario's fixtures overwrite rows by design.
 
 ### Attach a prospective agent
 
@@ -276,7 +309,10 @@ bun run demo:clean           # delete stopped demos' pg data volumes (label robo
 bun run demo:reap -- --dry-run          # SHOW errant containers a sweep would remove (changes nothing)
 bun run demo:reap -- --older-than 6h    # …then actually reap them (labels only, never name matching)
 bun run demo -- --pg-data <host-dir>   # resumable demo: bind postgres data to <host-dir>
-bun run demo -- --external-pg          # run against the MANAGED Postgres in .env (no pg container)
+bun run demo -- --db external          # run against the MANAGED Postgres in .env (no pg container)
+bun smoke -- --db twin                 # boot against a local restored copy of production
+bun run twin:capture         # dump the production REPLICA, gpg-encrypted (rm_readonly)
+bun run twin:rehearse        # unattended digital-twin rehearsal (restore + boot + checks)
 bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
 bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)

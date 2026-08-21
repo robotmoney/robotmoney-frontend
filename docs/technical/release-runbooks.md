@@ -145,10 +145,23 @@ that the backup tooling produces a restorable artifact and that the restore
 procedure completes without error. Do not proceed to the digital-twin
 rehearsal until this smoke test passes.
 
+The repo ships both halves, and a runbook names them rather than restating
+them:
+
+```bash
+bun run twin:capture     # rm_readonly -> replica; pg_dump + pg_dumpall, gpg-encrypted
+```
+
+`twin:capture` refuses to run against the primary (`pg_is_in_recovery()` must be
+true), refuses the application's writer credential, refuses a `pg_dump` older
+than the server, and refuses to write inside the checkout. It emits a
+`manifest.json` recording what it captured and from where — §4.5 cites that file
+instead of transcribing its contents.
+
 ### 4.4. Digital-twin rehearsal
 
 Set up a digital twin by restoring the backup from §4.3 to a local Postgres
-container (not a remote database) on a staging machine. Run the full upgrade
+container (**not** a remote database) on a staging machine. Run the full upgrade
 on the twin, including:
 
 - preflight checks,
@@ -158,6 +171,22 @@ on the twin, including:
 The twin must use the same release candidate that is planned for production.
 Any failure, warning, or unexpected state change discovered on the twin is a
 blocking issue.
+
+The twin is a named data path, not an assembly:
+
+```bash
+bun smoke -- --db twin      # restore the backup, boot the real stack against it
+bun run twin:rehearse       # the same boot, unattended, plus the frontend checks
+```
+
+"not a remote database" is now enforced rather than trusted: `--db twin`
+restores into a local container and points the stack at it, and the mode enum
+makes "twin" and "external" separate, non-substitutable choices.
+
+**`twin:rehearse` covers restore + boot + serve, not the whole gate.** The
+preflight and postflight steps above are version-specific and stay explicit
+commands in the per-release runbook — the driver deliberately does not run them,
+because what changes per release is exactly the part it would have to guess at.
 
 ### 4.5. Stage rehearsal report
 
@@ -174,6 +203,11 @@ that includes at least:
 
 The stage rehearsal gate passes only when this report exists, all acceptance
 criteria pass, and the operator has signed off.
+
+The twin setup summary should CITE the artifacts rather than restate them:
+`manifest.json` in the backup directory records the source, role, replica proof
+and server/client versions, and the boot banner records the container, the volume
+and the backup stamp.
 
 ### 4.6. Fix loop
 
@@ -246,7 +280,13 @@ runbook must:
 - provide post-cutover verification steps,
 - be written so it can be executed top to bottom, every command
   copy-pasteable, every claim verified against a specific commit SHA rather
-  than described from memory.
+  than described from memory,
+- **name data paths by `--db <mode>`; never describe how to construct one.**
+  There are three — `ephemeral` (the demo's own container), `external` (a managed
+  server from `.env`), `twin` (a local restored copy of production) — and the
+  tooling that builds each is shared and version-agnostic. A runbook that
+  re-derives a twin out of lower-level flags is how the last one ended up
+  pinned to a single release.
 
 By convention the runbook lives on the release's `releases-A.B.x` branch,
 alongside the code it describes cutting over to, so a runbook change and the

@@ -10,6 +10,26 @@ namespace guard's full behaviour (§2.1). **This runbook does not repeat it; it
 cites it.** Where the two disagree, the contradiction is called out inline under
 **CONTRADICTS deployment.md**.
 
+> **Flag-surface note (added after this runbook was written).** The demo/smoke
+> data path is now selected by one enum flag — `--db ephemeral|external|twin` —
+> and the digital twin has a first-class mode of its own instead of borrowing
+> `--external-pg`. **Every command below still works**: `--external-pg` remains
+> an accepted spelling of `--db external` and prints a deprecation notice.
+>
+> This runbook is deliberately **not** rewritten for the new surface. It is the
+> committed, executed record of the v0.2.2 cutover, and
+> [stack-runbook-reconciliation.md §6](../technical/stack-runbook-reconciliation.md)
+> is explicit that the 0.2 line should not be reworked in passing. New tooling
+> that supersedes parts of §5.1–§5.3b:
+>
+> | This runbook's step | The standing command |
+> |---|---|
+> | §5.1/§5.2 hand-run `pg_dump` + `gpg` | `bun run twin:capture` |
+> | §5.3b stage rehearsal | `bun run twin:rehearse` |
+> | §7.3's `--smoke --external-pg` against a restored copy | `bun smoke -- --db twin` |
+>
+> Use those from the **0.2.3** runbook onward; here, follow the text as written.
+
 > **Filename note.** This file is `v0-2-2-rollout.md`, not `v0.2.2-rollout.md`.
 > `scripts/lint-docs.sh:32` enforces `^[a-z0-9]+(-[a-z0-9]+)*\.md$` on every
 > `docs/runbooks/*.md`, and a dot in the stem fails that check.
