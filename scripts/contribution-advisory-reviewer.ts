@@ -63,23 +63,34 @@ export function extractOpenCodeAssistantText(transcript: string): string {
   return parts.join("\n").trim();
 }
 
+// CLAMPS, and not by accident. MAX_CONCERNS/MAX_CONCERN_CHARS exist to bound what
+// an UNTRUSTED pull-request diff can turn into a public PR comment. This used to
+// enforce them by throwing, which bounded the comment by failing the whole job:
+// a keyless model that padded one bullet past 400 characters — a formatting slip,
+// not an attack — took the scheduled workflow red every few days and reviewed
+// nothing. Clamping enforces the SAME bounds strictly (the emitted body can never
+// exceed them) while a slip degrades to a slightly shortened advisory instead of
+// a red run. Truncation is marked with an ellipsis so a clipped concern is never
+// mistaken for the model's whole thought.
+//
+// Still fatal: output carrying NO bullet at all. That is unusable rather than
+// merely untidy, and a silent empty advisory would be the dishonest outcome.
 export function normalizeContributionReview(text: string): string {
   const normalized = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").trim();
   if (normalized === CLEAN_CONTRIBUTION_REVIEW) return CLEAN_CONTRIBUTION_REVIEW;
 
-  const lines = normalized.split("\n");
-  if (lines.length === 0 || lines.length > MAX_CONCERNS) {
-    throw new Error(`contribution reviewer returned ${lines.length} concerns; expected 1-${MAX_CONCERNS}`);
+  // Bullets only: a preamble ("Here are the concerns:") or a trailing note is
+  // dropped rather than published, which is also what keeps prose the model was
+  // talked into emitting out of the comment body.
+  const bullets = normalized.split("\n").filter((line) => line.startsWith("- "));
+  if (bullets.length === 0) {
+    throw new Error("contribution reviewer returned no Markdown bullets");
   }
-  for (const line of lines) {
-    if (!line.startsWith("- ")) {
-      throw new Error("contribution reviewer findings must contain Markdown bullets only");
-    }
-    if (line.length > MAX_CONCERN_CHARS) {
-      throw new Error(`contribution reviewer concern exceeds ${MAX_CONCERN_CHARS} characters`);
-    }
-  }
-  return lines.join("\n");
+
+  return bullets
+    .slice(0, MAX_CONCERNS)
+    .map((line) => (line.length <= MAX_CONCERN_CHARS ? line : line.slice(0, MAX_CONCERN_CHARS - 1) + "…"))
+    .join("\n");
 }
 
 export interface ContributionReviewOptions {

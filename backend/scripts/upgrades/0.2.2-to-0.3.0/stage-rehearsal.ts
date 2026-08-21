@@ -1,16 +1,16 @@
 // ⛔ RUN THIS ON THE DEDICATED STAGING HOST, NEVER THE PRODUCTION API HOST.
 // This does a real Docker image build plus a full app boot — genuine compute
 // and disk load that a machine serving live production traffic cannot spare
-// (docs/runbooks/*.md §2, added 2026-08-17 after exactly this mistake).
+// (docs/runbooks/rollout-procedure.md §4, added after exactly this mistake).
 //
 // The heavy rehearsal: restore the Gate C backup into a throwaway local
 // Postgres (same mechanism as restore-check.ts), then boot the REAL app
-// against it with the EXACT command §7.3 runs for real cutover —
+// against it with the EXACT command §8.2 runs for real cutover —
 // `bun smoke -- --external-pg --no-tui` — so this release's actual
 // migrations run for real, not just the static checks preflight.ts makes.
 // Then verifies the site actually serves, reusing scripts/demo-frontend-check.ts
 // (the same route/content checks CI runs), not a bespoke health probe, and
-// finally runs §8's postflight against the migrated twin (§5.3b.0 step 3, G8)
+// finally runs this release's postflight against the migrated twin (§6.1 step 3, G8)
 // while the twin still exists — the teardown below is why that cannot be a
 // separate command run afterwards.
 //
@@ -30,7 +30,7 @@
 // routine preflight.
 //
 // Usage:
-//   bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts [backupDir]
+//   bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts [backupDir]
 //
 // Exit codes: 0 = migrated and booted clean, frontend checks pass, and
 // postflight is clean against the twin; 1 = the boot, a frontend check or the
@@ -44,12 +44,12 @@ import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } fro
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
 import { TAG_GLOB } from "./release.ts";
 
-const NAME = "stage-rehearsal-0.2.2";
+const NAME = "stage-rehearsal-0.3.0";
 const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
 const err = (msg: string) => console.error(`[${NAME}] ${msg}`);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-// backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>
+// backend/scripts/upgrades/0.2.2-to-0.3.0/ -> <repo root>
 const repoRoot = join(scriptDir, "..", "..", "..", "..");
 
 async function spawn(cmd: string[], opts: { cwd?: string; env?: Record<string, string | undefined> } = {}): Promise<number> {
@@ -58,7 +58,7 @@ async function spawn(cmd: string[], opts: { cwd?: string; env?: Record<string, s
 }
 
 /**
- * How long the boot gets to reach readiness (§5.3b.1 G3). Generous on purpose:
+ * How long the boot gets to reach readiness (§6.2 G3). Generous on purpose:
  * a cold run pulls base images and compiles before a single container starts.
  * This is a DEADLINE, not an estimate — exceeding it is a failure (G1), never
  * a reason to wait longer.
@@ -189,13 +189,13 @@ async function main(backupDirArg?: string): Promise<number> {
     log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key`);
 
     log(`booting: bun scripts/demo.ts --smoke --external-pg --no-tui  (project=${project}, this can take several minutes)`);
-    // §7.3's box: CI unset, or the boot tears itself down on exit.
+    // §8.2's box: CI unset, or the boot tears itself down on exit.
     const { CI: _ci, ...envWithoutCi } = process.env as Record<string, string | undefined>;
     const bootEnv = { ...envWithoutCi, DEMO_PROJECT: project };
-    // SUPERVISED, NOT AWAITED (§5.3b.1 G2). With CI unset this boot never
+    // SUPERVISED, NOT AWAITED (§6.2 G2). With CI unset this boot never
     // self-terminates BY DESIGN: it falls past demo-main's CI-gated exits
     // (scripts/lib/demo-main.ts:1175, :1212) into the LIVE steady-state loop
-    // and cycles swarm sessions forever. That is correct for §7.3, where the
+    // and cycles swarm sessions forever. That is correct for §8.2, where the
     // stack must stay up serving production — so awaiting it here hangs the
     // rehearsal permanently, which is exactly what it used to do. Setting CI
     // is NOT the fix: a truthy CI tears the stack down regardless of exit
@@ -263,17 +263,17 @@ async function main(backupDirArg?: string): Promise<number> {
       return 1;
     }
 
-    // §5.3b.0 step 3 — the half that used to have nowhere to run. §5.5 mandates
-    // "every §8 check and every §8.1 AC against the twin after the boot reaches
+    // §6.1 step 3 — the half that used to have nowhere to run. §6.4 mandates
+    // "every postflight check and every release AC against the twin after the boot reaches
     // readiness", but the twin exists only inside this function's try block:
     // the finally below tears it down. Before this, the only way to satisfy
     // step 3 was to race a watcher against teardown from another terminal,
     // which is not a procedure. G8 makes the window part of the contract.
-    log("running §8's postflight checks against the migrated twin (§5.3b.0 step 3)");
+    log("running this release's postflight checks against the migrated twin (§6.1 step 3)");
     const postflightCode = await spawn(
       [
         "bun",
-        "scripts/upgrades/0.2.1-to-0.2.2/postflight.ts",
+        "scripts/upgrades/0.2.2-to-0.3.0/postflight.ts",
         `--base-url=${backendUrl}`,
         "--emit-receipt=P5.postflight-twin",
         ...(backupDirArg ? [`--backup-dir=${backupDirArg}`] : []),
@@ -287,8 +287,8 @@ async function main(backupDirArg?: string): Promise<number> {
       },
     );
     if (postflightCode !== 0) {
-      err("postflight FAILED against the migrated twin — §5.5: treat this exactly as a failed production");
-      err("cutover. Diagnose, patch, cut the next rc, re-rehearse. Do not carry it into §7.");
+      err("postflight FAILED against the migrated twin — §6.4: treat this exactly as a failed production");
+      err("cutover. Diagnose, patch, cut the next rc, re-rehearse. Do not carry it into the cutover.");
       return 1;
     }
 

@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CLEAN_CONTRIBUTION_REVIEW,
+  MAX_CONCERN_CHARS,
+  MAX_CONCERNS,
+  normalizeContributionReview,
   reviewContributionDiff,
 } from "../../contribution-advisory-reviewer.ts";
 import { delimitContributionDiff } from "../../lib/contribution-reviewer-diff.ts";
@@ -150,5 +153,42 @@ describe("contribution advisory reviewer fixture contract", () => {
       opencodeBin: join(fakeDir, "missing-opencode"),
       timeoutMs: 100,
     })).rejects.toThrow(/failed loudly|failed to spawn|no fallback/i);
+  });
+});
+
+describe("contribution review normalization bounds", () => {
+  test("the clean sentinel passes through untouched", () => {
+    expect(normalizeContributionReview(`  ${CLEAN_CONTRIBUTION_REVIEW}\n`)).toBe(CLEAN_CONTRIBUTION_REVIEW);
+  });
+
+  test("an over-long concern is truncated to the bound, not thrown on", () => {
+    // The real scheduled-run failure: a keyless model padded one bullet past the
+    // bound and took the whole workflow red.
+    const long = "- " + "x".repeat(MAX_CONCERN_CHARS * 2);
+    const out = normalizeContributionReview(long);
+    expect(out.length).toBe(MAX_CONCERN_CHARS);
+    expect(out.endsWith("…")).toBe(true);
+    expect(out.startsWith("- xxx")).toBe(true);
+  });
+
+  test("a concern exactly at the bound is left alone", () => {
+    const exact = "- " + "x".repeat(MAX_CONCERN_CHARS - 2);
+    expect(normalizeContributionReview(exact)).toBe(exact);
+  });
+
+  test("surplus concerns are dropped to the cap", () => {
+    const many = Array.from({ length: MAX_CONCERNS + 3 }, (_, i) => `- concern ${i}`).join("\n");
+    const out = normalizeContributionReview(many).split("\n");
+    expect(out).toHaveLength(MAX_CONCERNS);
+    expect(out[0]).toBe("- concern 0");
+  });
+
+  test("non-bullet prose is dropped rather than published", () => {
+    const noisy = ["Here are the concerns:", "- a real concern", "Hope that helps!"].join("\n");
+    expect(normalizeContributionReview(noisy)).toBe("- a real concern");
+  });
+
+  test("output carrying no bullet at all is still fatal", () => {
+    expect(() => normalizeContributionReview("I could not review this diff.")).toThrow(/no Markdown bullets/);
   });
 });

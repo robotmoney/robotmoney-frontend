@@ -31,6 +31,8 @@
     "twin:capture": "bun run --cwd backend scripts/twin-capture.ts",
     "twin:rehearse": "bun scripts/twin-rehearse.ts",
     "smoke": "bun scripts/demo.ts --smoke",
+    "rollout:where": "bun backend/scripts/upgrades/0.2.2-to-0.3.0/where.ts",
+    "rollout:where:v022": "bun backend/scripts/upgrades/0.2.1-to-0.2.2/where.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check"
   },

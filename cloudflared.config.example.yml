@@ -5,7 +5,7 @@
 #
 # This file is committed so the tunnel's shape is REVIEWABLE — the connector is
 # host-side software with no presence in docker-compose*.yml, so without a
-# checked-in template the only description of what `site.robotmoney.net` points
+# checked-in template the only description of what `robotmoney.network` points
 # at lives on one droplet's filesystem, where no agent or reviewer can see it.
 #
 # NOT THE DEFAULT DESIGN. docs/runbooks/deployment.md §1 states there is "no
@@ -28,7 +28,7 @@ credentials-file: /root/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
 # ── Ingress ─────────────────────────────────────────────────────────────────
 # Rules are evaluated top-down; the first hostname match wins.
 ingress:
-  # site.robotmoney.net → the STAGE demo stack.
+  # robotmoney.network → the STAGE demo stack.
   #
   # WHY 48787 AND NOTHING ELSE. This is the single fixed host port in the whole
   # system (scripts/stack/ports.ts:39). Every other published port — including
@@ -40,7 +40,7 @@ ingress:
   #
   # Bring the origin up with:  bun run demo:stage
   # Confirm it with:           bun run demo:status
-  - hostname: site.robotmoney.net
+  - hostname: robotmoney.network
     service: http://127.0.0.1:48787
 
   # REQUIRED final rule — cloudflared refuses to start without a catch-all. A
@@ -70,7 +70,7 @@ ingress:
 # INSTALL AS A SERVICE so the tunnel survives a reboot:
 #     cloudflared tunnel login                    # interactive; needs the CF account
 #     cloudflared tunnel create <name>            # prints UUID + credentials path
-#     cloudflared tunnel route dns <name> site.robotmoney.net
+#     cloudflared tunnel route dns <name> robotmoney.network
 #     cloudflared service install                 # systemd unit, enabled at boot
 #
 # The origin does NOT survive a reboot on its own — `bun run demo:stage` is

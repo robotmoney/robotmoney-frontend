@@ -11,9 +11,11 @@ software to deploy), **DigitalOcean = compute + storage** (everything CI builds 
 runs). There is no Worker/`wrangler`, no reverse proxy, and no tunnel by default.
 
 > **⛔ Upgrading production to v0.2.2? Read
-> [the rollout runbook](./v0-2-2-rollout.md) FIRST — before anything below.**
+> [the rollout procedure](./rollout-procedure.md) and the current release's
+> runbook FIRST — before anything below.**
 > This document is the *standing* credential and topology reference;
-> [`v0-2-2-rollout.md`](./v0-2-2-rollout.md) is the *version-specific* procedure
+> [`rollout-procedure.md`](./rollout-procedure.md) plus the release's own runbook
+> is the *version-specific* procedure
 > for **v0.2.1 → v0.2.2**, and this one is **not sufficient for it**. Two of its
 > go/no-go gates decide the outcome before any instruction here applies: an
 > **admin-lockout gate** that can leave the upgrade unrecoverable, and a
@@ -79,7 +81,7 @@ work.
 **`robotmoney.net` cuts over onto the `api` process** (decision
 [D29](../decisions.md#d29--the-api-process-static_dir-is-the-cutover-host-for-robotmoneynet-and-its-deploy-path-prerenders-per-route-html-issue-480)),
 which co-serves the marketing SPA from `STATIC_DIR` with no reverse proxy
-(D11/D13) — the shape the cutover origin `site.robotmoney.net` already runs
+(D11/D13) — the shape the cutover origin `robotmoney.network` already runs
 behind the connector in §3.3. **Cloudflare Pages is not a production host
 here**: §1 disables Cloudflare git integration, the §3.1 token carries no Pages
 permission, and the one Pages project (`robotmoney-preview`, D20) has automatic
@@ -101,8 +103,10 @@ bun run static:assemble        # scripts/static-assembly.sh → _static/
 which copies `frontend/public` into `_static/` and runs `scripts/prerender.ts`
 over it (`PRERENDER_DIR=_static`), writing a `<route>/index.html` for every
 `<loc>` in `frontend/public/sitemap.xml` from `seo.js`'s `metaFor` table — the
-same prerenderer `scripts/cloudflare-statics.sh` runs over `_site`, so there is
-one metadata table for both hosts. `docker-compose.yml` bind-mounts `./_static`
+same prerenderer the retired Cloudflare Pages assembly used to run over `_site`,
+so there has only ever been one metadata table. (That script,
+`scripts/cloudflare-statics.sh`, was removed in #608 — the Pages pipeline it
+served was never turned on. See architecture.md.) `docker-compose.yml` bind-mounts `./_static`
 read-only at `/srv/frontend`.
 
 **Operationally:**
@@ -259,7 +263,7 @@ that block cannot lose them silently.)
 > is honoured only by the api guard (`backend/src/db/handle-namespace.ts:476`).
 > A failing initializer throws (`scripts/stack/stack.ts:248-251`) and fails the
 > boot. On that workflow the remedy is the repair above, or rollback — not this
-> variable. See docs/runbooks/v0-2-2-rollout.md §7.5.
+> variable. See docs/runbooks/rollout-procedure.md §7.5.
 
 The api then logs the same block plus an `OVERRIDE:` line, serves anyway, and
 reports `handle_namespace: "overridden"` at `/health` for the whole life of the
@@ -425,7 +429,7 @@ Worker, and marketing is reached DNS-only so Cloudflare does not cache it.)
 There is **no tunnel by default** (§1) — the default is proxied DNS + DO Cloud
 Firewall. A host may nonetheless opt into a `cloudflared` connector as the
 zero-public-ingress hardening ARCHITECTURE §4 describes, and one does today:
-`site.robotmoney.net`.
+`robotmoney.network`.
 
 Because the connector is **host-side software with no presence in
 `docker-compose*.yml`**, its configuration is checked in as

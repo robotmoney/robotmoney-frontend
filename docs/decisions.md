@@ -1539,7 +1539,7 @@ second.
 
 **1. Which host serves `robotmoney.net` after cutover? The `api` process,
 serving an assembled `STATIC_DIR`.** It is what the cutover origin already
-does — `site.robotmoney.net` is a `cloudflared` connector onto the single-box
+does — `robotmoney.network` is a `cloudflared` connector onto the single-box
 stack (`docs/runbooks/deployment.md` §3.3), and `docker-compose.yml` sets
 `STATIC_DIR: /srv/frontend` so the api co-serves the marketing SPA with no
 reverse proxy (D11, D13). **Cloudflare Pages is not a candidate for
@@ -1594,7 +1594,7 @@ for `preview/*` hosting, unchanged.
 - **Enable production deploys on the Cloudflare Pages project** — reverses D13
   (Cloudflare = DNS + observability), D20 (`preview/*` only) and the GitOps
   principle that no vendor watches the repo, and would still leave
-  `site.robotmoney.net`'s api-served origin unfixed.
+  `robotmoney.network`'s api-served origin unfixed.
 - **Prerender into `frontend/public/` in place** — build output in the source
   tree, and `/skills` is both a sitemap route and an existing asset directory
   (`frontend/public/skills/`), so the outputs would interleave with sources.

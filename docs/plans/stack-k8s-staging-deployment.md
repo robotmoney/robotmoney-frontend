@@ -1,5 +1,13 @@
 # Deployment plan — `stack` on Kubernetes, staging first
 
+> **Status: future-infrastructure proposal, not adopted.** `stack` is under
+> evaluation for how deployment might work at some point in the future. Nothing
+> in production uses it today, and no accepted decision in
+> [`decisions.md`](../decisions.md) stands behind it. Current production
+> procedure is [`docs/runbooks/rollout-procedure.md`](../runbooks/rollout-procedure.md)
+> plus the release's own runbook. Read this as design work, not as instructions.
+
+
 Standing up a professional deployment environment for robotmoney using
 [bozemanpass/stack](https://github.com/bozemanpass/stack), targeting Kubernetes,
 with Postgres owned by the deployment and backed up through K8up/restic.
@@ -268,7 +276,7 @@ cluster-internal Postgres. Three options:
    `kubectl apply` and the deploy stops being one artifact.
 
 **Recommendation: (1) for staging**, because it preserves the abort gate that
-`v0-2-2-rollout.md`'s go/no-go depends on, and staging is where we learn whether
+the rollout runbooks' go/no-go depends on, and staging is where we learn whether
 the exec dance is tolerable. Revisit before any production cutover.
 
 The cost of *not* deciding is already visible: the running deployment serves
@@ -355,7 +363,7 @@ written once this one has evidence.
   precisely so this is a spec change, not a rewrite.
 - **Restic password loss is total backup loss** (§4). Escrow before first backup.
 - **The migration abort gate may weaken** (§5), which matters because
-  `v0-2-2-rollout.md`'s go/no-go gates assume it.
+  the rollout runbooks' go/no-go gates assume it.
 - **Liveness-only probes** (field guide §12) mean a pod takes traffic before it
   can serve. Acceptable at one replica; decide before scaling.
 - **`deploy` is not idempotent** — it mints a new deployment identity, namespace

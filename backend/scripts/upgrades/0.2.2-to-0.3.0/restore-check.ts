@@ -1,23 +1,23 @@
 // ⛔ RUN THIS ON THE DEDICATED STAGING HOST, NEVER THE PRODUCTION API HOST
-// (docs/runbooks/*.md §2). Lighter than stage-rehearsal.ts — one small
+// (docs/runbooks/rollout-procedure.md §4). Lighter than stage-rehearsal.ts — one small
 // container, no image build — but still real load, and the rule is "the
 // staging host," not "whichever checks seem cheap enough."
 //
-// Restore-verify the encrypted Gate C backup (docs/runbooks/*.md §5) into a
+// Restore-verify the encrypted Gate C backup (docs/runbooks/rollout-procedure.md §5) into a
 // THROWAWAY local Postgres container, THEN run this release's full preflight
 // checks (preflight.ts's runChecks) against that restored copy. Touches
 // nothing on production — no network path to it at all once the encrypted
 // files are read from disk. This is deliberately the FIRST place preflight's
 // checks run: the runbook's process is dump -> restore -> check the dump ->
-// only then check the live replica (§4), never production first.
+// only then check the live replica, never production first.
 //
 // This is the FAST, SQL-only check. For a much heavier but much stronger
 // rehearsal — actually running this release's migrations for real and
 // booting the whole app against the restored data — see stage-rehearsal.ts.
 //
 // Usage:
-//   bun scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts [backupDir]
-//   backupDir defaults to ~/rm-backup-v022. Expects, inside it:
+//   bun scripts/upgrades/0.2.2-to-0.3.0/restore-check.ts [backupDir]
+//   backupDir defaults to ~/rm-backup-v030. Expects, inside it:
 //     .last-stamp                       — the STAMP §5.1 generated
 //     rm-preupgrade-<STAMP>.dump.gpg    — §5.1/§5.2's encrypted pg_dump
 //     rm-globals-<STAMP>.sql.gpg        — §5.1/§5.2's encrypted pg_dumpall --globals-only
@@ -37,10 +37,10 @@ import { runChecks } from "./preflight.ts";
 import { TAG_GLOB } from "./release.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-// backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>
+// backend/scripts/upgrades/0.2.2-to-0.3.0/ -> <repo root>
 const repoRoot = join(scriptDir, "..", "..", "..", "..");
 
-const NAME = "restore-check-0.2.2";
+const NAME = "restore-check-0.3.0";
 const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
 const err = (msg: string) => console.error(`[${NAME}] ${msg}`);
 
@@ -75,25 +75,30 @@ async function run(backupDirArg?: string): Promise<number> {
         UNION ALL SELECT 'swarm_sessions', count(*) FROM swarm_sessions
         UNION ALL SELECT 'admin_credential', count(*) FROM admin_credential
         UNION ALL SELECT 'schema_migrations', count(*) FROM schema_migrations
+        UNION ALL SELECT 'wallet_balance_samples', count(*) FROM wallet_balance_samples
+        UNION ALL SELECT 'job_schedules', count(*) FROM job_schedules
       `) as unknown as { t: string; count: string }[];
       for (const row of counts) log(`  ${row.t}: ${row.count}`);
 
-      // §5.3's namespace invariant — same pre-0030 landmine as §8's checks
-      // 4/6/7/9: swarm_members.handle does not exist until migration 0030
-      // applies, so check column existence first (docs/runbooks/*.md §5.3).
-      if (await columnExists(db, "swarm_members", "handle")) {
-        const violations = (await db.unsafe(
-          `SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
-           FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id`,
-        )) as unknown as { holder: string; handle: string; shadowed: string }[];
-        if (violations.length > 0) {
-          err(`${violations.length} handle/id namespace violation(s) in the restored copy`);
-          return 1;
-        }
-        log("  namespace invariant: 0 rows (post-0030 backup, clean)");
-      } else {
-        log("  swarm_members.handle absent — this backup predates migration 0030 (expected pre-upgrade)");
+      // The handle/id namespace invariant. For v0.2.2 this had to tolerate a
+      // pre-0030 backup, where swarm_members.handle did not exist yet. That
+      // case is gone: any dump taken from a v0.2.2 production database is
+      // post-0030 by definition, so an absent column here means the dump is
+      // NOT from the database this upgrade claims to be upgrading.
+      if (!(await columnExists(db, "swarm_members", "handle"))) {
+        err("swarm_members.handle is absent in the restored dump — this backup predates migration 0030,");
+        err("so it did not come from a v0.2.2 database. The upgrade's premise does not hold for this dump.");
+        return 1;
       }
+      const violations = (await db.unsafe(
+        `SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
+         FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id`,
+      )) as unknown as { holder: string; handle: string; shadowed: string }[];
+      if (violations.length > 0) {
+        err(`${violations.length} handle/id namespace violation(s) in the restored copy`);
+        return 1;
+      }
+      log("  namespace invariant: 0 rows");
 
       log("");
       log("running this release's preflight checks against the restored dump");
@@ -106,14 +111,14 @@ async function run(backupDirArg?: string): Promise<number> {
         blocked: `[${NAME}] VERDICT: DUMP BLOCKED`,
       });
       if (preflightCode !== 0) {
-        err("a preflight check failed against the restored dump — do not proceed to the live replica (§4) until this is clean");
+        err("a preflight check failed against the restored dump — do not proceed to the live replica until this is clean");
         return 1;
       }
     } finally {
       await db.end({ timeout: 5 });
     }
 
-    log("restore verified and dump-based preflight is clean — safe to proceed to §4's live replica check");
+    log("restore verified and dump-based preflight is clean — safe to proceed to the live replica check");
     return 0;
   } finally {
     teardownContainer(restored.container, log);

@@ -38,7 +38,10 @@ export interface BackupFiles {
 }
 
 export function resolveBackupFiles(backupDirArg?: string): BackupFiles | { error: string } {
-  const backupDir = backupDirArg ?? join(homedir(), "rm-backup-v022");
+  // Same precedence as rollout-receipt.ts's DEFAULT_BACKUP_DIR: explicit arg,
+  // then RM_BACKUP_DIR, then v0.2.2's literal directory for that release only.
+  const backupDir =
+    backupDirArg ?? (process.env.RM_BACKUP_DIR?.trim() || join(homedir(), "rm-backup-v022"));
   const stampFile = join(backupDir, ".last-stamp");
   if (!existsSync(stampFile)) {
     return { error: `missing ${stampFile} — run §5.1's pg_dump/pg_dumpall first` };
