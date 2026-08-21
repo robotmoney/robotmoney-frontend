@@ -339,11 +339,13 @@ or workers**. Contributor workflow in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 **Layout.** Three pinned locations:
 
-- `frontend/preview/` — the preview wrapper `index.html` plus the Cloudflare
-  static-hosting files `_redirects` (one line: `/ /preview/index.html 200`),
-  `_headers` (`X-Robots-Tag: noindex` for `/*`), and `404.html` (frame-escape
-  handler: redirects a missing path back to `/#<path>`). Deliberately a
-  **sibling** of `frontend/public/`, so production never serves any of it.
+- `frontend/preview/` — the preview wrapper `index.html`, `404.html` (the
+  local frame-escape handler `scripts/preview-server.ts` actively serves on a
+  miss, redirecting back to `/#<path>`), and two Cloudflare Pages convention
+  files, `_redirects` and `_headers`, kept **inert** (marked as such in each
+  file) since issue #608/#670 confirmed there is no live Pages project left to
+  read them. Deliberately a **sibling** of `frontend/public/`, so production
+  never serves any of it.
 - `frontend/public/` — the production SPA, byte-for-byte untouched by preview.
 - `goldens/api-goldens.json` — the goldens. Pinned at `goldens/` because it is a
   **shared test fixture**: `frontend/test/browser/allocation-view.spec.ts`,
@@ -364,7 +366,8 @@ watermark remains permanently visible. SPA navigation
 links are shareable: `/#/allocation` loads that view. The mocking is entirely
 client-side — no backend, no reverse proxy, no server-side `/api` replay.
 
-**URL space contract** — identical locally and hosted:
+**URL space contract** (local `bun run preview` only — there is no hosted
+deployment of this space, see below):
 
 | Path | Serves |
 | --- | --- |
@@ -379,28 +382,20 @@ client-side — no backend, no reverse proxy, no server-side `/api` replay.
 tree — **no copying, no build step**: edit a file under `frontend/public/` and
 refresh. Random free port (printed on start; `PORT=<n>` to pin).
 
-**Hosted: Cloudflare Pages Git integration.** There is **no deploy automation in
-the repo** — no workflow, no wrangler, no GitHub secrets. The Cloudflare Pages
-project is connected to the GitHub repo in the Cloudflare dashboard; on push to a
-`preview/*` branch, Cloudflare checks out the branch and runs the
-dashboard-configured build command `bash scripts/cloudflare-statics.sh` — a
-~10-line transparent shell script (run only by Cloudflare's build, and locally
-for verification; nothing in the repo invokes it) that assembles `_site`
-(gitignored): `frontend/public/*` at the root, the wrapper at
-`/preview/index.html`, goldens at `/goldens/api-goldens.json`, and
-`_redirects`/`_headers`/`404.html` at the root. Cloudflare publishes `_site` to
-a per-branch URL like `preview-foo.robotmoney-preview.pages.dev`. Dashboard
-settings:
-
-| Setting | Value |
-| --- | --- |
-| Project | `robotmoney-preview` |
-| Root directory | *(empty — repo root)* |
-| Build command | `bash scripts/cloudflare-statics.sh` |
-| Build output directory | `_site` |
-| Production branch | `main`, with **automatic production deploys disabled** |
-| Preview deployments | custom branches: `preview/*` only |
-| GitHub secrets | none required |
+**Hosted: none.** D19/D20 originally described a hosted `robotmoney-preview`
+Cloudflare Pages Git integration alongside this local server — a
+dashboard-configured project that, on push to a `preview/*` branch, would run
+a build command (`bash scripts/cloudflare-statics.sh`) to assemble a `_site`
+deploy dir and publish it to a per-branch `*.pages.dev` URL. Issue #670
+confirmed the repo owner never actually turned that pipeline on: Cloudflare
+Transform Rules, legacy Page Rules, and the Pages Git integration are all
+unused — Cloudflare is DNS + observability only (`docs/decisions.md`
+D13/D29). There is no dashboard project, no build command, and no `.pages.dev`
+URL to browse. `scripts/cloudflare-statics.sh` (the assemble script) has been
+removed (issue #608); `frontend/preview/_redirects` and `frontend/preview/_headers`
+are kept only as documented-inert records of the Pages convention that script
+once emitted. Previewing a change means running `bun run preview` locally, as
+described above; there is no hosted equivalent.
 
 **Goldens (`goldens/api-goldens.json`).** One committed JSON keyed by request
 pathname → response body, covering every route the frontend calls. It is a *mock*:
@@ -422,9 +417,7 @@ deploy-side check. Two gates run in the normal PR suite:
 - **Goldens drift gate** — `scripts/tests/unit/goldens-drift.test.ts` blocks a PR
   whose goldens no longer match the code (route set or field shapes). It runs in
   `bun test scripts/tests` in the **`integration` workflow's
-  `backend-integration` job** ("Check root scripts" step), which also runs
-  `scripts/tests/unit/cloudflare-statics.test.ts` (asserts the assemble script lands
-  the key files in `_site`).
+  `backend-integration` job** ("Check root scripts" step).
 
 An agent (or human) whose change alters an API route or shape must recapture in
 the same PR — the fix for a red gate is `bun run goldens:update` against a
