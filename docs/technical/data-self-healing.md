@@ -855,6 +855,25 @@ reading the field itself — and this does not touch the §6.4 Class A
 *reconciler* (source-revision detection + quarantine), which remains unfiled,
 larger-scoped work.
 
+**Audit (2026-08-21, #646 AC3): the EDGAR-degraded bullet is a different
+finding from the Class A one, and needs no code.** #646 paired the two,
+expecting both to be "checked but unimplemented". They are not the same. The
+mechanism the bullet describes — a degraded EDGAR refresh retains the
+last-good signal and does **not** publish a partial one — genuinely exists at
+`backend/src/analytics/index.ts`'s `if (refresh?.status === "degraded")`
+branch, whose own comment attributes it to **issue #109 AC5**, and it is
+covered by an executed CI test (`backend/tests/research-last-good.test.ts`
+asserts the full degrade-then-recover cycle: a clean run publishes, a degraded
+run sets `skipped: true` and writes nothing, and a later recovered run
+publishes again — which is exactly the "retry-later, not success" claim).
+Dates settle it: the skip landed 2026-08-05 (`7c5cdfc`, via #471/#512) and
+its test 2026-07-15 (#164), while #614's PR #615 landed 2026-08-15. So the
+defect here is **attribution, not absence** — #614 ticked an acceptance
+criterion describing correct pre-existing behaviour as though that PR had
+delivered it. Nothing was built for AC3 because nothing needed to be; the
+contrast with the Class A bullet above, which had no implementing code
+anywhere until #714, is the point worth keeping.
+
 `backend/scripts/seed-provenance-verify.ts` had a real executed CI test
 (`backend/tests/seed-provenance-verify.test.ts:5` imports its `main`) and
 **no production caller** — no boot path, deploy gate, or cron (filed as #638,
