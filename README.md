@@ -6,6 +6,13 @@ a Bun server, and a Postgres-backed task queue.
 **Architecture & rationale:** [`docs/architecture.md`](./docs/architecture.md) ·
 [`docs/decisions.md`](./docs/decisions.md)
 
+**Research & regime engine:** the market-regime classifier and the two
+research signals (`channel-divergence`, `late-cycle-signals`) are documented
+in [`docs/technical/regime-engine.md`](./docs/technical/regime-engine.md) and
+[`docs/technical/research-signals.md`](./docs/technical/research-signals.md) —
+what they compute, why, and where the numbers come from. Entry point:
+`backend/src/analytics/index.ts::runAnalytics`.
+
 ```
 contract/   shared HTTP contract (route paths + DTO types)
 frontend/   buildless static SPA (frontend/public)

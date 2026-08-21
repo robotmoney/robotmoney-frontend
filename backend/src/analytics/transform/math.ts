@@ -1,5 +1,42 @@
 // Shared, pure analytics math. Used by every tool (regime + research) so the
 // normalization is identical across the suite. No I/O, no data-source knowledge.
+//
+// ── WARNING: four semantic-twin export pairs live in this one file ─────────
+// Each pair below has a v0-faithful port and a look-alike with a SHORTER,
+// more attractive name and DIFFERENT semantics (A1 finding F5; full
+// discussion + EXECUTED divergence numbers:
+// docs/audits/v0-v1-parity/A1-regime-core-procedures.md finding F5, and
+// docs/technical/regime-engine.md §7). No current regime-core or research
+// call site uses the wrong twin — the risk is prospective, for the next
+// person autocompleting an import.
+//
+//   mean (:~20, 0 for empty, `reduce`)      vs  meanArr (:~86, NaN for empty)
+//     meanArr is the v0-faithful port (lib/utils.js `mean`), private to this
+//     file, consumed by stddev/pearson below. `mean` is a lighter helper for
+//     the research/seed-provider code (rollingBeta, etc.) with no v0 analogue.
+//   std (:~24, POPULATION σ)                vs  stddev (:~94, SAMPLE σ, n-1)
+//     stddev is the v0-faithful port (lib/utils.js `stddev`); the regime
+//     core's smoothRegimes 2σ fast-track depends on the SAMPLE form. `std` has
+//     no v0 analogue and no regime-core consumer today.
+//   pctChange(xs) (:~41, length-shortening,  vs  pctChangeLag(xs, lag) (:~127,
+//     0 on zero denominator)                     length-preserving, NaN pad,
+//                                                 skips zero/non-finite denom)
+//     pctChangeLag is the v0-faithful port (lib/utils.js `pctChange(xs,lag)`,
+//     renamed only to avoid clobbering `pctChange` here) — consumed by both
+//     the regime core's transform layer and research-signals.ts. `pctChange`
+//     is a lighter research/seed-provider helper with no v0 analogue.
+//   percentileInWindow(v, window) (:~33,     vs  rollingPercentileRank(xs, w)
+//     `<= count / n`, NO tie-split, 0.5           (:~178, `(below+0.5*equal)/n`
+//     for n<=1, full-sample, NOT point-in-time)    mid-rank, 30-obs warm-up,
+//                                                   point-in-time ROLLING)
+//     rollingPercentileRank is the v0-faithful port (lib/utils.js
+//     `rollingPercentileRank`) and is what the regime core (analyze/
+//     compute.ts) AND both production research signals (research-signals.ts,
+//     since issue #465's R7 fix) consume. percentileInWindow is EXTRA — no v0
+//     analogue — and its only consumer repo-wide is the DEAD
+//     analyze/regime.ts (`regimeTool`); see docs/technical/regime-engine.md
+//     §7 and docs/technical/research-signals.md §2.
+// ─────────────────────────────────────────────────────────────────────────
 
 export function lcg(seed: number): () => number {
   let s = (seed >>> 0) || 1;

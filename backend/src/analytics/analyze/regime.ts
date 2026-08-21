@@ -1,3 +1,19 @@
+// DEAD IN PRODUCTION — this is NOT the regime classifier, and must not be used
+// for reconciliation. The production classifier is `bucketFn` in
+// analyze/compute.ts, fed by `computeRegime`, invoked from
+// analytics/index.ts::runAnalytics. See docs/technical/regime-engine.md §7 for
+// the full comparison and docs/audits/v0-v1-parity/A1-regime-core-procedures.md
+// finding F4 for the executed evidence. This file's only importer repo-wide is
+// backend/tests/analytics.test.ts. It differs structurally from the production
+// path in every dimension that matters: 11 hardcoded indicators (not the
+// 26-entry registry in analyze/indicators.ts), static literal weights (not
+// point-in-time inverse-correlation), a 90-day window (not the 1095-day
+// rolling window), `percentileInWindow` (not `rollingPercentileRank` — see
+// transform/math.ts's header for why that distinction matters), no 5-day/2σ
+// smoothing, and 4-decimal rounding throughout its output. Reconciling a
+// published regime label against THIS file's numbers will not match
+// production and does not indicate a bug in production.
+//
 // Regime classifier as a composable AnalyticTool. Macro + on-chain indicators →
 // per-indicator sign-adjusted percentile → panel composites → overall composite +
 // regime label. Pure compute — persistence goes through the orchestrator's
@@ -7,10 +23,12 @@ import { classifyRegime } from "@robotmoney/contract";
 import { percentileInWindow, applySign } from "../transform/math.ts";
 
 // The regime thresholds/label rule live in @robotmoney/contract (contract/src/
-// regime.js) — this classifier is the canon they encode (0.33/0.67), and the
-// swarm domain layer + MCP memo builder consume the same module so labels
-// can never diverge again. Re-exported here so analytics-side callers/tests can
-// keep importing the label rule from the classifier.
+// regime.js) — the same 0.33/0.67 rule the PRODUCTION classifier
+// (analyze/compute.ts's `bucketFn`) also implements, not something this dead
+// file defines. The swarm domain layer + swarm memo builder consume the same
+// contract module so labels can never diverge across surfaces. Re-exported
+// here only so this file's own (dead) callers/tests can keep importing the
+// label rule from one place.
 export { classifyRegime, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
 
 const WINDOW = 90;
