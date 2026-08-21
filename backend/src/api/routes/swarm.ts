@@ -71,8 +71,16 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
       return { status: 400, body: { error: e instanceof Error ? e.message : "invalid request" } };
     }
   }
-  if (m === "GET" && p.startsWith(`${C.members}/`))
-    return { status: 200, body: await ic.getMember(decodeURIComponent(p.split("/").pop()!)) };
+  if (m === "GET" && p.startsWith(`${C.members}/`)) {
+    // #687: an unresolvable ref is a deliberate 404, not a 200 with a null
+    // body — a crawler with the old slug indexed must not be told the page is
+    // fine (the mistake #603 made). The 404 is also what makes this request
+    // fail api.get() on the frontend, so memberProfile.init() falls through to
+    // its archive fallback and, only once THAT misses too, renders the
+    // committee roster in place instead of a blank profile.
+    const member = await ic.getMember(decodeURIComponent(p.split("/").pop()!));
+    return { status: member ? 200 : 404, body: member ?? { error: "not found" } };
+  }
   if (m === "GET" && RE_SUBJECT_SNAPSHOTS.test(p)) {
     const id = decodeURIComponent(p.split("/")[4] ?? "");
     return { status: 200, body: { snapshots: await ic.getSubjectSnapshots(id) } };

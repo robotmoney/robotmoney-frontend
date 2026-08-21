@@ -234,8 +234,9 @@ test("a handle an administrator set BEFORE acceptance survives acceptance untouc
 
   expect((await approve(memberId)).status).toBe(200);
   expect(await handleOf(memberId)).toBe("chosen-by-hand");
-  // …and the name-derived handle was never taken by anybody.
-  expect((await getMemberRoute("noop-analyst")).body).toBeNull();
+  // …and the name-derived handle was never taken by anybody. #687: an
+  // unresolvable ref is a deliberate 404, not a 200 with a null body.
+  expect((await getMemberRoute("noop-analyst")).status).toBe(404);
 });
 
 test("a post-acceptance NAME edit moves neither the handle nor the public URL", async () => {
@@ -252,7 +253,9 @@ test("a post-acceptance NAME edit moves neither the handle nor the public URL", 
   // changing it stays a separate, audited act.
   expect(await handleOf(memberId)).toBe("noop-analyst");
   expect((await getMemberRoute("noop-analyst")).body.id).toBe(memberId);
-  expect((await getMemberRoute("macro-desk")).body).toBeNull();
+  // #687: a ref that resolves to nothing is a deliberate 404, not a 200 with
+  // a null body.
+  expect((await getMemberRoute("macro-desk")).status).toBe(404);
 
   // An administrator can still move it at any time — that capability is what
   // the automatic derivation must not replace.

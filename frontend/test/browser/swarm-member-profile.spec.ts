@@ -269,3 +269,55 @@ test("a slow member fetch does not stamp its identity on the route the visitor m
   await expect(page.locator('meta[property="og:url"]')).toHaveAttribute("content", FAQ_URL);
   expect(await page.title()).toBe(faqTitle);
 });
+
+// #687: a ref that resolves on neither the live API nor the static archive
+// used to render a blank profile. It now renders the committee roster IN
+// PLACE at the requested URL — no redirect, so the URL keeps the failed ref
+// for a future "did you mean" affordance — while the API answers 404, not a
+// silent 200 (the mistake #603 made). A ref that DOES resolve is the separate,
+// unchanged code path the two tests above already cover.
+const ROSTER_FIXTURE = [
+  { id: "r1", handle: "robot-money", name: "Robot Money", lens: "macro regime", tagline: "Reads the composite." },
+  { id: "r2", handle: "athena", name: "Athena", lens: "on-chain flow", tagline: "Reads wallet flow." },
+];
+
+test("an unresolvable member ref answers 404 and renders the committee roster in place, not a blank profile", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  let memberRouteStatus: number | null = null;
+
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (pathname === "/api/swarm/members") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ members: ROSTER_FIXTURE, rosterCap: 10, seatsFilled: 2, seatsAvailable: 8 }),
+      });
+    }
+    if (pathname === "/api/swarm/members/not-a-real-member-anywhere") {
+      memberRouteStatus = 404;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not found" }) });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  // No shipped manifest exists for this ref, so the archive fallback also
+  // legitimately misses (a real, expected 404 against /data/swarm/**).
+  await page.goto("/swarm/members/not-a-real-member-anywhere");
+
+  // The requested URL is unchanged — render in place, not a redirect.
+  await expect(page).toHaveURL(/\/swarm\/members\/not-a-real-member-anywhere$/);
+  expect(memberRouteStatus).toBe(404);
+
+  // No blank/error profile: the committee roster renders instead, reachable
+  // by each member's current handle (same link shape the /swarm directory's
+  // Members panel uses).
+  await expect(page.locator(".profile-name")).toHaveCount(0);
+  await expect(page.locator(".sv__panel", { hasText: "Committee members" })).toContainText("not-a-real-member-anywhere");
+  for (const m of ROSTER_FIXTURE) {
+    const link = page.locator(`a.sv__row-title[href="/swarm/members/${m.handle}"]`);
+    await expect(link).toHaveText(m.name);
+  }
+
+  await expectNoBrowserErrors(errors);
+});

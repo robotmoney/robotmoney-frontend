@@ -233,8 +233,10 @@ describe("every memberMark() call site seeds it the same way", () => {
       for (const m of src.matchAll(/memberMark\(\s*([^,]+?)\s*,/g)) calls.push({ file: rel, seed: m[1] });
     }
     // Canary: if the templates stop calling memberMark(), or the regex stops
-    // matching them, the filter below would pass over an empty list.
-    expect(calls.length, "no memberMark() call sites found in the swarm templates").toBe(3);
+    // matching them, the filter below would pass over an empty list. Four call
+    // sites, not one per file: member.html gained a second (#687's not-found
+    // roster, the same markup the /swarm directory's Members panel uses).
+    expect(calls.length, "no memberMark() call sites found in the swarm templates").toBe(4);
     expect(new Set(calls.map((c) => c.file)).size).toBe(3);
 
     const bare = calls.filter(({ seed }) => !/KeyFingerprint\s*\|\|\s*\S/i.test(seed));
