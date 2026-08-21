@@ -184,6 +184,11 @@ export const ROUTES = {
       memberDeactivate: "/api/swarm/admin/members/:id/deactivate", // POST — versioned
       memberReactivate: "/api/swarm/admin/members/:id/reactivate", // POST — versioned, mints a fresh credential
       memberRotateKey: "/api/swarm/admin/members/:id/rotate-key", // POST — one-time credential in the response only
+      // POST — issue #626: raw image bytes as the body (Content-Type is the
+      // upload's mime type, not application/json). Stores the file and points
+      // avatar.path at it, which is all member-mark.js's precedence check
+      // (issue #625) needs to prefer it over the derived mark.
+      memberAvatar: "/api/swarm/admin/members/:id/avatar",
 
       sessionCreate: "/api/swarm/admin/sessions", // POST — UTC-validated, snapshots the roster, enqueues 4 scoped jobs
       sessionRoster: "/api/swarm/admin/sessions/:id/roster", // GET — the frozen expected roster

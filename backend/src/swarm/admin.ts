@@ -9,6 +9,8 @@
 // surface. Where this module's session lifecycle overlaps with domain.ts (e.g.
 // aggregateSessionGuarded still calls domain.aggregateSession for the rich
 // rollup), it composes those functions rather than duplicating them.
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { sql, type DbHandle } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import {
@@ -560,6 +562,104 @@ export async function rotateMemberKeyAdmin(
     await audit(actor, "member_rotate_key", { memberId }, tx);
     return { ok: true, status: 200, memberId, token };
   });
+}
+
+// ── Admin avatar upload (issue #626) ────────────────────────────────────────
+// The real thing: swarm/admin.ts's updateMemberAdmin already lets an admin
+// point avatar.path at an arbitrary URL string (metadata-only, no bytes
+// stored). This is the endpoint that stores actual image bytes and points
+// avatar.path at them, so it flows through the SAME precedence chain issue
+// #625 built in frontend/assets/js/app/lib/member-mark.js: memberAvatarMarkup
+// treats any avatar.path that loads as taking precedence over the derived
+// mark, so a stored, servable file at the path this writes is all "uploaded
+// wins" requires — no separate precedence flag.
+export const AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5 MiB: generous for a profile photo.
+export const AVATAR_CONTENT_TYPES: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+export interface AvatarUploadInput {
+  contentType: string | null;
+  bytes: Uint8Array;
+}
+
+// memberId is interpolated straight into a filesystem path below (never into
+// SQL — the UPDATE is parameterized like every other query here). `path.join`
+// NORMALIZES `..` segments rather than rejecting them
+// (join("/x/avatars/uploads", "../../../etc/cron.d/evil") === "/etc/cron.d/evil"),
+// so without this check a memberId of "../../../etc/cron.d/evil" would happily
+// write outside the upload directory. Every real member id is minted by
+// crypto.randomUUID() (addMemberAdmin, applyMember) and never anything else,
+// so a non-UUID-shaped id can never name a real member anyway — rejecting it
+// here is a 404 an operator would have gotten either way, closed BEFORE any
+// path is built instead of relying on it happening to be safe.
+const MEMBER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// `storageDir` is injected (mirrors AdminAuthConfig in routes/swarm-admin.ts)
+// rather than read from config here, so tests point it at a throwaway
+// directory instead of the real STATIC_DIR. Production wiring passes
+// config.staticDir — the SAME directory backend/src/api/static.ts serves, so
+// the file lands exactly where the avatar.path this writes says it does, with
+// no second serving path to keep in sync.
+//
+// Validation (type, size, storage configured) runs BEFORE any filesystem or
+// database write, so a rejected upload leaves nothing behind. An upload that
+// passes validation still writes to a TEMP file first and is renamed into the
+// serving path only after the database UPDATE commits — so a not-found member
+// or a failed commit leaves an orphaned temp file (cleaned up here), never a
+// half-written or unlinked file sitting at the path avatar.path would resolve
+// to.
+export async function uploadMemberAvatarAdmin(
+  memberId: string,
+  input: AvatarUploadInput,
+  storageDir: string | null,
+  actor: Actor = ADMIN_ACTOR,
+): Promise<AdminResult> {
+  const type = (input.contentType ?? "").split(";")[0]!.trim().toLowerCase();
+  const ext = AVATAR_CONTENT_TYPES[type];
+  if (!ext) {
+    return err(400, `unsupported avatar content-type "${input.contentType ?? ""}"; allowed: ${Object.keys(AVATAR_CONTENT_TYPES).join(", ")}`);
+  }
+  if (input.bytes.byteLength === 0) return err(400, "empty upload");
+  if (input.bytes.byteLength > AVATAR_MAX_BYTES) return err(400, `avatar exceeds ${AVATAR_MAX_BYTES}-byte limit`);
+  if (!storageDir) return err(500, "avatar storage is not configured (STATIC_DIR unset)");
+  if (!MEMBER_ID_RE.test(memberId)) return err(404, "member not found");
+
+  const dir = join(storageDir, "avatars", "uploads");
+  await mkdir(dir, { recursive: true });
+  const finalPath = join(dir, `${memberId}.${ext}`);
+  // Cache-bust token decided up front (not derived from the row's version),
+  // so the query string is stable across the write and does not depend on
+  // whether the later UPDATE succeeds.
+  const cacheBust = crypto.randomUUID().slice(0, 8);
+  const tmpPath = join(dir, `.${memberId}.${cacheBust}.tmp`);
+  await writeFile(tmpPath, input.bytes);
+
+  try {
+    const avatarPath = `/avatars/uploads/${memberId}.${ext}?v=${cacheBust}`;
+    const avatar = { path: avatarPath, source_url: null, credit: "Uploaded by admin" };
+    const result = await sql.begin(async (tx) => {
+      const upd = await tx`
+        UPDATE swarm_members SET avatar = ${tx.json(avatar as any)}, version = version + 1, updated_at = now()
+        WHERE id = ${memberId}
+        RETURNING id`;
+      if (upd.length === 0) return err(404, "member not found");
+      await audit(actor, "member_avatar_upload", { memberId, path: avatarPath }, tx);
+      return { ok: true, status: 200, memberId, avatar };
+    });
+    if (result.ok) {
+      await rename(tmpPath, finalPath);
+    } else {
+      await rm(tmpPath, { force: true }).catch(() => {});
+    }
+    return result;
+  } catch (e) {
+    await rm(tmpPath, { force: true }).catch(() => {});
+    throw e;
+  }
 }
 
 // ── Sessions: creation with a frozen roster snapshot ────────────────────────
