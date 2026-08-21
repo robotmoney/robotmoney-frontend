@@ -10,6 +10,7 @@ import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberMarkOrInitials } from "../lib/member-mark.js";
+import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -613,6 +614,7 @@ export function registerStaticViews(Alpine) {
     copiedId: false,
     pollTimer: null,
     pulseTimer: null,
+    routeAtEntry: null,
     async init() {
       const match = location.pathname.match(/^\/swarm\/apply\/([^/]+)\/?$/);
       if (!match) {
@@ -621,6 +623,10 @@ export function registerStaticViews(Alpine) {
         return;
       }
       this.id = decodeURIComponent(match[1]);
+      // See syncTitle(): destroy() stops the poll on navigation, but it cannot
+      // cancel a refresh() that is already in flight, so the title write needs
+      // to know which route asked for it.
+      this.routeAtEntry = location.pathname;
       await this.refresh();
       this.pollTimer = setInterval(() => this.refresh(), 4000);
       // Heartbeat: only meaningful once approved, so checkPulse() self-gates.
@@ -687,6 +693,10 @@ export function registerStaticViews(Alpine) {
     // Swarm"). Same fix memberProfile already applies: name the tab after
     // the member once it is known, and after the state until then.
     syncTitle() {
+      // Skipped once the visitor has moved on. refresh() awaits two requests
+      // before reaching here, and neither is aborted by destroy(), so an
+      // unguarded write let a slow status response rename an unrelated page.
+      if (this.routeAtEntry && location.pathname !== this.routeAtEntry) return;
       const suffix = "Robot Money Investment Swarm";
       const name = this.member?.name;
       document.title = name
@@ -999,6 +1009,11 @@ export function registerStaticViews(Alpine) {
     topN: 7,
     async init() {
       const id = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
+      // The route this component was mounted on. The fetch below is not
+      // cancelled when the router tears the view down, so a slow response would
+      // otherwise stamp a subject's name onto whatever page is showing by the
+      // time it lands. Same guard memberProfile applies for the same reason.
+      const routeAtEntry = location.pathname;
       try {
         this.subject = await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject)
           .catch(() => loadArchiveSubject(id));
@@ -1006,7 +1021,9 @@ export function registerStaticViews(Alpine) {
         // Route-level SEO titleizes the last URL segment, which for a slug like
         // "robotmoney-allocation" reads "Robotmoney Allocation". Name the tab
         // after the subject once we know what it is actually called.
-        if (this.subject?.name) document.title = `${this.subject.name}: Robot Money Investment Swarm`;
+        if (this.subject?.name && location.pathname === routeAtEntry) {
+          document.title = `${this.subject.name}: Robot Money Investment Swarm`;
+        }
         // Each side-fetch is guarded on its own: a subject with no snapshot yet
         // still has sessions worth reading, and vice versa.
         this.snapshots = await this.loadSnapshots(id);
@@ -1382,6 +1399,10 @@ export function registerStaticViews(Alpine) {
     openTakes: {},   // take id → expanded
     async init() {
       const memberId = location.pathname.split("/").filter(Boolean).pop();
+      // The route this init is answering. Everything below runs after an await,
+      // and the router does not cancel a superseded view's in-flight work, so
+      // the corrections at the end have to know whether they are still relevant.
+      const routeAtEntry = location.pathname;
       try {
         // LIVE FIRST, archive only as the fallback (issue #595) — the same
         // precedence subjectProfile.init() above and swarmSessionDetail below
@@ -1410,10 +1431,29 @@ export function registerStaticViews(Alpine) {
         // page: the old ordering surfaced the API's own error here, and
         // subjectProfile.init() throws the same way for the same reason.
         if (!this.member) throw new Error("Member not found");
-        // Route-level SEO titleizes the last URL segment, which here is a raw
-        // UUID ("D6e430f5 D706 4325…"). This is the page onboarding hands a new
-        // operator, so name the tab after the member once it is known.
-        if (this.member?.name) document.title = `${this.member.name}: Robot Money Investment Swarm`;
+        // Both corrections below name this page after the record rather than
+        // after the URL, and both are skipped if the visitor has already moved
+        // on: the fetch above is not cancelled when the router tears this view
+        // down, so a slow response would otherwise stamp a member's identity
+        // onto whatever route is showing by the time it lands.
+        if (location.pathname === routeAtEntry) {
+          // Route-level SEO titleizes the last URL segment, which here is a raw
+          // UUID ("D6e430f5 D706 4325…"). This is the page onboarding hands a new
+          // operator, so name the tab after the member once it is known.
+          if (this.member?.name) document.title = `${this.member.name}: Robot Money Investment Swarm`;
+          // Same correction, for the address rather than the tab. This profile
+          // answers on BOTH /swarm/members/<handle> and /swarm/members/<id> —
+          // migration 0030 keeps every published id resolving on purpose — so the
+          // page is two URLs and, left alone, two indexable duplicates. Now that
+          // the record is in hand, name the handle form as the canonical one.
+          //
+          // Guarded on `handle` too: it is undefined for a member served from the
+          // static archive manifests (see camelMember above), and there the
+          // visited URL stays canonical, which is what the archive links to.
+          if (this.member?.handle) {
+            setCanonicalUrl(canonicalUrlFor(`/swarm/members/${this.member.handle}`), routeAtEntry);
+          }
+        }
         this.rows = await this.loadRows(memberId);
       } catch (e) {
         this.error = e.message || "Member not found";

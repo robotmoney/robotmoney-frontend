@@ -240,13 +240,50 @@ const META = {
   },
 };
 
-// Dynamic detail routes (/docs/*, /blog/*, /swarm/*) inherit a base
+// Dynamic detail routes (/docs/*, /blog/*, /swarm/*, /media/*) inherit a base
 // description from their section and get a title derived from the last path
 // segment, so they are still unique and descriptive without hand-authoring each.
+//
+// `/media` earns its prefix the same way the other three did: views/media/
+// ships articles.html and videos.html, and views/media.html links to both
+// ("All Articles →" / "All Videos →"). With no prefix here they fell past every
+// branch to NOT_FOUND_META, so two real, internally-linked pages served the
+// title "Page Not Found — Robot Money" under `noindex, follow`. The entry for
+// `/media` itself is in META above and is found before this table is consulted.
 const SECTIONS = [
   { prefix: "/docs", suffix: "Robot Money Docs" },
   { prefix: "/blog", suffix: "Robot Money Blog" },
   { prefix: "/swarm", suffix: "Robot Money Investment Swarm" },
+  { prefix: "/media", suffix: "Robot Money Media" },
+];
+
+// Legacy path aliases, mirroring every content-serving rewrite `viewFor()`
+// performs in routes.js (issue #263 pass 2's /committee -> /swarm rename, plus
+// the two older one-off renames below). routes.js resolves an
+// old path to the NEW path's fragment, so both addresses render the same page
+// and both return 200 — which makes every one of them a duplicate URL unless
+// something names the new address as canonical.
+//
+// Keeping the table here rather than importing routes.js is deliberate: this
+// module is imported by the deploy-time prerenderer under Bun, where routes.js's
+// browser-facing view resolution has no business running. The cost is that the
+// two lists must be kept in step, which is why they are spelled the same way.
+//
+// Order is not significant — `/admin/committee` does not start with
+// `/committee/`, so no entry can shadow another.
+const LEGACY_ALIASES = [
+  ["/committee", "/swarm"],
+  ["/admin/committee", "/admin/swarm"],
+  ["/docs/investment-committee", "/docs/investment-swarm"],
+  // Not from the /committee rename, but the same shape and the same defect:
+  // viewFor() resolves both of these to the renamed page's view, so both return
+  // 200 with the new page's content. Without an entry here they fell past every
+  // branch to NOT_FOUND_META, which is worse than a duplicate — the full
+  // treasury-allocation blog post served under "Page Not Found" and
+  // `noindex, follow`, on a URL that is still live on robotmoney.network and
+  // cited inline by the archived swarm sessions (routes.js:152,161).
+  ["/allocation2", "/performance"],
+  ["/articles/treasury-allocation", "/blog/treasury-allocation"],
 ];
 
 // The last resort in metaFor(), reached only by a path that is in no META
@@ -325,11 +362,44 @@ function normalize(pathname) {
 }
 
 /**
+ * The address a path should be indexed under: normalized, with any legacy
+ * prefix rewritten to the name the page actually has now.
+ *
+ * Every other path is returned unchanged, so an unknown path still reaches
+ * NOT_FOUND_META rather than being rewritten into something plausible.
+ *
+ * @param {string} pathname
+ * @returns {string}
+ */
+function canonicalPath(pathname) {
+  const p = normalize(pathname);
+  for (const [from, to] of LEGACY_ALIASES) {
+    if (p === from) return to;
+    if (p.startsWith(from + "/")) return to + p.slice(from.length);
+  }
+  return p;
+}
+
+/**
+ * The absolute URL a path should declare as its canonical.
+ *
+ * @param {string} pathname
+ * @returns {string}
+ */
+export function canonicalUrlFor(pathname) {
+  const p = canonicalPath(pathname);
+  return ORIGIN + (p === "/" ? "/" : p);
+}
+
+/**
  * @param {string} pathname
  * @returns {{ title: string; description: string; robots?: string }}
  */
 export function metaFor(pathname) {
-  const p = normalize(pathname);
+  // Resolved through the alias table so a legacy path describes itself as the
+  // page it actually renders. Without this, /committee/members/woon fell to
+  // NOT_FOUND_META ("Page Not Found", noindex) while rendering a real member.
+  const p = canonicalPath(pathname);
   if (META[p]) return META[p];
   for (const { prefix, suffix } of SECTIONS) {
     if (p === prefix || p.startsWith(prefix + "/")) {
@@ -393,7 +463,7 @@ export function applyRouteMeta(pathname) {
   if (typeof document === "undefined") return;
   const p = normalize(pathname);
   const m = metaFor(p);
-  const url = ORIGIN + (p === "/" ? "/" : p);
+  const url = canonicalUrlFor(p);
 
   document.title = m.title;
   upsert("meta", "name", "description", "content", m.description);
@@ -409,4 +479,119 @@ export function applyRouteMeta(pathname) {
   upsert("meta", "name", "twitter:title", "content", m.title);
   upsert("meta", "name", "twitter:description", "content", m.description);
   upsert("meta", "name", "twitter:image", "content", OG_IMAGE);
+}
+
+/**
+ * Point this page's canonical (and og:url) at a specific absolute URL.
+ *
+ * `applyRouteMeta` runs on navigation, before a view has fetched anything, so
+ * it can only canonicalise the URL the visitor typed. A view that later learns
+ * the record's OWN address calls this to correct it — the member profile is the
+ * case that matters, because a member resolves by handle AND by id
+ * (migration 0030 keeps every published id resolving on purpose), so the same
+ * profile is reachable at two URLs and only one of them should be indexed.
+ *
+ * Deliberately narrow: it writes the two URL-valued tags and nothing else, so
+ * it cannot fight `applyRouteMeta` over title, description or robots.
+ *
+ * `forPathname` is the route the caller was serving when it started. Every
+ * caller of this function is late by construction — it runs after an await —
+ * and the router does not cancel a superseded view's in-flight work
+ * (`destroyTree` cannot abort a pending promise). Without the guard, a member
+ * fetch still running when the visitor moves on lands its correction on
+ * whatever route is showing, so /faq would declare itself a duplicate of a
+ * member profile. This is the same cross-route leak spa.spec.ts already pins
+ * for the `robots` directive.
+ *
+ * @param {string} url absolute URL, normally from `canonicalUrlFor`
+ * @param {string} [forPathname] skip the write if the visitor has since navigated away
+ */
+export function setCanonicalUrl(url, forPathname) {
+  if (typeof document === "undefined" || !url) return;
+  if (forPathname !== undefined && normalize(location.pathname) !== normalize(forPathname)) return;
+  upsert("link", "rel", "canonical", "href", url);
+  upsert("meta", "property", "og:url", "content", url);
+}
+
+/**
+ * Escape a value destined for a double-quoted HTML attribute.
+ *
+ * `<` and `>` are escaped as well as `&` and `"`. They are not strictly
+ * required inside a quoted attribute, but every value passed here reaches
+ * `<head>` and one of them is derived from a request path, so the safe superset
+ * costs nothing and removes a class of question.
+ *
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeAttr(str) {
+  return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Substitute this module's per-route metadata into a copy of the shell's HTML.
+ *
+ * The string half of `applyRouteMeta`, for the two callers that have no DOM:
+ * the deploy-time prerenderer (`scripts/prerender.ts`) and the api process's
+ * shell fallback (`backend/src/api/static.ts`). Both currently ship raw HTML
+ * carrying the HOME page's title, description, canonical and og:url on every
+ * route they do not have a prerendered file for, which is every dynamic route —
+ * so a shared member or session link unfurls as the home page.
+ *
+ * `robots` is substituted here and is NOT substituted by the prerenderer today,
+ * which is why every `noindex` in this file has so far been render-time only.
+ *
+ * A tag missing from the shell is left missing rather than injected: each
+ * replace is a no-op when its pattern does not match, so an unexpected shell
+ * degrades to today's behaviour instead of producing malformed head markup.
+ *
+ * @param {string} shellHtml the shell document
+ * @param {string} pathname the route being served
+ * @returns {string}
+ */
+export function renderMeta(shellHtml, pathname) {
+  const m = metaFor(pathname);
+  // Escaped like every other substituted value. It is derived from the request
+  // path, which for the api process's shell fallback is arbitrary attacker-
+  // controlled input: `static.ts` decodes the pathname before it gets here, so
+  // an unescaped `"` would close the attribute and everything after it would
+  // parse as markup in <head>.
+  const url = escapeAttr(canonicalUrlFor(pathname));
+  const title = escapeHtml(m.title);
+  const titleAttr = escapeAttr(m.title);
+  const description = escapeAttr(m.description);
+  const robots = escapeAttr(m.robots || DEFAULT_ROBOTS);
+
+  // Every substitution goes through a FUNCTION replacer. With a string
+  // replacement, `$&`, `$'`, "$`" and `$n` are replacement PATTERNS, and
+  // metaFor's SECTIONS branch derives its title from the raw last path segment,
+  // so a `$` in the URL would be expanded rather than inserted. `$&` re-injects
+  // the matched tag (including its quote, reopening the attribute) and `$'`
+  // inserts the entire remainder of the document, compounding across the nine
+  // replaces: a 16KB shell became 256MB for a path of six `$'`. A function's
+  // return value is always used verbatim.
+  const TAGS = [
+    [/(<meta name="description" content=")[^"]*(")/, description],
+    [/(<link rel="canonical" href=")[^"]*(")/, url],
+    [/(<meta name="robots" content=")[^"]*(")/, robots],
+    [/(<meta property="og:title" content=")[^"]*(")/, titleAttr],
+    [/(<meta property="og:description" content=")[^"]*(")/, description],
+    [/(<meta property="og:url" content=")[^"]*(")/, url],
+    [/(<meta name="twitter:title" content=")[^"]*(")/, titleAttr],
+    [/(<meta name="twitter:description" content=")[^"]*(")/, description],
+  ];
+
+  let html = shellHtml.replace(/<title>[^<]*<\/title>/, () => `<title>${title}</title>`);
+  for (const [pattern, value] of TAGS) {
+    html = html.replace(pattern, (_match, open, close) => `${open}${value}${close}`);
+  }
+  return html;
 }

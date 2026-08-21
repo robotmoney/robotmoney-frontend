@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { navigate } from "./navigation.ts";
 
 // PR #327 shipped the public subject profile (/swarm/subjects/:id) with
 // zero test coverage (issue #340). This spec exercises the real, shipped
@@ -147,4 +148,38 @@ test("public subject profile hides the structural-notes panel for a subject with
   await expect(page.locator(".sv__panel", { hasText: "Structural notes" })).toBeVisible();
 
   await expectNoBrowserErrors(errors);
+});
+
+// The same late-write leak swarm-member-profile.spec.ts pins for the member
+// page. subjectProfile.init() renames the tab after the subject once the fetch
+// resolves, and that fetch is not cancelled when the router tears the view
+// down — so before the route guard, a slow response stamped a subject's name
+// onto whatever page the visitor had moved to.
+test("a slow subject fetch does not stamp its name on the route the visitor moved to", async ({ page }) => {
+  const FETCH_DELAY_MS = 2500;
+  const SUBJECT_NAME = "Woon";
+
+  await page.route("**/api/swarm/**", async (route) => {
+    if (/\/api\/swarm\/subjects\/woon$/.test(new URL(route.request().url()).pathname)) {
+      await new Promise((resolve) => setTimeout(resolve, FETCH_DELAY_MS));
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "woon", name: SUBJECT_NAME, thesis_blurb: "" }),
+      });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  // Leave before the subject resolves.
+  await page.goto("/swarm/subjects/woon");
+  await navigate(page, "/faq");
+
+  const faqTitle = await page.title();
+  expect(faqTitle).not.toContain(SUBJECT_NAME);
+
+  // Outlast the fetch, then confirm nothing moved. Read after the delay rather
+  // than polling for a negative, which would pass simply by being early.
+  await page.waitForTimeout(FETCH_DELAY_MS + 1500);
+  expect(await page.title()).toBe(faqTitle);
 });

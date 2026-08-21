@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { navigate } from "./navigation.ts";
 
 // Read-precedence coverage for the public member profile (/swarm/members/:ref),
 // issue #595.
@@ -177,4 +178,94 @@ test("with the swarm API unreachable, all four shipped manifests still render fr
   }
 
   await expectNoBrowserErrors(errors);
+});
+
+// The other consequence of "no URL that has ever been published stops working":
+// one member is TWO indexable URLs. The test above proves both render the same
+// record — which is the thing that makes them duplicates rather than two pages.
+// Only one of them may claim to be the address.
+test("both of a member's public URLs name the handle form as canonical", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (/\/api\/swarm\/members\/(athena|macro-desk)$/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RENAMED_ATHENA) });
+    }
+    if (/\/api\/swarm\/members\/(athena|macro-desk)\/takes$/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ takes: [] }) });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  const canonical = () => page.locator('link[rel="canonical"]').getAttribute("href");
+  const ogUrl = () => page.locator('meta[property="og:url"]').getAttribute("content");
+  const expected = "https://robotmoney.network/swarm/members/macro-desk";
+
+  // Polled, not read once: applyRouteMeta() writes the VISITED url on
+  // navigation and memberProfile.init() corrects it to the handle form after
+  // the record arrives, so the assertion has to outlast the first write.
+  //
+  // The third address is the pre-rename product name. routes.js rewrites
+  // /committee/** to /swarm/** and serves the same page, so it is a third
+  // published URL for this one member and has to converge on the same answer.
+  for (const address of ["/swarm/members/athena", "/swarm/members/macro-desk", "/committee/members/athena"]) {
+    await page.goto(address);
+    await expect(page.locator(".profile-name")).toHaveText(RENAMED_ATHENA.name);
+    await expect.poll(canonical, { message: `canonical on ${address}` }).toBe(expected);
+    await expect.poll(ogUrl, { message: `og:url on ${address}` }).toBe(expected);
+  }
+
+  await expectNoBrowserErrors(errors);
+});
+
+// The archive fallback carries no `handle` (the manifests predate the column),
+// so there is no better address to point at than the one being visited. The
+// correction must SKIP rather than emit `/swarm/members/undefined`.
+test("a member served from the static archive keeps the visited URL as canonical", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.route("**/api/swarm/**", (route) => route.abort("failed"));
+
+  await page.goto("/swarm/members/noop-analyst");
+  await expect(page.locator(".profile-name")).toBeVisible();
+  await expect
+    .poll(() => page.locator('link[rel="canonical"]').getAttribute("href"))
+    .toBe("https://robotmoney.network/swarm/members/noop-analyst");
+
+  await expectNoBrowserErrors(errors);
+});
+
+// memberProfile.init() names the page after the record it fetched, which means
+// it writes AFTER an await. The router tears a view down on navigation but
+// cannot cancel that in-flight fetch, so a slow member response would otherwise
+// land its title and canonical on whatever route the visitor moved on to,
+// leaving a real indexed page declaring itself a duplicate of a member profile.
+// Same cross-route leak spa.spec.ts pins for the `robots` directive.
+test("a slow member fetch does not stamp its identity on the route the visitor moved to", async ({ page }) => {
+  const FETCH_DELAY_MS = 2500;
+
+  await page.route("**/api/swarm/**", async (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (/\/api\/swarm\/members\/athena$/.test(pathname)) {
+      await new Promise((resolve) => setTimeout(resolve, FETCH_DELAY_MS));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RENAMED_ATHENA) });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  // Leave before the member resolves.
+  await page.goto("/swarm/members/athena");
+  await navigate(page, "/faq");
+
+  const FAQ_URL = "https://robotmoney.network/faq";
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", FAQ_URL);
+  const faqTitle = await page.title();
+  expect(faqTitle).not.toContain(RENAMED_ATHENA.name);
+
+  // Outlast the fetch, then confirm nothing moved. Read after the delay rather
+  // than polling for a negative, which would pass simply by being early.
+  await page.waitForTimeout(FETCH_DELAY_MS + 1500);
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", FAQ_URL);
+  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute("content", FAQ_URL);
+  expect(await page.title()).toBe(faqTitle);
 });

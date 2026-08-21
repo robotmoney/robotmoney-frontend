@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { navigate } from "./navigation.ts";
+import { renderMeta } from "../../public/assets/js/app/seo.js";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -277,6 +279,110 @@ test("the noindex override does not leak onto the next route", async ({ page }) 
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex, follow");
   await navigate(page, "/faq");
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /^index, follow/);
+});
+
+// The inverse of the stub tests above: these two are REAL pages that were being
+// noindexed. views/media/ ships articles.html and videos.html and views/media.html
+// links to both, but seo.js had no `/media` section prefix, so each fell through
+// to NOT_FOUND_META and served "Page Not Found — Robot Money" under
+// `noindex, follow` while rendering its content perfectly well.
+const MEDIA_SECTION_ROUTES = [
+  { path: "/media/articles", title: "Articles — Robot Money Media" },
+  { path: "/media/videos", title: "Videos — Robot Money Media" },
+];
+
+for (const { path, title } of MEDIA_SECTION_ROUTES) {
+  test(`${path} is a real page and says so, rather than "Page Not Found"`, async ({ page }) => {
+    const errors = failOnBrowserErrors(page);
+    await page.goto("/");
+    await navigate(page, path);
+
+    await expect(page).toHaveTitle(title);
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /^index, follow/);
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      `https://robotmoney.network${path}`,
+    );
+
+    await expectNoBrowserErrors(errors);
+  });
+}
+
+// routes.js rewrites the pre-rename paths (issue #263 pass 2) and serves the
+// renamed page's own fragment, so an old URL returns 200 with real content —
+// which makes it a duplicate of the new URL unless it points at it. seo.js had
+// no matching rewrite, so /docs/investment-committee/* declared ITSELF
+// canonical and competed with the /docs/investment-swarm/* page it renders.
+test("a legacy /docs/investment-committee URL is canonical to its renamed address", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.goto("/");
+  await navigate(page, "/docs/investment-committee/how-it-works");
+
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    "https://robotmoney.network/docs/investment-swarm/how-it-works",
+  );
+  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute(
+    "content",
+    "https://robotmoney.network/docs/investment-swarm/how-it-works",
+  );
+  // The rewrite must not cost the page its own copy — before it, this path
+  // still reached the /docs section prefix and got a real title, and it should
+  // keep exactly that one.
+  await expect(page).toHaveTitle("How It Works — Robot Money Docs");
+
+  await expectNoBrowserErrors(errors);
+});
+
+// renderMeta() is a pure string function with no DOM, so this needs no `page`.
+// It lives in this file because seo.js is browser code and this spec is where
+// its route-metadata behaviour is already covered.
+//
+// The reason it needs its own test: renderMeta substitutes a title derived from
+// the raw last path segment, and its intended caller is the api process's shell
+// fallback, which is handed arbitrary decoded request paths. Passing a STRING as
+// the second argument to String.prototype.replace makes `$&`, `$'`, "$`" and
+// `$n` replacement PATTERNS rather than literals, so a `$` in the URL is
+// expanded instead of inserted: `$&` re-injects the matched tag along with its
+// quote and reopens the attribute, and `$'` splices in the rest of the document
+// once per substitution.
+const INJECTION_PATHS = [
+  ["a $& pattern plus markup", "/docs/$&><img src=x onerror=alert(1)>"],
+  ["a $' pattern, which self-amplifies", "/docs/x$'y"],
+  ["six $' patterns", "/docs/$'$'$'$'$'$'"],
+  ["a raw double quote", '/docs/a"onload=alert(1) x'],
+  ["a $` pattern", "/swarm/members/w$`oon"],
+  ["numbered $n patterns", "/docs/$1$2$3"],
+];
+
+test("renderMeta neither expands $ replacement patterns nor lets a path escape an attribute", async () => {
+  // node:fs, not Bun.file — Playwright's runner is Node.
+  const shell = readFileSync(join(process.cwd(), "frontend/public/index.html"), "utf8");
+
+  const headOf = (html: string) => html.match(/<head[\s\S]*?<\/head>/i)?.[0] ?? "";
+  // Counting `<` is the structural invariant: a correctly escaped substitution
+  // can only ever change the TEXT inside existing tags, never create a tag. Any
+  // `<` the payload carries arrives as `&lt;`. Asserting on the raw string
+  // instead (say, matching an `on*=` attribute) cannot tell a live attribute
+  // from the same characters safely escaped inside a quoted value.
+  const openAngles = (html: string) => (html.match(/</g) ?? []).length;
+  const shellAngles = openAngles(headOf(shell));
+
+  for (const [label, path] of INJECTION_PATHS) {
+    const out = renderMeta(shell, path);
+    const head = headOf(out);
+
+    expect(openAngles(head), `${label}: new markup created in <head>`).toBe(shellAngles);
+    // $' splices the remainder of the document in, once per substitution.
+    expect(out.length, `${label}: output size`).toBeLessThan(shell.length + 2000);
+    // No substituted value may carry a character that would end its attribute
+    // or open a tag. `[^"]*` cannot capture a raw quote, so a payload that
+    // escaped its attribute shows up as a SHORTER capture plus stray markup,
+    // which the angle-bracket count above catches.
+    for (const [, value] of out.matchAll(/(?:href|content)="([^"]*)"/g)) {
+      expect(value.includes("<"), `${label}: raw < inside an attribute value`).toBe(false);
+    }
+  }
 });
 
 declare global {
