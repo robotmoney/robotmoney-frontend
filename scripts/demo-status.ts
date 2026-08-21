@@ -102,7 +102,7 @@ function livePort(service: string, containerPort: number): number | undefined {
   }
 }
 const liveApiPort = livePort("api", API_CONTAINER_PORT);
-// An --external-pg boot has no postgres service, so asking the daemon for its
+// A non-ephemeral boot has no compose postgres service, so asking the daemon for its
 // published port is not a question with an answer — skip it rather than let the
 // "not running" branch imply a container that ought to be up.
 const mode = dbModeFromState(s);

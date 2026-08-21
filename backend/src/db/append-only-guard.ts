@@ -90,7 +90,8 @@
 //     migrate nor db-preflight.
 //   - backend/scripts/prod-bootstrap.ts — after migrate(), because migrate() is
 //     what installs the thing being verified.
-//   - backend/scripts/db-preflight.ts — the `--external-pg` demo boot.
+//   - backend/scripts/db-preflight.ts — a pre-populated demo boot (`--db
+//     external` / `--db twin`).
 import type postgresTypes from "postgres";
 import { sql } from "./client.ts";
 import { createNamespaceGuardClient } from "./handle-namespace.ts";

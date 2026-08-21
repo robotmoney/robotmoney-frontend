@@ -1,7 +1,7 @@
 // Classify the target database before the boot's first write: fresh bootstrap,
 // or adopted production data.
 //
-// WHY THIS EXISTS. A `--external-pg` boot points the demo at a real managed
+// WHY THIS EXISTS. A `--db external` boot points the demo at a real managed
 // server, and its migrate one-shot does not only migrate: it seeds job
 // schedules, enqueues cold-start sampler jobs, backfills wallet samples and
 // writes the allocation framework. This step runs BEFORE any of that and states
@@ -56,7 +56,8 @@
 // (`docker compose up -d`, which runs neither migrate nor this script) a
 // restored violation reached serving traffic unchecked. That was issue #602.
 // The query now lives in src/db/handle-namespace.ts and has three callers:
-//   - this script, before an `--external-pg` boot's first write;
+//   - this script, before a pre-populated boot's first write (`--db external`
+//     against a managed server, or `--db twin` against a restored copy);
 //   - src/api/index.ts, before Bun.serve binds a port;
 //   - scripts/prod-bootstrap.ts, as its first step, before migrate().
 // The api guard is the one that covers the compose path, and it is deliberately
