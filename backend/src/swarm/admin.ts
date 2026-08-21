@@ -9,8 +9,6 @@
 // surface. Where this module's session lifecycle overlaps with domain.ts (e.g.
 // aggregateSessionGuarded still calls domain.aggregateSession for the rich
 // rollup), it composes those functions rather than duplicating them.
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { sql, type DbHandle } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import {
@@ -573,6 +571,15 @@ export async function rotateMemberKeyAdmin(
 // treats any avatar.path that loads as taking precedence over the derived
 // mark, so a stored, servable file at the path this writes is all "uploaded
 // wins" requires — no separate precedence flag.
+//
+// STORED IN POSTGRES, NOT STATIC_DIR. The first cut of this wrote bytes to
+// STATIC_DIR/avatars/uploads/. That directory does not survive a redeploy:
+// scripts/static-assembly.sh wipes and re-copies STATIC_DIR's contents on
+// every `docker compose up`, so an uploaded avatar would silently vanish on
+// the next release. swarm_member_avatars (migration 0035) is the durable
+// store instead; avatar.path now points at a route
+// (routes/swarm.ts's GET .../members/:id/avatar) that reads the bytes back
+// out of that table, not a file on disk.
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5 MiB: generous for a profile photo.
 export const AVATAR_CONTENT_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -586,36 +593,23 @@ export interface AvatarUploadInput {
   bytes: Uint8Array;
 }
 
-// memberId is interpolated straight into a filesystem path below (never into
-// SQL — the UPDATE is parameterized like every other query here). `path.join`
-// NORMALIZES `..` segments rather than rejecting them
-// (join("/x/avatars/uploads", "../../../etc/cron.d/evil") === "/etc/cron.d/evil"),
-// so without this check a memberId of "../../../etc/cron.d/evil" would happily
-// write outside the upload directory. Every real member id is minted by
+// Storage is DB-backed now, so there is no filesystem path to traverse — the
+// UPDATE/INSERT below are parameterized like every other query here, so an
+// arbitrary string in memberId cannot reach SQL as anything but a bind value.
+// This check stays anyway: every real member id is minted by
 // crypto.randomUUID() (addMemberAdmin, applyMember) and never anything else,
-// so a non-UUID-shaped id can never name a real member anyway — rejecting it
-// here is a 404 an operator would have gotten either way, closed BEFORE any
-// path is built instead of relying on it happening to be safe.
+// so a non-UUID-shaped id can never name a real member — rejecting it here is
+// a fast, clear 404 instead of a round trip to prove the same thing.
 const MEMBER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// `storageDir` is injected (mirrors AdminAuthConfig in routes/swarm-admin.ts)
-// rather than read from config here, so tests point it at a throwaway
-// directory instead of the real STATIC_DIR. Production wiring passes
-// config.staticDir — the SAME directory backend/src/api/static.ts serves, so
-// the file lands exactly where the avatar.path this writes says it does, with
-// no second serving path to keep in sync.
-//
-// Validation (type, size, storage configured) runs BEFORE any filesystem or
-// database write, so a rejected upload leaves nothing behind. An upload that
-// passes validation still writes to a TEMP file first and is renamed into the
-// serving path only after the database UPDATE commits — so a not-found member
-// or a failed commit leaves an orphaned temp file (cleaned up here), never a
-// half-written or unlinked file sitting at the path avatar.path would resolve
-// to.
+// Validation (type, size, id shape) runs BEFORE any database write, so a
+// rejected upload leaves nothing behind. The bytes row and the member's
+// avatar pointer are written in ONE transaction — a not-found member or a
+// failed commit leaves neither half written; there is no temp-file/rename
+// dance to get wrong because there is no file.
 export async function uploadMemberAvatarAdmin(
   memberId: string,
   input: AvatarUploadInput,
-  storageDir: string | null,
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   const type = (input.contentType ?? "").split(";")[0]!.trim().toLowerCase();
@@ -625,41 +619,32 @@ export async function uploadMemberAvatarAdmin(
   }
   if (input.bytes.byteLength === 0) return err(400, "empty upload");
   if (input.bytes.byteLength > AVATAR_MAX_BYTES) return err(400, `avatar exceeds ${AVATAR_MAX_BYTES}-byte limit`);
-  if (!storageDir) return err(500, "avatar storage is not configured (STATIC_DIR unset)");
   if (!MEMBER_ID_RE.test(memberId)) return err(404, "member not found");
 
-  const dir = join(storageDir, "avatars", "uploads");
-  await mkdir(dir, { recursive: true });
-  const finalPath = join(dir, `${memberId}.${ext}`);
   // Cache-bust token decided up front (not derived from the row's version),
   // so the query string is stable across the write and does not depend on
   // whether the later UPDATE succeeds.
   const cacheBust = crypto.randomUUID().slice(0, 8);
-  const tmpPath = join(dir, `.${memberId}.${cacheBust}.tmp`);
-  await writeFile(tmpPath, input.bytes);
+  const avatarPath = `/api/swarm/members/${memberId}/avatar?v=${cacheBust}`;
+  const avatar = { path: avatarPath, source_url: null, credit: "Uploaded by admin" };
 
-  try {
-    const avatarPath = `/avatars/uploads/${memberId}.${ext}?v=${cacheBust}`;
-    const avatar = { path: avatarPath, source_url: null, credit: "Uploaded by admin" };
-    const result = await sql.begin(async (tx) => {
-      const upd = await tx`
-        UPDATE swarm_members SET avatar = ${tx.json(avatar as any)}, version = version + 1, updated_at = now()
-        WHERE id = ${memberId}
-        RETURNING id`;
-      if (upd.length === 0) return err(404, "member not found");
-      await audit(actor, "member_avatar_upload", { memberId, path: avatarPath }, tx);
-      return { ok: true, status: 200, memberId, avatar };
-    });
-    if (result.ok) {
-      await rename(tmpPath, finalPath);
-    } else {
-      await rm(tmpPath, { force: true }).catch(() => {});
-    }
-    return result;
-  } catch (e) {
-    await rm(tmpPath, { force: true }).catch(() => {});
-    throw e;
-  }
+  return sql.begin(async (tx) => {
+    const upd = await tx`
+      UPDATE swarm_members SET avatar = ${tx.json(avatar as any)}, version = version + 1, updated_at = now()
+      WHERE id = ${memberId}
+      RETURNING id`;
+    if (upd.length === 0) return err(404, "member not found");
+    await tx`
+      INSERT INTO swarm_member_avatars (member_id, content_type, bytes, byte_size)
+      VALUES (${memberId}, ${type}, ${Buffer.from(input.bytes)}, ${input.bytes.byteLength})
+      ON CONFLICT (member_id) DO UPDATE
+        SET content_type = EXCLUDED.content_type,
+            bytes = EXCLUDED.bytes,
+            byte_size = EXCLUDED.byte_size,
+            uploaded_at = now()`;
+    await audit(actor, "member_avatar_upload", { memberId, path: avatarPath, contentType: type, byteSize: input.bytes.byteLength }, tx);
+    return { ok: true, status: 200, memberId, avatar };
+  });
 }
 
 // ── Sessions: creation with a frozen roster snapshot ────────────────────────

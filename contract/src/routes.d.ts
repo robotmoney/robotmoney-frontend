@@ -38,6 +38,7 @@ export const ROUTES: {
     member: string;
     memberTakes: string;
     memberProfile: string;
+    memberAvatar: string;
     subject: string;
     subjectSnapshots: string;
     sessions: string;

@@ -45,11 +45,6 @@ export interface AdminAuthConfig {
   adminToken: string | null;
   automationToken?: string | null;
   allowInsecure: boolean;
-  // Where the avatar-upload route (issue #626) writes/serves files from.
-  // Optional so every existing caller/test that builds a narrower cfg object
-  // (auth-only) keeps compiling; uploadMemberAvatarAdmin treats an absent
-  // value the same as an unset STATIC_DIR (500, avatar storage unconfigured).
-  staticDir?: string | null;
 }
 
 // `cfg` is injectable (mirrors routes/admin.ts's handleAdmin) so tests can
@@ -117,7 +112,7 @@ export async function handleSwarmAdmin(
       }
       const bytes = new Uint8Array(await req.arrayBuffer());
       return fromResult(
-        await admin.uploadMemberAvatarAdmin(id, { contentType: req.headers.get("Content-Type"), bytes }, cfg.staticDir ?? null),
+        await admin.uploadMemberAvatarAdmin(id, { contentType: req.headers.get("Content-Type"), bytes }),
       );
     }
     if (segs.length === 3) {

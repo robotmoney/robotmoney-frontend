@@ -1,8 +1,11 @@
 // Admin per-member avatar upload (issue #626): the real thing behind
 // updateMemberAdmin's metadata-only avatar patch (which merely lets an admin
 // point avatar.path at an arbitrary URL string). This route stores actual
-// image bytes under `staticDir` — the SAME directory backend/src/api/
-// static.ts serves STATIC_DIR from — and points avatar.path at them.
+// image bytes in Postgres (swarm_member_avatars, migration 0035) and points
+// avatar.path at a GET route that serves them back — DB-backed rather than
+// STATIC_DIR because scripts/static-assembly.sh wipes and re-copies
+// STATIC_DIR's contents on every `docker compose up`/redeploy, so a
+// file-on-disk upload would not survive one.
 //
 // PRECEDENCE (AC3 of #626, and the third test the issue's test plan
 // requires) is proven at the boundary this backend owns, not by re-deriving
@@ -14,17 +17,14 @@
 // the backend-provable form of "uploaded wins over derived" is: before
 // upload, the member carries no avatar.path (a consumer has nothing to try
 // loading, so it falls to the derived mark); after upload, avatar.path is
-// set AND resolves — served back byte-for-byte through the same
-// serveStatic() the production static.ts uses — so a real <img> pointed at
-// it can never hit that onerror fallback. That is the whole condition
-// #625's precedence check depends on; there is no separate flag to assert.
-import { test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+// set AND resolves — served back byte-for-byte through the SAME public GET
+// route production traffic uses — so a real <img> pointed at it can never
+// hit that onerror fallback. That is the whole condition #625's precedence
+// check depends on; there is no separate flag to assert.
+import { test, expect } from "bun:test";
 import { generateKeyPair } from "../../src/lib/signing.ts";
 import { handleSwarmAdmin } from "../../src/api/routes/swarm-admin.ts";
-import { serveStatic } from "../../src/api/static.ts";
+import { handleSwarm } from "../../src/api/routes/swarm.ts";
 import { AVATAR_MAX_BYTES } from "../../src/swarm/admin.ts";
 import { sql } from "../../src/db/client.ts";
 import { ROUTES, path as buildPath } from "@robotmoney/contract";
@@ -33,17 +33,8 @@ import { useCleanDatabase } from "../support/clean-db.ts";
 // Own database per file — see admin-swarm.test.ts for why (issue #152).
 useCleanDatabase(import.meta.file);
 
-let storageDir: string;
-beforeAll(() => {
-  storageDir = mkdtempSync(join(tmpdir(), "avatar-upload-test-"));
-});
-afterAll(() => {
-  rmSync(storageDir, { recursive: true, force: true });
-});
-
 const TOKEN = "s3cret-avatar-admin-token";
-const PROD = () => ({ adminToken: TOKEN, allowInsecure: false, staticDir: storageDir });
-const NO_STORAGE = { adminToken: TOKEN, allowInsecure: false, staticDir: null } as const;
+const PROD = { adminToken: TOKEN, allowInsecure: false };
 
 // A tiny, genuinely-PNG-signed payload — content-type is what this endpoint
 // validates, not decoded pixel data, but a real magic number keeps the fixture
@@ -64,8 +55,16 @@ function avatarReq(
   });
 }
 
-const call = (r: Request, cfg: ReturnType<typeof PROD> | typeof NO_STORAGE = PROD()) =>
-  handleSwarmAdmin(r, new URL(r.url), cfg);
+const call = (r: Request, cfg = PROD) => handleSwarmAdmin(r, new URL(r.url), cfg);
+
+// The public serving route lives in handleSwarm (routes/swarm.ts), not the
+// admin dispatcher — a real <img src=avatarPath> is an unauthenticated GET.
+async function fetchAvatar(avatarPath: string): Promise<Response> {
+  const url = new URL(`http://x${avatarPath}`);
+  const r = await handleSwarm(new Request(url), url);
+  if (!(r instanceof Response)) throw new Error(`expected the avatar route to return a raw Response, got ${JSON.stringify(r)}`);
+  return r;
+}
 
 async function seatMember(): Promise<string> {
   const { publicKeyB64 } = await generateKeyPair();
@@ -81,16 +80,10 @@ async function seatMember(): Promise<string> {
 }
 
 const rowOf = async (id: string) => (await sql`SELECT * FROM swarm_members WHERE id = ${id}`)[0] as Record<string, any>;
-
-// Files this member's uploads could ever land under, across every allowed
-// extension AND the dotted temp-file naming — so "nothing partial was left
-// behind" is checked against every name the implementation could have written,
-// not just the one extension a given test happens to upload.
-function storedFilesFor(memberId: string): string[] {
-  const dir = join(storageDir, "avatars", "uploads");
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((f) => f.includes(memberId));
-}
+const avatarRowOf = async (id: string) =>
+  (await sql`SELECT content_type, byte_size FROM swarm_member_avatars WHERE member_id = ${id}`)[0] as
+    | Record<string, any>
+    | undefined;
 
 // ── AC2 / test plan bullet 1: authentication is required ───────────────────
 
@@ -101,97 +94,90 @@ test("avatar upload: unauthenticated or wrong-token request is rejected before a
     expect(res?.status).toBe(403);
   }
   expect((await rowOf(id)).avatar).toBeNull();
-  expect(storedFilesFor(id)).toEqual([]);
+  expect(await avatarRowOf(id)).toBeUndefined();
 });
 
 // ── AC1 / test plan bullet 2: a valid upload is stored and served back ─────
 
-test("avatar upload: a valid image is stored, the member row points at it, and it is served back byte-for-byte", async () => {
+test("avatar upload: a valid image is stored in the database, the member row points at it, and it is served back byte-for-byte", async () => {
   const id = await seatMember();
   expect((await rowOf(id)).avatar).toBeNull();
 
   const res = await call(avatarReq(id, { token: TOKEN, contentType: "image/png", bytes: PNG_BYTES }));
   expect(res?.status).toBe(200);
   const avatar = (res!.body as any).avatar;
-  expect(avatar.path).toMatch(new RegExp(`^/avatars/uploads/${id}\\.png\\?v=`));
+  expect(avatar.path).toMatch(new RegExp(`^/api/swarm/members/${id}/avatar\\?v=`));
 
   // The database row is the authority — not just the response envelope.
   const row = await rowOf(id);
   expect(row.avatar).toEqual(avatar);
   expect(Number(row.version)).toBe(2); // seatMember's add is version 1
 
-  // Stored on disk, exactly the bytes that were sent — no encoding/truncation.
-  const onDisk = join(storageDir, "avatars", "uploads", `${id}.png`);
-  expect(existsSync(onDisk)).toBe(true);
-  expect(new Uint8Array(readFileSync(onDisk))).toEqual(PNG_BYTES);
-  // No leftover temp file once the upload has succeeded.
-  expect(storedFilesFor(id)).toEqual([`${id}.png`]);
+  // Stored in swarm_member_avatars, exactly the bytes that were sent — no
+  // encoding/truncation, and no file on disk to go stale on a redeploy.
+  const avatarRow = await avatarRowOf(id);
+  expect(avatarRow?.content_type).toBe("image/png");
+  expect(Number(avatarRow?.byte_size)).toBe(PNG_BYTES.byteLength);
 
-  // "served for that member": the SAME static.ts serveStatic() production
-  // uses over STATIC_DIR answers the path this route wrote to avatar.path.
-  const pathname = new URL(`http://x${avatar.path}`).pathname;
-  const served = await serveStatic(pathname, storageDir);
-  expect(served).not.toBeNull();
-  expect(served!.status).toBe(200);
-  expect(new Uint8Array(await served!.arrayBuffer())).toEqual(PNG_BYTES);
+  // "served for that member": the SAME public route production traffic hits.
+  const served = await fetchAvatar(avatar.path);
+  expect(served.status).toBe(200);
+  expect(served.headers.get("Content-Type")).toBe("image/png");
+  expect(new Uint8Array(await served.arrayBuffer())).toEqual(PNG_BYTES);
 });
 
 // ── AC4 / test plan implicit: invalid uploads are rejected, no partial state ─
 
-test("avatar upload: an unsupported content-type is rejected and leaves no file behind", async () => {
+test("avatar upload: an unsupported content-type is rejected and writes nothing", async () => {
   const id = await seatMember();
   const res = await call(avatarReq(id, { token: TOKEN, contentType: "text/plain", bytes: PNG_BYTES }));
   expect(res?.status).toBe(400);
   expect((res!.body as any).error).toContain("content-type");
   expect((await rowOf(id)).avatar).toBeNull();
   expect(Number((await rowOf(id)).version)).toBe(1);
-  expect(storedFilesFor(id)).toEqual([]);
+  expect(await avatarRowOf(id)).toBeUndefined();
 });
 
-test("avatar upload: an empty body is rejected and leaves no file behind", async () => {
+test("avatar upload: an empty body is rejected and writes nothing", async () => {
   const id = await seatMember();
   const res = await call(avatarReq(id, { token: TOKEN, contentType: "image/png", bytes: new Uint8Array(0) }));
   expect(res?.status).toBe(400);
   expect((await rowOf(id)).avatar).toBeNull();
-  expect(storedFilesFor(id)).toEqual([]);
+  expect(await avatarRowOf(id)).toBeUndefined();
 });
 
-test("avatar upload: an oversized body is rejected and leaves no file behind", async () => {
+test("avatar upload: an oversized body is rejected and writes nothing", async () => {
   const id = await seatMember();
   const oversized = new Uint8Array(AVATAR_MAX_BYTES + 1);
   const res = await call(avatarReq(id, { token: TOKEN, contentType: "image/png", bytes: oversized }));
   expect(res?.status).toBe(400);
   expect((res!.body as any).error).toContain("byte limit");
   expect((await rowOf(id)).avatar).toBeNull();
-  expect(storedFilesFor(id)).toEqual([]);
+  expect(await avatarRowOf(id)).toBeUndefined();
 });
 
-test("avatar upload: an unknown member is rejected and leaves no file behind", async () => {
+test("avatar upload: an unknown member is rejected and writes nothing", async () => {
   const bogus = crypto.randomUUID();
   const res = await call(avatarReq(bogus, { token: TOKEN, contentType: "image/png" }));
   expect(res?.status).toBe(404);
-  expect(storedFilesFor(bogus)).toEqual([]);
+  expect(await avatarRowOf(bogus)).toBeUndefined();
 });
 
-// memberId is interpolated into a filesystem path (never SQL). Every real
-// member id is a crypto.randomUUID() shape, so a non-UUID id is rejected
-// BEFORE any path is built — proving this closed matters more than the 404
-// itself: a memberId of "../../../../tmp/evil" would otherwise resolve
-// path.join("<dir>/avatars/uploads", "../../../../tmp/evil") straight outside
-// the upload directory.
-test("avatar upload: a path-traversal member id is rejected and writes nothing outside the upload directory", async () => {
-  const traversal = "../../../../tmp/rm-avatar-traversal-poc";
-  const res = await call(avatarReq(encodeURIComponent(traversal), { token: TOKEN, contentType: "image/png" }));
+// Storage is DB-backed now (no filesystem path is ever built from memberId),
+// so this is no longer a path-traversal closure — it is a fast, clear 404 for
+// input that can never name a real member, since every real id is a
+// crypto.randomUUID() shape (addMemberAdmin, applyMember).
+test("avatar upload: a non-UUID member id is rejected as not-found, not passed to a query", async () => {
+  const res = await call(avatarReq(encodeURIComponent("../../../../tmp/not-a-member"), { token: TOKEN, contentType: "image/png" }));
   expect(res?.status).toBe(404);
-  expect(existsSync("/tmp/rm-avatar-traversal-poc")).toBe(false);
-  expect(existsSync("/tmp/rm-avatar-traversal-poc.png")).toBe(false);
 });
 
-test("avatar upload: STATIC_DIR unconfigured is a clear 500, not a silent no-op", async () => {
+// ── The GET serving route: not-found and route/contract parity ─────────────
+
+test("avatar GET route: a member with no upload 404s", async () => {
   const id = await seatMember();
-  const res = await call(avatarReq(id, { token: TOKEN, contentType: "image/png" }), NO_STORAGE);
-  expect(res?.status).toBe(500);
-  expect((await rowOf(id)).avatar).toBeNull();
+  const res = await fetchAvatar(buildPath(ROUTES.swarm.memberAvatar, { id }));
+  expect(res.status).toBe(404);
 });
 
 // ── AC3 / test plan bullet 3: precedence over the derived mark ─────────────
@@ -213,10 +199,9 @@ test("avatar upload: an uploaded avatar resolves successfully, which is exactly 
   // x-on:error fallback, so #625's precedence renders the uploaded image, not
   // the mark, for this member everywhere avatars render.
   expect((await rowOf(id)).avatar.path).toBe(avatarPath);
-  const pathname = new URL(`http://x${avatarPath}`).pathname;
-  const served = await serveStatic(pathname, storageDir);
-  expect(served?.status).toBe(200);
-  expect(new Uint8Array(await served!.arrayBuffer())).toEqual(PNG_BYTES);
+  const served = await fetchAvatar(avatarPath);
+  expect(served.status).toBe(200);
+  expect(new Uint8Array(await served.arrayBuffer())).toEqual(PNG_BYTES);
 });
 
 // ── Route/contract parity ───────────────────────────────────────────────────
@@ -233,4 +218,13 @@ test("avatar upload: the route is the contract's swarm.admin.memberAvatar templa
     }),
   );
   expect(res?.status).toBe(200);
+});
+
+test("avatar GET: the route is the contract's swarm.memberAvatar template", async () => {
+  const id = await seatMember();
+  await call(avatarReq(id, { token: TOKEN, contentType: "image/png", bytes: PNG_BYTES }));
+  const templatePath = buildPath(ROUTES.swarm.memberAvatar, { id });
+  expect(templatePath).toBe(`/api/swarm/members/${id}/avatar`);
+  const res = await fetchAvatar(templatePath);
+  expect(res.status).toBe(200);
 });
