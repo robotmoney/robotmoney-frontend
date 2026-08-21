@@ -35,7 +35,19 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** Default backup directory — the same one restore-container.ts resolves. */
-export const DEFAULT_BACKUP_DIR = join(homedir(), "rm-backup-v022");
+/**
+ * Where a rollout's artifacts and receipts live, when a script is not given an
+ * explicit path.
+ *
+ * Reads RM_BACKUP_DIR first. The literal fallback is v0.2.2's directory and is
+ * kept ONLY so that release's scripts behave exactly as they did when they were
+ * executed — a shared lib must not silently repoint a past release's evidence.
+ * Every release from v0.3.0 on exports RM_BACKUP_DIR instead; the runbook
+ * (docs/runbooks/rollout-procedure.md, "Conventions") makes that the first step.
+ */
+export const DEFAULT_BACKUP_DIR = process.env.RM_BACKUP_DIR?.trim()
+  ? process.env.RM_BACKUP_DIR.trim()
+  : join(homedir(), "rm-backup-v022");
 
 /** Receipts live beside the backup artifacts, not in the checkout: §5.1 makes
  *  you `cd` out of the tree and §5.2 forbids rollout artifacts inside it. */
@@ -265,8 +277,8 @@ export function deriveHostRole(repoRoot: string): { role: "stage" | "cutover"; w
   const envFile = join(repoRoot, ".env");
   if (existsSync(envFile)) {
     const hasUrl = /^DATABASE_URL=\S/m.test(readFileSync(envFile, "utf8"));
-    if (hasUrl) return { role: "cutover", why: "repo-root .env carries DATABASE_URL (§6.5)" };
-    return { role: "stage", why: "repo-root .env exists but has no DATABASE_URL (§6.5)" };
+    if (hasUrl) return { role: "cutover", why: "repo-root .env carries DATABASE_URL (rollout-procedure.md §7.5)" };
+    return { role: "stage", why: "repo-root .env exists but has no DATABASE_URL (rollout-procedure.md §7.5)" };
   }
-  return { role: "stage", why: "no repo-root .env — §7/§8/§11/§12 cannot run here (§2, §6.5)" };
+  return { role: "stage", why: "no repo-root .env — the cutover and everything after it cannot run here (rollout-procedure.md §7.5)" };
 }
