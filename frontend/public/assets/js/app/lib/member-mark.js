@@ -229,6 +229,74 @@ export function memberMarkOrInitials(seed, name, size, initialsFn) {
   return memberMark(seed, size) || String(initialsFn(name) ?? "");
 }
 
+// Minimal HTML-attribute escaper for memberAvatarMarkup below. Not exported
+// with the rest of the app's escaping (static-views.js's `escapeHtml`) because
+// this module has no `this` to hang a shared helper off and pulling in a
+// second module for four lines is not worth the coupling.
+/** @type {Record<string, string>} */
+const ATTR_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+/** @param {string} s */
+function escapeAttr(s) {
+  return String(s).replace(/[&<>"']/g, (ch) => ATTR_ESCAPES[ch]);
+}
+
+/**
+ * Full avatar precedence for #625: manifest `avatar.path` first, the derived
+ * mark second, initials only when there is no seed either. Admin-uploaded
+ * override (#626) hooks in here too, ahead of the derived mark, once it has a
+ * field to read.
+ *
+ * THE 404 PROBLEM. roster-seed.ts sets `avatar.path` to
+ * `/avatars/swarm/{athena,robotmoney,woon}.jpg` for the three seeded members,
+ * and none of those files exist (#625's own motivation section) -- so
+ * rendering a manifest path unconditionally would put a broken-image icon on
+ * every one of them, not a derived mark, breaking the AC that says they must
+ * still show marks with "no manual asset added". An <img> that swaps itself
+ * for the fallback markup on a load error treats "path set but 404s" the same
+ * as "no path": both end up on the derived mark, and a real upload (#626)
+ * that resolves renders normally with no code path change here.
+ *
+ * The recovery is wired with Alpine's `x-on:error`, not an inline `onerror=`
+ * content attribute: this app's CSP (backend/src/api/static.ts) is
+ * `script-src 'self' 'unsafe-eval'` with no `unsafe-inline`/nonce/hash, which
+ * blocks inline event-handler attributes outright (confirmed by driving this
+ * exact markup through a real page under that CSP and reading the console
+ * violation). `x-on:` runs through Alpine's own `unsafe-eval`'d evaluator and
+ * attaches via `addEventListener`, which the same CSP allows, and Alpine's
+ * mutation observer initializes directives on nodes `x-html` inserts via
+ * innerHTML -- every call site binds this through `x-html`, so that is the
+ * only insertion path this needs to work for. The fallback markup travels in
+ * a `data-*` attribute rather than a closure, because `x-html` serializes
+ * this return value to a string and reparses it; nothing from this
+ * function's scope survives that round trip except what is written into the
+ * markup itself.
+ *
+ * @param {string | null | undefined} avatarPath  member.avatar?.path, if any.
+ * @param {string} seed  keyFingerprint when one exists, else the member id.
+ * @param {string} name
+ * @param {number} size
+ * @param {(name: string) => string} initialsFn
+ * @returns {string}
+ */
+export function memberAvatarMarkup(avatarPath, seed, name, size, initialsFn) {
+  const fallback = memberMarkOrInitials(seed, name, size, initialsFn);
+  const path = String(avatarPath || "").trim();
+  if (!path) return fallback;
+  const src = escapeAttr(path);
+  const fallbackAttr = escapeAttr(fallback);
+  // Alpine directive, not an inline `onerror=` attribute: the CSP this app
+  // serves under (backend/src/api/static.ts) is `script-src 'self'
+  // 'unsafe-eval'` with no `unsafe-inline`/nonce/hash, which blocks an inline
+  // event-handler CONTENT ATTRIBUTE outright -- confirmed by driving this
+  // exact markup through a real page and reading the CSP violation off the
+  // console (frontend/test/browser/swarm-index.spec.ts's 404 case). `x-on:`
+  // is evaluated through Alpine's own `unsafe-eval`'d Function() path and
+  // wired up via addEventListener, which the same CSP allows, and Alpine's
+  // mutation observer initializes directives on nodes added by innerHTML
+  // (which is how x-html, the binding every call site uses, inserts this).
+  return `<img class="sv__mark-img" src="${src}" width="${size}" height="${size}" alt="" data-mark-fallback="${fallbackAttr}" x-on:error="$el.outerHTML = $el.dataset.markFallback">`;
+}
+
 // Exported for the unit test: the palette a mark may draw from, so the
 // covenant ("no cyan in a figure, no beacon on an ordinary member") is
 // asserted against the real values rather than restated in a comment.

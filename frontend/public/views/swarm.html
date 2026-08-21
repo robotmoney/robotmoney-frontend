@@ -28,7 +28,7 @@
                        it this link loses the accessible name the initials
                        used to give it. -->
                   <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" :aria-label="m.name"
-                     x-html="memberMark(m.keyFingerprint || m.id, m.name, 40)"></a>
+                     x-html="memberMark(m.keyFingerprint || m.id, m.name, 40, m.avatar?.path)"></a>
                   <div class="sv__row-main">
                     <div class="sv__row-titleline">
                       <a class="sv__row-title" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" x-text="m.name"></a>

@@ -9,7 +9,7 @@ import { ASSET_DOT, assetDot, subjectDot } from "./views/shared.js";
 import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
-import { memberMarkOrInitials } from "../lib/member-mark.js";
+import { memberAvatarMarkup } from "../lib/member-mark.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -361,12 +361,13 @@ export const helpers = {
       .map((s) => s[0].toUpperCase())
       .join("") || "SW";
   },
-  // Derived identity mark (#560), falling back to the initials above when
-  // there is no seed. Bound with x-html: memberMark() never interpolates the
-  // seed into its output, and initials() is already stripped to letters and
-  // digits, so neither path can carry markup from a member name.
-  memberMark(seed, name, size = 40) {
-    return memberMarkOrInitials(seed, name, size, (n) => this.initials(n));
+  // Avatar precedence (#625): manifest avatar.path, then the derived identity
+  // mark (#560), then the initials above when there is no seed either. Bound
+  // with x-html: memberAvatarMarkup() only ever writes a path it was handed
+  // and a derived-mark/initials string that cannot carry markup from a member
+  // name, so neither path can inject anything.
+  memberMark(seed, name, size = 40, avatarPath) {
+    return memberAvatarMarkup(avatarPath, seed, name, size, (n) => this.initials(n));
   },
   stanceColor(stance) {
     return STANCE_COLORS[stance] || "#7e889e";

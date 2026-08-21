@@ -63,6 +63,46 @@ test("swarm index: a member's mark is the same on every load", async ({ page }) 
   expect(await read()).toBe(await read());
 });
 
+// #625's precedence: manifest avatar.path first, the derived mark second.
+// roster-seed.ts sets avatar.path for the three seeded members to files that
+// 404 (frontend/public/avatars/ does not exist), so the precedence check must
+// treat a 404 the same as "no avatar.path" rather than leaving a broken-image
+// icon in the roster. The image request is routed to a real 404 (not merely
+// asserted never to fire) so this exercises the actual onerror fallback, not
+// just the markup memberAvatarMarkup() produced for it.
+test("swarm index: a member's avatar.path that 404s falls back to the derived mark, not a broken image", async ({ page }) => {
+  const AVATAR_MEMBERS = [
+    { id: "athena", status: "active", name: "Athena", lens: "quant risk", tagline: null, biases: null, mandate: null, avatar: { path: "/avatars/swarm/athena.jpg", source_url: null, credit: "x" } },
+  ];
+  await page.route("**/api/swarm/members*", (route) => route.fulfill(json({ members: AVATAR_MEMBERS })));
+  await page.route("**/api/swarm/sessions*", (route) => route.fulfill(json({ sessions: [], nextCursor: null })));
+  await page.route("**/avatars/swarm/athena.jpg", (route) => route.fulfill({ status: 404, body: "not found" }));
+
+  await page.goto("/swarm");
+  const avatar = page.locator('.sv__person-row .sv__avatar--mark[aria-label="Athena"]');
+  await expect(avatar.locator("img")).toHaveCount(0);
+  await expect(avatar.locator("svg")).toHaveCount(1);
+});
+
+// The companion case: a real, loadable avatar.path takes precedence over the
+// derived mark, per #625's AC ("manifest avatar.path ... first, derived mark
+// second"). A 1x1 GIF is the smallest real image a route handler can fulfill.
+const PIXEL_GIF = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBTAA7", "base64");
+
+test("swarm index: a member with a loadable avatar.path renders it instead of the derived mark", async ({ page }) => {
+  const AVATAR_MEMBERS = [
+    { id: "athena", status: "active", name: "Athena", lens: "quant risk", tagline: null, biases: null, mandate: null, avatar: { path: "/avatars/swarm/athena.jpg", source_url: null, credit: "x" } },
+  ];
+  await page.route("**/api/swarm/members*", (route) => route.fulfill(json({ members: AVATAR_MEMBERS })));
+  await page.route("**/api/swarm/sessions*", (route) => route.fulfill(json({ sessions: [], nextCursor: null })));
+  await page.route("**/avatars/swarm/athena.jpg", (route) => route.fulfill({ status: 200, contentType: "image/gif", body: PIXEL_GIF }));
+
+  await page.goto("/swarm");
+  const avatar = page.locator('.sv__person-row .sv__avatar--mark[aria-label="Athena"]');
+  await expect(avatar.locator("img")).toHaveCount(1);
+  await expect(avatar.locator("svg")).toHaveCount(0);
+});
+
 // #560's precedence is uploaded art, then the derived mark, then initials.
 // A row with no id at all has no seed, so it falls back rather than rendering
 // an empty box.
