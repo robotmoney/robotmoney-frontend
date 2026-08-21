@@ -17,6 +17,27 @@ export {
   urlFromDiscreteKeys,
   type ExternalPgResolution,
 } from "./lib/demo-external-pg.ts";
+// Same reason again: the `--db` data-path resolver and the argv allowlist
+// (scripts/lib/demo-db-mode.ts) are what demo-main consumes, so
+// scripts/tests/unit/demo-db-mode.test.ts reaches them through this entrypoint
+// rather than the lib — which proves the tested module is the one that boots.
+export {
+  bannerFor,
+  BACKUP_DIR_FLAG,
+  DB_FLAG,
+  DB_MODES,
+  DEMO_FLAGS,
+  dataPathOverlayYaml,
+  isPrePopulated,
+  ownsData,
+  parseDataPath,
+  usesComposePostgres,
+  validateArgv,
+  type DataPathRequest,
+  type DbMode,
+  type ParsedDataPath,
+  type ResolvedDataPath,
+} from "./lib/demo-db-mode.ts";
 
 if (import.meta.main) {
   await import("./lib/demo-main.ts");
