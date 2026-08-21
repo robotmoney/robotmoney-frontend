@@ -16,6 +16,19 @@ import { join } from "node:path";
 // (issue #691). Everything about which major and why -alpine is not used lives
 // in that module.
 import { POSTGRES_IMAGE } from "./postgres-image.ts";
+// The SHARED naming scheme. This is a raw `docker run`, so — exactly like
+// backend/tests/preload.ts, the other non-compose spawner — it cannot inherit
+// labels from a compose file and must stamp them itself. Unlabelled, a twin is
+// invisible to demo:reap and demo:clean, which is how a container holding a full
+// copy of production ends up living on a host indefinitely.
+import {
+  dockerLabelFlags,
+  resolveStackEnvironment,
+  ROLE_LABEL,
+  stackLabels,
+  stackProjectName,
+  TWIN_ROLE,
+} from "../stack/naming.ts";
 
 export interface BackupFiles {
   stamp: string;
@@ -122,10 +135,25 @@ export async function restoreBackupIntoContainer(
      * container holds a restored copy of production data.
      */
     bindHost?: string;
+    /**
+     * The compose project this twin belongs to, when it belongs to one.
+     *
+     * A `--db twin` boot passes its demo project so demo:down and demo:clean
+     * scope to the twin like any other container that boot created. A standalone
+     * twin (restore-check.ts) passes nothing and gets its own `twin` family name
+     * — the two must not collide, because a standalone twin can legitimately run
+     * beside a demo.
+     */
+    project?: string;
   } = {},
 ): Promise<RestoredContainer | { error: string; container?: string }> {
   const bindHost = opts.bindHost ?? "127.0.0.1";
   const container = `rm-restore-${backup.stamp}-${Math.random().toString(36).slice(2, 8)}`;
+  const environment = resolveStackEnvironment(process.env);
+  const project = opts.project ?? stackProjectName("twin", environment);
+  // ROLE_LABEL last so it cannot be overridden: the reaper's liveness rule
+  // depends on a twin admitting what it is. See naming.ts's ROLE_LABEL.
+  const labelFlags = dockerLabelFlags({ ...stackLabels(environment, project), [ROLE_LABEL]: TWIN_ROLE });
   const localPassword = generateLocalPassword();
   log(`starting throwaway Postgres (${IMAGE})`);
   const runCode = await run(
@@ -143,6 +171,7 @@ export async function restoreBackupIntoContainer(
       `POSTGRES_DB=${LOCAL_DB}`,
       "-p",
       `${bindHost}::5432`,
+      ...labelFlags,
       IMAGE,
     ],
     { log },

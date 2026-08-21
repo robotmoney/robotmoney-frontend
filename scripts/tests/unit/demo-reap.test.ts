@@ -54,11 +54,13 @@ function psLine(o: {
   state?: string;
   status?: string;
   ports?: string;
+  role?: string;
 }): string {
   const labels: string[] = [];
   if (o.project !== null) labels.push(`robotmoney.demo.project=${o.project ?? "p"}`);
   if (o.envClass !== null) labels.push(`robotmoney.env=${o.envClass ?? "ci"}`);
   labels.push(`robotmoney.env.hash=${o.envHash ?? "aaaaaaaaaa"}`);
+  if (o.role) labels.push(`robotmoney.demo.role=${o.role}`);
   return JSON.stringify({
     ID: o.id,
     Names: o.name,
@@ -81,6 +83,7 @@ function container(o: Partial<ReapContainer> & { id: string; name: string }): Re
     running: false,
     healthy: false,
     publishesHostPort: false,
+    role: null,
     status: "Exited (137) 4 days ago",
     ...o,
   };
@@ -381,6 +384,40 @@ describe("planReap — G2 a live, serving project is never touched even when the
     const plan = planReap(cs, { now: NOW, olderThanMs: SIX_HOURS });
     expect(plan.doomed).toEqual([]);
     expect(plan.verdicts[0]!.reason).toMatch(/publishing a host port/);
+  });
+
+  test("a leaked TWIN does not count as proof of life — it publishes a port and serves nobody", () => {
+    // The twin (`--db twin`) is a raw `docker run` postgres holding a restored
+    // copy of production. It publishes a host port because the stack's
+    // containers dial it, never because anything is being served. Before the
+    // role label existed this read as "project is live and serving", which would
+    // have pinned the twin AND every dead container beside it, on every future
+    // reap, forever — the leak protecting itself.
+    const cs = [
+      container({ id: "twin", name: "rm-restore-20260821T101500Z-a3f9c1", project: "rm_demo_stack_gone", envClass: "local", createdAt: ancient, running: true, publishesHostPort: true, role: "twin", status: "Up 4 days" }),
+      container({ id: "api", name: "rm_demo_stack_gone-api-1", project: "rm_demo_stack_gone", envClass: "local", createdAt: ancient, running: false }),
+    ];
+    const plan = planReap(cs, { now: NOW, olderThanMs: SIX_HOURS });
+    expect(plan.doomed.map((c) => c.id).sort()).toEqual(["api", "twin"]);
+  });
+
+  test("the twin exemption is NARROW — a real serving container in the same project still shields it (planted control)", () => {
+    // The control for the test above: if the exemption were written as "ignore
+    // host ports entirely" rather than "ignore the twin", this project would be
+    // reaped out from under a live demo. It must not be.
+    const cs = [
+      container({ id: "twin", name: "rm-restore-x", project: "rm_demo_stack_live", envClass: "local", createdAt: ancient, running: true, publishesHostPort: true, role: "twin", status: "Up 4 days" }),
+      container({ id: "api", name: "rm_demo_stack_live-api-1", project: "rm_demo_stack_live", envClass: "local", createdAt: ancient, running: true, publishesHostPort: true, status: "Up 4 days" }),
+    ];
+    const plan = planReap(cs, { now: NOW, olderThanMs: SIX_HOURS });
+    expect(plan.doomed).toEqual([]);
+    for (const v of plan.verdicts) expect(v.reason).toMatch(/G2 project is live and serving/);
+  });
+
+  test("the role label is read off the docker line, not just hand-built objects", () => {
+    const parsed = parseContainerLine(psLine({ id: "t", name: "rm-restore-y", role: "twin", ports: "172.17.0.1:49155->5432/tcp" }));
+    expect(parsed?.role).toBe("twin");
+    expect(parsed?.publishesHostPort).toBe(true);
   });
 
   test("a STOPPED old local project is still reaped — G2 protects the serving, not the merely present", () => {
