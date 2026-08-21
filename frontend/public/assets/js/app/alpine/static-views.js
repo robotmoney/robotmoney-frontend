@@ -1397,6 +1397,13 @@ export function registerStaticViews(Alpine) {
     rows: [],
     subject: null,   // active session filter; null = every subject
     openTakes: {},   // take id → expanded
+    // #687: the ref that failed to resolve, and the full roster to land on
+    // instead of a blank profile. Kept distinct from `error` — this is not a
+    // failure, it is the deliberate not-found render, and the two states show
+    // different markup.
+    notFound: false,
+    attemptedRef: null,
+    members: [],
     async init() {
       const memberId = location.pathname.split("/").filter(Boolean).pop();
       // The route this init is answering. Everything below runs after an await,
@@ -1427,10 +1434,21 @@ export function registerStaticViews(Alpine) {
         // issue (and lose) a swarm API call on this page.
         this.member = await api.get(path(ROUTES.swarm.member, { id: memberId })).then(camelMember)
           .catch(() => loadArchiveMember(memberId).catch(() => null));
-        // Both sources missed. Raise it rather than falling through to a blank
-        // page: the old ordering surfaced the API's own error here, and
-        // subjectProfile.init() throws the same way for the same reason.
-        if (!this.member) throw new Error("Member not found");
+        // Both sources missed (issue #687). The route already answered this
+        // request 404 (backend/src/api/routes/swarm.ts) — that status is what
+        // makes "not found" deliberate rather than an accidental 200, and it is
+        // recorded there rather than re-derived here. The old behaviour threw
+        // into a blank error page; this renders the committee roster in place
+        // instead, at the URL the visitor actually requested, and keeps the
+        // failed ref on screen (attemptedRef) for a future "did you mean"
+        // affordance — deliberately not built here (out of scope per #687).
+        if (!this.member) {
+          this.notFound = true;
+          this.attemptedRef = memberId;
+          const res = await api.get(ROUTES.swarm.members).catch(() => null);
+          this.members = res?.members || [];
+          return;
+        }
         // Both corrections below name this page after the record rather than
         // after the URL, and both are skipped if the visitor has already moved
         // on: the fetch above is not cancelled when the router tears this view

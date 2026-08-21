@@ -258,9 +258,12 @@ test("GET /api/swarm/members/:ref resolves the new handle AND the legacy id, to 
   expect((byLegacyId!.body as any).id).toBe(m.id);
   expect((byLegacyId!.body as any).handle).toBe("noop-analyst");
 
-  // A name that belongs to nobody is still nothing.
+  // A name that belongs to nobody is still nothing. #687: that is a
+  // deliberate 404, not a 200 with a null body — a crawler must not be told
+  // the page is fine for a ref that never resolves.
   const missing = await getMemberRoute("no-such-member");
-  expect(missing!.body).toBeNull();
+  expect(missing!.status).toBe(404);
+  expect(missing!.body).toEqual({ error: "not found" });
 });
 
 test("GET /api/swarm/members/:ref/takes answers to the handle and to the legacy id alike", async () => {
