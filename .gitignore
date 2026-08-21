@@ -39,3 +39,6 @@ onboarding-admission-record.md
 # between the write and the rename orphans one next to the real artifact, where
 # `git add -A` would happily commit a ~1 MB near-duplicate.
 *.tmp-[0-9]*
+
+# ad-hoc stack-orchestrator environment (docs/technical/stack-orchestrator.md)
+.stack-env/
