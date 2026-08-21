@@ -152,6 +152,23 @@ export async function getMember(id: string) {
   const row = await resolveMemberRow(id);
   return row ? toMember(row) : null;
 }
+
+// Serves the bytes admin.ts's uploadMemberAvatarAdmin (issue #626) writes to
+// swarm_member_avatars — the durable, redeploy-proof store avatar.path now
+// points at (routes/swarm.ts's GET .../members/:id/avatar). No handle/id
+// resolution here: avatar.path always names the member's real uuid directly,
+// never a handle, so a plain equality lookup is enough.
+export interface MemberAvatarBytes {
+  contentType: string;
+  bytes: Buffer;
+  uploadedAt: Date;
+}
+export async function getMemberAvatarBytes(memberId: string): Promise<MemberAvatarBytes | null> {
+  const rows = await sql<{ content_type: string; bytes: Buffer; uploaded_at: Date }[]>`
+    SELECT content_type, bytes, uploaded_at FROM swarm_member_avatars WHERE member_id = ${memberId}`;
+  const row = rows[0];
+  return row ? { contentType: row.content_type, bytes: row.bytes, uploadedAt: row.uploaded_at } : null;
+}
 export async function getSubject(id: string) {
   const row = (await sql`SELECT * FROM swarm_subjects WHERE id = ${id}`)[0];
   return row ? toSubject(row) : null;

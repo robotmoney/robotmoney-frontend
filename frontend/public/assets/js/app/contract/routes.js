@@ -107,6 +107,10 @@ export const ROUTES = {
     // the body are changed. The path :id must match the bearer token's own
     // member id — this can never write another member's profile.
     memberProfile: "/api/swarm/members/:id/profile",
+    // GET, public, no auth — serves the bytes issue #626's admin upload
+    // stores in swarm_member_avatars (migration 0035). Distinct from
+    // admin.memberAvatar below, which is the privileged POST that writes them.
+    memberAvatar: "/api/swarm/members/:id/avatar",
     subject: "/api/swarm/subjects/:id", // GET
     subjectSnapshots: "/api/swarm/subjects/:id/snapshots", // GET
     // GET ?state=&limit=&cursor= — light index rows (no regimeSummary/synthesis/
@@ -184,6 +188,11 @@ export const ROUTES = {
       memberDeactivate: "/api/swarm/admin/members/:id/deactivate", // POST — versioned
       memberReactivate: "/api/swarm/admin/members/:id/reactivate", // POST — versioned, mints a fresh credential
       memberRotateKey: "/api/swarm/admin/members/:id/rotate-key", // POST — one-time credential in the response only
+      // POST — issue #626: raw image bytes as the body (Content-Type is the
+      // upload's mime type, not application/json). Stores the file and points
+      // avatar.path at it, which is all member-mark.js's precedence check
+      // (issue #625) needs to prefer it over the derived mark.
+      memberAvatar: "/api/swarm/admin/members/:id/avatar",
 
       sessionCreate: "/api/swarm/admin/sessions", // POST — UTC-validated, snapshots the roster, enqueues 4 scoped jobs
       sessionRoster: "/api/swarm/admin/sessions/:id/roster", // GET — the frozen expected roster

@@ -300,6 +300,10 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname.startsWith("/api/swarm/")) {
       const r = await handleSwarm(req, url);
+      // The avatar route (issue #626) returns a raw Response — real image
+      // bytes, not a {status, body} JSON envelope — so it must pass through
+      // untouched rather than being re-wrapped by json().
+      if (r instanceof Response) return r;
       if (r) return json(r.body, r.status);
     }
 

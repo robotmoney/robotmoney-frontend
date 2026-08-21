@@ -109,6 +109,24 @@ export async function handleSwarmAdmin(
       if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
       return fromResult(await admin.addMemberAdmin(parsed.data));
     }
+    // Avatar upload (issue #626), checked BEFORE the generic segs.length===3
+    // branch below: that branch unconditionally calls readJsonObject(req),
+    // which would consume the body trying to parse it as JSON — and the raw
+    // image bytes this route reads via req.arrayBuffer() ARE the body, not
+    // JSON. A Content-Length over the limit is refused before the body is
+    // even read, so an oversized upload cannot be used to force this process
+    // to buffer it into memory first.
+    if (segs.length === 3 && segs[2] === "avatar" && m === "POST") {
+      const id = decodeURIComponent(segs[1]!);
+      const contentLength = req.headers.get("Content-Length");
+      if (contentLength && Number(contentLength) > admin.AVATAR_MAX_BYTES) {
+        return { status: 400, body: { error: `avatar exceeds ${admin.AVATAR_MAX_BYTES}-byte limit` } };
+      }
+      const bytes = new Uint8Array(await req.arrayBuffer());
+      return fromResult(
+        await admin.uploadMemberAvatarAdmin(id, { contentType: req.headers.get("Content-Type"), bytes }),
+      );
+    }
     if (segs.length === 3) {
       const id = decodeURIComponent(segs[1]!);
       const b = (await readJsonObject(req)) ?? {};

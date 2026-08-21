@@ -42,6 +42,7 @@ const RE_SUBJECT_SNAPSHOTS = templateRe(C.subjectSnapshots); // /api/swarm/subje
 const RE_SUBJECT = templateRe(C.subject); // /api/swarm/subjects/:id
 const RE_MEMBER_TAKES = templateRe(C.memberTakes); // /api/swarm/members/:id/takes — checked before the plain member-detail route below, same reason as RE_SUBJECT_SNAPSHOTS vs RE_SUBJECT
 const RE_MEMBER_PROFILE = templateRe(C.memberProfile); // /api/swarm/members/:id/profile — POST only, so no ordering conflict with the GET member-detail dispatcher below
+const RE_MEMBER_AVATAR = templateRe(C.memberAvatar); // /api/swarm/members/:id/avatar (GET) — same ordering reason as RE_MEMBER_TAKES
 const RE_SESSION = templateRe(C.session); // /api/swarm/sessions/:date/:subject
 // /api/swarm/sessions/:id — ONE segment, so it cannot overlap the
 // two-segment date/subject form above; the order of the two tests below is
@@ -50,14 +51,37 @@ const RE_SESSION_BY_ID = templateRe(C.sessionById);
 const RE_MEMO = templateRe(C.memo, { id: "\\d+" }); // /api/swarm/memos/:id (numeric only, as before)
 const ADMIN_PREFIX = C.admin.action.replace(":action", ""); // /api/swarm/admin/
 
-// Returns { status, body } or null if the path isn't a swarm route.
-export async function handleSwarm(req: Request, url: URL): Promise<{ status: number; body: unknown } | null> {
+// Returns { status, body }, a raw Response (the avatar route — real image
+// bytes, not JSON), or null if the path isn't a swarm route.
+export async function handleSwarm(req: Request, url: URL): Promise<{ status: number; body: unknown } | Response | null> {
   const p = url.pathname;
   const m = req.method;
 
   if (m === "GET" && p === C.members) {
     const [members, roster] = await Promise.all([ic.getMembers(), ic.getRosterCapacity()]);
     return { status: 200, body: { members, ...roster } };
+  }
+  // Checked BEFORE the single-segment member-detail route below — a bare
+  // `.startsWith` there would otherwise swallow `/members/:id/avatar` too
+  // (its `.split("/").pop()` would read "avatar" as the member id).
+  if (m === "GET" && RE_MEMBER_AVATAR.test(p)) {
+    const id = decodeURIComponent(p.split("/")[4] ?? "");
+    const avatar = await ic.getMemberAvatarBytes(id);
+    if (!avatar) return new Response("not found", { status: 404 });
+    // Bytes are immutable once uploaded (a re-upload overwrites the row and
+    // the caller mints a fresh ?v= cache-bust token in avatar.path — see
+    // admin.ts's uploadMemberAvatarAdmin), so this exact URL's response can
+    // be cached hard; long max-age is safe because the query string, not the
+    // path, is what changes on a new upload.
+    return new Response(new Uint8Array(avatar.bytes), {
+      status: 200,
+      headers: {
+        "Content-Type": avatar.contentType,
+        "Content-Length": String(avatar.bytes.byteLength),
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "Last-Modified": avatar.uploadedAt.toUTCString(),
+      },
+    });
   }
   // Checked BEFORE the single-segment member-detail route below — a bare
   // `.startsWith` there would otherwise swallow `/members/:id/takes` too (its

@@ -659,6 +659,91 @@ export async function rotateMemberKeyAdmin(
   });
 }
 
+// ── Admin avatar upload (issue #626) ────────────────────────────────────────
+// The real thing: swarm/admin.ts's updateMemberAdmin already lets an admin
+// point avatar.path at an arbitrary URL string (metadata-only, no bytes
+// stored). This is the endpoint that stores actual image bytes and points
+// avatar.path at them, so it flows through the SAME precedence chain issue
+// #625 built in frontend/assets/js/app/lib/member-mark.js: memberAvatarMarkup
+// treats any avatar.path that loads as taking precedence over the derived
+// mark, so a stored, servable file at the path this writes is all "uploaded
+// wins" requires — no separate precedence flag.
+//
+// STORED IN POSTGRES, NOT STATIC_DIR. The first cut of this wrote bytes to
+// STATIC_DIR/avatars/uploads/. That directory does not survive a redeploy:
+// scripts/static-assembly.sh wipes and re-copies STATIC_DIR's contents on
+// every `docker compose up`, so an uploaded avatar would silently vanish on
+// the next release. swarm_member_avatars (migration 0035) is the durable
+// store instead; avatar.path now points at a route
+// (routes/swarm.ts's GET .../members/:id/avatar) that reads the bytes back
+// out of that table, not a file on disk.
+export const AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5 MiB: generous for a profile photo.
+export const AVATAR_CONTENT_TYPES: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+export interface AvatarUploadInput {
+  contentType: string | null;
+  bytes: Uint8Array;
+}
+
+// Storage is DB-backed now, so there is no filesystem path to traverse — the
+// UPDATE/INSERT below are parameterized like every other query here, so an
+// arbitrary string in memberId cannot reach SQL as anything but a bind value.
+// This check stays anyway: every real member id is minted by
+// crypto.randomUUID() (addMemberAdmin, applyMember) and never anything else,
+// so a non-UUID-shaped id can never name a real member — rejecting it here is
+// a fast, clear 404 instead of a round trip to prove the same thing.
+const MEMBER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Validation (type, size, id shape) runs BEFORE any database write, so a
+// rejected upload leaves nothing behind. The bytes row and the member's
+// avatar pointer are written in ONE transaction — a not-found member or a
+// failed commit leaves neither half written; there is no temp-file/rename
+// dance to get wrong because there is no file.
+export async function uploadMemberAvatarAdmin(
+  memberId: string,
+  input: AvatarUploadInput,
+  actor: Actor = ADMIN_ACTOR,
+): Promise<AdminResult> {
+  const type = (input.contentType ?? "").split(";")[0]!.trim().toLowerCase();
+  const ext = AVATAR_CONTENT_TYPES[type];
+  if (!ext) {
+    return err(400, `unsupported avatar content-type "${input.contentType ?? ""}"; allowed: ${Object.keys(AVATAR_CONTENT_TYPES).join(", ")}`);
+  }
+  if (input.bytes.byteLength === 0) return err(400, "empty upload");
+  if (input.bytes.byteLength > AVATAR_MAX_BYTES) return err(400, `avatar exceeds ${AVATAR_MAX_BYTES}-byte limit`);
+  if (!MEMBER_ID_RE.test(memberId)) return err(404, "member not found");
+
+  // Cache-bust token decided up front (not derived from the row's version),
+  // so the query string is stable across the write and does not depend on
+  // whether the later UPDATE succeeds.
+  const cacheBust = crypto.randomUUID().slice(0, 8);
+  const avatarPath = `/api/swarm/members/${memberId}/avatar?v=${cacheBust}`;
+  const avatar = { path: avatarPath, source_url: null, credit: "Uploaded by admin" };
+
+  return sql.begin(async (tx) => {
+    const upd = await tx`
+      UPDATE swarm_members SET avatar = ${tx.json(avatar as any)}, version = version + 1, updated_at = now()
+      WHERE id = ${memberId}
+      RETURNING id`;
+    if (upd.length === 0) return err(404, "member not found");
+    await tx`
+      INSERT INTO swarm_member_avatars (member_id, content_type, bytes, byte_size)
+      VALUES (${memberId}, ${type}, ${Buffer.from(input.bytes)}, ${input.bytes.byteLength})
+      ON CONFLICT (member_id) DO UPDATE
+        SET content_type = EXCLUDED.content_type,
+            bytes = EXCLUDED.bytes,
+            byte_size = EXCLUDED.byte_size,
+            uploaded_at = now()`;
+    await audit(actor, "member_avatar_upload", { memberId, path: avatarPath, contentType: type, byteSize: input.bytes.byteLength }, tx);
+    return { ok: true, status: 200, memberId, avatar };
+  });
+}
+
 // ── Sessions: creation with a frozen roster snapshot ────────────────────────
 // Field/validation shape matches docs/architecture.md §6.3
 // SessionCreateRequest: three explicit ISO instants, ordering

@@ -38,6 +38,7 @@ export const ROUTES: {
     member: string;
     memberTakes: string;
     memberProfile: string;
+    memberAvatar: string;
     subject: string;
     subjectSnapshots: string;
     sessions: string;
@@ -82,6 +83,7 @@ export const ROUTES: {
       memberDeactivate: string;
       memberReactivate: string;
       memberRotateKey: string;
+      memberAvatar: string;
       sessionCreate: string;
       sessionRoster: string;
       rosterAdd: string;
