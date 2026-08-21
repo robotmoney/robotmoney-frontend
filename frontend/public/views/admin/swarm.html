@@ -200,7 +200,7 @@
 
       <div class="rm-table-scroll">
         <table class="rm-table adm-table">
-          <thead><tr><th>Id</th><th>Name</th><th>Status</th><th>Applied</th><th>Activated</th></tr></thead>
+          <thead><tr><th>Id</th><th>Name</th><th>Status</th><th>Applied</th><th>Activated</th><th>Silence</th></tr></thead>
           <tbody>
             <template x-for="m in filteredMembers()" :key="m.id">
               <tr class="adm-row" @click="location.href = memberHref(m.id)">
@@ -209,9 +209,13 @@
                 <td x-text="m.status"></td>
                 <td x-text="m.appliedAt || '—'"></td>
                 <td x-text="m.activatedAt || '—'"></td>
+                <td>
+                  <span x-show="memberSilence(m)" :class="memberSilenceClass(memberSilence(m))"
+                        x-text="memberSilenceLabel(memberSilence(m))" data-testid="member-silence-flag"></span>
+                </td>
               </tr>
             </template>
-            <tr x-show="filteredMembers().length === 0"><td class="adm-dim" colspan="5">No members in this state.</td></tr>
+            <tr x-show="filteredMembers().length === 0"><td class="adm-dim" colspan="6">No members in this state.</td></tr>
           </tbody>
         </table>
       </div>

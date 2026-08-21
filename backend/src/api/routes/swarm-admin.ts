@@ -89,7 +89,19 @@ export async function handleSwarmAdmin(
 
   // ── Members ───────────────────────────────────────────────────────────
   if (segs[0] === "members") {
-    if (segs.length === 1 && m === "GET") return { status: 200, body: { members: await admin.listMembersAdmin() } };
+    if (segs.length === 1 && m === "GET") {
+      // Issue #563: silenceFlags is a SEPARATE query (getMemberSilenceFlags),
+      // not a field on toMemberAdmin()'s per-row projection — it needs the
+      // whole session/recommendation history, not one row, and admin.ts's
+      // other callers of toMemberAdmin() (manual-add, update, deactivate,
+      // reactivate) have no such history to hand it. Run in parallel; they
+      // read disjoint tables and neither writes.
+      const [members, silenceFlags] = await Promise.all([
+        admin.listMembersAdmin(),
+        admin.getMemberSilenceFlags(),
+      ]);
+      return { status: 200, body: { members, silenceFlags } };
+    }
     if (segs.length === 1 && m === "POST") {
       // The parser owns the message: a body that names `memberId` is refused
       // with its own sentence (issue #690), never folded into "required".

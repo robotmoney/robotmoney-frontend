@@ -359,9 +359,32 @@ export interface AdminApplicationRow {
   reviewed_at: string | null;
 }
 
-/** GET .../members response envelope — `members`, not `items`. */
+// ── Silence flags (issue #563) ──────────────────────────────────────────────
+// A member that activated and never submitted a take — or an established
+// member that has gone quiet since its last one — reads as perfectly healthy
+// on every other field here (status='active'). Computed on read
+// (backend/src/swarm/admin.ts getMemberSilenceFlags()) from
+// swarm_session_members/swarm_recommendations, not persisted on the member
+// row, so it is its OWN top-level field on the list response rather than a
+// key on AdminMember: every other AdminMember-returning route (manual-add,
+// update, deactivate, reactivate) projects one row with no session history to
+// compute it from, and giving those responses a field they cannot honestly
+// fill was the wrong shape to force on them.
+export type AdminMemberSilenceFlagType = "never_submitted" | "gone_quiet";
+
+export interface AdminMemberSilenceFlag {
+  type: AdminMemberSilenceFlagType;
+  /** Eligible (seated, non-excused) sessions since the reference point:
+   * activation for `never_submitted`, the member's own latest take for
+   * `gone_quiet`. */
+  sessionsSinceReference: number;
+}
+
+/** GET .../members response envelope — `members`, not `items`. `silenceFlags`
+ * is keyed by member id; a member with no entry is not flagged. */
 export interface AdminMemberListResponse {
   members: AdminMember[];
+  silenceFlags: Record<string, AdminMemberSilenceFlag>;
 }
 
 /** GET .../applications response envelope. */

@@ -216,6 +216,103 @@ export async function listMembersAdmin() {
   return rows.map(toMemberAdmin);
 }
 
+// ── Silence flags (issue #563) ──────────────────────────────────────────────
+// A member can complete onboarding, go `active`, and then never submit a
+// take — or submit for a while and then go quiet — while every liveness
+// signal (status='active', no swarm_agent_health_events row) still reads
+// healthy. Computed on read from the same eligibility record closeWindow()'s
+// absence bookkeeping already trusts (domain.ts): swarm_session_members is
+// what makes a session count toward N at all — a session the member was
+// never seated in is not silence, it never happened for them (issue #563,
+// "distinguish silence from exclusion") — and an EXCUSED row is dropped from
+// the count for the same reason closeWindow() drops it from its own absence
+// tally: an excusal is the roster saying this member was not expected, not
+// the member saying nothing.
+//
+// N is how many such eligible sessions must pass before this fires — the
+// issue leaves N uncalibrated ("Suggested starting shape" names it only as
+// `$1`). Chosen here, not inline, so it is one place to tune:
+export const SWARM_SILENCE_THRESHOLD_SESSIONS = 5;
+// Five is deliberately more than one: "do not fire on single-session
+// absence" is an explicit constraint, and a single miss is not evidence of
+// anything — an agent restarting, a slow first boot, a brief's window
+// closing early (#570) are all ordinary. Five misses in a row is not
+// ordinary, and at the swarm's roughly-daily cadence it still surfaces the
+// problem within about a week rather than the ~19-session gap that is what
+// this issue was actually filed over (#558) — an operator finds out from the
+// admin list, not from reading a transcript months later.
+
+export type MemberSilenceFlagType = "never_submitted" | "gone_quiet";
+
+export interface MemberSilenceFlag {
+  type: MemberSilenceFlagType;
+  /** Eligible (seated, non-excused) sessions since the reference point:
+   * activation for `never_submitted`, the member's own latest take for
+   * `gone_quiet`. Always >= SWARM_SILENCE_THRESHOLD_SESSIONS. */
+  sessionsSinceReference: number;
+}
+
+// Two DISJOINT queries, both gated on SWARM_SILENCE_THRESHOLD_SESSIONS:
+//   - never_submitted: the issue's core, required scope — the #558 case.
+//     Reuses the issue's own suggested shape almost verbatim, with `s.created_at`
+//     read as `s.convened_at` (swarm_sessions has no created_at; convened_at is
+//     "the real identity, set when the session actually convenes" — migration
+//     0022) and an added `sm.status != 'excused'` filter (see header comment).
+//   - gone_quiet: the issue's "Worth extending" note — an established member
+//     (>= 1 take on file) with nothing in the N eligible sessions since its
+//     OWN latest one. The window is anchored to the member's last take rather
+//     than to `now`, so it fires on N consecutive misses at any point in a
+//     long history, not only on the N most recent sessions system-wide.
+// A member can only ever match one: gone_quiet requires a prior take to
+// measure "since"; never_submitted requires there to be none. Callers key the
+// result by member_id, so listMembersAdmin() and this can run in parallel and
+// merge without either wondering whether the other assigned the same member
+// two answers.
+export async function getMemberSilenceFlags(tx: DbHandle = sql): Promise<Record<string, MemberSilenceFlag>> {
+  const neverSubmitted = await tx<{ member_id: string; sessions_seen: number }[]>`
+    WITH eligible AS (
+      SELECT sm.member_id, count(*)::int AS sessions_seen
+      FROM swarm_session_members sm
+      JOIN swarm_sessions s ON s.id = sm.session_id
+      JOIN swarm_members m  ON m.id = sm.member_id
+      WHERE m.status = 'active'
+        AND sm.status != 'excused'
+        AND s.convened_at > m.activated_at
+      GROUP BY sm.member_id
+    )
+    SELECT e.member_id, e.sessions_seen
+    FROM eligible e
+    WHERE e.sessions_seen >= ${SWARM_SILENCE_THRESHOLD_SESSIONS}
+      AND NOT EXISTS (SELECT 1 FROM swarm_recommendations r WHERE r.member_id = e.member_id)`;
+
+  const goneQuiet = await tx<{ member_id: string; sessions_seen: number }[]>`
+    WITH last_take AS (
+      SELECT r.member_id, max(s.convened_at) AS last_take_at
+      FROM swarm_recommendations r
+      JOIN swarm_sessions s ON s.id = r.session_id
+      GROUP BY r.member_id
+    )
+    SELECT sm.member_id, count(*)::int AS sessions_seen
+    FROM swarm_session_members sm
+    JOIN swarm_sessions s ON s.id = sm.session_id
+    JOIN swarm_members m  ON m.id = sm.member_id
+    JOIN last_take lt      ON lt.member_id = sm.member_id
+    WHERE m.status = 'active'
+      AND sm.status != 'excused'
+      AND s.convened_at > lt.last_take_at
+    GROUP BY sm.member_id
+    HAVING count(*) >= ${SWARM_SILENCE_THRESHOLD_SESSIONS}`;
+
+  const flags: Record<string, MemberSilenceFlag> = {};
+  for (const row of neverSubmitted) {
+    flags[row.member_id] = { type: "never_submitted", sessionsSinceReference: Number(row.sessions_seen) };
+  }
+  for (const row of goneQuiet) {
+    flags[row.member_id] = { type: "gone_quiet", sessionsSinceReference: Number(row.sessions_seen) };
+  }
+  return flags;
+}
+
 export async function listApplicationsAdmin(status?: string) {
   const rows = status
     ? await sql`SELECT id, member_id, status, created_at, reviewed_at FROM swarm_applications WHERE status = ${status} ORDER BY created_at DESC`

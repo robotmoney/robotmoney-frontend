@@ -98,6 +98,10 @@ export function registerAdminSwarmOverview(Alpine) {
     error: null,
     topics: [],
     members: [],
+    // Keyed by member id (issue #563); a member with no entry is not
+    // flagged. Populated from the SAME GET as `members`, not a second
+    // request — see loadAll().
+    silenceFlags: {},
     sessions: [],
     memberFilter: "active", // applied | active | inactive
 
@@ -148,6 +152,12 @@ export function registerAdminSwarmOverview(Alpine) {
         if (!Array.isArray(sessionsRes.sessions)) throw new Error("swarm sessions response missing 'sessions' array");
         this.topics = topicsRes.subjects;
         this.members = membersRes.members;
+        // Absent on a stale/cached bundle running against a newer backend —
+        // same "render without it" convention as swarm-member.js's canEdit(),
+        // rather than throwing the response out over one optional key.
+        this.silenceFlags = membersRes.silenceFlags && typeof membersRes.silenceFlags === "object"
+          ? membersRes.silenceFlags
+          : {};
         this.sessions = sessionsRes.sessions;
       } catch (e) {
         if (e.status === 403) this._handle403();
@@ -260,6 +270,24 @@ export function registerAdminSwarmOverview(Alpine) {
       if (s === "cancelled") return "adm-badge adm-badge--err";
       if (s === "collecting" || s === "window_closed" || s === "aggregated") return "adm-badge adm-badge--run";
       return "adm-badge adm-badge--idle";
+    },
+
+    // Issue #563: null for every member not in silenceFlags, which is the
+    // common case (a member with no entry is not flagged — see the type's
+    // doc comment) — the row's cell renders nothing rather than a dash.
+    memberSilence(m) { return this.silenceFlags[m.id] || null; },
+    memberSilenceLabel(flag) {
+      if (!flag) return "";
+      return flag.type === "never_submitted"
+        ? `never submitted (${flag.sessionsSinceReference} sessions)`
+        : `gone quiet (${flag.sessionsSinceReference} sessions)`;
+    },
+    // never_submitted is the more urgent of the two (issue #558's actual
+    // case: a member that looks fully onboarded and has NEVER produced a
+    // signed take) — err red rather than the amber `run` badge gone_quiet
+    // shares with an in-progress session state.
+    memberSilenceClass(flag) {
+      return flag?.type === "never_submitted" ? "adm-badge adm-badge--err" : "adm-badge adm-badge--run";
     },
 
     memberHref(id) { return path(`/admin/swarm/members/:id`, { id }); },
