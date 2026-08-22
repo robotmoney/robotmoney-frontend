@@ -113,15 +113,11 @@ and the filesystem disagree, the filesystem wins. Delete the receipts directory
 and you have lost bookkeeping, not safety — every gate can be re-run, and a
 step with no receipt is simply not done.
 
-Each step also has a machine-readable block (```` ```yaml step ````) carrying
-what a program has to know: its id, artifacts, TTL and `verify:` command. Those
-blocks live in the **per-release** runbook, not here — every field in one names
-that release's own scripts and backup directory, so a shared copy would be the
-"fact with two homes" the manifest exists to prevent. Each release's
-`backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts` is their single source, and
-that release's rollout-steps test fails if manifest and prose drift apart.
-
-Prose is the authority on *how* and *why*, in both documents.
+The step blocks that follow (```` ```yaml step ````) are the machine-readable
+half of each section; `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts` is
+their single source, and `backend/tests/rollout-steps.test.ts` fails if the two
+drift apart. Prose is still the authority on *how* and *why* — the blocks only
+carry what a program has to know.
 
 ---
 
@@ -319,11 +315,18 @@ upgrade is allowed to touch anything.
 
 ### 5.1 The dump
 
-> **Manifest step `P3.backup`.** The machine-readable block for this step —
-> its id, artifacts, TTL and `verify:` command — lives in the **per-release**
-> runbook, because every one of those fields names that release's own scripts
-> and backup directory. This document describes the mechanic; the release binds
-> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
+```yaml step
+id:          P3.backup
+phase:       P3 backup
+section:     §5.1
+host-role:   stage
+actor:       agent
+ttl:         48h
+artifacts:
+  - rm-preupgrade-<STAMP>.dump.gpg
+  - rm-globals-<STAMP>.sql.gpg
+verify:      §5.1's pg_dump/pg_dumpall + §5.2's gpg, then: where.ts --record P3.backup
+```
 
 > 🔴 **`cd` out of the checkout first.** §4 left you in `<checkout>/backend`, and
 > these commands write to the **current directory**. Writing a plaintext
@@ -510,11 +513,26 @@ bind mount can reach.
 
 ### 5.3 The verification that PROVES it restores — and that it is safe to upgrade
 
-> **Manifest step `P3.gate-c`.** The machine-readable block for this step —
-> its id, artifacts, TTL and `verify:` command — lives in the **per-release**
-> runbook, because every one of those fields names that release's own scripts
-> and backup directory. This document describes the mechanic; the release binds
-> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
+```yaml step
+id:          P3.gate-c
+phase:       P3 backup
+section:     §5.3
+gate:        C
+host-role:   stage
+actor:       agent
+requires:
+  - P3.backup
+depends-on:
+  - backend/scripts/upgrades/<FROM>-to-<TO>/preflight.ts
+  - backend/scripts/upgrades/<FROM>-to-<TO>/release.ts
+  - backend/scripts/lib/preflight-utils.ts
+  - backend/scripts/lib/checks.ts
+  - backend/migrations/**
+  - backend/scripts/lib/restore-container.ts
+  - backend/scripts/lib/postgres-image.ts
+  - backend/scripts/upgrades/<FROM>-to-<TO>/restore-check.ts
+verify:      bun scripts/upgrades/<FROM>-to-<TO>/restore-check.ts $RM_BACKUP_DIR --emit-receipt
+```
 
 A dump you have not restored is a hypothesis. And a dump that restores but
 was never checked against this release's migrations is only half proven.
@@ -559,11 +577,16 @@ throwaway container is gone whether the run succeeds or fails.
 
 ### 5.4 🔴 IRREVERSIBLE — capture the swarm schedule rows, which no restore returns
 
-> **Manifest step `P3.schedules`.** The machine-readable block for this step —
-> its id, artifacts, TTL and `verify:` command — lives in the **per-release**
-> runbook, because every one of those fields names that release's own scripts
-> and backup directory. This document describes the mechanic; the release binds
-> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
+```yaml step
+id:          P3.schedules
+phase:       P3 backup
+section:     §5.4
+host-role:   stage
+actor:       agent
+artifacts:
+  - rm-swarm-schedules-*.txt
+verify:      §5.4's psql block, then: where.ts --record P3.schedules
+```
 
 The `.dump` restores them, but **nothing in §10's rollback does**, and the very
 next boot overwrites them again. `seedSwarmSchedules()`
@@ -617,11 +640,29 @@ credentials, so it does not need §5.2's encryption).
 
 ## 6. The stage rehearsal — mandatory, not optional
 
-> **Manifest step `P5.rehearsal-boot`.** The machine-readable block for this step —
-> its id, artifacts, TTL and `verify:` command — lives in the **per-release**
-> runbook, because every one of those fields names that release's own scripts
-> and backup directory. This document describes the mechanic; the release binds
-> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
+```yaml step
+id:          P5.rehearsal-boot
+phase:       P5 twin rehearsal
+section:     §6
+host-role:   stage
+actor:       agent
+requires:
+  - P3.gate-c
+depends-on:
+  - backend/src/**
+  - backend/migrations/**
+  - backend/Dockerfile
+  - frontend/**
+  - scripts/**
+  - docker-compose.yml
+  - docker-compose.demo.yml
+  - package.json
+  - bun.lock
+  - backend/scripts/lib/restore-container.ts
+  - backend/scripts/lib/postgres-image.ts
+  - backend/scripts/upgrades/<FROM>-to-<TO>/stage-rehearsal.ts
+verify:      bun scripts/upgrades/<FROM>-to-<TO>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
+```
 
 > **Corrected 2026-08-20 — this section used to be headed "Optional but
 > recommended".** It is not optional and never was: §6.4 opens *"⛔ This is a
@@ -816,11 +857,24 @@ tokens, member access keys and every stored email address — the same inventory
 
 ### 6.4 Digital-twin rehearsal
 
-> **Manifest step `P5.postflight-twin`.** The machine-readable block for this step —
-> its id, artifacts, TTL and `verify:` command — lives in the **per-release**
-> runbook, because every one of those fields names that release's own scripts
-> and backup directory. This document describes the mechanic; the release binds
-> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
+```yaml step
+id:          P5.postflight-twin
+phase:       P5 twin rehearsal
+section:     §6.4
+host-role:   stage
+actor:       agent
+requires:
+  - P5.rehearsal-boot
+depends-on:
+  - backend/scripts/upgrades/<FROM>-to-<TO>/postflight.ts
+  - backend/scripts/upgrades/<FROM>-to-<TO>/release.ts
+  - backend/scripts/lib/postflight-utils.ts
+  - backend/scripts/lib/checks.ts
+  - backend/src/swarm/handle.ts
+  - backend/migrations/**
+  - backend/scripts/upgrades/<FROM>-to-<TO>/stage-rehearsal.ts
+verify:      bun scripts/upgrades/<FROM>-to-<TO>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt   # G8 runs this step
+```
 
 ⛔ **This is a blocking gate.** Do not proceed to §7 until the twin run exits
 `0` and every acceptance criterion in §6.5 is met.
@@ -856,11 +910,20 @@ bun scripts/upgrades/<FROM>-to-<TO>/stage-rehearsal.ts $RM_BACKUP_DIR
 
 ### 6.5 Stage rehearsal report
 
-> **Manifest step `P6.report`.** The machine-readable block for this step —
-> its id, artifacts, TTL and `verify:` command — lives in the **per-release**
-> runbook, because every one of those fields names that release's own scripts
-> and backup directory. This document describes the mechanic; the release binds
-> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
+```yaml step
+id:          P6.report
+phase:       P6 go/no-go
+section:     §6.5
+host-role:   stage
+actor:       operator
+requires:
+  - P4.preflight-live
+  - P5.rehearsal-boot
+  - P5.postflight-twin
+artifacts:
+  - *rehearsal-report-*.md
+verify:      write the §6.5 report, then: where.ts --record P6.report --note GO
+```
 
 ⛔ **Gate: do not proceed to §7 until this report exists and all criteria pass.**
 
@@ -1111,11 +1174,26 @@ deployment.md §2.1, "FIRST: find the project name".
 
 ### 8.2 The invocation
 
-> **Manifest step `P7.cutover`.** The machine-readable block for this step —
-> its id, artifacts, TTL and `verify:` command — lives in the **per-release**
-> runbook, because every one of those fields names that release's own scripts
-> and backup directory. This document describes the mechanic; the release binds
-> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
+```yaml step
+id:          P7.cutover
+phase:       P7 cutover
+section:     §8.2
+host-role:   cutover
+actor:       agent
+requires:
+  - P6.report
+depends-on:
+  - backend/src/**
+  - backend/migrations/**
+  - backend/Dockerfile
+  - frontend/**
+  - scripts/**
+  - docker-compose.yml
+  - docker-compose.demo.yml
+  - package.json
+  - bun.lock
+verify:      DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: where.ts --record P7.cutover
+```
 
 > 🔴 **IRREVERSIBLE.** This command is not a dry run and there is no "boot and
 > look first" mode. It writes to production three times before you can inspect
@@ -1179,11 +1257,19 @@ before you trust them, and confirm the scheduler actually survived the window.
 
 ### 9.1 Dry-run the checks before cutover — prove the checks discriminate
 
-> **Manifest step `P4.postflight-dryrun`.** The machine-readable block for this step —
-> its id, artifacts, TTL and `verify:` command — lives in the **per-release**
-> runbook, because every one of those fields names that release's own scripts
-> and backup directory. This document describes the mechanic; the release binds
-> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
+```yaml step
+id:          P4.postflight-dryrun
+phase:       P4 live preflight
+section:     §9.1
+host-role:   stage
+actor:       agent
+ttl:         48h
+requires:
+  - P4.preflight-live
+artifacts:
+  - postflight-dryrun-*.txt
+verify:      §9.1's table as rm_readonly against the replica, then: where.ts --record P4.postflight-dryrun
+```
 
 **Do this once, read-only, against production while it is still on the
 OUTGOING release, before the cutover runs — not a spot check, a self-test of
