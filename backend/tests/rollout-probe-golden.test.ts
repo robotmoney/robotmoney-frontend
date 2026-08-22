@@ -33,10 +33,46 @@ const STAMP = "20260101T000000Z";
 let fixture: string;
 let probe: { steps: { id: string; status: string; because: string }[]; next: string | null };
 
-/** A commit guaranteed to differ from HEAD in every path — the root commit. */
-function rootCommit(): string {
-  const out = Bun.spawnSync(["git", "rev-list", "--max-parents=0", "HEAD"], { cwd: repoRoot });
-  return new TextDecoder().decode(out.stdout).trim().split("\n")[0]!;
+/**
+ * A commit guaranteed to differ from HEAD in every path, on any checkout.
+ *
+ * The obvious choice — the root commit — is wrong, and wrong only off this
+ * machine. `actions/checkout` clones at depth 1 by default, so in CI the repo
+ * has exactly ONE commit: `rev-list --max-parents=0 HEAD` answers HEAD itself,
+ * the receipt records the sha it is compared against, and the drift row comes
+ * back `ok`. Green locally, and the one row this golden exists to hold gone
+ * silently in CI.
+ *
+ * So the fixture owns the commit instead of borrowing one from history: an
+ * empty tree, committed with `commit-tree`. It differs from HEAD in every path
+ * by construction, and `changedSince()` resolves it — `cat-file -e` and `diff`
+ * both read the object database, which has it because we just wrote it there,
+ * with no ref and no history required. The identity and dates are pinned so
+ * the object hashes the same every run: repeated runs reuse one dangling
+ * object rather than accumulating one per run, and `git gc` reclaims it.
+ */
+function emptyTreeCommit(): string {
+  const run = (args: string[]) => {
+    const out = Bun.spawnSync(["git", ...args], {
+      cwd: repoRoot,
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "rollout-probe-golden",
+        GIT_AUTHOR_EMAIL: "rollout-probe-golden@invalid",
+        GIT_COMMITTER_NAME: "rollout-probe-golden",
+        GIT_COMMITTER_EMAIL: "rollout-probe-golden@invalid",
+        GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+        GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+      },
+    });
+    if (out.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${new TextDecoder().decode(out.stderr).trim()}`);
+    }
+    return new TextDecoder().decode(out.stdout).trim();
+  };
+  const emptyTree = run(["hash-object", "-t", "tree", "--stdin", "-w"]);
+  return run(["commit-tree", emptyTree, "-m", "rollout-probe-golden drift fixture"]);
 }
 function headSha(): string {
   return new TextDecoder().decode(Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout).trim();
@@ -85,7 +121,7 @@ beforeAll(() => {
   put("P4.preflight-live", {                                      // -> expired (ttl 12h)
     at: new Date(Date.now() - 40 * 3600_000).toISOString(),
   });
-  put("P4.postflight-dryrun", { repo_sha: rootCommit() });        // -> invalid (code drift)
+  put("P4.postflight-dryrun", { repo_sha: emptyTreeCommit() });   // -> invalid (code drift)
   // Every other step gets no receipt at all -> missing ("no receipt").
 
   const run = Bun.spawnSync(["bun", PROBE, "--json", "--backup-dir", fixture], {
