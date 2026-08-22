@@ -583,6 +583,195 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
   }
 }
 
+// ── JSON-RPC array batching (the per-HIT optimisation) ───────────────────────
+//
+// WHY THIS EXISTS, AND WHY MULTICALL3 IS NOT ENOUGH. The provider meters
+// REQUEST FREQUENCY, not bytes: one POST carrying fifty calls costs the same
+// budget as one POST carrying one. Multicall3 (above) already exploits that for
+// reads that share a block — 27 balanceOf reads collapse into ONE eth_call. But
+// `aggregate3` executes at a SINGLE block, so it cannot span block tags, and it
+// cannot carry node methods (`eth_getBlockByNumber`, `eth_blockNumber`) at all
+// because those are not contract calls.
+//
+// That is exactly the shape of the backfill's cost. A repaired day needs its own
+// block tag, so N days are N eth_calls that no aggregate3 can merge; and locating
+// those blocks is ~80% of the spend, entirely in node methods. JSON-RPC array
+// batching is the only mechanism that merges either one — many request objects in
+// one HTTP POST — and it is what this function adds.
+//
+// ONE POST = ONE TOKEN. `acquireRateToken` is spent per POST here exactly as in
+// rpcRequest, so a 50-call batch draws 1 token instead of 50. The saving is not
+// incidental to the limiter; it IS the optimisation, and it needs no change to
+// the bucket.
+//
+// A SIBLING OF rpcRequest, NOT A REPLACEMENT. The single-call path is left
+// byte-for-byte as it was: every live caller (the request path, the sampler)
+// still issues exactly the request it issued before, with the same error
+// messages. Sharing a retry loop between the two would have made a change to
+// the batch path a change to the live read path, which is not a trade worth
+// taking on a release branch that just shipped the pacing this sits under.
+//
+// PARTIAL FAILURE IS A VALUE, NOT A THROW — the same contract multicall3
+// aggregate3 already establishes with `allowFailure`. One reverted or throttled
+// sub-call must not discard the other forty-nine, so per-entry errors come back
+// in the result array and the CALLER decides. Only a failure of the BATCH
+// itself (transport, HTTP, unparseable envelope) throws.
+
+/** One call in a JSON-RPC batch: the same (method, params) pair rpcRequest takes. */
+export interface BatchCall {
+  method: string;
+  params: unknown[];
+}
+
+/** Per-entry outcome, positionally aligned with the input array. */
+export type BatchResult<T> =
+  | { ok: true; result: T }
+  | { ok: false; error: { code?: number; message: string } };
+
+/** Default cap on calls per POST. Endpoints cap batch size (and answer an
+ *  oversized batch with HTTP 413 or a single envelope error rather than a
+ *  partial result), so the transport chunks rather than trusting the caller to
+ *  know the provider's limit. 50 is conservative against the public Base node,
+ *  measured to accept well beyond it; override per deployment. */
+export const DEFAULT_MAX_BATCH_SIZE = 50;
+function maxBatchSize(): number {
+  return intEnv("BASE_RPC_MAX_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE, 1);
+}
+
+/** A JSON-RPC error entry, normalised. Missing/garbage shapes still produce a
+ *  message so a caller never has to read `undefined` to learn it failed. */
+function toBatchError(e: { code?: number; message?: string } | undefined): { code?: number; message: string } {
+  return { ...(e?.code == null ? {} : { code: e.code }), message: e?.message ?? "unknown" };
+}
+
+/**
+ * Issue `calls` as JSON-RPC array batches and return one outcome per call, IN
+ * INPUT ORDER.
+ *
+ * Chunked at `maxBatchSize()`; each chunk is one POST costing one rate token.
+ * Responses are matched by `id`, never by position — JSON-RPC 2.0 explicitly
+ * permits a server to answer a batch in any order, and trusting position would
+ * silently attribute one day's balance to another day.
+ *
+ * RETRY IS TWO-LEVEL, because the two failures are different failures:
+ *   * the POST failed (transport, 429, 5xx) → retry the WHOLE chunk, with the
+ *     same bounded backoff rpcRequest uses.
+ *   * individual entries came back throttled (-32016) inside an otherwise fine
+ *     200 → retry ONLY those entries. Re-sending the whole chunk to rescue one
+ *     poisoned entry would spend the budget this function exists to save.
+ * A hard per-entry error (a revert, a bad param) is NOT retried: it is returned,
+ * exactly as `allowFailure` returns `{success:false}`.
+ */
+export async function rpcBatchRequest<T>(
+  calls: readonly BatchCall[],
+  opts: RpcCallOptions,
+): Promise<BatchResult<T>[]> {
+  if (calls.length === 0) return [];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8000);
+  const retries = maxRetries();
+  const out = new Array<BatchResult<T>>(calls.length);
+  const size = maxBatchSize();
+
+  try {
+    for (let start = 0; start < calls.length; start += size) {
+      const chunk = calls.slice(start, start + size);
+      // Indices INTO `calls` that this pass must still answer. Shrinks to just
+      // the throttled entries on a per-entry retry.
+      let pending = chunk.map((_, i) => start + i);
+
+      for (let attempt = 0; ; attempt++) {
+        const body = JSON.stringify(
+          pending.map((idx, i) => ({ jsonrpc: "2.0", id: i, method: calls[idx]!.method, params: calls[idx]!.params })),
+        );
+
+        // Same ordering as rpcRequest: budget first, then a concurrency slot, so
+        // a request only waiting on the bucket never holds a slot.
+        await acquireRateToken(controller.signal);
+        await acquireSlot();
+        let res: Response;
+        try {
+          res = await fetch(opts.rpcUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "User-Agent": "robotmoney-rmpc/1.0" },
+            body,
+            signal: controller.signal,
+          });
+        } finally {
+          releaseSlot();
+        }
+
+        if (!res.ok) {
+          if (res.status === 429) noteRateLimitExhaustion();
+          if (TRANSIENT_STATUSES.has(res.status) && attempt < retries && !controller.signal.aborted) {
+            await sleepOrAbort(backoffMs(attempt + 1, res.headers.get("retry-after")), controller.signal);
+            continue;
+          }
+          throw new Error(`Base RPC batch HTTP ${res.status}`);
+        }
+
+        const parsed = (await res.json()) as
+          | { id?: number; result?: T; error?: { code?: number; message?: string } }[]
+          | { error?: { code?: number; message?: string } };
+
+        // A single envelope object instead of an array is how endpoints report a
+        // batch-level refusal (oversized batch, malformed body). That is a failure
+        // of the BATCH, so it throws rather than being spread over the entries.
+        if (!Array.isArray(parsed)) {
+          const err = toBatchError(parsed?.error);
+          if (err.code != null && TRANSIENT_RPC_ERROR_CODES.has(err.code)) noteRateLimitExhaustion();
+          throw new Error(`Base RPC batch error${err.code == null ? "" : ` ${err.code}`}: ${err.message}`);
+        }
+
+        const byId = new Map<number, { result?: T; error?: { code?: number; message?: string } }>();
+        for (const entry of parsed) if (typeof entry?.id === "number") byId.set(entry.id, entry);
+
+        const throttled: number[] = [];
+        for (let i = 0; i < pending.length; i++) {
+          const idx = pending[i]!;
+          const entry = byId.get(i);
+          if (entry === undefined) {
+            // Answered nothing for this id. Not retried as throttling — a server
+            // that drops entries is not a server that is over budget.
+            out[idx] = { ok: false, error: { message: `Base RPC batch: no response for ${calls[idx]!.method}` } };
+            continue;
+          }
+          if (entry.error) {
+            const err = toBatchError(entry.error);
+            if (err.code != null && TRANSIENT_RPC_ERROR_CODES.has(err.code)) {
+              noteRateLimitExhaustion();
+              throttled.push(idx);
+              continue;
+            }
+            out[idx] = { ok: false, error: err };
+            continue;
+          }
+          if (entry.result === undefined) {
+            out[idx] = { ok: false, error: { message: `Base RPC batch: missing result for ${calls[idx]!.method}` } };
+            continue;
+          }
+          out[idx] = { ok: true, result: entry.result };
+        }
+
+        if (throttled.length > 0 && attempt < retries && !controller.signal.aborted) {
+          pending = throttled;
+          await sleepOrAbort(backoffMs(attempt + 1, res.headers.get("retry-after")), controller.signal);
+          continue;
+        }
+        // Out of retries with entries still throttled: report them as failed
+        // rather than looping. An unread day must keep LOOKING unread.
+        for (const idx of throttled) {
+          out[idx] = { ok: false, error: { code: -32016, message: "Base RPC batch: over rate limit (retries exhausted)" } };
+        }
+        break;
+      }
+    }
+    return out;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // A single `eth_call`. Throws on transport failure, a non-2xx HTTP status, or a
 // JSON-RPC `error` field — callers (chain/vault-economics.ts) catch this and
 // degrade the response rather than propagate a 5xx or fabricate a number.
@@ -642,6 +831,55 @@ export async function ethGetBlockByNumber(blockNumber: number, opts: RpcCallOpti
   const result = await rpcRequest<EthBlock | null>("eth_getBlockByNumber", ["0x" + blockNumber.toString(16), false], opts);
   if (!result?.timestamp) throw new Error(`Base RPC: no block ${blockNumber}`);
   return result;
+}
+
+// MANY block headers in ONE POST. The batched twin of ethGetBlockByNumber, and
+// the reason rpcBatchRequest exists: block resolution is a node method, so it
+// can never ride inside an aggregate3, and it is the dominant RPC cost of a
+// backfill (§6.5.1 — ≤8 probes per day against a per-IP-metered provider).
+//
+// Positional, and per-entry: a block that is missing or errored comes back as
+// `{ok:false}` beside its siblings rather than discarding the batch. The
+// `!result?.timestamp` check mirrors the single-call version — a header without
+// a timestamp is not a block we can date, whatever else it contains.
+export async function ethGetBlockByNumberBatch(
+  blockNumbers: readonly number[],
+  opts: RpcCallOptions,
+): Promise<BatchResult<EthBlock>[]> {
+  const raw = await rpcBatchRequest<EthBlock | null>(
+    blockNumbers.map((n) => ({ method: "eth_getBlockByNumber", params: ["0x" + n.toString(16), false] })),
+    opts,
+  );
+  return raw.map((r, i) =>
+    !r.ok
+      ? r
+      : r.result?.timestamp
+        ? ({ ok: true, result: r.result } as const)
+        : ({ ok: false, error: { message: `Base RPC: no block ${blockNumbers[i]}` } } as const),
+  );
+}
+
+/** One `eth_call` in a batch, carrying its OWN block tag — which is the whole
+ *  point: aggregate3 cannot span blocks, so N days need N of these. */
+export interface BatchEthCall {
+  to: string;
+  data: string;
+  /** Omitted resolves to "latest", matching ethCall's load-bearing default. */
+  blockTag?: string;
+}
+
+// MANY eth_calls in ONE POST, each at its own block. Composes with Multicall3
+// rather than replacing it: the right shape for a multi-day read is N aggregate3
+// payloads (one per day, each collapsing that day's ~27 reads) sent as ONE
+// batched POST — the two batchings multiply, 27×N reads for a single token.
+export async function ethCallBatch(
+  calls: readonly BatchEthCall[],
+  opts: RpcCallOptions,
+): Promise<BatchResult<string>[]> {
+  return await rpcBatchRequest<string>(
+    calls.map((c) => ({ method: "eth_call", params: [{ to: c.to, data: c.data }, c.blockTag ?? opts.blockTag ?? "latest"] })),
+    opts,
+  );
 }
 
 export async function callTotalAssets(contractAddress: string, opts: RpcCallOptions): Promise<bigint> {
