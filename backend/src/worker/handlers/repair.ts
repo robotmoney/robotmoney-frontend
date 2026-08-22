@@ -25,12 +25,14 @@ import { detectAllGaps } from "../../ops/gap-detector.ts";
 import {
   assertRpcBudgetConfigured,
   backfillWalletDay as runBackfillDay,
+  backfillWalletWindow as runBackfillWindow,
   BACKFILLED_SERIES,
   maxDaysPerRun,
   planWalletBackfill,
 } from "../../ops/wallet-backfill.ts";
 
 const BACKFILL_KIND = "wallet.backfill_day";
+const WINDOW_KIND = "wallet.backfill_window";
 
 /** Whether this deployment may dispatch repair work. See the note in
  *  repairGaps: under a live RPC source the shared rate budget must be
@@ -103,32 +105,49 @@ export async function repairGaps(): Promise<unknown> {
   const unhandledClassC = classC.filter((k) => !covered.has(k));
 
   const plan = await planWalletBackfill(sql);
+
+  // ONE WINDOW JOB, NOT N DAY JOBS — because the provider meters HTTP hits and
+  // the two costs a day carries are both shareable. Ten separate day jobs each
+  // resolved their own block from `latest` (~5 hits apiece) and each loaded
+  // their own day of prices; a window resolves all ten in lockstep (~4 hits
+  // total) and loads the price range once. The per-day guarantees are untouched:
+  // the executor still writes each day in its own transaction with its own
+  // checkpoint, and each day still fails alone.
+  //
+  // No dedupe_key: that index is UNIQUE across the WHOLE jobs table including
+  // terminal rows, so a dedupe_key would make a day that once failed permanently
+  // un-retryable — the exact opposite of self-healing. Duplicate work is
+  // prevented by skipping days a live job already covers, and the executor is
+  // idempotent regardless (it never writes a non-empty day).
+  const [liveWindow] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n
+      FROM jobs
+     WHERE kind = ${WINDOW_KIND}
+       AND status IN ('pending', 'running')
+  `;
+  // Legacy per-day rows may still be in flight from a pre-upgrade dispatcher.
+  // Their days are excluded rather than repaired twice.
+  const liveDays = await sql<{ asof: string }[]>`
+    SELECT payload->>'asof' AS asof
+      FROM jobs
+     WHERE kind = ${BACKFILL_KIND}
+       AND status IN ('pending', 'running')
+  `;
+  const claimed = new Set(liveDays.map((r) => r.asof));
+  const days = (liveWindow?.n ?? 0) > 0 ? [] : plan.days.filter((d) => !claimed.has(d));
   let enqueued = 0;
-  for (const day of plan.days) {
-    // No dedupe_key: that index is UNIQUE across the WHOLE jobs table including
-    // terminal rows, so a dedupe_key would make a day that once failed
-    // permanently un-retryable — the exact opposite of self-healing. Duplicate
-    // work is prevented by checking for a live job for the same day instead, and
-    // the executor is idempotent regardless (it never writes a non-empty day).
-    const [existing] = await sql<{ n: number }[]>`
-      SELECT count(*)::int AS n
-        FROM jobs
-       WHERE kind = ${BACKFILL_KIND}
-         AND status IN ('pending', 'running')
-         AND payload->>'asof' = ${day}
-    `;
-    if ((existing?.n ?? 0) > 0) continue;
+  if (days.length > 0) {
     await sql`
       INSERT INTO jobs (kind, payload)
-      VALUES (${BACKFILL_KIND}, ${sql.json({ asof: day })})
+      VALUES (${WINDOW_KIND}, ${sql.json({ dates: days })})
     `;
-    enqueued += 1;
+    enqueued = 1;
   }
 
   return {
     ok: true,
     dirtySeries: dirty.map((r) => r.key),
-    dispatched: { classC: plan.days, enqueued },
+    dispatched: { classC: days, enqueued, kind: WINDOW_KIND },
     deferredDays: plan.deferred,
     totalMissingDays: plan.totalMissing,
     retryingDays: plan.retrying,
@@ -164,11 +183,50 @@ export async function backfillWalletDay(payload: Record<string, unknown> = {}): 
   if (typeof asof !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(asof)) {
     throw new Error(`${BACKFILL_KIND}: payload.asof must be an ISO calendar day, got ${JSON.stringify(asof)}`);
   }
-  const result = await runBackfillDay(sql, asof);
   // A day that could not be read honestly must surface as a FAILED run, not a
   // succeeded one with a quiet note. worker/loop.ts's isDegradedResult matches
   // `ok === false`, and the wallet samplers' inability to do this is exactly the
   // alerting gap #651 records — a chain-read storm that recorded
   // status='succeeded' with no retry and no alert.
-  return result;
+  return await runBackfillDay(sql, asof);
+}
+
+/**
+ * `wallet.backfill_window` — repair a window of days in as few HTTP hits as the
+ * work allows. The kind the dispatcher now enqueues; `wallet.backfill_day` above
+ * is retained so rows enqueued by a pre-upgrade dispatcher still drain.
+ *
+ * ONE JOB IS NOT ONE OUTCOME. The window is a batching unit, and the result
+ * reports each day's own status — the run is degraded if ANY day failed, so a
+ * window that repaired nine days and lost one still surfaces as a failed run
+ * rather than a succeeded one with a quiet note. That is the same rule the
+ * per-day handler follows and the same alerting gap #651 records.
+ */
+export async function backfillWalletWindow(payload: Record<string, unknown> = {}): Promise<unknown> {
+  const dates = payload.dates;
+  if (!Array.isArray(dates) || dates.length === 0) {
+    throw new Error(`${WINDOW_KIND}: payload.dates must be a non-empty array, got ${JSON.stringify(dates)}`);
+  }
+  for (const d of dates) {
+    if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      throw new Error(`${WINDOW_KIND}: payload.dates entries must be ISO calendar days, got ${JSON.stringify(d)}`);
+    }
+  }
+  const results = await runBackfillWindow(sql, dates as string[]);
+  const failed = results.filter((r) => !r.ok);
+  return {
+    ok: failed.length === 0,
+    days: results.length,
+    filled: results.filter((r) => r.status === "filled").length,
+    skipped: results.filter((r) => r.status === "skipped").length,
+    failed: failed.length,
+    exhausted: results.filter((r) => r.status === "exhausted").length,
+    results,
+    // worker/loop.ts's degrade path reads `error` for the job_runs text, so the
+    // reason a window is degraded is durable and greppable rather than only in
+    // the per-day console lines.
+    ...(failed.length > 0
+      ? { error: `${failed.length}/${results.length} day(s) unrepaired: ${failed.map((r) => `${r.sampleDate} (${r.detail ?? r.status})`).join("; ")}` }
+      : {}),
+  };
 }

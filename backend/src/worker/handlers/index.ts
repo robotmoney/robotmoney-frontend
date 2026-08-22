@@ -5,7 +5,7 @@ import { makeAnalyticsHandlers } from "./analytics.ts";
 import { refreshBuybacks } from "./buybacks.ts";
 import * as swarm from "./swarm.ts";
 import * as projects from "./projects.ts";
-import { backfillWalletDay, repairGaps } from "./repair.ts";
+import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "./wallet.ts";
 
@@ -36,10 +36,18 @@ export const handlers: Record<string, JobHandler> = {
   // The self-healing pair (issue #709). `ops.repair_gaps` is the dispatcher of
   // docs/technical/data-self-healing.md §4 — it asks the gap detector what is
   // missing and dispatches by remediationClass, which is what turns that field
-  // from a label into behaviour. `wallet.backfill_day` is the Class C executor:
-  // one day per job, read at that day's own block, written only if the whole
-  // day read honestly.
+  // from a label into behaviour. `wallet.backfill_window` is the Class C
+  // executor: a window of days per job, each read at its OWN block and written
+  // only if that whole day read honestly.
+  //
+  // The window is a BATCHING unit, not a blast radius — the provider meters HTTP
+  // hits, so a window resolves its blocks in lockstep and loads its price range
+  // once, while each day keeps its own transaction, its own checkpoint and its
+  // own failure. `wallet.backfill_day` is retained (unchanged, and now the N=1
+  // case of the same executor) so rows enqueued by a pre-upgrade dispatcher
+  // still drain.
   "ops.repair_gaps": repairGaps,
+  "wallet.backfill_window": backfillWalletWindow,
   "wallet.backfill_day": backfillWalletDay,
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
