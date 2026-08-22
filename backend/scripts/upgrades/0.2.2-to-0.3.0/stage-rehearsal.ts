@@ -47,10 +47,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBackupFiles } from "../../../../scripts/lib/restore-container.ts";
 import { runTwinRehearsal } from "../../../../scripts/lib/twin-rehearsal.ts";
+import { connect } from "../../lib/postflight-utils.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
-import { TAG_GLOB } from "./release.ts";
+import { NEW_SCHEDULE_KIND, TAG_GLOB } from "./release.ts";
+import { observeRepairDispatch, observeRepairCompletion } from "./repair-observation.ts";
 
 const NAME = "stage-rehearsal-0.3.0";
+
+/** How long check 3/3 may wait for one paced backfill day. Sits inside the
+ *  driver's own checkDeadlineMs, which bounds the whole window (G1/G5). */
+const COMPLETION_BUDGET_MS = 20 * 60 * 1000;
 const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -61,9 +67,23 @@ async function run(backupDirArg?: string): Promise<number> {
   return runTwinRehearsal({
     name: NAME,
     backupDir: backupDirArg,
-    // §6.1 step 3 / G8 — this release's postflight, inside the twin's window.
+    // §6.1 step 3 / G8 — this release's postflight, inside the twin's window,
+    // followed by §7.1's dispatch observation.
+    //
+    // ⚠ ORDER IS LOAD-BEARING. postflight's `new-tables` check asserts
+    // chain_day_blocks and wallet_backfill_state are present AND EMPTY; the
+    // dispatch observation populates both. Run the observation first and
+    // postflight's PASS becomes a WARN, with two checks fighting over the same
+    // rows and neither of them wrong. postflight first, always.
+    //
+    // Postflight is the only BLOCKING member of the sequence: §6.4 says a twin
+    // that fails it is a failed cutover, so spending more of a metered window on
+    // it is waste. Everything after is graded but non-blocking, because the
+    // point of holding one window open is that ONE twin yields all the evidence
+    // — if the observation disappoints you still want it from this boot rather
+    // than paying for another restore and image build.
     onReady: async ({ backendUrl, databaseUrl, log: rlog, err: rerr }) => {
-      rlog("running this release's postflight checks against the migrated twin (§6.1 step 3)");
+      rlog("check 1/3 postflight — this release's checks against the migrated twin (§6.1 step 3)");
       const proc = Bun.spawn(
         [
           "bun",
@@ -86,8 +106,44 @@ async function run(backupDirArg?: string): Promise<number> {
       if (code !== 0) {
         rerr("postflight FAILED against the migrated twin — §6.4: treat this exactly as a failed production");
         rerr("cutover. Diagnose, patch, cut the next rc, re-rehearse. Do not carry it into the cutover.");
+        rerr("checks 2/3 and 3/3 did NOT run. A skipped check is not a passed one; no receipt is emitted for them.");
+        return code;
       }
-      return code;
+
+      // ── §7.1 — the dispatch observation ─────────────────────────────────
+      const db = connect(databaseUrl, "repair-observation-0.3.0");
+      let worst: "PASS" | "WARN" | "FAIL" = "PASS";
+      try {
+        rlog(`check 2/3 repair-dispatch — ${NEW_SCHEDULE_KIND} fires and dispatches (§7.1)`);
+        const dispatch = await observeRepairDispatch(db, rlog);
+        for (const line of dispatch.detail) rlog(`  ${line}`);
+        rlog(`  [${dispatch.status}] repair-dispatch`);
+        if (dispatch.remediation) rlog(`  → ${dispatch.remediation}`);
+        if (dispatch.status === "FAIL") worst = "FAIL";
+        else if (dispatch.status === "WARN" && worst === "PASS") worst = "WARN";
+
+        // Only worth waiting on a completion if something was actually
+        // enqueued. On a clean twin the dispatch check already said so.
+        if (dispatch.status === "PASS") {
+          rlog(`check 3/3 repair-completion — one day completes and writes provenance='backfilled' (§7.1)`);
+          const completion = await observeRepairCompletion(db, rlog, COMPLETION_BUDGET_MS);
+          for (const line of completion.detail) rlog(`  ${line}`);
+          rlog(`  [${completion.status}] repair-completion`);
+          if (completion.remediation) rlog(`  → ${completion.remediation}`);
+          if (completion.status === "WARN" && worst === "PASS") worst = "WARN";
+        } else {
+          rlog("check 3/3 repair-completion — SKIPPED: nothing was dispatched to complete");
+        }
+      } finally {
+        await db.end({ timeout: 5 });
+      }
+
+      if (worst === "FAIL") {
+        rerr("§7.1's dispatch observation FAILED — the schedule is seeded but the repair does not dispatch.");
+        rerr("That is this release's headline feature shipping inert (§0.3). Do not carry it into the cutover.");
+        return 1;
+      }
+      return 0;
     },
   });
 }

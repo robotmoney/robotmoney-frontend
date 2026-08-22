@@ -24,11 +24,20 @@ before you start; this runbook executes them and does not restate them.
 
 > **Verification status of this document.** Every claim below about repository
 > content was checked against `main` at **`de41647`** on 2026-08-21 and cites the
-> file it came from. **No claim below has been executed against production or
-> against a digital twin** — this runbook is written *before* the rehearsal, not
-> after it. §7's rehearsal is what converts these from "read from the source" to
-> "observed to happen". Sections that cannot be written until the rehearsal runs
-> say so explicitly rather than guessing.
+> file it came from. **Nothing below has been executed against production.**
+>
+> A first §7 rehearsal ran on 2026-08-22 against `v0.3.0-rc.0` (`9a6958f`), on
+> the `20260822T014613Z` dump. It confirmed the migration set, `schema_migrations`
+> holding both `0032_*` and both `0033_*`, `catchup_policy` on exactly the two
+> wallet samplers, the seeded `ops.repair_gaps` row, and a clean postflight —
+> and it measured the migration set: **18 ms** of DDL (the spread across the four
+> `schema_migrations.applied_at` rows), inside a **973 ms** migrate step whose
+> remainder is the one-shot container's own startup. §2.2's "well under a second"
+> holds on both readings; the second is the one that sizes a maintenance window.
+> It did **not** cover §7's
+> remaining three requirements (repair dispatch, the rollback, the passkey
+> ceremony), which had no tooling at the time; those are §7.1–§7.3 now. Claims
+> still marked as read-from-the-source below have not been observed.
 
 ---
 
@@ -63,8 +72,9 @@ beside them. `bun run rollout:where` points at this release;
 runbook's `yaml step` blocks in agreement.
 
 **⛔ STILL BLOCKING: Gate A's remaining items (§3.0).** The tracking issue's
-Phases are open under the feature freeze and need the recorded exception, the
-§0.4 seam-banner decision is unmade, and `releases-0.3.x` has to be cut.
+Phases are open under the feature freeze and need the recorded exception, and
+the §0.4 seam-banner decision is unmade. **`releases-0.3.x` is cut** — it
+carries `v0.3.0-rc.0` and 28 commits past `v0.2.2`.
 
 ### 0.2 The `bun smoke` facts from v0.2.2 all still apply
 
@@ -138,6 +148,8 @@ phase:       P2 release identity
 section:     §1
 host-role:   any
 actor:       operator
+requires:
+  - P1.phases-closed
 verify:      git tag -a v0.3.0-rc.<N> <sha> -m 'v0.3.0 release candidate <N>' && git push origin v0.3.0-rc.<N>
 ```
 
@@ -195,7 +207,7 @@ Grouped by what they mean for an operator:
 
 | Group | Commits | Operator impact |
 |---|---|---|
-| **Wallet/AUM self-healing** | `5788ba6` (#711), `c3540a4` (#667), `7664cb1` (#713) | New hourly schedule, **opt-in** (§5.2). Two new migrations. |
+| **Wallet/AUM self-healing** | `5788ba6` (#711), `c3540a4` (#667), `7664cb1` (#713) | New hourly schedule, **opt-out** — it dispatches on arrival (§5.2). Two new migrations. |
 | **Analytics/regime** | `d1e769d` (#714), `1bc4e05` (#717), `e88ccf2` (#715), `8e6d4aa` (#712), `c5d5fad` (#716), `ac0bb91` (#718), `6d1042a` (#725) | One migration; changes **existing** schedule behaviour (§4.3). |
 | **Admin auth** | `94748a3` (#721) | **Fixes the v0.2.2 known-broken passkey item.** Requires two new env vars (§5.1). |
 | **Swarm** | `64cc1d5` (#722), `bac7273` (#723), `f34c918` (#726), `de41647` (#727) | One migration (new table). |
@@ -271,7 +283,7 @@ table. See the lock profile above.
 production. The duplicate prefix is untidy, not dangerous.
 
 > **Preflight must still assert it.** "Safe by code reading" is not the same as
-> "observed on this database". §6 Check 3 exists for exactly this.
+> "observed on this database". §6.1's `append-only-safety` check exists for exactly this.
 
 ### 2.3 A dangling reference introduced by this delta
 
@@ -372,7 +384,7 @@ phase:       P3 backup
 section:     §3.1
 gate:        C
 host-role:   stage
-actor:       agent
+actor:       script
 requires:
   - P3.backup
 depends-on:
@@ -407,12 +419,31 @@ Unchanged from the archived v0.2.2 runbook's Gate D. v0.3.0 adds no new role. No
 production role taxonomy) is **out of scope for this release** — production
 still connects as `doadmin` and that remains a known, accepted gap (§11.2).
 
+> **Gate D has no manifest step for this release, by decision.** It asserts
+> nothing v0.3.0 changes, and a step that always passes trains an operator to
+> skim the ones that do not. Record it on #661 instead. If #692 lands, this
+> becomes a step. Stated here because `bun run rollout:where` cannot show a gate
+> that is not in the manifest, and a gate silently absent from the probe is
+> worse than one deliberately kept out of it.
+
 ### 3.4 Gate E — no long-running transactions (order 4)
 
 Unchanged from the archived v0.2.2 runbook's Gate E. Still worth running even though this
 migration set is additive and fast: `0034`'s `ADD COLUMN` takes an
 `ACCESS EXCLUSIVE` lock on `job_schedules`, briefly, and a long-lived
 transaction holding a conflicting lock will block it.
+
+> **Gate E has no manifest step either — it is a check inside Gate B.**
+> `P4.preflight-live` runs `blocking-xacts` ("no transaction older than 60s"),
+> and that IS this gate. A second step would give one fact two homes, which is
+> the bug the manifest exists to prevent.
+>
+> This is why `P4.preflight-live` carries a **2h TTL** rather than the 12h it
+> used to: a long-running transaction is a condition that goes stale by the
+> minute, so a preflight that was Gate-E-clean this morning says nothing about
+> tonight. `P7.cutover` now requires `P4.preflight-live`, so that short TTL is
+> what forces a fresh preflight immediately before the irreversible step — which
+> is what Gate E has always actually meant.
 
 ### 3.5 Gate F — the config decisions in §5 are made and recorded
 
@@ -575,7 +606,7 @@ phase:       P4 preflight
 section:     §6
 gate:        B
 host-role:   stage
-actor:       agent
+actor:       script
 requires:
   - P3.gate-c
 depends-on:
@@ -584,7 +615,7 @@ depends-on:
   - backend/scripts/lib/preflight-utils.ts
   - backend/scripts/lib/checks.ts
   - backend/migrations/**
-ttl:         12h
+ttl:         2h
 verify:      bun scripts/upgrades/0.2.2-to-0.3.0/preflight.ts --emit-receipt
 ```
 
@@ -648,9 +679,10 @@ id:          P5.rehearsal-boot
 phase:       P5 rehearsal
 section:     §7
 host-role:   stage
-actor:       agent
+actor:       script
 requires:
   - P3.gate-c
+  - P1.config-decided
 depends-on:
   - backend/src/**
   - backend/migrations/**
@@ -662,7 +694,7 @@ depends-on:
   - package.json
   - bun.lock
   - backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts
-ttl:         72h
+ttl:         48h
 verify:      bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
 ```
 
@@ -671,7 +703,7 @@ id:          P5.postflight-twin
 phase:       P5 rehearsal
 section:     §7
 host-role:   stage
-actor:       agent
+actor:       script
 requires:
   - P5.rehearsal-boot
 depends-on:
@@ -682,7 +714,7 @@ depends-on:
   - backend/src/db/seed.ts
   - backend/migrations/**
   - backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts
-ttl:         72h
+ttl:         48h
 verify:      bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt   # runs this step
 ```
 
@@ -693,38 +725,155 @@ the first time. Procedure and container mechanics: follow
 The twin must run the **same rc** you intend to deploy, against a restore of the
 **production** dump from Gate C.
 
-What this release specifically requires the twin to prove. Record each result in
-the stage rehearsal report (§7.1), not against this list:
+**The rehearsal runs a graded SEQUENCE inside one twin window**, not a single
+check. `stage-rehearsal.ts` holds the twin up for the whole sequence — the
+duration of its `onReady` hook *is* the twin's lifetime — under a 45-minute
+ceiling enforced by the driver, because G1 says a rehearsal terminates on its
+own and G5 says spend is bounded. Expect **5–30 minutes** depending on how many
+wallet days the dump is missing, against ~1 minute before the sequence existed.
 
-- All four migrations apply, in one boot, with **no error and no skip**.
-      Capture `migrated: <file>` lines for all four.
-- After migration, `schema_migrations` holds **both** `0032_*` names and
-      **both** `0033_*` names — the §2.2.1 claim, observed rather than reasoned.
-- `0034`'s `UPDATE` set `catchup_policy = 'collapse-per-bucket'` on exactly
-      `wallet.sample_balances` and `wallet.sample_sleeves`, and left every other
-      schedule at `'all'`.
-- `ops.repair_gaps` appears in `job_schedules`, enabled.
-- With `BASE_RPC_MAX_CALLS_PER_SEC` unset, `ops.repair_gaps` fires at :25
-      and **dispatches**: `job_runs` names the days it enqueued and the days it
-      deferred, and matching `wallet.backfill_day` jobs exist. Let at least one
-      day complete on the twin and confirm the written rows carry
-      `provenance='backfilled'`. (§4.1)
-- **Time the migration set.** Record wall-clock. This is the number that
-      sizes the maintenance window; §2.2's "well under a second" is a prediction
-      from reading the DDL, not a measurement.
-- Every §9 postflight check runs green against the twin.
-- The §10 rollback procedure is executed at least once on the twin.
+| # | Check | Blocking | Proves |
+|---|---|---|---|
+| 1 | `postflight` | **yes** | Every §9 check against the migrated twin, including the migration wall-clock. §6.4: a twin that fails postflight is a failed cutover, so the sequence stops here. |
+| 2 | `repair-dispatch` | no (FAIL still fails the run) | §4.1 — `ops.repair_gaps` fires and **dispatches**: `job_runs` names the days enqueued, deferred, retrying and exhausted, and every day it claims to have enqueued has a matching `wallet.backfill_day` job. |
+| 3 | `repair-completion` | no — **WARN only** | One day completes and its rows carry `provenance='backfilled'`. |
 
-### 7.1 Stage rehearsal report (release-runbooks.md §4.5)
+> **Why check 3 can only WARN.** Completing a day means real reads against
+> `mainnet.base.org` paced at 0.25 calls/s, plus historical prices from a
+> third-party free tier. A hard failure there would make whether v0.3.0 ships
+> depend on a provider's mood on rehearsal day. The path this release *changed*
+> is the dispatch, and check 2 grades that hard.
+
+> **Check 2 does not wait for the wall-clock `:25`.** It backdates
+> `next_run_at` by exactly one cadence and lets the ordinary 30-second scheduler
+> tick fire it, so the real scheduler and the real handler are observed and only
+> the clock is hurried. It must be a *past* slot: `tickScheduler` anchors at
+> `next_run_at - 1s` and breaks on the first future slot, so a bare
+> `SET next_run_at = now()` enqueues nothing at all.
+
+What this release requires the twin to prove, and what now proves it. Record
+each result in the stage rehearsal report (§7.4):
+
+| Requirement | Proven by |
+|---|---|
+| All four migrations apply in one boot, no error, no skip | boot log's four `migrated:` lines, then postflight's `migrations-applied` |
+| `schema_migrations` holds **both** `0032_*` and **both** `0033_*` — §2.2.1 observed rather than reasoned | postflight `migrations-applied` |
+| `0034`'s `UPDATE` hit exactly the two wallet samplers, everything else left `'all'` | postflight `catchup-policy` |
+| `ops.repair_gaps` present, enabled, **exactly one row** | postflight `repair-schedule` |
+| It **dispatches** with the budget unset; `job_runs` names enqueued and deferred days; matching `wallet.backfill_day` jobs exist | check 2 `repair-dispatch` |
+| One day completes and writes `provenance='backfilled'` | check 3 `repair-completion` |
+| **The migration set's wall-clock** — the number that sizes the maintenance window | postflight `migrations-applied` reports it from `schema_migrations.applied_at`, which nothing used to read. §2.2's "well under a second" is no longer a prediction |
+| Every §9 postflight check green against the twin | check 1 |
+| The §10 rollback procedure executed at least once on the twin | **§7.2 — a separate command**, not part of this sequence |
+| A real passkey ceremony (§9 Check 7) | **§7.3 — a separate command**, and it does not substitute for `P8.acceptance` |
+
+### 7.2 Rollback rehearsal — §10, executed on the twin
+
+```yaml step
+id:          P5.rollback-twin
+phase:       P5 rehearsal
+section:     §7.2
+host-role:   stage
+actor:       operator
+requires:
+  - P5.postflight-twin
+ttl:         48h
+verify:      execute §10 against a migrated twin per the procedure below, then: where.ts --record P5.rollback-twin
+```
+
+⚠ **Nothing has ever executed this, for any release.** There is no rollback
+driver in the repo, no down migrations, and the word "rollback" appears in none
+of the three v0.2.2 rehearsal reports. §10 asserts the rollback is survivable
+because the migrations are additive — and then says, correctly, that this is *"a
+reading of the schema, not an observation."* This step is where it stops being a
+reading. It is a **manual procedure with a manifest step** rather than a script,
+so that the requirement is at least tracked; automating it is open work.
+
+Run it against a twin that has **already been migrated by the rc**, because that
+is the state a real rollback starts from. Rehearsing against an unmigrated
+database rehearses nothing.
+
+1. Restore a twin and boot the rc against it so the four migrations apply
+   (`bun run twin:rehearse` does the restore-and-migrate half).
+2. Capture `job_schedules` **before** rolling back — kind, cron, enabled,
+   timezone, payload, next_run_at, catchup_policy. This is the *before* side of
+   rollout-procedure.md §10's IRREVERSIBLE seed-clobber warning.
+3. Stop the rc's stack, then follow
+   [rollout-procedure.md §10](./rollout-procedure.md)'s commands against the
+   surviving twin — **`--external-pg`, never `--db external`**, because the tag
+   you check out predates the enum.
+4. Record each of the following. Every one is a claim this runbook currently
+   makes on the strength of reading the schema:
+
+   | Observation | The claim it discharges |
+   |---|---|
+   | All four v0.3.0 migrations still in `schema_migrations` | §10: "the schema stays where the migration left it" |
+   | v0.2.2 boots and serves against the new schema; `job_runs` advances | §10: additive DDL is survivable — rollout-procedure.md §10's mandatory question 1 |
+   | `job_schedules` diffed against step 2's capture | The seed clobber, observed for the first time; it is why `P3.schedules` is an evidence artifact |
+   | What happens to the surviving `ops.repair_gaps` row | **Expect trouble.** v0.2.2's `seed()` has never heard of this kind, so the row survives *still enabled* and the old scheduler keeps enqueuing a job its worker has no handler for. Record what actually happens — if it retry-loops, §10 needs a new bullet telling operators to disable it after a rollback. |
+   | `DELETE FROM schema_migrations WHERE name = '0034_…'` inside a transaction is **refused** | `0032_append_only_history.sql` protects the ledger itself, so a true ledger rewind would require dropping the guard. Expect SQLSTATE `0A000`, then `ROLLBACK`. **Do not drop the trigger.** |
+   | Whether passkey sign-in still works | rollout-procedure.md §10's mandatory question 2. §10 already states the expected answer — no — so this confirms it rather than discovers it. |
+
+### 7.3 Passkey ceremony on a tunnel-published twin
+
+```yaml step
+id:          P5.passkey-twin
+phase:       P5 rehearsal
+section:     §7.3
+host-role:   stage
+actor:       operator
+requires:
+  - P5.postflight-twin
+  - P1.config-decided
+ttl:         48h
+verify:      complete a passkey ceremony against the tunnel-published twin, then: where.ts --record P5.passkey-twin
+```
+
+§9 Check 7 — a real passkey ceremony against a public HTTPS origin — is this
+release's headline acceptance criterion, and without this step its **first real
+test is production, after the irreversible cutover.** That is avoidable:
+`WEBAUTHN_ORIGIN` is plumbed to the api container
+(`docker-compose.yml`, `${WEBAUTHN_ORIGIN:-}`), unlike `AUTOMATION_TOKEN` and
+`SWARM_PUBLIC_BASE_URL` which §0.2 says cannot be set — so a twin published on
+the stage tunnel can run the real ceremony.
+
+```sh
+WEBAUTHN_ORIGIN=https://stage.robotmoney-labs.dev   bun run twin --reuse --backup-dir $RM_BACKUP_DIR
+```
+
+🔴 **Claim the admin credential as your very first action — before you open the
+public URL, before anything else.** `scripts/twin.ts`'s own banner spells out
+why: the restored `admin_credential` is typically *empty*, and on the tunnel
+whoever reaches the admin surface first claims admin over a database of **real
+member data**. This is not a footnote to the procedure; it is step one of it.
+
+Then register a passkey and sign in with it. The proof is a stored credential
+plus a verified assertion — the bug being fixed is an origin mismatch, which
+fails the assertion, so a completed sign-in *is* the fix working.
+
+When you are done: tear the stack down and `bun run demo:clean` immediately. The
+twin volume holds password hashes, session tokens and member emails.
+
+⚠ **This does not substitute for `P8.acceptance`.** It proves the fix works
+behind a cloudflared TLS tunnel — which is the exact v0.2.2 failure mode — but
+at origin `stage.robotmoney-labs.dev`, not `robotmoney.network`. It cannot prove
+the production origin string is right. §9 Check 7 remains the production
+confirmation, for the same reason `postflight.ts` refuses to guess which
+database it graded.
+
+### 7.4 Stage rehearsal report (release-runbooks.md §4.5)
 
 ```yaml step
 id:          P6.report
 phase:       P6 sign-off
-section:     §7.1
+section:     §7.4
 host-role:   any
 actor:       operator
 requires:
   - P5.postflight-twin
+  - P4.postflight-dryrun
+  - P5.rollback-twin
+  - P5.passkey-twin
 artifacts:
   - stage-rehearsal-report-*.md
 verify:      write the report per rollout-procedure.md §6.5, then: where.ts --record P6.report
@@ -745,6 +894,8 @@ host-role:   cutover
 actor:       agent
 requires:
   - P6.report
+  - P4.preflight-live
+  - P1.config-decided
 depends-on:
   - backend/src/**
   - backend/migrations/**
@@ -768,7 +919,7 @@ The only v0.3.0-specific differences:
 1. **Four migrations, not six** (§2.2). The boot log must show four
    `migrated: …` lines and then `migrations up to date`.
 2. **`seed()` inserts a new schedule row** — `ops.repair_gaps` (§4.1) — in
-   addition to rewriting the `swarm.*` rows rollout-procedure.md §7.5 describes.
+   addition to rewriting the `swarm.*` rows rollout-procedure.md §5.4 describes.
 3. **The `.env` from §5 must be in place before the boot**, not after.
    `WEBAUTHN_ORIGIN` is read at request time, so a later restart would pick it
    up — but a passkey ceremony attempted in between will fail, and that is
@@ -801,7 +952,7 @@ depends-on:
   - backend/scripts/lib/checks.ts
   - backend/src/db/seed.ts
   - backend/migrations/**
-ttl:         12h
+ttl:         2h
 verify:      run §9's checks as rm_readonly against the replica, then: where.ts --record P4.postflight-dryrun
 ```
 
@@ -810,7 +961,7 @@ id:          P8.postflight-prod
 phase:       P8 verify
 section:     §9
 host-role:   cutover
-actor:       agent
+actor:       script
 requires:
   - P7.cutover
 depends-on:
@@ -861,12 +1012,12 @@ bun scripts/upgrades/0.2.2-to-0.3.0/postflight.ts --emit-receipt=P8.postflight-p
 All must pass before `v0.3.0` is tagged.
 
 | # | Check id | Asserts | Expected |
-|---|---|---|
+|---|---|---|---|
 | 1 | `migrations-applied` | all four names in `schema_migrations` | Both `0032_*`, both `0033_*`, `0034_*`, `0035_*` present — the check that would catch a runner keyed on the numeric prefix |
-| 2 | `strategy-nav-column` | the column exists and nothing was backfilled | `NULL` on every pre-existing row. Non-NULL is only correct if the sampler has already run |
+| 2 | `strategy-nav-column` | the column exists and **the migration populated nothing** | `NULL` on every row untouched since `0032_wallet_*` applied. Rows written or re-upserted afterwards carry values legitimately — that is the sampler working. (This row used to expect `NULL` on *every* row, which postflight can never see: it runs after readiness, so the per-minute sampler has always written by then, and the check WARNed on every clean run.) |
 | 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). **The only data write in the set** |
 | 4 | `new-tables` | the three new tables exist and are empty | Three clean `CREATE TABLE`s |
-| 5 | `repair-schedule` | the new schedule is seeded, and its behaviour matches the budget you chose | Declines each run with the budget unset, dispatches with it set — **confirm it is the world you chose** (§5.2) |
+| 5 | `repair-schedule` | the new schedule is seeded, exactly once and enabled, and its behaviour matches the budget you chose | **Dispatches** with the budget unset (the built-in 0.25 calls/s default) or set to any positive value; declines only when it is explicitly `0` — **confirm it is the world you chose** (§5.2) |
 | 6 | `append-only-intact` | the guard survived the migration | Live on all fourteen protected tables. A guard silently lost is the §11.1 failure mode |
 | 7 | ⛔ **manual — no script** | a real passkey ceremony completes against the public HTTPS origin | The §5.1 fix, verified end-to-end. Step `P8.acceptance`; reading `WEBAUTHN_ORIGIN` back out of the container proves configuration, not function |
 | 8 | `no-wedge` | the cutover window did not wedge a schedule | `next_run_at` within one cadence of now. Compare against preflight's `wedged-schedules` baseline — a pre-existing wedge is not this release's damage |
@@ -902,8 +1053,23 @@ and that is unusual.** All four migrations are additive: v0.2.2's code does not
 know about `strategy_nav_idle_only`, `catchup_policy`, or the three new tables,
 and ignores them. The one behavioural residue is `0034`'s `UPDATE` — the
 `catchup_policy` values persist, but v0.2.2's scheduler never reads that column,
-so it changes nothing. **Verify this on the twin (§7) before relying on it**; it
-is a reading of the schema, not an observation.
+so it changes nothing. **Verify this on the twin (§7.2) before relying on it**;
+until that step runs it is a reading of the schema, not an observation. This is
+[rollout-procedure.md §10](./rollout-procedure.md)'s mandatory question 1, and
+that is its answer.
+
+🔴 **Question 2 — rolling back DOES change who can authenticate.** rollout-procedure.md
+§10 requires this release to answer it, and the answer is not the reassuring one.
+v0.3.0's headline fix is `WEBAUTHN_ORIGIN` (§5.1); v0.2.2 does not have it, so
+**rolling back re-breaks passkey sign-in behind the tunnel** — v0.2.2's own
+§10.1 known-broken item, returning. Two consequences:
+
+- A rollback taken to recover from a bad cutover **also costs you passkey
+  access**, at the moment you are least able to absorb a second problem. Confirm
+  another route to the admin surface is available *before* you trigger one.
+- An admin lockout is therefore **not** a reason to roll back in this release —
+  unlike v0.2.2, where rollback restored `ADMIN_TOKEN` access and was itself the
+  remedy. That property does not carry forward.
 
 ---
 

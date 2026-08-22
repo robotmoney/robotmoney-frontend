@@ -24,7 +24,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import { STEPS, THIS_RELEASE_MIGRATIONS } from "../scripts/upgrades/0.2.2-to-0.3.0/steps.ts";
-import { APPEND_ONLY_MIGRATION } from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
+import { APPEND_ONLY_MIGRATION, APPEND_ONLY_TABLES } from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(testDir, "..", "..");
@@ -118,6 +118,35 @@ describe("v0.3.0 rollout manifest ↔ runbook", () => {
     }
   });
 
+  test("a step's TTL never outlives the steps it depends on", () => {
+    // A rehearsal cannot be better evidence than the dump proof it consumed.
+    // P5.rehearsal-boot used to be 72h against P3.gate-c's 48h, which left a
+    // 24h window where the gate read `expired` and the step built on it still
+    // read `ok`. This makes the whole class impossible rather than fixing the
+    // one instance.
+    const byId = new Map(STEPS.map((s) => [s.id, s]));
+    for (const step of STEPS) {
+      if (!step.ttlHours) continue;
+      for (const req of step.requires) {
+        const dep = byId.get(req)!;
+        if (!dep.ttlHours) continue;
+        expect({ step: step.id, req, ok: step.ttlHours <= dep.ttlHours }).toEqual({ step: step.id, req, ok: true });
+      }
+    }
+  });
+
+  test("a step that emits its own receipt is actor:script, not attestable", () => {
+    // where.ts refuses `--record` for actor:"script". That refusal guarded
+    // NOTHING until this test existed: every script-backed step was
+    // actor:"agent", so a rehearsal could be attested by typing --record
+    // instead of being run. A step whose verify runs --emit-receipt has a
+    // machine that produces its evidence; a human claiming it is not that.
+    for (const step of STEPS) {
+      if (!step.verify.includes("--emit-receipt")) continue;
+      expect({ step: step.id, actor: step.actor }).toEqual({ step: step.id, actor: "script" });
+    }
+  });
+
   test("phases are contiguous — manifest order is display order", () => {
     const seen: string[] = [];
     for (const s of STEPS) {
@@ -194,6 +223,19 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     const m = guard.match(/APPEND_ONLY_MIGRATION\s*=\s*"([^"]+)"/);
     expect({ found: m !== null }).toEqual({ found: true });
     expect({ copy: APPEND_ONLY_MIGRATION }).toEqual({ copy: m![1]! });
+  });
+
+  test("the append-only TABLE ROSTER matches src/db/append-only-guard.ts", () => {
+    // Same copy-not-import trade as the constant above, and the same mitigation.
+    // postflight's append-only-intact check compares the live triggers against
+    // this roster; before it did, ANY non-zero trigger count PASSed, so losing
+    // thirteen of fourteen tables read as green. A roster that drifts from the
+    // guard would put that hole straight back.
+    const guard = readFileSync(join(repoRoot, "backend", "src", "db", "append-only-guard.ts"), "utf8");
+    const block = guard.match(/APPEND_ONLY_TABLES\s*=\s*\[([\s\S]*?)\]\s*as const/);
+    expect({ found: block !== null }).toEqual({ found: true });
+    const fromGuard = [...block![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+    expect({ tables: [...APPEND_ONLY_TABLES] as string[] }).toEqual({ tables: fromGuard });
   });
 });
 

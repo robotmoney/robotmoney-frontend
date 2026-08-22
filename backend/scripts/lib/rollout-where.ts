@@ -60,7 +60,7 @@ export interface WhereConfig {
   trackingIssue: number;
 }
 
-type Status = "ok" | "expired" | "invalid" | "failed" | "missing" | "unverifiable";
+type Status = "ok" | "expired" | "invalid" | "failed" | "missing" | "unverifiable" | "blocked";
 
 interface Evaluated {
   step: RolloutStep;
@@ -70,6 +70,10 @@ interface Evaluated {
   /** false when this host cannot execute the step at all (rollout-procedure.md's host split). */
   runnableHere: boolean;
   receipt?: RolloutReceipt;
+  /** Set on a `blocked` step: the requires that are not themselves `ok`. */
+  blockedBy?: { id: string; status: Status }[];
+  /** True when a blocker is RED rather than merely stale — drives the glyph. */
+  redBlocked?: boolean;
 }
 
 const MARK: Record<Status, string> = {
@@ -79,7 +83,70 @@ const MARK: Record<Status, string> = {
   failed: "✖",
   missing: "✖",
   unverifiable: "⚠",
+  blocked: "⚠",
 };
+
+/** Which statuses are RED — a step that is wrong, as against one that is merely
+ *  stale. The distinction is what keeps expiry "amber, never red" intact under
+ *  propagation: a blocked step inherits its worst blocker's severity rather than
+ *  escalating it. */
+const RED: ReadonlySet<Status> = new Set<Status>(["invalid", "failed", "missing"]);
+
+/**
+ * Second pass: a step whose `requires` are not all satisfied is `blocked`.
+ *
+ * WHY THIS EXISTS. evaluate() grades every step in ISOLATION, and until this
+ * function existed `requires` was decorative — read in exactly one place, as a
+ * "held by" annotation on the NEXT line, and absent from --json entirely. The
+ * consequence was not theoretical: v0.3.0's P3.gate-c expires at 48h, and every
+ * step built on it read `✔` for as long as its own TTL lasted, so an expired
+ * dump proof never reached the cutover decision by any path. A runbook's §3
+ * calls its gates blocking; this is the code that makes them so.
+ *
+ * ONE FORWARD PASS SUFFICES because `requires` always point BACKWARDS in
+ * manifest order — an invariant the per-release manifest tests enforce. Those
+ * tests are load-bearing for this function, not merely tidy.
+ *
+ * A step's OWN complaint always wins: only a step that is otherwise `ok` can be
+ * blocked. And `next` cannot move, because a blocker is always earlier in
+ * manifest order and is itself not-ok, so the first not-ok row is at or before
+ * any blocked row.
+ */
+function propagateBlocked(rows: Evaluated[]): Evaluated[] {
+  const byId = new Map<string, Evaluated>();
+  const out: Evaluated[] = [];
+  for (const e of rows) {
+    if (e.status !== "ok" || e.step.requires.length === 0) {
+      byId.set(e.step.id, e);
+      out.push(e);
+      continue;
+    }
+    const blockers = e.step.requires
+      .map((id) => byId.get(id))
+      .filter((r): r is Evaluated => r !== undefined && r.status !== "ok");
+
+    if (blockers.length === 0) {
+      byId.set(e.step.id, e);
+      out.push(e);
+      continue;
+    }
+    // Severity is TRANSITIVE. A blocker whose own status is `blocked` carries
+    // the severity of whatever blocked IT — otherwise a red cause two links up
+    // fades to amber on the way down, and the chain that most needs to be loud
+    // is the quietest.
+    const redBlocked = blockers.some((r) => RED.has(r.status) || r.redBlocked === true);
+    const next: Evaluated = {
+      ...e,
+      status: "blocked",
+      blockedBy: blockers.map((r) => ({ id: r.step.id, status: r.status })),
+      because: `requires ${blockers.map((r) => `${r.step.id} (${r.status})`).join(", ")}`,
+      redBlocked,
+    };
+    byId.set(e.step.id, next);
+    out.push(next);
+  }
+  return out;
+}
 
 /**
  * The bare release tag, from the glob that selects its rcs: `v0.3.0*` -> `v0.3.0`.
@@ -327,7 +394,7 @@ function printState(ctx: Ctx, rows: Evaluated[]): void {
       p(`  ${phase}`);
     }
     const blocked = !e.runnableHere && e.status !== "ok";
-    const mark = blocked ? "⛔" : MARK[e.status];
+    const mark = blocked ? "⛔" : e.redBlocked ? "✖" : MARK[e.status];
     const id = e.step.id.padEnd(20);
     const title = e.step.title.length > 46 ? `${e.step.title.slice(0, 45)}…` : e.step.title.padEnd(46);
     const because = blocked ? `needs role=${e.step.hostRole} — ${e.because}` : e.because;
@@ -418,7 +485,7 @@ export async function runWhere(cfg: WhereConfig): Promise<number> {
   if (recordId) return record(cfg, recordId, ctx);
 
   const receipts = readReceipts(backupDir);
-  const rows = cfg.steps.map((s) => evaluate(s, receipts, ctx));
+  const rows = propagateBlocked(cfg.steps.map((s) => evaluate(s, receipts, ctx)));
 
   if (process.argv.includes("--json")) {
     console.log(
@@ -442,6 +509,7 @@ export async function runWhere(cfg: WhereConfig): Promise<number> {
             status: e.status,
             because: e.because,
             runnable_here: e.runnableHere,
+            blocked_by: e.blockedBy ?? null,
             verify: e.step.verify,
           })),
           next: rows.find((e) => e.status !== "ok")?.step.id ?? null,

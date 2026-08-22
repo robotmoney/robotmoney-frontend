@@ -14,13 +14,16 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import parser from "cron-parser";
 import { columnExists, tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
 import { type Db, runPostflightMain } from "../../lib/postflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
   APPEND_ONLY_MIGRATION,
+  APPEND_ONLY_TABLES,
   COLLAPSE_PER_BUCKET_KINDS,
+  NEW_COLUMN_MIGRATION,
   NEW_COLUMNS,
   NEW_SCHEDULE_KIND,
   NEW_TABLES,
@@ -67,7 +70,32 @@ async function checkMigrationsApplied(db: Db, { record }: Checker): Promise<void
   record("migrations-applied", "PASS", [
     `all ${THIS_RELEASE_MIGRATIONS.length} migration(s) recorded`,
     ...pairs.map((p) => `  ${p.prefix}* → ${p.names.length} file(s): ${p.names.join(", ")}`),
+    await migrationWallClock(db),
   ]);
+}
+
+/** §7's "time the migration set" requirement, answered from data instead of
+ *  transcription.
+ *
+ *  `schema_migrations.applied_at` has been written since the ledger existed
+ *  (src/db/migrate.ts) and read by NOTHING in this repo. The runner commits each
+ *  file in its own transaction, so the spread across this release's rows is the
+ *  migration set's wall-clock — the number §2.2 predicts as "well under a
+ *  second" and §12's report asks for.
+ *
+ *  It is a LOWER bound: Postgres `now()` is transaction-start time, so the
+ *  spread runs from the first migration's start to the last migration's start
+ *  and omits the last one's own duration. Stated rather than rounded away. */
+async function migrationWallClock(db: Db): Promise<string> {
+  const [r] = (await db`
+    SELECT EXTRACT(EPOCH FROM (max(applied_at) - min(applied_at)))::float8 AS spread_s,
+           min(applied_at) AS first_at
+      FROM schema_migrations
+     WHERE name = ANY(${[...THIS_RELEASE_MIGRATIONS]})
+  `) as unknown as { spread_s: number | null; first_at: string | null }[];
+
+  if (!r || r.spread_s === null) return "  migration wall-clock: unavailable";
+  return `  migration wall-clock: ${(r.spread_s * 1000).toFixed(0)}ms across ${THIS_RELEASE_MIGRATIONS.length} file(s), from ${r.first_at} (lower bound — excludes the last file's own duration)`;
 }
 
 /** Check 2 — the new column exists and NOTHING was backfilled into it.
@@ -86,24 +114,65 @@ async function checkStrategyNavColumn(db: Db, { record }: Checker): Promise<void
     );
     return;
   }
-  const [row] = (await db`
-    SELECT count(*) FILTER (WHERE strategy_nav_idle_only IS NOT NULL) AS non_null,
-           count(*) AS total
-      FROM wallet_balance_samples
-  `) as unknown as { non_null: number; total: number }[];
-  const nonNull = Number(row?.non_null ?? 0);
-  const total = Number(row?.total ?? 0);
+  // Count only rows that PREDATE the migration.
+  //
+  // This check used to compare against absolute zero, and so could never pass
+  // in the place it runs. postflight runs after readiness — G8 requires it, and
+  // on production the stack is up by definition — so the per-minute sampler has
+  // necessarily written at least one fresh row with the column populated, which
+  // is correct behaviour. Every twin rehearsal therefore produced the same
+  // WARN, and a warning that always fires is one an operator learns to skim.
+  //
+  // What the check actually cares about is that THE MIGRATION POPULATED
+  // NOTHING: 0032_wallet_* is `ADD COLUMN` nullable with no default, so every
+  // row untouched since it applied must still be NULL. Rows written or
+  // re-upserted afterwards are the sampler (or a backfill) doing their job.
+  // `wallet_balance_samples.sampled_at` vs `schema_migrations.applied_at` is
+  // the boundary — note `sampled_at` moves on upsert, which is what makes it
+  // the right column here: it asks "untouched since the migration", not "old".
+  const [mig] = (await db`
+    SELECT applied_at FROM schema_migrations WHERE name = ${NEW_COLUMN_MIGRATION}
+  `) as unknown as { applied_at: string }[];
 
-  if (nonNull > 0) {
+  if (!mig) {
     record(
       "strategy-nav-column",
-      "WARN",
-      [`${nonNull} of ${total} row(s) already carry a non-NULL value`],
-      "Expected 0 immediately after migration. Non-zero means the sampler has already run — fine if the stack has been up, wrong if it has not.",
+      "FAIL",
+      `the column exists but ${NEW_COLUMN_MIGRATION} is not in schema_migrations`,
+      "The column arrived by some route other than this release's migration. Establish why before tagging.",
     );
     return;
   }
-  record("strategy-nav-column", "PASS", `column present; NULL on all ${total} pre-existing row(s), as intended`);
+
+  const [row] = (await db`
+    SELECT count(*) FILTER (WHERE strategy_nav_idle_only IS NOT NULL AND sampled_at < ${mig.applied_at}) AS historical_non_null,
+           count(*) FILTER (WHERE sampled_at < ${mig.applied_at}) AS historical,
+           count(*) FILTER (WHERE strategy_nav_idle_only IS NOT NULL) AS non_null,
+           count(*) AS total
+      FROM wallet_balance_samples
+  `) as unknown as { historical_non_null: number; historical: number; non_null: number; total: number }[];
+
+  const historicalNonNull = Number(row?.historical_non_null ?? 0);
+  const historical = Number(row?.historical ?? 0);
+  const nonNull = Number(row?.non_null ?? 0);
+  const total = Number(row?.total ?? 0);
+
+  if (historicalNonNull > 0) {
+    record(
+      "strategy-nav-column",
+      "FAIL",
+      [
+        `${historicalNonNull} of ${historical} row(s) untouched since ${NEW_COLUMN_MIGRATION} applied carry a non-NULL value`,
+        "The column is three-valued: NULL means 'not applicable or not known', and every historical row is one of those.",
+      ],
+      "Something asserted a measurement nobody took. Do NOT tag until you know what wrote them.",
+    );
+    return;
+  }
+  record("strategy-nav-column", "PASS", [
+    `column present; NULL on all ${historical} row(s) untouched since the migration, as intended`,
+    `${nonNull} of ${total} row(s) carry a value, all written after it — the sampler doing its job`,
+  ]);
 }
 
 /** Check 3 — 0034's UPDATE hit exactly the two intended kinds.
@@ -192,6 +261,24 @@ async function checkRepairSchedule(db: Db, { record }: Checker): Promise<void> {
     );
     return;
   }
+  // EXACTLY one row, because seed()'s ON CONFLICT key is (kind, cron): changing
+  // this schedule's cron string INSERTS a second row rather than updating the
+  // first, and both would be enabled. This check used to read rows[0]! and
+  // grade one of them arbitrarily, so a duplicated schedule — dispatching the
+  // same repair work twice against a metered RPC budget — looked identical to a
+  // correct one.
+  if (rows.length > 1) {
+    record(
+      "repair-schedule",
+      "FAIL",
+      [
+        `${NEW_SCHEDULE_KIND} has ${rows.length} rows, not 1:`,
+        ...rows.map((r) => `  cron=${r.cron} enabled=${r.enabled} next_run_at=${r.next_run_at ?? "null"}`),
+      ],
+      "seed()'s ON CONFLICT key is (kind, cron), so a cadence change leaves the old row behind. Disable or delete the superseded row before tagging — two enabled rows dispatch the same backfill twice.",
+    );
+    return;
+  }
   const s = rows[0]!;
   // Unset is no longer "off": chain/base-rpc-client.ts paces from a conservative
   // default, so the ordinary deployment heals. Only an explicit 0 declines.
@@ -218,12 +305,17 @@ async function checkRepairSchedule(db: Db, { record }: Checker): Promise<void> {
  *  something dropped triggers during the upgrade, and the retention guarantee
  *  v0.2.2 shipped is no longer real. */
 async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void> {
+  // `LIKE '%_append_only%'`, not `LIKE '%_append_only'`: append-only-guard.ts
+  // installs TWO triggers per table — `<table>_append_only` (statement) and
+  // `<table>_append_only_row`. The old anchored pattern matched only the
+  // statement trigger, so this check reported "1 trigger(s)" for every table
+  // and could not see a row-level trigger that had been dropped on its own.
   const rows = (await db`
     SELECT c.relname AS table_name, count(*)::int AS triggers
       FROM pg_trigger t
       JOIN pg_class c ON c.oid = t.tgrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname LIKE '%_append_only'
+     WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname LIKE '%\_append\_only%'
      GROUP BY c.relname ORDER BY c.relname
   `) as unknown as { table_name: string; triggers: number }[];
 
@@ -231,17 +323,37 @@ async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void>
     SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = ${APPEND_ONLY_MIGRATION}) AS present
   `) as unknown as { present: boolean }[];
 
-  if (applied?.present && rows.length === 0) {
+  if (!applied?.present) {
+    record("append-only-intact", "PASS", [
+      `${APPEND_ONLY_MIGRATION} is not applied here — the guard was never installed`,
+    ]);
+    return;
+  }
+
+  // Compare against the roster the guard itself declares, not against zero.
+  // Before this, ANY non-empty result PASSed: losing thirteen of the fourteen
+  // tables reported "guard live on 1 table(s)" and read as green. The whole
+  // point of the check is that a guard silently lost is the §11.1 failure mode,
+  // and "silently lost" is exactly what a partial loss is.
+  const present = new Map(rows.map((r) => [r.table_name, r.triggers]));
+  const missing = APPEND_ONLY_TABLES.filter((t) => !present.has(t));
+
+  if (missing.length > 0) {
     record(
       "append-only-intact",
       "FAIL",
-      `${APPEND_ONLY_MIGRATION} is applied but no *_append_only triggers remain`,
+      [
+        `${APPEND_ONLY_MIGRATION} is applied but the guard is gone from ${missing.length} of ${APPEND_ONLY_TABLES.length} table(s):`,
+        ...missing.map((t) => `  ${t}`),
+        `still guarded: ${rows.length} table(s)`,
+      ],
       "The guard was lost during this upgrade. Do NOT tag. Investigate before writing anything else.",
     );
     return;
   }
+
   record("append-only-intact", "PASS", [
-    `guard live on ${rows.length} table(s)`,
+    `guard live on all ${APPEND_ONLY_TABLES.length} protected table(s)`,
     ...rows.map((r) => `  ${r.table_name} (${r.triggers} trigger(s))`),
   ]);
 }
@@ -251,28 +363,75 @@ async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void>
  *  The per-minute samplers wedge after ~1 minute of downtime, and a wedged
  *  schedule does not self-heal. Compared against preflight's wedged-schedules
  *  baseline: a schedule that was ALREADY late before the cutover is not this
- *  release's damage. */
+ *  release's damage.
+ *
+ *  THE THRESHOLD IS PER-CADENCE, and that is the whole point. This check used a
+ *  flat `interval '60 minutes'` for every row, while its own premise — and §8's
+ *  cutover budget — is that `wallet.sample_balances` and `wallet.sample_sleeves`
+ *  wedge after about ONE minute. A forty-minute cutover therefore wedged both
+ *  per-minute samplers and this check still returned PASS: sixty times wider
+ *  than the failure it exists to catch. A schedule is late here when it has
+ *  missed more than one of its OWN slots, plus a small grace for the scheduler's
+ *  30s tick (worker/runtime.ts). */
+const WEDGE_GRACE_MS = 90_000;
+
+/** How long one cadence of `cron` is, in ms, from two consecutive occurrences.
+ *  Returns null for an expression cron-parser rejects — an unparseable cron is
+ *  reported rather than silently given an arbitrary threshold. */
+function cadenceMs(cron: string, timezone: string): number | null {
+  try {
+    const it = parser.parseExpression(cron, { tz: timezone, currentDate: new Date() });
+    const a = it.next().toDate().getTime();
+    const b = it.next().toDate().getTime();
+    return b > a ? b - a : null;
+  } catch {
+    return null;
+  }
+}
+
 async function checkNoWedge(db: Db, { record }: Checker): Promise<void> {
   const rows = (await db`
-    SELECT kind, cron, next_run_at,
-           EXTRACT(EPOCH FROM (now() - next_run_at))::int / 60 AS minutes_late
+    SELECT kind, cron, timezone, next_run_at,
+           EXTRACT(EPOCH FROM (now() - next_run_at))::int AS seconds_late
       FROM job_schedules
-     WHERE enabled AND next_run_at IS NOT NULL AND next_run_at < now() - interval '60 minutes'
+     WHERE enabled AND next_run_at IS NOT NULL AND next_run_at < now()
      ORDER BY next_run_at
-  `) as unknown as { kind: string; cron: string; minutes_late: number }[];
+  `) as unknown as { kind: string; cron: string; timezone: string; seconds_late: number }[];
 
-  if (rows.length === 0) {
-    record("no-wedge", "PASS", "no enabled schedule is more than 60m behind");
+  const wedged: string[] = [];
+  const unparseable: string[] = [];
+  for (const r of rows) {
+    const cadence = cadenceMs(r.cron, r.timezone);
+    if (cadence === null) {
+      unparseable.push(`  ${r.kind} (${r.cron}) — cron not parseable, ${r.seconds_late}s late`);
+      continue;
+    }
+    const budgetMs = cadence + WEDGE_GRACE_MS;
+    if (r.seconds_late * 1000 > budgetMs) {
+      wedged.push(
+        `  ${r.kind} (${r.cron}) ${r.seconds_late}s late — more than one ${Math.round(cadence / 1000)}s cadence behind`,
+      );
+    }
+  }
+
+  if (wedged.length === 0 && unparseable.length === 0) {
+    record("no-wedge", "PASS", `no enabled schedule is more than one of its own cadences behind (${rows.length} due)`);
+    return;
+  }
+  if (wedged.length === 0) {
+    record("no-wedge", "WARN", ["every due schedule is within cadence, but:", ...unparseable], "Check the cron syntax.");
     return;
   }
   record(
     "no-wedge",
     "FAIL",
-    [
-      `${rows.length} enabled schedule(s) are wedged:`,
-      ...rows.map((r) => `  ${r.kind} (${r.cron}) ${r.minutes_late}m late`),
-    ],
-    "Compare against preflight's baseline. If new, repair with UPDATE job_schedules SET next_run_at = now() WHERE kind = ...",
+    [`${wedged.length} enabled schedule(s) are wedged:`, ...wedged, ...unparseable],
+    // NOT `next_run_at = now()`: scheduler.ts anchors its cron iterator at
+    // next_run_at - 1s and breaks on the first FUTURE slot, so setting it to
+    // now() enqueues nothing at all and the schedule simply resumes at its next
+    // slot — up to a full cadence away, with the missed backlog dropped. To
+    // fire immediately, set it back past a slot that has already passed.
+    "Compare against preflight's baseline. If new, repair with UPDATE job_schedules SET next_run_at = now() - <one cadence> WHERE kind = ... — which resumes AND replays the missed slots. Setting it to now() only resumes at the next slot and discards the backlog.",
   );
 }
 

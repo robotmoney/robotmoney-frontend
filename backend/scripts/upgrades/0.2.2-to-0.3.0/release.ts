@@ -70,6 +70,30 @@ export const COLLAPSE_PER_BUCKET_KINDS = ["wallet.sample_balances", "wallet.samp
  *  deployment sets BASE_RPC_MAX_CALLS_PER_SEC=0 — see the runbook §5.2. */
 export const NEW_SCHEDULE_KIND = "ops.repair_gaps";
 
+/** The migration that adds `wallet_balance_samples.strategy_nav_idle_only`.
+ *  postflight reads its `applied_at` to separate rows that PREDATE the column
+ *  (which must all be NULL) from rows the sampler wrote afterwards (which
+ *  legitimately carry a value). */
+export const NEW_COLUMN_MIGRATION = "0032_wallet_balance_samples_strategy_nav_idle_only.sql";
+
+/** Its cron, as `seed()` writes it (backend/src/db/seed.ts). Held here so the
+ *  postflight check and the §7.1 dispatch observation grade against ONE copy —
+ *  and, more importantly, so a future cadence change has a single place to
+ *  land. seed()'s ON CONFLICT key is `(kind, cron)`, so changing this string
+ *  INSERTS a second enabled row rather than updating the first; whoever changes
+ *  it must retire the old row in `seedJobSchedules()` the way `analytics.run`
+ *  is retired, and postflight's `repair-schedule` check will FAIL until they
+ *  do. */
+export const NEW_SCHEDULE_CRON = "25 * * * *";
+
+/** The kind `ops.repair_gaps` enqueues, one job per day it decides to repair. */
+export const BACKFILL_JOB_KIND = "wallet.backfill_day";
+
+/** What a repaired row's `provenance` column reads
+ *  (backend/src/ops/wallet-backfill.ts). The §7.1 observation asserts this
+ *  rather than trusting that a completed job wrote anything. */
+export const BACKFILL_PROVENANCE = "backfilled";
+
 /** Selects this release's tags and no others (the runbook cuts `v0.3.0-rc.N`). */
 export const TAG_GLOB = "v0.3.0*";
 
@@ -91,3 +115,33 @@ export const TRACKING_ISSUE = 661;
  * the two in agreement mechanically, so this cannot drift silently.
  */
 export const APPEND_ONLY_MIGRATION = "0032_append_only_history.sql";
+
+/**
+ * BYTE-IDENTICAL COPY of APPEND_ONLY_TABLES from src/db/append-only-guard.ts,
+ * for the same reason as the constant above: that module imports db/client.ts,
+ * which demands DATABASE_URL at module load and builds the app's WRITER pool.
+ *
+ * postflight's `append-only-intact` check needs the roster, not the guard. It
+ * used to pass on ANY non-zero trigger count, so losing thirteen of these
+ * fourteen tables reported "guard live on 1 table(s)" and read as green — which
+ * is precisely the silent partial loss the check exists to catch. Comparing
+ * against a list is what makes it able to fail.
+ *
+ * Held in agreement with the guard by backend/tests/rollout-steps-0-3-0.test.ts.
+ */
+export const APPEND_ONLY_TABLES = [
+  "swarm_members",
+  "swarm_recommendations",
+  "swarm_memos",
+  "swarm_sessions",
+  "swarm_briefs",
+  "swarm_subjects",
+  "swarm_session_events",
+  "swarm_session_members",
+  "swarm_subject_snapshots",
+  "swarm_applications",
+  "audit_log",
+  "agent_activity_log",
+  "regime_snapshots",
+  "schema_migrations",
+] as const;

@@ -28,7 +28,13 @@
 //
 // Usage:
 //   bun scripts/upgrades/0.2.2-to-0.3.0/restore-check.ts [backupDir]
-//   backupDir defaults to ~/rm-backup-v030. Expects, inside it:
+//   backupDir resolves as: the argument, then $RM_BACKUP_DIR, then
+//   ~/rm-backup-v022 (scripts/lib/restore-container.ts::resolveBackupFiles, and
+//   the same precedence in backend/scripts/lib/rollout-receipt.ts's
+//   DEFAULT_BACKUP_DIR). The last fallback is the PREVIOUS release's directory,
+//   deliberately — v0.3.0 never got its own default. The runbook §6 tells you to
+//   `export RM_BACKUP_DIR` for exactly this reason; without it, this release's
+//   receipts land in v0.2.2's receipts/ folder. Expects, inside the resolved dir:
 //     .last-stamp                       — the STAMP §5.1 generated
 //     rm-preupgrade-<STAMP>.dump.gpg    — §5.1/§5.2's encrypted pg_dump
 //     rm-globals-<STAMP>.sql.gpg        — §5.1/§5.2's encrypted pg_dumpall --globals-only
