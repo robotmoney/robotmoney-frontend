@@ -11,6 +11,8 @@
 // not a rate — that is the #651 finding this file pins).
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
+  DEFAULT_RATE_BURST,
+  DEFAULT_RATE_PER_SEC,
   ethCall,
   ethGetBalance,
   isEmptyReturnData,
@@ -97,16 +99,46 @@ test("an empty return is distinguishable from a genuine zero", () => {
 
 // ── The shared rate budget ───────────────────────────────────────────────────
 
-test("unset budget = no pacing at all (the pre-#709 transport, unchanged)", async () => {
-  expect(resolveRpcRateBudget({})).toBeNull();
-  expect(resolveRpcRateBudget({ BASE_RPC_MAX_CALLS_PER_SEC: "" })).toBeNull();
-  expect(resolveRpcRateBudget({ BASE_RPC_MAX_CALLS_PER_SEC: "nonsense" })).toBeNull();
-  expect(resolveRpcRateBudget({ BASE_RPC_MAX_CALLS_PER_SEC: "0" })).toBeNull();
+test("unset budget = the conservative default, NOT unpaced", async () => {
+  // The default exists because the alternative — wait for an operator to
+  // measure the provider's unpublished limit — shipped the gap repair inert.
+  for (const env of [{}, { BASE_RPC_MAX_CALLS_PER_SEC: "" }, { BASE_RPC_MAX_CALLS_PER_SEC: "nonsense" }]) {
+    // A typo must not silently restore the unpaced transport.
+    expect(resolveRpcRateBudget(env)).toEqual({ ratePerSec: DEFAULT_RATE_PER_SEC, burst: DEFAULT_RATE_BURST });
+  }
+  // An explicit value still wins, and the burst floor is the measured bucket depth.
+  expect(resolveRpcRateBudget({ BASE_RPC_MAX_CALLS_PER_SEC: "2" })).toEqual({ ratePerSec: 2, burst: 5 });
+  expect(resolveRpcRateBudget({ BASE_RPC_MAX_CALLS_PER_SEC: "20" })).toEqual({ ratePerSec: 20, burst: 20 });
+  expect(resolveRpcRateBudget({ BASE_RPC_MAX_CALLS_PER_SEC: "2", BASE_RPC_RATE_BURST: "1" })).toEqual({ ratePerSec: 2, burst: 1 });
 
+  // preload.ts sets the suite-wide opt-out; this is the one test that wants the
+  // real default, so it removes it and drives the actual transport.
+  delete process.env.BASE_RPC_MAX_CALLS_PER_SEC;
+  globalThis.fetch = (async () => okResult("0x1")) as unknown as typeof fetch;
+  const started = Date.now();
+  // One burst's worth passes immediately...
+  for (let i = 0; i < DEFAULT_RATE_BURST; i++) await rpcRequest("eth_call", [], { rpcUrl: RPC });
+  expect(Date.now() - started).toBeLessThan(300);
+
+  // ...and the next one CANNOT, because at 0.25 calls/s the sixth token is four
+  // seconds away. Asserted as "still pending after 1s" rather than by waiting
+  // the whole refill out, so the proof costs a second instead of four.
+  let settled = false;
+  const sixth = rpcRequest("eth_call", [], { rpcUrl: RPC }).then(() => { settled = true; });
+  await Promise.race([sixth, new Promise((r) => setTimeout(r, 1000))]);
+  expect(settled).toBe(false);
+  await sixth; // do not leak a pending request into the next test
+});
+
+test("zero IS the opt-out: no pacing at all (the pre-#709 transport)", async () => {
+  expect(resolveRpcRateBudget({ BASE_RPC_MAX_CALLS_PER_SEC: "0" })).toBeNull();
+  expect(resolveRpcRateBudget({ BASE_RPC_MAX_CALLS_PER_SEC: "-1" })).toBeNull();
+
+  process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0";
   globalThis.fetch = (async () => okResult("0x1")) as unknown as typeof fetch;
   const started = Date.now();
   for (let i = 0; i < 8; i++) await rpcRequest("eth_call", [], { rpcUrl: RPC });
-  // No budget → no delay. Generous bound: this asserts the ABSENCE of pacing.
+  // Generous bound: this asserts the ABSENCE of pacing.
   expect(Date.now() - started).toBeLessThan(300);
 });
 
@@ -130,6 +162,7 @@ test("the budget PACES: N calls past the burst take at least (N-burst)/rate", as
 
 test("pacing is NOT concurrency: a serialized caller with concurrency 1 is unpaced without a budget", async () => {
   process.env.BASE_RPC_MAX_CONCURRENCY = "1";
+  process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0"; // the pre-#709 transport, explicitly
   globalThis.fetch = (async () => okResult("0x1")) as unknown as typeof fetch;
 
   // This is the #651 finding, pinned: the existing gate bounds IN-FLIGHT, and on

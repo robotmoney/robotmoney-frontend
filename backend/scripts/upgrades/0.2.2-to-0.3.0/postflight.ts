@@ -164,7 +164,7 @@ async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
       "new-tables",
       "WARN",
       [`present but not empty: ${nonEmpty.join(", ")}`],
-      "Expected empty on arrival. Non-empty means the backfill has already dispatched — only possible if a budget is set.",
+      "Expected empty on arrival. Non-empty means the backfill has already dispatched — expected on any deployment that did not set BASE_RPC_MAX_CALLS_PER_SEC=0, since the transport paces by default.",
     );
     return;
   }
@@ -174,9 +174,10 @@ async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
 /** Check 5 — the new schedule is seeded, and its dispatch behaviour matches
  *  whatever budget decision was actually taken.
  *
- *  Deliberately NOT asserting "it declined": with BASE_RPC_MAX_CALLS_PER_SEC
- *  set, doing real work is the correct outcome. The check reports which world
- *  it is in so the operator confirms it is the one they chose. */
+ *  Deliberately NOT asserting either outcome: dispatching real work is the
+ *  DEFAULT and is correct, and a deployment that set BASE_RPC_MAX_CALLS_PER_SEC=0
+ *  has chosen the other world on purpose. The check reports which one it is in
+ *  so the operator confirms it is the one they chose. */
 async function checkRepairSchedule(db: Db, { record }: Checker): Promise<void> {
   const rows = (await db`
     SELECT kind, cron, enabled, next_run_at FROM job_schedules WHERE kind = ${NEW_SCHEDULE_KIND}
@@ -192,12 +193,17 @@ async function checkRepairSchedule(db: Db, { record }: Checker): Promise<void> {
     return;
   }
   const s = rows[0]!;
+  // Unset is no longer "off": chain/base-rpc-client.ts paces from a conservative
+  // default, so the ordinary deployment heals. Only an explicit 0 declines.
   const budget = process.env.BASE_RPC_MAX_CALLS_PER_SEC;
+  const pacingOff = budget !== undefined && Number(budget) <= 0;
   const detail = [
     `${s.kind} cron=${s.cron} enabled=${s.enabled} next_run_at=${s.next_run_at ?? "null"}`,
-    budget
-      ? `BASE_RPC_MAX_CALLS_PER_SEC=${budget} — the backfill WILL dispatch repair work`
-      : "BASE_RPC_MAX_CALLS_PER_SEC unset — the backfill stays OFF and will decline each run",
+    pacingOff
+      ? `BASE_RPC_MAX_CALLS_PER_SEC=${budget} — pacing is OFF, so the backfill declines each run`
+      : budget
+        ? `BASE_RPC_MAX_CALLS_PER_SEC=${budget} — the backfill WILL dispatch repair work`
+        : "BASE_RPC_MAX_CALLS_PER_SEC unset — the built-in 0.25 calls/s default applies, so the backfill WILL dispatch repair work",
   ];
   if (!s.enabled) {
     record("repair-schedule", "WARN", [...detail, "seeded but DISABLED"], "Confirm this was deliberate.");

@@ -362,6 +362,23 @@ standing verifier or only a bounded one-time executor.
 production backfill run. Getting this wrong does not merely slow the backfill: it
 **causes new gaps while fixing old ones**, by 429-ing the live sampler.
 
+> **Interim answer taken 2026-08-22 — a conservative shared default, not a
+> measurement.** PD6's real question (keyed provider vs. shared priority bucket
+> vs. quiet window) is still open. What is settled is that *waiting* for it is
+> not free: while the budget was unset, `ops.repair_gaps` ran hourly on every
+> deployment and healed nothing, so #709 shipped inert. Base publishes **no**
+> rate limit for `https://mainnet.base.org` — its docs say only that the public
+> endpoints "are rate-limited and not suitable for production traffic" — so
+> there was never an authoritative figure to wait for either.
+> `chain/base-rpc-client.ts` therefore now paces from a hardcoded
+> `DEFAULT_RATE_PER_SEC = 0.25` (half the measured refill, ~7.5× the live
+> samplers' draw) with a burst of 5 (the measured bucket depth), overridable by
+> `BASE_RPC_MAX_CALLS_PER_SEC` and disabled outright by setting it to `0`. Being
+> wrong about production's real limit now costs throughput rather than 429s, and
+> `noteRateLimitExhaustion()` corrects it downward on any 429/`-32016`. A
+> re-measurement from the droplet still improves the number; it is no longer a
+> precondition for repairing anything.
+
 **The measured constraint** (§6.3; measured from a developer IP, **not**
 re-measured from the production droplet — see the closing note of this item): a ~**5-token bucket refilling at
 ~0.55 calls/s**, metered **per-IP at the provider** and **per sub-call, not per
@@ -1511,9 +1528,12 @@ plumbing (`:243-301`) verbatim rather than reimplementing it.
 
 Add a real **token bucket**, its capacity and refill rate **configurable and
 seeded from the measured values** (~5 tokens, ~0.55/s — measured from a
-developer IP), **not hardcoded**: PD6 requires those figures re-measured from
-the production droplet, so the bucket's parameters must be re-derived from that
-measurement before any production run. What exists today bounds *concurrency*
+developer IP). *(Amended 2026-08-22: this item originally said "**not
+hardcoded**", on the reasoning that PD6 required the figures re-measured from
+the production droplet first. That made "unset" mean unpaced-and-unhealing, and
+it stayed unset. The parameters are still configurable; they now also carry a
+conservative hardcoded default at half the measured refill — see PD6's interim
+note. A droplet measurement still refines the number.)* What exists today bounds *concurrency*
 and not *rate*: `acquireSlot`/`releaseSlot` at `:243-256`, sized by
 `BASE_RPC_MAX_CONCURRENCY` (default 4, `:230`) — which is why production saw
 the 2026-08-10 `Base RPC HTTP 429` storm.

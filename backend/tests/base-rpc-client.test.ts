@@ -29,7 +29,12 @@ const realFetch = globalThis.fetch;
 const RPC = "https://mainnet.base.org";
 const OK = { rpcUrl: RPC, timeoutMs: 5000 };
 
-const KNOBS = ["BASE_RPC_MAX_CONCURRENCY", "BASE_RPC_MAX_RETRIES", "BASE_RPC_RETRY_BASE_MS"] as const;
+const KNOBS = [
+  "BASE_RPC_MAX_CONCURRENCY",
+  "BASE_RPC_MAX_RETRIES",
+  "BASE_RPC_RETRY_BASE_MS",
+  "BASE_RPC_MAX_CALLS_PER_SEC",
+] as const;
 
 function okResult(result: unknown): Response {
   return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200 });
@@ -44,6 +49,12 @@ function rpcError(code: number, message: string): Response {
 beforeEach(() => {
   // Keep retries plentiful but each backoff ~instant so the suite is quick.
   process.env.BASE_RPC_RETRY_BASE_MS = "1";
+  // Pacing OFF for this file. The transport now paces by default (0.25 calls/s
+  // — chain/base-rpc-client.ts::DEFAULT_RATE_PER_SEC), and a 429 deliberately
+  // DRAINS that bucket, so every retry assertion below would otherwise measure
+  // a 4-second refill instead of the backoff it is about. The token bucket's
+  // own behaviour is covered in tests/base-rpc-block-addressing.test.ts.
+  process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0";
   _resetRpcConcurrencyForTests();
 });
 afterEach(() => {

@@ -67,21 +67,23 @@ function backfillEnabled(): boolean {
  *     deliberately not done here.
  */
 export async function repairGaps(): Promise<unknown> {
-  // THE PD6 PRECONDITION DOUBLES AS THE OPT-IN. A live backfill must never run
-  // unpaced against a per-IP-metered provider, so the driver refuses without a
-  // configured RPC budget. Rather than let each enqueued day discover that and
-  // fail, the dispatcher checks once and reports it: the schedule stays seeded
-  // and enabled everywhere, and a deployment turns healing ON by measuring its
-  // own budget and setting BASE_RPC_MAX_CALLS_PER_SEC. That is deliberate — the
-  // figures in §6.5.3 were measured from a developer IP, and PD6 requires them
-  // re-derived from the production droplet before a real sweep.
+  // THE PD6 PRECONDITION, WHICH IS NO LONGER AN OPT-IN. A live backfill must
+  // never run unpaced against a per-IP-metered provider, so the driver refuses
+  // when pacing is off. It used to be off by DEFAULT — the budget had to be
+  // measured and set before repair did anything, which meant the ordinary
+  // deployment ran this dispatcher hourly and healed nothing. The transport now
+  // paces from a conservative hardcoded default
+  // (chain/base-rpc-client.ts::DEFAULT_RATE_PER_SEC, half the §6.5.3 measured
+  // refill), so this check passes unless an operator has explicitly set
+  // BASE_RPC_MAX_CALLS_PER_SEC=0. Rather than let each enqueued day discover
+  // that and fail, the dispatcher checks once and reports it.
   if (!backfillEnabled()) {
     const reports = await detectAllGaps(sql);
     return {
       ok: true,
       status: "skipped",
       reason:
-        "BASE_RPC_MAX_CALLS_PER_SEC is unset — the backfill shares the live sampler's per-IP RPC budget and will not run unpaced (PD6, #651)",
+        "BASE_RPC_MAX_CALLS_PER_SEC=0 — pacing is explicitly disabled, and the backfill shares the live sampler's per-IP RPC budget, so it will not run unpaced (PD6, #651). Unset the variable to use the conservative default.",
       dirtySeries: reports.filter((r) => !r.clean).map((r) => r.key),
     };
   }

@@ -74,10 +74,12 @@ export const SCHEDULES: SeedSchedule[] = [
   // and enqueues one wallet.backfill_day job per missing day, bounded per run.
   // HOURLY rather than daily so a wide gap converges in hours instead of weeks
   // under the per-run cap, and cheap when there is nothing to do (two detector
-  // queries and no chain read). It is a NO-OP unless the deployment has
-  // configured its shared RPC rate budget (BASE_RPC_MAX_CALLS_PER_SEC), so a
-  // demo/CI boot never starts sweeping months of history — see
-  // worker/handlers/repair.ts. Handler: worker/handlers/repair.ts.
+  // queries and no chain read). Since the transport now paces from a
+  // conservative default (chain/base-rpc-client.ts), this DOES dispatch on an
+  // ordinary live deployment — that is the point of the feature — and is a
+  // NO-OP only where an operator has set BASE_RPC_MAX_CALLS_PER_SEC=0. A
+  // hermetic demo/CI boot reads BASE_RPC_SOURCE=stub, so its sweep costs no
+  // provider budget. Handler: worker/handlers/repair.ts.
   { kind: "ops.repair_gaps", cron: "25 * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Swarm lifecycle rows are seeded SEPARATELY below (seedSwarmSchedules)
   // — issue #208 made their enabled/cron/window environment-configurable via

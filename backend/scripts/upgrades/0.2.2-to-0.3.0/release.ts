@@ -65,8 +65,9 @@ export const NEW_COLUMNS = [
  */
 export const COLLAPSE_PER_BUCKET_KINDS = ["wallet.sample_balances", "wallet.sample_sleeves"] as const;
 
-/** The schedule seed() adds on the first boot of this release. Inert until
- *  BASE_RPC_MAX_CALLS_PER_SEC is set — see the runbook §5.2. */
+/** The schedule seed() adds on the first boot of this release. Live on arrival:
+ *  the transport paces from a built-in default, so this dispatches unless the
+ *  deployment sets BASE_RPC_MAX_CALLS_PER_SEC=0 — see the runbook §5.2. */
 export const NEW_SCHEDULE_KIND = "ops.repair_gaps";
 
 /** Selects this release's tags and no others (the runbook cuts `v0.3.0-rc.N`). */
