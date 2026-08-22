@@ -18,7 +18,14 @@
 // `bun run projects-roster-seed:regenerate` (scripts/projects-roster-seed-
 // regenerate.ts) — never implicitly here.
 import { config, resolveBaseRpcSource, resolvePriceSource, resolveTrackedAssets } from "../../config.ts";
-import { callAsset, callDecimals, callTotalAssets, type RpcCallOptions } from "../../chain/base-rpc-client.ts";
+import {
+  callDecimals,
+  decodeUint256,
+  encodeAssetCall,
+  encodeTotalAssetsCall,
+  multicall3Aggregate3,
+  type RpcCallOptions,
+} from "../../chain/base-rpc-client.ts";
 import {
   persistedFallbackWalletPriceReader,
   readChainAmountsBatched,
@@ -126,8 +133,25 @@ export const liveProjectsDataSource: ProjectsDataSource = {
 
   async vaultErc4626Read(vaultAddress: string, chain: string): Promise<Erc4626Read> {
     const opts = baseRpcOpts();
-    const totalAssets = await callTotalAssets(vaultAddress, opts);
-    const assetAddr = await callAsset(vaultAddress, opts); // throws on empty (no-code address) → degrade
+    // THREE POSTs → TWO. totalAssets() and asset() are independent, so they
+    // share one Multicall3 call; decimals() genuinely depends on asset()'s
+    // answer and cannot join them (§6.5.5 — batch the independent axis, never
+    // pretend a dependent one is independent).
+    const [taRes, assetRes] = await multicall3Aggregate3(
+      [
+        { target: vaultAddress, allowFailure: true, callData: encodeTotalAssetsCall() },
+        { target: vaultAddress, allowFailure: true, callData: encodeAssetCall() },
+      ],
+      opts,
+    );
+    if (!taRes || !taRes.success) throw new Error(`live-source: totalAssets() failed for ${vaultAddress}`);
+    const totalAssets = decodeUint256(taRes.returnData);
+    // An empty/failed asset() is a call to an address with no code. It THROWS
+    // rather than decoding to the zero address, preserving callAsset's contract
+    // — the caller degrades the whole vault to its last-persisted row.
+    const assetRaw = (!assetRes || !assetRes.success ? "" : assetRes.returnData).replace(/^0x/, "");
+    if (assetRaw.length < 40) throw new Error(`Base RPC: empty asset() result from ${vaultAddress}`);
+    const assetAddr = "0x" + assetRaw.slice(-40);
     // decimals() decoding to 0/garbage falls back to 18 (legacy edge-fn semantics).
     const decimals = (await callDecimals(assetAddr, opts)) || 18;
     const assetPriceUsd = STABLES.has(assetAddr.toLowerCase()) ? 1 : await dexPriceUsd(chain, assetAddr);

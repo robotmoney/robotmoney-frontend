@@ -4,7 +4,16 @@
 // (vault.sample_share_price, vault.sample_adapters) populate the tables.
 import { config, resolveBaseRpcSource, resolveVaultAdapters, type BaseRpcSource, type VaultAdapterConfig } from "../config.ts";
 import { sql } from "../db/client.ts";
-import { callTotalAssets, callTotalSupply, callBalanceOf, type RpcCallOptions } from "./base-rpc-client.ts";
+import {
+  decodeUint256,
+  encodeBalanceOfCall,
+  encodeTotalAssetsCall,
+  encodeTotalSupplyCall,
+  multicall3Aggregate3,
+  type Aggregate3Result,
+  type Call3,
+  type RpcCallOptions,
+} from "./base-rpc-client.ts";
 import type { Provenance } from "./wallet-valuation.ts";
 import { ttlCached } from "./ttl-cache.ts";
 
@@ -71,27 +80,69 @@ export interface VaultEconomicsReaders {
   samples: VaultSampleReader;
 }
 
+/** A sub-call that reverted, or returned nothing, is NOT a zero. §6.5.5's rule:
+ *  batching may never turn a failed read into a plausible number. */
+function requireWord(r: Aggregate3Result | undefined, what: string): bigint {
+  if (!r || !r.success) throw new Error(`vault-economics: ${what} sub-call failed`);
+  return decodeUint256(r.returnData);
+}
+
 const rpcVaultCoreReader: VaultCoreReader = {
   async read(vaultAddress, usdcAddress, opts) {
-    const [totalAssets, totalSupply, idle] = await Promise.all([
-      callTotalAssets(vaultAddress, opts),
-      callTotalSupply(vaultAddress, opts),
-      callBalanceOf(usdcAddress, vaultAddress, opts),
-    ]);
-    return { totalAssets, totalSupply, idle };
+    // THREE READS AT ONE BLOCK → ONE eth_call. They were three separate POSTs
+    // under Promise.all, which is three tokens from a bucket that meters per
+    // request, for reads that Multicall3 was built to carry together. The
+    // failure semantics are deliberately unchanged: all three must succeed or
+    // the read throws and the caller degrades to its persisted sample, exactly
+    // as an individual throw did before.
+    const calls: Call3[] = [
+      { target: vaultAddress, allowFailure: true, callData: encodeTotalAssetsCall() },
+      { target: vaultAddress, allowFailure: true, callData: encodeTotalSupplyCall() },
+      { target: usdcAddress, allowFailure: true, callData: encodeBalanceOfCall(vaultAddress) },
+    ];
+    const res = await multicall3Aggregate3(calls, opts);
+    return {
+      totalAssets: requireWord(res[0], "totalAssets()"),
+      totalSupply: requireWord(res[1], "totalSupply()"),
+      idle: requireWord(res[2], "idle balanceOf()"),
+    };
   },
 };
 
 const rpcVaultAdapterReader: VaultAdapterReader = {
   async read(adapters, opts) {
-    const settled = await Promise.allSettled(
-      adapters.map((a) => (a.configured ? callTotalAssets(a.address, opts) : Promise.resolve(null))),
-    );
-    return settled.map((r, i) => {
-      if (r.status === "fulfilled") return r.value;
-      console.error(`vault-economics: adapter ${adapters[i]!.name} read failed, degrading only that adapter:`, r.reason);
-      return null;
-    });
+    // N adapters at ONE block → ONE eth_call, where this was N parallel POSTs.
+    // `allowFailure` maps exactly onto the per-adapter degrade this reader
+    // already promised via allSettled: a reverting adapter yields null and its
+    // siblings are unaffected.
+    const wanted = adapters.map((a, i) => ({ a, i })).filter(({ a }) => a.configured);
+    if (wanted.length === 0) return adapters.map(() => null);
+
+    let res: Aggregate3Result[];
+    try {
+      res = await multicall3Aggregate3(
+        wanted.map(({ a }) => ({ target: a.address, allowFailure: true, callData: encodeTotalAssetsCall() })),
+        opts,
+      );
+    } catch (err) {
+      // The BATCH failed (transport/HTTP/JSON-RPC), so every adapter in it is
+      // unread — the same all-fail outcome the per-call path produced when the
+      // transport was down, not a silent row of zeros.
+      console.error("vault-economics: batched adapter read failed, degrading every adapter:", err);
+      return adapters.map(() => null);
+    }
+
+    const out: (bigint | null)[] = adapters.map(() => null);
+    for (let k = 0; k < wanted.length; k++) {
+      const { a, i } = wanted[k]!;
+      const r = res[k];
+      if (!r || !r.success) {
+        console.error(`vault-economics: adapter ${a.name} read failed, degrading only that adapter`);
+        continue;
+      }
+      out[i] = decodeUint256(r.returnData);
+    }
+    return out;
   },
 };
 
