@@ -110,7 +110,7 @@ function codeOnly(file: string): string {
 // Vendored, generated, or binary trees: nothing in them is source somebody
 // writes a psql statement into, and walking them would only make this slower.
 // Everything else in the repo is scanned.
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", "brand-assets", "recyclebin"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", "brand-assets"]);
 // Skipped by repo-relative PATH, not by bare directory name, so the exemption
 // cannot silently widen to some other `code-review/` added elsewhere later.
 // `docs/code-review/` is where review artefacts are written, and a review of

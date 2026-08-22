@@ -146,7 +146,10 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   });
 
   test("release constants live in release.ts, not in the manifest", () => {
-    const steps = readFileSync(join(repoRoot, "backend", "scripts", "upgrades", "0.2.1-to-0.2.2", "steps.ts"), "utf8");
+    // THIS release's manifest. Until now this line read 0.2.1-to-0.2.2 — cloned
+    // with the rest of the file when #731 forked this suite — so it asserted the
+    // PREVIOUS release's manifest twice and left v0.3.0's unchecked.
+    const steps = readFileSync(join(repoRoot, "backend", "scripts", "upgrades", "0.2.2-to-0.3.0", "steps.ts"), "utf8");
     // steps.ts may RE-EXPORT them; declaring them would put display metadata
     // back inside every gate's depends-on, which is what the split undid.
     expect(/const THIS_RELEASE_MIGRATIONS\s*=/.test(steps)).toBe(false);

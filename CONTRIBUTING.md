@@ -100,6 +100,7 @@ mechanism** — the dictionary is the only authorization surface.
 | Shared HTTP contract | `contract/` — re-vendor with `bun run sync-contract`, never hand-edit |
 | Tooling & CI scripts | `scripts/` — tests in `scripts/tests/unit/` (checkout-only: no Docker, no network, `bun run test:unit`) or `scripts/tests/integration/` (Docker- or network-backed, `bun run test:integration`). The directory IS the CI cost class (D23); never leave a test loose at `scripts/tests/`. |
 | Technical docs about this repo | `docs/**/*.md` (kebab-case) |
+| Reviews, audits, dated evidence | `docs/code-review/`, `docs/audits/`, `docs/reports/` — **append-only**. Never edited after the date they carry, never deleted, even when nothing links them. See [`docs/code-review/index.md`](docs/code-review/index.md). |
 | Workflows | `.github/workflows/` |
 | Root | config only — new root files/dirs are a review flag |
 

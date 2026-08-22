@@ -32,7 +32,7 @@ const repoRoot = join(import.meta.dir, "..", "..", "..");
 // throws below rather than silently contributing zero files.
 const SCANNED_ROOTS = ["docs", ".github/workflows", "scripts", "backend/tests", "contract", "frontend/public/assets/js"];
 const SCANNED_EXTENSIONS = [".md", ".yml", ".yaml", ".ts", ".js", ".sh"];
-const EXCLUDED_DIRS = new Set(["node_modules", "code-review", "recyclebin", ".git"]);
+const EXCLUDED_DIRS = new Set(["node_modules", "code-review", ".git"]);
 const LOOSE_FILES = ["CONTRIBUTING.md", "README.md"];
 
 // A citation is a path to an executable file, captured up to the extension so a
