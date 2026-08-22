@@ -1700,14 +1700,36 @@ refuses an oversized batch with 200 and an error object. Use unique keys so a
 cache cannot flatter one arm, interleave the arms so ordering cannot, and count
 *delivered results* rather than absent errors.
 
+**Where the pattern has been applied.** The sweep of existing call sites, so the
+next reader knows what is already done and what a new one should look like:
+
+| call site | was | now |
+|---|---|---|
+| `ops/wallet-backfill.ts` (repair run) | ~5 hits/day resolving + 1 price load/day | one lockstep resolve + one price range per window |
+| `chain/block-resolver.ts` | 1 hit per probe per day | 1 hit per probe ROUND, all days |
+| `chain/vault-economics.ts` core | 3 parallel POSTs | 1 `aggregate3` |
+| `chain/vault-economics.ts` adapters | N parallel POSTs | 1 `aggregate3`, `allowFailure` → the per-adapter degrade it already promised |
+| `worker/handlers/vault.ts` sampler | 2 POSTs at `latest` | 1 `aggregate3` — also **fixes a latent bug**: two reads at `latest` can straddle a block, so the persisted share price was a ratio of two numbers that were never simultaneously true |
+| `projects/access/live-source.ts` | 3 serial POSTs per vault | 1 `aggregate3` + 1 dependent `decimals()` |
+| `chain/buyback-logs.ts` | 2 serial POSTs **per swap** | one batched header prefetch + one batched WETH-log prefetch per chunk |
+
+Two of those are worth copying for their shape specifically: the vault adapter
+reader, where `allowFailure` mapped exactly onto an existing `allSettled`
+per-item degrade, and the buyback prefetch, where priming is **best-effort** — an
+unanswered entry is left out of the cache so the per-item path re-reads it and
+fails loudly if it must. Priming may make a scan cheaper; it may never make it
+wrong, and it may never turn a failed read into a missing row.
+
 **What is still on the table.** The window shares block resolution and price
 loading; the per-day chain reads are still one `eth_call` per day. Ten days'
 `aggregate3` payloads would fit in a single POST via `ethCallBatch`, which would
 take a ten-day window from ~11 metered POSTs to ~2. It is deliberately not done
-yet: it means restructuring `readChainAmountsBatched`'s two dependent rounds to
-run per-block-group, and that is the code where an error produces a plausible and
-wrong number rather than a loud failure. Worth doing, worth doing carefully, and
-worth an equivalence test against the single-block path first.
+yet: it means restructuring `readChainAmountsBatched`'s two dependent rounds
+(round 2's `convertToAssets` needs round 1's share balances) to run per
+block-group, and that is the code where an error produces a plausible and wrong
+NAV rather than a loud failure. Worth doing, worth doing carefully, and worth an
+equivalence test against the single-block path — of the kind
+`tests/block-resolver-batched.test.ts` runs — written first.
 
 ### 6.6 Sequencing
 

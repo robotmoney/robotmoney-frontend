@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
 import { liveProjectsDataSource } from "../src/projects/access/live-source.ts";
-import { _resetRpcConcurrencyForTests, decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../src/chain/base-rpc-client.ts";
+import { _resetRpcConcurrencyForTests, decodeAggregate3Calls, encodeAggregate3Result, MULTICALL3_ADDRESS, type Aggregate3Result } from "../src/chain/base-rpc-client.ts";
 import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
 
 const realFetch = globalThis.fetch;
@@ -34,10 +34,23 @@ const SEL_DECIMALS = "0x313ce567"; // decimals()
 const word = (n: bigint): string => "0x" + n.toString(16).padStart(64, "0");
 const addressWord = (addr: string): string => "0x" + addr.replace(/^0x/, "").padStart(64, "0");
 
+const SEL_AGGREGATE3 = "0x82ad56cb"; // aggregate3((address,bool,bytes)[])
+
 // Answer one eth_call by selector with the fixture vault's values:
 // totalAssets = 1,234 USDC (6 dp raw), asset() = Base USDC, decimals() = 6.
+//
+// An aggregate3 recurses into its sub-calls and re-encodes the result, so the
+// mock answers a BATCHED read exactly as the node would. The live source now
+// carries totalAssets() and asset() together — they are independent, and the
+// provider meters requests — while decimals() stays a second call because it
+// needs asset()'s answer first.
 function answer(data: string): string {
   const sel = data.slice(0, 10);
+  if (sel === SEL_AGGREGATE3) {
+    const inner = decodeAggregate3Calls(data);
+    const results: Aggregate3Result[] = inner.map((c) => ({ success: true, returnData: answer(c.callData) }));
+    return encodeAggregate3Result(results);
+  }
   if (sel === SEL_TOTAL_ASSETS) return word(1_234_000_000n);
   if (sel === SEL_ASSET) return addressWord(USDC_BASE);
   if (sel === SEL_DECIMALS) return word(6n);
@@ -76,7 +89,9 @@ test("(a) a 429 with Retry-After on a vault read is retried by the shared transp
 
   const read = await liveProjectsDataSource.vaultErc4626Read(VAULT, "base");
   expect(read).toEqual({ totalAssetsRaw: "1234000000", decimals: 6, assetPriceUsd: 1 });
-  expect(calls).toBe(4); // one 429 + retried totalAssets + asset + decimals
+  // one 429 + the retried aggregate3 (totalAssets + asset) + decimals. It was 4
+  // before the two independent reads were batched.
+  expect(calls).toBe(3);
 });
 
 test("(b) every vault-read RPC request carries the transport's User-Agent and a correct eth_call body", async () => {
@@ -88,7 +103,7 @@ test("(b) every vault-read RPC request carries the transport's User-Agent and a 
   }) as unknown as typeof fetch;
 
   await liveProjectsDataSource.vaultErc4626Read(VAULT, "base");
-  expect(seen).toHaveLength(3); // totalAssets → asset → decimals, in order
+  expect(seen).toHaveLength(2); // [totalAssets + asset] batched → decimals
   for (const r of seen) {
     expect(r.url).toBe(config.baseRpcUrl); // the configured Base RPC, nothing else
     expect(r.userAgent).toBe("robotmoney-rmpc/1.0"); // the public node 403s bare POSTs
@@ -96,11 +111,17 @@ test("(b) every vault-read RPC request carries the transport's User-Agent and a 
     expect(r.body.method).toBe("eth_call");
     expect((r.body.params as [unknown, string])[1]).toBe("latest");
   }
-  const [totalAssets, asset, decimals] = seen.map((r) => (r.body.params as [{ to: string; data: string }, string])[0]);
-  expect(totalAssets!.to).toBe(VAULT);
-  expect(totalAssets!.data).toBe(SEL_TOTAL_ASSETS);
-  expect(asset!.to).toBe(VAULT);
-  expect(asset!.data).toBe(SEL_ASSET);
+  const [batched, decimals] = seen.map((r) => (r.body.params as [{ to: string; data: string }, string])[0]);
+  // The first request is ONE aggregate3 carrying both vault reads. Asserting the
+  // decoded sub-calls rather than just the outer shape keeps this a test of what
+  // is actually asked of the chain, not merely of how it is wrapped.
+  expect(batched!.to).toBe(MULTICALL3_ADDRESS);
+  expect(batched!.data.slice(0, 10)).toBe(SEL_AGGREGATE3);
+  const inner = decodeAggregate3Calls(batched!.data);
+  expect(inner.map((c) => [c.target.toLowerCase(), c.callData])).toEqual([
+    [VAULT.toLowerCase(), SEL_TOTAL_ASSETS],
+    [VAULT.toLowerCase(), SEL_ASSET],
+  ]);
   expect(decimals!.to).toBe(USDC_BASE); // decimals() is read on the UNDERLYING
   expect(decimals!.data).toBe(SEL_DECIMALS);
 });
@@ -124,7 +145,7 @@ test("(c) with BASE_RPC_MAX_CONCURRENCY=1 concurrent vault reads are serialized 
   const vaults = ["0x" + "a1".repeat(20), "0x" + "b2".repeat(20), "0x" + "c3".repeat(20), "0x" + "d4".repeat(20)];
   const reads = await Promise.all(vaults.map((v) => liveProjectsDataSource.vaultErc4626Read(v, "base")));
   for (const r of reads) expect(r).toEqual({ totalAssetsRaw: "1234000000", decimals: 6, assetPriceUsd: 1 });
-  expect(peak).toBe(1); // the module-level gate serialized 4×3 = 12 eth_calls
+  expect(peak).toBe(1); // the module-level gate serialized 4×2 = 8 eth_calls
 });
 
 // ── walletBalanceUsd (issue #346) ────────────────────────────────────────────
@@ -202,7 +223,7 @@ test("(f) walletBalanceUsd refuses a non-'base' chain without ever opening a soc
 // DexScreener HTTP fetches (different hosts, not Base RPC) may fetch directly.
 test("live-source.ts source contains no hand-rolled RPC (no jsonrpc/eth_call literals, no selector hex table)", async () => {
   const src = await Bun.file(new URL("../src/projects/access/live-source.ts", import.meta.url)).text();
-  expect(src).toContain("callTotalAssets"); // positive control: right file, routed through base-rpc-client
+  expect(src).toContain("multicall3Aggregate3"); // positive control: right file, routed through base-rpc-client
   for (const forbidden of ["jsonrpc", "eth_call", SEL_TOTAL_ASSETS, SEL_ASSET, SEL_DECIMALS, "0x70a08231"]) {
     expect(src).not.toContain(forbidden);
   }

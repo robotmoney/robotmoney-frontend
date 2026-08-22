@@ -583,27 +583,40 @@ function mockHistoricBuyback(ohlcv: "ok" | "unavailable") {
       const addrs = (u.split("/token_price/")[1] ?? "x").toLowerCase().split(",");
       return new Response(JSON.stringify({ data: { attributes: { token_prices: Object.fromEntries(addrs.map((a) => [a, String(TODAY_SPOT)])) } } }), { status: 200 });
     }
-    const body = JSON.parse(String(init?.body)) as { method: string; params: any[] };
-    if (body.method === "eth_blockNumber") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x" + (BUYBACK_FROM_BLOCK + 50).toString(16) }), { status: 200 });
-    if (body.method === "eth_getBlockByNumber") {
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { timestamp: "0x" + HISTORIC_TS.toString(16) } }), { status: 200 });
-    }
-    if (body.method === "eth_getLogs") {
-      const p = body.params[0] as { address: string; fromBlock: string; toBlock: string };
-      const inWindow = parseInt(p.fromBlock, 16) <= HISTORIC_BLOCK && HISTORIC_BLOCK <= parseInt(p.toBlock, 16);
-      if (!inWindow) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
-      // The WETH leg query pins fromBlock == toBlock == the swap's block; the
-      // ROBOTMONEY leg query spans the whole chunk.
-      const isWethLeg = p.fromBlock === p.toBlock;
-      const log = {
-        blockNumber: "0x" + HISTORIC_BLOCK.toString(16),
-        logIndex: "0x1",
-        transactionHash: SWAP_TX,
-        data: word(isWethLeg ? WETH_OUT : ROBOTMONEY_IN),
-      };
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [log] }), { status: 200 });
-    }
-    throw new Error(`unexpected ${body.method}`);
+    // The scan prefetches a chunk's block headers and per-block WETH logs as
+    // JSON-RPC ARRAY batches (chain/buyback-logs.ts), so the body may be one
+    // request object or a list of them. Answering per entry keeps this mock a
+    // model of the node rather than of one call shape.
+    const parsedBody = JSON.parse(String(init?.body)) as
+      | { id: number; method: string; params: any[] }
+      | { id: number; method: string; params: any[] }[];
+    const batched = Array.isArray(parsedBody);
+    const entries = batched ? parsedBody : [parsedBody];
+
+    const answerOne = (body: { method: string; params: any[] }): unknown => {
+      if (body.method === "eth_blockNumber") return "0x" + (BUYBACK_FROM_BLOCK + 50).toString(16);
+      if (body.method === "eth_getBlockByNumber") return { timestamp: "0x" + HISTORIC_TS.toString(16) };
+      if (body.method === "eth_getLogs") {
+        const p = body.params[0] as { address: string; fromBlock: string; toBlock: string };
+        const inWindow = parseInt(p.fromBlock, 16) <= HISTORIC_BLOCK && HISTORIC_BLOCK <= parseInt(p.toBlock, 16);
+        if (!inWindow) return [];
+        // The WETH leg query pins fromBlock == toBlock == the swap's block; the
+        // ROBOTMONEY leg query spans the whole chunk.
+        const isWethLeg = p.fromBlock === p.toBlock;
+        return [
+          {
+            blockNumber: "0x" + HISTORIC_BLOCK.toString(16),
+            logIndex: "0x1",
+            transactionHash: SWAP_TX,
+            data: word(isWethLeg ? WETH_OUT : ROBOTMONEY_IN),
+          },
+        ];
+      }
+      throw new Error(`unexpected ${body.method}`);
+    };
+
+    const answers = entries.map((e) => ({ jsonrpc: "2.0", id: e.id ?? 1, result: answerOne(e) }));
+    return new Response(JSON.stringify(batched ? answers : answers[0]), { status: 200 });
   }) as unknown as typeof fetch;
   return calls;
 }
