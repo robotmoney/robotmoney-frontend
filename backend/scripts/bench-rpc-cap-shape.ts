@@ -15,3 +15,10 @@ for (const size of [10, 11]) {
     `size ${String(size).padStart(2)}: HTTP ${res.status}  ${Array.isArray(parsed) ? `array of ${parsed.length}` : "OBJECT"}  ${body.slice(0, 160)}`,
   );
 }
+
+// Module scope, deliberately: backend/tsconfig.json includes scripts/**, and a
+// bench file with no import or export is a GLOBAL script — three of them then
+// collide on every top-level name and top-level await stops being legal. CI
+// caught this because it runs typecheck from backend/; a root-level tsc does
+// not cover this directory at all.
+export {};

@@ -80,3 +80,6 @@ console.log(`  batched: ${batchSent} POSTs (${batchSent * 10} sub-calls), ${batc
 console.log(
   `\n  Same number of SUB-CALLS each (${singleSent} vs ${batchSent * 10}); the arms differ only in how many POSTs carried them.`,
 );
+
+// Module scope — see the note in bench-rpc-cap-shape.ts.
+export {};

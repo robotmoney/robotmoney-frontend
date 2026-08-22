@@ -284,6 +284,63 @@ test("a caller that injects only the per-day resolver still drives the executor"
   expect(out.every((r) => r.status === "filled")).toBe(true);
 });
 
+test("a window reads every day's legs in ONE multi-block pass, each at its own block", async () => {
+  // The last of the three per-day fan-outs to be collapsed. The assertion that
+  // matters is not the call count but that each day still got ITS OWN block:
+  // one batched read serving every day the FIRST day's balances would be the
+  // silent-wrong-number failure §6.5.5 warns about.
+  const seen: { tags: readonly string[]; calls: number } = { tags: [], calls: 0 };
+  const base = countingDeps();
+  const deps: WalletBackfillDeps = {
+    ...base.deps,
+    async readChainAmountsAtBlocks(reads, _label, blockTags) {
+      seen.calls += 1;
+      seen.tags = blockTags;
+      // Amount encodes the block, so a day served the wrong block's map shows up
+      // as the wrong value_usd below.
+      return new Map(
+        blockTags.map((tag) => [
+          tag,
+          new Map(reads.map((r) => [r.key, { ok: true, amount: parseInt(tag, 16) } as ChainAmount])),
+        ]),
+      );
+    },
+    async readChainAmounts() {
+      throw new Error("per-day read must not be used when the batched reader is available");
+    },
+  };
+
+  const out = await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  expect(out.every((r) => r.status === "filled")).toBe(true);
+  expect(seen.calls).toBe(1); // ONE pass for three days
+  expect([...seen.tags]).toEqual([D1, D2, D3].map((d) => "0x" + blockFor(d).toString(16)));
+
+  // Each day's persisted amount is its OWN block's, not the window's first.
+  const rows = await sql<{ sample_date: Date; amount: string }[]>`
+    SELECT sample_date, min(amount)::text AS amount FROM wallet_balance_samples
+     WHERE sample_date = ANY(${[D1, D2, D3]}::date[]) GROUP BY sample_date ORDER BY sample_date
+  `;
+  expect(rows.map((r) => Number(r.amount))).toEqual([D1, D2, D3].map((d) => blockFor(d)));
+});
+
+test("a window-wide chain-read failure fails every day it covered, and writes none", async () => {
+  const base = countingDeps();
+  const deps: WalletBackfillDeps = {
+    ...base.deps,
+    async readChainAmountsAtBlocks() {
+      throw new Error("simulated transport outage");
+    },
+  };
+
+  const out = await backfillWalletWindow(sql, [D1, D2], deps, NOW);
+  expect(out.every((r) => r.status === "failed")).toBe(true);
+  expect(out.every((r) => (r.detail ?? "").includes("simulated transport outage"))).toBe(true);
+  const [row] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ANY(${[D1, D2]}::date[])
+  `;
+  expect(row!.n).toBe(0);
+});
+
 test("an empty window is a no-op, not a throw", async () => {
   const { deps, counts } = countingDeps();
   expect(await backfillWalletWindow(sql, [], deps, NOW)).toEqual([]);

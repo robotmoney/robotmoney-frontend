@@ -121,3 +121,7 @@ console.log(
       : "  → the meter is closer to PER-SUB-CALL: batching buys round trips, NOT throughput.\n" +
         "    Multicall3 stays the real leverage — it collapses many reads into ONE sub-call.",
 );
+
+// Module scope — see the note in bench-rpc-cap-shape.ts. Without an import or
+// export these bench files are GLOBAL scripts and collide with each other.
+export {};

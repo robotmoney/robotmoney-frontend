@@ -57,6 +57,7 @@ import {
 } from "../chain/block-resolver.ts";
 import { loadHistoricalPrices, type HistoricalPriceTable } from "../chain/historical-prices.ts";
 import {
+  readChainAmountsAtBlocks,
   readChainAmountsBatched,
   SLEEVE_DEFS,
   type ChainAmount,
@@ -296,6 +297,16 @@ export interface WalletBackfillDeps {
     now: Date,
   ): Promise<DayBlockOutcome[]>;
   readChainAmounts(reads: KeyedAssetRead[], logLabel: string, readOpts: ChainReadOptions): Promise<Map<string, ChainAmount>>;
+  /** The MULTI-BLOCK reader. Optional for the same reason `resolveBlocks` is:
+   *  a caller injecting only the single-block `readChainAmounts` still drives
+   *  the real executor. Production supplies it, so a window's days are read in
+   *  two requests rather than two per day. */
+  readChainAmountsAtBlocks?(
+    reads: KeyedAssetRead[],
+    logLabel: string,
+    blockTags: readonly string[],
+    readOpts: ChainReadOptions,
+  ): Promise<Map<string, Map<string, ChainAmount>>>;
   loadPrices(assets: TrackedAsset[], fromDate: string, toDate: string): Promise<HistoricalPriceTable>;
 }
 
@@ -303,6 +314,7 @@ export const defaultWalletBackfillDeps: WalletBackfillDeps = {
   resolveBlock: (date, opts, cache, now) => resolveDayBlock(date, opts, cache, undefined, now),
   resolveBlocks: (dates, opts, cache, now) => resolveDayBlocks(dates, opts, cache, undefined, now),
   readChainAmounts: readChainAmountsBatched,
+  readChainAmountsAtBlocks,
   loadPrices: loadHistoricalPrices,
 };
 
@@ -467,8 +479,35 @@ export async function backfillWalletWindow(
     return settle();
   }
 
+  // 3. Read EVERY day's legs at ITS OWN block, in two requests for the whole
+  //    window rather than two per day. The reads are identical across days —
+  //    only the block tag differs — so this is the same independent axis the
+  //    resolver batches (§6.5.5). A block the reader could not answer comes back
+  //    all-{ok:false} and fails just that day, below.
+  const blockTags = readable.map(({ resolved }) => toBlockTag(resolved.blockNumber));
+  let amountsByTag: Map<string, Map<string, ChainAmount>> | null = null;
+  if (deps.readChainAmountsAtBlocks && readable.length > 0) {
+    const { reads } = buildDayReads(assets, wallets);
+    try {
+      amountsByTag = await deps.readChainAmountsAtBlocks(
+        reads,
+        `wallet-backfill ${span[0]}..${span[span.length - 1]}`,
+        blockTags,
+        { strictEmptyReturn: true },
+      );
+    } catch (err) {
+      // A whole-window read failure fails every day it covered — the same
+      // refusal each day would have made alone, made once.
+      for (const { date, resolved } of readable) {
+        out.set(date, await failDay(db, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber));
+      }
+      return settle();
+    }
+  }
+
   for (const { date, resolved } of readable) {
-    out.set(date, await repairResolvedDay(db, date, resolved, prices, wallets, assets, deps));
+    const pre = amountsByTag?.get(toBlockTag(resolved.blockNumber)) ?? null;
+    out.set(date, await repairResolvedDay(db, date, resolved, prices, wallets, assets, deps, pre));
   }
   return settle();
 }
@@ -546,6 +585,10 @@ async function repairResolvedDay(
   wallets: string[],
   assets: TrackedAsset[],
   deps: WalletBackfillDeps,
+  /** This day's legs, already read as part of the window's batched pass. Null
+   *  when the caller had no multi-block reader, in which case this day reads
+   *  its own block on its own — the pre-batch behaviour, unchanged. */
+  preRead: Map<string, ChainAmount> | null = null,
 ): Promise<BackfillDayResult> {
   const fail = (detail: string, blockNumber: number | null = null): Promise<BackfillDayResult> =>
     failDay(db, date, detail, blockNumber);
@@ -554,10 +597,14 @@ async function repairResolvedDay(
   // 2. Read every leg AT THAT BLOCK, with the silent-zero rail armed.
   const { reads, sleeveTargets } = buildDayReads(assets, wallets);
   let amounts: Map<string, ChainAmount>;
-  try {
-    amounts = await deps.readChainAmounts(reads, `wallet-backfill ${date}`, { blockTag, strictEmptyReturn: true });
-  } catch (err) {
-    return fail(`chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber);
+  if (preRead) {
+    amounts = preRead;
+  } else {
+    try {
+      amounts = await deps.readChainAmounts(reads, `wallet-backfill ${date}`, { blockTag, strictEmptyReturn: true });
+    } catch (err) {
+      return fail(`chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber);
+    }
   }
   const unreadable = reads.filter((r) => !amounts.get(r.key)?.ok).map((r) => r.key);
   if (unreadable.length > 0) {
