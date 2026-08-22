@@ -628,12 +628,24 @@ export type BatchResult<T> =
   | { ok: true; result: T }
   | { ok: false; error: { code?: number; message: string } };
 
-/** Default cap on calls per POST. Endpoints cap batch size (and answer an
- *  oversized batch with HTTP 413 or a single envelope error rather than a
- *  partial result), so the transport chunks rather than trusting the caller to
- *  know the provider's limit. 50 is conservative against the public Base node,
- *  measured to accept well beyond it; override per deployment. */
-export const DEFAULT_MAX_BATCH_SIZE = 50;
+/** Default cap on calls per POST — MEASURED, not guessed.
+ *
+ *  The public Base node enforces a STRUCTURAL cap of 10 and answers an oversized
+ *  batch with HTTP **200** carrying a single object, not a partial array:
+ *
+ *    {"jsonrpc":"2.0","error":{"code":-32014,"message":"maximum 10 calls in 1 batch"},"id":null}
+ *
+ *  Re-measured 2026-08-22 against mainnet.base.org, confirming the figure
+ *  docs/technical/data-self-healing.md §6.5.3 recorded. The 200 status is the
+ *  trap: a caller that checks only the HTTP code reads a wholesale rejection as
+ *  a success, which is exactly how an early draft of this change measured a
+ *  batch of 100 as "working". The transport treats a non-array body as a
+ *  batch-level failure and THROWS for that reason.
+ *
+ *  Chunking at the cap is what keeps the -32014 path unreachable in normal
+ *  operation; override via BASE_RPC_MAX_BATCH_SIZE for a provider that allows
+ *  more. */
+export const DEFAULT_MAX_BATCH_SIZE = 10;
 function maxBatchSize(): number {
   return intEnv("BASE_RPC_MAX_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE, 1);
 }

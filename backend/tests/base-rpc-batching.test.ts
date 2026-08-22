@@ -23,6 +23,7 @@ import {
   rpcBatchRequest,
   ethGetBlockByNumberBatch,
   ethCallBatch,
+  DEFAULT_MAX_BATCH_SIZE,
   _resetRpcConcurrencyForTests,
   _resetRpcRateLimiterForTests,
   type BatchCall,
@@ -82,16 +83,27 @@ afterEach(() => {
 
 // ── The core claim ───────────────────────────────────────────────────────────
 
-test("N calls cost exactly ONE HTTP POST — the whole point of batching", async () => {
+test("a full chunk costs exactly ONE HTTP POST", async () => {
+  serve((e) => ({ jsonrpc: "2.0", id: e.id, result: `r${e.id}` }));
+
+  const out = await rpcBatchRequest<string>(calls(10), OK);
+
+  expect(posts.length).toBe(1); // 10 calls, 1 round trip
+  expect(posts[0]!.length).toBe(10);
+  expect(out.map((r) => (r.ok ? r.result : null))).toEqual(calls(10).map((_, i) => `r${i}`));
+});
+
+test("40 calls cost 4 POSTs, not 40 — the saving is bounded by the provider's cap of 10", async () => {
+  // Stated as the real ratio rather than an aspirational one. The cap is 10, so
+  // batching is a 10:1 saving on ROUND TRIPS and nothing more; anything claiming
+  // more than that is measuring something else.
   serve((e) => ({ jsonrpc: "2.0", id: e.id, result: `r${e.id}` }));
 
   const out = await rpcBatchRequest<string>(calls(40), OK);
 
-  expect(posts.length).toBe(1); // 40 calls, 1 metered hit
-  expect(posts[0]!.length).toBe(40);
+  expect(posts.length).toBe(4);
   expect(out.length).toBe(40);
   expect(out.every((r) => r.ok)).toBe(true);
-  expect(out.map((r) => (r.ok ? r.result : null))).toEqual(calls(40).map((_, i) => `r${i}`));
 });
 
 test("an empty batch issues NO request at all", async () => {
@@ -242,6 +254,35 @@ test("a batch-level refusal (a single envelope object, not an array) THROWS", as
   await expect(rpcBatchRequest(calls(3), OK)).rejects.toThrow(/batch too large/);
 });
 
+test("the REAL -32014 over-cap response — HTTP 200 with an object body — is a failure, not a success", async () => {
+  // The exact wire shape mainnet.base.org returns for an 11-call batch,
+  // captured 2026-08-22. The 200 status is the trap: an early draft of this
+  // change checked only the HTTP code and recorded a wholesale rejection as a
+  // working batch of 100, which made a benchmark report ~400x throughput that
+  // was really the speed of being refused. Pinning the shape keeps that
+  // particular self-deception from coming back.
+  globalThis.fetch = (async (_u: string, i: RequestInit) => {
+    posts.push(JSON.parse(String(i.body)));
+    return new Response(
+      JSON.stringify({ jsonrpc: "2.0", error: { code: -32014, message: "maximum 10 calls in 1 batch" }, id: null }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+
+  await expect(rpcBatchRequest(calls(11), OK)).rejects.toThrow(/maximum 10 calls in 1 batch/);
+});
+
+test("the DEFAULT chunk size is the provider's measured cap, so -32014 is unreachable", async () => {
+  // 10, measured — not a round number someone liked. A default above the cap
+  // would make every batch of a full window fail wholesale in production while
+  // every hermetic test passed.
+  expect(DEFAULT_MAX_BATCH_SIZE).toBe(10);
+  serve((e) => ({ jsonrpc: "2.0", id: e.id, result: `r${e.id}` }));
+  await rpcBatchRequest<string>(calls(25), OK);
+  expect(posts.map((p) => p.length)).toEqual([10, 10, 5]);
+  expect(Math.max(...posts.map((p) => p.length))).toBeLessThanOrEqual(DEFAULT_MAX_BATCH_SIZE);
+});
+
 test("a non-transient HTTP status throws immediately with no retry", async () => {
   globalThis.fetch = (async (_u: string, i: RequestInit) => {
     posts.push(JSON.parse(String(i.body)));
@@ -254,24 +295,27 @@ test("a non-transient HTTP status throws immediately with no retry", async () =>
 
 // ── The pacing claim: one POST draws ONE token ───────────────────────────────
 
-test("PACING: a batch of N draws ONE token where N single calls would draw N", async () => {
-  // The saving is not incidental to the limiter, it IS the optimisation — so it
-  // is worth pinning behaviourally rather than trusting the call-site reading.
+test("PACING: our OWN limiter charges per POST, so a chunk of 10 costs one token", async () => {
+  // This pins what OUR bucket does, and deliberately claims nothing about what
+  // the PROVIDER's bucket does — measurement on 2026-08-22 says the provider
+  // meters closer to per sub-call, so the real-world saving here is round trips
+  // and retry cycles, not throughput. See DEFAULT_MAX_BATCH_SIZE and
+  // docs/technical/data-self-healing.md §6.5.3.
   process.env.BASE_RPC_MAX_CALLS_PER_SEC = "50";
   process.env.BASE_RPC_RATE_BURST = "1"; // no burst to absorb the fan-out
   _resetRpcRateLimiterForTests();
   serve((e) => ({ jsonrpc: "2.0", id: e.id, result: `r${e.id}` }));
 
   const started = Date.now();
-  await rpcBatchRequest<string>(calls(20), OK);
+  await rpcBatchRequest<string>(calls(10), OK);
   const batched = Date.now() - started;
 
-  // 20 calls through ONE POST spend one token: no refill wait beyond the first.
-  // The same 20 as single POSTs would spend 20 tokens at 50/s ≈ 380ms of pure
-  // waiting. Asserting the ceiling rather than an exact figure keeps this from
-  // being a flaky clock test.
+  // 10 calls through ONE POST spend one local token: no refill wait beyond the
+  // first. The same 10 as single POSTs would spend 10 tokens at 50/s ≈ 180ms of
+  // pure waiting. Asserting a ceiling rather than an exact figure keeps this
+  // from being a flaky clock test.
   expect(posts.length).toBe(1);
-  expect(batched).toBeLessThan(200);
+  expect(batched).toBeLessThan(150);
 });
 
 // ── The typed helpers ────────────────────────────────────────────────────────

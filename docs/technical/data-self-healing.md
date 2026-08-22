@@ -1500,6 +1500,34 @@ recommended scope, not a settled one, until PD7 is taken.
 **Independently valuable: it improves the live path too**, which is the reason
 this item is worth filing even if the backfill slips.
 
+> **Re-measured 2026-08-22** against `mainnet.base.org` from `rm-frontend-stage-1`,
+> reproducibly, with every response body validated. Scripts are committed at
+> `backend/scripts/bench-rpc-batching.ts` (the comparison),
+> `bench-rpc-cache-control.ts` (the confound control) and `bench-rpc-cap-shape.ts`
+> (the wire shape), so the numbers below can be re-run rather than believed.
+>
+> | claim below | 2026-08-22 result |
+> |---|---|
+> | structural cap of 10 | **confirmed.** 11 calls → HTTP **200** with `{"error":{"code":-32014,"message":"maximum 10 calls in 1 batch"},"id":null}` |
+> | limiter meters per sub-call | **not reproduced — it meters per POST.** Interleaved arms, equal POST counts, unique blocks: single delivered 14 reads, batched×10 delivered 135, from 778 POSTs each, throttled at effectively the same rate (724 vs 726). Ratio **9.64x**, twice running — the cap ratio, not 1. |
+> | ~0.55 calls/s refill | **consistent.** The single arm sustained ~0.5 delivered reads/s under continuous pressure. A *recovered* bucket absorbs a burst of ~150 POSTs first. |
+>
+> **A warning worth more than the numbers.** The first version of this
+> re-measurement reported ~400x and was wrong, because it checked only the HTTP
+> status. An oversized batch is refused with **200** and an object body, so a
+> benchmark that does not read what came back measures the speed of being
+> rejected. It was caught only by a control that used never-before-requested
+> blocks and counted *delivered block headers* rather than non-errors. Any future
+> re-measurement here should do the same, and should interleave its arms: run
+> sequentially and the first drains the bucket for the second, which flipped the
+> same script between "400x win" and "0x" purely by ordering.
+>
+> **What this changes for design.** Batching is worth up to **10x** on the metered
+> budget, not more, and Multicall3 remains the larger lever — the two *multiply*,
+> since one POST can carry 10 `aggregate3` payloads of ~27 inner reads each. The
+> `eth_getBlockByNumber` probes that dominate a backfill's cost cannot go in an
+> `aggregate3` at all, which is what array batching is for.
+
 **Measured facts** (§6.3; from a developer IP, **unverified** from production).
 Base accepts JSON-RPC batch arrays *including* `eth_call` at different historical
 blocks in one POST, but:
@@ -1605,6 +1633,81 @@ available to a repair driver without a further contract change — but the §7.6
 hazard is unchanged for **the next** value this design adds (a quarantine state),
 which must land in the DTO union and the renderer in the same change as the
 writer.
+
+#### 6.5.5 The backfill pattern — for whoever repairs the next series
+
+*Added 2026-08-22, alongside `wallet.backfill_window`. Class C's wallet executor
+is the worked example; the shape is meant to be copied, and the reasoning matters
+more than the code.*
+
+**Batch on the axis the provider meters, and nothing else.** The unit of cost is
+the HTTP POST, so the question for any repair driver is "what work can share a
+POST?" — never "how do I make this concurrent?" Two different mechanisms exist
+here and they are not interchangeable:
+
+| mechanism | merges | cannot merge |
+|---|---|---|
+| **Multicall3 `aggregate3`** | many contract reads **at one block** | anything at another block; any node method |
+| **JSON-RPC array batching** | up to **10** calls of any kind, any block | — (but capped at 10) |
+
+They compose, and a repair driver needs both: `aggregate3` collapses one day's
+~27 reads into one sub-call, and array batching puts ten *days* of those into one
+POST. Block resolution (`eth_getBlockByNumber`) can only ever use the second.
+
+**Find the sequential depth, then run the independent axis in lockstep.** A
+per-day binary search for a block looks irreducibly serial, and within a day it
+is — each probe's target comes from the previous probe's timestamp. Across days
+it is not. `resolveDayBlocks` therefore advances every day one probe at a time
+and ships each *round* as one POST: sequential depth stays ~3–8 rounds whether
+one day is resolving or fifty. **The question to ask of any serial-looking loop
+is which of its dimensions is actually independent.**
+
+**Share the off-chain fan-out too.** The wallet backfill's most visible failure
+on 2026-08-22 was not RPC at all: it lost `2026-03-18` to a price-feed 429 caused
+purely by its own per-day fan-out, when `loadHistoricalPrices` had taken a date
+*range* all along. Before optimising the metered path, check whether a per-item
+loop is calling a range-capable API one item at a time.
+
+**A batching unit is not a blast radius.** This is the constraint that makes the
+rest safe, and it is where a careless version of this pattern does real damage.
+Batching changes *how work is fetched*; it must not change how work is committed
+or how failure is scoped. In the wallet executor:
+
+- each day is still written in **its own transaction** with its own checkpoint,
+  so an interruption still loses at most one day (§7.5);
+- each day still **fails alone** — an unresolvable block, a reverted leg, an
+  unpriced symbol take down that day and no other;
+- a day is still **day-atomic**: a partial read writes nothing;
+- shared work fails *exactly as widely as it was shared* — one price load covers
+  N days, so its failure fails those N days, and writes none of them.
+
+Per-entry results are what make this expressible rather than aspirational:
+`rpcBatchRequest` returns `{ok}` per call and `aggregate3` returns
+`{success}` per sub-call, so "one bad item" never has to mean "throw the batch".
+A driver that catches at the batch level has thrown that away.
+
+**Keep one executor.** `backfillWalletDay` is the N=1 case of
+`backfillWalletWindow`, not a second implementation, and a test asserts the two
+produce identical results and identical rows. Two executors are two sets of
+invariants to keep honest, and the day-atomic write path is the last place to
+accept that.
+
+**Measure the provider before designing against it — and validate the bodies.**
+§6.5.3's box records how this went wrong in both directions on the same day: a
+documented "meters per sub-call" that did not reproduce, and a fresh "400x"
+measurement that was an artifact of treating HTTP 200 as success when the node
+refuses an oversized batch with 200 and an error object. Use unique keys so a
+cache cannot flatter one arm, interleave the arms so ordering cannot, and count
+*delivered results* rather than absent errors.
+
+**What is still on the table.** The window shares block resolution and price
+loading; the per-day chain reads are still one `eth_call` per day. Ten days'
+`aggregate3` payloads would fit in a single POST via `ethCallBatch`, which would
+take a ten-day window from ~11 metered POSTs to ~2. It is deliberately not done
+yet: it means restructuring `readChainAmountsBatched`'s two dependent rounds to
+run per-block-group, and that is the code where an error produces a plausible and
+wrong number rather than a loud failure. Worth doing, worth doing carefully, and
+worth an equivalence test against the single-block path first.
 
 ### 6.6 Sequencing
 
