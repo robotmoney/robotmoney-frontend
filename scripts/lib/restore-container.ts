@@ -16,6 +16,19 @@ import { join } from "node:path";
 // (issue #691). Everything about which major and why -alpine is not used lives
 // in that module.
 import { POSTGRES_IMAGE } from "./postgres-image.ts";
+// The SHARED naming scheme. This is a raw `docker run`, so — exactly like
+// backend/tests/preload.ts, the other non-compose spawner — it cannot inherit
+// labels from a compose file and must stamp them itself. Unlabelled, a twin is
+// invisible to demo:reap and demo:clean, which is how a container holding a full
+// copy of production ends up living on a host indefinitely.
+import {
+  dockerLabelFlags,
+  resolveStackEnvironment,
+  ROLE_LABEL,
+  stackLabels,
+  stackProjectName,
+  TWIN_ROLE,
+} from "../stack/naming.ts";
 
 export interface BackupFiles {
   stamp: string;
@@ -125,10 +138,71 @@ export async function restoreBackupIntoContainer(
      * container holds a restored copy of production data.
      */
     bindHost?: string;
+    /**
+     * The compose project this twin belongs to, when it belongs to one.
+     *
+     * A `--db twin` boot passes its demo project so demo:down and demo:clean
+     * scope to the twin like any other container that boot created. A standalone
+     * twin (restore-check.ts) passes nothing and gets its own `twin` family name
+     * — the two must not collide, because a standalone twin can legitimately run
+     * beside a demo.
+     */
+    project?: string;
+    /**
+     * A NAMED volume to hold the restored cluster, created here with the demo's
+     * labels so `demo:clean` reclaims it by the same label scoping it uses for
+     * every other volume a boot creates.
+     *
+     * Omitted (restore-check.ts) the data lives in the container's writable
+     * layer and dies with it, which is right for a check that tears down in a
+     * `finally`. A `--db twin` boot passes one because its contract is the
+     * ephemeral-pgdata contract: teardown keeps the data, demo:clean reclaims it.
+     *
+     * NOTE the volume must be created BEFORE `docker run`, because a volume
+     * auto-created by `-v` carries no labels at all — which is precisely how a
+     * copy of production becomes invisible to the tooling meant to reclaim it.
+     */
+    volume?: string;
   } = {},
 ): Promise<RestoredContainer | { error: string; container?: string }> {
   const bindHost = opts.bindHost ?? "127.0.0.1";
   const container = `rm-restore-${backup.stamp}-${Math.random().toString(36).slice(2, 8)}`;
+  const environment = resolveStackEnvironment(process.env);
+  const project = opts.project ?? stackProjectName("twin", environment);
+  // ROLE_LABEL last so it cannot be overridden: the reaper's liveness rule
+  // depends on a twin admitting what it is. See naming.ts's ROLE_LABEL.
+  const labels = { ...stackLabels(environment, project), [ROLE_LABEL]: TWIN_ROLE };
+  const labelFlags = dockerLabelFlags(labels);
+  const volumeArgs: string[] = [];
+  if (opts.volume) {
+    // DEMO_VOLUME_LABEL ("robotmoney.demo=1") is what demo:clean filters on —
+    // docker-compose.demo.yml stamps it on pgdata, and this is the non-compose
+    // equivalent. Without it the volume is unreclaimable by the documented path.
+    const created = await run(
+      ["docker", "volume", "create", "--label", "robotmoney.demo=1", ...dockerLabelFlags(labels), opts.volume],
+      { log },
+    );
+    if (created !== 0) return { error: `docker volume create ${opts.volume} failed` };
+    // MOUNT THE PARENT, not `/var/lib/postgresql/data`. Verified empirically on
+    // this host against postgres:18: a volume at .../data makes the entrypoint
+    // EXIT 1 rather than merely ignoring it —
+    //
+    //   "Counter to that, there appears to be PostgreSQL data in:
+    //      /var/lib/postgresql/data (unused mount/volume)"
+    //
+    // PG 18 moved PGDATA into a major-version subdirectory
+    // (/var/lib/postgresql/18/docker, docker-library/postgres#1259) so that
+    // `pg_upgrade --link` does not cross a mount boundary, and the image treats
+    // a mount at the old path as a misconfiguration worth refusing. The
+    // documented 18+ configuration is a single mount at /var/lib/postgresql.
+    //
+    // NOT a contradiction of docker-compose.yml's `pgdata:/var/lib/postgresql/data`:
+    // that service is pinned to an OLDER major on purpose (see postgres-image.ts's
+    // header — a live data directory cannot be re-read by a different major, which
+    // is what the --pg-data resume contract depends on). The twin has no such
+    // constraint: it is restored fresh from a dump every boot.
+    volumeArgs.push("-v", `${opts.volume}:/var/lib/postgresql`);
+  }
   const localPassword = generateLocalPassword();
   log(`starting throwaway Postgres (${IMAGE})`);
   const runCode = await run(
@@ -146,6 +220,8 @@ export async function restoreBackupIntoContainer(
       `POSTGRES_DB=${LOCAL_DB}`,
       "-p",
       `${bindHost}::5432`,
+      ...labelFlags,
+      ...volumeArgs,
       IMAGE,
     ],
     { log },
@@ -232,4 +308,45 @@ export async function restoreBackupIntoContainer(
 export function teardownContainer(container: string, log: (m: string) => void): void {
   log(`cleaning up: docker rm -f ${container}`);
   Bun.spawnSync(["docker", "rm", "-f", container]);
+}
+
+/**
+ * Restore a backup, hand the caller the running twin, and ALWAYS tear it down.
+ *
+ * Extracted because restore-check.ts and any future release's equivalent do the
+ * identical five things around their own version-specific queries: resolve the
+ * files, restore, run something, unwind on failure, tear down in a finally. The
+ * failure-path teardown is the part worth centralising — a checker that returns
+ * early from the middle of its own try block is exactly how a container holding
+ * a copy of production gets left behind.
+ *
+ * `fn` receives the running container. Its resolved value is returned verbatim;
+ * a thrown error propagates AFTER teardown has run.
+ *
+ * Returns `{ error, code: 2 }` for the could-not-run cases (missing files, a
+ * failed restore), matching the exit-code contract the upgrade scripts use:
+ * 2 = could not run, distinct from 1 = ran and found a problem.
+ */
+export async function withTwinContainer<T>(
+  opts: { backupDir?: string; log: (m: string) => void; bindHost?: string; project?: string; volume?: string },
+  fn: (restored: RestoredContainer, backup: BackupFiles) => Promise<T>,
+): Promise<T | { error: string; code: 2 }> {
+  const backup = resolveBackupFiles(opts.backupDir);
+  if ("error" in backup) return { error: backup.error, code: 2 };
+
+  const restored = await restoreBackupIntoContainer(backup, opts.log, {
+    bindHost: opts.bindHost,
+    project: opts.project,
+    volume: opts.volume,
+  });
+  if ("error" in restored) {
+    if (restored.container) teardownContainer(restored.container, opts.log);
+    return { error: restored.error, code: 2 };
+  }
+
+  try {
+    return await fn(restored, backup);
+  } finally {
+    teardownContainer(restored.container, opts.log);
+  }
 }

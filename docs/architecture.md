@@ -1985,11 +1985,47 @@ pgdata volume, and (via explicit `--label` flags, since it is a raw `docker run`
 channel tooling must select on**, because on a host that also serves the live site a
 wrong name-substring match is an outage.
 
+**Which database a boot runs against — `--db`.** One enum flag with three named data
+paths, replacing the former `--external-pg` boolean (still accepted, deprecated):
+
+| Mode | Postgres lives | Who owns the data | Teardown |
+|---|---|---|---|
+| `--db ephemeral` *(default)* | a compose `postgres` service | this boot | container removed, **data kept** (`<project>_pgdata`, or the `--pg-data` dir) |
+| `--db external` | a managed server addressed from `.env` | somebody else | nothing kept, because nothing here was ever this boot's |
+| `--db twin` | a local container restored from an encrypted production dump | this boot | container removed, **copy kept** in a labelled volume |
+
+They are one flag rather than several booleans because *where postgres lives* and *who
+owns the data* are different questions, and the twin is the case that separates them: it
+dials a URL like `external` does, but every write lands in a copy this boot may reclaim.
+`scripts/lib/demo-db-mode.ts` carries both as the exported predicates `usesComposePostgres()`
+and `ownsData()`; the state file records the mode as `db`, which `demo:down`, `demo:status`
+and `demo:clean` branch on.
+
+Unknown flags are refused at parse time rather than ignored — an enum makes a typo'd value
+dangerous in a way a boolean was not, so the argv allowlist ships with it.
+
+The twin's tooling is version-agnostic and lives outside any release directory:
+`bun run twin:capture` produces the encrypted backup (read-only role, replica only),
+`bun smoke -- --db twin` restores and boots against it, `bun run twin:rehearse` does that
+unattended with the frontend checks, and `bun run twin` is the standing variant on the
+pinned tunnel port. See [release-runbooks.md §4.3–§4.4](./technical/release-runbooks.md).
+
+A release's own rehearsal (`backend/scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts`)
+drives the same shared driver and adds the half that *is* version-specific: it passes an
+`onReady` hook, so that release's postflight runs against the migrated twin between the
+frontend checks and teardown. That window has to be inside the run — the driver tears the
+twin down on every exit path — so the checks cannot be a command issued afterwards.
+
 **Postgres data location.** By default each run uses a fresh anonymous named volume
 `<project>_pgdata`, labeled `robotmoney.demo=1` (so `demo:clean` can find it). Passing
 `bun run demo -- --pg-data <host-dir>` instead bind-mounts postgres's data directory to
 `<host-dir>` (created if absent), so the SAME value on a later boot resumes the SAME
 data — this is a CLI **argument**, never an env var, and is recorded in the state file.
+`--pg-data` applies only to `--db ephemeral`: it binds the data directory *of* the compose
+postgres container, so pairing it with a mode that starts no such container is
+unrepresentable rather than merely rejected. A `--db twin` boot keeps its restored copy in
+its own labelled volume under the same contract — teardown keeps it, `demo:clean` reclaims
+it — and every twin boot restores FRESH, because the previous boot migrated that copy.
 Reuse constraints: the same postgres major (17) and the same baked-in demo credentials;
 migrate + seed are idempotent (`backend/src/db/seed.ts` uses `ON CONFLICT DO NOTHING`),
 so re-booting on old data converges rather than duplicating rows. (Bind mounts were
@@ -2056,7 +2092,7 @@ the only thing that injects `PRODUCER_*_CRON` into compose (through
   that subject — so repeat sessions could not collide on the old
   `UNIQUE(date, subject_id)`, and each boot began by TRUNCATE-ing all session
   history so "today" was free again. Invisible while every boot got a throwaway
-  postgres volume; against a persistent database (`--external-pg`) it destroyed
+  postgres volume; against a persistent database (`--db external`) it destroyed
   published memos on every restart and handed their ids to different memos.
 
   Migration `0022` makes `convened_at timestamptz DEFAULT now()` a session's

@@ -31,7 +31,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { columnExists, createChecker, printVerdict } from "../../lib/checks.ts";
-import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
+import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../../../scripts/lib/restore-container.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
 import { runChecks } from "./preflight.ts";
 import { TAG_GLOB } from "./release.ts";

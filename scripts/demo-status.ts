@@ -14,7 +14,7 @@ import {
   portArgs,
   POSTGRES_CONTAINER_PORT,
 } from "./stack/index.ts";
-import { buildDemoLifecycleComposeEnv } from "./lib/demo-lifecycle-env.ts";
+import { buildDemoLifecycleComposeEnv, dbModeFromState } from "./lib/demo-lifecycle-env.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -39,11 +39,16 @@ interface DemoState {
   envClass?: string;
   envHash?: string;
   composeFiles: string;
-  // For an --external-pg boot these four are REDACTED placeholders, not
-  // credentials: the real ones live in .env and must never be copied into a file
-  // inside the checkout. `externalPg` is the flag to branch on — optional
-  // because state files written before the flag existed have no such field.
+  // For every non-ephemeral boot these four are REDACTED placeholders, not
+  // credentials: the real ones live in .env (external) or in a throwaway
+  // container (twin) and must never be copied into a file inside the checkout.
+  // `db` is what to branch on; `externalPg` is the pre-refactor boolean, and
+  // dbModeFromState() reconciles the two.
+  db?: string;
   externalPg?: boolean;
+  twinContainer?: string;
+  twinVolume?: string;
+  twinBackupStamp?: string;
   databaseUrl: string;
   dbUser: string;
   dbPassword: string;
@@ -97,23 +102,27 @@ function livePort(service: string, containerPort: number): number | undefined {
   }
 }
 const liveApiPort = livePort("api", API_CONTAINER_PORT);
-// An --external-pg boot has no postgres service, so asking the daemon for its
+// A non-ephemeral boot has no compose postgres service, so asking the daemon for its
 // published port is not a question with an answer — skip it rather than let the
 // "not running" branch imply a container that ought to be up.
-const livePgPort = s.externalPg ? undefined : livePort("postgres", POSTGRES_CONTAINER_PORT);
+const mode = dbModeFromState(s);
+const livePgPort = mode === "ephemeral" ? livePort("postgres", POSTGRES_CONTAINER_PORT) : undefined;
 // `?? undefined` on the recorded pgPort keeps an old state file (no pgPort
 // field) from printing "undefined" as if it were a number.
 const shownApi = liveApiPort !== undefined ? `:${liveApiPort} (live)` : `:${s.apiPort} (from state file — NOT RUNNING)`;
-const shownPg = s.externalPg
-  ? "EXTERNAL (managed — from .env; no container)"
-  : livePgPort !== undefined ? `:${livePgPort} (live)` : s.pgPort !== undefined ? `:${s.pgPort} (from state file — NOT RUNNING)` : "unknown";
+const shownPg =
+  mode === "external"
+    ? "EXTERNAL (managed — from .env; no container)"
+    : mode === "twin"
+      ? "TWIN (local restored copy; no compose container)"
+      : livePgPort !== undefined ? `:${livePgPort} (live)` : s.pgPort !== undefined ? `:${s.pgPort} (from state file — NOT RUNNING)` : "unknown";
 
 console.log(`[demo:status] project=${s.project}  api=${shownApi}  pg=${shownPg}  (created ${s.createdAt})`);
 if (s.envClass || s.envHash) {
   console.log(`[demo:status]   environment: ${s.envClass ?? "unknown"}/${s.envHash ?? "unknown"}  (container labels robotmoney.env / robotmoney.env.hash)`);
 }
 if (s.stage) {
-  console.log(`[demo:status]   --stage:    api PINNED to :${liveApiPort ?? s.apiPort} — this is the cloudflared origin for stage.robotmoney-labs.dev.`);
+  console.log(`[demo:status]   --static-port: api PINNED to :${liveApiPort ?? s.apiPort} — this is the cloudflared origin for stage.robotmoney-labs.dev.`);
 }
 if (liveApiPort !== undefined && liveApiPort !== s.apiPort) {
   // Worth saying out loud rather than silently preferring the live value: it
@@ -123,9 +132,16 @@ if (liveApiPort !== undefined && liveApiPort !== s.apiPort) {
 if (liveApiPort !== undefined) console.log(`[demo:status]   Site:      http://127.0.0.1:${liveApiPort}/`);
 console.log(`[demo:status]   state file: ${stateFile}`);
 if (s.logFile) console.log(`[demo:status]   log file:   ${s.logFile}`);
-if (s.externalPg) {
+if (mode === "external") {
   console.log(`[demo:status]   pg data:    EXTERNAL managed server ${s.databaseUrl} — owned by that server, NOT by this demo.`);
   console.log(`[demo:status]               demo:down and demo:clean cannot touch it; this boot's writes are permanent.`);
+} else if (mode === "twin") {
+  // NOT the pgVolume fallback below: a twin boot creates no <project>_pgdata,
+  // so naming one would send the operator after storage that does not exist
+  // while leaving the volume that DOES hold a copy of production unmentioned.
+  console.log(`[demo:status]   pg data:    TWIN volume ${s.twinVolume ?? "(unrecorded)"}  (restored from backup ${s.twinBackupStamp ?? "?"}; kept on teardown; reclaim: bun run demo:clean)`);
+  console.log(`[demo:status]               it holds a copy of production, including real credential material.`);
+  if (s.twinContainer) console.log(`[demo:status]   twin:       container ${s.twinContainer}`);
 } else if (s.pgDataDir) {
   console.log(`[demo:status]   pg data:    --pg-data ${s.pgDataDir}  (bind; resume: bun run demo -- --pg-data ${s.pgDataDir})`);
 } else {

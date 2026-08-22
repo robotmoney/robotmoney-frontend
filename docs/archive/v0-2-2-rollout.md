@@ -22,6 +22,27 @@ namespace guard's full behaviour (§2.1). **This runbook does not repeat it; it
 cites it.** Where the two disagree, the contradiction is called out inline under
 **CONTRADICTS deployment.md**.
 
+> **Flag-surface note (added after this runbook was written).** The demo/smoke
+> data path is now selected by one enum flag — `--db ephemeral|external|twin` —
+> and the digital twin has a first-class mode of its own instead of borrowing
+> `--external-pg`. **Every command below still works**: `--external-pg` remains
+> an accepted spelling of `--db external` and prints a deprecation notice.
+>
+> This runbook is deliberately **not** rewritten for the new surface. It is the
+> committed, executed record of the v0.2.2 cutover, and
+> [stack-runbook-reconciliation.md §6](../technical/stack-runbook-reconciliation.md)
+> is explicit that the 0.2 line should not be reworked in passing. New tooling
+> that supersedes parts of §5.1–§5.3b:
+>
+> | This runbook's step | The standing command |
+> |---|---|
+> | §5.1/§5.2 hand-run `pg_dump` + `gpg` | `bun run twin:capture` |
+> | §5.3b stage rehearsal | `bun run twin:rehearse` |
+> | §7.3's `--smoke --external-pg` against a restored copy | `bun smoke -- --db twin` |
+>
+> **v0.3.0 onward already uses them** — its `stage-rehearsal.ts` is a thin wrapper
+> over the shared driver. Here, follow the text as written.
+
 > **Filename note.** This file is `v0-2-2-rollout.md`, not `v0.2.2-rollout.md`.
 > `scripts/lint-docs.sh:32` enforces `^[a-z0-9]+(-[a-z0-9]+)*\.md$` on every
 > `docs/runbooks/*.md`, and a dot in the stem fails that check.
@@ -741,7 +762,7 @@ downgrades the last two to warnings — **do not make that the normal path.**
 |---|---|---|
 | `session-read-only` | The connection can write. Nothing else was queried. | Use port `25060` and the `rm_readonly` URL. Never `PREFLIGHT_ALLOW_PRIVILEGED` for this one — it does not downgrade it. |
 | `role-privileges` / `role-write-grants` | The role is a superuser, or holds write grants / table ownership. | Provision §3's role and re-run. |
-| `server-version` | Server is < PG 11, where `0030`'s `ADD COLUMN` rewrites the table under `ACCESS EXCLUSIVE`. | Upgrade the cluster. (A **WARN** here just means "outside {17, 18}". Since issue #691 the backend suite and the restore twin both run **18**, production's major — pinned once in `backend/scripts/lib/postgres-image.ts`. 17 stays warning-free only because the demo / single-box stack still runs it.) |
+| `server-version` | Server is < PG 11, where `0030`'s `ADD COLUMN` rewrites the table under `ACCESS EXCLUSIVE`. | Upgrade the cluster. (A **WARN** here just means "outside {17, 18}". Since issue #691 the backend suite and the restore twin both run **18**, production's major — pinned once in `scripts/lib/postgres-image.ts`. 17 stays warning-free only because the demo / single-box stack still runs it.) |
 | `extensions` | `pgcrypto` absent; `0001_backends.sql:4` needs `gen_random_uuid()`. | `CREATE EXTENSION IF NOT EXISTS pgcrypto;` as `doadmin`. |
 | `schema-migrations` | Either no `schema_migrations` at all (wrong database), or **orphans**: files recorded in the database that are absent from `backend/migrations/`. | Orphans mean the **database is ahead of the checkout** — you are on the wrong tag. Stop and check out the §1 release tip. |
 | `rm-worker-role` | `rm_worker` missing and `0029_admin_passkey.sql` pending. | Gate D above. |
@@ -1036,7 +1057,7 @@ reversible form:
 **Use a passphrase FILE, not gpg's interactive prompt.** `restore-check.ts`
 and `stage-rehearsal.ts` decrypt non-interactively with
 `gpg --batch --passphrase-file <backupDir>/.backup-passphrase`
-(`backend/scripts/lib/restore-container.ts`), and `resolveBackupFiles()`
+(`scripts/lib/restore-container.ts`), and `resolveBackupFiles()`
 refuses to start without that exact file. An earlier revision of this
 section showed a bare `gpg --symmetric`, which prompts and writes no such
 file — follow that literally and §5.3 exits `2` before it restores anything,
@@ -1092,8 +1113,8 @@ depends-on:
   - backend/scripts/lib/preflight-utils.ts
   - backend/scripts/lib/checks.ts
   - backend/migrations/**
-  - backend/scripts/lib/restore-container.ts
-  - backend/scripts/lib/postgres-image.ts
+  - scripts/lib/restore-container.ts
+  - scripts/lib/postgres-image.ts
   - backend/scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts
 verify:      bun scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts ~/rm-backup-v022 --emit-receipt
 ```
@@ -1159,8 +1180,8 @@ depends-on:
   - docker-compose.demo.yml
   - package.json
   - bun.lock
-  - backend/scripts/lib/restore-container.ts
-  - backend/scripts/lib/postgres-image.ts
+  - scripts/lib/restore-container.ts
+  - scripts/lib/postgres-image.ts
   - backend/scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts
 verify:      bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022 --emit-receipt
 ```

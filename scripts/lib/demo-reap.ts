@@ -60,6 +60,8 @@ import {
   LOCAL_PROJECT_PREFIX,
   MANAGED_NETWORK_LABEL,
   PROJECT_LABEL,
+  ROLE_LABEL,
+  TWIN_ROLE,
   type EnvironmentClass,
 } from "../stack/naming.ts";
 import { listDemoVolumes, removeDemoVolumes, type DockerRunner } from "./demo-volumes.ts";
@@ -91,6 +93,13 @@ export interface ReapContainer {
   healthy: boolean;
   /** Publishes at least one host port, e.g. "0.0.0.0:48787->8787/tcp". */
   publishesHostPort: boolean;
+  /**
+   * robotmoney.demo.role — what this container does inside its project, or null
+   * for the ordinary serving containers. Only `twin` is set today, and only G2
+   * reads it: a twin publishes a host port without serving anything, so counting
+   * it as proof of life would pin a dead project forever.
+   */
+  role: string | null;
   status: string;
 }
 
@@ -227,6 +236,7 @@ export function parseContainerLine(line: string): ReapContainer | null {
     running,
     healthy: /\(healthy\)/i.test(status),
     publishesHostPort: /:\d+->/.test(ports),
+    role: labels.get(ROLE_LABEL) ?? null,
     status,
   };
 }
@@ -406,7 +416,12 @@ export function planReap(containers: ReapContainer[], opts: PlanOptions, network
     // is exempt: a CI container older than the threshold is the leak, and the
     // state file that G1 trusts has already been observed stale on this host.
     if (!isCi) {
-      const live = members.find((m) => m.running && (m.healthy || m.publishesHostPort));
+      // A twin is EXCLUDED from the liveness evidence, not from the reap. It
+      // publishes a host port because the stack's containers dial it, never
+      // because anything is being served — so a twin that outlived its stack
+      // would otherwise read as "project is live" and protect itself, and every
+      // other container in the project, from every future reap.
+      const live = members.find((m) => m.role !== TWIN_ROLE && m.running && (m.healthy || m.publishesHostPort));
       if (live) {
         const why = live.healthy ? "healthcheck healthy" : "publishing a host port";
         for (const c of members) {

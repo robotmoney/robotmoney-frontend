@@ -40,7 +40,7 @@ import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../lib/restore-container.ts";
+import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../../../scripts/lib/restore-container.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
 import { TAG_GLOB } from "./release.ts";
 

@@ -42,3 +42,9 @@ onboarding-admission-record.md
 
 # ad-hoc stack-orchestrator environment (docs/technical/stack-orchestrator.md)
 .stack-env/
+
+# Also ignore node_modules when it is a SYMLINK (a worktree pointing at the
+# main checkout's install). The trailing-slash form above matches directories
+# only, so a symlink named node_modules was not ignored and got committed.
+/node_modules
+/backend/node_modules

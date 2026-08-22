@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeDockerRunner, purgeDemoEvalContainers } from "./lib/demo-volumes.ts";
 import { removeDemoAnalyticsToken } from "./lib/demo-secret.ts";
-import { buildDemoLifecycleComposeEnv } from "./lib/demo-lifecycle-env.ts";
+import { buildDemoLifecycleComposeEnv, dbModeFromState } from "./lib/demo-lifecycle-env.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -45,11 +45,19 @@ interface DemoState {
   envClass?: string;
   envHash?: string;
   composeFiles: string;
-  // True when the boot ran against a managed Postgres (`--external-pg`): there
-  // is no postgres container to stop and no volume to keep, and the four fields
-  // below are redacted placeholders rather than usable credentials. Optional —
-  // state files written before the flag existed have no such field.
+  // Which data path the boot ran against (`--db`). For every non-ephemeral mode
+  // there is no compose postgres container to stop, and the four fields below are
+  // redacted placeholders rather than usable credentials. BOTH are optional and
+  // dbModeFromState() reconciles them: `db` is authoritative, `externalPg` is the
+  // pre-refactor boolean a state file written before `--db` carries.
+  db?: string;
   externalPg?: boolean;
+  // Twin only: the container this boot restored production into, the volume
+  // holding that copy, and the backup it came from. The container is removed
+  // here; the VOLUME is kept, exactly as pgdata is (demo:clean reclaims it).
+  twinContainer?: string;
+  twinVolume?: string;
+  twinBackupStamp?: string;
   databaseUrl: string;
   dbUser: string;
   dbPassword: string;
@@ -80,15 +88,16 @@ const s: DemoState = JSON.parse(readFileSync(stateFile, "utf8"));
 // port input at all. One less thing a stale state file can get wrong.
 const dockerEnv = buildDemoLifecycleComposeEnv(s, process.env);
 
+const mode = dbModeFromState(s);
 console.log(
-  s.externalPg
+  mode === "external"
     ? `[demo:down] tearing down project=${s.project} (created ${s.createdAt}) — its database is EXTERNAL and is not touched…`
     : `[demo:down] tearing down project=${s.project} (created ${s.createdAt}) — keeping postgres data…`,
 );
 if (s.stage) {
   // Worth saying out loud: this is the demo the tunnel points at, so tearing it
   // down takes stage.robotmoney-labs.dev offline until a `--stage` boot returns.
-  console.log(`[demo:down] this demo was booted with --stage (api pinned to :${s.apiPort}, the cloudflared origin) — the stage site goes down with it.`);
+  console.log(`[demo:down] this demo was booted with --static-port (api pinned to :${s.apiPort}, the cloudflared origin) — the stage site goes down with it.`);
 }
 
 const run = makeDockerRunner(dockerEnv);
@@ -119,16 +128,31 @@ if (s.analyticsTokenFile) {
   }
 }
 
-if (s.externalPg) {
+if (s.twinContainer) {
+  // AFTER `compose down`, never before: the stack must stop talking to the twin
+  // before it disappears, the same ordering demo-main's cleanup() uses.
+  const rm = Bun.spawnSync(["docker", "rm", "-f", s.twinContainer], { stdout: "ignore", stderr: "ignore" });
+  console.log(
+    rm.exitCode === 0
+      ? `[demo:down] twin container ${s.twinContainer} removed.`
+      : `[demo:down] WARNING: could not remove twin container ${s.twinContainer} (already gone?).`,
+  );
+}
+
+if (mode === "twin") {
+  console.log(`[demo:down] containers + network removed for ${s.project}; the twin's restored copy of production is KEPT in volume ${s.twinVolume ?? "(unrecorded)"}`);
+  console.log(`[demo:down]   that copy holds real credential material — reclaim it with: bun run demo:clean`);
+  console.log(`[demo:down]   re-run (restores a FRESH copy from backup ${s.twinBackupStamp ?? "?"}):  bun smoke -- --db twin`);
+} else if (mode === "external") {
   // No volume, no bind dir, nothing kept — because nothing here ever owned the
   // data. Say which server the (now stopped) stack was writing to so the
   // operator knows where its rows actually went.
   console.log(`[demo:down] containers + network removed for ${s.project}; the EXTERNAL database is untouched (${s.databaseUrl})`);
   // Reproduce EVERY flag the stopped boot ran with. Both are CLI-only by design
   // (nothing is inferred from the state file at boot), so a hint that dropped
-  // --stage would bring the demo back on a Docker-assigned port with the tunnel
-  // still routed at :48787.
-  console.log(`[demo:down]   resume:  bun run demo --${s.stage ? " --stage" : ""} --external-pg   (same server; migrate + seed are idempotent)`);
+  // --static-port would bring the demo back on a Docker-assigned port with the
+  // tunnel still routed at :48787.
+  console.log(`[demo:down]   resume:  bun run demo --${s.stage ? " --static-port" : ""} --db external   (same server; migrate + seed are idempotent)`);
 } else {
   const where = s.pgDataDir ? `--pg-data dir ${s.pgDataDir}` : `volume ${s.pgVolume ?? `${s.project}_pgdata`}`;
   console.log(`[demo:down] containers + network removed for ${s.project}; postgres data kept (${where})`);

@@ -58,6 +58,15 @@ export const ENV_HASH_LABEL = "robotmoney.env.hash";
 // label, this is an explicit ownership assertion: the demo reaper may enumerate
 // the network without first finding one of its containers.
 export const MANAGED_NETWORK_LABEL = "robotmoney.demo.network";
+// What a container DOES inside its project, for the reaper's liveness question.
+// Only set on containers that are part of a project without serving it — today
+// exactly one: the `--db twin` postgres. It publishes a host port (the stack
+// dials it from sibling containers), and the reaper reads "publishes a host
+// port" as evidence the project is alive and must not be touched. A twin that
+// outlived its stack would pin the whole project forever on that reasoning, so
+// it declares that it is not the thing keeping the project up.
+export const ROLE_LABEL = "robotmoney.demo.role";
+export const TWIN_ROLE = "twin";
 
 // The compose interpolation variable names the two env labels are threaded
 // through (scripts/stack/config.ts's buildComposeEnv sets both;
@@ -90,7 +99,12 @@ export const CI_IDENTITY_VARS = [
 //   eval-swarm — the local real-inference swarm-authoring eval (swarm-eval-local.ts)
 //   infra          — the inference-off rails check (onboarding-eval-infra.test.ts)
 //   pgtest         — the backend suite's ephemeral postgres (backend/tests/preload.ts)
-export type StackRole = "stack" | "eval" | "eval-swarm" | "infra" | "pgtest";
+//   twin           — a STANDALONE restored production copy (restore-check.ts).
+//                    A twin booted as part of a demo (`--db twin`) carries that
+//                    demo's project instead, so demo:down / demo:clean scope to
+//                    it like any other container the boot created; this role is
+//                    only for a twin that belongs to no stack.
+export type StackRole = "stack" | "eval" | "eval-swarm" | "infra" | "pgtest" | "twin";
 
 export interface StackEnvironment {
   /** Which kind of environment started this stack. */
@@ -165,9 +179,10 @@ export function stackLabels(environment: StackEnvironment, project: string): Rec
 }
 
 /**
- * The same labels as `docker run --label` argv. Needed because ONE spawner —
- * backend/tests/preload.ts — is a raw `docker run`, not compose, so it cannot
- * pick labels up from a compose file and must pass them explicitly.
+ * The same labels as `docker run --label` argv. Needed because the raw
+ * `docker run` spawners — backend/tests/preload.ts and
+ * scripts/lib/restore-container.ts's twin — are not compose, so they cannot pick
+ * labels up from a compose file and must pass them explicitly.
  * Deterministically ordered so an argv assertion is stable.
  */
 export function dockerLabelFlags(labels: Record<string, string>): string[] {

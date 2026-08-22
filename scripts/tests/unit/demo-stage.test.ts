@@ -35,7 +35,8 @@ describe("planStageArgs — the data path follows .env", () => {
   test("a DATABASE_URL in .env selects the external database", () => {
     const plan = planStageArgs(envFile(DB_URL));
     expect(plan.dataPath).toBe("external");
-    expect(plan.args).toContain("--external-pg");
+    expect(plan.args).toContain("--db");
+    expect(plan.args).toContain("external");
     expect(plan.target).toContain("db.example.com");
     expect(plan.target).not.toContain(":p@"); // redacted, never the password
   });
@@ -78,12 +79,24 @@ describe("planStageArgs — the data path follows .env", () => {
 describe("planStageArgs — operator passthrough", () => {
   test("extra flags are forwarded in order, after the decided ones", () => {
     const plan = planStageArgs(envFile(DB_URL), ["--no-tui"]);
-    expect(plan.args).toEqual([STATIC_PORT_FLAG, "--external-pg", "--no-tui"]);
+    expect(plan.args).toEqual([STATIC_PORT_FLAG, "--db", "external", "--no-tui"]);
   });
 
-  test("an explicit --external-pg is not doubled up", () => {
+  test("an operator's own --db external is not doubled up", () => {
+    const plan = planStageArgs(envFile(DB_URL), ["--db", "external"]);
+    expect(plan.args.filter((a) => a === "--db").length).toBe(1);
+  });
+
+  test("the deprecated --external-pg spelling still suppresses the emitted one", () => {
+    // The wrapper must not turn one operator-stated data path into two
+    // conflicting flags; demo-main then prints the deprecation notice once.
     const plan = planStageArgs(envFile(DB_URL), ["--external-pg"]);
-    expect(plan.args.filter((a) => a === "--external-pg").length).toBe(1);
+    expect(plan.args).toEqual([STATIC_PORT_FLAG, "--external-pg"]);
+  });
+
+  test("an operator's --db twin is never overridden by what .env happens to hold", () => {
+    const plan = planStageArgs(envFile(DB_URL), ["--smoke", "--db", "twin"]);
+    expect(plan.args).toEqual([STATIC_PORT_FLAG, "--smoke", "--db", "twin"]);
   });
 
   test("an operator may force --external-pg even when .env has nothing usable", () => {

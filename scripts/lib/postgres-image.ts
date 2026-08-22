@@ -6,7 +6,7 @@
 //      because they need a genuine pre-migration baseline
 //      (admin-surface-migration, swarm-briefs-session-key-migration,
 //      swarm-member-handle-migration, swarm-member-handle-namespace-migration).
-//   2. The rollout tooling's digital twin — backend/scripts/lib/restore-container.ts,
+//   2. The rollout tooling's digital twin — scripts/lib/restore-container.ts,
 //      which restores a real production dump for restore-check.ts and
 //      stage-rehearsal.ts.
 //

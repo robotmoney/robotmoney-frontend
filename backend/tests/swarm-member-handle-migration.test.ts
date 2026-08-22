@@ -39,10 +39,10 @@ import postgres from "postgres";
 // container of its own, so it is one of the sites that has to stay on the
 // major production runs; it must never hold its own literal again — that is
 // exactly how the harness fell a major behind. See
-// backend/scripts/lib/postgres-image.ts for the version and the -alpine
+// scripts/lib/postgres-image.ts for the version and the -alpine
 // decision, and backend/tests/postgres-version-parity.test.ts, which fails if
 // a literal reappears anywhere under backend/tests/.
-import { POSTGRES_IMAGE } from "../scripts/lib/postgres-image.ts";
+import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0030_swarm_member_handle.sql";

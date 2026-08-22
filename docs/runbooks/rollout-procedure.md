@@ -141,13 +141,14 @@ assume. Re-check them against the tip you pin in §1 before you rely on them.
    explicit demo schedules…), not a production one."* You are running the demo
    composition against production data. Nothing below can change that — it is a
    property of the workflow, not a setting.
-2. **Without `--external-pg`, `bun smoke` builds a brand-new empty database
+2. **Without `--db external`, `bun smoke` builds a brand-new empty database
    every single boot and your production data is not touched.** The compose
    project name is `rm_demo_stack_<10 hex>` where the hex is
    `shortHash(crypto.randomUUID())` (`scripts/stack/naming.ts:138`, `:149-151`)
    — **random per boot** outside GitHub Actions. A new project means a new
    `<project>_pgdata` volume. The previous boot's volume is orphaned, not
-   deleted. **`--external-pg` is mandatory for this rollout.**
+   deleted. **`--db external` is mandatory for this rollout** (`--external-pg` is the
+   older spelling of the same mode and still works).
 3. **You cannot set `AUTOMATION_TOKEN`, `ADMIN_TOKEN` or
    `SWARM_PUBLIC_BASE_URL` for a `bun smoke` boot.** See §7 — this is the single
    biggest departure from the established plan, and two of the three are code
@@ -160,7 +161,7 @@ assume. Re-check them against the tip you pin in §1 before you rely on them.
 ### 3.1 Establish `DATABASE_URL` before any `psql` in this document
 
 ⚠ **`DATABASE_URL` is not in your shell, and nothing in this workflow puts it
-there.** `--external-pg` reads it out of the repo-root `.env` **file** —
+there.** `--db external` reads it out of the repo-root `.env` **file** —
 `loadEnvFile()` is `readFileSync` (`scripts/lib/demo-external-pg.ts:163-165`),
 called at `:294`, and the value is taken at `:303` — and `process.env` is never
 consulted (§7.5).
@@ -469,7 +470,7 @@ reversible form:
 **Use a passphrase FILE, not gpg's interactive prompt.** `restore-check.ts`
 and `stage-rehearsal.ts` decrypt non-interactively with
 `gpg --batch --passphrase-file <backupDir>/.backup-passphrase`
-(`backend/scripts/lib/restore-container.ts`), and `resolveBackupFiles()`
+(`scripts/lib/restore-container.ts`), and `resolveBackupFiles()`
 refuses to start without that exact file. An earlier revision of this
 section showed a bare `gpg --symmetric`, which prompts and writes no such
 file — follow that literally and §5.3 exits `2` before it restores anything,
@@ -650,8 +651,13 @@ restored data, `seed()`, and a full health-wait.
 
 > 💳 **This runs the production model on a funded key, and that is the
 > point.** `OPENCODE_API_KEY` must be set — in your shell, or in the
-> checkout's `.env` or `.env.readonly`, which the script checks in that
-> order. It **refuses to start** without one rather than quietly downgrading.
+> checkout's **`.env.readonly`**, and deliberately **not** `.env`. On a staging
+> host `.env` holds the application's writer `DATABASE_URL`, and this whole
+> family of commands (`twin:capture`, `twin:rehearse`, `stage-rehearsal.ts`,
+> preflight) is defined by not needing that credential; reading `.env` for the
+> key would have made them depend on the one file they exist to stay away from,
+> and made "which key did that run use?" a question with two answers. It
+> **refuses to start** without one rather than quietly downgrading.
 >
 > An earlier version pinned `AGENT_MODEL=free` to avoid the spend. That made
 > the rehearsal cheaper and less meaningful: `scripts/lib/swarm/inference.ts`
@@ -675,35 +681,41 @@ What it does:
    (Docker's own iptables rules can expose a `0.0.0.0` bind past a firewall
    that looks like it blocks the port — verified 2026-08-17, this is not
    hypothetical).
-2. Checks out an **isolated `git worktree`** (detached `HEAD`) rather than
-   using the checkout you are sitting in — `--external-pg` reads
-   `DATABASE_URL` from repo-root `.env`, and overwriting the real `.env`,
-   even temporarily, risks corrupting it or leaking the throwaway DB into a
-   later boot run by hand. `node_modules` is symlinked in from the main
-   checkout (same lockfile, same commit) instead of a slow reinstall.
-3. Writes the worktree's own `.env`: `DATABASE_URL` pointing at the restored
-   container, plus the funded **`OPENCODE_API_KEY`**. It deliberately sets
-   **no `AGENT_MODEL`**, so the model resolves to `DEFAULT_AGENT_MODEL`
-   (`opencode/deepseek-v4-flash`) — the one production runs. See the box
-   below: this rehearsal spends real credit, on purpose.
-4. Boots with the **exact command §8.2 runs for real cutover**:
-   `bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI` unset, a
-   scoped `DEMO_PROJECT` (lowercased — Compose project names reject the
-   uppercase `T`/`Z` in the backup's own timestamp).
-5. **Supervises** that boot rather than waiting for it to exit (G2 — it never
-   would), polling the worktree's `.agents/demo-state.json` for the api's
-   published port and `GET /health` on it until both answer, against G3's
-   deadline. A boot that exits at all fails the run immediately, since a
-   healthy `CI`-unset boot runs forever.
-6. Once ready, runs `scripts/demo-frontend-check.ts` against that port — the
+2. Boots the real stack against it with `bun scripts/demo.ts --smoke --db
+   twin --no-tui`, `CI` unset, a scoped `DEMO_PROJECT` (lowercased — Compose
+   project names reject the uppercase `T`/`Z` in the backup's own timestamp).
+   The funded **`OPENCODE_API_KEY`** is passed in the child's environment, and
+   **no `AGENT_MODEL`** is set, so the model resolves to `DEFAULT_AGENT_MODEL`
+   — the one production runs. See the box below: this rehearsal spends real
+   credit, on purpose.
+3. **Supervises** that boot rather than waiting for it to exit (G2 — it never
+   would), polling `.agents/demo-state.json` for the api's published port and
+   `GET /health` on it until both answer, against G3's deadline. A boot that
+   exits at all fails the run immediately, since a healthy `CI`-unset boot runs
+   forever.
+4. Once ready, runs `scripts/demo-frontend-check.ts` against that port — the
    same route/content checks CI runs on every boot, not a bespoke probe.
-7. Tears down on **every** exit path (G6): stops the supervised boot first,
+5. Then, **while the twin is still up**, runs this release's `postflight.ts`
+   against it (G8, §6.1 step 3). This is the step that emits
+   `P5.postflight-twin`.
+6. Tears down on **every** exit path (G6): stops the supervised boot first,
    then `demo-down.ts` with an explicit `DEMO_PROJECT`, the `member_home_*`
-   volumes `demo-down` deliberately keeps, `git worktree remove --force`, and
-   the throwaway Postgres container.
+   volumes `demo-down` deliberately keeps, and the twin's own volume — which
+   `demo-down` keeps by contract but which, for a rehearsal, is pure litter
+   holding production-derived data.
 
-Exit `0` means the migration ran for real, the stack came up healthy, and the
-frontend checks passed against production-shaped data.
+> **The isolated `git worktree` is gone, and so is the throwaway `.env`.**
+> Earlier revisions of this step checked out a detached worktree, symlinked
+> `node_modules` into it and wrote it a private `.env`, for exactly one reason:
+> `--external-pg` reads `DATABASE_URL` from the repo-root `.env` **file**, and
+> on a staging host that file holds a real credential. `--db twin` builds its
+> URL in-process and writes no file at all, so the whole apparatus was
+> insurance against a risk the mode no longer takes. What it was protecting is
+> now asserted rather than arranged — see G7.
+
+Exit `0` means the migration ran for real, the stack came up healthy, the
+frontend checks passed against production-shaped data, and this release's
+postflight is clean against the migrated twin.
 
 #### 6.1 ⛔ The rehearsal runs preflight AND POSTFLIGHT against the twin
 
@@ -741,13 +753,13 @@ section states the intent and the script is what gets fixed.
 | # | Guarantee | Why it is load-bearing |
 |---|---|---|
 | **G1** | **It terminates on its own, always.** A run reaches one of the exit codes below without an operator interrupting it. "Still going" after the deadline is a **failure**, not patience. | This is the last gate before a production cutover, often at 3am. A step that can hang indefinitely cannot be sequenced, cannot be timed, and silently converts "rehearsal passed" into "nobody waited long enough to find out." |
-| **G2** | **It boots exactly what §8.2 boots** — `bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI` unset — and **supervises** that boot rather than waiting for it to finish. | With `CI` unset the boot **never self-terminates by design**: it falls past demo-main's CI-gated exits (`scripts/lib/demo-main.ts:1175`, `:1212`) into the LIVE steady-state loop and cycles sessions forever. That is correct for §8.2, where the stack must stay up serving production. A rehearsal that `await`s that process therefore waits forever — the two requirements are only compatible if the rehearsal supervises. Setting `CI` to escape this is **not** an acceptable fix: a truthy `CI` tears the stack down regardless of exit code (§8.2), so the frontend checks would have nothing left to hit, and the boot would no longer be the one §8.2 runs. |
-| **G3** | **Readiness is polled, with a deadline.** Ready ⇔ the worktree's `.agents/demo-state.json` exists **and** `/health` on its `apiPort` answers `200`. Not reached within the deadline ⇒ exit `1`. | Readiness is the only honest signal that migration + seed + serve all succeeded, and a deadline is what turns G1 from an intention into a property. Allow generously for a cold image build (a first build pulls base images and compiles); this is minutes, not seconds. |
+| **G2** | **It boots what §8.2 boots, and supervises it.** Same scenario (`--smoke`), same `--no-tui`, same `CI`-unset supervision, same compose topology — the one difference is the data path: `--db twin` here, `--db external` at cutover. Those two modes take the *identical* structural path through the boot (`demo-db-mode.ts` generates one overlay for both: no postgres service, no volume, no `depends_on`); they differ only in who resolves `DATABASE_URL`, and `--db twin` additionally *asserts* the answer (G7). Before the mode enum existed the rehearsal borrowed `--external-pg` to get byte-identical flags, and paid for it with the worktree apparatus above. | With `CI` unset the boot **never self-terminates by design**: it falls past demo-main's CI-gated exits (`scripts/lib/demo-main.ts:1175`, `:1212`) into the LIVE steady-state loop and cycles sessions forever. That is correct for §8.2, where the stack must stay up serving production. A rehearsal that `await`s that process therefore waits forever — the two requirements are only compatible if the rehearsal supervises. Setting `CI` to escape this is **not** an acceptable fix: a truthy `CI` tears the stack down regardless of exit code (§8.2), so the frontend checks would have nothing left to hit, and the boot would no longer be the one §8.2 runs. |
+| **G3** | **Readiness is polled, with a deadline.** Ready ⇔ `.agents/demo-state.json` exists **and** `/health` on its `apiPort` answers `200`. Not reached within the deadline ⇒ exit `1`. | Readiness is the only honest signal that migration + seed + serve all succeeded, and a deadline is what turns G1 from an intention into a property. Allow generously for a cold image build (a first build pulls base images and compiles); this is minutes, not seconds. |
 | **G4** | **Verification runs against the booted stack**: `scripts/demo-frontend-check.ts` on the published port — the same route/content checks CI runs, never a bespoke probe. | A stack that boots but serves the home-page shell for every route is a failed cutover that `/health` alone reports as green (§8 check 11). |
 | **G5** | **Spend is bounded.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack **as soon as verification finishes** (G4 *and* G8) — pass or fail — and must not let the loop keep cycling. G8 costs seconds; it does not license leaving the stack up for anything else. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. |
-| **G6** | **Cleanup is unconditional.** The compose stack, the git worktree, and the throwaway Postgres container are all removed on **every** exit path — success, assertion failure, readiness timeout, and an unhandled throw. | Leftovers from this script are not inert: a surviving container holds a full copy of production data (§6.3), and a surviving stack keeps spending under G5. |
-| **G7** | **Isolation is absolute.** Never the real repo-root `.env`; never a production connection; the twin's port bound to a non-routable address. | The rehearsal's whole claim is that it cannot touch production. See §6.3. |
-| **G8** | **Postflight runs against the twin, inside the same run** — §8's checks *and* §8.1's AC1–AC5, via `postflight.ts --emit-receipt=P5.postflight-twin`, after G4 and before teardown. A failure is exit `1`. | §6.1 step 3 and §6.4 both require it, and the twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. |
+| **G6** | **Cleanup is unconditional.** The compose stack, the twin container and the twin's volume are all removed on **every** exit path — success, assertion failure, readiness timeout, and an unhandled throw. The volume is explicit: a `--db twin` boot *keeps* it by contract (`demo:clean` reclaims it), which is right for an operator looking at a twin and wrong for an unattended rehearsal, where it is production-derived data nobody asked to keep. | Leftovers from this script are not inert: a surviving container holds a full copy of production data (§6.3), and a surviving stack keeps spending under G5. |
+| **G7** | **Isolation is absolute, and asserted rather than arranged.** No file is written — not the real repo-root `.env`, not a throwaway one; the twin's port is bound to a non-routable address; and `assertTwinIsTarget()` refuses the boot outright unless the compose environment's `DATABASE_URL` **is** the twin's. | The rehearsal's whole claim is that it cannot touch production. Compose auto-loads the repo-root `.env`, so "the stack config wins over that file" is a precedence *argument*; this is a check. A rehearsal that silently ran against production would be the worst outcome this repo has. See §6.3. |
+| **G8** | **Postflight runs against the twin, inside the same run** — this release's postflight checks *and* its acceptance criteria, via `postflight.ts --emit-receipt=P5.postflight-twin`, after G4 and before teardown. A failure is exit `1`. **So is being unable to run it at all**: a rehearsal that cannot reach the twin to grade it must not report the boot's green as the gate's green. | §6.1 step 3 and §6.4 both require it, and the twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. The shared driver (`scripts/lib/twin-rehearsal.ts`) cannot know a release's checks, so it hands the window back through an `onReady` hook and the release's own `stage-rehearsal.ts` fills it. |
 
 **Exit codes.**
 
@@ -832,13 +844,15 @@ against it in sequence:
 1. **Preflight (§4)** — run `restore-check.ts` (Gate C) first, then §4's live
    checks against the restored twin. Any failure is blocking. Follow the fix
    loop: patch, cut the next rc, restore a fresh dump, rehearse again.
-2. **Cutover (§7)** — run `stage-rehearsal.ts`, which executes the exact §8.2
-   boot command (`bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI`
-   unset) against the migrated twin. Any failure is blocking.
-3. **Postflight (§8)** — run every §8 check **and** every §8.1 acceptance
-   criterion against the twin after the boot reaches readiness. Any failure is
-   blocking — do not carry a known-failing AC into a production cutover on the
-   theory that production will behave differently.
+2. **Cutover (§7)** — run `stage-rehearsal.ts`, which boots the §8.2 stack
+   (`--smoke`, `--no-tui`, `CI` unset; see G2 on the one flag that differs)
+   against the migrated twin. Any failure is blocking.
+3. **Postflight (§8)** — every §8 check **and** every §8.1 acceptance criterion
+   against the twin, after readiness and before teardown. **`stage-rehearsal.ts`
+   runs this for you** (G8) — it is not a command you issue afterwards, because
+   the twin does not survive step 2. Any failure is blocking; do not carry a
+   known-failing AC into a production cutover on the theory that production will
+   behave differently.
 
 The twin holds real production rows. An AC failure on the twin is an AC failure
 in production; it is the same data. Treat a failing twin the same as a failing
@@ -849,9 +863,8 @@ cd <checkout>/backend
 # Step 1 — preflight against the twin
 bun scripts/upgrades/<FROM>-to-<TO>/restore-check.ts $RM_BACKUP_DIR
 
-# Steps 2+3 — cutover + postflight against the twin
-bun scripts/upgrades/<FROM>-to-<TO>/stage-rehearsal.ts $RM_BACKUP_DIR
-# After EXIT=0: run every §8 check and §8.1 ACs against the twin's published port
+# Steps 2+3 — cutover AND postflight, in one run, against the same twin
+bun scripts/upgrades/<FROM>-to-<TO>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
 ```
 
 ### 6.5 Stage rehearsal report
@@ -1024,7 +1037,7 @@ cat .env      # must contain, at minimum:
 # DATABASE_URL=postgres://<app-user>:<pw>@<host>:25060/defaultdb?sslmode=require
 ```
 
-`--external-pg` reads `DATABASE_URL` from **that file directly**
+`--db external` reads `DATABASE_URL` from **that file directly**
 (`scripts/lib/demo-external-pg.ts:288-305`), not from `process.env`. A missing or
 unreadable `.env` is a fatal exit 1 before anything starts.
 
@@ -1147,7 +1160,7 @@ deployment.md §2.1, "FIRST: find the project name".
 
 ```bash
 cd <checkout>
-DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
+DEMO_PROJECT=rm_prod bun smoke -- --db external --no-tui
 BOOT_STATUS=$?                # capture it HERE — §8 verification 1 reads this
 echo "boot exit=$BOOT_STATUS" # MUST be 0
 ```
@@ -1162,10 +1175,10 @@ not.
 
 | Flag / var | Why it is here | What happens without it |
 |---|---|---|
-| `--external-pg` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/demo-external-pg.ts:288-305`). | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §2. |
-| `DEMO_PROJECT=rm_prod` | **MANDATORY.** Pins the compose project name (`scripts/lib/demo-main.ts:261`). Without it the name is `rm_demo_stack_<random>` per boot (`scripts/stack/naming.ts:138`). | Every restart leaves an orphaned project. `docker compose -p …` commands in deployment.md address the wrong stack. Note: `--external-pg` does **not** by itself stabilise the project name — only `DEMO_PROJECT` does. |
+| `--db external` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/demo-external-pg.ts:288-305`). One enum flag names the data path — `ephemeral \| external \| twin` — and `external` is the only one that means "a server this boot did not create and cannot reclaim". The older `--external-pg` spelling still works and prints a deprecation notice; runbooks written before the enum use it throughout. | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §2. Since the enum landed an unknown flag is also a hard error rather than a silent default, so a typo'd data path stops the boot instead of quietly picking `ephemeral`. |
+| `DEMO_PROJECT=rm_prod` | **MANDATORY.** Pins the compose project name (`scripts/lib/demo-main.ts:261`). Without it the name is `rm_demo_stack_<random>` per boot (`scripts/stack/naming.ts:138`). | Every restart leaves an orphaned project. `docker compose -p …` commands in deployment.md address the wrong stack. Note: `--db external` does **not** by itself stabilise the project name — only `DEMO_PROJECT` does. |
 | `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/demo-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Always pass it.** Needing the per-boot `ADMIN_TOKEN` — the expected unclaimed case (§2) — is *not* a reason to omit it: read the token out of the container instead (§7.4). |
-| **`CI` must be UNSET** | ⛔ With any truthy `CI` the boot runs a bounded scenario and then **tears the whole stack down**. Under smoke the branch taken is `CI && smokeMode` (`scripts/lib/demo-main.ts:1175`): it runs one live swarm session against production and then `scripts/smoke-e2e-assert.ts` (`:1206`). The swarm-session *driver* at `:1212` is the **other** branch, `CI && !smokeMode`, and never runs here. Either way control reaches `if (process.env.CI)` at `:1390`, which calls `cleanup()` — a full `compose down` (`:697`, `:711-715`) — then `cleanCiVolume()` (`:1393`) and `process.exit(0)` (`:1394`). `cleanCiVolume()` also runs on the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/demo-volumes.ts:105`). | The volume removal is harmless under `--external-pg` (no volume exists), but the teardown is not. Success exits `0` (`:1394`) and failure exits `1` (`:1894`) — the exit code still works — yet **either way the stack is torn down**, so the site does not stay up and there is nothing left to inspect or verify in §8. Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |
+| **`CI` must be UNSET** | ⛔ With any truthy `CI` the boot runs a bounded scenario and then **tears the whole stack down**. Under smoke the branch taken is `CI && smokeMode` (`scripts/lib/demo-main.ts:1175`): it runs one live swarm session against production and then `scripts/smoke-e2e-assert.ts` (`:1206`). The swarm-session *driver* at `:1212` is the **other** branch, `CI && !smokeMode`, and never runs here. Either way control reaches `if (process.env.CI)` at `:1390`, which calls `cleanup()` — a full `compose down` (`:697`, `:711-715`) — then `cleanCiVolume()` (`:1393`) and `process.exit(0)` (`:1394`). `cleanCiVolume()` also runs on the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/demo-volumes.ts:105`). | The volume removal is harmless under `--db external` (no volume exists), but the teardown is not. Success exits `0` (`:1394`) and failure exits `1` (`:1894`) — the exit code still works — yet **either way the stack is torn down**, so the site does not stay up and there is nothing left to inspect or verify in §8. Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |
 
 ```bash
 echo "CI=[$CI]"     # MUST be empty
@@ -1407,6 +1420,15 @@ echo "CI=[$CI]"                            # MUST be empty
 DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
 BOOT_STATUS=$?; echo "rollback boot exit=$BOOT_STATUS"   # capture it here (§8.2)
 ```
+
+> ⚠ **`--external-pg` here, not `--db external` — deliberately.** You have just
+> checked out an OLDER tag, and the `--db` enum does not exist in every tag you
+> might roll back to. `--external-pg` is understood by both: by old code as the
+> only spelling, and by new code as the deprecated alias for `--db external`. It
+> is the one form that boots whatever you land on. Since the enum landed, an
+> unrecognised flag is a hard error rather than a silent default — which is the
+> right behaviour everywhere else and exactly the wrong thing to discover
+> mid-rollback.
 
 Then re-run the per-release runbook's post-cutover checks against the rolled-back
 stack. A rollback that is not verified is not a rollback.

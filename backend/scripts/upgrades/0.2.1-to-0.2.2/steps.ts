@@ -100,8 +100,8 @@ const POSTFLIGHT_CODE = [
   "backend/migrations/**",
 ];
 const RESTORE_CODE = [
-  "backend/scripts/lib/restore-container.ts",
-  "backend/scripts/lib/postgres-image.ts",
+  "scripts/lib/restore-container.ts",
+  "scripts/lib/postgres-image.ts",
 ];
 /** What a real boot actually executes. This is why the rc.6 rehearsal survived
  *  the commits that invalidated its gates: none of them landed here. */

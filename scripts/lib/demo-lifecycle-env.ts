@@ -1,3 +1,18 @@
+import type { DbMode } from "./demo-db-mode.ts";
+
+/**
+ * Which data path wrote this state file.
+ *
+ * `db` is authoritative; `externalPg` is the pre-refactor boolean, still written
+ * alongside it, and is the only signal a state file from before `--db` carries.
+ * One normaliser rather than three copies of the fallback, because demo:down,
+ * demo:status and demo:reap must never disagree about what a boot ran against.
+ */
+export function dbModeFromState(s: { db?: string; externalPg?: boolean }): DbMode {
+  if (s.db === "ephemeral" || s.db === "external" || s.db === "twin") return s.db;
+  return s.externalPg ? "external" : "ephemeral";
+}
+
 /** State fields required to inspect or tear down an existing demo stack. */
 export interface DemoLifecycleState {
   project: string;
