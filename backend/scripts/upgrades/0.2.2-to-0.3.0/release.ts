@@ -86,7 +86,20 @@ export const NEW_COLUMN_MIGRATION = "0032_wallet_balance_samples_strategy_nav_id
  *  do. */
 export const NEW_SCHEDULE_CRON = "25 * * * *";
 
-/** The kind `ops.repair_gaps` enqueues, one job per day it decides to repair. */
+/** The kind `ops.repair_gaps` enqueues: ONE job carrying `{dates: [...]}` for
+ *  the whole window it decides to repair, not one job per day.
+ *
+ *  Changed by #739 (`79063ab`), which batches on the axis the provider actually
+ *  meters — a window resolves its days' blocks in lockstep, one HTTP hit per
+ *  round, instead of paying ~5 hits per day to locate blocks alone. The §7.1
+ *  dispatch observation asserts THIS kind: a dispatcher that reverted to one
+ *  job per day would be a regression, and must fail rather than pass quietly. */
+export const BACKFILL_WINDOW_JOB_KIND = "wallet.backfill_window";
+
+/** The pre-#739 per-day kind. Still registered as a handler so rows enqueued by
+ *  a pre-upgrade dispatcher drain after the cutover
+ *  (`backend/src/worker/handlers/repair.ts`), but nothing enqueues it any more —
+ *  which is why §7.1 does not grade it. */
 export const BACKFILL_JOB_KIND = "wallet.backfill_day";
 
 /** What a repaired row's `provenance` column reads

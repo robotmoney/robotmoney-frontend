@@ -59,7 +59,7 @@
 
 import parser from "cron-parser";
 import type { Db } from "../../lib/postflight-utils.ts";
-import { BACKFILL_JOB_KIND, BACKFILL_PROVENANCE, NEW_SCHEDULE_CRON, NEW_SCHEDULE_KIND } from "./release.ts";
+import { BACKFILL_WINDOW_JOB_KIND, BACKFILL_PROVENANCE, NEW_SCHEDULE_CRON, NEW_SCHEDULE_KIND } from "./release.ts";
 
 export interface ObservationResult {
   status: "PASS" | "WARN" | "FAIL";
@@ -248,7 +248,7 @@ export async function observeRepairDispatch(
   const detail = [
     `${NEW_SCHEDULE_KIND} run ${run.id} succeeded and dispatched`,
     `  totalMissingDays: ${String(out.totalMissingDays ?? "?")}   perRunCap: ${String(out.perRunCap ?? "?")}`,
-    `  enqueued: ${String(dispatched.enqueued ?? 0)} day(s)${days.length ? ` — ${days.join(", ")}` : ""}`,
+    `  enqueued: ${String(dispatched.enqueued ?? 0)} ${BACKFILL_WINDOW_JOB_KIND} job(s) covering ${days.length} day(s)${days.length ? ` — ${days.join(", ")}` : ""}`,
     `  deferred: ${JSON.stringify(out.deferredDays ?? [])}`,
     `  retrying: ${JSON.stringify(out.retryingDays ?? [])}   exhausted: ${JSON.stringify(out.exhaustedDays ?? [])}`,
     `  dirtySeries: ${JSON.stringify(out.dirtySeries ?? [])}`,
@@ -275,24 +275,39 @@ export async function observeRepairDispatch(
   // The run must not claim days it did not enqueue — the assertion
   // tests/repair-gaps-dispatch.test.ts makes in-process, made here against a
   // real boot and a real scheduler.
+  //
+  // Since #739 the dispatcher enqueues ONE `wallet.backfill_window` carrying
+  // `{dates: [...]}`, so a day is "enqueued" when some window job's dates array
+  // CONTAINS it — jsonb `@>`, not `payload->>'asof' =`. Graded against the
+  // window kind alone, deliberately: a dispatcher that reverted to one job per
+  // day would leave every reported day uncovered here and fail, which is the
+  // point. `wallet.backfill_day` is still a registered handler for draining
+  // pre-upgrade rows, and draining is not dispatching.
   const missing: string[] = [];
   for (const day of days) {
     const [j] = (await db`
-      SELECT id FROM jobs WHERE kind = ${BACKFILL_JOB_KIND} AND payload->>'asof' = ${day} LIMIT 1
+      SELECT id FROM jobs
+       WHERE kind = ${BACKFILL_WINDOW_JOB_KIND}
+         AND payload->'dates' @> ${JSON.stringify([day])}::jsonb
+       LIMIT 1
     `) as unknown as { id: string }[];
     if (!j) missing.push(day);
   }
   if (missing.length > 0) {
     return {
       status: "FAIL",
-      detail: [...detail, "", `but ${missing.length} reported day(s) have NO ${BACKFILL_JOB_KIND} job: ${missing.join(", ")}`],
+      detail: [
+        ...detail,
+        "",
+        `but ${missing.length} reported day(s) are in NO ${BACKFILL_WINDOW_JOB_KIND} job: ${missing.join(", ")}`,
+      ],
       remediation: "The dispatcher's report and the queue disagree. Do not carry this into a cutover.",
     };
   }
 
   return {
     status: "PASS",
-    detail: [...detail, `  every reported day has a matching ${BACKFILL_JOB_KIND} job`],
+    detail: [...detail, `  every reported day is covered by a ${BACKFILL_WINDOW_JOB_KIND} job`],
   };
 }
 
@@ -333,16 +348,23 @@ export async function observeRepairCompletion(
   const finished = new Map<string, { status: string; last_error: string | null; state: string; detail: string | null }>();
 
   while (Date.now() - startedAt < budgetMs) {
+    // One window job carries many days, so expand `payload->'dates'` and grade
+    // per DAY — the unit §7 asks about is a repaired day, not a queue row. Every
+    // day of one window shares that window's terminal status, which is exactly
+    // the "ONE JOB IS NOT ONE OUTCOME" caveat `repair.ts` documents: a window
+    // that repaired nine days and lost one surfaces as a failed run, so a
+    // per-day `written` count is the only honest read of what landed.
     const rows = (await db`
-      SELECT j.payload->>'asof' AS asof, j.status, j.last_error,
+      SELECT d.asof AS asof, j.status, j.last_error,
              coalesce(w.status, 'absent') AS state, w.detail,
              (SELECT count(*)::int FROM wallet_balance_samples b
-               WHERE b.sample_date = (j.payload->>'asof')::date
+               WHERE b.sample_date = d.asof::date
                  AND b.provenance = ${BACKFILL_PROVENANCE}) AS written
         FROM jobs j
-        LEFT JOIN wallet_backfill_state w ON w.sample_date = (j.payload->>'asof')::date
-       WHERE j.kind = ${BACKFILL_JOB_KIND} AND j.status IN ('succeeded', 'failed', 'dead')
-       ORDER BY j.id
+        CROSS JOIN LATERAL jsonb_array_elements_text(j.payload->'dates') AS d(asof)
+        LEFT JOIN wallet_backfill_state w ON w.sample_date = d.asof::date
+       WHERE j.kind = ${BACKFILL_WINDOW_JOB_KIND} AND j.status IN ('succeeded', 'failed', 'dead')
+       ORDER BY j.id, d.asof
     `) as unknown as {
       asof: string;
       status: string;
@@ -359,7 +381,7 @@ export async function observeRepairCompletion(
       return {
         status: "PASS",
         detail: [
-          `${BACKFILL_JOB_KIND} for ${wrote.asof} succeeded and WROTE`,
+          `${BACKFILL_WINDOW_JOB_KIND} day ${wrote.asof} succeeded and WROTE`,
           `  ${wrote.written} wallet_balance_samples row(s) carry provenance='${BACKFILL_PROVENANCE}'`,
           `  wallet_backfill_state: status=${wrote.state} detail=${wrote.detail ?? "none"}`,
           `  after ${Math.round((Date.now() - startedAt) / 1000)}s, ${finished.size} day(s) finished`,
@@ -369,7 +391,7 @@ export async function observeRepairCompletion(
 
     const waited = Math.round((Date.now() - startedAt) / 1000);
     log(
-      `  waiting for a ${BACKFILL_JOB_KIND} that WRITES — ${finished.size} finished so far, ${waited}s elapsed, ${Math.round(budgetMs / 1000) - waited}s left`,
+      `  waiting for a ${BACKFILL_WINDOW_JOB_KIND} day that WRITES — ${finished.size} day(s) finished so far, ${waited}s elapsed, ${Math.round(budgetMs / 1000) - waited}s left`,
     );
     await Bun.sleep(POLL_MS);
   }
@@ -377,7 +399,7 @@ export async function observeRepairCompletion(
   if (finished.size === 0) {
     return {
       status: "WARN",
-      detail: [`no ${BACKFILL_JOB_KIND} reached a terminal status within ${Math.round(budgetMs / 60000)}m`],
+      detail: [`no ${BACKFILL_WINDOW_JOB_KIND} reached a terminal status within ${Math.round(budgetMs / 60000)}m`],
       remediation:
         "Paced chain reads are slow by design (0.25 calls/s, shared with the per-minute samplers). Not blocking: the DISPATCH half is what this release changed and check 2 grades it hard.",
     };

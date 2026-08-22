@@ -477,8 +477,11 @@ Beyond the schema. Read this before §5; it is what the config decisions are for
 `seed()` inserts `ops.repair_gaps` (`cron: "25 * * * *"`, `enabled: true`). It
 will show up in `job_schedules` on the first boot and start being dispatched
 hourly at :25. Unless you set `BASE_RPC_MAX_CALLS_PER_SEC=0`, each run **detects
-gaps and enqueues up to ten `wallet.backfill_day` jobs**, and its `job_runs`
-output names the days dispatched, deferred, retrying and exhausted. At `0` it
+gaps and enqueues ONE `wallet.backfill_window` job carrying up to ten days**,
+and its `job_runs` output names the days dispatched, deferred, retrying and
+exhausted. (It was one job per day until #739 (`79063ab`) batched on the axis
+the provider meters; `wallet.backfill_day` survives only as a registered handler
+so rows a pre-upgrade dispatcher left in the queue still drain.) At `0` it
 declines instead and records the refusal — a visible no-op, not an error.
 Postflight verifies whichever world you are in (§9 Check 5).
 
@@ -735,7 +738,7 @@ wallet days the dump is missing, against ~1 minute before the sequence existed.
 | # | Check | Blocking | Proves |
 |---|---|---|---|
 | 1 | `postflight` | **yes** | Every §9 check against the migrated twin, including the migration wall-clock. §6.4: a twin that fails postflight is a failed cutover, so the sequence stops here. |
-| 2 | `repair-dispatch` | no (FAIL still fails the run) | §4.1 — `ops.repair_gaps` fires and **dispatches**: `job_runs` names the days enqueued, deferred, retrying and exhausted, and every day it claims to have enqueued has a matching `wallet.backfill_day` job. |
+| 2 | `repair-dispatch` | no (FAIL still fails the run) | §4.1 — `ops.repair_gaps` fires and **dispatches**: `job_runs` names the days enqueued, deferred, retrying and exhausted, and every day it claims to have enqueued appears in the `dates` payload of a `wallet.backfill_window` job. |
 | 3 | `repair-completion` | no — **WARN only** | One day completes and its rows carry `provenance='backfilled'`. |
 
 > **Why check 3 can only WARN.** Completing a day means real reads against
@@ -760,7 +763,7 @@ each result in the stage rehearsal report (§7.4):
 | `schema_migrations` holds **both** `0032_*` and **both** `0033_*` — §2.2.1 observed rather than reasoned | postflight `migrations-applied` |
 | `0034`'s `UPDATE` hit exactly the two wallet samplers, everything else left `'all'` | postflight `catchup-policy` |
 | `ops.repair_gaps` present, enabled, **exactly one row** | postflight `repair-schedule` |
-| It **dispatches** with the budget unset; `job_runs` names enqueued and deferred days; matching `wallet.backfill_day` jobs exist | check 2 `repair-dispatch` |
+| It **dispatches** with the budget unset; `job_runs` names enqueued and deferred days; a `wallet.backfill_window` job covers every one of them | check 2 `repair-dispatch` |
 | One day completes and writes `provenance='backfilled'` | check 3 `repair-completion` |
 | **The migration set's wall-clock** — the number that sizes the maintenance window | postflight `migrations-applied` reports it from `schema_migrations.applied_at`, which nothing used to read. §2.2's "well under a second" is no longer a prediction |
 | Every §9 postflight check green against the twin | check 1 |
