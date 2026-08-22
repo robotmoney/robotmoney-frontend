@@ -54,17 +54,14 @@ git diff --name-status main...v0.2.2    # expect: only the frontend seam-banner
                                         # files from §0.4, if anything
 ```
 
-**RESOLVED — `backend/scripts/upgrades/0.2.2-to-0.3.0/` now exists.** It carries
-`preflight.ts`, `postflight.ts`, `restore-check.ts`, `stage-rehearsal.ts`,
-`steps.ts`, `where.ts` and `release.ts`, adapted from the `0.2.1-to-0.2.2/` set
-beside them. `bun run rollout:where` points at this release;
-`bun run rollout:where:v022` still reaches v0.2.2's probe.
-`backend/tests/rollout-steps-0-3-0.test.ts` holds this manifest and this
-runbook's `yaml step` blocks in agreement.
+**⛔ STILL BLOCKING: there is no `backend/scripts/upgrades/0.2.2-to-0.3.0/`.**
+The per-upgrade preflight, postflight, restore-check and stage-rehearsal
+scripts have to be written for this release, adapted from the
+`0.2.1-to-0.2.2/` set that now sits beside them. §6 lists the checks the
+preflight must make. Until they exist, Gate A cannot be evaluated (§3.0).
 
-**⛔ STILL BLOCKING: Gate A's remaining items (§3.0).** The tracking issue's
-Phases are open under the feature freeze and need the recorded exception, the
-§0.4 seam-banner decision is unmade, and `releases-0.3.x` has to be cut.
+`releases-0.3.x` must also be cut — but that is the *last* step before
+preflight, not a prerequisite to writing the scripts.
 
 ### 0.2 The `bun smoke` facts from v0.2.2 all still apply
 
@@ -109,15 +106,6 @@ Doing nothing means v0.3.0 ships the banner.
 ---
 
 ## 1. Release identity
-
-```yaml step
-id:          P2.rc-tag
-phase:       P2 release identity
-section:     §1
-host-role:   any
-actor:       operator
-verify:      git tag -a v0.3.0-rc.<N> <sha> -m 'v0.3.0 release candidate <N>' && git push origin v0.3.0-rc.<N>
-```
 
 | | |
 |---|---|
@@ -276,17 +264,6 @@ the v0.3.0 tracking issue (#661) per §6 of that policy.
 
 ### 3.0 Gate A — code readiness (release-runbooks.md §4.1)
 
-```yaml step
-id:          P1.phases-closed
-phase:       P1 authorize
-section:     §3.0
-gate:        A
-host-role:   any
-actor:       agent
-ttl:         24h
-verify:      gh issue view 661 --json body -q .body   # then: where.ts --record P1.phases-closed
-```
-
 All of the following must be true. **Tick them on #661, not here** — this
 runbook states the requirement; release-runbooks.md §6 puts the checkbox on the
 tracking issue, which is why no runbook in this repo carries tickable state.
@@ -298,73 +275,15 @@ tracking issue, which is why no runbook in this repo carries tickable state.
       §1 permits skipping a gate only that way.
 - **DONE.** The v0.2.2 rollout tooling is backported from `releases-0.2.x` to `main`
       (done — see §0.1).
-- **DONE.** `backend/scripts/upgrades/0.2.2-to-0.3.0/` exists with
-      `preflight.ts`, `postflight.ts`, `restore-check.ts`, `stage-rehearsal.ts`,
-      `steps.ts`, `where.ts` and `release.ts` (see §0.1).
+- `backend/scripts/upgrades/0.2.2-to-0.3.0/` exists with `preflight.ts`,
+      `postflight.ts`, `restore-check.ts` and `stage-rehearsal.ts`, adapted from
+      the `0.2.1-to-0.2.2/` set.
 - The §0.4 seam-banner decision is recorded on #661, and `main` reflects it.
 - The §2.3 dangling `cloudflare-statics.sh` references are resolved.
 - `releases-0.3.x` is cut from `main` and carries every commit the release
       needs (`git log --oneline v0.2.2..origin/releases-0.3.x`).
 
 ### 3.1 Gate C — backup taken, restored, and clean (order 1, run FIRST)
-
-```yaml step
-id:          P3.baseline
-phase:       P3 backup
-section:     §3.1
-host-role:   stage
-actor:       agent
-artifacts:
-  - pre-upgrade-baseline-*.txt
-ttl:         48h
-verify:      rollout-procedure.md §5's baseline capture, then: where.ts --record P3.baseline
-```
-
-```yaml step
-id:          P3.backup
-phase:       P3 backup
-section:     §3.1
-host-role:   stage
-actor:       agent
-artifacts:
-  - rm-preupgrade-<STAMP>.dump.gpg
-  - rm-globals-<STAMP>.sql.gpg
-ttl:         48h
-verify:      rollout-procedure.md §5.1 + §5.2, then: where.ts --record P3.backup
-```
-
-```yaml step
-id:          P3.schedules
-phase:       P3 backup
-section:     §3.1
-host-role:   stage
-actor:       agent
-artifacts:
-  - rm-swarm-schedules-*.txt
-verify:      rollout-procedure.md §5.4's psql block, then: where.ts --record P3.schedules
-```
-
-```yaml step
-id:          P3.gate-c
-phase:       P3 backup
-section:     §3.1
-gate:        C
-host-role:   stage
-actor:       agent
-requires:
-  - P3.backup
-depends-on:
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/preflight.ts
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/release.ts
-  - backend/scripts/lib/preflight-utils.ts
-  - backend/scripts/lib/checks.ts
-  - backend/migrations/**
-  - backend/scripts/lib/restore-container.ts
-  - backend/scripts/lib/postgres-image.ts
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/restore-check.ts
-ttl:         48h
-verify:      bun scripts/upgrades/0.2.2-to-0.3.0/restore-check.ts $RM_BACKUP_DIR --emit-receipt
-```
 
 Unchanged from v0.2.2. Follow
 [rollout-procedure.md §5](./rollout-procedure.md) verbatim — the dump, the separate
@@ -393,16 +312,6 @@ migration set is additive and fast: `0034`'s `ADD COLUMN` takes an
 transaction holding a conflicting lock will block it.
 
 ### 3.5 Gate F — the config decisions in §5 are made and recorded
-
-```yaml step
-id:          P1.config-decided
-phase:       P1 authorize
-section:     §3.5
-gate:        F
-host-role:   any
-actor:       operator
-verify:      record both decisions on the tracking issue, then: where.ts --record P1.config-decided
-```
 
 New for v0.3.0. Two of this release's headline changes are inert until an
 operator sets an environment variable (§0.3). Deploying without deciding is not
@@ -522,121 +431,33 @@ to the RPC budget).
 
 ## 6. Preflight
 
-```yaml step
-id:          P4.preflight-live
-phase:       P4 preflight
-section:     §6
-gate:        B
-host-role:   stage
-actor:       agent
-requires:
-  - P3.gate-c
-depends-on:
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/preflight.ts
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/release.ts
-  - backend/scripts/lib/preflight-utils.ts
-  - backend/scripts/lib/checks.ts
-  - backend/migrations/**
-ttl:         12h
-verify:      bun scripts/upgrades/0.2.2-to-0.3.0/preflight.ts --emit-receipt
-```
+**To be written against `backend/scripts/upgrades/0.2.2-to-0.3.0/preflight.ts`,
+which does not exist yet (§0.1).** Port it from
+`backend/scripts/upgrades/0.2.1-to-0.2.2/preflight.ts` — the harness, exit-code
+contract and output format in
+[rollout-procedure.md §1](./rollout-procedure.md)'s receipt model all carry over
+unchanged.
 
-Run it from anywhere in the checkout — the `.env.readonly` path resolves off the
-script's own location, not the cwd.
+The checks it must make, derived from §2 and §4 of this document:
 
-```bash
-export RM_BACKUP_DIR=~/rm-backup-v030
-bun scripts/upgrades/0.2.2-to-0.3.0/preflight.ts --emit-receipt
-```
-
-Exit codes: **0** = SAFE TO UPGRADE, **1** = BLOCKED, **2** = could not run.
-A preflight that cannot connect is a **failure, not a skip** — exit 2 is not a
-pass. The harness, receipt format and verdict wording are
-[rollout-procedure.md §1](./rollout-procedure.md)'s and are unchanged.
-
-### 6.1 What it checks, and why each one is here
-
-| Check | Asserts | Why this release needs it |
+| # | Check | Why |
 |---|---|---|
-| `server-version` | PG 11+ | 0034's `NOT NULL DEFAULT` is instant on 11+ and a full table REWRITE before it (§2.2) |
-| `schema-migrations` | pending set is **exactly** this release's four; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
-| `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `.env.readonly` points somewhere else |
-| `append-only-safety` | guard installed, and **no** table this release touches is protected | §2.2.1 — this is what makes the out-of-order warning harmless |
-| `clean-targets` | the 3 tables and 2 columns do not exist yet | A target that already exists means an out-of-band change |
-| `catchup-baseline` | records `job_schedules` as it stands now | §4.3 — 0034 OVERWRITES these rows; §9 check 3 grades against this |
-| `wallet-samples-size` | row count + table size | Informational, for §7's wall-clock measurement |
-| `blocking-xacts` | nothing older than 60s | Would queue in front of 0034/0035's locks. Goes stale by the minute |
-| `wedged-schedules` | which schedules are ALREADY late | So postflight does not blame the cutover for a pre-existing wedge |
+| 1 | Connected to the **replica** as the **read-only role** | v0.2.2's rule: every preflight read happens on the replica, never the primary |
+| 2 | `schema_migrations` contains the six migrations v0.2.2 introduced | Proves the database really is at v0.2.2 |
+| 3 | `schema_migrations` contains **neither** `0032_wallet_…` **nor** `0033_wallet_backfill.sql` | §2.2.1 — proves the duplicate prefixes have not already half-applied |
+| 4 | The four new migration files hash to what the pinned rc contains | Proves you are gating the artifact you will ship |
+| 5 | `wallet_balance_samples` lacks `strategy_nav_idle_only` | The `ADD COLUMN` has a clean target |
+| 6 | `job_schedules` lacks `catchup_policy`, and record the current rows | §4.3 — the baseline the postflight `UPDATE` check compares against |
+| 7 | `chain_day_blocks`, `wallet_backfill_state`, `swarm_member_avatars` do not exist | Clean targets for the three `CREATE TABLE`s |
+| 8 | The append-only guard is installed and intact | v0.2.2 shipped it; a missing guard means restored-unchecked data |
+| 9 | No long-running transactions (Gate E) | §3.4 |
 
-### 6.2 ⚠ Expect exactly one warning, and read it rather than skimming it
+Exit non-zero on any failure. **A preflight that cannot connect is a failure, not
+a skip.**
 
-`schema-migrations` returns **WARN**, not PASS, and that is the correct output
-for this release:
-
-```
-[WARN] schema-migrations  4 migration(s) will be applied on the next boot:
-         0032_wallet_balance_samples_strategy_nav_idle_only.sql
-         0033_wallet_backfill.sql
-         0034_job_schedules_catchup_policy.sql
-         0035_swarm_member_avatar_bytes.sql
-       NOTE: 1 of these sort BEFORE the newest applied file
-             (0033_swarm_member_uuid_ids.sql):
-         0032_wallet_balance_samples_strategy_nav_idle_only.sql
-```
-
-`0032_wallet_…` sorts before an already-applied `0033_`, so the runner will
-apply it "out of order" relative to a fresh database. **`append-only-safety` is
-the check that makes that harmless** — on a fresh database the DDL it would have
-run after is the append-only guard, the guard is already installed here, and no
-migration in this set writes to a protected table.
-
-> **So: a WARN on `schema-migrations` together with a PASS on
-> `append-only-safety` is the expected shape of a clean v0.3.0 preflight.** A
-> WARN on `schema-migrations` with anything else on `append-only-safety` is not.
+---
 
 ## 7. Digital-twin rehearsal (release-runbooks.md §4.4)
-
-```yaml step
-id:          P5.rehearsal-boot
-phase:       P5 rehearsal
-section:     §7
-host-role:   stage
-actor:       agent
-requires:
-  - P3.gate-c
-depends-on:
-  - backend/src/**
-  - backend/migrations/**
-  - backend/Dockerfile
-  - frontend/**
-  - scripts/**
-  - docker-compose.yml
-  - docker-compose.demo.yml
-  - package.json
-  - bun.lock
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts
-ttl:         72h
-verify:      bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
-```
-
-```yaml step
-id:          P5.postflight-twin
-phase:       P5 rehearsal
-section:     §7
-host-role:   stage
-actor:       agent
-requires:
-  - P5.rehearsal-boot
-depends-on:
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/postflight.ts
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/release.ts
-  - backend/scripts/lib/postflight-utils.ts
-  - backend/scripts/lib/checks.ts
-  - backend/src/db/seed.ts
-  - backend/migrations/**
-ttl:         72h
-verify:      bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt   # runs this step
-```
 
 Non-negotiable, and for this release it is where every §2 claim gets tested for
 the first time. Procedure and container mechanics: follow
@@ -666,46 +487,12 @@ the stage rehearsal report (§7.1), not against this list:
 
 ### 7.1 Stage rehearsal report (release-runbooks.md §4.5)
 
-```yaml step
-id:          P6.report
-phase:       P6 sign-off
-section:     §7.1
-host-role:   any
-actor:       operator
-requires:
-  - P5.postflight-twin
-artifacts:
-  - stage-rehearsal-report-*.md
-verify:      write the report per rollout-procedure.md §6.5, then: where.ts --record P6.report
-```
-
 The gate passes only when the report exists, all acceptance criteria pass, and
 the operator has signed off. Use rollout-procedure.md §6.5's format.
 
 ---
 
 ## 8. Cutover
-
-```yaml step
-id:          P7.cutover
-phase:       P7 cutover
-section:     §8
-host-role:   cutover
-actor:       agent
-requires:
-  - P6.report
-depends-on:
-  - backend/src/**
-  - backend/migrations/**
-  - backend/Dockerfile
-  - frontend/**
-  - scripts/**
-  - docker-compose.yml
-  - docker-compose.demo.yml
-  - package.json
-  - bun.lock
-verify:      DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: where.ts --record P7.cutover
-```
 
 🔴 **IRREVERSIBLE.** The invocation, every flag and the reason for each, the
 `BOOT_STATUS` capture, the `CI` must-be-unset check, and the scheduler-downtime
@@ -735,90 +522,22 @@ cutover they do.
 
 ## 9. Post-cutover verification
 
-```yaml step
-id:          P4.postflight-dryrun
-phase:       P4 preflight
-section:     §9
-host-role:   stage
-actor:       agent
-requires:
-  - P4.preflight-live
-depends-on:
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/postflight.ts
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/release.ts
-  - backend/scripts/lib/postflight-utils.ts
-  - backend/scripts/lib/checks.ts
-  - backend/src/db/seed.ts
-  - backend/migrations/**
-ttl:         12h
-verify:      run §9's checks as rm_readonly against the replica, then: where.ts --record P4.postflight-dryrun
-```
-
-```yaml step
-id:          P8.postflight-prod
-phase:       P8 verify
-section:     §9
-host-role:   cutover
-actor:       agent
-requires:
-  - P7.cutover
-depends-on:
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/postflight.ts
-  - backend/scripts/upgrades/0.2.2-to-0.3.0/release.ts
-  - backend/scripts/lib/postflight-utils.ts
-  - backend/scripts/lib/checks.ts
-  - backend/src/db/seed.ts
-  - backend/migrations/**
-verify:      bun scripts/upgrades/0.2.2-to-0.3.0/postflight.ts --emit-receipt=P8.postflight-prod
-```
-
-```yaml step
-id:          P8.acceptance
-phase:       P8 verify
-section:     §9
-host-role:   any
-actor:       operator
-requires:
-  - P8.postflight-prod
-verify:      complete a passkey sign-in at the public origin, then: where.ts --record P8.acceptance
-```
-
-```yaml step
-id:          P9.tag
-phase:       P9 close
-section:     §9
-host-role:   any
-actor:       operator
-requires:
-  - P8.acceptance
-verify:      git tag v0.3.0 <deployed-rc-commit> && git push origin v0.3.0
-```
-
 Run [rollout-procedure.md §9](./rollout-procedure.md)'s mechanics first — they verify the
 system is alive and serving, and none of that changed. **Dry-run them before
 cutover** (rollout-procedure.md §9.1) so you know they discriminate.
 
-Then these, specific to v0.3.0. **Checks 1–6 and 8 are what
-`postflight.ts` runs** — one row per `record()` in the script, and
-`rollout-steps-0-3-0.test.ts` fails if this table and the script stop naming the
-same set. Check 7 is the one no script can do.
+Then these, specific to v0.3.0. All must pass before `v0.3.0` is tagged.
 
-```bash
-bun scripts/upgrades/0.2.2-to-0.3.0/postflight.ts --emit-receipt=P8.postflight-prod
-```
-
-All must pass before `v0.3.0` is tagged.
-
-| # | Check id | Asserts | Expected |
+| # | Check | Expected |
 |---|---|---|
-| 1 | `migrations-applied` | all four names in `schema_migrations` | Both `0032_*`, both `0033_*`, `0034_*`, `0035_*` present — the check that would catch a runner keyed on the numeric prefix |
-| 2 | `strategy-nav-column` | the column exists and nothing was backfilled | `NULL` on every pre-existing row. Non-NULL is only correct if the sampler has already run |
-| 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). **The only data write in the set** |
-| 4 | `new-tables` | the three new tables exist and are empty | Three clean `CREATE TABLE`s |
-| 5 | `repair-schedule` | the new schedule is seeded, and its behaviour matches the budget you chose | Declines each run with the budget unset, dispatches with it set — **confirm it is the world you chose** (§5.2) |
-| 6 | `append-only-intact` | the guard survived the migration | Live on all fourteen protected tables. A guard silently lost is the §11.1 failure mode |
-| 7 | ⛔ **manual — no script** | a real passkey ceremony completes against the public HTTPS origin | The §5.1 fix, verified end-to-end. Step `P8.acceptance`; reading `WEBAUTHN_ORIGIN` back out of the container proves configuration, not function |
-| 8 | `no-wedge` | the cutover window did not wedge a schedule | `next_run_at` within one cadence of now. Compare against preflight's `wedged-schedules` baseline — a pre-existing wedge is not this release's damage |
+| 1 | `SELECT name FROM schema_migrations WHERE name LIKE '003%' ORDER BY name;` | Both `0032_*`, both `0033_*`, `0034_*`, `0035_*` all present |
+| 2 | `strategy_nav_idle_only` exists on `wallet_balance_samples` and is `NULL` for every pre-existing row | Additive, nothing backfilled |
+| 3 | `SELECT kind, catchup_policy FROM job_schedules ORDER BY kind;` | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3) |
+| 4 | `chain_day_blocks`, `wallet_backfill_state`, `swarm_member_avatars` exist and are empty | Three clean `CREATE TABLE`s |
+| 5 | `ops.repair_gaps` present and enabled; after :25 its `job_runs` row shows a **declined** dispatch (budget unset) or real work (budget set) — matching your §5.2 decision | §4.1 |
+| 6 | The append-only guard is still installed on all fourteen protected tables | A guard silently lost during migration is the §11.1 failure mode |
+| 7 | **A real passkey ceremony completes** against the public HTTPS origin | The §5.1 fix, verified end-to-end rather than by reading `.env` |
+| 8 | Per-minute schedules are not wedged — `next_run_at` is within one cadence of now | rollout-procedure.md §9.2's check; the cutover window is when this breaks |
 
 > **Check 7 is the release's headline acceptance criterion.** v0.3.0's admin-auth
 > claim is that passkeys work behind the tunnel. Reading `WEBAUTHN_ORIGIN` back
@@ -894,21 +613,6 @@ v0.3.0 shipped, so the next release does not rediscover it.
 ---
 
 ## 12. Production rollout report (release-runbooks.md §4.9)
-
-```yaml step
-id:          P9.report
-phase:       P9 close
-section:     §12
-host-role:   any
-actor:       operator
-requires:
-  - P9.tag
-artifacts:
-  - rollout-report-*.md
-verify:      fill in §12, then: where.ts --record P9.report
-```
-
-
 
 Fill in and commit. The release tracking issue closes only after this exists and
 the final tag is on `releases-0.3.x`. Items below are stated as claims to
