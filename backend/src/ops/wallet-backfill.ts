@@ -104,15 +104,20 @@ export function maxAttemptsPerDay(): number {
 // ── The RPC budget precondition (PD6) ────────────────────────────────────────
 
 /**
- * Refuse to run a LIVE backfill until the shared RPC rate budget is configured.
+ * Refuse to run a LIVE backfill while pacing is explicitly turned OFF.
  *
  * This is not defensive boilerplate; it is the one mechanism that stops this
- * feature from re-creating the incident it exists to repair. The measured
- * figures (~5-token bucket, ~0.55 calls/s) were taken from a developer IP, and
- * PD6 requires them re-measured from the production droplet before any
- * production run. Unset means the transport paces nothing, and an unpaced
+ * feature from re-creating the incident it exists to repair: an unpaced
  * multi-day sweep against a per-IP-metered provider is exactly what killed
  * `vault.sample_share_price` on 2026-08-10.
+ *
+ * WHAT CHANGED, AND WHAT DID NOT. The budget is no longer something an operator
+ * must set before anything happens — chain/base-rpc-client.ts now carries a
+ * conservative hardcoded default (half the measured refill), so the ordinary
+ * deployment is paced and this check passes. See that file for why a safe
+ * constant beats an unset knob. What has NOT changed is the refusal itself:
+ * `BASE_RPC_MAX_CALLS_PER_SEC=0` still means no limiter anywhere, and a
+ * deployment that has chosen that must not sweep.
  *
  * Only LIVE reads are gated: under BASE_RPC_SOURCE=stub there is no provider
  * bucket to exhaust.
@@ -121,8 +126,9 @@ export function assertRpcBudgetConfigured(): void {
   if (resolveBaseRpcSource() !== "live") return;
   if (resolveRpcRateBudget()) return;
   throw new Error(
-    "wallet-backfill: refusing to run without BASE_RPC_MAX_CALLS_PER_SEC set — " +
-      "the backfill shares the live sampler's per-IP RPC budget and must never run unpaced (PD6, issue #651)",
+    "wallet-backfill: refusing to run with BASE_RPC_MAX_CALLS_PER_SEC=0 (pacing explicitly disabled) — " +
+      "the backfill shares the live sampler's per-IP RPC budget and must never run unpaced (PD6, issue #651). " +
+      "Unset the variable to use the conservative default instead.",
   );
 }
 

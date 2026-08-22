@@ -44,8 +44,8 @@ async function cleanup(): Promise<void> {
 }
 
 beforeEach(async () => {
-  // The backfill refuses to run live without a measured budget (PD6). Tests are
-  // not measuring anything, so they declare one explicitly.
+  // A rate high enough that pacing never shows up in these tests' wall clock —
+  // the transport's default (0.25/s) would pace them for real.
   process.env.BASE_RPC_MAX_CALLS_PER_SEC = "10";
   await cleanup();
 });
@@ -263,8 +263,11 @@ test("a day that keeps failing becomes 'exhausted' — still a gap, no longer a 
   expect(rows!.n).toBe(0);
 });
 
-test("a LIVE run refuses outright when the shared RPC budget is unconfigured (PD6)", async () => {
-  delete process.env.BASE_RPC_MAX_CALLS_PER_SEC;
+test("a LIVE run refuses outright when pacing is explicitly disabled (PD6)", async () => {
+  // Unsetting is no longer a refusal — the transport carries a conservative
+  // default, so an ordinary deployment heals. Only BASE_RPC_MAX_CALLS_PER_SEC=0,
+  // which turns the limiter off entirely, still stops the sweep.
+  process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0";
   const prior = process.env.BASE_RPC_SOURCE;
   process.env.BASE_RPC_SOURCE = "live";
   try {

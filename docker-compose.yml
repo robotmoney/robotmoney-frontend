@@ -124,11 +124,12 @@ x-worker-env: &worker-env
   # BASE_RPC_MAX_CALLS_PER_SEC is the one token bucket every chain read in the
   # app draws from — live samplers and the gap backfill alike — because the
   # provider meters PER-IP and a second limiter beside the first sums to 2x and
-  # 429s them both. UNSET means no pacing (today's behaviour) AND means the
-  # self-healing backfill stays off: it refuses to run unpaced, which is
-  # deliberate, because the ~0.55 calls/s figure in the design doc was measured
-  # from a developer IP and must be re-measured from this droplet before a real
-  # sweep. Setting it is how a deployment opts into repair.
+  # 429s them both. UNSET means the conservative built-in default (0.25 calls/s,
+  # burst 5 — chain/base-rpc-client.ts), which also means the self-healing
+  # backfill is ON. Set it to a measured value to go faster; set it to 0 to turn
+  # pacing off entirely, which also stops the backfill (it refuses to run
+  # unpaced). Passing it through here is still what makes an override reachable
+  # inside the container at all.
   # (BASE_RPC_URL / BASE_RPC_SOURCE are deliberately NOT added here: their
   # absence from this allowlist is the pre-existing defect class tracked in
   # #641/#643, and fixing it belongs there rather than riding along on this

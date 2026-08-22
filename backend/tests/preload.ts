@@ -2,7 +2,7 @@
 // at it, and apply migrations — ONCE, before any test file imports the db client.
 // Fails loudly if Docker/Postgres can't start (never a silent skip).
 import net from "node:net";
-import { afterAll } from "bun:test";
+import { afterAll, beforeEach } from "bun:test";
 // The SHARED naming scheme (scripts/stack/naming.ts), reached across the
 // workspace boundary on purpose: this is the fourth and only NON-compose
 // container spawner in the repo, and a fourth private name shape is exactly
@@ -23,6 +23,32 @@ import {
 // leaves (constants and node builtins, no side effects), which is what keeps
 // that edge one-way and cheap.
 import { POSTGRES_IMAGE, POSTGRES_MAJOR } from "../../scripts/lib/postgres-image.ts";
+
+// SUITE-WIDE: the shared RPC token bucket is OFF unless a test asks for it.
+//
+// chain/base-rpc-client.ts paces every chain read from a conservative default
+// (0.25 calls/s, burst 5) so a production deployment heals its wallet AUM /
+// sleeve gaps without configuration — see that file, and decisions.md's PD6
+// amendment. That default is correct in production and wrong here: this suite
+// drives the REAL transport against a mocked `globalThis.fetch`, the bucket is
+// process-global and NOT reset between files, and files routinely make dozens
+// of chain reads across their tests. Left on, everything past the first burst
+// waits four seconds a call and ~40 assertions blow their 5s timeout — none of
+// them measuring rate.
+//
+// So the suite's baseline is the explicit opt-out, and the limiter's OWN
+// behaviour (the default, the burst, the pacing, the 429 feedback) is covered
+// where it belongs, by tests/base-rpc-block-addressing.test.ts, which sets its
+// own values per test. A test that wants pacing sets the variable; nothing
+// silently inherits it.
+// Re-applied before EVERY test, not set once: bun runs the suite's files in one
+// process, so a single file that deletes the knob in its own afterEach would
+// otherwise hand the default to all 150 files after it — which is exactly what
+// happened. A file that wants a budget sets one in its own beforeEach, which
+// registers later than this one and therefore wins.
+beforeEach(() => {
+  process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0";
+});
 
 function freePort(): Promise<number> {
   return new Promise((res, rej) => {

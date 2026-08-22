@@ -144,7 +144,7 @@ export const STEPS: RolloutStep[] = [
     requires: [],
     dependsOn: [],
     verify: "record both decisions on the tracking issue, then: where.ts --record P1.config-decided",
-    note: "Not deploying a value is itself a decision here: unset means the passkey fix stays broken and the gap repair never runs. Deciding by omission is what this gate exists to stop.",
+    note: "Not deploying a value is itself a decision here, and the two variables fail in OPPOSITE directions: unset WEBAUTHN_ORIGIN leaves the passkey fix broken, while unset BASE_RPC_MAX_CALLS_PER_SEC now means the gap repair RUNS on the built-in 0.25 calls/s default. Deciding by omission is what this gate exists to stop.",
   },
   {
     id: "P2.rc-tag",

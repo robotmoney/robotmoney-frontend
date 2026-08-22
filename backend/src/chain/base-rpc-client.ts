@@ -324,30 +324,88 @@ export function _resetRpcConcurrencyForTests(): void {
 // and the wallet backfill (ops/wallet-backfill.ts) alike — draws from this one
 // bucket. Do not add a second limiter anywhere.
 //
-// UNSET = DISABLED, byte-for-byte today's behaviour. The measured figures
-// (~5-token bucket refilling at ~0.55 calls/s) come from a developer IP and are
-// NOT hardcoded here: PD6 requires them re-measured from the production droplet
-// before a backfill run, so the parameters are configuration and the backfill
-// driver refuses to start until they are set.
+// PACED BY DEFAULT, since v0.3.0. This used to read "UNSET = DISABLED,
+// byte-for-byte today's behaviour", and it deliberately did: §6.5.3 asked for
+// the bucket's parameters to be configuration rather than a constant, because
+// the only measurements anyone had were taken from a developer IP and PD6
+// required them re-derived from the production droplet first.
+//
+// That is still true of the *measurement*, and it is now handled differently.
+// The provider publishes NO rate limit at all — docs.base.org says only that
+// the public endpoints "are rate-limited and not suitable for production
+// traffic", with no number — so waiting for an authoritative figure waits
+// forever, and waiting for an operator to measure one meant the gap repair
+// (#709) shipped inert and stayed inert. A conservative constant that is
+// WRONG-BUT-SAFE beats an unset knob that is unpaced-and-off:
+//
+//   * The default is well under the measured refill, not at it, so being
+//     wrong about production's real limit costs throughput and not 429s.
+//   * It is self-correcting downward: noteRateLimitExhaustion() drains the
+//     bucket on every 429/-32016, so a limit LOWER than we guessed is absorbed
+//     by the limiter instead of storming (which is exactly what the unpaced
+//     transport could not do on 2026-08-10).
+//   * It is overridable upward or off by env, so a deployment that DOES measure
+//     its own budget still owns the number.
+//
+// WHERE THE DEFAULT COMES FROM (docs/technical/data-self-healing.md §6.3,
+// §6.5.3 — measured from a developer IP against https://mainnet.base.org):
+// a ~5-token bucket refilling at ~0.55 calls/s, metered PER-IP and per
+// sub-call, no Retry-After header. The sustained rate validated with zero
+// errors was ~0.5 calls/s (540 logical reads in 38.2s via Multicall3). The live
+// per-minute wallet samplers draw ~0.033 calls/s of that.
+//
+// 0.25 calls/s is that measurement halved: it leaves ~55% of the measured
+// budget unused as margin for the production droplet's IP being strictly worse
+// (shared NAT — §6.3's closing note), while still being ~7.5x what the live
+// samplers consume, so pacing is invisible to them. The backfill spends the
+// remainder and converges over successive hourly runs, which is what its
+// per-run cap already assumes.
+//
+// IT IS ONE BUCKET AND ONE DEFAULT FOR THE WHOLE APP. There is no per-caller
+// rate, and the backfill does not get its own — see the note above. A sweep in
+// progress therefore paces the request path too; that contention is PD6's open
+// question, and the answer to it is a keyed provider on its own bucket, not a
+// second limiter here.
 const RATE_PER_SEC_ENV = "BASE_RPC_MAX_CALLS_PER_SEC";
 const RATE_BURST_ENV = "BASE_RPC_RATE_BURST";
+
+/** Conservative shared default: half the measured ~0.55 calls/s refill. */
+export const DEFAULT_RATE_PER_SEC = 0.25;
+/** Default bucket capacity = the measured provider bucket depth (~5 tokens).
+ *  NOT ceil(rate), which would be 1 here and would serialize even a single
+ *  wallet sample (2 eth_calls) across two refill intervals. */
+export const DEFAULT_RATE_BURST = 5;
 
 interface RateBudget {
   ratePerSec: number;
   burst: number;
 }
 
-/** The configured budget, or null when the knob is unset/blank/garbage (no
- *  pacing at all — the pre-#709 transport). Read at CALL time like every other
- *  knob in this file. */
+/**
+ * The budget in force, or null ONLY when pacing has been explicitly turned off.
+ * Read at CALL time like every other knob in this file.
+ *
+ *   unset / blank / unparseable → the conservative default above.
+ *     Unparseable falls back to the default rather than to null on purpose: a
+ *     typo'd value must not silently restore the unpaced transport.
+ *   <= 0                        → null. The explicit opt-out, and the one way
+ *     back to pre-#709 behaviour: no pacing anywhere, and ops.repair_gaps
+ *     refuses to dispatch (ops/wallet-backfill.ts::assertRpcBudgetConfigured).
+ *   > 0                         → that rate.
+ */
 export function resolveRpcRateBudget(env: Record<string, string | undefined> = process.env): RateBudget | null {
   const raw = env[RATE_PER_SEC_ENV];
-  if (raw === undefined || raw === "") return null;
-  const ratePerSec = Number(raw);
-  if (!Number.isFinite(ratePerSec) || ratePerSec <= 0) return null;
+  const parsed = raw === undefined || raw === "" ? NaN : Number(raw);
+  // Explicitly zero/negative is a decision to disable; anything unreadable is
+  // not, and falls back to the safe default.
+  if (Number.isFinite(parsed) && parsed <= 0) return null;
+  const ratePerSec = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_RATE_PER_SEC;
   const rawBurst = env[RATE_BURST_ENV];
   const parsedBurst = rawBurst === undefined || rawBurst === "" ? NaN : Number(rawBurst);
-  const burst = Number.isFinite(parsedBurst) && parsedBurst >= 1 ? Math.floor(parsedBurst) : Math.max(1, Math.ceil(ratePerSec));
+  const burst =
+    Number.isFinite(parsedBurst) && parsedBurst >= 1
+      ? Math.floor(parsedBurst)
+      : Math.max(DEFAULT_RATE_BURST, Math.ceil(ratePerSec));
   return { ratePerSec, burst };
 }
 

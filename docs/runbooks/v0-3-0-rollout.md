@@ -83,15 +83,34 @@ rollout goes silently wrong. Do not re-derive them — read
 
 Re-verify each against the tip you pin in §1 before you rely on it.
 
-### 0.3 This release is mostly *inert on arrival*, and that is deliberate
+### 0.3 The gap repair is LIVE on arrival; the passkey fix is not
 
-The largest feature in the delta — the self-healing wallet/AUM gap repair
-(#709/#711) — **does nothing until you give it a budget.** `ops.repair_gaps` is
-seeded `enabled: true` (`backend/src/db/seed.ts`), but it refuses to dispatch
-repair work while `BASE_RPC_MAX_CALLS_PER_SEC` is unset, and unset is the
-default. Turning it on is a §5 decision you make deliberately, not a consequence
-of the upgrade. The same is true of passkeys: v0.3.0 ships the *fix*, but the
-fix is two environment variables you must set (§5.1).
+⚠ **This section was inverted on 2026-08-22 — re-read it even if you read this
+runbook before.** The largest feature in the delta, the self-healing wallet/AUM
+gap repair (#709/#711), used to do nothing until an operator set a measured RPC
+budget, and "unset" was the default — so the release shipped its headline
+feature inert. That gate is gone. `chain/base-rpc-client.ts` now paces every
+chain read from a built-in **0.25 calls/s** default (burst 5), and
+`ops.repair_gaps` — seeded `enabled: true` in `backend/src/db/seed.ts` —
+therefore **starts dispatching repair work on the first boot, with no
+configuration from you.** See decisions.md's PD6 amendment for why.
+
+What that means for this rollout:
+
+- **The wallet AUM and sleeve gaps start closing by themselves**, ten days per
+  hourly run (`WALLET_BACKFILL_MAX_DAYS_PER_RUN`), converging over hours. That
+  is the point of the release; it is no longer something you opt into.
+- **Every chain read in the app is now paced**, including the request path.
+  A `/api/dashboards/vault-economics` cache miss (30s TTL) costs 3 core reads
+  plus one per configured adapter, and while a repair sweep is drawing on the
+  same bucket those reads queue. This is the shared-bucket contention PD6 names;
+  the answer to it is a keyed provider, not a second limiter. Watch dashboard
+  latency in §9.
+- **§5.2 is now an opt-OUT decision, not an opt-in one.**
+
+Passkeys are the opposite and unchanged: v0.3.0 ships the *fix*, but the fix is
+an environment variable you must set (§5.1). Deploy without it and passkeys stay
+broken.
 
 ### 0.4 One user-visible divergence is unresolved between the branches
 
@@ -407,14 +426,14 @@ actor:       operator
 verify:      record both decisions on the tracking issue, then: where.ts --record P1.config-decided
 ```
 
-New for v0.3.0. Two of this release's headline changes are inert until an
-operator sets an environment variable (§0.3). Deploying without deciding is not
-neutral — it ships a passkey fix that stays broken and a gap repair that never
-runs.
+New for v0.3.0. The two variables fail in OPPOSITE directions, which is why
+this is one gate and not two (§0.3). Deploying without deciding is not neutral:
+an unset `WEBAUTHN_ORIGIN` ships a passkey fix that stays broken, while an unset
+`BASE_RPC_MAX_CALLS_PER_SEC` ships a gap repair that starts sweeping on its own.
 
 - `WEBAUTHN_ORIGIN` decided (§5.1)
 - `BASE_RPC_MAX_CALLS_PER_SEC` decided — including a deliberate "leave it
-      off for this release" (§5.2)
+      unset and let the built-in default heal" (§5.2)
 
 ---
 
@@ -426,9 +445,11 @@ Beyond the schema. Read this before §5; it is what the config decisions are for
 
 `seed()` inserts `ops.repair_gaps` (`cron: "25 * * * *"`, `enabled: true`). It
 will show up in `job_schedules` on the first boot and start being dispatched
-hourly at :25. With `BASE_RPC_MAX_CALLS_PER_SEC` unset it declines to do work
-and records that in `job_runs` — a visible no-op, not an error. Postflight
-verifies this either way (§9 Check 5).
+hourly at :25. Unless you set `BASE_RPC_MAX_CALLS_PER_SEC=0`, each run **detects
+gaps and enqueues up to ten `wallet.backfill_day` jobs**, and its `job_runs`
+output names the days dispatched, deferred, retrying and exhausted. At `0` it
+declines instead and records the refusal — a visible no-op, not an error.
+Postflight verifies whichever world you are in (§9 Check 5).
 
 ### 4.2 Passkey verification changes behaviour
 
@@ -492,12 +513,20 @@ WEBAUTHN_ORIGIN=https://robotmoney.network
 records why: trusting a forwarded header would let any caller pick the
 relying-party origin.
 
-### 5.2 ⚖ `BASE_RPC_MAX_CALLS_PER_SEC` — the gap-repair opt-in
+### 5.2 ⚖ `BASE_RPC_MAX_CALLS_PER_SEC` — the gap-repair opt-OUT
 
-**Unset (the default) means two things at once:** no RPC pacing anywhere — the
-exact behaviour that exists today — **and** the self-healing backfill stays off.
-`ops.repair_gaps` is seeded and enabled but refuses to dispatch without a budget.
-That refusal *is* the opt-in.
+⚠ **This section previously recommended leaving the budget unset, on the
+reading that unset meant "ship the code, change no behaviour". That is no longer
+what unset does.** Since 2026-08-22 the transport paces from a built-in default
+and the backfill runs on it. Rehearse §7 against the *current* behaviour, not a
+remembered reading of this section.
+
+| value | pacing | gap repair |
+|---|---|---|
+| **unset** (the default) | 0.25 calls/s, burst 5 | **ON** |
+| a positive number | that rate | ON |
+| `0` | none — the pre-v0.3.0 transport | OFF (declines each run) |
+| unreadable (a typo) | the 0.25 default | ON |
 
 There is deliberately **one** token bucket shared by every chain read in the app
 — the per-minute wallet samplers, the vault/buyback readers, and the backfill
@@ -505,18 +534,33 @@ alike. `.env.example` records why: the public Base RPC meters per-IP, so a secon
 independent limiter would sum to 2× against one bucket and 429 both. That is how
 the 2026-08-10 storm killed `vault.sample_share_price` (#651).
 
-> ⛔ **Do not copy the number out of the docs.** The ~0.55 calls/s figure in
-> `docs/technical/data-self-healing.md` §6.5.3 was measured **from a developer
-> IP**. `.env.example` calls it "a starting point, not a value to copy." Measure
-> the production host's real limit, or leave the budget unset for this release
-> and enable it as a separate, observable change.
+**Where the 0.25 came from, and why it is not a vendor figure.** Base publishes
+no rate limit for `https://mainnet.base.org` — its docs say only that the public
+endpoints are "rate-limited and not suitable for production traffic". The
+measured figures in `docs/technical/data-self-healing.md` §6.5.3 (~5-token
+bucket, ~0.55 calls/s) came **from a developer IP**, and the default is half of
+that, leaving margin for this droplet's IP being worse. A guess that is too low
+costs throughput, not 429s, and a 429 or `-32016` drains the bucket so the
+limiter corrects itself downward.
 
-**Recommendation: leave it unset for the v0.3.0 cutover.** Ship the code, keep
-the behaviour change out of the rollout, and turn the backfill on afterwards
-when it can be watched on its own. Record whichever way you decide on #661.
+**Recommendation: leave it unset.** The gap repair is the point of this release
+(§0.3) and a measurement that never happened is what kept it switched off. Two
+things to watch instead of a value to set:
 
-Companion knobs, all optional and all inert while the budget is unset:
-`BASE_RPC_RATE_BURST`, `WALLET_BACKFILL_MAX_DAYS_PER_RUN` (default 10),
+1. **Dashboard latency during the first sweep.** The repair draws on the same
+   bucket as the request path; a `/api/dashboards/vault-economics` cache miss
+   needs 3 + N adapter reads. If it degrades unacceptably, raise the rate rather
+   than turning repair off — the contention is PD6's, and the real fix is a
+   keyed provider on its own bucket.
+2. **`GET /api/admin/gaps` draining.** That is the whole deliverable. If it does
+   not shrink over the first few hours, the repair is not working and the
+   `job_runs` output for `ops.repair_gaps` says why.
+
+Set `0` only if you need the pre-v0.3.0 transport back. Record whichever way you
+decide on #661.
+
+Companion knobs: `BASE_RPC_RATE_BURST` (default 5, the measured bucket depth),
+`WALLET_BACKFILL_MAX_DAYS_PER_RUN` (default 10),
 `WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY` (default 3),
 `GECKO_OHLCV_MIN_INTERVAL_MS` (default 3000 — a GeckoTerminal control, unrelated
 to the RPC budget).
@@ -661,7 +705,10 @@ the stage rehearsal report (§7.1), not against this list:
       schedule at `'all'`.
 - `ops.repair_gaps` appears in `job_schedules`, enabled.
 - With `BASE_RPC_MAX_CALLS_PER_SEC` unset, `ops.repair_gaps` fires at :25
-      and **declines** — recorded in `job_runs`, not an error. (§4.1)
+      and **dispatches**: `job_runs` names the days it enqueued and the days it
+      deferred, and matching `wallet.backfill_day` jobs exist. Let at least one
+      day complete on the twin and confirm the written rows carry
+      `provenance='backfilled'`. (§4.1)
 - **Time the migration set.** Record wall-clock. This is the number that
       sizes the maintenance window; §2.2's "well under a second" is a prediction
       from reading the DDL, not a measurement.
@@ -933,7 +980,8 @@ confirm in prose — the tickable copy lives on #661.
 ### Config decisions taken
 
 - `WEBAUTHN_ORIGIN`: `________`
-- `BASE_RPC_MAX_CALLS_PER_SEC`: set to `______` / **left unset** (§5.2)
+- `BASE_RPC_MAX_CALLS_PER_SEC`: set to `______` / **left unset — repair runs
+  on the 0.25 calls/s default** / **set to 0 — repair off** (§5.2)
 - Seam banner (§0.4): shipped / removed
 
 ### Timeline

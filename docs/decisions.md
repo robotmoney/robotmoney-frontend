@@ -2227,6 +2227,23 @@ means no pacing (exactly the prior behaviour) *and* means the seeded
 `ops.repair_gaps` schedule is a no-op — so a demo or CI boot never sweeps months
 of history, and a deployment opts into repair by measuring its own limit.
 
+> **Superseded in part (2026-08-22): the opt-in is retired; the parameters stay
+> configurable.** Making "unset" mean *unpaced and unhealing* meant the release
+> that carries this feature shipped it inert, and the number it was waiting for
+> does not exist to be looked up: Base publishes no rate limit for
+> `https://mainnet.base.org`, only that its public endpoints are "rate-limited
+> and not suitable for production traffic". So the transport now paces from a
+> conservative constant — `DEFAULT_RATE_PER_SEC = 0.25` (half the measured
+> refill, ~7.5× what the live samplers draw) with a burst of 5 (the measured
+> bucket depth) — and `ops.repair_gaps` dispatches on an ordinary live
+> deployment without configuration. Everything else above stands: it is still
+> ONE bucket for the whole app, the value is still overridable with
+> `BASE_RPC_MAX_CALLS_PER_SEC`, and `BASE_RPC_MAX_CALLS_PER_SEC=0` still means
+> no limiter and no sweep — now an explicit opt-OUT rather than the default. A
+> guess that is too low costs throughput; the 429/`-32016` feedback into the
+> bucket corrects it downward. A droplet measurement still improves the number,
+> and PD6's real question — a keyed provider on its own bucket — remains open.
+
 **Self-healing means scheduled, not manual.** The repair is an ordinary producer
 in the analytics lane — `ops.repair_gaps` (dispatch by `remediationClass`) and
 `wallet.backfill_day` (one day per job) — and its work list is re-derived **from
