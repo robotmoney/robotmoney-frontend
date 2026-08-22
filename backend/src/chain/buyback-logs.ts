@@ -25,7 +25,10 @@ import {
   encodeAddressArg,
   ethBlockNumber,
   ethGetBlockByNumber,
+  ethGetBlockByNumberBatch,
   ethGetLogs,
+  rpcBatchRequest,
+  type EthGetLogsParams,
   type EthLog,
   type RpcCallOptions,
 } from "./base-rpc-client.ts";
@@ -171,14 +174,104 @@ function rpcOpts(): RpcCallOptions {
 // (which selects the historical price candle) come from the SAME block read, so
 // a row's date and its price can never describe different days.
 const blockTimeCache = new Map<number, { day: string; ts: number }>();
+
+function rememberBlockTime(blockNumber: number, timestampHex: string): { day: string; ts: number } {
+  const ts = parseInt(timestampHex, 16);
+  const at = { day: new Date(ts * 1000).toISOString().slice(0, 10), ts };
+  blockTimeCache.set(blockNumber, at);
+  return at;
+}
+
+/**
+ * Fill the block-time cache for a whole chunk's blocks in batched POSTs.
+ *
+ * The scan loop below reads one swap at a time, and each swap needs its own
+ * block's timestamp — so an N-swap chunk made N separate `eth_getBlockByNumber`
+ * round trips against a provider that meters requests. The block numbers are
+ * all known the moment the chunk's logs land, and none of them depends on any
+ * other, so they are exactly the independent axis §6.5.5 says to batch.
+ *
+ * BEST-EFFORT BY DESIGN. A block that the batch could not answer is simply left
+ * uncached, and `blockTime` falls back to its single read — which throws the
+ * same way it always did. Priming may make the scan cheaper; it may never make
+ * it wrong, and it may never turn a failed read into a missing row.
+ */
+async function primeBlockTimes(blockNumbers: readonly number[]): Promise<void> {
+  const wanted = [...new Set(blockNumbers)].filter((n) => !blockTimeCache.has(n));
+  if (wanted.length === 0) return;
+  const res = await ethGetBlockByNumberBatch(wanted, rpcOpts());
+  for (let i = 0; i < wanted.length; i++) {
+    const r = res[i];
+    if (r?.ok && r.result.timestamp) rememberBlockTime(wanted[i]!, r.result.timestamp);
+  }
+}
+
 async function blockTime(blockNumber: number): Promise<{ day: string; ts: number }> {
   const hit = blockTimeCache.get(blockNumber);
   if (hit) return hit;
   const block = await ethGetBlockByNumber(blockNumber, rpcOpts());
-  const ts = parseInt(block.timestamp, 16);
-  const at = { day: new Date(ts * 1000).toISOString().slice(0, 10), ts };
-  blockTimeCache.set(blockNumber, at);
-  return at;
+  return rememberBlockTime(blockNumber, block.timestamp);
+}
+
+// The WETH-out logs of a single block, keyed by block. The scan needs them
+// per TX, but the filter is per BLOCK and the tx match happens client-side, so
+// one read serves every swap in that block.
+const wethLogsCache = new Map<number, EthLog[]>();
+
+/**
+ * Drop both of the SCAN's block-keyed caches (distinct from
+ * _resetBuybackCacheForTests above, which clears the read path's TTL cache). Called at the START of every scan run, and by
+ * tests between cases.
+ *
+ * BOUNDED BY THE RUN, not by the process. Both maps exist to let one run's
+ * batched prefetch serve its own per-swap loop; keeping them across runs would
+ * buy almost nothing — the cursor moves forward, so a later run asks about
+ * different blocks — while growing without limit inside a worker that lives for
+ * weeks. `wethLogsCache` holds log ARRAYS rather than two numbers, so it is the
+ * one that would actually matter. Clearing per run makes the high-water mark one
+ * run's working set, which the chunk bounds already cap.
+ */
+export function resetBuybackScanCaches(): void {
+  blockTimeCache.clear();
+  wethLogsCache.clear();
+}
+
+/** Test-only alias, matching base-rpc-client's `_reset*ForTests` convention. */
+export const _resetBuybackScanCachesForTests = resetBuybackScanCaches;
+
+function wethLogsParams(wethToken: string, primaryWallet: string, blockNumber: number): EthGetLogsParams {
+  const blockHex = "0x" + blockNumber.toString(16);
+  return {
+    address: wethToken,
+    topics: [TRANSFER_TOPIC, topicAddress(primaryWallet), null],
+    fromBlock: blockHex,
+    toBlock: blockHex,
+  };
+}
+
+/**
+ * Fill the WETH-log cache for a chunk's blocks, ten `eth_getLogs` per POST.
+ *
+ * Same shape as primeBlockTimes, and same refusal: an unanswered block is left
+ * out of the cache so the per-tx path re-reads it and fails loudly if it must.
+ * An unpaired swap must stay unpaired for a real reason, never because a batch
+ * entry quietly went missing.
+ */
+async function primeWethLogs(
+  wethToken: string,
+  primaryWallet: string,
+  blockNumbers: readonly number[],
+): Promise<void> {
+  const wanted = [...new Set(blockNumbers)].filter((n) => !wethLogsCache.has(n));
+  if (wanted.length === 0) return;
+  const res = await rpcBatchRequest<EthLog[]>(
+    wanted.map((n) => ({ method: "eth_getLogs", params: [wethLogsParams(wethToken, primaryWallet, n)] })),
+    rpcOpts(),
+  );
+  for (let i = 0; i < wanted.length; i++) {
+    const r = res[i];
+    if (r?.ok && Array.isArray(r.result)) wethLogsCache.set(wanted[i]!, r.result);
+  }
 }
 
 // WETH/USD at a swap's own block time, from the settled daily candle of the
@@ -206,16 +299,17 @@ async function wethSpentForTx(
   blockNumber: number,
   txHash: string,
 ): Promise<number | null> {
-  const blockHex = "0x" + blockNumber.toString(16);
-  const logs = await ethGetLogs(
-    {
-      address: wethToken,
-      topics: [TRANSFER_TOPIC, topicAddress(primaryWallet), null],
-      fromBlock: blockHex,
-      toBlock: blockHex,
-    },
-    rpcOpts(),
-  );
+  // Served from the chunk's primed batch when it is there; otherwise read on
+  // its own, which is also what happens when priming could not answer this
+  // block. The result is identical either way — only the number of round trips
+  // differs.
+  const logs =
+    wethLogsCache.get(blockNumber) ??
+    (await (async () => {
+      const fetched = await ethGetLogs(wethLogsParams(wethToken, primaryWallet, blockNumber), rpcOpts());
+      wethLogsCache.set(blockNumber, fetched);
+      return fetched;
+    })());
   let raw = 0n;
   let matched = false;
   for (const log of logs) {
@@ -250,6 +344,10 @@ export async function indexBuybacks(): Promise<IndexResult> {
   const chunk = BUYBACK_LOG_CHUNK;
   const maxChunks = BUYBACK_MAX_CHUNKS;
   const floor = cfg.fromBlock;
+
+  // One run, one working set. See resetBuybackScanCaches for why these are scoped to
+  // the run rather than the process.
+  resetBuybackScanCaches();
 
   let indexed = 0;
   let scannedToBlock: number | null = null;
@@ -290,6 +388,16 @@ export async function indexBuybacks(): Promise<IndexResult> {
         },
         rpcOpts(),
       );
+      // ONE batched prefetch per chunk, before the per-swap loop below.
+      // Every swap needs its block's timestamp and its block's WETH-out logs,
+      // and both sets of block numbers are fully known right here — so they go
+      // out ten to a POST instead of two round trips per swap, serially. The
+      // loop's logic is untouched: it still asks for one swap's data at a time
+      // and still refuses a swap it cannot pair.
+      const chunkBlocks = logs.map((l) => parseInt(l.blockNumber, 16));
+      await primeBlockTimes(chunkBlocks);
+      await primeWethLogs(cfg.wethToken, cfg.primaryWallet, chunkBlocks);
+
       for (const log of logs) {
         const blockNumber = parseInt(log.blockNumber, 16);
         const logIndex = parseInt(log.logIndex, 16);

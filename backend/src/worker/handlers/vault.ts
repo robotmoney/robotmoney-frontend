@@ -8,10 +8,9 @@ import { config, resolveBaseRpcSource, resolveVaultAdapters } from "../../config
 import { sql } from "../../db/worker-client.ts";
 import {
   type Aggregate3Result,
-  callTotalAssets,
-  callTotalSupply,
   decodeUint256,
   encodeTotalAssetsCall,
+  encodeTotalSupplyCall,
   isEmptyReturnData,
   multicall3Aggregate3,
 } from "../../chain/base-rpc-client.ts";
@@ -24,10 +23,30 @@ export async function sampleSharePrice(payload: Record<string, unknown> = {}): P
   // read at "latest" — a replayed slot cannot be honoured for a past hour.
   if (isReplayedSlot(payload)) return declineReplayedSlot("vault.sample_share_price", payload);
   const opts = { rpcUrl: config.baseRpcUrl };
-  const [totalAssets, totalSupply] = await Promise.all([
-    callTotalAssets(config.vault.address, opts),
-    callTotalSupply(config.vault.address, opts),
-  ]);
+  // ONE eth_call, not two — and here batching is not only cheaper, it is more
+  // correct. Two separate reads at "latest" can land either side of a block
+  // boundary, which would divide a totalAssets from one block by a totalSupply
+  // from another and persist the quotient as an hour's share price. Multicall3
+  // evaluates both at a single block, so the ratio is always of two numbers that
+  // were simultaneously true.
+  const coreRes = await multicall3Aggregate3(
+    [
+      { target: config.vault.address, allowFailure: true, callData: encodeTotalAssetsCall() },
+      { target: config.vault.address, allowFailure: true, callData: encodeTotalSupplyCall() },
+    ],
+    opts,
+  );
+  const requireWord = (r: Aggregate3Result | undefined, what: string): bigint => {
+    // A reverted or empty sub-call is not a zero: a zero totalSupply would make
+    // sharePrice null, and a zero totalAssets would persist a real vault as
+    // empty. Throw so the job degrades loudly, as an eth_call error did before.
+    if (!r || !r.success || isEmptyReturnData(r.returnData)) {
+      throw new Error(`vault.sample_share_price: ${what} unreadable at latest`);
+    }
+    return decodeUint256(r.returnData);
+  };
+  const totalAssets = requireWord(coreRes[0], "totalAssets()");
+  const totalSupply = requireWord(coreRes[1], "totalSupply()");
   const sharePrice = totalSupply === 0n ? null : Number(totalAssets) / Number(totalSupply);
   const sampledAt = new Date();
   const sampleHour = new Date(sampledAt);

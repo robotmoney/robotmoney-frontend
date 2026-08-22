@@ -34,14 +34,18 @@ import {
 } from "../config.ts";
 import { sql } from "../db/client.ts";
 import {
+  decodeAggregate3,
   decodeUint256,
+  encodeAggregate3,
   encodeBalanceOfCall,
   encodeConvertToAssetsCall,
   encodeGetEthBalanceCall,
+  ethCallBatch,
   isEmptyReturnData,
   multicall3Aggregate3,
   MULTICALL3_ADDRESS,
   type Aggregate3Result,
+  type BatchResult,
   type Call3,
   type RpcCallOptions,
 } from "./base-rpc-client.ts";
@@ -248,14 +252,50 @@ export async function readChainAmountsBatched(
   logLabel: string,
   readOpts: ChainReadOptions = {},
 ): Promise<Map<string, ChainAmount>> {
-  const opts = rpcOpts(readOpts.blockTag);
+  const tag = readOpts.blockTag ?? "latest";
+  const byBlock = await readChainAmountsAtBlocks(reads, logLabel, [tag], readOpts);
+  return byBlock.get(tag) ?? new Map<string, ChainAmount>();
+}
+
+/**
+ * Read every keyed leg AT SEVERAL BLOCKS, in two POSTs rather than two per block.
+ *
+ * WHY THIS IS THE SHAPE. `aggregate3` already collapses one block's ~27 reads
+ * into one `eth_call`, but it executes at a SINGLE block, so a ten-day repair
+ * still made ten of them. The calls themselves are identical across blocks —
+ * targets and calldata depend only on `reads` — so the whole difference between
+ * two days is the block tag, and JSON-RPC array batching is what carries N tags
+ * in one request (§6.5.5).
+ *
+ * ROUND 2 IS THE HAZARD, AND THE REASON THE STATE IS PER BLOCK. NAV is
+ * `idleUsdc + convertToAssets(shares)`, and the shares come from round 1. Every
+ * accumulator below therefore lives inside a per-block `BlockState`: pairing one
+ * block's shares with another block's exchange rate would produce a total that
+ * is real-looking, wrong, and completely silent. The rounds still run in
+ * lockstep — all blocks' round 1, then all blocks' round 2 — so batching costs
+ * no extra sequential depth.
+ *
+ * FAILURE IS PER BLOCK. A block whose `eth_call` errors degrades ITS OWN keys to
+ * `{ok:false}` and leaves the other blocks untouched, which is the same
+ * all-fail-for-this-read outcome the single-block path produced on a throw, just
+ * scoped to the block it belongs to.
+ */
+export async function readChainAmountsAtBlocks(
+  reads: KeyedAssetRead[],
+  logLabel: string,
+  blockTags: readonly string[],
+  readOpts: ChainReadOptions = {},
+): Promise<Map<string, Map<string, ChainAmount>>> {
+  const byBlock = new Map<string, Map<string, ChainAmount>>();
+  const tags = [...new Set(blockTags)];
+  for (const t of tags) byBlock.set(t, new Map<string, ChainAmount>());
+  if (tags.length === 0 || reads.length === 0) return byBlock;
+
   const strictEmpty = readOpts.strictEmptyReturn === true;
   // A sub-call is usable only if it succeeded AND — under a block-addressed
   // read — actually returned bytes. See ChainReadOptions.strictEmptyReturn.
   const subCallFailed = (r: Aggregate3Result | undefined): boolean =>
     !r || !r.success || (strictEmpty && isEmptyReturnData(r.returnData));
-  const out = new Map<string, ChainAmount>();
-  if (reads.length === 0) return out;
   for (const r of reads) {
     // config (SP500) is an off-chain size — the callers resolve it from config
     // and never pass it here (loud guard, not a silent 0).
@@ -315,108 +355,223 @@ export async function readChainAmountsBatched(
     }
   }
 
-  const rawSum = new Map<string, bigint>(); // erc20/aave/native keys
-  const idleUsdcRaw = new Map<string, bigint>(); // strategy keys
-  const underlyingRaw = new Map<string, bigint>(); // strategy key -> Σ aToken-style balances (6dp USDC)
-  const vaultSharesRaw = new Map<string, Map<number, bigint>>(); // strategy key -> vaultIndex -> shares
-  const errored = new Set<string>();
-  let round1: Aggregate3Result[];
-  try {
-    round1 = await multicall3Aggregate3(calls, opts);
-  } catch (err) {
-    // The whole batch eth_call failed (transport/HTTP/JSON-RPC) — degrade EVERY
-    // chain-read key to stale, exactly as the pre-batch all-fail path did.
-    console.error(`${logLabel}: batched round-1 multicall failed, degrading all chain legs to stale:`, err);
-    for (const r of reads) out.set(r.key, { ok: false });
-    return out;
+  // EVERY accumulator is PER BLOCK. Round 2 consumes round 1's shares, so a
+  // single shared set of these is exactly how a batched implementation would
+  // silently value one day's holdings at another day's exchange rate.
+  interface BlockState {
+    rawSum: Map<string, bigint>; // erc20/aave/native keys
+    idleUsdcRaw: Map<string, bigint>; // strategy keys
+    underlyingRaw: Map<string, bigint>; // strategy key -> Σ aToken-style balances (6dp USDC)
+    vaultSharesRaw: Map<string, Map<number, bigint>>; // strategy key -> vaultIndex -> shares
+    vaultAssetsRaw: Map<string, bigint>; // strategy key -> summed vault assets (6dp USDC)
+    errored: Set<string>;
   }
-  for (let i = 0; i < legs.length; i++) {
-    const leg = legs[i]!;
-    const r = round1[i];
-    if (subCallFailed(r)) {
-      errored.add(leg.key); // a reverted (or empty, when strict) sub-call fails the whole key
+  const states = new Map<string, BlockState>();
+  for (const tag of tags) {
+    states.set(tag, {
+      rawSum: new Map(),
+      idleUsdcRaw: new Map(),
+      underlyingRaw: new Map(),
+      vaultSharesRaw: new Map(),
+      vaultAssetsRaw: new Map(),
+      errored: new Set(),
+    });
+  }
+
+  // ── Round 1, every block in ONE request. ──────────────────────────────────
+  // The Call3[] is identical for all of them (it depends only on `reads`), so
+  // the same aggregate3 payload goes out once per block tag.
+  const round1ByTag = await aggregateAcrossBlocks(
+    new Map(tags.map((tag) => [tag, calls])),
+    logLabel,
+    "round-1",
+  );
+
+  for (const tag of tags) {
+    const st = states.get(tag)!;
+    const round1 = round1ByTag.get(tag);
+    if (!round1) {
+      // This block's eth_call failed — degrade EVERY chain-read key AT THIS
+      // BLOCK to stale, exactly as the pre-batch all-fail path did, and leave
+      // the other blocks alone.
+      for (const r of reads) st.errored.add(r.key);
       continue;
     }
-    const value = decodeUint256(r!.returnData);
-    if (leg.kind === "balance") {
-      rawSum.set(leg.key, (rawSum.get(leg.key) ?? 0n) + value);
-    } else if (leg.kind === "idleUsdc") {
-      idleUsdcRaw.set(leg.key, value);
-    } else if (leg.kind === "underlying") {
-      underlyingRaw.set(leg.key, (underlyingRaw.get(leg.key) ?? 0n) + value);
-    } else if (value > 0n) {
-      let byVault = vaultSharesRaw.get(leg.key);
-      if (!byVault) {
-        byVault = new Map();
-        vaultSharesRaw.set(leg.key, byVault);
+    for (let i = 0; i < legs.length; i++) {
+      const leg = legs[i]!;
+      const r = round1[i];
+      if (subCallFailed(r)) {
+        st.errored.add(leg.key); // a reverted (or empty, when strict) sub-call fails the whole key
+        continue;
       }
-      byVault.set(leg.vaultIndex, value);
+      const value = decodeUint256(r!.returnData);
+      if (leg.kind === "balance") {
+        st.rawSum.set(leg.key, (st.rawSum.get(leg.key) ?? 0n) + value);
+      } else if (leg.kind === "idleUsdc") {
+        st.idleUsdcRaw.set(leg.key, value);
+      } else if (leg.kind === "underlying") {
+        st.underlyingRaw.set(leg.key, (st.underlyingRaw.get(leg.key) ?? 0n) + value);
+      } else if (value > 0n) {
+        let byVault = st.vaultSharesRaw.get(leg.key);
+        if (!byVault) {
+          byVault = new Map();
+          st.vaultSharesRaw.set(leg.key, byVault);
+        }
+        byVault.set(leg.vaultIndex, value);
+      }
     }
   }
 
   // ── Round 2: ERC-4626 NAV convertToAssets(shares) per (key, vault) w/ shares. ──
-  const navCalls: Call3[] = [];
-  const navKeys: { key: string; vaultIndex: number }[] = [];
-  for (const r of reads) {
-    if (r.asset.valuationKind !== "strategy" || errored.has(r.key)) continue;
-    const byVault = vaultSharesRaw.get(r.key);
-    if (!byVault) continue;
-    for (const [vaultIndex, shares] of byVault) {
-      navCalls.push({ target: strategyVaults[vaultIndex]!.address, allowFailure: true, callData: encodeConvertToAssetsCall(shares) });
-      navKeys.push({ key: r.key, vaultIndex });
-    }
-  }
-  const vaultAssetsRaw = new Map<string, bigint>(); // strategy key -> summed vault assets (6dp USDC)
-  if (navCalls.length > 0) {
-    let round2: Aggregate3Result[];
-    try {
-      round2 = await multicall3Aggregate3(navCalls, opts);
-    } catch (err) {
-      console.error(`${logLabel}: batched round-2 NAV multicall failed, degrading strategy legs to stale:`, err);
-      for (const nk of navKeys) errored.add(nk.key);
-      round2 = [];
-    }
-    for (let i = 0; i < navKeys.length; i++) {
-      const r = round2[i];
-      const { key } = navKeys[i]!;
-      if (subCallFailed(r)) {
-        errored.add(key);
-        continue;
+  // Built from EACH block's own round-1 shares, then all blocks issued together
+  // — one more request, not one more per block.
+  const navCallsByTag = new Map<string, Call3[]>();
+  const navKeysByTag = new Map<string, { key: string; vaultIndex: number }[]>();
+  for (const tag of tags) {
+    const st = states.get(tag)!;
+    const navCalls: Call3[] = [];
+    const navKeys: { key: string; vaultIndex: number }[] = [];
+    for (const r of reads) {
+      if (r.asset.valuationKind !== "strategy" || st.errored.has(r.key)) continue;
+      const byVault = st.vaultSharesRaw.get(r.key);
+      if (!byVault) continue;
+      for (const [vaultIndex, shares] of byVault) {
+        navCalls.push({ target: strategyVaults[vaultIndex]!.address, allowFailure: true, callData: encodeConvertToAssetsCall(shares) });
+        navKeys.push({ key: r.key, vaultIndex });
       }
-      vaultAssetsRaw.set(key, (vaultAssetsRaw.get(key) ?? 0n) + decodeUint256(r!.returnData));
+    }
+    if (navCalls.length > 0) {
+      navCallsByTag.set(tag, navCalls);
+      navKeysByTag.set(tag, navKeys);
     }
   }
 
-  // ── Resolve each key's amount (or its failure). ────────────────────────────
-  for (const r of reads) {
-    if (errored.has(r.key)) {
-      out.set(r.key, { ok: false });
+  if (navCallsByTag.size > 0) {
+    const round2ByTag = await aggregateAcrossBlocks(navCallsByTag, logLabel, "round-2 NAV");
+    for (const [tag, navKeys] of navKeysByTag) {
+      const st = states.get(tag)!;
+      const round2 = round2ByTag.get(tag);
+      if (!round2) {
+        for (const nk of navKeys) st.errored.add(nk.key);
+        continue;
+      }
+      for (let i = 0; i < navKeys.length; i++) {
+        const r = round2[i];
+        const { key } = navKeys[i]!;
+        if (subCallFailed(r)) {
+          st.errored.add(key);
+          continue;
+        }
+        st.vaultAssetsRaw.set(key, (st.vaultAssetsRaw.get(key) ?? 0n) + decodeUint256(r!.returnData));
+      }
+    }
+  }
+
+  // ── Resolve each key's amount (or its failure), block by block. ───────────
+  for (const tag of tags) {
+    const st = states.get(tag)!;
+    const out = byBlock.get(tag)!;
+    for (const r of reads) {
+      if (st.errored.has(r.key)) {
+        out.set(r.key, { ok: false });
+        continue;
+      }
+      switch (r.asset.valuationKind) {
+        case "erc20":
+        case "aave": // Aave V3 aToken balanceOf is already underlying-denominated (1:1).
+        case "native":
+          out.set(r.key, { ok: true, amount: amountFrom(st.rawSum.get(r.key) ?? 0n, r.asset.decimals) });
+          break;
+        case "strategy": {
+          // NAV = idle USDC + Σ convertToAssets(shares) over the ERC-4626 vaults
+          // + Σ balanceOf over the underlying-denominated positions. An account
+          // holding NONE of them values as idle-only — still a real,
+          // non-reverting live read, but an incomplete picture of an account that
+          // is supposed to be deployed, so the non-idle total travels with it as
+          // `strategyPositions` for the caller to disclose (issue #642).
+          const idle = st.idleUsdcRaw.get(r.key) ?? 0n;
+          const vaultAssets = st.vaultAssetsRaw.get(r.key) ?? 0n;
+          const underlying = st.underlyingRaw.get(r.key) ?? 0n;
+          const positions = vaultAssets + underlying;
+          out.set(r.key, {
+            ok: true,
+            amount: amountFrom(idle + positions, 6), // underlying USDC (6 dp)
+            strategyPositions: amountFrom(positions, 6),
+          });
+          break;
+        }
+      }
+    }
+  }
+  return byBlock;
+}
+
+/**
+ * Issue one `aggregate3` per block tag, all in ONE batched request.
+ *
+ * `undefined` for a tag means that block could not be read — the caller degrades
+ * that block's keys and no others. A failure of the REQUEST itself degrades
+ * every block in it, which is the same outcome the single-block path produced
+ * when the transport was down.
+ */
+async function aggregateAcrossBlocks(
+  callsByTag: Map<string, Call3[]>,
+  logLabel: string,
+  round: string,
+): Promise<Map<string, Aggregate3Result[] | undefined>> {
+  const out = new Map<string, Aggregate3Result[] | undefined>();
+  const entries = [...callsByTag.entries()].filter(([, c]) => c.length > 0);
+  if (entries.length === 0) return out;
+
+  // ONE BLOCK STAYS A PLAIN eth_call, NOT A BATCH OF ONE.
+  //
+  // Every live caller — the request path, both samplers, the projects wallet
+  // read — reads a single block, and wrapping their one call in a JSON-RPC array
+  // would change the bytes on the wire for all of them while saving exactly
+  // nothing: one call in an array is still one round trip. Array batching earns
+  // its keep only when there are several blocks to carry, which is the backfill
+  // window and nothing else today.
+  if (entries.length === 1) {
+    const [tag, c] = entries[0]!;
+    try {
+      out.set(tag, await multicall3Aggregate3(c, rpcOpts(tag)));
+    } catch (err) {
+      console.error(`${logLabel}: batched ${round} multicall failed, degrading all chain legs to stale:`, err);
+      out.set(tag, undefined);
+    }
+    return out;
+  }
+
+  let res: BatchResult<string>[];
+  try {
+    res = await ethCallBatch(
+      entries.map(([tag, c]) => ({ to: MULTICALL3_ADDRESS, data: encodeAggregate3(c), blockTag: tag })),
+      rpcOpts(),
+    );
+  } catch (err) {
+    console.error(`${logLabel}: batched ${round} multicall failed, degrading all chain legs to stale:`, err);
+    for (const [tag] of entries) out.set(tag, undefined);
+    return out;
+  }
+
+  for (let i = 0; i < entries.length; i++) {
+    const tag = entries[i]![0];
+    const r = res[i];
+    if (!r || !r.ok) {
+      console.error(
+        `${logLabel}: batched ${round} multicall failed at block ${tag}, degrading that block's legs to stale:`,
+        r && !r.ok ? r.error.message : "no response",
+      );
+      out.set(tag, undefined);
       continue;
     }
-    switch (r.asset.valuationKind) {
-      case "erc20":
-      case "aave": // Aave V3 aToken balanceOf is already underlying-denominated (1:1).
-      case "native":
-        out.set(r.key, { ok: true, amount: amountFrom(rawSum.get(r.key) ?? 0n, r.asset.decimals) });
-        break;
-      case "strategy": {
-        // NAV = idle USDC + Σ convertToAssets(shares) over the ERC-4626 vaults
-        // + Σ balanceOf over the underlying-denominated positions. An account
-        // holding NONE of them values as idle-only — still a real,
-        // non-reverting live read, but an incomplete picture of an account that
-        // is supposed to be deployed, so the non-idle total travels with it as
-        // `strategyPositions` for the caller to disclose (issue #642).
-        const idle = idleUsdcRaw.get(r.key) ?? 0n;
-        const vaultAssets = vaultAssetsRaw.get(r.key) ?? 0n;
-        const underlying = underlyingRaw.get(r.key) ?? 0n;
-        const positions = vaultAssets + underlying;
-        out.set(r.key, {
-          ok: true,
-          amount: amountFrom(idle + positions, 6), // underlying USDC (6 dp)
-          strategyPositions: amountFrom(positions, 6),
-        });
-        break;
-      }
+    try {
+      out.set(tag, decodeAggregate3(r.result));
+    } catch (err) {
+      // Undecodable bytes are not a zero-length result set: treat the block as
+      // unread rather than silently valuing every leg at nothing.
+      console.error(`${logLabel}: batched ${round} result at block ${tag} did not decode, degrading that block:`, err);
+      out.set(tag, undefined);
     }
   }
   return out;
