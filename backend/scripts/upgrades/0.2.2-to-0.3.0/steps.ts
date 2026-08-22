@@ -33,7 +33,6 @@ import {
   RESTORE_CODE as SHARED_RESTORE_CODE,
   postflightCode,
   preflightCode,
-  stepById as stepByIdIn,
 } from "../../lib/rollout-manifest.ts";
 import type { RolloutStep as SharedRolloutStep } from "../../lib/rollout-manifest.ts";
 
@@ -298,7 +297,3 @@ export const STEPS: RolloutStep[] = [
     verify: "fill in §12, then: where.ts --record P9.report",
   },
 ];
-
-export function stepById(id: string): RolloutStep | undefined {
-  return stepByIdIn(STEPS, id);
-}
