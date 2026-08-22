@@ -23,100 +23,50 @@
 export { TAG_GLOB, THIS_RELEASE_MIGRATIONS, TRACKING_ISSUE } from "./release.ts";
 import { TRACKING_ISSUE } from "./release.ts";
 
-export type HostRole = "stage" | "cutover" | "any";
-export type Actor = "script" | "operator" | "agent";
+// The step TYPE and the four glob groups used to be declared here, in full, in
+// every release directory — 68% identical across the two live copies. They now
+// come from the shared half; what stays below is what is actually about this
+// release. See backend/scripts/lib/rollout-manifest.ts for why the gate letters
+// did NOT move with them.
+import {
+  APP_CODE as SHARED_APP_CODE,
+  RESTORE_CODE as SHARED_RESTORE_CODE,
+  postflightCode,
+  preflightCode,
+  stepById as stepByIdIn,
+} from "../../lib/rollout-manifest.ts";
+import type { RolloutStep as SharedRolloutStep } from "../../lib/rollout-manifest.ts";
 
-export interface RolloutStep {
-  /** Stable id, also the receipt filename. Phase-prefixed so manifest order
-   *  and display order are the same thing. */
-  id: string;
-  phase: string;
-  /** Runbook section this step is written in. The test asserts the prose at
-   *  that section carries a matching `yaml step` block. */
-  section: string;
-  title: string;
-  /** Gate letter, for the runbook's §3 gates. The letters are stable NAMES, not
-   *  an order — §3's execution order is C, B, D, E, which is manifest order. */
-  gate?: "A" | "B" | "C" | "F";
-  hostRole: HostRole;
-  actor: Actor;
-  /** Step ids that must be `ok` before this one can run. */
-  requires: string[];
-  /**
-   * Code paths whose change invalidates a completed receipt. This is the axis
-   * that makes "we cut a new rc" answerable without redoing everything: a
-   * docs-only commit invalidates nothing, while a commit touching a step's own
-   * inputs invalidates exactly that step. Repo-relative globs, matched against
-   * `git diff --name-only <receipt sha>..HEAD`.
-   *
-   * Empty = the step is not code-bound (an operator observation, a git tag).
-   */
-  dependsOn: string[];
-  /**
-   * Artifacts, relative to the backup dir. `<STAMP>` expands to .last-stamp.
-   * Their absence demotes the step to `missing` no matter what a receipt says.
-   *
-   * Patterns are ANDed: every one listed must match something. Two spellings of
-   * the same file are therefore ONE pattern, not two entries.
-   */
-  artifacts?: string[];
-  /** Wall-clock validity. Expiry is amber (re-run advised), not red — unlike
-   *  code drift, which is red. */
-  ttlHours?: number;
-  /** The command that performs (and, for scripts, records) this step. */
-  verify: string;
-  /** Derived from git/filesystem at probe time; carries no receipt. */
-  derived?: boolean;
-  /**
-   * What `pg_is_in_recovery()` MUST have said on the connection this step ran
-   * against: true = a read replica, false = the primary. A receipt that
-   * disagrees graded the wrong server and is rejected outright — §2.0's
-   * failure mode ("connects successfully, to the wrong database") made durable.
-   */
-  expectInRecovery?: boolean;
-  /** One line on why this step can be blocked or stale, shown by the probe. */
-  note?: string;
-}
+export type { Actor, HostRole } from "../../lib/rollout-manifest.ts";
 
-// Glob groups, named once. `backend/scripts/**` is deliberately NOT one of
-// these: a change to stage-rehearsal.ts must not invalidate a preflight run,
-// and a change to preflight.ts must not invalidate a boot rehearsal. Steps
-// declare the files they actually execute, plus what those files read.
-const PREFLIGHT_CODE = [
-  "backend/scripts/upgrades/0.2.2-to-0.3.0/preflight.ts",
-  "backend/scripts/upgrades/0.2.2-to-0.3.0/release.ts",
-  "backend/scripts/lib/preflight-utils.ts",
-  "backend/scripts/lib/checks.ts",
-  "backend/migrations/**",
-];
-const POSTFLIGHT_CODE = [
-  "backend/scripts/upgrades/0.2.2-to-0.3.0/postflight.ts",
-  "backend/scripts/upgrades/0.2.2-to-0.3.0/release.ts",
-  "backend/scripts/lib/postflight-utils.ts",
-  "backend/scripts/lib/checks.ts",
+/**
+ * This release's gate letters. Names, not an order — execution order is
+ * manifest order. Declared here rather than in the shared type so a release
+ * cannot inherit the previous one's set by accident.
+ */
+export type Gate = "A" | "B" | "C" | "F";
+
+/** This release's step type: the shared shape, narrowed to this release's gates. */
+export type RolloutStep = SharedRolloutStep<Gate>;
+
+/** This release's upgrade directory — the one parameter the glob factories take. */
+const DIR = "0.2.2-to-0.3.0";
+
+// Built rather than transcribed. The arrays are IDENTICAL to the ones this file
+// declared by hand, element for element and in order, and
+// backend/tests/rollout-shared-manifest.test.ts asserts exactly that against the
+// live manifests — order included, because rollout-steps*.test.ts compares each
+// `dependsOn` to the runbook's `depends-on:` block with an ordered toEqual.
+const PREFLIGHT_CODE = preflightCode(DIR);
+const POSTFLIGHT_CODE = postflightCode(DIR, [
   // seed() decides whether ops.repair_gaps exists and what catchup_policy the
   // wallet samplers carry, so postflight's checks 3 and 5 certify its output.
   "backend/src/db/seed.ts",
-  "backend/migrations/**",
-];
-const RESTORE_CODE = [
-  "scripts/lib/restore-container.ts",
-  "scripts/lib/postgres-image.ts",
-];
-/** What a real boot actually executes. This is why the rc.6 rehearsal survived
- *  the commits that invalidated its gates: none of them landed here. */
-const APP_CODE = [
-  "backend/src/**",
-  "backend/migrations/**",
-  "backend/Dockerfile",
-  "frontend/**",
-  "scripts/**",
-  "docker-compose.yml",
-  "docker-compose.demo.yml",
-  "package.json",
-  "bun.lock",
-];
-
+]);
+// Copied out of the frozen shared arrays: `dependsOn` is a mutable string[], and
+// a step must never hold a reference that could edit what every other release reads.
+const RESTORE_CODE = [...SHARED_RESTORE_CODE];
+const APP_CODE = [...SHARED_APP_CODE];
 
 export const STEPS: RolloutStep[] = [
   {
@@ -350,5 +300,5 @@ export const STEPS: RolloutStep[] = [
 ];
 
 export function stepById(id: string): RolloutStep | undefined {
-  return STEPS.find((s) => s.id === id);
+  return stepByIdIn(STEPS, id);
 }
