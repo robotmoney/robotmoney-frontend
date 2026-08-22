@@ -157,7 +157,10 @@ const EXPECTED: [string, string, string][] = [
   ["P3.backup", "invalid", "artifact changed since the run: <fixture>/rm-preupgrade-20260101T000000Z.dump.gpg"],
   ["P3.schedules", "ok", "<age>"],
   ["P3.gate-c", "unverifiable", "<sha> is not in this checkout"],
-  ["P4.preflight-live", "expired", "<age> · TTL 12h"],
+  // 12h -> 2h: this step carries Gate E (blocking-xacts), a condition that goes
+  // stale by the minute, and P7.cutover now requires it — so the short TTL is
+  // what forces a fresh preflight immediately before the irreversible step.
+  ["P4.preflight-live", "expired", "<age> · TTL 2h"],
   ["P4.postflight-dryrun", "invalid", "changed since <rc>: <files>"],
   ["P5.rehearsal-boot", "missing", "no receipt"],
   ["P5.postflight-twin", "missing", "no receipt"],

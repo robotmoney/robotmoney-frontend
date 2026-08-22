@@ -57,6 +57,13 @@ import { twinUrlFromContainer } from "./demo-twin.ts";
 export const READY_DEADLINE_MS = 20 * 60 * 1000;
 export const READY_POLL_MS = 5_000;
 
+/** Default ceiling on the post-readiness check window (RehearsalOptions.checkDeadlineMs).
+ *
+ *  45 minutes: enough for a release to watch a 30s-tick scheduler fire and a
+ *  paced backfill day complete against a metered RPC budget, and far short of
+ *  "nobody noticed it was still up". */
+export const CHECK_DEADLINE_MS = 45 * 60 * 1000;
+
 /** Repo root, resolved from this module rather than cwd. */
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -159,8 +166,33 @@ export interface RehearsalOptions {
    * serves and BEFORE teardown (G8). Return 0 to pass; any other value fails
    * the rehearsal. Omit it and the rehearsal grades restore + boot + serve
    * only, which is what `bun run twin:rehearse` does.
+   *
+   * THE DURATION OF THIS AWAIT IS THE TWIN'S LIFETIME. That is the whole
+   * hold-open mechanism — there is no flag, and deliberately so (a flag would
+   * mean an unsupervised standing twin holding production-derived data with a
+   * graded receipt attached to nothing, which is what `bun run twin` is for and
+   * why it carries the warning it does). A release that needs to observe
+   * something slow — a scheduled job firing, a backfill completing — simply
+   * takes longer to return, and `checkDeadlineMs` below is what keeps that
+   * bounded.
    */
   onReady?: (window: TwinWindow) => Promise<number>;
+  /**
+   * Ceiling on the `onReady` await, i.e. on how long the twin may stay up after
+   * readiness. Defaults to CHECK_DEADLINE_MS.
+   *
+   * WHY A SECOND DEADLINE, rather than widening READY_DEADLINE_MS: that one
+   * bounds readiness, and merging them would make "the image build was slow"
+   * and "a check hung" the same failure with the same message. They want
+   * different diagnoses.
+   *
+   * WHY A CEILING AT ALL: G1 says a rehearsal terminates on its own, always,
+   * and G5 says spend is bounded. When the hook was a single postflight spawn
+   * that cost seconds, an unbounded await was harmless. Once a release can hold
+   * the window open for minutes to watch a scheduler tick, an unbounded await
+   * is a new way to leak exactly what the `finally` exists to prevent.
+   */
+  checkDeadlineMs?: number;
 }
 
 /**
@@ -276,7 +308,52 @@ export async function runTwinRehearsal(opts: RehearsalOptions): Promise<number> 
         );
         return 1;
       }
-      const hookCode = await opts.onReady({ backendUrl, databaseUrl, log, err });
+      // Race the hook against BOTH a deadline and the boot's own death.
+      //
+      // The boot supervision matters as much as the deadline: until the window
+      // could be held open, nothing watched `bootExit` after readiness, because
+      // the hook returned in seconds. Over a window of minutes the stack can
+      // die underneath the checks — and then they either hang on a dead port or,
+      // worse, grade a corpse and report green.
+      const deadlineMs = opts.checkDeadlineMs ?? CHECK_DEADLINE_MS;
+      const checksStartedAt = Date.now();
+      log(`running this release's checks against the twin (deadline ${Math.round(deadlineMs / 60000)}m)`);
+      const TIMED_OUT = Symbol("timeout");
+      const BOOT_DIED = Symbol("boot-died");
+      // The deadline timer MUST be cancellable. Promise.race does not cancel
+      // the promises that lose it, so a bare `Bun.sleep(deadlineMs)` keeps the
+      // event loop alive for the full deadline after the hook has returned —
+      // the rehearsal completes, tears down, writes its receipt, and then sits
+      // there for the rest of the 45 minutes. Observed exactly that on
+      // 2026-08-22: two runs finished all their work and stayed resident. A
+      // deadline added to enforce G1 ("it terminates on its own, always") must
+      // not be the thing that breaks it.
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<number>((resolve) => {
+        deadlineTimer = setTimeout(() => resolve(TIMED_OUT as unknown as number), deadlineMs);
+      });
+      let hookCode: number;
+      try {
+        hookCode = await Promise.race([
+          opts.onReady({ backendUrl, databaseUrl, log, err }),
+          deadline,
+          bootProc.exited.then(() => BOOT_DIED as unknown as number),
+        ]);
+      } finally {
+        clearTimeout(deadlineTimer);
+      }
+      if ((hookCode as unknown) === TIMED_OUT) {
+        err(
+          `this release's checks did not finish within ${Math.round(deadlineMs / 60000)}m — treating as a FAILED rehearsal, not as patience (G1). The twin is being torn down now; a check that cannot bound its own wait must say so rather than hold a metered stack open.`,
+        );
+        return 1;
+      }
+      if ((hookCode as unknown) === BOOT_DIED) {
+        err(
+          `the boot exited ${bootExit} DURING this release's checks, after ${Math.round((Date.now() - checksStartedAt) / 1000)}s — any check that had already passed graded a stack that is now gone. This is a failed rehearsal.`,
+        );
+        return 1;
+      }
       if (hookCode !== 0) return hookCode === 2 ? 2 : 1;
       log("VERDICT: migrated and booted clean, frontend checks pass, this release's checks are clean against the twin");
       return 0;

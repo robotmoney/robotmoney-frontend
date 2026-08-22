@@ -173,7 +173,7 @@ unless you load it yourself.
 or the local socket, `PGUSER`, database named after the user), so on any host
 that happens to run a local postgres it connects **successfully, to the wrong
 database**. The admin-credential check then reports "unclaimed" about a
-database that is not production, and every §8 check grades the wrong server.
+database that is not production, and every §9.1 check grades the wrong server.
 
 Load it once, then **prove** what you loaded:
 
@@ -723,17 +723,19 @@ postflight is clean against the migrated twin.
 release.** Run **both** halves against the digital twin, in the same order
 production will see them, before production is touched at all:
 
-1. **Preflight** — §5.3's `restore-check.ts` (Gate C), then §4's checks.
+1. **Preflight** — §5.3's `restore-check.ts` (Gate C), then the release's own
+   `preflight.ts` checks.
 2. **Cutover** — §6's boot, which applies this release's migrations to the
    restored production rows for real.
-3. **Postflight** — **every §8 check, and every §8.1 acceptance criterion**,
+3. **Postflight** — **every check the release's postflight runs, and every acceptance criterion the per-release runbook states**,
    against the migrated twin.
 
 Step 3 is the one that was missing, and its absence is exactly how a real
 defect reached rc.5 while every script reported success: the boot exited `0`,
 the frontend checks passed, and **two members still ended up with the wrong
 public handle** (`robot-money` instead of `robotmoney`, `woon-2` instead of
-`woon`) — §8.1. A green mechanism is not a met objective, and only §8.1
+`woon`) — the per-release runbook's acceptance criteria. A green mechanism is
+not a met objective, and only those criteria
 distinguishes them.
 
 The twin is the right place for this and the only place it is free: it holds
@@ -755,8 +757,8 @@ section states the intent and the script is what gets fixed.
 | **G1** | **It terminates on its own, always.** A run reaches one of the exit codes below without an operator interrupting it. "Still going" after the deadline is a **failure**, not patience. | This is the last gate before a production cutover, often at 3am. A step that can hang indefinitely cannot be sequenced, cannot be timed, and silently converts "rehearsal passed" into "nobody waited long enough to find out." |
 | **G2** | **It boots what §8.2 boots, and supervises it.** Same scenario (`--smoke`), same `--no-tui`, same `CI`-unset supervision, same compose topology — the one difference is the data path: `--db twin` here, `--db external` at cutover. Those two modes take the *identical* structural path through the boot (`demo-db-mode.ts` generates one overlay for both: no postgres service, no volume, no `depends_on`); they differ only in who resolves `DATABASE_URL`, and `--db twin` additionally *asserts* the answer (G7). Before the mode enum existed the rehearsal borrowed `--external-pg` to get byte-identical flags, and paid for it with the worktree apparatus above. | With `CI` unset the boot **never self-terminates by design**: it falls past demo-main's CI-gated exits (`scripts/lib/demo-main.ts:1175`, `:1212`) into the LIVE steady-state loop and cycles sessions forever. That is correct for §8.2, where the stack must stay up serving production. A rehearsal that `await`s that process therefore waits forever — the two requirements are only compatible if the rehearsal supervises. Setting `CI` to escape this is **not** an acceptable fix: a truthy `CI` tears the stack down regardless of exit code (§8.2), so the frontend checks would have nothing left to hit, and the boot would no longer be the one §8.2 runs. |
 | **G3** | **Readiness is polled, with a deadline.** Ready ⇔ `.agents/demo-state.json` exists **and** `/health` on its `apiPort` answers `200`. Not reached within the deadline ⇒ exit `1`. | Readiness is the only honest signal that migration + seed + serve all succeeded, and a deadline is what turns G1 from an intention into a property. Allow generously for a cold image build (a first build pulls base images and compiles); this is minutes, not seconds. |
-| **G4** | **Verification runs against the booted stack**: `scripts/demo-frontend-check.ts` on the published port — the same route/content checks CI runs, never a bespoke probe. | A stack that boots but serves the home-page shell for every route is a failed cutover that `/health` alone reports as green (§8 check 11). |
-| **G5** | **Spend is bounded.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack **as soon as verification finishes** (G4 *and* G8) — pass or fail — and must not let the loop keep cycling. G8 costs seconds; it does not license leaving the stack up for anything else. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. |
+| **G4** | **Verification runs against the booted stack**: `scripts/demo-frontend-check.ts` on the published port — the same route/content checks CI runs, never a bespoke probe. | A stack that boots but serves the home-page shell for every route is a failed cutover that `/health` alone reports as green (§9.1's check table). |
+| **G5** | **Spend is bounded, and the bound is explicit.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack as soon as its checks finish — pass or fail — and must never let the loop cycle unattended. Where a release's checks genuinely need longer than seconds (watching a scheduler tick, waiting on a paced backfill), the window is **bounded by `RehearsalOptions.checkDeadlineMs`**, default 45 minutes, enforced by the driver as a race against the `onReady` hook. A check that cannot bound its own wait must say so rather than hold a metered stack open. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. **And verified again 2026-08-22, against the assumption that `--smoke` makes this cheap: it does not.** A smoke boot does suppress the scripted-newcomer narrative (`smoke-mode.ts`'s `runsNewcomerOnboarding: false`) and the `swarm.*` schedules (`docker-compose.demo.yml` pins `SWARM_SCHEDULES_ENABLED: "0"`), but the steady-state session loop still ran and authored verified memos throughout a ~20-minute observation window. Budget the window deliberately; do not assume smoke mode makes it free. |
 | **G6** | **Cleanup is unconditional.** The compose stack, the twin container and the twin's volume are all removed on **every** exit path — success, assertion failure, readiness timeout, and an unhandled throw. The volume is explicit: a `--db twin` boot *keeps* it by contract (`demo:clean` reclaims it), which is right for an operator looking at a twin and wrong for an unattended rehearsal, where it is production-derived data nobody asked to keep. | Leftovers from this script are not inert: a surviving container holds a full copy of production data (§6.3), and a surviving stack keeps spending under G5. |
 | **G7** | **Isolation is absolute, and asserted rather than arranged.** No file is written — not the real repo-root `.env`, not a throwaway one; the twin's port is bound to a non-routable address; and `assertTwinIsTarget()` refuses the boot outright unless the compose environment's `DATABASE_URL` **is** the twin's. | The rehearsal's whole claim is that it cannot touch production. Compose auto-loads the repo-root `.env`, so "the stack config wins over that file" is a precedence *argument*; this is a check. A rehearsal that silently ran against production would be the worst outcome this repo has. See §6.3. |
 | **G8** | **Postflight runs against the twin, inside the same run** — this release's postflight checks *and* its acceptance criteria, via `postflight.ts --emit-receipt=P5.postflight-twin`, after G4 and before teardown. A failure is exit `1`. **So is being unable to run it at all**: a rehearsal that cannot reach the twin to grade it must not report the boot's green as the gate's green. | §6.1 step 3 and §6.4 both require it, and the twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. The shared driver (`scripts/lib/twin-rehearsal.ts`) cannot know a release's checks, so it hands the window back through an `onReady` hook and the release's own `stage-rehearsal.ts` fills it. |
@@ -791,7 +793,7 @@ EXIT=0
 ```
 
 with zero containers, volumes, worktrees or processes surviving. All four
-migrations applied to production-shaped data, and §8's checks 2/4/5/6/7/8 pass
+migrations applied to production-shaped data, and the release's postflight checks pass
 against the resulting database (trigger `tgenabled = A`, zero null handles,
 zero namespace violations, `swarm_recommendations` above its pre-upgrade
 baseline).
@@ -801,8 +803,9 @@ baseline).
 > verifies and cleans up. It says nothing about whether the release achieved
 > its objective. On 2026-08-17 this script exited `0` with every check above
 > green while **two members ended up with the wrong public handle** — the
-> defect §8.1 exists to catch. Always follow a green run with §6.1 step 3:
-> §8's checks *and* §8.1's acceptance criteria, against the same twin.
+> defect the acceptance criteria exist to catch. Always follow a green run with
+> §6.1 step 3: the release's postflight checks *and* its acceptance criteria,
+> against the same twin.
 
 > **Reading a run.** "Still running" is only ever legitimate *before*
 > readiness, and only up to G3's deadline — a cold first build genuinely
@@ -821,7 +824,7 @@ tokens, member access keys and every stored email address — the same inventory
 
 | # | Guarantee | Why |
 |---|---|---|
-| **T1** | **No production credential is used or needed.** The twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run *for real* with no production secret in play. It is also why `doadmin` is irrelevant to §5.3/§6: the migrations apply to the twin, and at real cutover (§7) they apply as the application's writer from `DATABASE_URL` — `doadmin` applies migrations at no point in this runbook. |
+| **T1** | **No production credential is used or needed.** The twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run *for real* with no production secret in play. It is also why `doadmin` is irrelevant to §5.3/§6: the migrations apply to the twin, and at real cutover (§8) they apply as the application's writer from `DATABASE_URL` — `doadmin` applies migrations at no point in this runbook. |
 | **T2** | **The twin's superuser is a true superuser, and that is fine.** It holds more Postgres privilege than `doadmin` does (DO withholds real superuser — §4's `pg_read_all_data` box is that limit in action), yet near-zero risk: it reaches one disposable container and dies with it. | Privilege and blast radius are independent. Do not reason about this credential by its power; reason about the state it can reach. |
 | **T3** | **The published port must bind a non-routable address** — `127.0.0.1`, or the Docker bridge gateway when sibling containers must reach it (§6). **Never `0.0.0.0`.** | Docker inserts its own iptables rules ahead of ufw/firewalld, so a `0.0.0.0` bind can be reachable from outside the host *even when the firewall looks closed* (verified 2026-08-17). Given T4, the bind address is the only thing standing between a production-data copy and the internet. |
 | **T4** | **The twin's password must be generated per run, not a constant.** | A predictable password is acceptable *only* while T3 holds perfectly; making it unpredictable removes the dependence of one control on another and costs nothing. **Conformant as of 2026-08-17.** `restore-container.ts` previously hardcoded `LOCAL_PASSWORD = "throwaway-local-only"` while §5.3's prose claimed the superuser was "freshly generated" — it was not. It now is: generated per run, never logged, passed to callers on `RestoredContainer`. |
@@ -841,13 +844,14 @@ Restore the backup (§5.3's `restore-check.ts`, then §6's
 `stage-rehearsal.ts`) into a local Postgres container and run the full runbook
 against it in sequence:
 
-1. **Preflight (§4)** — run `restore-check.ts` (Gate C) first, then §4's live
+1. **Preflight** — run `restore-check.ts` (Gate C) first, then the release's live
    checks against the restored twin. Any failure is blocking. Follow the fix
    loop: patch, cut the next rc, restore a fresh dump, rehearse again.
-2. **Cutover (§7)** — run `stage-rehearsal.ts`, which boots the §8.2 stack
+2. **Cutover** — run `stage-rehearsal.ts`, which boots the §8.2 stack
    (`--smoke`, `--no-tui`, `CI` unset; see G2 on the one flag that differs)
    against the migrated twin. Any failure is blocking.
-3. **Postflight (§8)** — every §8 check **and** every §8.1 acceptance criterion
+3. **Postflight** — every check the release's postflight runs **and** every
+   acceptance criterion the per-release runbook states
    against the twin, after readiness and before teardown. **`stage-rehearsal.ts`
    runs this for you** (G8) — it is not a command you issue afterwards, because
    the twin does not survive step 2. Any failure is blocking; do not carry a
@@ -886,35 +890,46 @@ a file alongside the backup artifacts (e.g.
 - Backup stamp used (`rm-preupgrade-<STAMP>.dump.gpg`)
 - `restore-check.ts` exit code and any notable output
 
-**2. Preflight results (§4 on the twin)**
-- All **Gate C, B, D, E** results (pass / fail / note) — §2's four gates, in
-  execution order. There is no Gate A; an earlier revision of this line asked
-  for "Gate A–D" after §2 had abolished it
+**2. Preflight results (on the twin)**
+- Every gate the per-release runbook defines, in its stated execution order,
+  with pass / fail / note for each. Gate letters are stable NAMES, not an
+  order, and which letters exist is the release's business — v0.3.0 defines
+  A through F. **Do not assume a gate is absent because this document does not
+  mention it**; an earlier revision of this line denied the existence of a gate
+  that §8.2 below required to be green and that the per-release manifest carried
+  all along.
 - Exit code of `restore-check.ts`
 
-**3. Cutover results (§7 on the twin)**
+**3. Cutover results (on the twin)**
 - `stage-rehearsal.ts` exit code
 - Time to readiness (`ready after …s`)
 - Frontend check verdict
 
 **4. Postflight results (§8 on the twin)**
-- Result for every §8 check (check 1–12)
-- All §8.1 acceptance criteria explicitly ticked or failed
+- A result for **every check the release's `postflight.ts` records** — the count
+  is whatever `runChecks` runs, not a fixed number (v0.2.2 ran twelve; v0.3.0
+  runs seven plus one manual). The per-release runbook's postflight table is the
+  authority.
+- Every acceptance criterion in the per-release runbook explicitly ticked or
+  failed
 
 **5. Acceptance criteria** (mark each PASS or FAIL with evidence)
-- All features in #660 Objective are present and working
-- No unexpected schema drift — exactly the six migrations this release ships,
-  and no others: `0029_admin_auth_recovery`, `0029_admin_passkey`,
-  `0030_swarm_member_handle`, `0031_swarm_member_handle_namespace`,
-  `0032_append_only_history`, `0033_swarm_member_uuid_ids`. (An earlier
-  revision said "only migrations `0028`–`0031`": `0028` is not in this delta
-  at all — the preflight gate relies on it already existing at the outgoing release — and `0032`/`0033`
-  were missing. The list has one home now:
-  `THIS_RELEASE_MIGRATIONS` in `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`,
-  which `preflight.ts`, `postflight.ts` and §8's check 2 all read)
+- Every item in the release tracking issue's Objective is present and working
+- No unexpected schema drift — **exactly the migrations this release ships, and
+  no others.** Do not look for the list here: it lives in
+  `THIS_RELEASE_MIGRATIONS` in `backend/scripts/upgrades/<FROM>-to-<TO>/release.ts`,
+  and `preflight.ts`, `postflight.ts` and the per-release runbook's postflight
+  table all read that one copy.
+
+  > ⚠ **This bullet used to enumerate literal filenames** — the outgoing
+  > release's — in the same breath as saying the list has one home. It was wrong
+  > for every release after the one it was written for, and would have had an
+  > operator grade the release in front of them against a release that had
+  > already shipped. A release-independent document must not name a release's
+  > facts; that is what the per-release runbook and `release.ts` are for.
 - Row counts after migration match the per-release runbook's pre-upgrade baseline
-- Zero null or incorrect handles (§8.1)
-- `swarm_recommendations` count ≥ baseline
+- Every release-specific acceptance criterion in the per-release runbook's
+  post-cutover section
 
 **6. Issues found**
 List any failures, unexpected output, or observations encountered during the
@@ -1132,11 +1147,11 @@ deployment.md §2.1, "FIRST: find the project name".
 
 > 🔴 **IRREVERSIBLE.** This command is not a dry run and there is no "boot and
 > look first" mode. It writes to production three times before you can inspect
-> anything: the six migrations (§7.4), `seed()` rewriting the five `swarm.*`
-> schedule rows (§7.5, §5.4), and the **archive initializer** — `prod-bootstrap.ts`
+> anything: this release's migrations, `seed()` rewriting the five `swarm.*`
+> schedule rows (§5.4), and the **archive initializer** — `prod-bootstrap.ts`
 > run as `docker compose run --rm … api bun run scripts/prod-bootstrap.ts
 > --already-migrated` (`scripts/lib/demo-main.ts:1136-1140`) — which adopts and
-> writes archive rows into the live database (§8 verification 8). None of it has
+> writes archive rows into the live database (§9.1's check table). None of it has
 > a down migration (§7 header). Do not run this before Gates B, D, E, C and A
 > are all green.
 
@@ -1154,14 +1169,18 @@ deployment.md §2.1, "FIRST: find the project name".
 >
 > In practice, a worker down for > ~16h40m will wedge every per-minute
 > schedule for the next ~41 days without a manual `UPDATE job_schedules SET
-> next_run_at = now() WHERE ...`. Plan for a maintenance window shorter than
+> next_run_at = now() - <one cadence> WHERE ...` — note the subtraction: the
+> scheduler anchors its cron iterator at `next_run_at - 1s` and stops at the
+> first FUTURE slot, so setting it to a bare `now()` fires **nothing**, resumes
+> at the next slot up to a full cadence away, and silently drops the missed
+> backlog. Plan for a maintenance window shorter than
 > the shortest enabled schedule's cadence, or run §9.2 immediately after boot
 > to detect and repair any wedge.
 
 ```bash
 cd <checkout>
 DEMO_PROJECT=rm_prod bun smoke -- --db external --no-tui
-BOOT_STATUS=$?                # capture it HERE — §8 verification 1 reads this
+BOOT_STATUS=$?                # capture it HERE — §9.1's check 1 reads this
 echo "boot exit=$BOOT_STATUS" # MUST be 0
 ```
 
@@ -1206,7 +1225,7 @@ check that
 *looks* like it answers the right question can instead throw an error that
 gets misread as a pass, or silently return an empty result that means
 nothing yet. Run every SQL-shaped check from §8's table now, as `rm_readonly`
-(§4/§4's role — this is safe, it cannot write), and confirm what you see
+(§4's read-only role — this is safe, it cannot write), and confirm what you see
 matches what is documented here — verified 2026-08-17 against production:
 
 | # | Check | Result running TODAY, pre-upgrade | What it means |
@@ -1250,7 +1269,7 @@ and never `$?`.
 | # | Check | Command | Expected |
 |---|---|---|---|
 | 1 | Boot exited clean | `echo "$BOOT_STATUS"` — the variable captured on §8.2's own command line. **Not `echo $?`**: by the time you reach §8 that reports `demo:status`, not the boot, and it will read `0` after a failed cutover. | `0`. On a TTY without `--no-tui` this proves nothing (§8.2). If `BOOT_STATUS` is unset you did not capture it; you cannot recover it, so re-run §8.2 (it is idempotent — migrations resume, seed and adopt are idempotent) rather than assume. |
-| 2 | All six migrations recorded | `psql "$DATABASE_URL" -c "SELECT name FROM schema_migrations WHERE name LIKE '0029%' OR name LIKE '003%' ORDER BY 1;"` | six rows: `0029_admin_auth_recovery.sql`, `0029_admin_passkey.sql`, `0030_swarm_member_handle.sql`, `0031_swarm_member_handle_namespace.sql`, `0032_append_only_history.sql`, `0033_swarm_member_uuid_ids.sql` |
+| 2 | Every migration this release ships is recorded | The release's own `postflight.ts` (`migrations-applied`), which reads `THIS_RELEASE_MIGRATIONS` from `release.ts`. **Do not hand-write a `LIKE '0029%' OR '003%'` query** — this row used to carry one, hardcoded to v0.2.2's six names, and against a v0.3.0 database it returns ten rows and grades nothing. | Every name in `THIS_RELEASE_MIGRATIONS`, under its FULL filename. The per-release runbook's postflight table states the count for that release. |
 | 3 | Namespace guard ran and was clean | `curl -s "http://127.0.0.1:$(docker compose -p "$RM_PROJECT" port api 8787 \| cut -d: -f2)/health"` | `"handle_namespace":"clean"`. **`"unchecked"` means the guard could not run — this boot proves nothing.** `"overridden"` means you are serving a violation. |
 | 4 | No violation in the data | `psql "$DATABASE_URL" -c "SELECT a.id, a.handle, b.id FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id;"` | 0 rows |
 | 5 | Namespace trigger is `ENABLE ALWAYS` | `psql "$DATABASE_URL" -c "SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger';"` | `A`. `O` means a `DISABLE`/`ENABLE` cycle downgraded it and the replica-role bypass `0031` closes is open again. |
@@ -1264,7 +1283,7 @@ and never `$?`.
 
 ### 9.2 Scheduler and producer liveness
 
-> **This check addresses issue #644.** §8.1 confirms the schema and data are
+> **This check addresses issue #644.** §9.1 confirms the schema and data are
 > correct; this check confirms the scheduler fired and a producer wrote output
 > after the new code booted. A green `/health`, a clean `/api/admin/overview`,
 > and a continuous-looking `/performance` chart are **not** evidence these
@@ -1305,7 +1324,7 @@ not the 10-minute run count, is the liveness signal on this deployment.
 > and read `last_run_at`/`run_count_last_10m` as context.
 
 A `next_run_at` in the past by more than the schedule's own cadence is the
-wedge signal — the same condition §4's `wedged-schedules` check reports.
+wedge signal — the same condition preflight's `wedged-schedules` check reports.
 
 **Wedge detection:** if `next_run_at` is more than 1 minute in the past for a
 per-minute schedule, it is already wedged. Repair:
@@ -1346,7 +1365,7 @@ If this is a fresh database (e.g. the twin), `samples_today` may legitimately be
 > samplers stopped ten days ago — `wallet.sample_balances` and
 > `wallet.sample_sleeves` last succeeded on 2026-08-10 (`job_runs`) and their
 > `next_run_at` has been frozen at `2026-08-09 16:32+00` ever since, which is
-> exactly what §4's `wedged-schedules` WARN reports. Every other enabled
+> exactly what preflight's `wedged-schedules` WARN reports. Every other enabled
 > schedule is healthy.
 >
 > So a post-cutover `samples_today = 0` here is the **pre-existing** wedge, not
@@ -1356,7 +1375,7 @@ If this is a fresh database (e.g. the twin), `samples_today` may legitimately be
 > `UPDATE` after the boot, and confirm the sampler recovers. If it does not, that
 > is a separate production defect to file, not a reason to hold the release.
 
-> **Note on §5.4's preflight wedge warning.** If §4's `wedged-schedules` WARN
+> **Note on §5.4's preflight wedge warning.** If preflight's `wedged-schedules` WARN
 > flagged any rows, cross-check them here: if those same rows now show
 > `run_count_last_10m > 0`, the warning can be marked resolved. If they still
 > show no runs, the wedge persisted through the upgrade and needs the repair
@@ -1374,7 +1393,10 @@ If this is a fresh database (e.g. the twin), `samples_today` may legitimately be
 ### Triggers — roll back if any of these are true
 
 - Verification 3 reports `overridden`, or 4 returns rows you cannot repair now.
-- Verification 2 shows fewer than **six** migrations (steps.ts's `THIS_RELEASE_MIGRATIONS`) **and** the boot is failing.
+- Verification 2 shows fewer than **all** of this release's migrations
+  (`THIS_RELEASE_MIGRATIONS` in `release.ts` — the count is the release's, not a
+  constant; this line used to say "six", which was v0.2.2's) **and** the boot is
+  failing.
 - The admin surface is unreachable post-cutover because `admin_credential` is
   claimed and nobody holds the password — most likely the claim window
   was raced, or the password was lost immediately after claiming. Roll back

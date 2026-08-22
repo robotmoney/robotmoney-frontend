@@ -102,7 +102,7 @@ export const STEPS: RolloutStep[] = [
     title: "an rc tag exists at HEAD",
     hostRole: "any",
     actor: "operator",
-    requires: [],
+    requires: ["P1.phases-closed"],
     dependsOn: [],
     derived: true,
     verify: "git tag -a v0.3.0-rc.<N> <sha> -m 'v0.3.0 release candidate <N>' && git push origin v0.3.0-rc.<N>",
@@ -156,7 +156,7 @@ export const STEPS: RolloutStep[] = [
     title: "Gate C — the dump restores, and preflight is clean against it",
     gate: "C",
     hostRole: "stage",
-    actor: "agent",
+    actor: "script",
     requires: ["P3.backup"],
     dependsOn: [
       ...PREFLIGHT_CODE,
@@ -174,10 +174,16 @@ export const STEPS: RolloutStep[] = [
     title: "Gate B — preflight is clean against the live replica",
     gate: "B",
     hostRole: "stage",
-    actor: "agent",
+    actor: "script",
     requires: ["P3.gate-c"],
     dependsOn: [...PREFLIGHT_CODE],
-    ttlHours: 12,
+    // 2h, not 12h. This step carries Gate E (§3.4) as its `blocking-xacts`
+    // check, and a long-running transaction is a condition that goes stale by
+    // the minute — a preflight that was Gate-E-clean at breakfast says nothing
+    // about dinner. With P7.cutover now requiring this step, the short TTL is
+    // what forces a fresh preflight immediately before the irreversible step,
+    // which is what Gate E has always actually meant.
+    ttlHours: 2,
     verify: "bun scripts/upgrades/0.2.2-to-0.3.0/preflight.ts --emit-receipt",
     note: "Expect ONE warning: schema-migrations reports 0032_wallet_* as out-of-order. That is correct for this release — see §2.2.1. append-only-safety is what proves it is harmless, so read that check's result, not just the verdict.",
   },
@@ -190,7 +196,11 @@ export const STEPS: RolloutStep[] = [
     actor: "agent",
     requires: ["P4.preflight-live"],
     dependsOn: [...POSTFLIGHT_CODE],
-    ttlHours: 12,
+    // 2h, matching P4.preflight-live. Both are point-in-time reads of the live
+    // replica taken in the pre-cutover window, and this one is chained to that
+    // one — evidence may not outlive its own premise. Cheap to re-run: it is a
+    // handful of SELECTs, no container and no build.
+    ttlHours: 2,
     verify: "run §9's checks as rm_readonly against the replica, then: where.ts --record P4.postflight-dryrun",
     note: "Against the still-v0.2.2 database every post-migration check MUST fail. A check that passes before the migration is not testing anything.",
   },
@@ -200,10 +210,17 @@ export const STEPS: RolloutStep[] = [
     section: "§7",
     title: "the twin migrates and boots on the rc being shipped",
     hostRole: "stage",
-    actor: "agent",
-    requires: ["P3.gate-c"],
+    actor: "script",
+    // Gate F as well as Gate C: a rehearsal has to rehearse the world §5.2
+    // chose. With BASE_RPC_MAX_CALLS_PER_SEC unset the twin dispatches repair
+    // work; with it set to 0 the twin does nothing. Those are different
+    // rehearsals, and neither is evidence for the other.
+    requires: ["P3.gate-c", "P1.config-decided"],
     dependsOn: [...APP_CODE, "backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts"],
-    ttlHours: 72,
+    // 48h, matching P3.gate-c. A rehearsal cannot be better evidence than the
+    // dump proof it consumed: at 72h there was a 24h window in which Gate C
+    // read `expired` while the rehearsal built on it still read `ok`.
+    ttlHours: 48,
     verify: "bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt",
     note: "Record the migration set's WALL-CLOCK here. §2.2's 'well under a second' is read off the DDL, not measured; this step is where it becomes a number.",
   },
@@ -213,25 +230,61 @@ export const STEPS: RolloutStep[] = [
     section: "§7",
     title: "postflight is clean against the MIGRATED twin",
     hostRole: "stage",
-    actor: "agent",
+    actor: "script",
     requires: ["P5.rehearsal-boot"],
     // stage-rehearsal.ts is in here because it is what DECIDES whether these
     // checks run against the twin at all: it hands postflight to the shared
     // driver's onReady window. A commit that drops that hook leaves a green
     // rehearsal that graded nothing, so this step's evidence must die with it.
     dependsOn: [...POSTFLIGHT_CODE, "backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts"],
-    ttlHours: 72,
+    ttlHours: 48,
     verify: "bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt   # runs this step",
     note: "A twin that boots but fails postflight is a failed rehearsal, not a partial success.",
   },
   {
+    id: "P5.rollback-twin",
+    phase: "P5 rehearsal",
+    section: "§7.2",
+    title: "the §10 rollback is executed once against a migrated twin",
+    hostRole: "stage",
+    // OPERATOR, not script: there is no rollback driver in this repo, for any
+    // release. §7.2 is a written procedure and this step tracks whether anyone
+    // has run it — which is strictly better than the previous arrangement,
+    // where §7 required the rollback in prose and nothing could report on it at
+    // all. Automating it is open work; when it lands, this becomes script.
+    actor: "operator",
+    requires: ["P5.postflight-twin"],
+    dependsOn: [],
+    ttlHours: 48,
+    verify: "execute §10 against a migrated twin per the procedure below, then: where.ts --record P5.rollback-twin",
+    note: "Never done, for any release: no rollback driver exists, no down migrations exist, and 'rollback' appears in none of the v0.2.2 rehearsal reports. §10's survivability claim is a reading of the schema until this runs.",
+  },
+  {
+    id: "P5.passkey-twin",
+    phase: "P5 rehearsal",
+    section: "§7.3",
+    title: "a passkey ceremony completes against a tunnel-published twin",
+    hostRole: "stage",
+    actor: "operator",
+    requires: ["P5.postflight-twin", "P1.config-decided"],
+    dependsOn: [],
+    ttlHours: 48,
+    verify: "complete a passkey ceremony against the tunnel-published twin, then: where.ts --record P5.passkey-twin",
+    note: "De-risks §9 Check 7, which is otherwise first tested in PRODUCTION after the irreversible cutover. Does NOT substitute for P8.acceptance — a twin ceremony runs at the stage origin, not robotmoney.network.",
+  },
+  {
     id: "P6.report",
     phase: "P6 sign-off",
-    section: "§7.1",
+    section: "§7.4",
     title: "stage rehearsal report written and signed off",
     hostRole: "any",
     actor: "operator",
-    requires: ["P5.postflight-twin"],
+    // P4.postflight-dryrun is here, not on the rehearsal, because this is the
+    // step where the twin's green gets INTERPRETED. Postflight passing on a
+    // migrated twin means nothing on its own unless those same checks are known
+    // to FAIL before the migration — otherwise a check that passes
+    // unconditionally is indistinguishable from one that verified something.
+    requires: ["P5.postflight-twin", "P4.postflight-dryrun", "P5.rollback-twin", "P5.passkey-twin"],
     dependsOn: [],
     artifacts: ["stage-rehearsal-report-*.md"],
     verify: "write the report per rollout-procedure.md §6.5, then: where.ts --record P6.report",
@@ -243,7 +296,11 @@ export const STEPS: RolloutStep[] = [
     title: "IRREVERSIBLE — production migrated and booted on the rc",
     hostRole: "cutover",
     actor: "agent",
-    requires: ["P6.report"],
+    // Gate B and Gate F stated directly. evaluate() computes no transitivity and
+    // where.ts's "held by" line reads only DIRECT requires, so an edge that is
+    // transitively implied still has to be named to be shown — and these two are
+    // exactly the gates §3 calls blocking that nothing used to enforce.
+    requires: ["P6.report", "P4.preflight-live", "P1.config-decided"],
     dependsOn: [...APP_CODE],
     verify: "DEMO_PROJECT=rm_prod bun smoke -- --db external --no-tui   # then: where.ts --record P7.cutover",
     note: "The .env from §5 must be in place BEFORE this runs. Four `migrated:` lines expected, then `migrations up to date`.",
@@ -254,7 +311,7 @@ export const STEPS: RolloutStep[] = [
     section: "§9",
     title: "postflight is clean against PRODUCTION",
     hostRole: "cutover",
-    actor: "agent",
+    actor: "script",
     requires: ["P7.cutover"],
     dependsOn: [...POSTFLIGHT_CODE],
     verify: "bun scripts/upgrades/0.2.2-to-0.3.0/postflight.ts --emit-receipt=P8.postflight-prod",
