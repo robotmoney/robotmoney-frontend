@@ -27,7 +27,12 @@
 // EVERY READ HERE GOES THROUGH base-rpc-client.ts, so it shares the one RPC rate
 // budget with the live sampler (see that file's token-bucket section). This
 // module never constructs a limiter of its own.
-import { ethBlockNumber, ethGetBlockByNumber, type RpcCallOptions } from "./base-rpc-client.ts";
+import {
+  ethBlockNumber,
+  ethGetBlockByNumber,
+  ethGetBlockByNumberBatch,
+  type RpcCallOptions,
+} from "./base-rpc-client.ts";
 
 /** Base's fixed block cadence. Used only to ESTIMATE a starting probe — every
  *  returned block is verified against real timestamps, so a cadence change
@@ -186,4 +191,274 @@ export async function resolveDayBlock(
 
   await cache.set(date, current.number, current.timestampSec);
   return { date, blockNumber: current.number, blockTimestampSec: current.timestampSec, rpcCalls: calls, cached: false };
+}
+
+// ── Resolving MANY days in lockstep (the batched path) ───────────────────────
+//
+// WHY THIS EXISTS. resolveDayBlock above is cheap in RPC CALLS (~3-8 probes),
+// but the provider meters HTTP HITS and that function spends one hit per probe.
+// A ten-day repair run therefore paid ~50 hits to LOCATE ten blocks — roughly
+// 80% of the run's entire budget — before reading a single balance.
+//
+// The searches are sequentially dependent WITHIN a day (each probe's target is
+// computed from the previous probe's timestamp) but completely INDEPENDENT
+// ACROSS days. So they run in LOCKSTEP: every active day contributes one probe
+// to a round, the round goes out as ONE batched POST, and each day advances its
+// own state from its own answer. Sequential depth stays ~3-8 ROUNDS no matter
+// how many days are resolving — ten days cost about what one day costs.
+//
+// WHAT IS DELIBERATELY UNCHANGED. Every returned block is still VERIFIED against
+// real timestamps and still has the bracket property asserted, with the same
+// self-correcting cadence estimate. Base's fixed 2s slots make a UTC day almost
+// exactly 43200 blocks, and it is tempting to derive a neighbour arithmetically
+// from a cached day — but this module's header says why that is not enough on
+// its own: "a resolver that trusts a wrong constant does not fail, it lands on
+// the wrong day and writes a plausible balance under a right-looking date."
+// Arithmetic may pick a better STARTING PROBE; it may never be the answer.
+//
+// PER-DAY FAILURE, NOT PER-BATCH. A day that exhausts its probe budget, or whose
+// probe errors, fails ALONE — the same contract rpcBatchRequest and aggregate3's
+// allowFailure establish. One unresolvable day must not cost a window nine good
+// ones.
+
+/** One probe's answer, or why it could not be had. Shaped like BatchResult so
+ *  failure reads the same way everywhere in the chain layer. */
+export type BlockProbe = { ok: true; stamp: BlockStamp } | { ok: false; error: string };
+
+export interface ResolveDayBlocksDeps {
+  latestBlockNumber(opts: RpcCallOptions): Promise<number>;
+  /** MANY headers in one hit, positionally aligned with `blockNumbers`. */
+  blocksAt(blockNumbers: readonly number[], opts: RpcCallOptions): Promise<BlockProbe[]>;
+}
+
+export const defaultResolveDayBlocksDeps: ResolveDayBlocksDeps = {
+  latestBlockNumber: (opts) => ethBlockNumber(opts),
+  async blocksAt(blockNumbers, opts) {
+    const res = await ethGetBlockByNumberBatch(blockNumbers, opts);
+    return res.map((r) =>
+      r.ok
+        ? { ok: true as const, stamp: { number: parseInt(r.result.number, 16), timestampSec: parseInt(r.result.timestamp, 16) } }
+        : { ok: false as const, error: r.error.message },
+    );
+  },
+};
+
+export type DayBlockOutcome = ({ ok: true } & ResolvedDayBlock) | { ok: false; date: string; error: string };
+
+/** Per-day search state while the lockstep loop runs. */
+interface DaySearch {
+  date: string;
+  targetSec: number;
+  current: BlockStamp;
+  secPerBlock: number;
+  calls: number;
+  /** 'estimate' → proportional convergence; 'back'/'forward' → exact bracketing. */
+  phase: "estimate" | "back" | "forward" | "done";
+  estimateSteps: number;
+  failed: string | null;
+}
+
+/**
+ * Resolve MANY UTC days to their last blocks in as few HTTP hits as the
+ * searches' sequential depth allows.
+ *
+ * Cache hits cost nothing and never enter the loop. Everything else runs the
+ * same algorithm resolveDayBlock does, one ROUND at a time across all
+ * outstanding days. Results are positionally aligned with `dates`.
+ */
+export async function resolveDayBlocks(
+  dates: readonly string[],
+  opts: RpcCallOptions,
+  cache: DayBlockCache = nullDayBlockCache,
+  deps: ResolveDayBlocksDeps = defaultResolveDayBlocksDeps,
+  now: Date = new Date(),
+): Promise<DayBlockOutcome[]> {
+  const out = new Map<string, DayBlockOutcome>();
+  const unresolved: string[] = [];
+  const nowSec = Math.floor(now.getTime() / 1000);
+
+  for (const date of dates) {
+    try {
+      assertIsoDay(date);
+    } catch (err) {
+      out.set(date, { ok: false, date, error: String(err) });
+      continue;
+    }
+    if (nowSec < dayEndExclusiveSec(date)) {
+      out.set(date, {
+        ok: false,
+        date,
+        error: `block-resolver: ${date} has not closed yet — refusing to resolve a block for an open day`,
+      });
+      continue;
+    }
+    const hit = await cache.get(date);
+    if (hit) {
+      out.set(date, {
+        ok: true,
+        date,
+        blockNumber: hit.blockNumber,
+        blockTimestampSec: hit.blockTimestampSec,
+        rpcCalls: 0,
+        cached: true,
+      });
+      continue;
+    }
+    unresolved.push(date);
+  }
+
+  if (unresolved.length > 0) {
+    // ONE head read for the whole window, not one per day. Sharing the head is
+    // also what makes the first probe round a single hit.
+    const latestNumber = await deps.latestBlockNumber(opts);
+    const headProbe = (await deps.blocksAt([latestNumber], opts))[0];
+
+    if (!headProbe || !headProbe.ok) {
+      const error = `block-resolver: could not read head block ${latestNumber}${headProbe && !headProbe.ok ? ` — ${headProbe.error}` : ""}`;
+      for (const date of unresolved) out.set(date, { ok: false, date, error });
+    } else {
+      const head = headProbe.stamp;
+      const searches: DaySearch[] = [];
+      for (const date of unresolved) {
+        const targetSec = dayEndExclusiveSec(date) - 1;
+        if (head.timestampSec <= targetSec) {
+          out.set(date, {
+            ok: false,
+            date,
+            error: `block-resolver: ${date} is not in the chain's past (head block ${head.number} is at or before the day's end)`,
+          });
+          continue;
+        }
+        // The shared head read is charged to every day that uses it, exactly as
+        // the single-day resolver charges its own eth_blockNumber + head probe.
+        searches.push({
+          date,
+          targetSec,
+          current: head,
+          secPerBlock: BASE_BLOCK_TIME_SEC,
+          calls: 2,
+          phase: "estimate",
+          estimateSteps: 0,
+          failed: null,
+        });
+      }
+
+      // ── The lockstep loop: one batched round per iteration. ────────────────
+      for (;;) {
+        const targets: number[] = [];
+        const probing: DaySearch[] = [];
+        for (const s of searches) {
+          if (s.phase === "done" || s.failed !== null) continue;
+          const next = nextProbeFor(s, latestNumber);
+          if (next === null) continue; // settled without needing another probe
+          if (s.calls >= RESOLVER_CALL_BUDGET) {
+            s.failed = `block-resolver: ${s.date} exceeded the ${RESOLVER_CALL_BUDGET}-probe budget without bracketing the day boundary`;
+            continue;
+          }
+          s.calls += 1;
+          targets.push(next);
+          probing.push(s);
+        }
+        if (targets.length === 0) break;
+
+        const probes = await deps.blocksAt(targets, opts);
+        for (let i = 0; i < probing.length; i++) {
+          const s = probing[i]!;
+          const p = probes[i];
+          if (!p || !p.ok) {
+            s.failed = `block-resolver: ${s.date} probe of block ${targets[i]} failed${p && !p.ok ? ` — ${p.error}` : ""}`;
+            continue;
+          }
+          advance(s, p.stamp, latestNumber);
+        }
+      }
+
+      for (const s of searches) {
+        if (s.failed !== null) {
+          out.set(s.date, { ok: false, date: s.date, error: s.failed });
+          continue;
+        }
+        await cache.set(s.date, s.current.number, s.current.timestampSec);
+        out.set(s.date, {
+          ok: true,
+          date: s.date,
+          blockNumber: s.current.number,
+          blockTimestampSec: s.current.timestampSec,
+          rpcCalls: s.calls,
+          cached: false,
+        });
+      }
+    }
+  }
+
+  return dates.map((d) => out.get(d) ?? { ok: false, date: d, error: `block-resolver: ${d} produced no outcome` });
+}
+
+/** The next block this day wants to look at, or null when its phase has nothing
+ *  left to ask. Kept separate from `advance` so the state machine reads in one
+ *  place rather than being spread through the loop. */
+function nextProbeFor(s: DaySearch, latestNumber: number): number | null {
+  if (s.phase === "estimate") {
+    const driftSec = s.targetSec - s.current.timestampSec;
+    const step = Math.trunc(driftSec / s.secPerBlock);
+    const next = Math.min(latestNumber, Math.max(0, s.current.number + step));
+    if (step === 0 || next === s.current.number || s.estimateSteps >= 4) {
+      s.phase = s.current.timestampSec > s.targetSec ? "back" : "forward";
+      return nextProbeFor(s, latestNumber);
+    }
+    s.estimateSteps += 1;
+    return next;
+  }
+  if (s.phase === "back") {
+    if (s.current.timestampSec <= s.targetSec) {
+      s.phase = "forward";
+      return nextProbeFor(s, latestNumber);
+    }
+    if (s.current.number === 0) {
+      s.failed = `block-resolver: ${s.date} precedes the chain's genesis block`;
+      s.phase = "done";
+      return null;
+    }
+    return s.current.number - 1;
+  }
+  if (s.phase === "forward") {
+    if (s.current.number >= latestNumber) {
+      s.phase = "done";
+      return null;
+    }
+    return s.current.number + 1;
+  }
+  return null;
+}
+
+/** Fold one probe answer into a day's state, mirroring resolveDayBlock's own
+ *  transitions: the cadence estimate is re-measured from the observed span, and
+ *  each walk stops on the same condition. */
+function advance(s: DaySearch, stamp: BlockStamp, latestNumber: number): void {
+  if (s.phase === "estimate") {
+    const previous = s.current;
+    s.current = stamp;
+    const spanBlocks = previous.number - stamp.number;
+    if (spanBlocks !== 0) {
+      const observed = (previous.timestampSec - stamp.timestampSec) / spanBlocks;
+      if (observed > 0) s.secPerBlock = observed;
+    }
+    return;
+  }
+  if (s.phase === "back") {
+    s.current = stamp;
+    if (s.current.timestampSec <= s.targetSec) s.phase = "forward";
+    return;
+  }
+  if (s.phase === "forward") {
+    // The probe is the block AHEAD. It becomes `current` only while it is still
+    // inside the day; the first block past the boundary ENDS the walk and is
+    // discarded, which is what leaves `current` as the day's LAST block.
+    if (stamp.timestampSec > s.targetSec) {
+      s.phase = "done";
+      return;
+    }
+    s.current = stamp;
+    if (s.current.number >= latestNumber) s.phase = "done";
+  }
 }

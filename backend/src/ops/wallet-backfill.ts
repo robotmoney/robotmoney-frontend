@@ -50,11 +50,14 @@ import {
 import { resolveRpcRateBudget, toBlockTag, type RpcCallOptions } from "../chain/base-rpc-client.ts";
 import {
   resolveDayBlock,
+  resolveDayBlocks,
   type DayBlockCache,
+  type DayBlockOutcome,
   type ResolvedDayBlock,
 } from "../chain/block-resolver.ts";
 import { loadHistoricalPrices, type HistoricalPriceTable } from "../chain/historical-prices.ts";
 import {
+  readChainAmountsAtBlocks,
   readChainAmountsBatched,
   SLEEVE_DEFS,
   type ChainAmount,
@@ -284,13 +287,34 @@ export interface BackfillDayResult {
 
 export interface WalletBackfillDeps {
   resolveBlock(date: string, opts: RpcCallOptions, cache: DayBlockCache, now: Date): Promise<ResolvedDayBlock>;
+  /** The BATCHED resolver. Optional so a caller that injects only the per-day
+   *  `resolveBlock` still drives the real executor (every existing test does);
+   *  production supplies it and takes the lockstep path. */
+  resolveBlocks?(
+    dates: readonly string[],
+    opts: RpcCallOptions,
+    cache: DayBlockCache,
+    now: Date,
+  ): Promise<DayBlockOutcome[]>;
   readChainAmounts(reads: KeyedAssetRead[], logLabel: string, readOpts: ChainReadOptions): Promise<Map<string, ChainAmount>>;
+  /** The MULTI-BLOCK reader. Optional for the same reason `resolveBlocks` is:
+   *  a caller injecting only the single-block `readChainAmounts` still drives
+   *  the real executor. Production supplies it, so a window's days are read in
+   *  two requests rather than two per day. */
+  readChainAmountsAtBlocks?(
+    reads: KeyedAssetRead[],
+    logLabel: string,
+    blockTags: readonly string[],
+    readOpts: ChainReadOptions,
+  ): Promise<Map<string, Map<string, ChainAmount>>>;
   loadPrices(assets: TrackedAsset[], fromDate: string, toDate: string): Promise<HistoricalPriceTable>;
 }
 
 export const defaultWalletBackfillDeps: WalletBackfillDeps = {
   resolveBlock: (date, opts, cache, now) => resolveDayBlock(date, opts, cache, undefined, now),
+  resolveBlocks: (dates, opts, cache, now) => resolveDayBlocks(dates, opts, cache, undefined, now),
   readChainAmounts: readChainAmountsBatched,
+  readChainAmountsAtBlocks,
   loadPrices: loadHistoricalPrices,
 };
 
@@ -336,14 +360,162 @@ export function buildDayReads(
   return { reads, sleeveTargets };
 }
 
+/** Record a day's refusal. Lifted out of the executor unchanged so the window
+ *  and the single-day path cannot drift in how a failure is written down. */
+async function failDay(
+  db: Db,
+  date: string,
+  detail: string,
+  blockNumber: number | null = null,
+): Promise<BackfillDayResult> {
+  const attempts = await bumpAttempts(db, date);
+  const exhausted = attempts >= maxAttemptsPerDay();
+  const status: BackfillDayStatus = exhausted ? "exhausted" : "failed";
+  await recordState(db, date, status, blockNumber, 0, 0, detail, attempts);
+  console.warn(`wallet-backfill: ${date} refused (attempt ${attempts}${exhausted ? ", exhausted" : ""}) — ${detail}`);
+  // An exhausted day returns ok:true so the QUEUE stops retrying it — the day
+  // itself is still an unrepaired, still-reported gap; what has stopped is the
+  // spending, not the disclosure.
+  return exhausted
+    ? { ok: true, sampleDate: date, status, blockNumber, balanceRows: 0, sleeveRows: 0, detail }
+    : { ok: false, sampleDate: date, status, blockNumber, balanceRows: 0, sleeveRows: 0, detail, error: detail };
+}
+
+async function skipDay(
+  db: Db,
+  date: string,
+  detail: string,
+  blockNumber: number | null = null,
+): Promise<BackfillDayResult> {
+  await recordState(db, date, "skipped", blockNumber, 0, 0, detail, null);
+  return { ok: true, sampleDate: date, status: "skipped", blockNumber, balanceRows: 0, sleeveRows: 0, detail };
+}
+
 /**
- * Repair ONE day.
+ * Repair a WINDOW of days — the batched executor, and the ONLY executor.
  *
- * DAY-ATOMIC, and that is a correctness requirement rather than tidiness: round
- * 2 of the chain read (`convertToAssets` NAV, chain/wallet-valuation.ts) depends
- * on round 1's output, so a half-read day produces a total that is plausible and
- * wrong. If any leg of the day fails, NOTHING is written for it and the day
- * stays in the gap report.
+ * WHY A WINDOW IS THE UNIT NOW. The provider meters HTTP hits, and the two
+ * costs a day carries are both shareable across days:
+ *
+ *   * BLOCK RESOLUTION — the searches are independent across days, so they run
+ *     in lockstep and a whole window's blocks cost about what one day's cost
+ *     (chain/block-resolver.ts::resolveDayBlocks). This was ~80% of a run.
+ *   * HISTORICAL PRICES — loadHistoricalPrices already takes a DATE RANGE and
+ *     pages daily candles, so a window loads once where the per-day executor
+ *     loaded N times. That is not just cheaper, it is the fix for an observed
+ *     failure: on 2026-08-22 a repair run lost 2026-03-18 to a price-feed 429
+ *     caused by nothing but its own per-day fan-out.
+ *
+ * WHAT DOES NOT CHANGE, AND MUST NOT. Every day is still written in ITS OWN
+ * transaction with its own checkpoint, so an interruption still loses at most
+ * one day. Every day still fails ALONE — a window is a batching unit, never a
+ * blast radius. And a day is still DAY-ATOMIC: if any leg of it fails, nothing
+ * is written for it and it stays in the gap report.
+ */
+export async function backfillWalletWindow(
+  db: Db,
+  dates: readonly string[],
+  deps: WalletBackfillDeps = defaultWalletBackfillDeps,
+  now: Date = new Date(),
+): Promise<BackfillDayResult[]> {
+  const out = new Map<string, BackfillDayResult>();
+  const cutoff = lastClosedDay(now);
+  const closed: string[] = [];
+  for (const date of dates) {
+    if (date > cutoff) {
+      out.set(date, await skipDay(db, date, `${date} has not closed yet — the live sampler owns the current day`));
+      continue;
+    }
+    closed.push(date);
+  }
+  const settle = (): BackfillDayResult[] =>
+    dates.map(
+      (d) =>
+        out.get(d) ?? {
+          ok: false,
+          sampleDate: d,
+          status: "failed" as const,
+          blockNumber: null,
+          balanceRows: 0,
+          sleeveRows: 0,
+          detail: "no outcome",
+          error: "no outcome",
+        },
+    );
+  if (closed.length === 0) return settle();
+
+  assertRpcBudgetConfigured();
+  const wallets = resolvePropWallets();
+  const assets = resolveTrackedAssets();
+
+  // 1. dates → blocks. Permanent cache, so a re-run over the same window is free.
+  const resolvedByDate = await resolveWindowBlocks(db, closed, deps, now);
+  const readable: { date: string; resolved: ResolvedDayBlock }[] = [];
+  for (const date of closed) {
+    const r = resolvedByDate.get(date);
+    if (!r || !r.ok) {
+      out.set(date, await failDay(db, date, `block resolution failed: ${r ? r.error : "no outcome"}`));
+      continue;
+    }
+    readable.push({ date, resolved: r.resolved });
+  }
+  if (readable.length === 0) return settle();
+
+  // 2. Prices for the WHOLE window in ONE load, spanning its first to last day.
+  //    A load failure fails every day it covers — the same refusal the per-day
+  //    path made, just made once.
+  const span = readable.map((r) => r.date).sort();
+  let prices: HistoricalPriceTable;
+  try {
+    prices = await deps.loadPrices(
+      assets.filter((a) => a.valuationKind !== "config"),
+      span[0]!,
+      span[span.length - 1]!,
+    );
+  } catch (err) {
+    for (const { date, resolved } of readable) {
+      out.set(date, await failDay(db, date, `historical price load failed: ${String(err)}`, resolved.blockNumber));
+    }
+    return settle();
+  }
+
+  // 3. Read EVERY day's legs at ITS OWN block, in two requests for the whole
+  //    window rather than two per day. The reads are identical across days —
+  //    only the block tag differs — so this is the same independent axis the
+  //    resolver batches (§6.5.5). A block the reader could not answer comes back
+  //    all-{ok:false} and fails just that day, below.
+  const blockTags = readable.map(({ resolved }) => toBlockTag(resolved.blockNumber));
+  let amountsByTag: Map<string, Map<string, ChainAmount>> | null = null;
+  if (deps.readChainAmountsAtBlocks && readable.length > 0) {
+    const { reads } = buildDayReads(assets, wallets);
+    try {
+      amountsByTag = await deps.readChainAmountsAtBlocks(
+        reads,
+        `wallet-backfill ${span[0]}..${span[span.length - 1]}`,
+        blockTags,
+        { strictEmptyReturn: true },
+      );
+    } catch (err) {
+      // A whole-window read failure fails every day it covered — the same
+      // refusal each day would have made alone, made once.
+      for (const { date, resolved } of readable) {
+        out.set(date, await failDay(db, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber));
+      }
+      return settle();
+    }
+  }
+
+  for (const { date, resolved } of readable) {
+    const pre = amountsByTag?.get(toBlockTag(resolved.blockNumber)) ?? null;
+    out.set(date, await repairResolvedDay(db, date, resolved, prices, wallets, assets, deps, pre));
+  }
+  return settle();
+}
+
+/**
+ * Repair exactly ONE day — the N=1 case of the window, deliberately not a
+ * second implementation. Two executors would be two sets of invariants to keep
+ * honest, and the day-atomic write path is the last place to accept that.
  */
 export async function backfillWalletDay(
   db: Db,
@@ -351,48 +523,88 @@ export async function backfillWalletDay(
   deps: WalletBackfillDeps = defaultWalletBackfillDeps,
   now: Date = new Date(),
 ): Promise<BackfillDayResult> {
-  const fail = async (detail: string, blockNumber: number | null = null): Promise<BackfillDayResult> => {
-    const attempts = await bumpAttempts(db, date);
-    const exhausted = attempts >= maxAttemptsPerDay();
-    const status: BackfillDayStatus = exhausted ? "exhausted" : "failed";
-    await recordState(db, date, status, blockNumber, 0, 0, detail, attempts);
-    console.warn(`wallet-backfill: ${date} refused (attempt ${attempts}${exhausted ? ", exhausted" : ""}) — ${detail}`);
-    // An exhausted day returns ok:true so the QUEUE stops retrying it — the day
-    // itself is still an unrepaired, still-reported gap; what has stopped is the
-    // spending, not the disclosure.
-    return exhausted
-      ? { ok: true, sampleDate: date, status, blockNumber, balanceRows: 0, sleeveRows: 0, detail }
-      : { ok: false, sampleDate: date, status, blockNumber, balanceRows: 0, sleeveRows: 0, detail, error: detail };
-  };
-  const skip = async (detail: string, blockNumber: number | null = null): Promise<BackfillDayResult> => {
-    await recordState(db, date, "skipped", blockNumber, 0, 0, detail, null);
-    return { ok: true, sampleDate: date, status: "skipped", blockNumber, balanceRows: 0, sleeveRows: 0, detail };
-  };
+  return (await backfillWalletWindow(db, [date], deps, now))[0]!;
+}
 
-  if (date > lastClosedDay(now)) {
-    return skip(`${date} has not closed yet — the live sampler owns the current day`);
+/**
+ * The window's blocks, batched when the deps can batch and one-at-a-time when
+ * they cannot.
+ *
+ * The fallback is not dead weight: `resolveBlocks` is optional precisely so a
+ * caller that injects only the single-day `resolveBlock` — every existing test
+ * does — still drives the real executor. Production supplies both and takes the
+ * lockstep path.
+ */
+async function resolveWindowBlocks(
+  db: Db,
+  dates: readonly string[],
+  deps: WalletBackfillDeps,
+  now: Date,
+): Promise<Map<string, { ok: true; resolved: ResolvedDayBlock } | { ok: false; error: string }>> {
+  const opts = { rpcUrl: config.baseRpcUrl };
+  const cache = dayBlockCache(db);
+  const out = new Map<string, { ok: true; resolved: ResolvedDayBlock } | { ok: false; error: string }>();
+
+  if (deps.resolveBlocks) {
+    const outcomes = await deps.resolveBlocks(dates, opts, cache, now);
+    for (let i = 0; i < dates.length; i++) {
+      const o = outcomes[i];
+      const date = dates[i]!;
+      if (!o) out.set(date, { ok: false, error: "no outcome" });
+      else if (o.ok) out.set(date, { ok: true, resolved: o });
+      else out.set(date, { ok: false, error: o.error });
+    }
+    return out;
   }
-  assertRpcBudgetConfigured();
 
-  const wallets = resolvePropWallets();
-  const assets = resolveTrackedAssets();
-
-  // 1. asof → block. Permanent cache, so a re-run over the same window is free.
-  let resolved: ResolvedDayBlock;
-  try {
-    resolved = await deps.resolveBlock(date, { rpcUrl: config.baseRpcUrl }, dayBlockCache(db), now);
-  } catch (err) {
-    return fail(`block resolution failed: ${String(err)}`);
+  for (const date of dates) {
+    try {
+      out.set(date, { ok: true, resolved: await deps.resolveBlock(date, opts, cache, now) });
+    } catch (err) {
+      out.set(date, { ok: false, error: String(err) });
+    }
   }
+  return out;
+}
+
+/**
+ * Repair one day whose block is already resolved and whose prices are already
+ * loaded.
+ *
+ * DAY-ATOMIC, and that is a correctness requirement rather than tidiness: round
+ * 2 of the chain read (`convertToAssets` NAV, chain/wallet-valuation.ts) depends
+ * on round 1's output, so a half-read day produces a total that is plausible and
+ * wrong. If any leg of the day fails, NOTHING is written for it and the day
+ * stays in the gap report.
+ */
+async function repairResolvedDay(
+  db: Db,
+  date: string,
+  resolved: ResolvedDayBlock,
+  prices: HistoricalPriceTable,
+  wallets: string[],
+  assets: TrackedAsset[],
+  deps: WalletBackfillDeps,
+  /** This day's legs, already read as part of the window's batched pass. Null
+   *  when the caller had no multi-block reader, in which case this day reads
+   *  its own block on its own — the pre-batch behaviour, unchanged. */
+  preRead: Map<string, ChainAmount> | null = null,
+): Promise<BackfillDayResult> {
+  const fail = (detail: string, blockNumber: number | null = null): Promise<BackfillDayResult> =>
+    failDay(db, date, detail, blockNumber);
   const blockTag = toBlockTag(resolved.blockNumber);
 
   // 2. Read every leg AT THAT BLOCK, with the silent-zero rail armed.
   const { reads, sleeveTargets } = buildDayReads(assets, wallets);
   let amounts: Map<string, ChainAmount>;
-  try {
-    amounts = await deps.readChainAmounts(reads, `wallet-backfill ${date}`, { blockTag, strictEmptyReturn: true });
-  } catch (err) {
-    return fail(`chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber);
+  if (preRead) {
+    amounts = preRead;
+  } else {
+    try {
+      amounts = await deps.readChainAmounts(reads, `wallet-backfill ${date}`, { blockTag, strictEmptyReturn: true });
+    } catch (err) {
+      return fail(`chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber);
+    }
   }
   const unreadable = reads.filter((r) => !amounts.get(r.key)?.ok).map((r) => r.key);
   if (unreadable.length > 0) {
@@ -404,18 +616,9 @@ export async function backfillWalletDay(
     );
   }
 
-  // 3. Price at that DATE (not at spot). A missing price fails the day rather
-  //    than valuing a real holding at zero, which would read as a drawdown.
-  let prices: HistoricalPriceTable;
-  try {
-    prices = await deps.loadPrices(
-      assets.filter((a) => a.valuationKind !== "config"),
-      date,
-      date,
-    );
-  } catch (err) {
-    return fail(`historical price load failed: ${String(err)}`, resolved.blockNumber);
-  }
+  // 3. Price at that DATE (not at spot), from the window's shared table. A
+  //    missing price fails the day rather than valuing a real holding at zero,
+  //    which would read as a drawdown.
   const priceFor = (symbol: string): number | undefined => prices.get(symbol)?.get(date);
   const unpriced = reads
     .map((r) => r.asset.symbol)
