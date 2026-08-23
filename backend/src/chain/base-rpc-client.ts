@@ -265,6 +265,14 @@ const TRANSIENT_RPC_ERROR_CODES = new Set([-32016]);
 // stall a request longer than the AbortController timeout would anyway.
 const MAX_BACKOFF_MS = 30_000;
 
+/** How long a caller may wait for a RATE token before giving up. Not a network
+ *  timeout — see acquireRateToken(). Generous by default: at the 0.25 calls/s
+ *  default this allows a queue of ~15 callers ahead of you. */
+const DEFAULT_BUDGET_WAIT_MS = 60_000;
+function budgetWaitMs(): number {
+  return intEnv("BASE_RPC_BUDGET_WAIT_MS", DEFAULT_BUDGET_WAIT_MS, 1);
+}
+
 // Env knobs, read at CALL time (not module load) so tests/deployments can flip
 // them. Fall back to the documented default on unset/empty/garbage.
 function intEnv(name: string, fallback: number, min: number): number {
@@ -451,14 +459,34 @@ function refillBucket(budget: RateBudget, now: number): void {
 async function acquireRateToken(): Promise<void> {
   const budget = resolveRpcRateBudget();
   if (!budget) return;
+  // BOUNDED, even though the bucket always eventually refills. Taking the token
+  // wait out of the request deadline fixed paced requests being reported as
+  // timeouts, but it must not replace a wrong bound with none: waiters serialize,
+  // so the k-th caller behind a sweep waits roughly k/ratePerSec seconds, and the
+  // request path shares this bucket with the backfill by design (PD6). An
+  // unbounded wait there turns "slow dashboard" into "hung dashboard".
+  //
+  // This ceiling is deliberately far above any single wait — one token at the
+  // 0.25/s default is 4s — so reaching it means a QUEUE, not a slow refill. The
+  // error says so, because the failure it replaces was misread for exactly this
+  // reason: `Base RPC aborted (timeout) during retry backoff` on a run that was
+  // only ever being paced.
+  const deadline = Date.now() + budgetWaitMs();
   for (;;) {
     refillBucket(budget, Date.now());
     if (bucketTokens >= 1) {
       bucketTokens -= 1;
       return;
     }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Base RPC: still waiting for rate budget after ${Math.round(budgetWaitMs() / 1000)}s ` +
+          `(BASE_RPC_MAX_CALLS_PER_SEC=${budget.ratePerSec}/s, burst ${budget.burst}) — ` +
+          "the shared bucket is queued, not the endpoint slow. Raise the rate or reduce concurrent chain work.",
+      );
+    }
     const waitMs = Math.ceil(((1 - bucketTokens) / budget.ratePerSec) * 1000);
-    await sleep(Math.min(Math.max(waitMs, 1), MAX_BACKOFF_MS));
+    await sleep(Math.min(Math.max(waitMs, 1), MAX_BACKOFF_MS, Math.max(deadline - Date.now(), 1)));
   }
 }
 

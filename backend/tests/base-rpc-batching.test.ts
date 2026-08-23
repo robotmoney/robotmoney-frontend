@@ -40,6 +40,7 @@ const KNOBS = [
   "BASE_RPC_MAX_CALLS_PER_SEC",
   "BASE_RPC_RATE_BURST",
   "BASE_RPC_MAX_BATCH_SIZE",
+  "BASE_RPC_BUDGET_WAIT_MS",
 ] as const;
 
 /** Every request body the mock saw, parsed. One entry per HTTP POST — which is
@@ -365,6 +366,24 @@ test("PACING: the per-POST deadline still bounds a genuinely hung POST", async (
   const started = Date.now();
   await expect(rpcBatchRequest<string>(calls(1), { ...OK, timeoutMs: 100 })).rejects.toThrow();
   expect(Date.now() - started).toBeLessThan(2000);
+});
+
+test("PACING: a token wait is BOUNDED — a queued bucket errors saying so, not silently hanging", async () => {
+  // Moving the token wait out of the request deadline must not leave it
+  // unbounded: the request path shares this bucket with the backfill by design,
+  // so an unbounded wait turns a slow dashboard into a hung one. The error must
+  // name pacing rather than a timeout — misreading one for the other is what
+  // sent an earlier investigation after a phantom transport bug.
+  process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0.01"; // 100s per token
+  process.env.BASE_RPC_RATE_BURST = "1";
+  process.env.BASE_RPC_BUDGET_WAIT_MS = "150";
+  _resetRpcRateLimiterForTests();
+  serve((e) => ({ jsonrpc: "2.0", id: e.id, result: `r${e.id}` }));
+
+  await rpcBatchRequest<string>(calls(1), OK); // spends the one burst token
+  const started = Date.now();
+  await expect(rpcBatchRequest<string>(calls(1), OK)).rejects.toThrow(/still waiting for rate budget/);
+  expect(Date.now() - started).toBeLessThan(3000);
 });
 
 // ── The typed helpers ────────────────────────────────────────────────────────
