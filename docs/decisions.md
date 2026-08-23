@@ -1286,6 +1286,20 @@ shape rather than prompt discipline.
 
 ## D26 — Nightly is a mirror of the merge-to-main set (issue #373; supersedes #280/PR #367)
 
+> **Amended 2026-08-23 — the push set now includes `releases-*`.** Those ten
+> workflows trigger on `push: branches: [main, "releases-*"]`, because a release
+> branch is where release code lives during a rollout: cut from `main`, then
+> accumulating rc commits `main` does not see until the backport. Every one of
+> those commits used to reach a stage host unverified, which is how v0.3.0 came
+> to run its suites by hand and find a broken release gate four rcs deep. The
+> isomorphism D26 asserts is unaffected — it is over the SET OF WORKFLOWS, not
+> the branch list, and `scripts/tests/unit/nightly-mirrors-merge-set.test.ts`
+> keys on `branches` *including* `main` for exactly that reason. One deliberate
+> asymmetry: `e2e.yml`'s paid real-inference eval stays scoped to
+> `refs/heads/main` and the nightly, since an rc push happens several times an
+> hour during a rollout and the eval's coverage argument is one admission per
+> night.
+
 **Decision.** Nightly CI is **isomorphic** to the merge-to-main set. Every
 workflow that runs on `push: branches: [main]` also runs on a nightly
 `schedule:`, and **nothing else runs on a nightly schedule**. The relationship is
