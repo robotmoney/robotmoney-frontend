@@ -83,7 +83,10 @@ export const NEW_COLUMN_MIGRATION = "0032_wallet_balance_samples_strategy_nav_id
  *  INSERTS a second enabled row rather than updating the first; whoever changes
  *  it must retire the old row in `seedJobSchedules()` the way `analytics.run`
  *  is retired, and postflight's `repair-schedule` check will FAIL until they
- *  do. */
+ *  do — it compares job_schedules.cron against this constant directly. (That
+ *  was an aspiration rather than a fact until 2026-08-23: the check read only
+ *  kind/enabled/next_run_at, so a schedule seeded on the wrong cadence was a
+ *  clean PASS.) */
 export const NEW_SCHEDULE_CRON = "25 * * * *";
 
 /** The kind `ops.repair_gaps` enqueues: ONE job carrying `{dates: [...]}` for

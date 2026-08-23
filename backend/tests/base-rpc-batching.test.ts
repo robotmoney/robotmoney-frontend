@@ -318,6 +318,55 @@ test("PACING: our OWN limiter charges per POST, so a chunk of 10 costs one token
   expect(batched).toBeLessThan(150);
 });
 
+// ── Pacing must not be mistaken for a hung request ───────────────────────────
+//
+// The regression: the AbortController was armed BEFORE the rate token was
+// acquired, and in rpcBatchRequest a single deadline spanned every chunk. At the
+// shipped default of 0.25 calls/s a drained bucket costs 4000ms per token, so
+// half of the 8000ms default was spent queueing before a byte moved — and any
+// batch needing two chunks aborted by construction. It surfaced in the field as
+// `Base RPC aborted (timeout) during retry backoff` on a run that was only ever
+// being paced. The deadline now bounds each POST, not the queueing in front of
+// it.
+
+test("PACING: a multi-chunk batch survives a drained bucket instead of aborting on its own deadline", async () => {
+  // Two chunks at a rate whose refill (500ms/token) exceeds the per-POST
+  // deadline below. Under the old single-deadline-per-invocation shape the
+  // second chunk could not be reached before the deadline fired.
+  process.env.BASE_RPC_MAX_CALLS_PER_SEC = "2";
+  process.env.BASE_RPC_RATE_BURST = "1";
+  process.env.BASE_RPC_MAX_BATCH_SIZE = "5";
+  _resetRpcRateLimiterForTests();
+  serve((e) => ({ jsonrpc: "2.0", id: e.id, result: `r${e.id}` }));
+
+  const out = await rpcBatchRequest<string>(calls(10), { ...OK, timeoutMs: 300 });
+
+  expect(posts.length).toBe(2);
+  expect(out.length).toBe(10);
+  expect(out.every((r) => r.ok)).toBe(true);
+});
+
+test("PACING: the per-POST deadline still bounds a genuinely hung POST", async () => {
+  // The other half of the contract — moving the token wait out must not make
+  // `timeoutMs` toothless where it actually applies.
+  process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0";
+  _resetRpcRateLimiterForTests();
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(resolve, 5000);
+      init.signal?.addEventListener("abort", () => {
+        clearTimeout(t);
+        reject(new Error("aborted"));
+      });
+    });
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const started = Date.now();
+  await expect(rpcBatchRequest<string>(calls(1), { ...OK, timeoutMs: 100 })).rejects.toThrow();
+  expect(Date.now() - started).toBeLessThan(2000);
+});
+
 // ── The typed helpers ────────────────────────────────────────────────────────
 
 test("ethGetBlockByNumberBatch: many headers in one POST, and a timestamp-less block is failed not fabricated", async () => {

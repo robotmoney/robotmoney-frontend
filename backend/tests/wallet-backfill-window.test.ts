@@ -201,6 +201,110 @@ test("a price-load failure fails every day it covers — and writes none of them
   expect(rows!.n).toBe(0);
 });
 
+// ── A shared failure is charged ONCE, not once per day ───────────────────────
+//
+// The regression these guard: once #739 made the WINDOW the unit, the three
+// shared legs (price load, whole-window chain read, the resolver's head probe)
+// began failing every day at once — and each of them charged every day an
+// attempt against a per-day ceiling of 3. The queue's degraded retry
+// (worker/loop.ts, backoff 2^attempts) lands three executions inside about ten
+// seconds, and 'exhausted' is terminal: selectBackfillDays() re-plans only
+// undefined and 'failed'. So ten seconds of provider trouble permanently
+// retired ten days, recoverable only by hand-written SQL. The suite was green
+// throughout, because the shared-fate test above asserts the STATUS and says
+// nothing about `attempts`.
+
+test("a shared price-load failure charges NO day an attempt", async () => {
+  const { deps } = countingDeps({
+    async loadPrices() {
+      throw new Error("429 Too Many Requests");
+    },
+  });
+
+  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+
+  const rows = await sql<{ attempts: number }[]>`
+    SELECT attempts FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
+  `;
+  expect(rows.length).toBe(3);
+  expect(rows.every((r) => r.attempts === 0)).toBe(true);
+});
+
+test("repeated shared failures never exhaust a day — it stays re-plannable", async () => {
+  const { deps } = countingDeps({
+    async loadPrices() {
+      throw new Error("429 Too Many Requests");
+    },
+  });
+
+  // One more pass than the per-day ceiling (default 3). Under the old
+  // accounting the third pass flipped every day to 'exhausted' for good.
+  for (let i = 0; i < 4; i++) await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+
+  const rows = await sql<{ status: string; attempts: number }[]>`
+    SELECT status, attempts FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
+  `;
+  expect(rows.every((r) => r.status === "failed")).toBe(true);
+  expect(rows.every((r) => r.attempts === 0)).toBe(true);
+});
+
+test("a day-specific failure DOES charge that day, and only that day", async () => {
+  // One day's block is unreadable; the window's shared legs are fine. That is a
+  // refusal attributable to the day, so its ceiling must move — and its
+  // siblings' must not.
+  const { deps } = countingDeps({
+    async resolveBlocks(dates): Promise<DayBlockOutcome[]> {
+      return dates.map((date) =>
+        date === D2
+          ? { ok: false as const, date, error: "block-resolver: no bracket found" }
+          : {
+              ok: true as const,
+              date,
+              blockNumber: blockFor(date),
+              blockTimestampSec: tsFor(date),
+              rpcCalls: 1,
+              cached: false,
+            },
+      );
+    },
+  });
+
+  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+
+  const rows = await sql<{ sample_date: string; status: string; attempts: number }[]>`
+    SELECT sample_date::text AS sample_date, status, attempts
+      FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[]) ORDER BY sample_date
+  `;
+  const byDate = new Map(rows.map((r) => [r.sample_date, r]));
+  expect(byDate.get(D2)!.attempts).toBe(1);
+  expect(byDate.get(D2)!.status).toBe("failed");
+  expect(byDate.get(D1)!.attempts).toBe(0);
+  expect(byDate.get(D3)!.attempts).toBe(0);
+});
+
+test("the resolver's SHARED head-block failure charges no day", async () => {
+  // block-resolver flags this one `shared: true` precisely so it is not mistaken
+  // for each day's own search failing.
+  const { deps } = countingDeps({
+    async resolveBlocks(dates): Promise<DayBlockOutcome[]> {
+      return dates.map((date) => ({
+        ok: false as const,
+        date,
+        error: "block-resolver: could not read head block 999",
+        shared: true,
+      }));
+    },
+  });
+
+  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+
+  const rows = await sql<{ attempts: number }[]>`
+    SELECT attempts FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
+  `;
+  expect(rows.length).toBe(3);
+  expect(rows.every((r) => r.attempts === 0)).toBe(true);
+});
+
 // ── Per-day durability survives the batching ─────────────────────────────────
 
 test("each day commits its OWN checkpoint row, so an interruption loses at most one day", async () => {
@@ -230,21 +334,41 @@ test("an OPEN day is skipped without spending anything, and never blocks the clo
   expect(counts.resolvedDays).toBe(1);
 });
 
-test("re-running a window over already-filled days writes nothing new", async () => {
-  const { deps } = countingDeps();
+test("re-running a window over already-filled days writes nothing new, spends nothing, and KEEPS the checkpoint", async () => {
+  const { deps, counts } = countingDeps();
   await backfillWalletWindow(sql, [D1, D2], deps, NOW);
   const [before] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ANY(${[D1, D2]}::date[])
   `;
+  const checkpointBefore = await sql<{ sample_date: string; status: string; balance_rows: number }[]>`
+    SELECT sample_date::text AS sample_date, status, balance_rows
+      FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2]}::date[]) ORDER BY sample_date
+  `;
+  const spentBefore = counts.resolvedDays;
 
   const second = await backfillWalletWindow(sql, [D1, D2], deps, NOW);
-  expect(second.every((r) => r.status === "skipped")).toBe(true);
-  expect(second.every((r) => (r.detail ?? "").includes("already populated"))).toBe(true);
 
+  // The days come back as the FILLED days they are. They used to be re-executed
+  // and come back 'skipped, 0 rows, already populated', which overwrote the
+  // record of a real repair with a record of a no-op — and that record is what
+  // §7.1's completion observation grades.
+  expect(second.every((r) => r.status === "filled")).toBe(true);
+
+  // Nothing new written, and — the part the old behaviour got wrong — nothing
+  // UNWRITTEN either: the checkpoint still says what the first pass did.
   const [after] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ANY(${[D1, D2]}::date[])
   `;
   expect(after!.n).toBe(before!.n);
+  const checkpointAfter = await sql<{ sample_date: string; status: string; balance_rows: number }[]>`
+    SELECT sample_date::text AS sample_date, status, balance_rows
+      FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2]}::date[]) ORDER BY sample_date
+  `;
+  expect(checkpointAfter).toEqual(checkpointBefore);
+
+  // And the retry costs no provider budget: settled days never reach the
+  // resolver, let alone the chain read.
+  expect(counts.resolvedDays).toBe(spentBefore);
 });
 
 // ── One executor, not two ────────────────────────────────────────────────────

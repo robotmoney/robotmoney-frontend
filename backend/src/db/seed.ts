@@ -71,7 +71,9 @@ export const SCHEDULES: SeedSchedule[] = [
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
   { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
   // Self-healing dispatcher (issue #709). Asks the gap detector what is missing
-  // and enqueues one wallet.backfill_day job per missing day, bounded per run.
+  // and enqueues ONE wallet.backfill_window job carrying the days it picked,
+  // bounded per run (#739 — the provider meters HTTP hits, so a window that
+  // resolves its days in lockstep costs a fraction of one job per day).
   // HOURLY rather than daily so a wide gap converges in hours instead of weeks
   // under the per-run cap, and cheap when there is nothing to do (two detector
   // queries and no chain read). Since the transport now paces from a
@@ -280,6 +282,24 @@ export async function seed(): Promise<void> {
   await sql`
     INSERT INTO jobs (kind, payload, dedupe_key)
     VALUES ('vault.sample_share_price', ${sql.json(jsonValue({}))}, 'vault.sample_share_price:coldstart')
+    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+  `;
+  // Cold start for the gap repair, same mechanism and same reason — but the wait
+  // it removes is far longer. ops.repair_gaps runs at `25 * * * *`, and
+  // worker/scheduler.ts seeds a brand-new schedule's next_run_at to the next
+  // FUTURE occurrence, so a fresh boot does no repair work for up to an HOUR.
+  // On the cutover boot specifically that means the release's headline feature
+  // does nothing at all for however long it is until the next :25 — including
+  // through §9's postflight, which is where an operator looks for evidence it
+  // works.
+  //
+  // The hourly cron owns every run after this one. Overlap is a no-op rather
+  // than double work: the dispatcher declines while a window job is in flight
+  // (worker/handlers/repair.ts), and a CONSTANT dedupe_key fires this at most
+  // once per database.
+  await sql`
+    INSERT INTO jobs (kind, payload, dedupe_key)
+    VALUES ('ops.repair_gaps', ${sql.json(jsonValue({}))}, 'ops.repair_gaps:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
   console.log("enqueued cold-start sampler jobs (idempotent on dedupe_key)");
