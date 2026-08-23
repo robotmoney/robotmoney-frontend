@@ -30,17 +30,53 @@ WETH and ETH carry an identical price because ETH resolves through WETH's pool.
 ~$60 000 is not an ETH price; it is a BTC-class one. AUM for those days reads
 about 25× high, and the chart steps at the provenance boundary.
 
-**Mechanism.** `chain/historical-prices.ts:252` requests
+**Mechanism, confirmed against the live API on 2026-08-23** (not inferred).
+`chain/historical-prices.ts:252` requests
 
 ```
 /networks/base/pools/{pool}/ohlcv/day?aggregate=1&limit=1000&before_timestamp={ts}
 ```
 
-with no `token=` and no `currency=usd`. GeckoTerminal's OHLCV endpoint is
-**pool-addressed**: absent a `token` parameter it returns candles for the pool's
-*base* token. `resolvePoolForToken` selects the highest-24h-volume pool
-containing the target token — so when the target is the pool's *quote* side, the
-returned closes describe the counterparty.
+with no `token=` and no `currency=usd`. Measured against the `cbBTC / WETH 0.05%`
+pool (`0x42d4a22cad0f5a49681a5715ce994af73a43b76b`):
+
+| request | close returned |
+|---|---|
+| exactly what our code sends today | **77 684.75** — cbBTC's price |
+| `…&token=0x4200…0006&currency=usd` | **2 466.44** — WETH's price |
+
+So the vendor semantics are settled: **absent `token=`, OHLCV describes the
+pool's BASE token**, and `token=<address>&currency=usd` is the correct remedy.
+The $2 466 figure agrees with our own live sampler's $2 438, which is the
+independent corroboration that the remedy is right.
+
+### 1.1 The bug is NON-DETERMINISTIC, and that is the important part
+
+`resolvePoolForToken` selects the highest-24h-volume pool containing the target
+token. For WETH on Base, that ranking is a near-tie between pools that mean
+opposite things:
+
+```
+110,627,595   WETH / USDC 0.3%     WETH is BASE   -> correct price
+101,261,626   cbBTC / WETH 0.05%   WETH is QUOTE  -> cbBTC's price
+ 86,171,193   cbBTC / WETH 0.01%   WETH is QUOTE  -> cbBTC's price
+```
+
+A **9% swing in relative volume** decides whether AUM is correct or ~25× high.
+Nothing in the code notices the pool changed meaning; the price simply becomes a
+different asset's.
+
+Three consequences:
+
+1. **"It used to work" is true, and is not evidence of a fix.** The path was
+   correct whenever WETH/USDC won the sort. Any test, rehearsal or manual check
+   that passed did so by luck of the ranking on that day.
+2. **Bisecting for the breaking commit would have found nothing** — there isn't
+   one. The behaviour changed without the code changing.
+3. **Quarantine cannot be scoped by date.** Some existing `backfilled` rows are
+   correct and some are 25× high, interleaved by whichever pool ranked first when
+   each window's prices were fetched. Every row must be re-checked individually,
+   not written off by range.
 
 ---
 
@@ -72,12 +108,18 @@ itself.
 
 ### 2.3 Why it looked like a batching regression
 
-Three things landed together: batching let the repair cover ten days per run
-instead of one; the cold-start job made it begin at boot rather than at the next
-`:25`; and the frontier finally reached days the chart displays. Throughput rose
-on a writer that was already producing wrong prices. The pre-#739 rehearsal that
-"successfully" filled 2026-03-24 wrote its price through the identical code path
-— nobody checked the magnitude.
+Two independent reasons, and the first is the one that matters.
+
+**The path really did work before, intermittently** (§1.1). It is correct
+whenever the target token is the base side of whichever pool currently leads on
+volume. So an operator who saw good numbers previously saw them genuinely — the
+ranking, not the code, then changed underneath.
+
+**And throughput rose at the same time.** Batching let the repair cover ten days
+per run instead of one; the cold-start job made it begin at boot rather than at
+the next `:25`; and the frontier finally reached days the chart displays. A
+writer that was already capable of producing wrong prices started producing many
+more of them, in a visible range, the same week batching landed.
 
 ### 2.4 What batching *did* break
 
@@ -169,7 +211,9 @@ Ordered by risk. Phase 1 is the foundation the rest sits on.
 
 1. **Make every price request name its token.** Pass
    `token=<tokenAddress>&currency=usd` on the OHLCV request so candles are
-   denominated for the token being priced, not the pool's base.
+   denominated for the token being priced, not the pool's base. **Verified
+   against the live API** (§1): the same pool returns 77 684.75 without it and
+   2 466.44 with it, the latter agreeing with our own live sampler.
 2. **Refuse pools whose side cannot be established.** When resolving a pool for a
    token, record which side the token is on; if that cannot be determined, price
    nothing rather than guess.
@@ -237,8 +281,11 @@ Ordered by risk. Phase 1 is the foundation the rest sits on.
 1. **Tolerance band** for P3 — fixed factor, volatility-scaled, or per-asset?
 2. **Is a second price source operationally acceptable?** Corroboration needs an
    independent reference: another provider, quota and failure mode.
-3. **How far back do we re-verify?** Every existing `backfilled` row came from
-   the current path and is suspect. Quarantining is cheap; re-deriving is not.
+3. **How do we re-verify?** Not "how far back" — §1.1 means correct and wrong
+   rows are interleaved unpredictably, so a date cutoff cannot separate them.
+   Every `backfilled` row needs an individual plausibility check against an
+   independent price. That is the same machinery as Phase 2's rail, pointed
+   backwards at existing data.
 4. **How much of allocation inherits this?** Target weights come from
    `allocation_framework` (managed, no chain reads) and are sound, but the
    *realised* allocation view derives from the same holdings and inherits the
