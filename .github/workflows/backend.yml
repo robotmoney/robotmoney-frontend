@@ -15,6 +15,16 @@
 # workflow used to feed was removed after a production incident on PR #316; a
 # structurally sounder fan-in replacement is tracked in issue #348).
 #
+# RELEASE BRANCHES RUN THE SAME SET (2026-08-23). `releases-*` is on the push
+# trigger beside `main` because a release branch is where release code actually
+# lives during a rollout: it is cut from main, then accumulates rc commits that
+# main never sees until the backport. Without this, every one of those commits
+# was unverified by CI, and the v0.3.0 rollout ended up running suites by hand on
+# the stage host and discovering a broken gate four rcs deep. `push` to a release
+# branch is never path-filtered, exactly as `push` to main is not — see the job
+# `if:` below, which keys on `event_name != 'pull_request'` and so already
+# covered this the moment the trigger did.
+#
 # Path-gated (issue #275 addendum): a `pull_request` run whose changed files
 # don't match `backend/**`/`docker-compose*.yml` skips the job body entirely —
 # a REAL dorny/paths-filter-computed skip, not a synthetic outcome. Because
@@ -36,7 +46,7 @@ env:
   CI_CLASS: system-correctness
 on:
   push:
-    branches: [main]
+    branches: [main, "releases-*"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does — so a red nightly means exactly what a red merge would

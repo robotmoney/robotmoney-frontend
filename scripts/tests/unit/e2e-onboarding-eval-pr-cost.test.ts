@@ -360,8 +360,17 @@ function prContext(opts: {
 }
 
 const CTX = {
-  push: { github: { event_name: "push", repository: "org/repo", event: {} }, inputs: {} } as Ctx,
-  schedule: { github: { event_name: "schedule", repository: "org/repo", event: {} }, inputs: {} } as Ctx,
+  push: { github: { event_name: "push", ref: "refs/heads/main", repository: "org/repo", event: {} }, inputs: {} } as Ctx,
+  // A push to a RELEASE branch. Since 2026-08-23 `releases-*` carries the same
+  // merge-set workflows as main, so this context is reachable — and it must NOT
+  // spend model tokens: an rc push happens several times an hour during a
+  // rollout, and the eval's coverage argument is one admission per night, not
+  // one per rc.
+  pushRelease: {
+    github: { event_name: "push", ref: "refs/heads/releases-0.3.x", repository: "org/repo", event: {} },
+    inputs: {},
+  } as Ctx,
+  schedule: { github: { event_name: "schedule", ref: "refs/heads/main", repository: "org/repo", event: {} }, inputs: {} } as Ctx,
   prPlain: prContext({ labels: [] }),
   prOtherLabels: prContext({ labels: ["documentation", "phase-3"] }),
   prOptedIn: prContext({ labels: [OPT_IN_LABEL] }),
@@ -398,6 +407,7 @@ export function realEvalSpendIsOptIn(expr: string): string | null {
     [`a pull_request labelled '${OPT_IN_LABEL}'`, CTX.prOptedIn, "1"],
     [`a labeled event adding '${OPT_IN_LABEL}'`, CTX.prLabeledOptIn, "1"],
     ["a push to the default branch", CTX.push, "1"],
+    ["a push to a release branch", CTX.pushRelease, ""],
     ["the nightly schedule mirror", CTX.schedule, "1"],
     ["a workflow_dispatch with real_eval=true", CTX.dispatchOn, "1"],
   ];
