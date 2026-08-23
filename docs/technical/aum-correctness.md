@@ -1,8 +1,10 @@
 # Making AUM and allocation complete and correct
 
-Status: **proposal, awaiting decision.** Written 2026-08-23 after a backfilled
-WETH holding was valued at **~25× its true price** on a stage twin, silently,
-with every gate green.
+Status: **claims verified against code, git history, the twin DB and the live
+vendor API (2026-08-23 review); plan broken into tasks (T0.1…T5.3) below.**
+Written 2026-08-23 after a backfilled WETH holding was valued at **~25× its
+true price** on a stage twin, silently, with every gate green. Cutover blockers
+are marked on the tasks.
 
 Two properties the AUM and allocation surfaces must have and currently do not:
 
@@ -21,10 +23,10 @@ gappy series of right ones, because a gap is visible and a wrong number is not.
 
 On the 2026-08-23 twin, `wallet_balance_samples` from 2026-06-27 onward:
 
-| symbol | amount | price_usd written | live-sampled price, same asset |
+| symbol | amount | price_usd written (range over the 50 backfilled rows) | live-sampled price, same asset |
 |---|---|---|---|
-| WETH | 15.4378 | **59 988.51** | **2 438.06** |
-| ETH | 0.04996 | **59 988.51** | — |
+| WETH | 15.4378 | **58 545.09 – 69 305.92** (2026-06-27 is 59 950.65) | **2 438.06** |
+| ETH | 0.04996 | identical to WETH, day by day | — |
 
 WETH and ETH carry an identical price because ETH resolves through WETH's pool.
 ~$60 000 is not an ETH price; it is a BTC-class one — **the holding was priced as
@@ -51,7 +53,13 @@ pool (`0x42d4a22cad0f5a49681a5715ce994af73a43b76b`):
 So the vendor semantics are settled: **absent `token=`, OHLCV describes the
 pool's BASE token**, and `token=<address>&currency=usd` is the correct remedy.
 The $2 466 figure agrees with our own live sampler's $2 438, which is the
-independent corroboration that the remedy is right.
+independent corroboration that the remedy is right. (Re-verified independently
+during the 2026-08-23 review: bare → 77 621.21, with `token=` → 2 460.91.)
+
+The same response also **names both sides in-band**: `meta.base` and
+`meta.quote` carry each side's symbol and address, and passing `token=` flips
+which one is `base`. Orientation is therefore verifiable on the very response
+that carries the price — the Phase 1 assertion (T1.2) needs no extra endpoint.
 
 ### 1.1 The bug is NON-DETERMINISTIC, and that is the important part
 
@@ -82,10 +90,17 @@ Three consequences:
    "it used to work" as established.
 2. **Bisecting for the breaking commit would have found nothing** — there isn't
    one. The behaviour changed without the code changing.
-3. **Quarantine cannot be scoped by date.** Some existing `backfilled` rows are
-   correct and some are 25× high, interleaved by whichever pool ranked first when
-   each window's prices were fetched. Every row must be re-checked individually,
-   not written off by range.
+3. **Quarantine cannot be scoped by date — and not by run either.** Wrongness
+   arrives in large uniform blocks, not per-row salt-and-pepper: the pool is
+   resolved once per process (`poolIdCache`) and one request prefetches ~180
+   days (`PREFETCH_DAYS`), so a single wrong-side resolution poisons an entire
+   window at once. On the 2026-08-23 twin **all 50** backfilled WETH/ETH rows
+   sit in the BTC price range (58 545 – 69 306) — none correct — while
+   BNKR/ROBOTMONEY backfilled prices overlap their live-sampled ranges. And the
+   blocks cannot be reconstructed afterwards: the backfill stamps `sampled_at`
+   as the *sample day's* 23:59, not the write time (`ops/wallet-backfill.ts:747`),
+   so run boundaries are unrecoverable from the table. Every `backfilled` row
+   must be re-checked individually (T5.1), not written off by range or by run.
 
 ---
 
@@ -107,9 +122,9 @@ itself.
 
 | Path | Verdict | How it was established |
 |---|---|---|
-| Per-day block resolution | **Correct** | 113 filled days → 113 distinct blocks, spaced exactly 43200 (2s × 86400s) |
+| Per-day block resolution | **Correct** | 113 filled days → 113 distinct blocks, spaced exactly 43200 blocks (86 400 s/day ÷ 2 s/block) |
 | Batched multicall → per-block demux | **Correct** | `res[i]` ↔ `entries[i]` positionally, and `rpcBatchRequest` fills results by JSON-RPC **id**, not arrival order |
-| Balance amounts | **Correct** | Backfilled amounts match live-sampled amounts exactly where the ranges overlap (`16.2719…`, `11.1044…`) |
+| Balance amounts | **Correct** | Backfilled amounts match live-sampled amounts exactly at the boundary (`16.2719…`, `11.1044…`). An out-of-band comparison: `UNIQUE (sample_date, symbol)` means the table never holds both provenances for one day, so this was checked across adjacent days, not same-day |
 | Empty-return rail | **Correct** | `strictEmptyReturn` refuses `0x` rather than decoding it as a zero balance |
 | **Historical price** | **WRONG** | live $2 438 vs backfilled $59 988 for the same asset |
 
@@ -119,10 +134,13 @@ itself.
 
 Two independent reasons, and the first is the one that matters.
 
-**The path really did work before, intermittently** (§1.1). It is correct
+**The path is capable of working, intermittently** (§1.1). It is correct
 whenever the target token is the base side of whichever pool currently leads on
-volume. So an operator who saw good numbers previously saw them genuinely — the
-ranking, not the code, then changed underneath.
+volume. So good numbers an operator saw earlier *may* have been genuine, with
+the ranking — not the code — changing underneath. But per §1.1.1 this document
+has not established that it ever did price WETH correctly, and on the twin no
+backfilled WETH row is correct; "it worked before" remains an unverified
+impression, which is precisely why it read as a regression.
 
 **And throughput rose at the same time.** Batching let the repair cover ten days
 per run instead of one; the cold-start job made it begin at boot rather than at
@@ -143,7 +161,7 @@ range the provider actually covered**, so a truncated page becomes a permanent
 "no price" for every older day for the life of the process — is *aggravated* by
 window loads but was **not introduced by batching**: `historical-prices.ts` is
 not in #739's diff either. Listing it as batching damage would repeat the
-attribution error this section exists to correct. Tracked as Phase 1.4. *Open.*
+attribution error this section exists to correct. Tracked as T1.4. *Open.*
 
 ---
 
@@ -166,7 +184,7 @@ calling that module safe. `buyback_swaps.value_usd` comes from the same
 pool-addressed pattern, carrying `currency=usd` but no `token=`. It is correct
 today **by luck of the pinned pool's orientation**, not by design: repoint that
 constant at a pool where WETH is the quote side and buyback values silently
-become cbBTC-denominated. Phase 1.1 must fix both call sites.
+become cbBTC-denominated. T1.1 must fix both call sites.
 
 Everything downstream inherits this. Three writers populate
 `wallet_balance_samples` — `worker/handlers/wallet.ts` (live),
@@ -216,82 +234,147 @@ dispatch happened. **Not one of them looks at a number.**
 
 ---
 
-## 5. Plan
+## 5. Plan, as tasks
 
-Ordered by risk. Phase 1 is the foundation the rest sits on.
+Ordered by risk. Phase 1 is the foundation the rest sits on. **Cutover blockers
+are T0.1, T0.2, T1.1 and T1.2** — the rest makes the guarantee durable; those
+make it stop being wrong. Every task names its files and a *done-when* that is
+observable, because "a run looked right" is exactly the evidence §1.1 retired.
 
 ### Phase 0 — Contain
 
-1. **Do not ship v0.3.0's repair as it stands.** On the live-on-arrival default
-   it begins writing prices to production on first boot, and those prices may
-   describe a different asset. Cutover blocker. **Minimum unblock is Phase 1.1 +
-   1.2** — name the token, pin the side. The rest of the plan makes the guarantee
-   durable; those two make it stop being wrong.
-2. **Quarantine, don't delete.** `wallet_balance_samples` is not under the
-   append-only guard, so backfilled rows are correctable — but the wrong values
-   are evidence. Mark them.
-3. **Reset the `exhausted` days** once pricing is trustworthy; they are terminal
-   by design and will never retry on their own.
+- [ ] **T0.1 — Hold the v0.3.0 cutover** until T1.1 + T1.2 are merged and T0.2
+  has run. *(cutover blocker)* The repair is live-on-arrival:
+  `worker/handlers/repair.ts::backfillEnabled` passes on shipped defaults
+  (pacing defaults on; only `BASE_RPC_MAX_CALLS_PER_SEC=0` disables it), so
+  first boot starts writing prices that may describe a different asset.
+  *Done when:* docs/runbooks/v0-3-0-rollout.md lists T0.2/T1.1/T1.2 as
+  preconditions of the cutover step.
+- [ ] **T0.2 — Quarantine, don't delete.** *(cutover blocker)* Migration: move
+  every existing `provenance='backfilled'` row in `wallet_balance_samples` and
+  `wallet_sleeve_samples` to `provenance='backfilled-quarantined'`; the serving
+  layer treats that value as absent. The table has no append-only trigger, so
+  the UPDATE is possible; the wrong values are evidence, so no DELETE. Scope is
+  **all** backfilled rows, not just WETH/ETH — runs are unrecoverable (§1.1.3)
+  and re-admission is T5.1's job, not this migration's.
+  *Done when:* no API response serves a value from a quarantined row, and the
+  rows still exist with their original numbers.
+- [ ] **T0.3 — Reset the `exhausted` days** after T1.1–T1.4 land: clear
+  `wallet_backfill_state` rows with `status='exhausted'` so the planner retries
+  them. They are terminal by design — `selectBackfillDays` treats
+  `('filled','skipped','exhausted')` as settled — and will never retry on their
+  own.
+  *Done when:* the next repair run re-plans those days.
 
 ### Phase 1 — One token-addressed price path *(the foundation)*
 
-1. **Make every price request name its token.** Pass
-   `token=<tokenAddress>&currency=usd` on the OHLCV request so candles are
-   denominated for the token being priced, not the pool's base. **Verified
-   against the live API** (§1): the same pool returns 77 684.75 without it and
-   2 466.44 with it, the latter agreeing with our own live sampler.
-2. **Refuse pools whose side cannot be established — and pin the choice.**
-   `token=` fixes the *denomination*; it does not fix the *stability*. The
-   selector remains free to swap pools on a volume tie, so the asset a price
-   describes could still change between runs. Record which side the token is on,
-   refuse to price when that cannot be determined, and prefer a pinned pool per
-   asset over a re-derived one. **A price that silently changes which asset it
-   describes is the defect; correcting the denomination is only half of it.**
-3. **Collapse the two modules onto one interface.** `token-prices.ts` and
-   `historical-prices.ts` must differ only in *when* they price, never in *what a
-   price means*. One module owns "USD price of token T at time t".
-4. **Fix `poolCloses` coverage bookkeeping** — cache the range actually covered
-   (oldest candle observed), and treat requested-but-uncovered days as *not
-   fetched* rather than *no price*.
+- [ ] **T1.1 — Make every price request name its token.** *(cutover blocker)*
+  - `chain/historical-prices.ts:252` — append
+    `&token=<tokenAddress>&currency=usd`; thread the token address through
+    `poolCloses` → `fetchDailyCloses`, which are pool-keyed today.
+  - `chain/token-prices.ts:235` (`fetchGeckoDailyCloseUsd`) — add `token=`; it
+    already carries `currency=usd`. The signature gains the token address;
+    `buyback-logs.ts:282` passes the WETH address. This is the call site that is
+    right today only by the pinned pool's orientation (§3).
+  **Verified against the live API** (§1): the same pool returns a cbBTC close
+  without `token=` and WETH's with it, agreeing with our live sampler.
+  *Done when:* T3.1's contract test passes, and a twin backfill writes WETH at a
+  price adjacent to the seed-implied ~$1 567 series, not ~$60 000.
+- [ ] **T1.2 — Assert orientation in-band; refuse what cannot be proven.**
+  *(cutover blocker)* The OHLCV response's `meta.base` / `meta.quote` carry both
+  sides' addresses (§1, re-verified live). After T1.1, assert
+  `meta.base.address` equals the requested token, case-insensitively; on
+  mismatch or absent `meta`, throw — the day becomes a disclosed gap, never a
+  substituted price. `token=` fixes the *denomination*; this fixes the
+  *stability*: even when the volume ranking swaps pools between runs (§1.1),
+  a price can no longer silently describe a different asset.
+  *Done when:* T3.2's wrong-orientation fixture is refused.
+- [ ] **T1.3 — Pin the pool per asset.** Add a pinned-pool map for gecko-priced
+  assets in `config.ts` (successor to the dead `*_POOL_ID` env vars, #639;
+  `WETH_USDC_POOL` at config.ts:449 is the precedent), leaving
+  `resolvePoolForToken`'s volume ranking as a *logged fallback* for unpinned
+  assets only. With T1.2 in place a bad pool degrades to a refusal, not a wrong
+  number — pinning restores *availability*; T1.2 owns *correctness*.
+  *Done when:* WETH prices from the pinned WETH/USDC pool with zero resolver
+  requests.
+- [ ] **T1.4 — Fix `poolCloses` coverage bookkeeping.** Cache the range a
+  response *actually covered* (oldest candle observed — `fetchDailyCloses`
+  already tracks `oldest`, it just doesn't return it), not the range requested.
+  A requested-but-uncovered day is *not fetched* (retryable), never *no price*.
+  Aggravated by window loads, not introduced by them (§2.4).
+  *Done when:* a unit test with a truncated first page shows older days retried
+  rather than permanently blank for the process lifetime.
+- [ ] **T1.5 — Collapse the two modules onto one interface.** One module owns
+  "USD price of token T at time t"; `token-prices.ts` (live spot + buyback
+  daily close) and `historical-prices.ts` (backfill) share the request builder
+  and the T1.2 assertion, differing only in *when* they price, never in *what a
+  price means*. May land after cutover.
+  *Done when:* exactly one function in the repo builds a pool-OHLCV URL
+  (today there are two: §3's grep-verified inventory).
 
 ### Phase 2 — Refuse to write what cannot be corroborated
 
-1. **Plausibility rail at the write boundary.** Compare each holding's unit price
-   against the nearest known-good price for that symbol; deviation beyond a
-   configured band fails the day and leaves a disclosed gap. **This is the single
-   highest-value item here** — it is the only one that catches bugs nobody
-   predicted.
-2. **Corroborate across sources** for backfilled days.
-3. **Put the rail where a future writer cannot forget it** — a trigger rejecting
-   a row whose unit price steps beyond the band without an explicit override.
+- [ ] **T2.1 — Plausibility rail at the write boundary.** In
+  `ops/wallet-backfill.ts`, before the INSERT: compare each holding's unit price
+  to the nearest accepted price for that symbol — live sample, seed-implied, or
+  previously accepted backfilled day; a step beyond the band fails the day with
+  a recorded reason and leaves a disclosed gap. Start with a fixed ×/÷2-per-
+  calendar-day band, per-asset override in config; open question 1 narrows it
+  later rather than blocking it. **This is the single highest-value item in the
+  plan** — it is the only one that catches bugs nobody predicted.
+  *Done when:* replaying the 2026-06-27 window against the *broken* fetch writes
+  nothing and records the refusal.
+- [ ] **T2.2 — Enforce the band where a future writer cannot forget it.**
+  Trigger on `wallet_balance_samples` / `wallet_sleeve_samples` rejecting a row
+  whose unit price steps beyond the band against the adjacent accepted day,
+  absent an explicit override (session setting an operator must deliberately
+  set).
+  *Done when:* a raw SQL insert of a 25× step is rejected on the twin.
+- [ ] **T2.3 — Corroborate across sources for backfilled days.** Blocked on open
+  question 2 (a second, independent provider). If accepted: a backfilled day is
+  written only when two sources agree within a band; otherwise it is a gap.
 
 ### Phase 3 — Tests that cross the seam
 
-1. **Request-shape contract** — assert the OHLCV URL carries `token=` and
-   `currency=usd`. Pure string assertion, no network, would have caught this at
-   PR time.
-2. **One golden test through the real pricing path** against a recorded provider
-   response, asserting the resulting `value_usd` — so a change in *either* the
-   request or the arithmetic fails.
-3. **Plausibility property test** over generated holdings and price series.
-4. **Stop neutralising shipped defaults** — `tests/preload.ts:50` sets
-   `BASE_RPC_MAX_CALLS_PER_SEC=0` suite-wide, so the shipped pacing default is
-   executed by nothing.
-5. **Assert consequences, not statuses** — rows written, attempts charged,
-   budget spent.
+- [ ] **T3.1 — Request-shape contract test.** Assert every OHLCV URL the repo
+  builds carries `token=` and `currency=usd` — both call sites. Pure string
+  assertion, no network; would have caught this at PR time.
+- [ ] **T3.2 — Golden tests through the real pricing path** against recorded
+  provider responses *including `meta`*: a right-orientation fixture asserting
+  the resulting `value_usd` (so a change in either the request or the
+  arithmetic fails), and a wrong-orientation fixture asserting refusal (T1.2).
+- [ ] **T3.3 — Plausibility property test** over generated holdings and price
+  series: no generated discontinuous series survives the T2.1 rail.
+- [ ] **T3.4 — Stop neutralising shipped defaults.** `tests/preload.ts:50` sets
+  `BASE_RPC_MAX_CALLS_PER_SEC=0` suite-wide, so the shipped pacing default is
+  executed by nothing; scope it to the files that need it.
+- [ ] **T3.5 — Assert consequences, not statuses** — rows written, attempts
+  charged, budget spent; never `ok: true` alone.
 
 ### Phase 4 — Gates that grade numbers
 
-1. Postflight asserts **AUM continuity across the provenance boundary** — the
-   exact discontinuity that would have caught this before anyone opened a chart.
-2. `repair-completion` grades plausibility, not row existence.
-3. A **completeness metric per series**, served and monitored.
+- [ ] **T4.1 — Postflight asserts AUM continuity across every provenance
+  boundary** — day-over-day unit-price step within the band; the exact
+  discontinuity that would have caught this before anyone opened a chart.
+- [ ] **T4.2 — `repair-completion` grades plausibility, not row existence**
+  (docs/runbooks/v0-3-0-rollout.md, check 3 — today it passes on any row
+  carrying `provenance='backfilled'`, whatever the number says).
+- [ ] **T4.3 — A completeness metric per series** — days covered ÷ days
+  claimed, by provenance — served and monitored.
 
-### Phase 5 — Serving-layer honesty
+### Phase 5 — Re-verify, then serve honestly
 
-1. Wallet-balance and allocation responses carry per-point provenance and a
-   completeness summary.
-2. The frontend **draws gaps as gaps** — never interpolates a missing day.
+- [ ] **T5.1 — Re-admit quarantined rows individually.** The T2.1 rail pointed
+  backwards: check every quarantined row against a freshly fetched
+  token-addressed price for its day; within band → restore to `backfilled`,
+  outside → leave quarantined and let the repair refill the day under T1.
+  Start from "assume all guilty" (§1.1.3). Expected on the twin: WETH/ETH rows
+  refill with correct prices; BNKR/ROBOTMONEY and usdc-kind rows re-admit.
+  *Done when:* zero quarantined rows remain unadjudicated.
+- [ ] **T5.2 — Wallet-balance and allocation responses carry per-point
+  provenance and a completeness summary.**
+- [ ] **T5.3 — The frontend draws gaps as gaps** — never interpolates a missing
+  day.
 
 ---
 
@@ -309,13 +392,17 @@ Ordered by risk. Phase 1 is the foundation the rest sits on.
 ## 7. Open questions for the decision
 
 1. **Tolerance band** for P3 — fixed factor, volatility-scaled, or per-asset?
+   Does not block T2.1, which starts from a fixed ×/÷2-per-day default; this
+   question only narrows it.
 2. **Is a second price source operationally acceptable?** Corroboration needs an
-   independent reference: another provider, quota and failure mode.
-3. **How do we re-verify?** Not "how far back" — §1.1 means correct and wrong
-   rows are interleaved unpredictably, so a date cutoff cannot separate them.
-   Every `backfilled` row needs an individual plausibility check against an
-   independent price. That is the same machinery as Phase 2's rail, pointed
-   backwards at existing data.
+   independent reference: another provider, quota and failure mode. Blocks T2.3
+   and nothing else.
+3. ~~**How do we re-verify?**~~ **Settled by the twin evidence.** Not "how far
+   back" — wrongness comes in run-sized blocks whose boundaries the table does
+   not record (§1.1.3), so neither a date cutoff nor a run cutoff can separate
+   them. Every `backfilled` row gets an individual plausibility check against an
+   independent token-addressed price, starting from "assume all guilty" — the
+   Phase 2 rail pointed backwards. That is T5.1, fed by T0.2's quarantine.
 4. **How much of allocation inherits this?** Target weights come from
    `allocation_framework` (managed, no chain reads) and are sound, but the
    *realised* allocation view derives from the same holdings and inherits the
