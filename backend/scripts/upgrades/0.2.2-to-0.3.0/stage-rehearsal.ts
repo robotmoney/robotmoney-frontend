@@ -82,13 +82,16 @@ async function run(backupDirArg?: string): Promise<number> {
     // point of holding one window open is that ONE twin yields all the evidence
     // — if the observation disappoints you still want it from this boot rather
     // than paying for another restore and image build.
-    onReady: async ({ backendUrl, databaseUrl, log: rlog, err: rerr }) => {
+    onReady: async ({ databaseUrl, log: rlog, err: rerr }) => {
       rlog("check 1/3 postflight — this release's checks against the migrated twin (§6.1 step 3)");
       const proc = Bun.spawn(
         [
           "bun",
           "scripts/upgrades/0.2.2-to-0.3.0/postflight.ts",
-          `--base-url=${backendUrl}`,
+          // No --base-url: postflight.ts parses only --emit-receipt and
+          // --backup-dir, so this was silently discarded. None of v0.3.0's seven
+          // checks makes an HTTP call (postflight-utils.ts's fetchCheck has no
+          // caller in this release), so there is nothing for it to configure.
           "--emit-receipt=P5.postflight-twin",
           ...(backupDirArg ? [`--backup-dir=${backupDirArg}`] : []),
         ],

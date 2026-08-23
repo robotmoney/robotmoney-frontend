@@ -430,9 +430,25 @@ function refillBucket(budget: RateBudget, now: number): void {
 
 // Wait until one token is available, then spend it. Waiters re-check after each
 // sleep rather than assuming their turn, so a herd waking together still spends
-// exactly one token each. Aborts with the request's own deadline (sleepOrAbort),
-// so pacing can never outlive the AbortController timeout.
-async function acquireRateToken(signal: AbortSignal): Promise<void> {
+// exactly one token each.
+//
+// ⚠ THIS WAIT IS NOT INSIDE A REQUEST DEADLINE, AND MUST NOT BE. An earlier
+// revision acquired the token inside the AbortController armed for the request
+// and claimed "pacing can never outlive the AbortController timeout" — true in
+// the trivial sense that the sleep aborts, and badly wrong as a safety property.
+// At the shipped default of 0.25 calls/s a drained bucket costs 4000 ms per
+// token against an 8000 ms deadline, so HALF the request's budget was spent
+// queueing before a byte moved; noteRateLimitExhaustion() then drains the bucket
+// on every 429, so each retry paid a fresh 4s toll and BASE_RPC_MAX_RETRIES=3
+// was really 2. Worse, one deadline spanning a multi-chunk batch made >1 chunk
+// abort unconditionally — reachable just by raising
+// WALLET_BACKFILL_MAX_DAYS_PER_RUN above the batch size. Observed in the field
+// as `Base RPC aborted (timeout) during retry backoff` on a run that was only
+// ever being paced.
+//
+// Callers now arm their deadline around the NETWORK attempt only. Waiting for
+// budget is not a request timing out; it is the limiter working.
+async function acquireRateToken(): Promise<void> {
   const budget = resolveRpcRateBudget();
   if (!budget) return;
   for (;;) {
@@ -442,7 +458,7 @@ async function acquireRateToken(signal: AbortSignal): Promise<void> {
       return;
     }
     const waitMs = Math.ceil(((1 - bucketTokens) / budget.ratePerSec) * 1000);
-    await sleepOrAbort(Math.min(Math.max(waitMs, 1), MAX_BACKOFF_MS), signal);
+    await sleep(Math.min(Math.max(waitMs, 1), MAX_BACKOFF_MS));
   }
 }
 
@@ -488,22 +504,14 @@ function backoffMs(attempt: number, retryAfterHeader: string | null): number {
   return Math.min(exp + jitter, MAX_BACKOFF_MS);
 }
 
-// Sleep that rejects the moment the request's AbortController fires (timeout), so
-// a retry loop can never outlive the request's overall deadline.
-function sleepOrAbort(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    if (signal.aborted) return reject(new Error("Base RPC aborted before retry"));
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new Error("Base RPC aborted (timeout) during retry backoff"));
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
+// Plain sleep, for waits that are NOT part of a network attempt: pacing and
+// retry backoff. Both are bounded on their own — the bucket by its refill rate,
+// backoff by MAX_BACKOFF_MS and a finite retry count — so neither needs, or
+// should be cut short by, a request deadline. See acquireRateToken().
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
+
 
 // The SINGLE JSON-RPC transport for every Base read in the app. Throws on
 // transport failure, a non-2xx HTTP status (after exhausting bounded retries on
@@ -513,20 +521,26 @@ function sleepOrAbort(ms: number, signal: AbortSignal): Promise<void> {
 // through here so there is exactly one place that speaks JSON-RPC to Base; do NOT
 // hand-roll a `fetch` to the RPC elsewhere.
 export async function rpcRequest<T>(method: string, params: unknown[], opts: RpcCallOptions): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8000);
   const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
   const retries = maxRetries();
-  try {
+  const timeoutMs = opts.timeoutMs ?? 8000;
+  {
     for (let attempt = 0; ; attempt++) {
       // Spend a RATE token before taking a concurrency slot — a request that is
       // only waiting for budget must not hold a slot while it waits. No-op when
-      // the budget is unconfigured (see resolveRpcRateBudget).
-      await acquireRateToken(controller.signal);
+      // the budget is unconfigured (see resolveRpcRateBudget). Deliberately
+      // OUTSIDE the deadline armed below: see acquireRateToken().
+      await acquireRateToken();
       // Acquire a concurrency slot per network attempt (and release it during any
       // backoff sleep, so a waiting request is never blocked by one that is just
       // sitting out its backoff).
       await acquireSlot();
+      // ONE DEADLINE PER NETWORK ATTEMPT. `timeoutMs` means "how long this POST
+      // may take", which is the only thing it can honestly bound — a single
+      // deadline stretched across pacing, backoff and every retry made a paced
+      // request indistinguishable from a hung one.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       let res: Response;
       try {
         res = await fetch(opts.rpcUrl, {
@@ -538,6 +552,7 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
           signal: controller.signal,
         });
       } finally {
+        clearTimeout(timeout);
         releaseSlot();
       }
 
@@ -553,10 +568,9 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
           if (
             parsed.error.code != null &&
             TRANSIENT_RPC_ERROR_CODES.has(parsed.error.code) &&
-            attempt < retries &&
-            !controller.signal.aborted
+            attempt < retries
           ) {
-            await sleepOrAbort(backoffMs(attempt + 1, null), controller.signal);
+            await sleep(backoffMs(attempt + 1, null));
             continue;
           }
           throw new Error(
@@ -567,19 +581,19 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
         return parsed.result;
       }
 
-      // Non-2xx. Retry only transient statuses, only while retries remain, and
-      // only if the request hasn't already been aborted by its timeout.
+      // Non-2xx. Retry only transient statuses, while retries remain. Retry-After
+      // is now honorable: the wait is no longer competing with the request's own
+      // deadline, so a header above ~7s stops guaranteeing an abort instead of
+      // compliance.
       if (res.status === 429) noteRateLimitExhaustion(); // same feedback as -32016 above
-      if (TRANSIENT_STATUSES.has(res.status) && attempt < retries && !controller.signal.aborted) {
-        await sleepOrAbort(backoffMs(attempt + 1, res.headers.get("retry-after")), controller.signal);
+      if (TRANSIENT_STATUSES.has(res.status) && attempt < retries) {
+        await sleep(backoffMs(attempt + 1, res.headers.get("retry-after")));
         continue;
       }
       // Exhausted / non-transient: THROW so the caller degrades to stale. Never
       // fabricate, never report live off a dead endpoint.
       throw new Error(`Base RPC HTTP ${res.status}`);
     }
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -679,13 +693,19 @@ export async function rpcBatchRequest<T>(
   opts: RpcCallOptions,
 ): Promise<BatchResult<T>[]> {
   if (calls.length === 0) return [];
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8000);
   const retries = maxRetries();
+  const timeoutMs = opts.timeoutMs ?? 8000;
   const out = new Array<BatchResult<T>>(calls.length);
   const size = maxBatchSize();
 
-  try {
+  // ONE DEADLINE PER POST, not one per invocation. A single deadline spanning
+  // the chunk loop below made any batch larger than `size` abort by
+  // construction: each chunk costs at least one rate token, and at the shipped
+  // 0.25 calls/s that is 4s of the 8s budget apiece. `calls.length` here is
+  // one-per-day for the backfill, so raising WALLET_BACKFILL_MAX_DAYS_PER_RUN
+  // past BASE_RPC_MAX_BATCH_SIZE — two independent knobs, no relationship
+  // documented between them — silently guaranteed every resolver round failed.
+  {
     for (let start = 0; start < calls.length; start += size) {
       const chunk = calls.slice(start, start + size);
       // Indices INTO `calls` that this pass must still answer. Shrinks to just
@@ -698,9 +718,12 @@ export async function rpcBatchRequest<T>(
         );
 
         // Same ordering as rpcRequest: budget first, then a concurrency slot, so
-        // a request only waiting on the bucket never holds a slot.
-        await acquireRateToken(controller.signal);
+        // a request only waiting on the bucket never holds a slot. Both sit
+        // OUTSIDE the per-POST deadline armed immediately below.
+        await acquireRateToken();
         await acquireSlot();
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
         let res: Response;
         try {
           res = await fetch(opts.rpcUrl, {
@@ -710,13 +733,14 @@ export async function rpcBatchRequest<T>(
             signal: controller.signal,
           });
         } finally {
+          clearTimeout(timeout);
           releaseSlot();
         }
 
         if (!res.ok) {
           if (res.status === 429) noteRateLimitExhaustion();
-          if (TRANSIENT_STATUSES.has(res.status) && attempt < retries && !controller.signal.aborted) {
-            await sleepOrAbort(backoffMs(attempt + 1, res.headers.get("retry-after")), controller.signal);
+          if (TRANSIENT_STATUSES.has(res.status) && attempt < retries) {
+            await sleep(backoffMs(attempt + 1, res.headers.get("retry-after")));
             continue;
           }
           throw new Error(`Base RPC batch HTTP ${res.status}`);
@@ -765,9 +789,9 @@ export async function rpcBatchRequest<T>(
           out[idx] = { ok: true, result: entry.result };
         }
 
-        if (throttled.length > 0 && attempt < retries && !controller.signal.aborted) {
+        if (throttled.length > 0 && attempt < retries) {
           pending = throttled;
-          await sleepOrAbort(backoffMs(attempt + 1, res.headers.get("retry-after")), controller.signal);
+          await sleep(backoffMs(attempt + 1, res.headers.get("retry-after")));
           continue;
         }
         // Out of retries with entries still throttled: report them as failed
@@ -779,8 +803,6 @@ export async function rpcBatchRequest<T>(
       }
     }
     return out;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

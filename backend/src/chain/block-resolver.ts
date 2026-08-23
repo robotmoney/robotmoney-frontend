@@ -243,7 +243,13 @@ export const defaultResolveDayBlocksDeps: ResolveDayBlocksDeps = {
   },
 };
 
-export type DayBlockOutcome = ({ ok: true } & ResolvedDayBlock) | { ok: false; date: string; error: string };
+/** `shared: true` marks a failure that belongs to the WINDOW, not to this day —
+ *  the one head read every day in the window depends on. The caller uses it to
+ *  decide whether the day has earned an attempt against its own retry ceiling;
+ *  see deferDay() in ops/wallet-backfill.ts. */
+export type DayBlockOutcome =
+  | ({ ok: true } & ResolvedDayBlock)
+  | { ok: false; date: string; error: string; shared?: boolean };
 
 /** Per-day search state while the lockstep loop runs. */
 interface DaySearch {
@@ -315,7 +321,10 @@ export async function resolveDayBlocks(
 
     if (!headProbe || !headProbe.ok) {
       const error = `block-resolver: could not read head block ${latestNumber}${headProbe && !headProbe.ok ? ` — ${headProbe.error}` : ""}`;
-      for (const date of unresolved) out.set(date, { ok: false, date, error });
+      // ONE head read backs every unresolved day, so its failure is the window's
+      // and not any day's. Flagged so the caller does not charge ten retry
+      // ceilings for one transient.
+      for (const date of unresolved) out.set(date, { ok: false, date, error, shared: true });
     } else {
       const head = headProbe.stamp;
       const searches: DaySearch[] = [];

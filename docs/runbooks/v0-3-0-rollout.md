@@ -728,6 +728,8 @@ the first time. Procedure and container mechanics: follow
 The twin must run the **same rc** you intend to deploy, against a restore of the
 **production** dump from Gate C.
 
+### 7.1 The graded sequence
+
 **The rehearsal runs a graded SEQUENCE inside one twin window**, not a single
 check. `stage-rehearsal.ts` holds the twin up for the whole sequence — the
 duration of its `onReady` hook *is* the twin's lifetime — under a 45-minute
@@ -738,8 +740,8 @@ wallet days the dump is missing, against ~1 minute before the sequence existed.
 | # | Check | Blocking | Proves |
 |---|---|---|---|
 | 1 | `postflight` | **yes** | Every §9 check against the migrated twin, including the migration wall-clock. §6.4: a twin that fails postflight is a failed cutover, so the sequence stops here. |
-| 2 | `repair-dispatch` | no (FAIL still fails the run) | §4.1 — `ops.repair_gaps` fires and **dispatches**: `job_runs` names the days enqueued, deferred, retrying and exhausted, and every day it claims to have enqueued appears in the `dates` payload of a `wallet.backfill_window` job. |
-| 3 | `repair-completion` | no — **WARN only** | One day completes and its rows carry `provenance='backfilled'`. |
+| 2 | `repair-dispatch` | no (FAIL still fails the run) | §4.1 — `ops.repair_gaps` fires and **dispatches**: `job_runs` names the days enqueued, deferred, retrying and exhausted, and **exactly one** `wallet.backfill_window` job carries **exactly** those days. A run that dispatched nothing while days were missing FAILs rather than passing vacuously, and N single-date windows FAIL — that is the un-batching regression #739 exists to prevent. |
+| 3 | `repair-completion` | no — **WARN only** | One dispatched day writes rows carrying `provenance='backfilled'`, in **either** backfilled series (`wallet_balance_samples` or `wallet_sleeve_samples`). |
 
 > **Why check 3 can only WARN.** Completing a day means real reads against
 > `mainnet.base.org` paced at 0.25 calls/s, plus historical prices from a
@@ -747,12 +749,16 @@ wallet days the dump is missing, against ~1 minute before the sequence existed.
 > depend on a provider's mood on rehearsal day. The path this release *changed*
 > is the dispatch, and check 2 grades that hard.
 
-> **Check 2 does not wait for the wall-clock `:25`.** It backdates
-> `next_run_at` by exactly one cadence and lets the ordinary 30-second scheduler
-> tick fire it, so the real scheduler and the real handler are observed and only
-> the clock is hurried. It must be a *past* slot: `tickScheduler` anchors at
-> `next_run_at - 1s` and breaks on the first future slot, so a bare
-> `SET next_run_at = now()` enqueues nothing at all.
+> **Check 2 does not wait for the wall-clock `:25`, and no longer needs to cheat
+> to avoid it.** `db/seed.ts` enqueues a cold-start `ops.repair_gaps` job on
+> every boot, so the first run happens within a worker tick of readiness — the
+> same first run production gets. The observation simply watches for it.
+>
+> It used to rewind `next_run_at` by one cadence instead. That was not
+> idempotent within an hour (the scheduler dedupes the re-enqueue on
+> `dedupe_key`, so a second observation in the same cadence reported "the work
+> never ran" and blamed the analytics lane), and it observed a run production
+> would never make.
 
 What this release requires the twin to prove, and what now proves it. Record
 each result in the stage rehearsal report (§7.4):
@@ -1019,9 +1025,9 @@ All must pass before `v0.3.0` is tagged.
 | 1 | `migrations-applied` | all four names in `schema_migrations` | Both `0032_*`, both `0033_*`, `0034_*`, `0035_*` present — the check that would catch a runner keyed on the numeric prefix |
 | 2 | `strategy-nav-column` | the column exists and **the migration populated nothing** | `NULL` on every row untouched since `0032_wallet_*` applied. Rows written or re-upserted afterwards carry values legitimately — that is the sampler working. (This row used to expect `NULL` on *every* row, which postflight can never see: it runs after readiness, so the per-minute sampler has always written by then, and the check WARNed on every clean run.) |
 | 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). **The only data write in the set** |
-| 4 | `new-tables` | the three new tables exist and are empty | Three clean `CREATE TABLE`s |
-| 5 | `repair-schedule` | the new schedule is seeded, exactly once and enabled, and its behaviour matches the budget you chose | **Dispatches** with the budget unset (the built-in 0.25 calls/s default) or set to any positive value; declines only when it is explicitly `0` — **confirm it is the world you chose** (§5.2) |
-| 6 | `append-only-intact` | the guard survived the migration | Live on all fourteen protected tables. A guard silently lost is the §11.1 failure mode |
+| 4 | `new-tables` | the three new tables exist | Three clean `CREATE TABLE`s. **Expect a WARN, not a PASS, on a live deployment:** the repair now dispatches from a cold-start job on the cutover boot (§4.1), so `chain_day_blocks` and `wallet_backfill_state` will already hold rows by the time postflight runs. Empty is the *fresh-schema* expectation, not the post-cutover one |
+| 5 | `repair-schedule` | the new schedule is seeded, exactly once, enabled, on the cron `release.ts` names — and what the DEPLOYMENT reports it actually did | Read from the latest `ops.repair_gaps` `job_runs` row: dispatched, or declined and why. It used to infer this from `BASE_RPC_MAX_CALLS_PER_SEC` **in postflight's own process**, which is not where the app reads it — an operator taking §5.2's opt-out via `.env` was told the backfill "WILL dispatch" while production had it off. **Confirm it is the world you chose** (§5.2) |
+| 6 | `append-only-intact` | the guard survived the migration | **Both** triggers live and **enabled** on all fourteen protected tables. Presence of one of the two used to pass, and `tgenabled` was never read — so a half-dropped guard, or one left `DISABLE TRIGGER`, read green. A guard silently lost is the §11.1 failure mode, and switched-off is a way of being lost |
 | 7 | ⛔ **manual — no script** | a real passkey ceremony completes against the public HTTPS origin | The §5.1 fix, verified end-to-end. Step `P8.acceptance`; reading `WEBAUTHN_ORIGIN` back out of the container proves configuration, not function |
 | 8 | `no-wedge` | the cutover window did not wedge a schedule | `next_run_at` within one cadence of now. Compare against preflight's `wedged-schedules` baseline — a pre-existing wedge is not this release's damage |
 

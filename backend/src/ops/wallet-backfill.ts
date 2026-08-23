@@ -381,6 +381,39 @@ async function failDay(
     : { ok: false, sampleDate: date, status, blockNumber, balanceRows: 0, sleeveRows: 0, detail, error: detail };
 }
 
+/** Record a refusal that was NOT this day's fault — a shared leg failed and took
+ *  the whole window with it.
+ *
+ *  WHY THIS IS NOT `failDay`. The per-day ceiling
+ *  (WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY, default 3) exists to stop spending
+ *  provider budget on a day that cannot be read. Once #739 made the WINDOW the
+ *  unit, three shared legs — the historical price load, the whole-window chain
+ *  read, and the resolver's head-block probe — began failing every day at once.
+ *  Charging each of them to every day turned a single transient into a
+ *  ten-day-wide charge, and the queue's own degraded retry
+ *  (worker/loop.ts, backoff 2^attempts seconds) lands three of those inside
+ *  about ten seconds. `exhausted` is terminal — selectBackfillDays() re-plans
+ *  only undefined and 'failed' — so roughly ten seconds of provider trouble
+ *  retired ten days permanently, recoverable only by hand-written SQL.
+ *
+ *  So: a day is charged an attempt only for a refusal attributable to that day
+ *  (its block unreadable, its legs unreadable, its own assets unpriced). A
+ *  shared-leg failure is written down as 'failed' with the detail, `attempts`
+ *  left alone (recordState treats null as "leave the counter"), and the day
+ *  stays re-plannable on the next sweep. The gap is still a gap and still
+ *  reported by GET /api/admin/gaps either way — what differs is whether the
+ *  system will ever try again. */
+async function deferDay(
+  db: Db,
+  date: string,
+  detail: string,
+  blockNumber: number | null = null,
+): Promise<BackfillDayResult> {
+  await recordState(db, date, "failed", blockNumber, 0, 0, detail, null);
+  console.warn(`wallet-backfill: ${date} deferred (shared leg, attempt not charged) — ${detail}`);
+  return { ok: false, sampleDate: date, status: "failed", blockNumber, balanceRows: 0, sleeveRows: 0, detail, error: detail };
+}
+
 async function skipDay(
   db: Db,
   date: string,
@@ -444,6 +477,45 @@ export async function backfillWalletWindow(
     );
   if (closed.length === 0) return settle();
 
+  // A RETRY of this window must not redo days it already finished. The queue
+  // retries the whole payload (worker/loop.ts's degraded path), and steps 1-3
+  // below read every day's legs from chain BEFORE the executor discovers the day
+  // is already populated — so without this filter a retry re-spends the metered
+  // budget on completed work, and then overwrites each finished day's
+  // `filled, N rows` checkpoint with `skipped, 0, 0, already populated`,
+  // destroying the record §7.1's completion observation reads.
+  //
+  // Terminal here means the day is settled for this pass: 'filled' and 'skipped'
+  // are settled facts, and 'exhausted' has spent its ceiling. 'failed' is NOT
+  // terminal — that is the retryable state, and re-running it is the point.
+  const priorState = await db<{ sample_date: string; status: BackfillDayStatus; block_number: number | null; balance_rows: number; sleeve_rows: number; detail: string | null }[]>`
+    SELECT sample_date::text AS sample_date, status, block_number, balance_rows, sleeve_rows, detail
+      FROM wallet_backfill_state
+     WHERE sample_date = ANY(${closed}::date[])
+       AND status IN ('filled', 'skipped', 'exhausted')
+  `;
+  const settled = new Map(priorState.map((r) => [r.sample_date, r]));
+  const pending: string[] = [];
+  for (const date of closed) {
+    const s = settled.get(date);
+    if (!s) {
+      pending.push(date);
+      continue;
+    }
+    out.set(date, {
+      ok: true,
+      sampleDate: date,
+      status: s.status,
+      blockNumber: s.block_number,
+      balanceRows: s.balance_rows,
+      sleeveRows: s.sleeve_rows,
+      detail: s.detail ?? `already ${s.status} by an earlier pass over this window`,
+    });
+  }
+  if (pending.length === 0) return settle();
+  closed.length = 0;
+  closed.push(...pending);
+
   assertRpcBudgetConfigured();
   const wallets = resolvePropWallets();
   const assets = resolveTrackedAssets();
@@ -454,7 +526,10 @@ export async function backfillWalletWindow(
   for (const date of closed) {
     const r = resolvedByDate.get(date);
     if (!r || !r.ok) {
-      out.set(date, await failDay(db, date, `block resolution failed: ${r ? r.error : "no outcome"}`));
+      // A day whose OWN search failed earns an attempt; one that only lost the
+      // window's shared head read does not (DayBlockOutcome.shared).
+      const detail = `block resolution failed: ${r ? r.error : "no outcome"}`;
+      out.set(date, r && !r.ok && r.shared ? await deferDay(db, date, detail) : await failDay(db, date, detail));
       continue;
     }
     readable.push({ date, resolved: r.resolved });
@@ -473,8 +548,10 @@ export async function backfillWalletWindow(
       span[span.length - 1]!,
     );
   } catch (err) {
+    // Shared leg: one load covers every day in the window, so its failure is not
+    // any one day's fault and charges none of them an attempt. See deferDay().
     for (const { date, resolved } of readable) {
-      out.set(date, await failDay(db, date, `historical price load failed: ${String(err)}`, resolved.blockNumber));
+      out.set(date, await deferDay(db, date, `historical price load failed: ${String(err)}`, resolved.blockNumber));
     }
     return settle();
   }
@@ -497,9 +574,10 @@ export async function backfillWalletWindow(
       );
     } catch (err) {
       // A whole-window read failure fails every day it covered — the same
-      // refusal each day would have made alone, made once.
+      // refusal each day would have made alone, made once. Made once, it is
+      // also charged once: no day's attempt counter moves. See deferDay().
       for (const { date, resolved } of readable) {
-        out.set(date, await failDay(db, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber));
+        out.set(date, await deferDay(db, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber));
       }
       return settle();
     }
@@ -535,15 +613,23 @@ export async function backfillWalletDay(
  * does — still drives the real executor. Production supplies both and takes the
  * lockstep path.
  */
+/** A day's block, or why it has none. `shared` is forwarded from
+ *  DayBlockOutcome (chain/block-resolver.ts): true means the window's single
+ *  head read failed, so this day never got its own chance and must not be
+ *  charged an attempt for it. */
+type WindowBlockOutcome =
+  | { ok: true; resolved: ResolvedDayBlock }
+  | { ok: false; error: string; shared?: boolean };
+
 async function resolveWindowBlocks(
   db: Db,
   dates: readonly string[],
   deps: WalletBackfillDeps,
   now: Date,
-): Promise<Map<string, { ok: true; resolved: ResolvedDayBlock } | { ok: false; error: string }>> {
+): Promise<Map<string, WindowBlockOutcome>> {
   const opts = { rpcUrl: config.baseRpcUrl };
   const cache = dayBlockCache(db);
-  const out = new Map<string, { ok: true; resolved: ResolvedDayBlock } | { ok: false; error: string }>();
+  const out = new Map<string, WindowBlockOutcome>();
 
   if (deps.resolveBlocks) {
     const outcomes = await deps.resolveBlocks(dates, opts, cache, now);
@@ -552,7 +638,9 @@ async function resolveWindowBlocks(
       const date = dates[i]!;
       if (!o) out.set(date, { ok: false, error: "no outcome" });
       else if (o.ok) out.set(date, { ok: true, resolved: o });
-      else out.set(date, { ok: false, error: o.error });
+      // `shared` must survive this remap: it is what tells the caller the
+      // failure was the window's one head read, not this day's own search.
+      else out.set(date, { ok: false, error: o.error, shared: o.shared === true });
     }
     return out;
   }
