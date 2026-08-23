@@ -27,8 +27,11 @@ On the 2026-08-23 twin, `wallet_balance_samples` from 2026-06-27 onward:
 | ETH | 0.04996 | **59 988.51** | — |
 
 WETH and ETH carry an identical price because ETH resolves through WETH's pool.
-~$60 000 is not an ETH price; it is a BTC-class one. AUM for those days reads
-about 25× high, and the chart steps at the provenance boundary.
+~$60 000 is not an ETH price; it is a BTC-class one — **the holding was priced as
+a different asset entirely.** The multiple depends on the reference: ~25× against
+the same-asset live sample above, ~38× against the adjacent `seed` row for the
+day before the boundary (which implies $1 567). The magnitude is a distraction
+from the fact that the number is not a WETH price at all.
 
 **Mechanism, confirmed against the live API on 2026-08-23** (not inferred).
 `chain/historical-prices.ts:252` requests
@@ -68,9 +71,15 @@ different asset's.
 
 Three consequences:
 
-1. **"It used to work" is true, and is not evidence of a fix.** The path was
-   correct whenever WETH/USDC won the sort. Any test, rehearsal or manual check
-   that passed did so by luck of the ranking on that day.
+1. **A past correct reading is possible — and would not have been evidence of
+   correctness.** The path returns the right price whenever the target token is
+   the base side of the leading pool, so any test, rehearsal or eyeball check
+   that passed may have passed by luck of that day's ranking. **Stated precisely,
+   because the distinction matters:** the *mechanism* is demonstrably intermittent
+   (the volume gap is 9%), but this document has **not** verified that the
+   backfill ever actually priced WETH correctly. The known-good neighbouring
+   values are `seed` rows written by `db/seed.ts`, not by this path. Do not read
+   "it used to work" as established.
 2. **Bisecting for the breaking commit would have found nothing** — there isn't
    one. The behaviour changed without the code changing.
 3. **Quarantine cannot be scoped by date.** Some existing `backfilled` rows are
@@ -129,9 +138,12 @@ Real, but none of it produces a wrong value — all of it produces refusals:
    all ten days in the window, retiring them permanently. *Fixed 2026-08-23.*
 2. **Request deadline consumed by the rate-token wait** — a paced request was
    reported as a transport timeout. *Fixed 2026-08-23.*
-3. **`poolCloses` caches the range it REQUESTED, not the range the provider
-   actually covered** — a truncated page becomes a permanent "no price" for
-   every older day, for the life of the process. *Open.*
+A third defect — **`poolCloses` caching the range it REQUESTED rather than the
+range the provider actually covered**, so a truncated page becomes a permanent
+"no price" for every older day for the life of the process — is *aggravated* by
+window loads but was **not introduced by batching**: `historical-prices.ts` is
+not in #739's diff either. Listing it as batching damage would repeat the
+attribution error this section exists to correct. Tracked as Phase 1.4. *Open.*
 
 ---
 
@@ -140,10 +152,21 @@ Real, but none of it produces a wrong value — all of it produces refusals:
 **We fetch prices two different ways, and only one of them can be right by
 construction.**
 
-| Path | Used by | Endpoint | Addressed by | Can misattribute? |
+There are **three** price call sites, not two, and only one is safe by
+construction:
+
+| Call site | Used by | Endpoint | Addressed by | Can misattribute? |
 |---|---|---|---|---|
-| `chain/token-prices.ts` | live sampler (`worker/handlers/wallet.ts`) | `/simple/networks/base/token_price/{addrs}` | **token** | No — you name the token |
-| `chain/historical-prices.ts` | backfill (`ops/wallet-backfill.ts`) | `/networks/base/pools/{pool}/ohlcv/day` | **pool** | **Yes** — must disambiguate the side, and does not |
+| `token-prices.ts:326` `fetchGeckoTokenPriceUsd` | live sampler | `/simple/networks/base/token_price/{addrs}` | **token** | **No** — you name the token |
+| `token-prices.ts:235` `fetchGeckoDailyCloseUsd` | buyback USD valuation (`buyback-logs.ts:282`) | `/networks/base/pools/{pool}/ohlcv/day` + `currency=usd` | **pool** | **Yes in principle** — right today only because its pool is a pinned constant (`WETH_USDC_POOL`) in which WETH happens to be the BASE side |
+| `historical-prices.ts:252` | backfill (`ops/wallet-backfill.ts`) | `/networks/base/pools/{pool}/ohlcv/day` | **pool** | **Yes, actively** — the pool is chosen dynamically by volume, so the side can flip underneath it (§1.1) |
+
+The middle row matters and the previous revision of this document got it wrong,
+calling that module safe. `buyback_swaps.value_usd` comes from the same
+pool-addressed pattern, carrying `currency=usd` but no `token=`. It is correct
+today **by luck of the pinned pool's orientation**, not by design: repoint that
+constant at a pool where WETH is the quote side and buyback values silently
+become cbBTC-denominated. Phase 1.1 must fix both call sites.
 
 Everything downstream inherits this. Three writers populate
 `wallet_balance_samples` — `worker/handlers/wallet.ts` (live),
@@ -200,7 +223,10 @@ Ordered by risk. Phase 1 is the foundation the rest sits on.
 ### Phase 0 — Contain
 
 1. **Do not ship v0.3.0's repair as it stands.** On the live-on-arrival default
-   it begins writing wrong prices to production on first boot. Cutover blocker.
+   it begins writing prices to production on first boot, and those prices may
+   describe a different asset. Cutover blocker. **Minimum unblock is Phase 1.1 +
+   1.2** — name the token, pin the side. The rest of the plan makes the guarantee
+   durable; those two make it stop being wrong.
 2. **Quarantine, don't delete.** `wallet_balance_samples` is not under the
    append-only guard, so backfilled rows are correctable — but the wrong values
    are evidence. Mark them.
@@ -214,9 +240,13 @@ Ordered by risk. Phase 1 is the foundation the rest sits on.
    denominated for the token being priced, not the pool's base. **Verified
    against the live API** (§1): the same pool returns 77 684.75 without it and
    2 466.44 with it, the latter agreeing with our own live sampler.
-2. **Refuse pools whose side cannot be established.** When resolving a pool for a
-   token, record which side the token is on; if that cannot be determined, price
-   nothing rather than guess.
+2. **Refuse pools whose side cannot be established — and pin the choice.**
+   `token=` fixes the *denomination*; it does not fix the *stability*. The
+   selector remains free to swap pools on a volume tie, so the asset a price
+   describes could still change between runs. Record which side the token is on,
+   refuse to price when that cannot be determined, and prefer a pinned pool per
+   asset over a re-derived one. **A price that silently changes which asset it
+   describes is the defect; correcting the denomination is only half of it.**
 3. **Collapse the two modules onto one interface.** `token-prices.ts` and
    `historical-prices.ts` must differ only in *when* they price, never in *what a
    price means*. One module owns "USD price of token T at time t".
