@@ -1,7 +1,16 @@
 # Making AUM and allocation complete and correct
 
-Status: **claims verified against code, git history, the twin DB and the live
-vendor API (2026-08-23 review); plan broken into tasks (T0.1…T5.3) below.**
+Status: **Phase 1 SHIPPED 2026-08-24 (`de5cf06`) — T1.1-T1.4, T3.1, T3.2 done
+and verified against the live vendor: the real path now prices WETH at
+$1,917-$2,326 for 2026-08-18..20, inside the live sampler's $1,903-$2,514,
+where it wrote ~$60,000 before.** Claims verified against code, git history,
+the twin DB and the live vendor API (2026-08-23 review); tasks T0.1…T5.3 below.
+
+**Still blocking cutover: T0.2** — every `backfilled` row already in the
+database remains BTC-priced. Fixing the writer does not correct what it wrote.
+The stage rehearsal has NOT validated any of this: it fails before the repair
+checks run, on `no-wedge`, whose 150s budget no Gate C dump older than ~2.5
+minutes can satisfy (ours was 35h old). Checks 2 and 3 never executed.
 Written 2026-08-23 after a backfilled WETH holding was valued at **~25× its
 true price** on a stage twin, silently, with every gate green. Cutover blockers
 are marked on the tasks.
@@ -268,7 +277,7 @@ observable, because "a run looked right" is exactly the evidence §1.1 retired.
 
 ### Phase 1 — One token-addressed price path *(the foundation)*
 
-- [ ] **T1.1 — Make every price request name its token.** *(cutover blocker)*
+- [x] **T1.1 — Make every price request name its token.** *(cutover blocker)*
   - `chain/historical-prices.ts:252` — append
     `&token=<tokenAddress>&currency=usd`; thread the token address through
     `poolCloses` → `fetchDailyCloses`, which are pool-keyed today.
@@ -280,7 +289,7 @@ observable, because "a run looked right" is exactly the evidence §1.1 retired.
   without `token=` and WETH's with it, agreeing with our live sampler.
   *Done when:* T3.1's contract test passes, and a twin backfill writes WETH at a
   price adjacent to the seed-implied ~$1 567 series, not ~$60 000.
-- [ ] **T1.2 — Assert orientation in-band; refuse what cannot be proven.**
+- [x] **T1.2 — Assert orientation in-band; refuse what cannot be proven.**
   *(cutover blocker)* The OHLCV response's `meta.base` / `meta.quote` carry both
   sides' addresses (§1, re-verified live). After T1.1, assert
   `meta.base.address` equals the requested token, case-insensitively; on
@@ -289,7 +298,7 @@ observable, because "a run looked right" is exactly the evidence §1.1 retired.
   *stability*: even when the volume ranking swaps pools between runs (§1.1),
   a price can no longer silently describe a different asset.
   *Done when:* T3.2's wrong-orientation fixture is refused.
-- [ ] **T1.3 — Pin the pool per asset.** Add a pinned-pool map for gecko-priced
+- [x] **T1.3 — Pin the pool per asset.** Add a pinned-pool map for gecko-priced
   assets in `config.ts` (successor to the dead `*_POOL_ID` env vars, #639;
   `WETH_USDC_POOL` at config.ts:449 is the precedent), leaving
   `resolvePoolForToken`'s volume ranking as a *logged fallback* for unpinned
@@ -297,7 +306,7 @@ observable, because "a run looked right" is exactly the evidence §1.1 retired.
   number — pinning restores *availability*; T1.2 owns *correctness*.
   *Done when:* WETH prices from the pinned WETH/USDC pool with zero resolver
   requests.
-- [ ] **T1.4 — Fix `poolCloses` coverage bookkeeping.** Cache the range a
+- [x] **T1.4 — Fix `poolCloses` coverage bookkeeping.** Cache the range a
   response *actually covered* (oldest candle observed — `fetchDailyCloses`
   already tracks `oldest`, it just doesn't return it), not the range requested.
   A requested-but-uncovered day is *not fetched* (retryable), never *no price*.
@@ -336,10 +345,10 @@ observable, because "a run looked right" is exactly the evidence §1.1 retired.
 
 ### Phase 3 — Tests that cross the seam
 
-- [ ] **T3.1 — Request-shape contract test.** Assert every OHLCV URL the repo
+- [x] **T3.1 — Request-shape contract test.** Assert every OHLCV URL the repo
   builds carries `token=` and `currency=usd` — both call sites. Pure string
   assertion, no network; would have caught this at PR time.
-- [ ] **T3.2 — Golden tests through the real pricing path** against recorded
+- [x] **T3.2 — Golden tests through the real pricing path** against recorded
   provider responses *including `meta`*: a right-orientation fixture asserting
   the resulting `value_usd` (so a change in either the request or the
   arithmetic fails), and a wrong-orientation fixture asserting refusal (T1.2).
