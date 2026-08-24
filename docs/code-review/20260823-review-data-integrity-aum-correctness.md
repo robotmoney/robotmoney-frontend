@@ -6,11 +6,23 @@ $1,917-$2,326 for 2026-08-18..20, inside the live sampler's $1,903-$2,514,
 where it wrote ~$60,000 before.** Claims verified against code, git history,
 the twin DB and the live vendor API (2026-08-23 review); tasks T0.1…T5.3 below.
 
-**Still blocking cutover: T0.2** — every `backfilled` row already in the
-database remains BTC-priced. Fixing the writer does not correct what it wrote.
-The stage rehearsal has NOT validated any of this: it fails before the repair
-checks run, on `no-wedge`, whose 150s budget no Gate C dump older than ~2.5
-minutes can satisfy (ours was 35h old). Checks 2 and 3 never executed.
+**Phase 0 SHIPPED 2026-08-24 — T0.1, T0.2, T0.3 done.** Migration
+`0036_quarantine_backfilled_samples.sql` moves every `backfilled` row in
+`wallet_balance_samples` / `wallet_sleeve_samples` to
+`backfilled-quarantined`, five read sites exclude that value, and the gap
+detector counts a quarantined day as a hole so the operator surface and the API
+agree. The rows keep their numbers: T5.1 needs them. **No cutover blocker
+remains open.**
+
+The stage rehearsal still has NOT validated any of this end to end — but the
+reason it could not has been removed rather than merely diagnosed. It failed
+before the repair checks ran, on `no-wedge`, whose 150s budget no Gate C dump
+older than ~2.5 minutes can satisfy (ours was 35h old); checks 2 and 3 never
+executed. That is the age of the dump, not a wedge: #614's CLAMP (`7b92a8c`,
+v0.2.2) drains an overflowing schedule a batch per tick instead of pinning it
+forever, so the backlog clears on its own. `stage-rehearsal.ts` now waits for
+that drain before postflight, and says so and continues if it does not happen —
+so `no-wedge` still FAILs on a twin that is genuinely wedged.
 Written 2026-08-23 after a backfilled WETH holding was valued at **~25× its
 true price** on a stage twin, silently, with every gate green. Cutover blockers
 are marked on the tasks.
@@ -252,14 +264,17 @@ observable, because "a run looked right" is exactly the evidence §1.1 retired.
 
 ### Phase 0 — Contain
 
-- [ ] **T0.1 — Hold the v0.3.0 cutover** until T1.1 + T1.2 are merged and T0.2
+- [x] **T0.1 — Hold the v0.3.0 cutover** until T1.1 + T1.2 are merged and T0.2
   has run. *(cutover blocker)* The repair is live-on-arrival:
   `worker/handlers/repair.ts::backfillEnabled` passes on shipped defaults
   (pacing defaults on; only `BASE_RPC_MAX_CALLS_PER_SEC=0` disables it), so
   first boot starts writing prices that may describe a different asset.
   *Done when:* docs/runbooks/v0-3-0-rollout.md lists T0.2/T1.1/T1.2 as
-  preconditions of the cutover step.
-- [ ] **T0.2 — Quarantine, don't delete.** *(cutover blocker)* Migration: move
+  preconditions of the cutover step. **Done** — §0.1 carries the three as a
+  blocking table and §8 repeats them at the irreversible step, both with the
+  `git merge-base --is-ancestor de5cf06 "$RC_TAG"` check, because `v0.3.0-rc.5`
+  and everything before it predate the fix and still price WETH as cbBTC.
+- [x] **T0.2 — Quarantine, don't delete.** *(cutover blocker)* Migration: move
   every existing `provenance='backfilled'` row in `wallet_balance_samples` and
   `wallet_sleeve_samples` to `provenance='backfilled-quarantined'`; the serving
   layer treats that value as absent. The table has no append-only trigger, so
@@ -267,13 +282,26 @@ observable, because "a run looked right" is exactly the evidence §1.1 retired.
   **all** backfilled rows, not just WETH/ETH — runs are unrecoverable (§1.1.3)
   and re-admission is T5.1's job, not this migration's.
   *Done when:* no API response serves a value from a quarantined row, and the
-  rows still exist with their original numbers.
-- [ ] **T0.3 — Reset the `exhausted` days** after T1.1–T1.4 land: clear
+  rows still exist with their original numbers. **Done** — migration `0036`,
+  plus exclusions at all five read sites (`wallet-balances.ts` history, current
+  holdings and last-persisted-holding; `wallet-sleeves.ts`;
+  `wallet-valuation.ts`'s fallback price reader, where a quarantined price would
+  otherwise have been served as a live one). A day is dropped WHOLE, because a
+  total that silently omits one leg is a wrong number rather than a smaller one.
+  `tests/quarantined-samples.test.ts` covers it, including a contract test that
+  fails on any future reader that forgets — the two writer-side row counts that
+  must still see quarantined rows declare themselves with a
+  `counts-quarantined: DELIBERATE` marker.
+- [x] **T0.3 — Reset the `exhausted` days** after T1.1–T1.4 land: clear
   `wallet_backfill_state` rows with `status='exhausted'` so the planner retries
   them. They are terminal by design — `selectBackfillDays` treats
   `('filled','skipped','exhausted')` as settled — and will never retry on their
   own.
-  *Done when:* the next repair run re-plans those days.
+  *Done when:* the next repair run re-plans those days. **Done** — the same
+  migration deletes them. `wallet_backfill_state` is an operational ledger, not
+  history: it holds no measurement and is re-derivable by re-attempting the day,
+  so DELETE is the right verb there in a way it never would be for a samples
+  table.
 
 ### Phase 1 — One token-addressed price path *(the foundation)*
 

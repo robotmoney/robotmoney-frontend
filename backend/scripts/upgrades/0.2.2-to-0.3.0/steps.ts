@@ -303,7 +303,7 @@ export const STEPS: RolloutStep[] = [
     requires: ["P6.report", "P4.preflight-live", "P1.config-decided"],
     dependsOn: [...APP_CODE],
     verify: "DEMO_PROJECT=rm_prod bun smoke -- --db external --no-tui   # then: where.ts --record P7.cutover",
-    note: "The .env from §5 must be in place BEFORE this runs. Four `migrated:` lines expected, then `migrations up to date`.",
+    note: "The .env from §5 must be in place BEFORE this runs. Five `migrated:` lines expected, then `migrations up to date`.",
   },
   {
     id: "P8.postflight-prod",

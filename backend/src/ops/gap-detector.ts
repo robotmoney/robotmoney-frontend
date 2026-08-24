@@ -56,10 +56,17 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
   const expectedHead = truncateToSlot(now, def.cadence);
   const stepMs = STEP_MS[def.cadence];
 
+  // A row the serving layer is not allowed to serve does not cover its slot
+  // (SeriesDef.uncounted). Filtering here rather than at the call sites keeps
+  // ONE notion of "which days are missing" — the report an operator reads, the
+  // work list planWalletBackfill derives, and the history the API serves all
+  // come from the same predicate.
+  const uncounted = def.uncounted;
   const rows = await db<{ slot: Date }[]>`
     SELECT DISTINCT ${db(def.dateColumn)}::timestamptz AS slot
       FROM ${db(def.table)}
      WHERE ${db(def.dateColumn)}::timestamptz >= ${seriesStart}
+       ${uncounted ? db`AND ${db(uncounted.column)} <> ALL (${db.array([...uncounted.values])})` : db``}
      ORDER BY slot
   `;
   const observed = new Set(rows.map((r) => new Date(r.slot).getTime()));

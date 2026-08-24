@@ -22,6 +22,7 @@ import {
 } from "../config.ts";
 import { sql } from "../db/client.ts";
 import {
+  QUARANTINED_PROVENANCE,
   readChainAmountsBatched,
   valueLeg,
   type ChainAmount,
@@ -167,6 +168,7 @@ async function lastPersistedHolding(symbol: string): Promise<PersistedHolding | 
     SELECT amount, price_usd, value_usd
       FROM wallet_balance_samples
      WHERE symbol = ${symbol}
+       AND provenance <> ${QUARANTINED_PROVENANCE}
      ORDER BY sample_date DESC
      LIMIT 1
   `;
@@ -234,10 +236,26 @@ function dominantProvenance(seen: Set<Provenance>): Provenance {
   return "stub"; // unreachable in practice (seen is always non-empty when called)
 }
 
+// A quarantined row (migration 0036) drops its WHOLE DAY, not just itself.
+//
+// Each point's totalUsd is a SUM across that day's symbols, so excluding the
+// quarantined rows alone would serve a total that silently omits a holding —
+// an understated AUM that looks like a real number and is not disclosed as
+// anything. That is precisely the substitution this quarantine exists to stop,
+// so a day one of whose legs cannot be trusted is absent in full.
+//
+// In practice every backfilled day is quarantined whole (0036 moves all of
+// them), so the subquery usually removes exactly the days it would anyway; it
+// is written this way for the mixed day the (sample_date, symbol) key permits
+// but the backfill has never produced — one symbol backfilled, another live.
 async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyProvenance: Record<Provenance, number> }> {
   const rows = await sql<{ sample_date: Date; symbol: string; value_usd: string; provenance: Provenance }[]>`
     SELECT sample_date, symbol, value_usd, provenance
       FROM wallet_balance_samples
+     WHERE sample_date NOT IN (
+             SELECT sample_date FROM wallet_balance_samples
+              WHERE provenance = ${QUARANTINED_PROVENANCE}
+           )
      ORDER BY sample_date ASC, symbol ASC
   `;
   const byDate = new Map<string, WalletHistoryPoint & { _seen: Set<Provenance> }>();
@@ -329,6 +347,7 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
   >`
     SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at
       FROM wallet_balance_samples
+     WHERE provenance <> ${QUARANTINED_PROVENANCE}
      ORDER BY symbol, sample_date DESC, sampled_at DESC
   `;
   const latest = new Map(rows.map((r) => [r.symbol, r]));

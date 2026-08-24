@@ -41,10 +41,10 @@ const repoRoot = join(scriptDir, "..", "..", "..", "..");
  *  in for production. The rehearsal is explicitly not production. */
 const RECEIPT_STEPS = ["P5.postflight-twin", "P8.postflight-prod"] as const;
 
-/** Check 1 — all four migrations recorded, under their FULL filenames.
+/** Check 1 — all five migrations recorded, under their FULL filenames.
  *
  *  The duplicate-prefix property this release introduces is only real if the
- *  ledger actually holds four new NAMES. If the runner had keyed on the numeric
+ *  ledger actually holds five new NAMES. If the runner had keyed on the numeric
  *  prefix, two of them would be silently absent here — which is precisely the
  *  failure this check exists to make impossible to miss. */
 async function checkMigrationsApplied(db: Db, { record }: Checker): Promise<void> {
@@ -455,12 +455,12 @@ async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void>
  *  than the failure it exists to catch. A schedule is late here when it has
  *  missed more than one of its OWN slots, plus a small grace for the scheduler's
  *  30s tick (worker/runtime.ts). */
-const WEDGE_GRACE_MS = 90_000;
+export const WEDGE_GRACE_MS = 90_000;
 
 /** How long one cadence of `cron` is, in ms, from two consecutive occurrences.
  *  Returns null for an expression cron-parser rejects — an unparseable cron is
  *  reported rather than silently given an arbitrary threshold. */
-function cadenceMs(cron: string, timezone: string): number | null {
+export function cadenceMs(cron: string, timezone: string): number | null {
   try {
     const it = parser.parseExpression(cron, { tz: timezone, currentDate: new Date() });
     const a = it.next().toDate().getTime();

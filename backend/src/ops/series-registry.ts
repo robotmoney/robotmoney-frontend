@@ -26,6 +26,8 @@
 // EXPECTED to exist on that day" oracle (e.g. which wallets/adapters were
 // configured back then) that does not exist in this codebase and would be
 // speculative to construct.
+import { QUARANTINED_PROVENANCE } from "../chain/wallet-valuation.ts";
+
 export type RemediationClass = "A" | "B" | "C";
 export type Cadence = "daily" | "hourly";
 
@@ -45,6 +47,17 @@ export interface SeriesDef {
   /** BACKFILLABLE_FROM_SOURCE (re-fetch) | BACKFILLABLE_BY_RECOMPUTE (derive
    *  from the stored floor) | NOT_BACKFILLABLE (forward-only, disclose the gap). */
   remediationClass: RemediationClass;
+  /** Rows that EXIST but do not count as coverage.
+   *
+   *  A series' gap report answers "which slots does this series actually
+   *  cover", and a row nothing is allowed to serve covers nothing. Without
+   *  this the detector reads presence off the table while the API reads it off
+   *  a filtered view of the same table, and the operator surface starts
+   *  disagreeing with what a chart draws — the exact drift §6.5.4 unified the
+   *  work list to prevent.
+   *
+   *  Today this carries one case: the samples migration 0036 quarantined. */
+  uncounted?: { column: string; values: readonly string[] };
 }
 
 // ── Wallet / sleeve / vault samplers (Class C — the LIVE samplers read chain
@@ -74,6 +87,7 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     cadence: "daily",
     seriesStart: "2026-03-18", // chain/wallet-history-seed.ts's earliest seeded day
     remediationClass: "C",
+    uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
   },
   {
     key: "wallet_sleeve_samples",
@@ -83,6 +97,7 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     cadence: "daily",
     seriesStart: "2026-03-18",
     remediationClass: "C",
+    uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
   },
   {
     key: "vault_share_price_history",

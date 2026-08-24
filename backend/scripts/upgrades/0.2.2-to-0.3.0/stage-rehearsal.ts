@@ -47,7 +47,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBackupFiles } from "../../../../scripts/lib/restore-container.ts";
 import { runTwinRehearsal } from "../../../../scripts/lib/twin-rehearsal.ts";
-import { connect } from "../../lib/postflight-utils.ts";
+import { connect, type Db } from "../../lib/postflight-utils.ts";
+import { cadenceMs, WEDGE_GRACE_MS } from "./postflight.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
 import { NEW_SCHEDULE_KIND, TAG_GLOB } from "./release.ts";
 import { observeRepairDispatch, observeRepairCompletion } from "./repair-observation.ts";
@@ -62,6 +63,84 @@ const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 // backend/scripts/upgrades/0.2.2-to-0.3.0/ -> <repo root>
 const repoRoot = join(scriptDir, "..", "..", "..", "..");
+
+/**
+ * Wait for the restored twin's schedules to catch up before anything grades
+ * them.
+ *
+ * WHY THIS EXISTS. Every rehearsal of this release so far has died on
+ * postflight's `no-wedge` check without ever reaching checks 2 and 3 — the two
+ * that actually observe the gap repair. It was read as a wedge. It is not one.
+ *
+ * A twin is a RESTORE of a Gate C dump, and the dump's `job_schedules` rows
+ * carry whatever `next_run_at` they had when it was taken. Ours was 35 hours
+ * old. `no-wedge`'s budget is one cadence plus WEDGE_GRACE_MS, which for the
+ * two per-minute samplers is 150s, so a dump older than about two and a half
+ * minutes arrives "wedged" by that definition and stays so until the scheduler
+ * has ticked the backlog off. Nothing about the release caused it and nothing
+ * about the release fixes it; it is the age of the dump.
+ *
+ * The backlog does drain on its own. #614's CLAMP (7b92a8c, shipped in v0.2.2)
+ * advances the cursor on EVERY iteration rather than only when the loop breaks,
+ * so a schedule further behind than MAX_SLOTS_PER_TICK drains a fresh batch per
+ * tick instead of being pinned forever — which is what it did before that fix,
+ * and is the reason this looked like a known defect. And `0034` gives the two
+ * per-minute samplers `catchup_policy='collapse-per-bucket'`, so the backlog
+ * collapses to one job per UTC day rather than one per minute. It is a wait,
+ * not a repair.
+ *
+ * A TIMEOUT IS NOT SWALLOWED. If the schedules have not caught up inside the
+ * budget, this says so and returns anyway, so `no-wedge` runs and FAILs on a
+ * twin that genuinely is wedged. The check keeps its teeth; it just stops
+ * firing on the restore's own clock.
+ */
+async function waitForScheduleDrain(
+  db: Db,
+  log: (m: string) => void,
+  budgetMs = 240_000,
+): Promise<"drained" | "timeout"> {
+  const deadline = Date.now() + budgetMs;
+  let lastReport = "";
+  for (;;) {
+    const rows = (await db`
+      SELECT kind, cron, timezone, next_run_at,
+             EXTRACT(EPOCH FROM (now() - next_run_at))::int AS seconds_late
+        FROM job_schedules
+       WHERE enabled
+    `) as unknown as { kind: string; cron: string; timezone: string; next_run_at: Date | null; seconds_late: number | null }[];
+
+    const behind: string[] = [];
+    for (const r of rows) {
+      // A NULL next_run_at means the scheduler has not ticked for that row yet
+      // — on a fresh restore that is "not ready", not "dead". no-wedge grades
+      // it as a wedge, so wait for it here too.
+      if (r.next_run_at === null) {
+        behind.push(`${r.kind} (never ticked)`);
+        continue;
+      }
+      const cadence = cadenceMs(r.cron, r.timezone);
+      if (cadence === null) continue; // unparseable: no-wedge reports it, not this
+      const late = (r.seconds_late ?? 0) * 1000;
+      if (late > cadence + WEDGE_GRACE_MS) behind.push(`${r.kind} ${Math.round(late / 1000)}s late`);
+    }
+
+    if (behind.length === 0) {
+      log("schedules have caught up with the restore — no enabled schedule is more than one cadence behind");
+      return "drained";
+    }
+    const report = behind.sort().join(", ");
+    if (report !== lastReport) {
+      log(`waiting for the restored backlog to drain: ${report}`);
+      lastReport = report;
+    }
+    if (Date.now() >= deadline) {
+      log(`schedules did NOT catch up within ${Math.round(budgetMs / 1000)}s — still behind: ${report}`);
+      log("running postflight anyway: if no-wedge FAILs now, it is reporting a real wedge, not the dump's age.");
+      return "timeout";
+    }
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+}
 
 async function run(backupDirArg?: string): Promise<number> {
   return runTwinRehearsal({
@@ -83,6 +162,16 @@ async function run(backupDirArg?: string): Promise<number> {
     // — if the observation disappoints you still want it from this boot rather
     // than paying for another restore and image build.
     onReady: async ({ databaseUrl, log: rlog, err: rerr }) => {
+      // BEFORE check 1, not inside it: the twin's schedules arrive as stale as
+      // the dump is old, and postflight's no-wedge grades them against a
+      // 150s budget. See waitForScheduleDrain.
+      const drainDb = connect(databaseUrl, "schedule-drain-0.3.0");
+      try {
+        await waitForScheduleDrain(drainDb, rlog);
+      } finally {
+        await drainDb.end({ timeout: 5 });
+      }
+
       rlog("check 1/3 postflight — this release's checks against the migrated twin (§6.1 step 3)");
       const proc = Bun.spawn(
         [
