@@ -713,6 +713,29 @@ async function repairResolvedDay(
     .filter((s, i, arr) => arr.indexOf(s) === i)
     .filter((s) => !Number.isFinite(priceFor(s) ?? NaN));
   if (unpriced.length > 0) {
+    // WHOSE FAULT the missing price is decides whether this day is CHARGED for
+    // it, and the price table says which: a symbol with no entry at all was
+    // refused at its POOL (loadHistoricalPrices leaves a refused symbol out
+    // entirely and gives every symbol it resolved a map, empty or not), while a
+    // symbol whose map is simply blank on this date has a thin day of its own.
+    //
+    // A pool-level refusal is a SHARED LEG by construction — the pool is the
+    // same for every day in the window, and the module's own contract is that
+    // retrying returns the same refusal — so charging it to each day is exactly
+    // the accounting deferDay() exists to prevent: three window retries inside
+    // ten seconds would flip every day to the terminal 'exhausted', and the days
+    // would stay unrepaired after the pin or the vendor was fixed, recoverable
+    // only by hand-written SQL. The gap is disclosed either way; what differs is
+    // whether the system will ever try again.
+    const refused = unpriced.filter((s) => !prices.has(s));
+    if (refused.length > 0) {
+      return deferDay(
+        db,
+        date,
+        `no price source for ${refused.join(", ")} — the pool refused to price it for the whole window`,
+        resolved.blockNumber,
+      );
+    }
     return fail(`no ${date} price for ${unpriced.join(", ")}`, resolved.blockNumber);
   }
 

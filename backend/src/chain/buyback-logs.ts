@@ -277,12 +277,22 @@ async function primeWethLogs(
 // WETH/USD at a swap's own block time, from the settled daily candle of the
 // deepest Base WETH/USDC pool. Returns null — never a substitute price — when
 // the candle cannot be read, so the caller persists an honest NULL value_usd.
-async function wethPriceUsdAt(blockTimestamp: number): Promise<number | null> {
+//
+// The pool is a baked constant and the token is the same address whose transfers
+// this indexer counts as the swap's input leg, so the request asserts that the
+// candle prices the very token being spent. If an operator re-points
+// WETH_ADDRESS at something that pool does not hold, the two stop describing one
+// asset and the read refuses rather than quietly pricing the input leg in
+// whatever the pool's base side happens to be — a refusal that lands here and
+// becomes a NULL, which is the honest answer for a swap nothing can price.
+// A refusal and a genuinely missing candle both arrive as an error; they are
+// told apart by the message, which is why the thrown text names the tokens.
+async function wethPriceUsdAt(wethToken: string, blockTimestamp: number): Promise<number | null> {
   try {
-    return await fetchGeckoDailyCloseUsd(WETH_USDC_POOL, blockTimestamp);
+    return await fetchGeckoDailyCloseUsd(WETH_USDC_POOL, wethToken, blockTimestamp);
   } catch (err) {
     console.warn(
-      `buyback-logs: no historical WETH price for ${new Date(blockTimestamp * 1000).toISOString().slice(0, 10)}, persisting value_usd NULL:`,
+      `buyback-logs: no usable historical WETH price for ${new Date(blockTimestamp * 1000).toISOString().slice(0, 10)}, persisting value_usd NULL:`,
       err,
     );
     return null;
@@ -413,7 +423,7 @@ export async function indexBuybacks(): Promise<IndexResult> {
         // amounts), so dropping it would lose a true row, while writing a
         // stand-in USD number would be exactly the fabrication migration 0015
         // forbids. NULL says "this row's USD value is unknown".
-        const wethPriceUsd = await wethPriceUsdAt(at.ts);
+        const wethPriceUsd = await wethPriceUsdAt(cfg.wethToken, at.ts);
         const valueUsd = wethPriceUsd == null ? null : Math.round(wethSpent * wethPriceUsd * 100) / 100;
         // Idempotent on the tx_hash natural key: a re-scan (overlap/reorg) never
         // duplicates a swap. NOTE: a single tx emitting multiple ROBOTMONEY-in

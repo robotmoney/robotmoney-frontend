@@ -230,6 +230,81 @@ test("a shared price-load failure charges NO day an attempt", async () => {
   expect(rows.every((r) => r.attempts === 0)).toBe(true);
 });
 
+// A POOL-LEVEL PRICE REFUSAL IS A SHARED LEG TOO, and it is the one that does
+// not announce itself by throwing. loadHistoricalPrices gives every symbol it
+// resolved a map — empty or not — and leaves a symbol whose pool priced the
+// OTHER side of the pair out of the table entirely. Absent therefore means "the
+// pool refused", which is the same pool for every day in the window and the same
+// answer on every retry; charging it per day walks the whole window to the
+// terminal 'exhausted' in about ten seconds, and fixing the pin afterwards no
+// longer repairs those days. A blank day inside a PRESENT map is the opposite
+// fact — a thin candle, that day's own problem — and still costs an attempt.
+
+function pricesExcept(refusedSymbol: string): WalletBackfillDeps["loadPrices"] {
+  return async (assets, fromDate, toDate) => {
+    const days: string[] = [];
+    for (let t = Date.parse(`${fromDate}T00:00:00Z`); t <= Date.parse(`${toDate}T00:00:00Z`); t += 86_400_000) {
+      days.push(new Date(t).toISOString().slice(0, 10));
+    }
+    const out = new Map<string, Map<string, number>>();
+    for (const a of assets) {
+      if (a.symbol === refusedSymbol) continue; // refused at the pool: no entry at all
+      out.set(a.symbol, new Map(days.map((d) => [d, 2])));
+    }
+    return out;
+  };
+}
+
+test("a symbol REFUSED at its pool charges no day an attempt, however often the window is retried", async () => {
+  const { deps } = countingDeps({ loadPrices: pricesExcept("BNKR") });
+
+  // One more pass than the per-day ceiling (default 3).
+  for (let i = 0; i < 4; i++) await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+
+  const rows = await sql<{ status: string; attempts: number }[]>`
+    SELECT status, attempts FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
+  `;
+  expect(rows.length).toBe(3);
+  expect(rows.every((r) => r.status === "failed")).toBe(true);
+  expect(rows.every((r) => r.attempts === 0)).toBe(true);
+
+  // Still a disclosed gap: refusing to charge the day is not the same as
+  // writing it at a price nobody stands behind.
+  const [written] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
+  `;
+  expect(written!.n).toBe(0);
+});
+
+test("a THIN DAY is still charged to that day — the symbol is priced, only this date is blank", async () => {
+  const { deps } = countingDeps({
+    async loadPrices(assets, fromDate, toDate) {
+      const days: string[] = [];
+      for (let t = Date.parse(`${fromDate}T00:00:00Z`); t <= Date.parse(`${toDate}T00:00:00Z`); t += 86_400_000) {
+        days.push(new Date(t).toISOString().slice(0, 10));
+      }
+      return new Map(
+        assets.map((a) => [
+          a.symbol,
+          new Map(days.filter((d) => !(a.symbol === "BNKR" && d === D2)).map((d) => [d, 2])),
+        ]),
+      );
+    },
+  });
+
+  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+
+  const rows = await sql<{ sample_date: Date; status: string; attempts: number }[]>`
+    SELECT sample_date, status, attempts FROM wallet_backfill_state
+    WHERE sample_date = ANY(${[D1, D2, D3]}::date[]) ORDER BY sample_date
+  `;
+  const byDay = new Map(rows.map((r) => [r.sample_date.toISOString().slice(0, 10), r]));
+  expect(byDay.get(D1)!.status).toBe("filled");
+  expect(byDay.get(D3)!.status).toBe("filled");
+  expect(byDay.get(D2)!.attempts).toBe(2); // its own problem, its own budget
+});
+
 test("repeated shared failures never exhaust a day — it stays re-plannable", async () => {
   const { deps } = countingDeps({
     async loadPrices() {
