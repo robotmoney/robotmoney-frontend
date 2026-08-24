@@ -76,6 +76,30 @@ Phases are open under the feature freeze and need the recorded exception, and
 the §0.4 seam-banner decision is unmade. **`releases-0.3.x` is cut** — it
 carries `v0.3.0-rc.0` and 28 commits past `v0.2.2`.
 
+**⛔ ALSO BLOCKING: the AUM price correctness preconditions (T0.1).** The gap
+repair this release ships wrote a WETH holding at ~$60,000 — a BTC price —
+because its price request named a POOL and never named the TOKEN it meant.
+Three tasks from
+[the review](../code-review/20260823-review-data-integrity-aum-correctness.md)
+are preconditions of §8, not follow-ups to it, because §0.3 makes the repair
+live on arrival: the first boot after cutover starts writing prices.
+
+| Task | What it is | State |
+|---|---|---|
+| **T1.1** | Every OHLCV request names its token (`&token=…&currency=usd`), at both pool-addressed call sites | ✅ `de5cf06` |
+| **T1.2** | The response's `meta.base` is asserted against the requested token; a mismatch throws instead of pricing | ✅ `de5cf06` |
+| **T0.2** | Every row the OLD path already wrote is quarantined and served as absent | ✅ migration `0036` (§2.2) |
+
+T1.1 and T1.2 fix the WRITER; they cannot fix what it already wrote, which is
+what `0036` is for. **Verify the rc you are cutting over actually contains all
+three** — `v0.3.0-rc.5` and everything before it predate `de5cf06` and still
+price WETH as cbBTC:
+
+```bash
+git merge-base --is-ancestor de5cf06 "$RC_TAG" && echo "T1.1/T1.2 present" || echo "⛔ STOP: this rc has the pool-addressed price bug"
+git tag --contains de5cf06 | tail -1
+```
+
 ### 0.2 The `bun smoke` facts from v0.2.2 all still apply
 
 Nothing in this delta changes them, and they are still the three ways this
@@ -215,7 +239,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — four migrations
+### 2.2 🔴 The database delta — five migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -229,8 +253,9 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0033_wallet_backfill.sql` | `CREATE TABLE chain_day_blocks`, `CREATE TABLE wallet_backfill_state`, one index | Additive, new tables |
 | `0034_job_schedules_catchup_policy.sql` | `ADD COLUMN catchup_policy text NOT NULL DEFAULT 'all'` + **an `UPDATE` of live rows** | Additive **plus a data write** |
 | `0035_swarm_member_avatar_bytes.sql` | `CREATE TABLE swarm_member_avatars (… bytes bytea …)` | Additive, new table |
+| `0036_quarantine_backfilled_samples.sql` | `UPDATE` every `provenance='backfilled'` row in `wallet_balance_samples` / `wallet_sleeve_samples` to `'backfilled-quarantined'`; `DELETE` the `exhausted` rows from `wallet_backfill_state` | **No DDL — a pure data write** |
 
-**Lock and downtime profile.** All four are additive DDL. The two `ADD COLUMN`s
+**Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
 column with no default, and `0034`'s `NOT NULL DEFAULT` is instant on PG 11+.
 `0034`'s `UPDATE` touches `job_schedules`, which holds single-digit rows.
@@ -239,6 +264,23 @@ trivial — but it does take a lock on `swarm_members` for the duration. Expect
 this migration set to complete in well under a second on production-sized data.
 **Confirm that on the twin (§7) rather than trusting it here** — §2.2's timings
 are read off the DDL, not measured.
+
+`0036` is the exception to "additive DDL", and on **production it is expected to
+touch zero rows**. It rewrites rows the wallet backfill wrote, and the backfill
+(`0033`, #709/#711) ships in THIS release — a database at v0.2.2 has never run
+it, so there is nothing tagged `provenance='backfilled'` for `0036` to find and
+`wallet_backfill_state` does not yet exist as a populated table. It matters on
+any database that has already run a `v0.3.0-rc.*`: **every twin**, and any stack
+an rc was ever deployed to. Confirm which side you are on before the cutover:
+
+```bash
+psql "$DATABASE_URL" -c "SELECT provenance, count(*) FROM wallet_balance_samples GROUP BY 1 ORDER BY 1;"
+```
+
+A row count against `backfilled` on production would mean an rc reached it, and
+that is a different conversation from this runbook — stop and establish how
+before continuing. On a twin, expect the count to move to
+`backfilled-quarantined` and the served AUM history to lose exactly those days.
 
 ### 2.2.1 ⚠ Two migrations reuse a number already applied in production
 
@@ -918,6 +960,14 @@ depends-on:
 verify:      DEMO_PROJECT=rm_prod bun smoke -- --db external --no-tui   # then: where.ts --record P7.cutover
 ```
 
+⛔ **Preconditions specific to this release, beyond the `requires:` above.**
+**T1.1**, **T1.2** and **T0.2** (§0.1) must all be in the rc being deployed. The
+first two are `de5cf06`; the third is migration `0036`, which this boot applies.
+An rc missing them writes prices that may describe a different asset, starting
+at the first boot (§0.3) — and §9's checks do not grade a number, so nothing
+downstream will catch it. Run §0.1's `git merge-base` check against the tag you
+are about to deploy.
+
 🔴 **IRREVERSIBLE.** The invocation, every flag and the reason for each, the
 `BOOT_STATUS` capture, the `CI` must-be-unset check, and the scheduler-downtime
 budget are **unchanged from v0.2.2**. Follow
@@ -925,8 +975,10 @@ budget are **unchanged from v0.2.2**. Follow
 
 The only v0.3.0-specific differences:
 
-1. **Four migrations, not six** (§2.2). The boot log must show four
-   `migrated: …` lines and then `migrations up to date`.
+1. **Five migrations, not six** (§2.2). The boot log must show five
+   `migrated: …` lines and then `migrations up to date`. The fifth, `0036`, is a
+   data write rather than DDL, and on production it is expected to change
+   nothing — see §2.2 for why, and for the check that confirms it.
 2. **`seed()` inserts a new schedule row** — `ops.repair_gaps` (§4.1) — in
    addition to rewriting the `swarm.*` rows rollout-procedure.md §5.4 describes.
 3. **The `.env` from §5 must be in place before the boot**, not after.

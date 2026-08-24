@@ -22,7 +22,7 @@
  * (`0033_swarm_member_uuid_ids.sql`), so preflight's `schema-migrations` check
  * reports it as out-of-order and returns WARN. See the runbook §6 for why that
  * warning is the correct output here and what makes it safe — in short, the
- * append-only guard is already installed by then, and none of the four touches
+ * append-only guard is already installed by then, and none of the five touches
  * a protected table.
  */
 export const THIS_RELEASE_MIGRATIONS = [
@@ -30,6 +30,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0033_wallet_backfill.sql",
   "0034_job_schedules_catchup_policy.sql",
   "0035_swarm_member_avatar_bytes.sql",
+  "0036_quarantine_backfilled_samples.sql",
 ] as const;
 
 /**

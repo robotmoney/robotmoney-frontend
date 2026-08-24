@@ -12,6 +12,7 @@ import {
 import { sql } from "../db/client.ts";
 import {
   persistedFallbackWalletPriceReader,
+  QUARANTINED_PROVENANCE,
   readChainAmountsBatched,
   SLEEVE_DEFS,
   type ChainAmount,
@@ -94,6 +95,7 @@ async function computeWalletSleeves(
       SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, sampled_at
         FROM wallet_sleeve_samples
        WHERE lower(wallet_address) = lower(${address})
+         AND provenance <> ${QUARANTINED_PROVENANCE}
        ORDER BY symbol, sample_date DESC, sampled_at DESC
     `;
     const sampleMap = new Map(rows.map((r) => [r.symbol, r]));

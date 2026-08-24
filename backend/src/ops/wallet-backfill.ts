@@ -752,9 +752,19 @@ async function repairResolvedDay(
     balanceRows = 0;
     sleeveRows = 0;
     skippedTables.length = 0;
+    // counts-quarantined: DELIBERATE. This is not a read of a value, it is the
+    // "is this day still empty" test that keeps repair from restating a day
+    // someone else wrote — and a quarantined row (migration 0036) still
+    // OCCUPIES its (sample_date, symbol) key. Excluding it here would make the
+    // day look empty, the INSERT would then be swallowed by
+    // ON CONFLICT DO NOTHING, and the run would report rows it did not write.
+    // Re-filling a quarantined day is T5.1's job, which adjudicates each row
+    // against a freshly fetched price; it is not a side effect of the planner
+    // finding the day missing.
     const [existingBalance] = await tx<{ n: number }[]>`
       SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${date}
     `;
+    // counts-quarantined: DELIBERATE — same reason as the balance count above.
     const [existingSleeve] = await tx<{ n: number }[]>`
       SELECT count(*)::int AS n FROM wallet_sleeve_samples WHERE sample_date = ${date}
     `;

@@ -1,7 +1,7 @@
 // Pre-upgrade dry run for v0.2.2 -> v0.3.0, specifically. The release-neutral
 // mechanics (env loading, read-only connect + gate, verdict printing, receipt
 // emission) live in ../../lib/preflight-utils.ts; this file only knows about
-// the four migrations THIS release ships and the checks specific to them.
+// the five migrations THIS release ships and the checks specific to them.
 //
 // A future release gets its own backend/scripts/upgrades/<from>-to-<to>/
 // directory, not an edit to this one — so what a past release's preflight
