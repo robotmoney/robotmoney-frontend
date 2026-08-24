@@ -682,7 +682,7 @@ pass. The harness, receipt format and verdict wording are
 | Check | Asserts | Why this release needs it |
 |---|---|---|
 | `server-version` | PG 11+ | 0034's `NOT NULL DEFAULT` is instant on 11+ and a full table REWRITE before it (§2.2) |
-| `schema-migrations` | pending set is **exactly** this release's four; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
+| `schema-migrations` | pending set is **exactly** this release's five; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
 | `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `.env.readonly` points somewhere else |
 | `append-only-safety` | guard installed, and **no** table this release touches is protected | §2.2.1 — this is what makes the out-of-order warning harmless |
 | `clean-targets` | the 3 tables and 2 columns do not exist yet | A target that already exists means an out-of-band change |
@@ -697,11 +697,12 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  4 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  5 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
          0035_swarm_member_avatar_bytes.sql
+         0036_quarantine_backfilled_samples.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
