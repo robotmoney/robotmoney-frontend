@@ -448,6 +448,46 @@ export const BUYBACK_FROM_BLOCK = 43_741_600;
 // owner data for a spot read that does not use them.
 export const WETH_USDC_POOL = "0x6c561b446416e1a00e8e93e221854d6ea4171372";
 
+// Which pool a gecko-priced token's HISTORICAL daily candles are read from
+// (chain/historical-prices.ts), keyed by the token's lowercase Base address.
+//
+// The alternative — and still the fallback for anything absent here — is to ask
+// GeckoTerminal for every pool containing the token and take the one with the
+// most 24h volume. That ranking is a live measurement, so it is not stable: for
+// WETH on Base the top two pools trade places between runs ("WETH / USDC 0.3%"
+// against "cbBTC / WETH 0.05%"), which makes the pool a backfill reads from a
+// property of the hour it ran in rather than of the config it ran with. Two runs
+// over the same day then disagree about which pool is authoritative, and neither
+// disagreement is visible in what they write. Pinning removes the measurement
+// from the decision: the same token reads the same pool on every host, every run.
+//
+// An unpinned token falling back to that ranking is tolerable only because the
+// request now names the token and the response is checked against the base side
+// the vendor reports for it, so a pool the ranking picks whose sides are the
+// wrong way round yields a REFUSAL, not a plausible-looking number denominated
+// in the other token. Availability is what a pin buys; correctness is enforced at
+// the request either way. Never add an entry here that has not been read off the
+// live pool: an address mistyped into a DIFFERENT pool that happens to hold the
+// same base token answers the orientation check truthfully and still prices the
+// token off a market nobody chose, which is the one wrong entry that check cannot
+// catch.
+//
+// WETH's entry doubles as native ETH's: ETH carries WETH's address as its
+// PRICING address (resolveTrackedAssets above), so both resolve through this one
+// key. A deployment that re-points WETH_ADDRESS falls off the pin by design and
+// back onto the ranking — the pin is a claim about one specific pair of Base
+// mainnet addresses, and it must not be silently reused for a different token.
+export const PINNED_GECKO_POOLS: Readonly<Record<string, string>> = Object.freeze({
+  "0x4200000000000000000000000000000000000006": WETH_USDC_POOL, // WETH → "WETH / USDC 0.3%", WETH is the base side
+});
+
+// Null means "no pin for this token" — the caller is expected to fall back to
+// volume-ranked discovery and say so in its logs, so an unpinned asset is a line
+// an operator can find rather than an invisible default.
+export function pinnedPoolForToken(tokenAddress: string): string | null {
+  return PINNED_GECKO_POOLS[tokenAddress.toLowerCase()] ?? null;
+}
+
 export function resolveBuybackConfig(
   env: Record<string, string | undefined> = process.env,
 ): BuybackConfig {
