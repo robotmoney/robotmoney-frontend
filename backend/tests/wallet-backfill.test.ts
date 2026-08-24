@@ -228,13 +228,36 @@ test("a day that has not closed is skipped without touching the chain", async ()
   expect(reads).toBe(0);
 });
 
-test("running the same day twice is idempotent — no duplicate rows", async () => {
-  await backfillWalletDay(sql, D1, happyDeps(), NOW);
+test("running the same day twice is idempotent — no duplicate rows, and the checkpoint is REPLAYED not restated", async () => {
+  const firstRun = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  expect(firstRun.status).toBe("filled");
   const [first] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${D1}`;
+
   const second = await backfillWalletDay(sql, D1, happyDeps(), NOW);
   const [after] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${D1}`;
+
+  // The idempotence this test is named for: no second copy of the day.
   expect(after!.n).toBe(first!.n);
-  expect(second.status).toBe("skipped");
+
+  // A SETTLED DAY REPLAYS ITS CHECKPOINT — it does not report itself 'skipped'.
+  // This used to expect 'skipped', which is what the day-at-a-time executor
+  // returned when it re-entered the write path and found both tables populated.
+  // The window planner now settles the day BEFORE that, so a re-run reports what
+  // the day actually did rather than what the re-run did. That is deliberate:
+  // answering 'skipped, 0 rows' overwrites the `filled, N rows` checkpoint, and
+  // §7.1's completion observation reads exactly that record to prove a day
+  // completed — a re-planned window would erase its own evidence.
+  expect(second.status).toBe("filled");
+  expect(second.balanceRows).toBe(firstRun.balanceRows);
+  expect(second.sleeveRows).toBe(firstRun.sleeveRows);
+  expect(second.detail).toMatch(/already filled/);
+
+  // And the durable record still says filled, with the counts the WRITE made.
+  const [state] = await sql<{ status: string; balance_rows: number; sleeve_rows: number }[]>`
+    SELECT status, balance_rows, sleeve_rows FROM wallet_backfill_state WHERE sample_date = ${D1}
+  `;
+  expect(state!.status).toBe("filled");
+  expect(state!.balance_rows).toBe(firstRun.balanceRows);
 });
 
 test("a day that keeps failing becomes 'exhausted' — still a gap, no longer a cost", async () => {
