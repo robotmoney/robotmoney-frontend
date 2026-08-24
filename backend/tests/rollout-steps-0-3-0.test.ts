@@ -293,7 +293,7 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     const inClause = mig.match(/WHERE\s+kind\s+IN\s*\(([^)]*)\)/i);
     expect({ found: inClause !== null }).toEqual({ found: true });
     const fromMigration = [...inClause![1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!).sort();
-    expect({ kinds: [...COLLAPSE_PER_BUCKET_KINDS].sort() }).toEqual({ kinds: fromMigration });
+    expect({ kinds: [...(COLLAPSE_PER_BUCKET_KINDS as readonly string[])].sort() }).toEqual({ kinds: fromMigration });
   });
 
   test("the append-only TABLE ROSTER matches src/db/append-only-guard.ts", () => {
