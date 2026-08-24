@@ -250,8 +250,9 @@ export function isEmptyReturnData(returnData: string): boolean {
 // that single leg to its last-persisted `stale` sample — it never fabricates a
 // value nor falsely reports `live`. Non-transient failures (a contract-revert
 // JSON-RPC `error`, missing `result`, a non-transient non-2xx like 400/500) throw
-// IMMEDIATELY with no retry. The AbortController timeout still bounds total work:
-// if the signal aborts mid-fetch or mid-backoff we stop retrying and throw.
+// IMMEDIATELY with no retry. Total work is bounded by the retry loop's own
+// deadline (retryTotalMs), NOT by the AbortController: that is armed per network
+// attempt, so it bounds one POST and says nothing about how long retrying runs.
 
 // Transient HTTP statuses worth a retry: 429 (rate limited) plus the 502/503/504
 // gateway/overload family. A 500/400/401/etc. is a hard error — no retry.
@@ -271,6 +272,24 @@ const MAX_BACKOFF_MS = 30_000;
 const DEFAULT_BUDGET_WAIT_MS = 60_000;
 function budgetWaitMs(): number {
   return intEnv("BASE_RPC_BUDGET_WAIT_MS", DEFAULT_BUDGET_WAIT_MS, 1);
+}
+
+/** The ceiling on ONE rpcRequest's whole retry loop, backoff waits included.
+ *
+ *  WHY THIS EXISTS AS ITS OWN KNOB. `timeoutMs` used to bound total work, because
+ *  one AbortController spanned pacing, backoff and every attempt. Arming it per
+ *  NETWORK ATTEMPT instead was right — a paced request had been indistinguishable
+ *  from a hung one — but it left `BASE_RPC_MAX_RETRIES` as the only bound on the
+ *  loop, and a retry count is not a time bound: retries × MAX_BACKOFF_MS is hours
+ *  at a high count, and nothing was watching the clock. So "bounded work" stopped
+ *  being true of a request while the comment above still promised it.
+ *
+ *  This restores the guarantee without restoring the defect: the deadline covers
+ *  only waits this loop CHOOSES to take (backoff), never the network attempt and
+ *  never the shared rate bucket, which carries its own ceiling in budgetWaitMs(). */
+const DEFAULT_RETRY_TOTAL_MS = 120_000;
+function retryTotalMs(): number {
+  return intEnv("BASE_RPC_RETRY_TOTAL_MS", DEFAULT_RETRY_TOTAL_MS, 1);
 }
 
 // Env knobs, read at CALL time (not module load) so tests/deployments can flip
@@ -540,6 +559,26 @@ function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+// Sit out one backoff, or GIVE UP because doing so would breach the loop's own
+// ceiling. Checked BEFORE sleeping rather than after, so the ceiling is a bound on
+// when the caller gets an answer, not merely on when we stop asking: a wait that
+// would end past the deadline is never taken.
+//
+// Giving up throws, because every caller of rpcRequest already treats a throw as
+// "degrade this leg to stale". Returning a sentinel would invent a second failure
+// mode for them to forget to handle.
+async function backoffOrGiveUp(waitMs: number, deadline: number, method: string, attempts: number): Promise<void> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0 || waitMs > remaining) {
+    throw new Error(
+      `Base RPC: gave up on ${method} after ${attempts} attempt(s) — the retry loop hit its ` +
+        `${Math.round(retryTotalMs() / 1000)}s ceiling (BASE_RPC_RETRY_TOTAL_MS). The endpoint kept ` +
+        "returning transient errors; this bounds RETRYING and is not a network timeout.",
+    );
+  }
+  await sleep(waitMs);
+}
+
 
 // The SINGLE JSON-RPC transport for every Base read in the app. Throws on
 // transport failure, a non-2xx HTTP status (after exhausting bounded retries on
@@ -552,6 +591,10 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
   const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
   const retries = maxRetries();
   const timeoutMs = opts.timeoutMs ?? 8000;
+  // Started before the first attempt so it covers the whole loop, and passed to
+  // every backoff. A retry COUNT alone cannot bound elapsed time — see
+  // retryTotalMs().
+  const retryDeadline = Date.now() + retryTotalMs();
   {
     for (let attempt = 0; ; attempt++) {
       // Spend a RATE token before taking a concurrency slot — a request that is
@@ -598,7 +641,7 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
             TRANSIENT_RPC_ERROR_CODES.has(parsed.error.code) &&
             attempt < retries
           ) {
-            await sleep(backoffMs(attempt + 1, null));
+            await backoffOrGiveUp(backoffMs(attempt + 1, null), retryDeadline, method, attempt + 1);
             continue;
           }
           throw new Error(
@@ -615,7 +658,12 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
       // compliance.
       if (res.status === 429) noteRateLimitExhaustion(); // same feedback as -32016 above
       if (TRANSIENT_STATUSES.has(res.status) && attempt < retries) {
-        await sleep(backoffMs(attempt + 1, res.headers.get("retry-after")));
+        await backoffOrGiveUp(
+          backoffMs(attempt + 1, res.headers.get("retry-after")),
+          retryDeadline,
+          method,
+          attempt + 1,
+        );
         continue;
       }
       // Exhausted / non-transient: THROW so the caller degrades to stale. Never
@@ -740,6 +788,12 @@ export async function rpcBatchRequest<T>(
       // the throttled entries on a per-entry retry.
       let pending = chunk.map((_, i) => start + i);
 
+      // PER CHUNK, for the same reason rpcRequest has one: `attempt < retries`
+      // bounds how many times we ask, never how long that takes. The backfill is
+      // the heaviest user of this path, so an unbounded chunk here is a window
+      // that never returns.
+      const retryDeadline = Date.now() + retryTotalMs();
+
       for (let attempt = 0; ; attempt++) {
         const body = JSON.stringify(
           pending.map((idx, i) => ({ jsonrpc: "2.0", id: i, method: calls[idx]!.method, params: calls[idx]!.params })),
@@ -768,7 +822,12 @@ export async function rpcBatchRequest<T>(
         if (!res.ok) {
           if (res.status === 429) noteRateLimitExhaustion();
           if (TRANSIENT_STATUSES.has(res.status) && attempt < retries) {
-            await sleep(backoffMs(attempt + 1, res.headers.get("retry-after")));
+            await backoffOrGiveUp(
+              backoffMs(attempt + 1, res.headers.get("retry-after")),
+              retryDeadline,
+              "batch",
+              attempt + 1,
+            );
             continue;
           }
           throw new Error(`Base RPC batch HTTP ${res.status}`);
@@ -817,9 +876,15 @@ export async function rpcBatchRequest<T>(
           out[idx] = { ok: true, result: entry.result };
         }
 
-        if (throttled.length > 0 && attempt < retries) {
+        // The ceiling is checked here rather than by backoffOrGiveUp BECAUSE THIS
+        // PATH MUST NOT THROW: running out of time has to land in the same place
+        // as running out of attempts — those entries reported FAILED, their
+        // siblings kept. Throwing would discard a chunk's successful results and
+        // turn a partial answer into no answer at all.
+        const entryWaitMs = backoffMs(attempt + 1, res.headers.get("retry-after"));
+        if (throttled.length > 0 && attempt < retries && entryWaitMs <= retryDeadline - Date.now()) {
           pending = throttled;
-          await sleep(backoffMs(attempt + 1, res.headers.get("retry-after")));
+          await sleep(entryWaitMs);
           continue;
         }
         // Out of retries with entries still throttled: report them as failed
