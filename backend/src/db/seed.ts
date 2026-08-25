@@ -219,6 +219,16 @@ export async function seedJobSchedules(): Promise<void> {
            updated_at = now()
      WHERE kind = 'analytics.run' AND status IN ('pending', 'running')
   `;
+
+  // Retire the superseded hourly ops.repair_gaps row. The cadence moved from
+  // `25 * * * *` to `*/5 * * * *`, and the additive loop above conflicts on
+  // (kind, cron) — so an existing deployment would keep its old row AND gain
+  // the new one, dispatching the same backfill twice against a metered RPC
+  // budget. Deleted rather than disabled: postflight's repair-schedule check
+  // requires exactly ONE row for the kind (the procedure release.ts documents
+  // at NEW_SCHEDULE_CRON). Jobs are untouched — the kind survives, only its
+  // cadence moved.
+  await sql`DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`;
 }
 
 /** Apply the demo's quota-safe schedule changes explicitly and idempotently. */
@@ -285,15 +295,14 @@ export async function seed(): Promise<void> {
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
   // Cold start for the gap repair, same mechanism and same reason — but the wait
-  // it removes is far longer. ops.repair_gaps runs at `25 * * * *`, and
+  // it removes is longer. ops.repair_gaps runs at `*/5 * * * *`, and
   // worker/scheduler.ts seeds a brand-new schedule's next_run_at to the next
-  // FUTURE occurrence, so a fresh boot does no repair work for up to an HOUR.
-  // On the cutover boot specifically that means the release's headline feature
-  // does nothing at all for however long it is until the next :25 — including
-  // through §9's postflight, which is where an operator looks for evidence it
-  // works.
+  // FUTURE occurrence, so a fresh boot does no repair work for up to five
+  // minutes. On the cutover boot specifically that means the release's headline
+  // feature does nothing at all until the next slot — including through §9's
+  // postflight, which is where an operator looks for evidence it works.
   //
-  // The hourly cron owns every run after this one. Overlap is a no-op rather
+  // The cron owns every run after this one. Overlap is a no-op rather
   // than double work: the dispatcher declines while a window job is in flight
   // (worker/handlers/repair.ts), and a CONSTANT dedupe_key fires this at most
   // once per database.
