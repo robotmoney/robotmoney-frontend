@@ -2662,3 +2662,93 @@ how many jobs get enqueued.
 - **Make it a global scheduler default instead of per-schedule.** Wrong for
   any schedule whose per-slot work is not day-idempotent (see "why per-schedule"
   above) — silently drops real catch-up work rather than redundant reads.
+
+## D41 — The price series is separate from the holdings series (follows #742/#745; review tracked in #750)
+
+**Decision.** Prices move out of `wallet_balance_samples` and
+`wallet_sleeve_samples` into their own dense per-day table, `asset_prices`,
+keyed `(price_date, symbol)`. A sample row keeps `amount` — per-day chain
+state — and stops carrying the vendor's number for that day. For a **closed**
+day, `value_usd` becomes a read-time join between the amount and that day's
+price. **Today's live point is the one exception** and keeps its fused row,
+because its amount and its spot price were genuinely read at the same instant.
+
+The table is the shared quote record `markets-asset-pricing-ingest.md` §8.1
+asks for, not a four-column minimum: asset identity, UTC day, currency, value,
+provider, pool or ticker, response identity, and config identity. The three
+`usdc`-priced assets are written as real rows with `source = 'pinned'` rather
+than special-cased in the reader, so "no row" uniformly means "gap".
+
+**Why this exists.** The two columns are different kinds of fact on different
+clocks. `amount` is chain state at one block; `price_usd` is a sample of a
+vendor time series that exists whether or not the fund held anything. Fusing
+them into one row has three consequences, and #742 hit all three:
+
+- **A missing price discards chain reads that succeeded.** The window executor
+  refuses the whole day when any symbol is unpriced, so a vendor's bad minute
+  throws away a correct, expensive, block-addressed multicall.
+- **"Is this day complete" depends on what the fund held.** That is where the
+  manifest and `expectedKeys` came from — a per-slot expected-key set, resolved
+  from active configuration, with no point-in-time answer for historical days.
+- **Prices cannot be reconciled.** A dense price series is re-derivable from the
+  vendor and diffable against what is persisted. Welded to holdings it is not,
+  which is why the "present and wrong" defect class
+  (`regime-engine.md` §11.1) has no detector for the one series where a wrong
+  value was actually served.
+
+Gap detection for prices becomes expected days minus distinct persisted days,
+per symbol — no manifest, no per-slot key sets. Repair becomes one OHLCV range
+call per pool/token key, of which there are **three** (WETH and native ETH share
+a pricing address; then ROBOTMONEY and BNKR), so a full year of prices costs
+roughly ten requests.
+
+**Why a read-time join does not float published history.** A join restates
+every historical total whenever `asset_prices` changes, which is what repair
+needs and exactly what the frozen-publication model forbids. Migration 0038
+already separates these: the join is the **candidate**, and
+`wallet_aum_snapshot_runs` is the **freeze point** — its header already hashes
+price evidence alongside the constituent rows. So the split composes with 0038
+rather than competing with it, and a published snapshot stays reproducible from
+its own evidence even after the price series is repaired underneath it.
+
+**Why "dense" needs a per-symbol floor.** ROBOTMONEY and BNKR have inception
+dates and their pools carry no candles before them. If expected days were the
+whole series range for every symbol, the split would manufacture permanent
+unfillable gaps — reintroducing, on the price series, the noisy-report problem
+`expectedKeys` created on the sleeve series. The floor is nearly free:
+`fetchDailyCloses` already folds `oldestSec` and `floorProven` across pages, so
+the first range call for a pool reports its first priceable day. Persist that
+per symbol and expected-days is bounded by it.
+
+**What this does not remove.** Amounts still need expected-key sets: a sample
+missing a leg still understates a sum, and that is the substitution the
+correctness contract forbids. `deployedAt` likewise stays — it was always an
+amounts concern (the silent-zero rail), never a price one. And the shared-leg
+attempt accounting (`deferDay`) survives on the amounts side, because block
+resolution and the multicall pass are still shared across a window. What the
+split buys is **one failure source per series**: a vendor problem can no longer
+void a chain read, and a chain problem can no longer void a price.
+
+**Migration note.** Seed `asset_prices` from `live` and `seed` provenance rows
+only. Quarantined rows are precisely the ones whose price describes a different
+asset (migration 0036), and re-admitting them through a backfill would restore
+the defect the quarantine exists to contain.
+
+**Rejected alternatives.**
+
+- **Keep the fusion; write the amount with a NULL price when the vendor
+  refuses.** Leaves `value_usd` ambiguous and pushes the decision into every
+  reader, which must still choose what a null leg does to a sum. Completeness
+  still depends on holdings, so the manifest machinery stays. It moves the
+  problem to the read path rather than removing it.
+- **A separate repair pass that fills the price column in place.** Same table,
+  so the same coupling: gap detection is still per-slot-and-per-key, and the
+  pass still cannot run without knowing which symbols were expected that day.
+- **Materialize `value_usd` from `asset_prices` at write time, with no join.**
+  This is what the 0038 snapshot already does at freeze; making it the *only*
+  mechanism re-welds the two series and loses the property that a repaired
+  price improves the candidate for every day at once.
+- **Keep prices per-holding but add a vendor-side cache.** Addresses request
+  cost, which is not the problem — three range calls a year was never
+  expensive. The problem is that one series' failure invalidates another's
+  successful reads.

@@ -187,6 +187,12 @@ splices two different measurements. The product decision — historical Yahoo
 close, explicit unavailable leg, or a separate config-time series — is open
 (§8).
 
+> **D41 changes where this output lands, not how it is fetched.** Everything in
+> this subsection — naming the token, asserting orientation, pinning the pool,
+> refusing a zero close — is unchanged by the split. What changes is that the
+> resulting price is written to its own series rather than onto a holding's row.
+> See §5.6.
+
 ### 3.3 Provenance, and what each value promises
 
 | Value | Meaning |
@@ -287,6 +293,11 @@ diff is computed in JS from explicit UTC methods rather than a SQL
 > does not exist. The consequence is real and is recorded in §8: every day that
 > predates a currently-configured key is now an interior gap, whether or not it
 > was ever repairable.
+
+> **D41 removes this question for prices and leaves it for amounts.** A dense
+> price series is complete or not on its own terms — expected days minus
+> persisted days, per symbol — so it needs no manifest at all. Amounts still
+> do, because a sample missing a leg still understates a sum. See §5.6.
 
 ### 4.3 Quarantine
 
@@ -399,6 +410,11 @@ disclosure; it remains reported by `GET /api/admin/gaps`.
 > `deferDay` never advancing the attempt counter is correct for a *transient*
 > shared leg and wrong for a *permanent* one. See §8.
 
+> **D41 retires the price-side third of this table.** A pool-level refusal stops
+> being a shared leg of the *holdings* window once prices are their own series;
+> what remains is block resolution and the multicall pass, which are genuinely
+> shared across a window and still need `deferDay`. See §5.6.
+
 ### 5.4 Evidence-preserving replacement
 
 Inside the per-day transaction:
@@ -439,6 +455,69 @@ reproduce a producer. Absent an explicit revision, a run is recorded as
 yet — legacy rows keep NULL snapshot identity, and the constraint shape is
 enforced but unexercised. This is P1 scaffolding landed early, not a live
 mechanism.
+
+### 5.6 Target shape — the price series is separate from the holdings series
+
+**Decided in [D41](../decisions.md), not yet built.** Nothing described in this
+subsection exists in the tree; §5.1–§5.5 above remain the behaviour. It is
+recorded here because the sections above describe machinery whose *reason for
+existing* this supersedes, and a reader needs to know which parts are load-
+bearing and which are consequences of a shape that is going away.
+
+`wallet_balance_samples` fuses two different kinds of fact on two different
+clocks: `amount` is chain state at one block, and `price_usd` is a sample of a
+vendor time series that exists whether or not the fund held anything. Three
+consequences follow, and #742 hit all three — a missing price discards chain
+reads that succeeded; "is this day complete" depends on what the fund held; and
+prices cannot be reconciled against the vendor because they are welded to
+holdings.
+
+The split gives prices their own dense per-day table, `asset_prices`, keyed
+`(price_date, symbol)` and carrying the full quote record §8.1 asks for. Then:
+
+- **Gap detection for prices** is expected days minus distinct persisted days,
+  per symbol. No manifest, no per-slot expected-key sets.
+- **Repair for prices** is one OHLCV range call per pool/token key. There are
+  three — WETH and native ETH share a pricing address, then ROBOTMONEY and
+  BNKR — so a full year costs roughly ten requests. The three `usdc`-priced
+  assets are written as real rows with `source = 'pinned'` so the join has no
+  special cases, and SP500 stays out (§3.2).
+- **`value_usd` for a closed day** becomes a read-time join. A thin price day is
+  then a disclosed gap in one series rather than a poisoned snapshot in another.
+
+Four properties have to hold for that to be safe, and each is easy to lose:
+
+1. **The two time bases must not be joined.** The live sampler writes a spot
+   price at a wall-clock instant; `asset_prices` holds UTC daily closes. Closed
+   days join to the table; **today's point keeps its fused live row**, where
+   amount and price were genuinely read at the same instant (§1.1). Do not
+   `COALESCE` the two — that is the substitution this document exists to refuse.
+2. **"Dense" is bounded by a per-symbol first-priceable day.** ROBOTMONEY and
+   BNKR have inception dates and their pools carry no candles before them.
+   Without a floor, the split manufactures permanent unfillable gaps — the same
+   noisy-report problem `expectedKeys` created on the sleeve series (§8.1).
+   `fetchDailyCloses` already folds `oldestSec` and `floorProven` across pages,
+   so the first range call for a pool reports that floor; persist it.
+3. **The join is the candidate; 0038 is the freeze point.** A read-time join
+   restates every historical total whenever `asset_prices` changes, which is
+   what repair needs and what frozen publication forbids. `wallet_aum_snapshot_runs`
+   already hashes price evidence alongside its constituent rows, so a published
+   snapshot stays reproducible from its own evidence after the price series is
+   repaired underneath it (§5.5).
+4. **Seed the table from `live` and `seed` rows only.** Quarantined rows are
+   exactly the ones whose price describes a different asset (§4.3); backfilling
+   from them would re-admit the defect the quarantine contains.
+
+**What the split does not remove.** Amounts still need expected-key sets, and
+`deployedAt` stays — it was always an amounts concern (§6.1's silent-zero rail),
+never a price one. `deferDay` survives on the amounts side too, because block
+resolution and the multicall pass are still shared legs across a window (§5.3).
+The win is narrower than "the manifest goes away" and more valuable than it
+sounds: **one failure source per series.** A vendor problem can no longer void a
+chain read, and a chain problem can no longer void a price.
+
+`wallet_sleeve_samples` carries the identical fusion and is covered by the same
+table — a second join, not a second design.
 
 ---
 
@@ -585,12 +664,16 @@ Stated up front so this document is not read as a promise it cannot keep.
   it — so every day from the registry's `seriesStart` is an interior gap on that
   series, including days no repair can close. The operator gap report is
   correspondingly noisy and `clean` does not return true.
-- **One shared quote record (P2).** Asset identity, observation time / UTC day,
-  currency, value, source, pool or ticker, response identity, and config identity
-  in one interface used by both the live and historical callers. Today the live
-  and historical paths implement the same policy twice, in two files, and neither
-  persists a replayable source identity. **Vetted pool policy must be explicit
-  per asset; the WETH pin is repeatability, not identity proof.**
+- **One shared quote record (P2) — now decided, not yet built.** Asset identity,
+  observation time / UTC day, currency, value, source, pool or ticker, response
+  identity, and config identity in one interface used by both the live and
+  historical callers. Today the live and historical paths implement the same
+  policy twice, in two files, and neither persists a replayable source identity.
+  **Vetted pool policy must be explicit per asset; the WETH pin is repeatability,
+  not identity proof.** [D41](../decisions.md) settles the shape: this record is
+  the `asset_prices` table of §5.6, and the two remaining gaps above — the
+  point-in-time manifest and, for prices, the coverage floor — are subsumed by
+  it on the price side only.
 - **A destructive-path guard for the sample tables (§6.5).**
 
 ### 8.2 Open product decisions
