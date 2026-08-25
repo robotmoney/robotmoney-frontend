@@ -519,6 +519,44 @@ chain read, and a chain problem can no longer void a price.
 `wallet_sleeve_samples` carries the identical fusion and is covered by the same
 table — a second join, not a second design.
 
+**Shape.** Sketch, not a migration — the columns that carry the four properties
+above are the point, and the cheap version of this table gets two of them wrong:
+
+```sql
+CREATE TABLE asset_prices (
+  price_date      date        NOT NULL,
+  symbol          text        NOT NULL,
+  -- Present so a second basis cannot be added invisibly. The table holds
+  -- settled closes; a live spot belongs on the live sample row, not here.
+  time_basis      text        NOT NULL CHECK (time_basis IN ('utc-daily-close')),
+  price_usd       numeric     NOT NULL CHECK (price_usd > 0),   -- §3.2 refuses 0
+  currency        text        NOT NULL CHECK (currency = 'USD'),
+  -- The PROVIDER, not the provenance. 'live'/'stale'/'seed' describe how a
+  -- HOLDING was read and have no meaning for a settled close.
+  provider        text        NOT NULL,   -- 'geckoterminal' | 'pinned'
+  pool_key        text,                   -- which pool answered; NULL when pinned
+  token_address   text,                   -- what `token=` named; NULL when pinned
+  observed_at     timestamptz NOT NULL,   -- the candle's own UTC close
+  fetched_at      timestamptz NOT NULL,   -- when we asked
+  response_hash   text,                   -- replayable source identity
+  config_identity text        NOT NULL,   -- which pin/config produced it
+  PRIMARY KEY (price_date, symbol, time_basis)
+);
+```
+
+An index on `(symbol, price_date)` serves the per-symbol gap query and the
+history join. Volume is not a concern at this scale — seven symbols over a
+series measured in months — but the join replaces a single-table read on the
+history path, so the read-path change wants a plan check rather than an
+assumption.
+
+**Cutover** is five phases — create and seed, dual-write and verify, switch the
+read path, stop writing the old column, then simplify the price-side driver —
+with the seed taking `live`/`seed` rows only and an explicit conflict rule.
+[D41](../decisions.md) carries the sequence, the two traps it must avoid, and
+why "clear the gap first, refactor after" is a judgement call rather than a
+dependency.
+
 ---
 
 ## 6. Safety properties

@@ -2729,10 +2729,57 @@ resolution and the multicall pass are still shared across a window. What the
 split buys is **one failure source per series**: a vendor problem can no longer
 void a chain read, and a chain problem can no longer void a price.
 
-**Migration note.** Seed `asset_prices` from `live` and `seed` provenance rows
-only. Quarantined rows are precisely the ones whose price describes a different
-asset (migration 0036), and re-admitting them through a backfill would restore
-the defect the quarantine exists to contain.
+**Cutover.** Five phases, none of which requires a flag day:
+
+1. **Create and seed.** Add `asset_prices` (ordinal `0039`) and seed it from
+   existing rows of `live` and `seed` provenance **only**. Quarantined rows are
+   precisely the ones whose price describes a different asset (migration 0036),
+   and re-admitting them through a backfill would restore the defect the
+   quarantine exists to contain. Seeding must also decide a winner where two
+   rows disagree for one `(date, symbol)` — `SELECT DISTINCT` yields both and
+   the primary key then rejects the insert — so the seed carries an explicit
+   conflict rule rather than discovering one at runtime.
+2. **Dual-write and verify.** `repairResolvedDay`
+   (`ops/wallet-backfill.ts`) writes both the sample row and the price row, and
+   a check reports rows that disagree. The live sampler is **excluded** from
+   this: see the trap below.
+3. **Switch the read path.** Three sites read `price_usd` off a sample row —
+   `chain/wallet-balances.ts`, `chain/wallet-sleeves.ts`, and
+   `recentPersistedPrice` in `chain/wallet-valuation.ts` — plus `value_usd`
+   consumers. API responses must be byte-identical across this step; that is the
+   step's acceptance test, not a hope.
+4. **Stop writing the old column**, leaving it in place and unread until a later
+   migration drops it. Dropping it in the same change removes the ability to
+   compare against it the moment a discrepancy shows up.
+5. **Simplify the price-side driver only** — per-symbol day counting for gap
+   detection, and no attempt accounting for price failures.
+
+**Two traps this cutover must not walk into**, both of which look like natural
+readings of the plan:
+
+- **`source` is the provider, not the provenance.** `'geckoterminal'` and
+  `'pinned'` are sources; `live` / `stale` / `seed` / `backfilled` are
+  provenance, and they describe how a *holding* was read. `'stale'` in
+  particular is meaningless in a settled daily-close series — staleness is a
+  live-path concept about serving an old value now. Putting the provenance
+  vocabulary in this column reintroduces the fusion in a second place.
+- **The live sampler must not dual-write into this table.** It produces a spot
+  price at a wall-clock instant; a date-keyed daily-close table would then hold
+  a value that is not the close for that date, under that date's key. That is
+  the substitution this whole decision exists to refuse. The live sampler is
+  unchanged and keeps its fused row.
+
+**Sequencing.** The natural instinct is to clear the outstanding AUM gap first
+and refactor afterwards, on the general principle that one does not restructure
+under operational pressure. That principle is sound and the conclusion is still
+probably wrong here, because the coupling is *why* the gap clears slowly: the
+planner takes the oldest days first, the oldest days are the least repairable,
+and a shared price refusal defers a whole window without retiring anything. The
+split removes one of the two failure sources from every day in that queue. The
+honest framing is that this is a judgement call about risk appetite, not a
+dependency — the refactor does not need the gap cleared, and clearing the gap
+does not need the refactor. Whichever runs first should not be chosen by
+assuming the other blocks it.
 
 **Rejected alternatives.**
 
@@ -2752,3 +2799,10 @@ the defect the quarantine exists to contain.
   cost, which is not the problem — three range calls a year was never
   expensive. The problem is that one series' failure invalidates another's
   successful reads.
+- **A minimal `(price_date, symbol, price_usd, source)` table.** Cheaper to
+  write and wrong twice over: with no `time_basis` column the live/close
+  distinction is structurally invisible, so the substitution above becomes a
+  one-line mistake rather than an impossible one; and with no currency, pool,
+  response identity or config identity it is not the quote record §8.1 asks
+  for, so it needs re-migrating almost immediately. The columns are the cheap
+  part of this change.
