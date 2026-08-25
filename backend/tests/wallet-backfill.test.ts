@@ -46,6 +46,18 @@ const NOW = new Date("2019-06-10T09:00:00Z");
 const ALL_DAYS = [D1, D2, D3, D4];
 const BLOCK = 1_234_567;
 const BLOCK_TS = Math.floor(Date.parse(`${D1}T23:59:58Z`) / 1000);
+const blockHash = (n: number): string => `0x${n.toString(16).padStart(64, "0")}`;
+const resolvedBlock = (date: string, rpcCalls = 3, cached = false) => ({
+  date,
+  blockNumber: BLOCK,
+  blockHash: blockHash(BLOCK),
+  blockTimestampSec: BLOCK_TS,
+  boundaryNextBlockNumber: BLOCK + 1,
+  boundaryNextBlockHash: blockHash(BLOCK + 1),
+  boundaryNextBlockTimestampSec: BLOCK_TS + 2,
+  rpcCalls,
+  cached,
+});
 
 async function cleanup(): Promise<void> {
   await sql`DROP TRIGGER IF EXISTS wallet_backfill_test_fail_sleeve ON wallet_sleeve_samples`;
@@ -74,7 +86,7 @@ afterEach(async () => {
 function happyDeps(overrides: Partial<WalletBackfillDeps> = {}): WalletBackfillDeps {
   return {
     async resolveBlock(date) {
-      return { date, blockNumber: BLOCK, blockTimestampSec: BLOCK_TS, rpcCalls: 3, cached: false };
+      return resolvedBlock(date);
     },
     async readChainAmounts(reads: KeyedAssetRead[]) {
       return new Map<string, ChainAmount>(reads.map((r) => [r.key, { ok: true, amount: 5 } as ChainAmount]));
@@ -158,10 +170,31 @@ test("the date→block resolution is cached permanently for that day", async () 
   const deps = happyDeps({
     async resolveBlock(date, opts, cache, now) {
       const hit = await cache.get(date);
-      if (hit) return { date, blockNumber: hit.blockNumber, blockTimestampSec: hit.blockTimestampSec, rpcCalls: 0, cached: true };
+      if (hit?.blockHash && hit.boundaryNextBlockNumber !== null
+        && hit.boundaryNextBlockHash && hit.boundaryNextBlockTimestampSec !== null) {
+        return {
+          date,
+          blockNumber: hit.blockNumber,
+          blockHash: hit.blockHash,
+          blockTimestampSec: hit.blockTimestampSec,
+          boundaryNextBlockNumber: hit.boundaryNextBlockNumber,
+          boundaryNextBlockHash: hit.boundaryNextBlockHash,
+          boundaryNextBlockTimestampSec: hit.boundaryNextBlockTimestampSec,
+          rpcCalls: 0,
+          cached: true,
+        };
+      }
       resolutions += 1;
-      await cache.set(date, BLOCK, BLOCK_TS);
-      return { date, blockNumber: BLOCK, blockTimestampSec: BLOCK_TS, rpcCalls: 3, cached: false };
+      const resolved = resolvedBlock(date);
+      await cache.set(date, {
+        blockNumber: resolved.blockNumber,
+        blockHash: resolved.blockHash,
+        blockTimestampSec: resolved.blockTimestampSec,
+        boundaryNextBlockNumber: resolved.boundaryNextBlockNumber,
+        boundaryNextBlockHash: resolved.boundaryNextBlockHash,
+        boundaryNextBlockTimestampSec: resolved.boundaryNextBlockTimestampSec,
+      });
+      return resolved;
     },
   });
   await backfillWalletDay(sql, D1, deps, NOW);
@@ -212,10 +245,41 @@ test("a missing price fails the day rather than valuing a real holding at zero",
   expect(balances!.n).toBe(0);
 });
 
-test("an incomplete populated day is rebuilt completely while preserving its original row as evidence", async () => {
+test("an incomplete populated day is rebuilt completely while preserving original balance/sleeve identity as evidence", async () => {
+  const sleeveTarget = resolveWalletSnapshotManifest().sleeveKeys[0]!;
+  const [snapshot] = await sql<{ run_id: string }[]>`
+    INSERT INTO wallet_aum_snapshot_runs
+      (sample_date, time_basis, state, manifest_version, manifest_json,
+       manifest_hash, config_identity,
+       expected_balance_keys, present_balance_keys,
+       observed_at, chain_id, block_number, block_hash,
+       block_timestamp, producer_revision_status, producer_revision, failure_code)
+    VALUES
+      (${D1}, 'live', 'failed-retryable', 'fixture-v1', ${sql.json({ fixture: true })},
+       ${"d".repeat(64)}, 'fixture-config',
+       ARRAY['USDC'], ARRAY['USDC'],
+       '2019-06-05T23:59:58Z', 8453, ${BLOCK}, ${blockHash(BLOCK)},
+       '2019-06-05T23:59:58Z', 'available', 'fixture-revision', 'fixture-incomplete')
+    RETURNING run_id
+  `;
   const [original] = await sql<{ id: string }[]>`
-    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
-    VALUES (${D1}, 'USDC', 111, 1, 111, 'live', now())
+    INSERT INTO wallet_balance_samples
+      (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at,
+       snapshot_run_id, amount_observed_at, price_observed_at, recorded_at)
+    VALUES
+      (${D1}, 'USDC', 111, 1, 111, 'live', '2019-06-05T23:59:58Z',
+       ${snapshot!.run_id}, '2019-06-05T23:59:56Z', '2019-06-05T23:59:57Z', '2019-06-06T00:00:01Z')
+    RETURNING id
+  `;
+  const [originalSleeve] = await sql<{ id: string }[]>`
+    INSERT INTO wallet_sleeve_samples
+      (sample_date, wallet_address, symbol, amount, price_usd, value_usd,
+       provenance, sampled_at, snapshot_run_id, amount_observed_at,
+       price_observed_at, recorded_at)
+    VALUES
+      (${D1}, ${sleeveTarget.walletAddress}, ${sleeveTarget.asset.symbol}, 222, 3, 666,
+       'live', '2019-06-05T23:59:58Z', ${snapshot!.run_id},
+       '2019-06-05T23:59:55Z', '2019-06-05T23:59:57Z', '2019-06-06T00:00:02Z')
     RETURNING id
   `;
   const result = await backfillWalletDay(sql, D1, happyDeps(), NOW);
@@ -227,14 +291,45 @@ test("an incomplete populated day is rebuilt completely while preserving its ori
   expect(Number(row!.amount)).toBe(5);
   expect(row!.provenance).toBe("backfilled");
 
-  const [evidence] = await sql<{ amount: string; provenance: string; evidence_reason: string }[]>`
-    SELECT amount, provenance, evidence_reason
+  const [evidence] = await sql<{
+    amount: string;
+    provenance: string;
+    evidence_reason: string;
+    snapshot_run_id: string;
+    amount_observed_at: string;
+    price_observed_at: string;
+    recorded_at: string;
+  }[]>`
+    SELECT amount, provenance, evidence_reason, snapshot_run_id,
+           amount_observed_at::text, price_observed_at::text, recorded_at::text
       FROM wallet_balance_sample_evidence
      WHERE original_id = ${original!.id}
   `;
   expect(Number(evidence!.amount)).toBe(111);
   expect(evidence!.provenance).toBe("live");
   expect(evidence!.evidence_reason).toBe("incomplete-snapshot-replacement");
+  expect(evidence!.snapshot_run_id).toBe(snapshot!.run_id);
+  expect(evidence!.amount_observed_at).toBe("2019-06-05 23:59:56+00");
+  expect(evidence!.price_observed_at).toBe("2019-06-05 23:59:57+00");
+  expect(evidence!.recorded_at).toBe("2019-06-06 00:00:01+00");
+
+  const [sleeveEvidence] = await sql<{
+    snapshot_run_id: string;
+    amount_observed_at: string;
+    price_observed_at: string;
+    recorded_at: string;
+  }[]>`
+    SELECT snapshot_run_id, amount_observed_at::text,
+           price_observed_at::text, recorded_at::text
+      FROM wallet_sleeve_sample_evidence
+     WHERE original_id = ${originalSleeve!.id}
+  `;
+  expect(sleeveEvidence).toEqual({
+    snapshot_run_id: snapshot!.run_id,
+    amount_observed_at: "2019-06-05 23:59:55+00",
+    price_observed_at: "2019-06-05 23:59:57+00",
+    recorded_at: "2019-06-06 00:00:02+00",
+  });
 
   const manifest = resolveWalletSnapshotManifest();
   const [balances] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${D1}`;
@@ -509,7 +604,7 @@ test("a day that has not closed is skipped without touching the chain", async ()
   const deps = happyDeps({
     async resolveBlock(date) {
       reads += 1;
-      return { date, blockNumber: BLOCK, blockTimestampSec: BLOCK_TS, rpcCalls: 1, cached: false };
+      return resolvedBlock(date, 1);
     },
   });
   const today = "2019-06-10";

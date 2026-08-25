@@ -20,11 +20,13 @@ import type { Checker } from "../../lib/checks.ts";
 import { type Db, runPostflightMain } from "../../lib/postflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
+  AUM_GUARD_TRIGGERS,
   APPEND_ONLY_MIGRATION,
   APPEND_ONLY_TABLES,
   BACKFILL_PROVENANCE,
   COLLAPSE_PER_BUCKET_KINDS,
   NEW_COLUMN_MIGRATION,
+  NEW_COLUMNS,
   NEW_SCHEDULE_CRON,
   NEW_SCHEDULE_KIND,
   NEW_TABLES,
@@ -41,10 +43,10 @@ const repoRoot = join(scriptDir, "..", "..", "..", "..");
  *  in for production. The rehearsal is explicitly not production. */
 const RECEIPT_STEPS = ["P5.postflight-twin", "P8.postflight-prod"] as const;
 
-/** Check 1 — all six migrations recorded, under their FULL filenames.
+/** Check 1 — all seven migrations recorded, under their FULL filenames.
  *
  *  The duplicate-prefix property this release introduces is only real if the
- *  ledger actually holds six new NAMES. If the runner had keyed on the numeric
+ *  ledger actually holds seven new NAMES. If the runner had keyed on the numeric
  *  prefix, two of them would be silently absent here — which is precisely the
  *  failure this check exists to make impossible to miss. */
 async function checkMigrationsApplied(db: Db, { record }: Checker): Promise<void> {
@@ -232,7 +234,7 @@ async function checkCatchupPolicy(db: Db, { record }: Checker): Promise<void> {
   ]);
 }
 
-/** Check 4 — every new table exists; report whether migration/repair populated it. */
+/** Check 4 — every new table/column exists; report whether migration/repair populated tables. */
 async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
   const missing: string[] = [];
   const nonEmpty: string[] = [];
@@ -244,8 +246,11 @@ async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
     const [row] = (await db.unsafe(`SELECT count(*)::int AS n FROM public.${t}`)) as unknown as { n: number }[];
     if ((row?.n ?? 0) > 0) nonEmpty.push(`${t} (${row!.n} rows)`);
   }
+  for (const { table, column } of NEW_COLUMNS) {
+    if (!(await columnExists(db, table, column))) missing.push(`${table}.${column}`);
+  }
   if (missing.length > 0) {
-    record("new-tables", "FAIL", [`absent: ${missing.join(", ")}`], "The CREATE TABLE(s) did not apply. Do NOT tag.");
+    record("new-tables", "FAIL", [`absent: ${missing.join(", ")}`], "The release schema did not apply completely. Do NOT tag.");
     return;
   }
   if (nonEmpty.length > 0) {
@@ -257,7 +262,11 @@ async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
     );
     return;
   }
-  record("new-tables", "PASS", `all ${NEW_TABLES.length} present and empty`);
+  record(
+    "new-tables",
+    "PASS",
+    `all ${NEW_TABLES.length} table(s) present and empty; all ${NEW_COLUMNS.length} column(s) present`,
+  );
 }
 
 /** Check 5 — the new schedule is seeded, and its dispatch behaviour matches
@@ -365,7 +374,7 @@ async function checkRepairSchedule(db: Db, { record }: Checker): Promise<void> {
  *  A guard that was installed and is now gone is worth refusing over: it means
  *  something dropped triggers during the upgrade, and the retention guarantee
  *  v0.2.2 shipped is no longer real. */
-async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void> {
+export async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void> {
   // `LIKE '%_append_only%'`, not `LIKE '%_append_only'`: append-only-guard.ts
   // installs TWO triggers per table — `<table>_append_only` (statement) and
   // `<table>_append_only_row`. The old anchored pattern matched only the
@@ -385,13 +394,6 @@ async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void>
   const [applied] = (await db`
     SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = ${APPEND_ONLY_MIGRATION}) AS present
   `) as unknown as { present: boolean }[];
-
-  if (!applied?.present) {
-    record("append-only-intact", "PASS", [
-      `${APPEND_ONLY_MIGRATION} is not applied here — the guard was never installed`,
-    ]);
-    return;
-  }
 
   // Compare against the roster the guard itself declares, not against zero.
   // Before this, ANY non-empty result PASSed: losing thirteen of the fourteen
@@ -419,23 +421,49 @@ async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void>
   });
   const disabled = APPEND_ONLY_TABLES.filter((t) => (present.get(t)?.disabled ?? 0) > 0);
 
-  if (missing.length > 0 || partial.length > 0 || disabled.length > 0) {
+  const aumTables = [...new Set(AUM_GUARD_TRIGGERS.map((guard) => guard.table))];
+  const aumRows = (await db`
+    SELECT c.relname AS table_name, t.tgname AS trigger_name, t.tgenabled
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND NOT t.tgisinternal
+       AND c.relname = ANY(${aumTables})
+  `) as unknown as { table_name: string; trigger_name: string; tgenabled: string }[];
+  const aumPresent = new Map(aumRows.map((row) => [`${row.table_name}.${row.trigger_name}`, row.tgenabled]));
+  const missingAum = AUM_GUARD_TRIGGERS.filter(
+    (guard) => !aumPresent.has(`${guard.table}.${guard.trigger}`),
+  );
+  const bypassableAum = AUM_GUARD_TRIGGERS.filter((guard) => {
+    const mode = aumPresent.get(`${guard.table}.${guard.trigger}`);
+    return mode !== undefined && mode !== "A";
+  });
+
+  if (!applied?.present || missing.length > 0 || partial.length > 0 || disabled.length > 0
+    || missingAum.length > 0 || bypassableAum.length > 0) {
     record(
       "append-only-intact",
       "FAIL",
       [
-        `${APPEND_ONLY_MIGRATION} is applied but the guard is not intact across all ${APPEND_ONLY_TABLES.length} protected table(s):`,
+        `${APPEND_ONLY_MIGRATION} applied: ${applied?.present === true}`,
+        `shared guard inventory (${APPEND_ONLY_TABLES.length} protected table(s)):`,
         ...missing.map((t) => `  ${t} — NO append-only trigger at all`),
         ...partial.map((t) => `  ${t} — ${present.get(t)!.triggers} trigger(s), expected ${EXPECTED_TRIGGERS}`),
         ...disabled.map((t) => `  ${t} — ${present.get(t)!.disabled} trigger(s) DISABLED (tgenabled='D'), so the guard is inert`),
+        `AUM guard inventory (${AUM_GUARD_TRIGGERS.length} exact trigger(s)):`,
+        ...missingAum.map((guard) => `  ${guard.table}.${guard.trigger} — MISSING`),
+        ...bypassableAum.map((guard) =>
+          `  ${guard.table}.${guard.trigger} — tgenabled='${aumPresent.get(`${guard.table}.${guard.trigger}`)}', expected 'A' (ENABLE ALWAYS)`,
+        ),
       ],
-      "The guard was lost or switched off during this upgrade. Do NOT tag. Investigate before writing anything else.",
+      "A shared or AUM-specific guard was lost, disabled, or left replication-bypassable. Do NOT tag.",
     );
     return;
   }
 
   record("append-only-intact", "PASS", [
     `guard live on all ${APPEND_ONLY_TABLES.length} protected table(s), ${EXPECTED_TRIGGERS} enabled trigger(s) each`,
+    `all ${AUM_GUARD_TRIGGERS.length} P0/P1 AUM trigger(s) present and ENABLE ALWAYS`,
     ...rows.map((r) => `  ${r.table_name} (${r.triggers} trigger(s))`),
   ]);
 }

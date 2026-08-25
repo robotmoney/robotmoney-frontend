@@ -27,6 +27,7 @@ const repoRoot = join(import.meta.dir, "../../..");
 
 interface ComposeConfig {
   services: Record<string, {
+    build?: { context?: string; dockerfile?: string; args?: Record<string, string | null> };
     environment?: Record<string, string | null>;
     secrets?: Array<{ source: string; target: string }>;
     volumes?: Array<{ source?: string; target?: string; read_only?: boolean }>;
@@ -55,6 +56,8 @@ function baseEnv(): Record<string, string> {
       // Boot-guard operator controls (issue #602): the cases below assert both
       // the set and the unset resolution, so neither may be inherited.
       "RM_ALLOW_HANDLE_NAMESPACE_VIOLATION", "PG_NAMESPACE_GUARD_TIMEOUT_MS",
+      // Build identity is asserted set and unset below; never inherit it.
+      "AUM_PRODUCER_REVISION",
     ].includes(k)) continue;
     env[k] = v;
   }
@@ -104,6 +107,40 @@ function serviceEnv(cfg: ComposeConfig, svc: string): Record<string, string | nu
 // all three worker lanes (issue #107 topology — swarm/analytics/research).
 const RPC_CONSUMERS = ["api", "worker-swarm", "worker-analytics", "worker-research"] as const;
 const HTTP_CACHE_CONSUMERS = [...RPC_CONSUMERS, "analytics-producer"] as const;
+const BACKEND_IMAGE_BUILDS = [...RPC_CONSUMERS, "analytics-producer"] as const;
+
+describe("AUM producer revision reaches every backend image build", () => {
+  const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
+    ["base", ["docker-compose.yml"]],
+    ["demo", DEMO_COMPOSE_FILES],
+    ["stage", [...DEMO_COMPOSE_FILES, "docker-compose.stage.yml"]],
+  ];
+
+  for (const [label, files] of COMPOSITIONS) {
+    test(`${label} passes the exact explicit revision to every backend Docker build`, () => {
+      const cfg = composeConfig({ AUM_PRODUCER_REVISION: "git-fixture-abc123" }, files);
+      for (const service of BACKEND_IMAGE_BUILDS) {
+        expect(`${service}:${cfg.services[service]?.build?.args?.AUM_PRODUCER_REVISION ?? "missing"}`)
+          .toBe(`${service}:git-fixture-abc123`);
+      }
+    });
+
+    test(`${label} preserves honest unavailable semantics when the revision is unset`, () => {
+      const cfg = composeConfig({}, files);
+      for (const service of BACKEND_IMAGE_BUILDS) {
+        expect(`${service}:${cfg.services[service]?.build?.args?.AUM_PRODUCER_REVISION ?? ""}`)
+          .toBe(`${service}:`);
+      }
+    });
+  }
+
+  test("the Dockerfile exposes only the explicit build argument, with no fallback", async () => {
+    const dockerfile = await Bun.file(join(repoRoot, "backend/Dockerfile")).text();
+    expect(dockerfile).toMatch(/^ARG AUM_PRODUCER_REVISION$/m);
+    expect(dockerfile).toMatch(/^ENV AUM_PRODUCER_REVISION=\$AUM_PRODUCER_REVISION$/m);
+    expect(dockerfile).not.toMatch(/AUM_PRODUCER_REVISION=.*(?:unknown|package|date|timestamp)/i);
+  });
+});
 
 describe("docker compose config — production capability TTLs", () => {
   test("base compose leaves optional TTLs blank so backend defaults remain authoritative", () => {
@@ -526,6 +563,9 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
       expect(`${file}:${/^\s*env_file\s*:/m.test(text)}`).toBe(`${file}:false`);
     }
     const dockerfile = await Bun.file(join(repoRoot, "backend/Dockerfile")).text();
-    expect(`Dockerfile:${/^\s*ENV\s/m.test(dockerfile)}`).toBe("Dockerfile:false");
+    for (const key of CONTROLS) {
+      expect(`${key}:${new RegExp(`^\\s*ENV\\s+${key}(?:=|\\s)`, "m").test(dockerfile)}`)
+        .toBe(`${key}:false`);
+    }
   });
 });

@@ -95,6 +95,8 @@ x-worker-base: &worker-base
   build:
     context: .
     dockerfile: backend/Dockerfile
+    args:
+      AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
   command: ["bun", "run", "src/worker/index.ts"]
   depends_on:
     postgres:
@@ -200,6 +202,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
     command: ["bun", "run", "src/api/index.ts"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
@@ -345,6 +349,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
     command: ["bun", "run", "src/producer/index.ts", "serve"]
     environment:
       ANALYTICS_API_URL: http://api:8787

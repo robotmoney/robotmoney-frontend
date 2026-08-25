@@ -1,7 +1,7 @@
 // Pre-upgrade dry run for v0.2.2 -> v0.3.0, specifically. The release-neutral
 // mechanics (env loading, read-only connect + gate, verdict printing, receipt
 // emission) live in ../../lib/preflight-utils.ts; this file only knows about
-// the six migrations THIS release ships and the checks specific to them.
+// the seven migrations THIS release ships and the checks specific to them.
 //
 // A future release gets its own backend/scripts/upgrades/<from>-to-<to>/
 // directory, not an edit to this one — so what a past release's preflight
@@ -289,6 +289,10 @@ async function checkCleanTargets(db: Db, { record }: Checker): Promise<void> {
   }
   for (const { table, column } of NEW_COLUMNS) {
     if (!(await tableExists(db, table))) {
+      // Some 0038 ALTER targets (chain cache and P0 evidence tables) are
+      // themselves created earlier in this release. Their absence is the clean
+      // v0.2.2 shape; postflight verifies the final table+column inventory.
+      if ((NEW_TABLES as readonly string[]).includes(table)) continue;
       record(
         "clean-targets",
         "FAIL",

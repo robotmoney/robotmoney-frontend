@@ -250,21 +250,55 @@ export function selectBackfillDays(
 export function dayBlockCache(db: Db): DayBlockCache {
   return {
     async get(date) {
-      const rows = await db<{ block_number: string; block_timestamp: Date }[]>`
-        SELECT block_number, block_timestamp FROM chain_day_blocks WHERE sample_date = ${date}
+      const rows = await db<{
+        block_number: string;
+        block_hash: string | null;
+        block_timestamp: Date;
+        boundary_next_block_number: string | null;
+        boundary_next_block_hash: string | null;
+        boundary_next_block_timestamp: Date | null;
+      }[]>`
+        SELECT block_number, block_hash, block_timestamp,
+               boundary_next_block_number, boundary_next_block_hash,
+               boundary_next_block_timestamp
+          FROM chain_day_blocks
+         WHERE sample_date = ${date}
       `;
       const row = rows[0];
       if (!row) return null;
       return {
         blockNumber: Number(row.block_number),
+        blockHash: row.block_hash,
         blockTimestampSec: Math.floor(new Date(row.block_timestamp).getTime() / 1000),
+        boundaryNextBlockNumber:
+          row.boundary_next_block_number === null ? null : Number(row.boundary_next_block_number),
+        boundaryNextBlockHash: row.boundary_next_block_hash,
+        boundaryNextBlockTimestampSec: row.boundary_next_block_timestamp === null
+          ? null
+          : Math.floor(new Date(row.boundary_next_block_timestamp).getTime() / 1000),
       };
     },
-    async set(date, blockNumber, blockTimestampSec) {
+    async set(date, proof) {
       await db`
-        INSERT INTO chain_day_blocks (sample_date, block_number, block_timestamp)
-        VALUES (${date}, ${blockNumber}, ${new Date(blockTimestampSec * 1000)})
-        ON CONFLICT (sample_date) DO NOTHING
+        INSERT INTO chain_day_blocks
+          (sample_date, block_number, block_hash, block_timestamp,
+           boundary_next_block_number, boundary_next_block_hash,
+           boundary_next_block_timestamp)
+        VALUES
+          (${date}, ${proof.blockNumber}, ${proof.blockHash},
+           ${new Date(proof.blockTimestampSec * 1000)},
+           ${proof.boundaryNextBlockNumber}, ${proof.boundaryNextBlockHash},
+           ${proof.boundaryNextBlockTimestampSec === null
+             ? null
+             : new Date(proof.boundaryNextBlockTimestampSec * 1000)})
+        ON CONFLICT (sample_date) DO UPDATE SET
+          block_number = EXCLUDED.block_number,
+          block_hash = EXCLUDED.block_hash,
+          block_timestamp = EXCLUDED.block_timestamp,
+          boundary_next_block_number = EXCLUDED.boundary_next_block_number,
+          boundary_next_block_hash = EXCLUDED.boundary_next_block_hash,
+          boundary_next_block_timestamp = EXCLUDED.boundary_next_block_timestamp,
+          resolved_at = now()
       `;
     },
   };
@@ -862,13 +896,15 @@ async function repairResolvedDay(
           INSERT INTO wallet_balance_sample_evidence
             (original_id, sample_date, symbol, amount, price_usd, value_usd,
              provenance, sampled_at, strategy_nav_idle_only, evidence_reason,
-             replacement_block_number)
+             replacement_block_number, snapshot_run_id, amount_observed_at,
+             price_observed_at, recorded_at)
           SELECT id, sample_date, symbol, amount, price_usd, value_usd,
                  provenance, sampled_at, strategy_nav_idle_only,
                  CASE WHEN provenance = ${QUARANTINED_PROVENANCE}
                       THEN 'quarantined-replacement'
                       ELSE 'incomplete-snapshot-replacement' END,
-                 ${resolved.blockNumber}
+                 ${resolved.blockNumber}, snapshot_run_id, amount_observed_at,
+                 price_observed_at, recorded_at
             FROM wallet_balance_samples
            WHERE sample_date = ${date}
         `;
@@ -877,13 +913,15 @@ async function repairResolvedDay(
           INSERT INTO wallet_sleeve_sample_evidence
             (original_id, sample_date, wallet_address, symbol, amount, price_usd,
              value_usd, provenance, sampled_at, evidence_reason,
-             replacement_block_number)
+             replacement_block_number, snapshot_run_id, amount_observed_at,
+             price_observed_at, recorded_at)
           SELECT id, sample_date, wallet_address, symbol, amount, price_usd,
                  value_usd, provenance, sampled_at,
                  CASE WHEN provenance = ${QUARANTINED_PROVENANCE}
                       THEN 'quarantined-replacement'
                       ELSE 'incomplete-snapshot-replacement' END,
-                 ${resolved.blockNumber}
+                 ${resolved.blockNumber}, snapshot_run_id, amount_observed_at,
+                 price_observed_at, recorded_at
             FROM wallet_sleeve_samples
            WHERE sample_date = ${date}
         `;
