@@ -693,15 +693,25 @@ Stated up front so this document is not read as a promise it cannot keep.
   With `expectedKeys` resolved from active configuration, the oldest days in the
   queue are exactly the ones least likely to be repairable, and the planner takes
   the **oldest first** — so each run can spend its whole budget on a dead prefix.
+  D41 adds a *sibling* on the price side — a per-symbol first-priceable day
+  (§5.6) — which is a different fact about a different series. Neither
+  substitutes for the other: one is "the contract did not exist yet", the other
+  is "the pool had not traded yet".
 - **`deferDay` on a permanent shared leg.** A shared leg that is permanently
   broken — not transient — never advances the attempt counter, so the same days
   are re-selected every hour indefinitely. The transient case is right; the
-  permanent case needs a distinct terminal state.
+  permanent case needs a distinct terminal state. D41 retires the price-side
+  third of this — a pool refusal stops being a shared leg of the holdings
+  window — but block resolution and the multicall pass remain shared, so the
+  gap survives the split.
 - **A point-in-time expected-key manifest (§4.2).** Until it exists, nothing
   seeds `wallet_sleeve_samples` — only the live sampler and the backfill write
   it — so every day from the registry's `seriesStart` is an interior gap on that
   series, including days no repair can close. The operator gap report is
-  correspondingly noisy and `clean` does not return true.
+  correspondingly noisy and `clean` does not return true. D41 narrows this to
+  the **amounts** series: a dense price series is complete on its own terms and
+  needs no manifest, while a sample missing a leg still understates a sum, so
+  the question stays alive for holdings.
 - **One shared quote record (P2) — now decided, not yet built.** Asset identity,
   observation time / UTC day, currency, value, source, pool or ticker, response
   identity, and config identity in one interface used by both the live and
@@ -709,9 +719,10 @@ Stated up front so this document is not read as a promise it cannot keep.
   policy twice, in two files, and neither persists a replayable source identity.
   **Vetted pool policy must be explicit per asset; the WETH pin is repeatability,
   not identity proof.** [D41](../decisions.md) settles the shape: this record is
-  the `asset_prices` table of §5.6, and the two remaining gaps above — the
-  point-in-time manifest and, for prices, the coverage floor — are subsumed by
-  it on the price side only.
+  the `asset_prices` table of §5.6. It does not settle the *policy* — which pool
+  is the economically intended market for each asset remains an open decision
+  (§8.2), and persisting the pool that answered is evidence of what happened,
+  not proof that it was the right venue.
 - **A destructive-path guard for the sample tables (§6.5).**
 
 ### 8.2 Open product decisions
@@ -720,6 +731,14 @@ Stated up front so this document is not read as a promise it cannot keep.
   Yahoo close, or a separate config-time series. The frontend currently
   interprets an absent asset inside an *existing* point as zero, so "omit" is not
   a neutral default.
+- **Vetted pool policy, per asset.** WETH is pinned to its USDC pool, which buys
+  determinism and availability. It does not establish that the pinned pool is the
+  *economically intended market* for the asset, and no decision records why that
+  venue rather than another. ROBOTMONEY and BNKR are not pinned at all and still
+  fall back to the 24h-volume ranking — safe only because the orientation
+  assertion turns a bad pool into a refusal rather than a wrong price (§3.2).
+  Persisting the pool that answered (§5.6) is evidence of what happened, never
+  proof that it was the right venue.
 - **Re-admission of quarantined rows (P5).** Every quarantined row must be
   adjudicated individually against the new quote rules; none has been. Re-admit
   only on evidence, and record the decision and source identity per row.
@@ -777,6 +796,16 @@ meters per POST, and batching is worth up to 10x, not more.
 specific decimal from an investigation capture will be flaky by construction;
 write tests against the *structural* claims — that a pool prices one side of its
 pair, that a candle is UTC-aligned, that an empty return is not a zero.
+
+**Decided but not built** — §5.6 and its supporting notes in §3.2, §4.2, §5.3
+and §8.1 describe [D41](../decisions.md), which no code implements. Every claim
+in §5.6 about *current* behaviour is a claim about what the split replaces, and
+those are verified above; every claim about what the split does is a design
+commitment, not an observation. The four safety properties in §5.6 are
+derivations from this document's own contract (§1) rather than measurements, and
+the request-cost figure — three pool/token keys, roughly ten requests a year —
+follows from the asset table in `config.ts` plus the ~181-candle window recorded
+below as inherited and unverified.
 
 **A standing warning on method.** Verify deliverables against the tree, never
 against issue status: a ticked acceptance criterion is not evidence that the code
