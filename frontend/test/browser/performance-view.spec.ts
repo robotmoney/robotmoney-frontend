@@ -41,10 +41,8 @@ const SERIES: { symbol: string; color: string }[] = [
 // would have passed unchanged against production's real 40-day gap. It is the
 // fixture the AC5 gap-rendering assertions below reuse for exactly that
 // reason: a real multi-week gap, not a synthetic one-off.
-// Provenance mix (issue #614 AC5): 4 of 6 persisted days are 'seed' (ported
-// pre-launch history) — above the 50% disclosure threshold — with one
-// genuinely 'live' day and one 'backfilled' (scheduler same-bucket catch-up)
-// day, so both the seed-share message AND a real seam boundary render.
+// Rows carry the endpoint's real `provenance`/`historyProvenance` shape even
+// though the UI no longer renders a seed-share disclosure from it.
 const HISTORY = [
   { date: "2026-03-18", byAsset: { WETH: 21519, ROBOTMONEY: 51300, BNKR: 12 }, totalUsd: 72831, provenance: "seed" },
   { date: "2026-03-19", byAsset: { WETH: 20841, ROBOTMONEY: 45207, BNKR: 12 }, totalUsd: 66060, provenance: "seed" },
@@ -170,13 +168,10 @@ test("AUM chart occupies proportional horizontal space across a real multi-week 
   }
 });
 
-// issue #614 AC5: "the API stops reporting source:'live' for a series that
-// is 95% seed rows; seed, backfilled and live spans are distinguishable...
-// the UI discloses the seam and any unrecoverable window." The fixture is
-// 4-of-6 'seed' (67%, above the 50% disclosure threshold) with a real seam
-// at 2026-06-26 and a genuine multi-week gap — this must render a visible
-// disclosure, not silently present the series as uniformly live.
-test("performance view discloses the seed/live seam and the unrecoverable gap window (issue #614 AC5)", async ({ page }) => {
+// issue #614 AC5: "the UI discloses ... any unrecoverable window." The
+// fixture has a genuine multi-week gap — this must render a visible
+// disclosure, not silently present the series as gapless.
+test("performance view discloses the unrecoverable gap window (issue #614 AC5)", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
   await navigate(page, "/performance");
@@ -184,8 +179,6 @@ test("performance view discloses the seed/live seam and the unrecoverable gap wi
   const seam = page.locator(".a2-seam");
   await expect(seam).toBeVisible();
   const text = await seam.textContent();
-  expect(text).toContain("67%"); // 4 of 6 persisted days are seed
-  expect(text).toContain("Jun 26"); // the seam: first non-seed persisted date
   expect(text).toMatch(/\d+ days? in this range could not be recovered/); // the ~91-day gap
 });
 

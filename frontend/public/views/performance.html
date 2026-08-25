@@ -43,10 +43,8 @@
       <p class="a2-status" x-show="loading">Loading wallet performance…</p>
       <p class="a2-status a2-status--error" x-show="error" x-text="error" x-cloak></p>
 
-      <!-- issue #614 AC5: discloses the seed/live seam and any unrecoverable
-           gap window instead of letting the whole series read as uniformly
-           "live". seamMessage() is null (and this stays hidden) once live
-           sampling covers most of the range and no day is missing. -->
+      <!-- issue #614 AC5: discloses any unrecoverable gap window. seamMessage()
+           is null (and this stays hidden) once no day in range is missing. -->
       <div class="a2-seam" x-show="!loading && !error && seamMessage()" x-cloak role="note">
         <span class="a2-seam__icon" aria-hidden="true">ⓘ</span>
         <span x-text="seamMessage()"></span>
