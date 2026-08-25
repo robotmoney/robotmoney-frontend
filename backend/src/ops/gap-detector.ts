@@ -51,7 +51,7 @@ const STEP_MS: Record<Cadence, number> = { daily: 86_400_000, hourly: 3_600_000 
 // its own cadence.
 const STALE_TICKS = 2;
 
-export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now: Date = new Date()): Promise<GapReport> {
+export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now: Date = new Date(), asOf?: string): Promise<GapReport> {
   const seriesStart = truncateToSlot(new Date(def.seriesStart), def.cadence);
   const expectedHead = truncateToSlot(now, def.cadence);
   const stepMs = STEP_MS[def.cadence];
@@ -62,17 +62,20 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
   // P0 planner reject partial snapshots; publishing completeness is P1 scope.
   const uncounted = def.uncounted;
   const expectedKeys = def.expectedKeys;
-  const rows = await db<(Record<string, unknown> & { slot: Date })[]>`
+  const deployedAtCol = def.deployedAtColumn;
+  const rows = await db<(Record<string, unknown> & { slot: Date; deployed_at?: string })[]>`
     SELECT DISTINCT ${db(def.dateColumn)}::timestamptz AS slot
            ${expectedKeys ? db`, ${db([...expectedKeys.columns])}` : db``}
+           ${deployedAtCol ? db`, ${db(deployedAtCol)}::text AS deployed_at` : db``}
       FROM ${db(def.table)}
      WHERE ${db(def.dateColumn)}::timestamptz >= ${seriesStart}
        ${uncounted ? db`AND ${db(uncounted.column)} <> ALL (${db.array([...uncounted.values])})` : db``}
      ORDER BY slot
   `;
   const keyToken = (parts: readonly string[]): string => JSON.stringify(parts);
-  const expected = expectedKeys ? new Set(expectedKeys.resolve().map((parts) => keyToken(parts))) : null;
+
   const observedBySlot = new Map<number, Set<string>>();
+  const deployedAtMap = new Map<string, string>(); // keyToken -> deployedAt (YYYY-MM-DD)
   for (const row of rows) {
     const slot = new Date(row.slot).getTime();
     let keys = observedBySlot.get(slot);
@@ -80,11 +83,35 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
       keys = new Set();
       observedBySlot.set(slot, keys);
     }
-    if (expectedKeys) keys.add(keyToken(expectedKeys.columns.map((column) => String(row[column]))));
+    if (expectedKeys) {
+      const keyParts = expectedKeys.columns.map((column) => String(row[column]));
+      keys.add(keyToken(keyParts));
+      if (deployedAtCol && row.deployed_at) {
+        deployedAtMap.set(keyToken(keyParts), row.deployed_at);
+      }
+    }
+  }
+
+  // Per-slot filtering: when a deployedAtColumn is present, each slot only
+  // expects assets deployed on or before that slot's date. This prevents
+  // pre-deployment dates (e.g. March days before SP500's May addition) from
+  // being flagged as incomplete gaps — the root cause of the infinite retry
+  // loop in #709.
+  let expected: Set<string> | null = null;
+  if (expectedKeys && !deployedAtCol) {
+    expected = new Set(expectedKeys.resolve(asOf).map((parts) => keyToken(parts)));
   }
   const observed = new Set<number>();
   for (const [slot, keys] of observedBySlot) {
-    if (!expected || [...expected].every((key) => keys.has(key))) observed.add(slot);
+    if (deployedAtCol) {
+      const slotDate = new Date(slot).toISOString().slice(0, 10);
+      const slotExpected = [...deployedAtMap.entries()]
+        .filter(([, d]) => d <= slotDate)
+        .map(([k]) => k);
+      if (slotExpected.every((key) => keys.has(key))) observed.add(slot);
+    } else {
+      if (!expected || [...expected].every((key) => keys.has(key))) observed.add(slot);
+    }
   }
   const headMs = observed.size > 0 ? Math.max(...observed) : null;
 
@@ -119,6 +146,6 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
 
 /** Every registered series, detected in parallel — the operator-surface feed
  *  (GET /api/admin/gaps). */
-export async function detectAllGaps(db: DbHandle = defaultSql, now: Date = new Date()): Promise<GapReport[]> {
-  return Promise.all(SERIES_REGISTRY.map((def) => detectGaps(def, db, now)));
+export async function detectAllGaps(db: DbHandle = defaultSql, now: Date = new Date(), asOf?: string): Promise<GapReport[]> {
+  return Promise.all(SERIES_REGISTRY.map((def) => detectGaps(def, db, now, asOf)));
 }
