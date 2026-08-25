@@ -40,11 +40,13 @@ const realFetch = globalThis.fetch;
 beforeEach(() => {
   // No inter-request spacing in tests: the serializer is exercised by its own
   // production default, not by making the suite sleep.
+  process.env.GECKO_MIN_INTERVAL_MS = "0";
   process.env.GECKO_OHLCV_MIN_INTERVAL_MS = "0";
   _resetHistoricalPriceCachesForTests();
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
+  delete process.env.GECKO_MIN_INTERVAL_MS;
   delete process.env.GECKO_OHLCV_MIN_INTERVAL_MS;
   _resetHistoricalPriceCachesForTests();
 });

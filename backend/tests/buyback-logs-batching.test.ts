@@ -18,6 +18,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { indexBuybacks, _resetBuybackScanCachesForTests } from "../src/chain/buyback-logs.ts";
 import { _resetRpcConcurrencyForTests, _resetRpcRateLimiterForTests } from "../src/chain/base-rpc-client.ts";
+import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
 
 const realFetch = globalThis.fetch;
 const KNOBS = [
@@ -123,11 +124,13 @@ beforeEach(async () => {
   process.env.PRICE_SOURCE = "live";
   process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0"; // pacing is not what this file measures
   process.env.BASE_RPC_MAX_RETRIES = "0";
+  process.env.GECKO_MIN_INTERVAL_MS = "0";
   process.env.ROBOTMONEY_ADDRESS = RM_TOKEN;
   process.env.WETH_ADDRESS = WETH;
   process.env.PROP_WALLET_ADDRESSES = WALLET;
   _resetRpcConcurrencyForTests();
   _resetRpcRateLimiterForTests();
+  _resetRateLimitStateForTests();
   await cleanup();
 });
 
@@ -136,6 +139,7 @@ afterEach(async () => {
   for (const k of KNOBS) delete process.env[k];
   _resetRpcConcurrencyForTests();
   _resetRpcRateLimiterForTests();
+  _resetRateLimitStateForTests();
   await cleanup();
 });
 
