@@ -56,8 +56,11 @@ export interface SeriesDef {
    * keys are tolerated; a missing expected key makes the whole slot a gap. */
   expectedKeys?: {
     columns: readonly string[];
-    resolve: () => readonly (readonly string[])[];
+    resolve: (asOf?: string) => readonly (readonly string[])[];
   };
+  /** Column holding the asset's deployment date, enabling per-slot filtering
+   *  of expected keys: a slot only expects assets deployed on or before it. */
+  deployedAtColumn?: string;
 }
 
 // ── Wallet / sleeve / vault samplers (Class C — the LIVE samplers read chain
@@ -90,8 +93,9 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
     expectedKeys: {
       columns: ["symbol"],
-      resolve: () => resolveWalletSnapshotManifest().balanceAssets.map((asset) => [asset.symbol]),
+      resolve: (asOf?: string) => resolveWalletSnapshotManifest(undefined, undefined, asOf).balanceAssets.map((asset) => [asset.symbol]),
     },
+    deployedAtColumn: "deployed_at",
   },
   {
     key: "wallet_sleeve_samples",
@@ -104,8 +108,9 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
     expectedKeys: {
       columns: ["wallet_address", "symbol"],
-      resolve: () => resolveWalletSnapshotManifest().sleeveKeys.map((key) => [key.walletAddress, key.asset.symbol]),
+      resolve: (asOf?: string) => resolveWalletSnapshotManifest(undefined, undefined, asOf).sleeveKeys.map((key) => [key.walletAddress, key.asset.symbol]),
     },
+    deployedAtColumn: "deployed_at",
   },
   {
     key: "vault_share_price_history",
