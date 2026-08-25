@@ -1,5 +1,5 @@
 // Block-addressable chain reads and the SHARED RPC rate budget — issue #709,
-// docs/technical/data-self-healing.md §6.5.1 and §6.5.3.
+// docs/technical/markets-asset-pricing-ingest.md §5.2 and §3.4.
 //
 // Fully offline: every assertion mocks `globalThis.fetch` and executes the real
 // transport, matching tests/base-rpc-client.test.ts.

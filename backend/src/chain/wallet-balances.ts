@@ -137,7 +137,7 @@ async function readChainAmounts(assets: TrackedAsset[], wallets: string[]): Prom
   //     owner last stated it; the only available timestamps are process/deploy
   //     start, which describe the container rather than the number — precisely the
   //     plausible-but-fabricated signal this codebase refuses to emit
-  //     (docs/technical/data-self-healing.md §10). A real fix needs a stated-at
+  //     (docs/technical/markets-asset-pricing-ingest.md §6.1). A real fix needs a stated-at
   //     date to travel WITH the size, which is a design question, not a patch.
   // What #641 does change: the size is now a committed constant instead of an env
   // override no container could receive, so drift is at least VISIBLE — it moves

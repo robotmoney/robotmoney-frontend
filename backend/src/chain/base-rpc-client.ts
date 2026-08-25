@@ -185,8 +185,8 @@ export interface RpcCallOptions {
   rpcUrl: string;
   timeoutMs?: number;
   /**
-   * BLOCK-ADDRESSED READS (issue #709 / docs/technical/data-self-healing.md
-   * §6.5.1). The block tag every `eth_call` / `eth_getBalance` issued through
+   * BLOCK-ADDRESSED READS (issue #709 / docs/technical/markets-asset-pricing-ingest.md
+   * §5.2). The block tag every `eth_call` / `eth_getBalance` issued through
    * this transport is evaluated at. Omitted — which is every live caller —
    * resolves to `"latest"` at the two call sites below, byte-for-byte the
    * behaviour that existed before this field.
@@ -219,7 +219,7 @@ export function toBlockTag(blockNumber: number): string {
 /**
  * True when an `eth_call` (or an aggregate3 sub-call) returned ZERO BYTES.
  *
- * THE SILENT-ZERO SEAM (§10's chain rail). `0x` means "there is no contract at
+ * THE SILENT-ZERO SEAM (markets §6.1's chain rail). `0x` means "there is no contract at
  * this address AT THIS BLOCK" — for a block-addressed read that is the normal
  * answer for a day before the target was deployed. `decodeUint256` maps it to
  * `0n` deliberately (see its comment) and every live caller depends on that,
@@ -352,7 +352,7 @@ export function _resetRpcConcurrencyForTests(): void {
 // bucket. Do not add a second limiter anywhere.
 //
 // PACED BY DEFAULT, since v0.3.0. This used to read "UNSET = DISABLED,
-// byte-for-byte today's behaviour", and it deliberately did: §6.5.3 asked for
+// byte-for-byte today's behaviour", and it deliberately did: markets §3.4 asked for
 // the bucket's parameters to be configuration rather than a constant, because
 // the only measurements anyone had were taken from a developer IP and PD6
 // required them re-derived from the production droplet first.
@@ -374,8 +374,8 @@ export function _resetRpcConcurrencyForTests(): void {
 //   * It is overridable upward or off by env, so a deployment that DOES measure
 //     its own budget still owns the number.
 //
-// WHERE THE DEFAULT COMES FROM (docs/technical/data-self-healing.md §6.3,
-// §6.5.3 — measured from a developer IP against https://mainnet.base.org):
+// WHERE THE DEFAULT COMES FROM (docs/technical/markets-asset-pricing-ingest.md
+// §3.4 — measured from a developer IP against https://mainnet.base.org):
 // a ~5-token bucket refilling at ~0.55 calls/s, metered PER-IP and per
 // sub-call, no Retry-After header. The sustained rate validated with zero
 // errors was ~0.5 calls/s (540 logical reads in 38.2s via Multicall3). The live
@@ -383,10 +383,10 @@ export function _resetRpcConcurrencyForTests(): void {
 //
 // 0.25 calls/s is that measurement halved: it leaves ~55% of the measured
 // budget unused as margin for the production droplet's IP being strictly worse
-// (shared NAT — §6.3's closing note), while still being ~7.5x what the live
-// samplers consume, so pacing is invisible to them. The backfill spends the
-// remainder and converges over successive hourly runs, which is what its
-// per-run cap already assumes.
+// (shared NAT — markets §8.2), while still being
+// ~7.5x what the live samplers consume, so pacing is invisible to them. The
+// backfill spends the remainder and converges over successive hourly runs,
+// which is what its per-run cap already assumes.
 //
 // IT IS ONE BUCKET AND ONE DEFAULT FOR THE WHOLE APP. There is no per-caller
 // rate, and the backfill does not get its own — see the note above. A sweep in
@@ -726,7 +726,7 @@ export type BatchResult<T> =
  *    {"jsonrpc":"2.0","error":{"code":-32014,"message":"maximum 10 calls in 1 batch"},"id":null}
  *
  *  Re-measured 2026-08-22 against mainnet.base.org, confirming the figure
- *  docs/technical/data-self-healing.md §6.5.3 recorded. The 200 status is the
+ *  docs/technical/markets-asset-pricing-ingest.md §3.4 recorded. The 200 status is the
  *  trap: a caller that checks only the HTTP code reads a wholesale rejection as
  *  a success, which is exactly how an early draft of this change measured a
  *  batch of 100 as "working". The transport treats a non-array body as a
@@ -963,7 +963,7 @@ export async function ethGetBlockByNumber(blockNumber: number, opts: RpcCallOpti
 // MANY block headers in ONE POST. The batched smoke-twin of ethGetBlockByNumber, and
 // the reason rpcBatchRequest exists: block resolution is a node method, so it
 // can never ride inside an aggregate3, and it is the dominant RPC cost of a
-// backfill (§6.5.1 — ≤8 probes per day against a per-IP-metered provider).
+// backfill (§5.2 — ≤8 probes per day against a per-IP-metered provider).
 //
 // Positional, and per-entry: a block that is missing or errored comes back as
 // `{ok:false}` beside its siblings rather than discarding the batch. The

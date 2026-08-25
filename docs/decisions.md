@@ -2330,7 +2330,7 @@ owner. It was auto-applied at the seven-day timeout and then written into a
 source comment citing #120 — which established no such thing; #120's finding was
 that both addresses revert on `balanceOf`, and its stated deliverable, owner
 confirmation of the correct valuation, never arrived. Every later repetition,
-including `docs/technical/data-self-healing.md` §10.1, traced back to that one
+including `docs/architecture.md` §12, traced back to that one
 sentence. This is worth recording as a failure mode in its own right: an
 auto-applied default acquired the authority of a verified finding purely by
 being written down in code and then cited.
@@ -2420,7 +2420,7 @@ when a silent regression would otherwise ship unnoticed.
   contributed" about thousands of historical rows nobody measured that way.
 - The request path still makes zero RPC calls (issue #118); it echoes what the
   sampler recorded rather than recomputing.
-- `docs/technical/data-self-healing.md` §10.1 is corrected, with the original
+- `docs/architecture.md` §12 (then `data-self-healing.md` §10.1) is corrected, with the original
   text retained so the correction is auditable.
 - Both accounts being effectively empty is an **owner** question — wrong
   addresses, capital moved, or legs wound down — and is explicitly out of scope.
@@ -2503,7 +2503,7 @@ schedule.
 
 **Consequences.**
 
-- `docs/technical/data-self-healing.md`'s §3 pattern-of-unwired-mechanisms
+- `docs/technical/regime-engine.md` §11's pattern-of-unwired-mechanisms
   passage is updated to reflect this one instance closed, while leaving
   `remediationClass` and `forward_fill_expired` — genuinely still unwired —
   as-is.
@@ -2552,11 +2552,11 @@ the data it describes.
 historical Yahoo ^GSPC` for the pre-launch window would not recover history —
 `SP500_SIZE` is a single present-tense constant with no position history (the
 same fact PD7 already turned into "skip, don't approximate" for the forward
-backfill, `docs/technical/data-self-healing.md` PD7). Applying that same logic
+backfill, `docs/technical/regime-engine.md` §11.9 PD7). Applying that same logic
 backwards into the seed would silently swap 99 genuine v0 readings for a
 fabricated one, which is strictly worse than a splice that is at least now
 labelled. **The seed's authority is that it is what v0 actually recorded**
-(`docs/technical/data-self-healing.md` §13's finding that the ~99 seeded
+(`docs/technical/markets-asset-pricing-ingest.md` §3.3's finding that the ~99 seeded
 `'seed'`-labelled rows are real production output, not synthetic) — that
 authority is destroyed by "fixing" it to a single retroactive source, not
 restored.

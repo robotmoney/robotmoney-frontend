@@ -135,7 +135,7 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
 // ── Indicator catch-up (issue #646, closing #614 AC4's Class A bullet) ──────
 // "a detected gap triggers a re-fetch that fills only missing keys" — never
 // implemented for raw_indicator_history despite the criterion being ticked on
-// the closed #614 (docs/technical/data-self-healing.md §14's standing warning
+// the closed #614 (docs/technical/markets-asset-pricing-ingest.md §9's standing warning
 // about exactly this pattern). raw_indicator_history is API-owned (#106): the
 // shared worker where `ops.repair_gaps` runs holds no ANALYTICS_TOKEN by
 // design (D25), so — same as Class B's research_signals self-heal above —

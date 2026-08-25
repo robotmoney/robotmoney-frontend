@@ -639,7 +639,7 @@ the 2026-08-10 storm killed `vault.sample_share_price` (#651).
 **Where the 0.25 came from, and why it is not a vendor figure.** Base publishes
 no rate limit for `https://mainnet.base.org` — its docs say only that the public
 endpoints are "rate-limited and not suitable for production traffic". The
-measured figures in `docs/technical/data-self-healing.md` §6.5.3 (~5-token
+measured figures in `docs/technical/markets-asset-pricing-ingest.md` §3.4 (~5-token
 bucket, ~0.55 calls/s) came **from a developer IP**, and the default is half of
 that, leaving margin for this droplet's IP being worse. A guess that is too low
 costs throughput, not 429s, and a 429 or `-32016` drains the bucket so the

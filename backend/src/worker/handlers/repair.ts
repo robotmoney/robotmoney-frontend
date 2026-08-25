@@ -1,5 +1,5 @@
 // The remediation DISPATCHER and the Class C day executor (issue #709,
-// docs/technical/data-self-healing.md §4 and §6.5.4).
+// docs/technical/markets-asset-pricing-ingest.md §4.1 and §5).
 //
 // This is where `remediationClass` stops being a label and becomes behaviour.
 // Before this file, ops/series-registry.ts declared a class for every series and
@@ -65,7 +65,7 @@ function backfillEnabled(): boolean {
  *     dispatcher still dispatches neither.
  *   - Class B (`research_signals`) already self-heals through the independent
  *     producer's own catch-up, which computes its own missing-days set. Unifying
- *     those two notions of "which days are missing" is tracked in §6.5.4 and is
+ *     those two notions of "which days are missing" is tracked in markets §5 and is
  *     deliberately not done here.
  */
 export async function repairGaps(): Promise<unknown> {
@@ -75,7 +75,7 @@ export async function repairGaps(): Promise<unknown> {
   // measured and set before repair did anything, which meant the ordinary
   // deployment ran this dispatcher hourly and healed nothing. The transport now
   // paces from a conservative hardcoded default
-  // (chain/base-rpc-client.ts::DEFAULT_RATE_PER_SEC, half the §6.5.3 measured
+  // (chain/base-rpc-client.ts::DEFAULT_RATE_PER_SEC, half the markets §3.4 measured
   // refill), so this check passes unless an operator has explicitly set
   // BASE_RPC_MAX_CALLS_PER_SEC=0. Rather than let each enqueued day discover
   // that and fail, the dispatcher checks once and reports it.
@@ -158,9 +158,9 @@ export async function repairGaps(): Promise<unknown> {
     perRunCap: maxDaysPerRun(),
     unhandled: {
       // Named, not omitted — an undispatched class must be as visible as an
-      // unrepaired day (§14's standing warning about ticked-but-unimplemented).
+      // unrepaired day (markets §9's standing warning about ticked-but-unimplemented).
       classA: classA.length > 0 ? { series: classA, tracking: "producer catch-up owns Class A (#646, src/producer/index.ts::catchUpMissedIndicatorDays)" } : null,
-      classB: classB.length > 0 ? { series: classB, tracking: "producer catch-up owns Class B (§6.2)" } : null,
+      classB: classB.length > 0 ? { series: classB, tracking: "producer catch-up owns Class B (regime-engine.md §11.4)" } : null,
       classC: unhandledClassC.length > 0 ? { series: unhandledClassC, tracking: "no executor for these Class C series" } : null,
     },
   };

@@ -34,7 +34,7 @@ export const handlers: Record<string, JobHandler> = {
   "wallet.sample_balances": sampleWalletBalances,
   "wallet.sample_sleeves": sampleWalletSleeves,
   // The self-healing pair (issue #709). `ops.repair_gaps` is the dispatcher of
-  // docs/technical/data-self-healing.md §4 — it asks the gap detector what is
+  // docs/technical/markets-asset-pricing-ingest.md §4.1 — it asks the gap detector what is
   // missing and dispatches by remediationClass, which is what turns that field
   // from a label into behaviour. `wallet.backfill_window` is the Class C
   // executor: a window of days per job, each read at its OWN block and written

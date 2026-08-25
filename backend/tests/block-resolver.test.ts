@@ -1,4 +1,4 @@
-// date → block resolution (issue #709, §6.5.1). Fully offline: the chain is a
+// date → block resolution (issue #709, markets §5.2). Fully offline: the chain is a
 // deterministic fixture (2-second blocks from a fixed genesis) injected through
 // ResolveDayBlockDeps, so every assertion is about the ALGORITHM — the bracket
 // property, the probe budget, the permanent cache, and the refusal to resolve a

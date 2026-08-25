@@ -189,7 +189,7 @@ function rememberBlockTime(blockNumber: number, timestampHex: string): { day: st
  * block's timestamp — so an N-swap chunk made N separate `eth_getBlockByNumber`
  * round trips against a provider that meters requests. The block numbers are
  * all known the moment the chunk's logs land, and none of them depends on any
- * other, so they are exactly the independent axis §6.5.5 says to batch.
+ * other, so they are exactly the independent axis markets §7 says to batch.
  *
  * BEST-EFFORT BY DESIGN. A block that the batch could not answer is simply left
  * uncached, and `blockTime` falls back to its single read — which throws the

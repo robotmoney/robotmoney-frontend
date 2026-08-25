@@ -1,4 +1,4 @@
-// THE REPAIR DRIVER (issue #709, §6.5.4) — the thing that makes "self-healing"
+// THE REPAIR DRIVER (issue #709, markets §5) — the thing that makes "self-healing"
 // true for the wallet/AUM series.
 //
 // Every assertion here is about a REFUSAL as much as about a write, because the

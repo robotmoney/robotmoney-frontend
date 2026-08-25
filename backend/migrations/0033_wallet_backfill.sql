@@ -1,5 +1,5 @@
 -- Class C wallet/AUM backfill: the date→block cache and the per-day checkpoint.
--- Issue #709; docs/technical/data-self-healing.md §6.5.1 and §6.5.4.
+-- Issue #709; docs/technical/markets-asset-pricing-ingest.md §5.2 and §5.
 --
 -- Neither table holds a measurement. `chain_day_blocks` is a cache of an
 -- immutable fact about the chain, and `wallet_backfill_state` is an operational
