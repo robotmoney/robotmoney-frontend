@@ -1,7 +1,7 @@
 // Pre-upgrade dry run for v0.2.2 -> v0.3.0, specifically. The release-neutral
 // mechanics (env loading, read-only connect + gate, verdict printing, receipt
 // emission) live in ../../lib/preflight-utils.ts; this file only knows about
-// the five migrations THIS release ships and the checks specific to them.
+// the seven migrations THIS release ships and the checks specific to them.
 //
 // A future release gets its own backend/scripts/upgrades/<from>-to-<to>/
 // directory, not an edit to this one — so what a past release's preflight
@@ -25,6 +25,7 @@ import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
   APPEND_ONLY_MIGRATION,
   COLLAPSE_PER_BUCKET_KINDS,
+  MIGRATION_TOUCHED_TABLES,
   NEW_COLUMNS,
   NEW_SCHEDULE_KIND,
   NEW_TABLES,
@@ -110,7 +111,7 @@ async function checkPriorRelease(db: Db, { record }: Checker, applied: Set<strin
 
 /**
  * Which migrations the next boot will apply, and whether that set is exactly
- * this release's four.
+ * this release's declared set.
  *
  * The out-of-order WARN this emits is EXPECTED for v0.3.0 and is not a defect:
  * `0032_wallet_...` sorts before the already-applied
@@ -252,8 +253,10 @@ async function checkAppendOnlySafety(db: Db, { record }: Checker, applied: Set<s
     return;
   }
 
-  // The tables this release's DDL touches, against the ones the guard protects.
-  const touched = [...NEW_TABLES, ...NEW_COLUMNS.map((c) => c.table)];
+  // Every table this release creates, alters, locks, or writes, against the
+  // ones the guard protects. This includes 0036/0037's active sleeve archive
+  // path, not only DDL targets.
+  const touched = [...MIGRATION_TOUCHED_TABLES];
   const collisions = touched.filter((t) => protectedTables.has(t));
   if (collisions.length > 0) {
     record(
@@ -286,6 +289,10 @@ async function checkCleanTargets(db: Db, { record }: Checker): Promise<void> {
   }
   for (const { table, column } of NEW_COLUMNS) {
     if (!(await tableExists(db, table))) {
+      // Some 0038 ALTER targets (chain cache and P0 evidence tables) are
+      // themselves created earlier in this release. Their absence is the clean
+      // v0.2.2 shape; postflight verifies the final table+column inventory.
+      if ((NEW_TABLES as readonly string[]).includes(table)) continue;
       record(
         "clean-targets",
         "FAIL",
@@ -310,9 +317,9 @@ async function checkCleanTargets(db: Db, { record }: Checker): Promise<void> {
 }
 
 /**
- * 0034 is the one migration in this set that WRITES to existing rows. Capture
- * what it will overwrite, so postflight can prove the UPDATE hit exactly the
- * two intended kinds and nothing else.
+ * Capture what 0034 will overwrite, so postflight can prove its schedule UPDATE
+ * hit exactly the two intended kinds and nothing else. Migrations 0036/0037
+ * separately quarantine and archive wallet samples.
  */
 async function checkCatchupBaseline(db: Db, { record }: Checker): Promise<void> {
   if (!(await tableExists(db, "job_schedules"))) {
@@ -409,7 +416,7 @@ async function checkBlockingActivity(db: Db, { record }: Checker): Promise<void>
       `${rows.length} transaction(s) older than ${BLOCKING_XACT_SECONDS}s:`,
       ...rows.map((r) => `  pid ${r.pid} (${r.state}, ${r.xact_seconds}s): ${r.query}`),
     ],
-    "Each will queue in front of 0034/0035's locks. Clear them or re-check immediately before cutover.",
+    "Each can queue in front of 0034/0035/0037's locks. Clear them or re-check immediately before cutover.",
   );
 }
 

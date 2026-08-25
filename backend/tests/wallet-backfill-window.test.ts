@@ -30,6 +30,22 @@ const ALL_DAYS = [D1, D2, D3, "2019-07-04", "2019-07-09", "2019-07-10"];
 const BLOCK = 7_000_000;
 const blockFor = (d: string): number => BLOCK + ALL_DAYS.indexOf(d);
 const tsFor = (d: string): number => Math.floor(Date.parse(`${d}T23:59:58Z`) / 1000);
+const blockHash = (n: number): string => `0x${n.toString(16).padStart(64, "0")}`;
+const resolvedBlock = (date: string, rpcCalls: number) => {
+  const blockNumber = blockFor(date);
+  const blockTimestampSec = tsFor(date);
+  return {
+    date,
+    blockNumber,
+    blockHash: blockHash(blockNumber),
+    blockTimestampSec,
+    boundaryNextBlockNumber: blockNumber + 1,
+    boundaryNextBlockHash: blockHash(blockNumber + 1),
+    boundaryNextBlockTimestampSec: blockTimestampSec + 2,
+    rpcCalls,
+    cached: false,
+  };
+};
 
 async function cleanup(): Promise<void> {
   await sql`DELETE FROM wallet_balance_samples WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
@@ -61,18 +77,14 @@ function countingDeps(overrides: Partial<WalletBackfillDeps> = {}): {
     priceRanges,
     deps: {
       async resolveBlock(date) {
-        return { date, blockNumber: blockFor(date), blockTimestampSec: tsFor(date), rpcCalls: 3, cached: false };
+        return resolvedBlock(date, 3);
       },
       async resolveBlocks(dates): Promise<DayBlockOutcome[]> {
         counts.resolveBatches += 1;
         counts.resolvedDays += dates.length;
         return dates.map((date) => ({
           ok: true as const,
-          date,
-          blockNumber: blockFor(date),
-          blockTimestampSec: tsFor(date),
-          rpcCalls: 1,
-          cached: false,
+          ...resolvedBlock(date, 1),
         }));
       },
       async readChainAmounts(reads: KeyedAssetRead[]) {
@@ -126,11 +138,7 @@ test("one day whose block will not resolve fails ALONE — the rest are repaired
           ? { ok: false as const, date, error: "simulated resolver outage" }
           : {
               ok: true as const,
-              date,
-              blockNumber: blockFor(date),
-              blockTimestampSec: tsFor(date),
-              rpcCalls: 1,
-              cached: false,
+              ...resolvedBlock(date, 1),
             },
       );
     },
@@ -334,11 +342,7 @@ test("a day-specific failure DOES charge that day, and only that day", async () 
           ? { ok: false as const, date, error: "block-resolver: no bracket found" }
           : {
               ok: true as const,
-              date,
-              blockNumber: blockFor(date),
-              blockTimestampSec: tsFor(date),
-              rpcCalls: 1,
-              cached: false,
+              ...resolvedBlock(date, 1),
             },
       );
     },
