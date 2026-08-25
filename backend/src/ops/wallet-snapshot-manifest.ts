@@ -32,11 +32,11 @@ export interface WalletSleeveManifestKey {
 
 /** The expected natural keys for one historical AUM snapshot.
  *
- * P0 deliberately uses the active configuration as the manifest. Persisting a
- * versioned point-in-time manifest is P1; until then, one shared resolver is
- * still strictly better than three callers independently deciding what
- * "complete" means. Config-valued SP500 is excluded because the historical
- * backfill has no chain observation for it. */
+ * When `asOf` is supplied, only assets deployed on or before that date are
+ * expected — so a March day that predates SP500's May 2026 addition is still
+ * complete. Without `asOf` (the default), all currently configured assets are
+ * expected, preserving backward compatibility for the operator surface and
+ * live-sampler completeness checks. */
 export interface WalletSnapshotManifest {
   balanceAssets: TrackedAsset[];
   sleeveKeys: WalletSleeveManifestKey[];
@@ -45,9 +45,13 @@ export interface WalletSnapshotManifest {
 export function resolveWalletSnapshotManifest(
   assets: TrackedAsset[] = resolveTrackedAssets(),
   wallets: string[] = resolvePropWallets(),
+  asOf?: string,
 ): WalletSnapshotManifest {
-  const balanceAssets = assets.filter((asset) => asset.valuationKind !== "config");
-  const bySymbol = new Map(assets.map((asset) => [asset.symbol, asset]));
+  const deployed = asOf
+    ? assets.filter((a) => a.deployedAt <= asOf)
+    : assets;
+  const balanceAssets = deployed.filter((asset) => asset.valuationKind !== "config");
+  const bySymbol = new Map(deployed.map((asset) => [asset.symbol, asset]));
   const sleeveKeys: WalletSleeveManifestKey[] = [];
 
   for (let walletIndex = 0; walletIndex < SLEEVE_DEFS.length && walletIndex < wallets.length; walletIndex++) {
