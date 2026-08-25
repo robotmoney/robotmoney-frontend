@@ -33,6 +33,7 @@ import {
   BACKFILL_WINDOW_JOB_KIND,
   COLLAPSE_PER_BUCKET_KINDS,
   MIGRATION_TOUCHED_TABLES,
+  MIGRATION_WRITTEN_TABLES,
   NEW_SCHEDULE_CRON,
   NEW_SCHEDULE_KIND,
   NEW_COLUMNS,
@@ -193,6 +194,22 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     expect(AUM_GUARD_TRIGGERS).toHaveLength(11);
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_balance_samples");
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_sleeve_samples");
+  });
+
+  // `swarm_members` is append-only protected, so folding it back into the set
+  // append-only-safety tests makes that check fail by construction on every
+  // run — which is exactly what blocked the v0.3.0 preflight. It belongs in the
+  // touched set (0035's FK locks it) and NOT in the written set (nothing writes
+  // to it). Runbook §2.2.1.
+  test("swarm_members is locked by this release but never written", () => {
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_members");
+    expect(MIGRATION_WRITTEN_TABLES).not.toContain("swarm_members");
+  });
+
+  test("every written table is also a touched table", () => {
+    for (const t of MIGRATION_WRITTEN_TABLES) {
+      expect({ t, touched: (MIGRATION_TOUCHED_TABLES as readonly string[]).includes(t) }).toEqual({ t, touched: true });
+    }
   });
 
   test("every named migration exists on disk", () => {

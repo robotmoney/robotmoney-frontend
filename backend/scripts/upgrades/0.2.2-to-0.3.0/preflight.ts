@@ -25,7 +25,7 @@ import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
   APPEND_ONLY_MIGRATION,
   COLLAPSE_PER_BUCKET_KINDS,
-  MIGRATION_TOUCHED_TABLES,
+  MIGRATION_WRITTEN_TABLES,
   NEW_COLUMNS,
   NEW_SCHEDULE_KIND,
   NEW_TABLES,
@@ -253,11 +253,13 @@ async function checkAppendOnlySafety(db: Db, { record }: Checker, applied: Set<s
     return;
   }
 
-  // Every table this release creates, alters, locks, or writes, against the
-  // ones the guard protects. This includes 0036/0037's active sleeve archive
-  // path, not only DDL targets.
-  const touched = [...MIGRATION_TOUCHED_TABLES];
-  const collisions = touched.filter((t) => protectedTables.has(t));
+  // Every table a migration in this release actually WRITES, against the ones
+  // the guard protects. This includes 0036/0037's active sleeve archive path,
+  // not only DDL targets. Tables this release merely locks — `swarm_members`,
+  // via 0035's foreign key — are excluded on purpose: the guard aborts a boot
+  // on a write, and holding a lock is not a write. See MIGRATION_WRITTEN_TABLES.
+  const written = [...MIGRATION_WRITTEN_TABLES];
+  const collisions = written.filter((t) => protectedTables.has(t));
   if (collisions.length > 0) {
     record(
       "append-only-safety",
@@ -272,8 +274,8 @@ async function checkAppendOnlySafety(db: Db, { record }: Checker, applied: Set<s
   }
 
   record("append-only-safety", "PASS", [
-    `guard live on ${protectedTables.size} table(s); none is touched by this release`,
-    `touched: ${touched.join(", ")}`,
+    `guard live on ${protectedTables.size} table(s); none is written by this release`,
+    `written: ${written.join(", ")}`,
   ]);
 }
 

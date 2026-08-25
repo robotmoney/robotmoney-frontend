@@ -88,14 +88,37 @@ export const NEW_COLUMNS = [
   { table: "chain_day_blocks", column: "boundary_next_block_timestamp" },
 ] as const;
 
-/** Every table this release creates, alters, locks, or writes. Preflight checks
- * this complete set against the live append-only trigger catalog. */
+/** Every table this release creates, alters, locks, or writes. This is the set
+ * that sizes the runbook's §2.2 lock profile — `swarm_members` is here because
+ * 0035's foreign key validates against it and takes a brief lock, not because
+ * anything writes to it. */
 export const MIGRATION_TOUCHED_TABLES = [
   ...NEW_TABLES,
   "wallet_balance_samples",
   "wallet_sleeve_samples",
   "job_schedules",
   "swarm_members",
+] as const;
+
+/**
+ * The subset of the above that a migration actually INSERTs, UPDATEs, DELETEs
+ * or rewrites. This — not MIGRATION_TOUCHED_TABLES — is what append-only-safety
+ * tests, because the guard aborts a boot on a write, and holding a lock is not
+ * a write.
+ *
+ * `swarm_members` is deliberately absent. 0035 names it only in
+ * `member_id text PRIMARY KEY REFERENCES swarm_members(id) ON DELETE CASCADE`;
+ * the cascade is unreachable because the guard refuses every DELETE on
+ * `swarm_members`, so no write can ever reach it. Runbook §2.2.1 argues the
+ * same thing in prose. Testing the lock-inclusive set here made the check fail
+ * by construction on every run — the guard protects `swarm_members`, so the
+ * collision test could never come back empty.
+ */
+export const MIGRATION_WRITTEN_TABLES = [
+  ...NEW_TABLES,
+  "wallet_balance_samples",
+  "wallet_sleeve_samples",
+  "job_schedules",
 ] as const;
 
 /**
