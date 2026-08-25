@@ -107,7 +107,7 @@ export function registerWalletPerfView(Alpine) {
     seamMessage() {
       const parts = [];
       if (this.gapDayCount > 0) {
-        parts.push(`${this.gapDayCount} day${this.gapDayCount === 1 ? "" : "s"} in this range could not be recovered and render as gaps in the chart above.`);
+        parts.push(`${this.gapDayCount} day${this.gapDayCount === 1 ? "" : "s"} in this range ${this.gapDayCount === 1 ? "is" : "are"} in process of being retrieved from the blockchain.`);
       }
       return parts.length ? parts.join(" ") : null;
     },
