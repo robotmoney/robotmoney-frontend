@@ -10,7 +10,12 @@
 // that enforces a minimum spacing between consecutive HTTP requests. This is
 // strictly better than a mutual-exclusion gate: it provides both ordering AND
 // spacing, and it naturally serializes across both code paths.
-const DEFAULT_MIN_INTERVAL_MS = 3_000;
+//
+// 6 000 ms → ≤ 10 req/min, matching the GeckoTerminal keyless IP quota.
+// The old spot path had no inter-request spacing (just mutual exclusion) and
+// the old historical path used 3 000 ms — both could briefly exceed 10/min
+// under concurrent load.  This default leaves a small safety margin.
+const DEFAULT_MIN_INTERVAL_MS = 6_000;
 
 function intEnv(name: string, fallback: number, min: number): number {
   const raw = process.env[name];
