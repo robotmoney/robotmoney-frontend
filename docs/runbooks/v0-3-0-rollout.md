@@ -239,7 +239,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — five migrations
+### 2.2 🔴 The database delta — six migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -254,6 +254,7 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0034_job_schedules_catchup_policy.sql` | `ADD COLUMN catchup_policy text NOT NULL DEFAULT 'all'` + **an `UPDATE` of live rows** | Additive **plus a data write** |
 | `0035_swarm_member_avatar_bytes.sql` | `CREATE TABLE swarm_member_avatars (… bytes bytea …)` | Additive, new table |
 | `0036_quarantine_backfilled_samples.sql` | `UPDATE` every `provenance='backfilled'` row in `wallet_balance_samples` / `wallet_sleeve_samples` to `'backfilled-quarantined'`; `DELETE` the `exhausted` rows from `wallet_backfill_state` | **No DDL — a pure data write** |
+| `0037_aum_repairable_quarantine.sql` | Create immutable balance/sleeve evidence tables; archive every row on a quarantined date; delete that date from the active tables so verified repair can reuse every natural key | Additive DDL **plus evidence-preserving data writes** |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
@@ -261,12 +262,20 @@ column with no default, and `0034`'s `NOT NULL DEFAULT` is instant on PG 11+.
 `0034`'s `UPDATE` touches `job_schedules`, which holds single-digit rows.
 `0035`'s foreign key is validated against an empty new table, so validation is
 trivial — but it does take a lock on `swarm_members` for the duration. Expect
-this migration set to complete in well under a second on production-sized data.
+`0037` creates two evidence tables and scans the wallet sample tables for the
+quarantined cohort; on an rc-upgraded database it copies and deletes every row
+for each affected date in one migration transaction. It takes
+`SHARE ROW EXCLUSIVE` on both wallet sample tables so an old draining sampler
+cannot insert a row between evidence copy and deletion; reads remain available,
+while sample writes wait for the transaction. On a production database
+upgrading directly from v0.2.2 that cohort is expected to be empty. Expect the
+migration set to complete in well under a second there, but size and time the rc
+cohort separately.
 **Confirm that on the twin (§7) rather than trusting it here** — §2.2's timings
 are read off the DDL, not measured.
 
-`0036` is the exception to "additive DDL", and on **production it is expected to
-touch zero rows**. It rewrites rows the wallet backfill wrote, and the backfill
+`0036` and `0037` are the exceptions to "additive DDL", and on **production they are expected to
+touch zero rows**. They process rows the wallet backfill wrote, and the backfill
 (`0033`, #709/#711) ships in THIS release — a database at v0.2.2 has never run
 it, so there is nothing tagged `provenance='backfilled'` for `0036` to find and
 `wallet_backfill_state` does not yet exist as a populated table. It matters on
@@ -682,13 +691,13 @@ pass. The harness, receipt format and verdict wording are
 | Check | Asserts | Why this release needs it |
 |---|---|---|
 | `server-version` | PG 11+ | 0034's `NOT NULL DEFAULT` is instant on 11+ and a full table REWRITE before it (§2.2) |
-| `schema-migrations` | pending set is **exactly** this release's five; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
+| `schema-migrations` | pending set is **exactly** this release's six; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
 | `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `.env.readonly` points somewhere else |
 | `append-only-safety` | guard installed, and **no** table this release touches is protected | §2.2.1 — this is what makes the out-of-order warning harmless |
-| `clean-targets` | the 3 tables and 2 columns do not exist yet | A target that already exists means an out-of-band change |
+| `clean-targets` | the 5 tables and 2 columns do not exist yet | A target that already exists means an out-of-band change |
 | `catchup-baseline` | records `job_schedules` as it stands now | §4.3 — 0034 OVERWRITES these rows; §9 check 3 grades against this |
 | `wallet-samples-size` | row count + table size | Informational, for §7's wall-clock measurement |
-| `blocking-xacts` | nothing older than 60s | Would queue in front of 0034/0035's locks. Goes stale by the minute |
+| `blocking-xacts` | nothing older than 60s | Would queue in front of 0034/0035/0037's locks. Goes stale by the minute |
 | `wedged-schedules` | which schedules are ALREADY late | So postflight does not blame the cutover for a pre-existing wedge |
 
 ### 6.2 ⚠ Expect exactly one warning, and read it rather than skimming it
@@ -697,12 +706,13 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  5 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  6 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
          0035_swarm_member_avatar_bytes.sql
          0036_quarantine_backfilled_samples.sql
+         0037_aum_repairable_quarantine.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
@@ -808,7 +818,7 @@ each result in the stage rehearsal report (§7.4):
 
 | Requirement | Proven by |
 |---|---|
-| All four migrations apply in one boot, no error, no skip | boot log's four `migrated:` lines, then postflight's `migrations-applied` |
+| All six migrations apply in one boot, no error, no skip | boot log's six `migrated:` lines, then postflight's `migrations-applied` |
 | `schema_migrations` holds **both** `0032_*` and **both** `0033_*` — §2.2.1 observed rather than reasoned | postflight `migrations-applied` |
 | `0034`'s `UPDATE` hit exactly the two wallet samplers, everything else left `'all'` | postflight `catchup-policy` |
 | `ops.repair_gaps` present, enabled, **exactly one row** | postflight `repair-schedule` |
@@ -1075,10 +1085,10 @@ All must pass before `v0.3.0` is tagged.
 
 | # | Check id | Asserts | Expected |
 |---|---|---|---|
-| 1 | `migrations-applied` | all four names in `schema_migrations` | Both `0032_*`, both `0033_*`, `0034_*`, `0035_*` present — the check that would catch a runner keyed on the numeric prefix |
+| 1 | `migrations-applied` | all six names in `schema_migrations` | Both `0032_*`, both `0033_*`, and `0034_*` through `0037_*` present — the check that would catch a runner keyed on the numeric prefix or an omitted repair migration |
 | 2 | `strategy-nav-column` | the column exists and **the migration populated nothing** | `NULL` on every row untouched since `0032_wallet_*` applied. Rows written or re-upserted afterwards carry values legitimately — that is the sampler working. (This row used to expect `NULL` on *every* row, which postflight can never see: it runs after readiness, so the per-minute sampler has always written by then, and the check WARNed on every clean run.) |
-| 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). **The only data write in the set** |
-| 4 | `new-tables` | the three new tables exist | Three clean `CREATE TABLE`s. **Expect a WARN, not a PASS, on a live deployment:** the repair now dispatches from a cold-start job on the cutover boot (§4.1), so `chain_day_blocks` and `wallet_backfill_state` will already hold rows by the time postflight runs. Empty is the *fresh-schema* expectation, not the post-cutover one |
+| 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). This grades the schedule-policy write; `0036`/`0037` separately quarantine and archive wallet samples |
+| 4 | `new-tables` | all five new tables exist | The two operational tables may already hold repair rows after cold-start dispatch; the two evidence tables may already hold an rc-era quarantined cohort archived by `0037`. A WARN reports those counts for reconciliation; empty is only the fresh direct-from-v0.2.2 expectation |
 | 5 | `repair-schedule` | the new schedule is seeded, exactly once, enabled, on the cron `release.ts` names — and what the DEPLOYMENT reports it actually did | Read from the latest `ops.repair_gaps` `job_runs` row: dispatched, or declined and why. It used to infer this from `BASE_RPC_MAX_CALLS_PER_SEC` **in postflight's own process**, which is not where the app reads it — an operator taking §5.2's opt-out via `.env` was told the backfill "WILL dispatch" while production had it off. **Confirm it is the world you chose** (§5.2) |
 | 6 | `append-only-intact` | the guard survived the migration | **Both** triggers live and **enabled** on all fourteen protected tables. Presence of one of the two used to pass, and `tgenabled` was never read — so a half-dropped guard, or one left `DISABLE TRIGGER`, read green. A guard silently lost is the §11.1 failure mode, and switched-off is a way of being lost |
 | 7 | ⛔ **manual — no script** | a real passkey ceremony completes against the public HTTPS origin | The §5.1 fix, verified end-to-end. Step `P8.acceptance`; reading `WEBAUTHN_ORIGIN` back out of the container proves configuration, not function |
@@ -1111,11 +1121,13 @@ ephemeral database while looking like it worked. `--external-pg` is understood b
 both. rollout-procedure.md §10 carries the same warning.
 
 **Rolling back the code without rolling back the database is survivable here,
-and that is unusual.** All four migrations are additive: v0.2.2's code does not
-know about `strategy_nav_idle_only`, `catchup_policy`, or the three new tables,
-and ignores them. The one behavioural residue is `0034`'s `UPDATE` — the
-`catchup_policy` values persist, but v0.2.2's scheduler never reads that column,
-so it changes nothing. **Verify this on the twin (§7.2) before relying on it**;
+and that is unusual.** The new schema objects and columns are backward-compatible:
+v0.2.2's code does not
+know about `strategy_nav_idle_only`, `catchup_policy`, or the five new tables,
+and ignores them. The data-write residues are `0034`'s schedule-policy update
+and `0036`/`0037` moving suspect rc-era samples out of the active tables into
+immutable evidence. v0.2.2 never reads `catchup_policy`, while archived suspect
+rows remain intentionally unserved. **Verify this on the twin (§7.2) before relying on it**;
 until that step runs it is a reading of the schema, not an observation. This is
 [rollout-procedure.md §10](./rollout-procedure.md)'s mandatory question 1, and
 that is its answer.

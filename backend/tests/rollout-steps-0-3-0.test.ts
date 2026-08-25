@@ -31,8 +31,10 @@ import {
   BACKFILL_PROVENANCE,
   BACKFILL_WINDOW_JOB_KIND,
   COLLAPSE_PER_BUCKET_KINDS,
+  MIGRATION_TOUCHED_TABLES,
   NEW_SCHEDULE_CRON,
   NEW_SCHEDULE_KIND,
+  NEW_TABLES,
 } from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -177,6 +179,15 @@ describe("v0.3.0 rollout manifest ↔ runbook", () => {
 });
 
 describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
+  test("the release inventory includes the terminal quarantine-repair migration", () => {
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(6);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0037_aum_repairable_quarantine.sql");
+    expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
+    expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
+    expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_balance_samples");
+    expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_sleeve_samples");
+  });
+
   test("every named migration exists on disk", () => {
     for (const m of THIS_RELEASE_MIGRATIONS) {
       expect({ m, exists: existsSync(join(repoRoot, "backend", "migrations", m)) }).toEqual({ m, exists: true });

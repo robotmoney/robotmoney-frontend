@@ -22,7 +22,7 @@
  * (`0033_swarm_member_uuid_ids.sql`), so preflight's `schema-migrations` check
  * reports it as out-of-order and returns WARN. See the runbook §6 for why that
  * warning is the correct output here and what makes it safe — in short, the
- * append-only guard is already installed by then, and none of the five touches
+ * append-only guard is already installed by then, and none of the six touches
  * a protected table.
  */
 export const THIS_RELEASE_MIGRATIONS = [
@@ -31,6 +31,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0034_job_schedules_catchup_policy.sql",
   "0035_swarm_member_avatar_bytes.sql",
   "0036_quarantine_backfilled_samples.sql",
+  "0037_aum_repairable_quarantine.sql",
 ] as const;
 
 /**
@@ -53,16 +54,33 @@ export const PRIOR_RELEASE_MIGRATIONS = [
  * adds a migration that DOES touch a protected table, the check fails instead
  * of the runbook quietly going stale.
  */
-export const NEW_TABLES = ["chain_day_blocks", "wallet_backfill_state", "swarm_member_avatars"] as const;
+export const NEW_TABLES = [
+  "chain_day_blocks",
+  "wallet_backfill_state",
+  "swarm_member_avatars",
+  "wallet_balance_sample_evidence",
+  "wallet_sleeve_sample_evidence",
+] as const;
 export const NEW_COLUMNS = [
   { table: "wallet_balance_samples", column: "strategy_nav_idle_only" },
   { table: "job_schedules", column: "catchup_policy" },
 ] as const;
 
+/** Every table this release creates, alters, locks, or writes. Preflight checks
+ * this complete set against the live append-only trigger catalog. */
+export const MIGRATION_TOUCHED_TABLES = [
+  ...NEW_TABLES,
+  "wallet_balance_samples",
+  "wallet_sleeve_samples",
+  "job_schedules",
+  "swarm_members",
+] as const;
+
 /**
  * The two schedules migration 0034 rewrites in place
  * (`UPDATE job_schedules SET catchup_policy = 'collapse-per-bucket'`). Captured
- * before and verified after — this is the one data write in the migration set.
+ * before and verified after. Migrations 0036/0037 also write existing wallet
+ * sample rows, but they do not alter schedule policy.
  */
 export const COLLAPSE_PER_BUCKET_KINDS = ["wallet.sample_balances", "wallet.sample_sleeves"] as const;
 
