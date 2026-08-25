@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { _resetTokenPriceCacheForTests, DEFAULT_TOKEN_PRICE_CACHE_TTL_MS, fetchGeckoTokenPriceUsd, resolveTokenPriceCacheTtlMs, TOKEN_PRICE_CACHE_TTL_ENV } from "../src/chain/token-prices.ts";
+import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
 
 const realFetch = globalThis.fetch;
 const ADDRESS = "0x4200000000000000000000000000000000000006"; // WETH
@@ -23,15 +24,19 @@ function batchPrice(prices: Record<string, number>): Response {
 
 beforeEach(() => {
   process.env.GECKO_PRICE_RETRY_BASE_MS = "1";
+  process.env.GECKO_MIN_INTERVAL_MS = "0";
   _resetTokenPriceCacheForTests();
+  _resetRateLimitStateForTests();
 });
 
 afterEach(() => {
   globalThis.fetch = realFetch;
   delete process.env.GECKO_PRICE_MAX_RETRIES;
   delete process.env.GECKO_PRICE_RETRY_BASE_MS;
+  delete process.env.GECKO_MIN_INTERVAL_MS;
   delete process.env[TOKEN_PRICE_CACHE_TTL_ENV];
   _resetTokenPriceCacheForTests();
+  _resetRateLimitStateForTests();
 });
 
 test("a transient GeckoTerminal 429 is retried and recovers", async () => {
@@ -108,7 +113,7 @@ test("concurrent distinct-address reads coalesce into ONE batched request with a
   ]);
 });
 
-test("callers arriving while a request holds the serializer slot coalesce into ONE follow-up batch", async () => {
+test("callers arriving while a request is in-flight coalesce into ONE follow-up batch", async () => {
   const urls: string[] = [];
   const book: Record<string, number> = { [ADDRESS]: 1900, [ROBOTMONEY]: 0.00001, [BNKR]: 0.0005 };
   globalThis.fetch = (async (url: unknown) => {

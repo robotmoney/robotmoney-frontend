@@ -42,6 +42,7 @@ import { sql } from "../src/db/client.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../src/chain/base-rpc-client.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../src/chain/wallet-balances.ts";
 import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
+import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
 import { getWalletBalances } from "../src/api/routes/dashboards.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
@@ -55,6 +56,7 @@ const ENV_KEYS = [
   "PRICE_SOURCE",
   "GECKO_PRICE_MAX_RETRIES",
   "GECKO_PRICE_RETRY_BASE_MS",
+  "GECKO_MIN_INTERVAL_MS",
 ] as const;
 
 // The bounded budget under test: 2 retries → exactly 3 upstream attempts for
@@ -68,8 +70,10 @@ beforeEach(async () => {
   process.env.PRICE_SOURCE = "live"; // real GeckoTerminal/Yahoo path against the mocked transport
   process.env.GECKO_PRICE_MAX_RETRIES = String(MAX_RETRIES);
   process.env.GECKO_PRICE_RETRY_BASE_MS = "1";
+  process.env.GECKO_MIN_INTERVAL_MS = "0";
   _resetTokenPriceCacheForTests();
   _resetWalletBalancesCacheForTests();
+  _resetRateLimitStateForTests();
   await sql`DELETE FROM wallet_balance_samples`;
 });
 
@@ -79,6 +83,7 @@ afterEach(async () => {
   for (const k of ENV_KEYS) delete process.env[k];
   _resetTokenPriceCacheForTests();
   _resetWalletBalancesCacheForTests();
+  _resetRateLimitStateForTests();
   await sql`DELETE FROM wallet_balance_samples`;
 });
 
