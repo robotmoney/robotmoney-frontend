@@ -26,56 +26,26 @@
 // this module now inherits config.ts's module-level `required("DATABASE_URL")`.
 // Its one production importer is the wallet backfill, which cannot run without a
 // database anyway; a standalone script that only wants a price cannot.
-import { pinnedPoolForToken, type TrackedAsset } from "../config.ts";
+import { pinnedPoolForToken, resolveTrackedAssets, type TrackedAsset } from "../config.ts";
 import { UA } from "../analytics/extract/http.ts";
 import { withFetchCache } from "../analytics/extract/fetch-cache.ts";
+import { serialized, retryAfterMs, sleep, _resetRateLimitStateForTests } from "./gecko-rate-limit.ts";
 
 const GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2";
 const GECKO_TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
 
 // A keyless 429 was observed on the SIXTH call in ~15s against an endpoint this
 // repo has already tuned to conserve quota (#202). Every request in this module
-// goes through one serializer with a minimum spacing so a multi-pool,
-// multi-page load cannot burst. This is a GeckoTerminal-host control and is
-// unrelated to — and must never be confused with — the single shared Base RPC
-// budget in base-rpc-client.ts.
-const DEFAULT_MIN_INTERVAL_MS = 3_000;
+// goes through the shared serializer (chain/gecko-rate-limit.ts) with a minimum
+// spacing so a multi-pool, multi-page load cannot burst. This is a
+// GeckoTerminal-host control and is unrelated to — and must never be confused
+// with — the single shared Base RPC budget in base-rpc-client.ts.
 
 function intEnv(name: string, fallback: number, min: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
   const n = Number(raw);
   return Number.isFinite(n) && n >= min ? Math.floor(n) : fallback;
-}
-
-function minIntervalMs(): number {
-  return intEnv("GECKO_OHLCV_MIN_INTERVAL_MS", DEFAULT_MIN_INTERVAL_MS, 0);
-}
-
-let chain: Promise<void> = Promise.resolve();
-let lastRequestAtMs = 0;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Run `fn` serialized behind every other request from this module, with at
- *  least `GECKO_OHLCV_MIN_INTERVAL_MS` between consecutive requests. */
-function serialized<T>(fn: () => Promise<T>): Promise<T> {
-  const run = chain.then(async () => {
-    const gap = minIntervalMs() - (Date.now() - lastRequestAtMs);
-    if (gap > 0) await sleep(gap);
-    try {
-      return await fn();
-    } finally {
-      lastRequestAtMs = Date.now();
-    }
-  });
-  chain = run.then(
-    () => {},
-    () => {},
-  );
-  return run;
 }
 
 async function getJson(url: string, timeoutMs: number): Promise<unknown> {
@@ -92,7 +62,7 @@ async function getJson(url: string, timeoutMs: number): Promise<unknown> {
       if (!GECKO_TRANSIENT_STATUSES.has(res.status) || attempt >= retries) {
         throw new Error(`${res.status} ${res.statusText} for ${url}`);
       }
-      const wait = Math.min(intEnv("GECKO_OHLCV_RETRY_BASE_MS", 1_000, 1) * 2 ** attempt, Math.max(0, deadline - Date.now()));
+      const wait = Math.min(retryAfterMs(res.headers.get("retry-after"), attempt + 1, 1_000), Math.max(0, deadline - Date.now()));
       if (wait <= 0) throw new Error(`geckoterminal: retry budget exhausted after HTTP ${res.status} for ${url}`);
       await sleep(wait);
     }
@@ -129,6 +99,20 @@ interface GeckoPool {
 }
 
 const poolIdCache = new Map<string, Promise<string>>();
+
+// Seed the in-memory pool cache from config's pinned pools, so a pinned token
+// never pays an API call for pool resolution — even on a cold start.
+let poolCacheSeeded = false;
+function seedPoolCache(): void {
+  if (poolCacheSeeded) return;
+  poolCacheSeeded = true;
+  for (const asset of resolveTrackedAssets()) {
+    if (asset.address && asset.priceKind === "gecko") {
+      const pinned = pinnedPoolForToken(asset.address);
+      if (pinned) poolIdCache.set(asset.address.toLowerCase(), Promise.resolve(pinned));
+    }
+  }
+}
 
 // Daily closes for one (pool, token) pair, with the range they can ANSWER for.
 //
@@ -565,6 +549,7 @@ export async function loadHistoricalPrices(
   fromDate: string,
   toDate: string,
 ): Promise<HistoricalPriceTable> {
+  seedPoolCache();
   const table: HistoricalPriceTable = new Map();
   const days: string[] = [];
   for (let t = Date.parse(`${fromDate}T00:00:00Z`); t <= Date.parse(`${toDate}T00:00:00Z`); t += 86_400_000) {
@@ -604,6 +589,6 @@ export async function loadHistoricalPrices(
 export function _resetHistoricalPriceCachesForTests(): void {
   poolIdCache.clear();
   closesCache.clear();
-  lastRequestAtMs = 0;
-  chain = Promise.resolve();
+  poolCacheSeeded = false;
+  _resetRateLimitStateForTests();
 }

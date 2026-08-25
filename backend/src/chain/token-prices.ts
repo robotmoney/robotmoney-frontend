@@ -36,6 +36,7 @@ import { UA } from "../analytics/extract/http.ts";
 import { withFetchCache } from "../analytics/extract/fetch-cache.ts";
 import { fetchYahoo } from "../analytics/extract/yahoo.ts";
 import { TtlCache } from "./ttl-cache.ts";
+import { serialized, retryAfterMs, sleep } from "./gecko-rate-limit.ts";
 
 const GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2";
 const GECKO_TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
@@ -77,12 +78,10 @@ function geckoRetryBaseMs(): number {
 // per-IP quota, so unique token reads are SERIALIZED, deduplicated per address
 // (WETH + native ETH share the WETH price), and MICRO-BATCHED: every caller
 // that arrives while a batch is still open — the wallet feeds' same-tick
-// Promise.all fan-out over legs, or callers queued behind the in-flight slot —
+// Promise.all fan-out over legs, or callers queued behind the batch gate —
 // coalesces into ONE comma-separated token_price request. A sampler run that
 // values WETH/ROBOTMONEY/BNKR therefore costs 1 upstream call, not 3 (the
 // demo/CI quota-exhaustion fix; symptom tracked in #202).
-let geckoInFlight = false;
-const geckoWaiters: Array<() => void> = [];
 const geckoPending = new Map<string, Promise<number>>();
 // The shared keyed TTL-cache primitive (chain/ttl-cache.ts, issue #455), keyed
 // per lowercased token address. ttlMs is passed as a resolver function (not a
@@ -90,9 +89,9 @@ const geckoPending = new Map<string, Promise<number>>();
 const geckoPriceCache = new TtlCache<string, number>(resolveTokenPriceCacheTtlMs);
 
 // The batch currently accepting joiners (null when none). It stays open until
-// its runner actually HOLDS the serializer slot (>= 1 microtask even when the
-// slot is free), then closes so its address set — and therefore its URL, which
-// doubles as the withFetchCache key — is final before the fetch goes out.
+// its runner passes the batch gate (one microtask even when the gate is free),
+// then closes so its address set — and therefore its URL, which doubles as the
+// withFetchCache key — is final before the fetch goes out.
 // Per-address uniqueness inside `waiters` is guaranteed by the geckoPending
 // gate: a second same-address caller never opens or joins a batch while the
 // first is outstanding. `timeoutMs` is the max over joiners so one shared
@@ -103,41 +102,18 @@ interface GeckoBatch {
 }
 let geckoOpenBatch: GeckoBatch | null = null;
 
-async function acquireGeckoSlot(): Promise<void> {
-  if (!geckoInFlight) {
-    geckoInFlight = true;
-    return;
-  }
-  await new Promise<void>((resolve) => geckoWaiters.push(resolve));
-}
-
-function releaseGeckoSlot(): void {
-  const next = geckoWaiters.shift();
-  if (next) next();
-  else geckoInFlight = false;
-}
-
-function retryAfterMs(header: string | null, attempt: number): number {
-  if (header) {
-    const seconds = Number(header);
-    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-    const when = Date.parse(header);
-    if (!Number.isNaN(when)) return Math.max(0, when - Date.now());
-  }
-  return geckoRetryBaseMs() * 2 ** (attempt - 1);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// Batch serialization gate. Batches execute one at a time so a second batch
+// stays open while the first is in-flight, letting concurrent callers join it.
+// Rate-limit spacing is handled by serialized() inside geckoFetchJson; this
+// gate exists purely for batch coalescing.
+let batchChain: Promise<void> = Promise.resolve();
 
 // Test-only cache/gate hygiene. Production callers never reset live prices.
 export function _resetTokenPriceCacheForTests(): void {
-  geckoInFlight = false;
-  geckoWaiters.length = 0;
   geckoPending.clear();
   geckoPriceCache.reset();
   geckoOpenBatch = null;
+  batchChain = Promise.resolve();
   geckoDailyCloseCache.clear();
 }
 
@@ -175,15 +151,17 @@ async function geckoFetchJson(url: string, timeoutMs: number, label: string): Pr
   for (let attempt = 0; ; attempt++) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new Error(`geckoterminal: ${label} timeout`);
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(remaining),
-      headers: { "user-agent": UA, accept: "application/json" },
-    });
+    const res = await serialized(() =>
+      fetch(url, {
+        signal: AbortSignal.timeout(remaining),
+        headers: { "user-agent": UA, accept: "application/json" },
+      }),
+    );
     if (res.ok) return await res.json();
     if (!GECKO_TRANSIENT_STATUSES.has(res.status) || attempt >= retries) {
       throw new Error(`${res.status} ${res.statusText} for ${url}`);
     }
-    const wait = retryAfterMs(res.headers.get("retry-after"), attempt + 1);
+    const wait = retryAfterMs(res.headers.get("retry-after"), attempt + 1, geckoRetryBaseMs());
     if (wait >= deadline - Date.now()) {
       throw new Error(`geckoterminal: ${label} retry budget exhausted after HTTP ${res.status}`);
     }
@@ -290,37 +268,29 @@ export async function fetchGeckoDailyCloseUsd(
   if (memo) return memo;
 
   const request = (async () => {
-    // Serialized behind the same single-flight slot as the spot batch: the
-    // keyless quota is per-IP across endpoints, and a catch-up scan asks for
-    // many candles.
-    await acquireGeckoSlot();
-    try {
-      const body = await (withFetchCache("json", url, async () => {
-        const j = (await geckoFetchJson(url, timeoutMs, `ohlcv for ${pool}@${dayStart}`)) as {
-          data?: { attributes?: { ohlcv_list?: unknown[][] } };
-          meta?: { base?: { address?: unknown; symbol?: unknown } };
-        };
-        // Checked HERE, inside the fetcher, so what the cache holds stays the
-        // bare candle list it has always been — no envelope shape change, and
-        // therefore no stale-shape hazard on disk. A body only reaches the cache
-        // after it has proved which token it prices, so a later hit is serving
-        // an already-attested candle rather than skipping the check.
-        assertCandleToken(pool, token, j);
-        return j?.data?.attributes?.ohlcv_list ?? [];
-      }) as Promise<unknown>);
-      const candle = Array.isArray(body) ? (body[0] as unknown[] | undefined) : undefined;
-      const bucket = Number(candle?.[0]);
-      const close = Number(candle?.[4]);
-      // The bucket must be the requested day: `before_timestamp` returns the
-      // most recent candle at or before it, so a pool with a gap would silently
-      // hand back an OLDER day's price for this swap.
-      if (bucket !== dayStart || !Number.isFinite(close) || close <= 0) {
-        throw new Error(`geckoterminal: no daily candle for ${pool} at ${new Date(dayStart * 1000).toISOString().slice(0, 10)}`);
-      }
-      return close;
-    } finally {
-      releaseGeckoSlot();
+    const body = await (withFetchCache("json", url, async () => {
+      const j = (await geckoFetchJson(url, timeoutMs, `ohlcv for ${pool}@${dayStart}`)) as {
+        data?: { attributes?: { ohlcv_list?: unknown[][] } };
+        meta?: { base?: { address?: unknown; symbol?: unknown } };
+      };
+      // Checked HERE, inside the fetcher, so what the cache holds stays the
+      // bare candle list it has always been — no envelope shape change, and
+      // therefore no stale-shape hazard on disk. A body only reaches the cache
+      // after it has proved which token it prices, so a later hit is serving
+      // an already-attested candle rather than skipping the check.
+      assertCandleToken(pool, token, j);
+      return j?.data?.attributes?.ohlcv_list ?? [];
+    }) as Promise<unknown>);
+    const candle = Array.isArray(body) ? (body[0] as unknown[] | undefined) : undefined;
+    const bucket = Number(candle?.[0]);
+    const close = Number(candle?.[4]);
+    // The bucket must be the requested day: `before_timestamp` returns the
+    // most recent candle at or before it, so a pool with a gap would silently
+    // hand back an OLDER day's price for this swap.
+    if (bucket !== dayStart || !Number.isFinite(close) || close <= 0) {
+      throw new Error(`geckoterminal: no daily candle for ${pool} at ${new Date(dayStart * 1000).toISOString().slice(0, 10)}`);
     }
+    return close;
   })();
 
   // A settled day's candle never changes, so it is memoized for the life of the
@@ -347,7 +317,7 @@ function joinGeckoBatch(lc: string, timeoutMs: number): Promise<number> {
   });
 }
 
-// Slot-holder for one batch: fetch every joined address in ONE request and
+// Gate-holder for one batch: fetch every joined address in ONE request and
 // settle each waiter individually. Failure semantics preserve the pre-batch
 // per-leg degrade contract (#50 honesty) EXACTLY:
 //   - an address missing (or non-numeric) in a SUCCESSFUL response rejects
@@ -356,7 +326,9 @@ function joinGeckoBatch(lc: string, timeoutMs: number): Promise<number> {
 //   - a FAILED request (hard status / retries exhausted / timeout) rejects
 //     every address in the batch, equivalent to the old individual failures.
 async function runGeckoBatch(batch: GeckoBatch): Promise<void> {
-  await acquireGeckoSlot();
+  await batchChain; // wait for previous batch — keeps this batch open for joiners
+  let release!: () => void;
+  batchChain = new Promise<void>((r) => { release = r; });
   if (geckoOpenBatch === batch) geckoOpenBatch = null; // close: the address set is final
   const addresses = [...batch.waiters.keys()].sort(); // stable URL/cache key (see fetcher note)
   try {
@@ -374,7 +346,7 @@ async function runGeckoBatch(batch: GeckoBatch): Promise<void> {
   } catch (err) {
     for (const waiter of batch.waiters.values()) waiter.reject(err);
   } finally {
-    releaseGeckoSlot();
+    release();
   }
 }
 
