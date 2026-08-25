@@ -59,6 +59,44 @@ test("gap-detector: a daily series missing one interior day reports exactly that
   });
 });
 
+test("gap-detector: a slot with only some expected natural keys is a gap", async () => {
+  const def: SeriesDef = {
+    ...DAILY_DEF,
+    expectedKeys: { columns: ["symbol"], resolve: () => [["A"], ["B"]] },
+  };
+  await sql.begin(async (tx) => {
+    await tx`CREATE TEMP TABLE gap_detector_test_daily (d date, symbol text) ON COMMIT DROP`;
+    for (let day = 1; day <= 10; day++) {
+      const date = `2026-01-${String(day).padStart(2, "0")}`;
+      await tx`INSERT INTO gap_detector_test_daily (d, symbol) VALUES (${date}::date, 'A')`;
+      if (day !== 5) await tx`INSERT INTO gap_detector_test_daily (d, symbol) VALUES (${date}::date, 'B')`;
+    }
+    const report = await detectGaps(def, tx, NOW_DAILY);
+    expect(report.interiorGaps).toEqual(["2026-01-05T00:00:00.000Z"]);
+    expect(report.clean).toBe(false);
+  });
+});
+
+test("gap-detector: completeness is evaluated per date and composite natural key", async () => {
+  const def: SeriesDef = {
+    ...DAILY_DEF,
+    expectedKeys: {
+      columns: ["wallet_address", "symbol"],
+      resolve: () => [["0xaaa", "A"], ["0xbbb", "B"]],
+    },
+  };
+  await sql.begin(async (tx) => {
+    await tx`CREATE TEMP TABLE gap_detector_test_daily (d date, wallet_address text, symbol text) ON COMMIT DROP`;
+    for (let day = 1; day <= 10; day++) {
+      const date = `2026-01-${String(day).padStart(2, "0")}`;
+      await tx`INSERT INTO gap_detector_test_daily VALUES (${date}::date, '0xaaa', 'A')`;
+      if (day !== 5) await tx`INSERT INTO gap_detector_test_daily VALUES (${date}::date, '0xbbb', 'B')`;
+    }
+    const report = await detectGaps(def, tx, NOW_DAILY);
+    expect(report.interiorGaps).toEqual(["2026-01-05T00:00:00.000Z"]);
+  });
+});
+
 test("gap-detector: a daily series whose head stopped advancing days ago reports stale, not an interior gap", async () => {
   await sql.begin(async (tx) => {
     await tx`CREATE TEMP TABLE gap_detector_test_daily (d date) ON COMMIT DROP`;

@@ -120,8 +120,14 @@ test("T0.2: a quarantined day reads as a GAP, so the operator surface and the AP
   // would never be told to look at it.
   const def = getSeriesDef("wallet_balance_samples")!;
   await sql.begin(async (tx) => {
-    await tx`CREATE TEMP TABLE wallet_balance_samples (sample_date date, provenance text) ON COMMIT DROP`;
-    await tx`INSERT INTO wallet_balance_samples VALUES ('2026-03-18'::date, 'seed'), ('2026-03-19'::date, 'seed'), ('2026-03-20'::date, ${QUARANTINED_PROVENANCE}), ('2026-03-21'::date, 'live')`;
+    await tx`CREATE TEMP TABLE wallet_balance_samples (sample_date date, symbol text, provenance text) ON COMMIT DROP`;
+    const expectedSymbols = def.expectedKeys!.resolve().map(([symbol]) => symbol!);
+    for (const date of ["2026-03-18", "2026-03-19", "2026-03-21"]) {
+      for (const symbol of expectedSymbols) {
+        await tx`INSERT INTO wallet_balance_samples VALUES (${date}::date, ${symbol}, 'seed')`;
+      }
+    }
+    await tx`INSERT INTO wallet_balance_samples VALUES ('2026-03-20'::date, ${expectedSymbols[0]}, ${QUARANTINED_PROVENANCE})`;
     const report = await detectGaps(def, tx, new Date("2026-03-21T12:00:00Z"));
     expect(report.interiorGaps).toEqual(["2026-03-20T00:00:00.000Z"]);
     expect(report.clean).toBe(false);
@@ -163,9 +169,13 @@ test("T0.2: every read of the sample tables excludes quarantined rows, or says w
   expect(offenders).toEqual([]);
 });
 
-test("T0.2: migration 0036 is applied to this database", async () => {
+test("T0.2/P0: quarantine and repairability migrations are applied to this database", async () => {
   const rows = await sql<{ name: string }[]>`
-    SELECT name FROM schema_migrations WHERE name = '0036_quarantine_backfilled_samples.sql'
+    SELECT name FROM schema_migrations
+     WHERE name IN ('0036_quarantine_backfilled_samples.sql', '0037_aum_repairable_quarantine.sql')
   `;
-  expect(rows.length).toBe(1);
+  expect(rows.map((row) => row.name).sort()).toEqual([
+    "0036_quarantine_backfilled_samples.sql",
+    "0037_aum_repairable_quarantine.sql",
+  ]);
 });

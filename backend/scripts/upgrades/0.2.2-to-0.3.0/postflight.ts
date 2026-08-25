@@ -41,10 +41,10 @@ const repoRoot = join(scriptDir, "..", "..", "..", "..");
  *  in for production. The rehearsal is explicitly not production. */
 const RECEIPT_STEPS = ["P5.postflight-twin", "P8.postflight-prod"] as const;
 
-/** Check 1 — all five migrations recorded, under their FULL filenames.
+/** Check 1 — all six migrations recorded, under their FULL filenames.
  *
  *  The duplicate-prefix property this release introduces is only real if the
- *  ledger actually holds five new NAMES. If the runner had keyed on the numeric
+ *  ledger actually holds six new NAMES. If the runner had keyed on the numeric
  *  prefix, two of them would be silently absent here — which is precisely the
  *  failure this check exists to make impossible to miss. */
 async function checkMigrationsApplied(db: Db, { record }: Checker): Promise<void> {
@@ -232,7 +232,7 @@ async function checkCatchupPolicy(db: Db, { record }: Checker): Promise<void> {
   ]);
 }
 
-/** Check 4 — the three new tables exist and are empty. */
+/** Check 4 — every new table exists; report whether migration/repair populated it. */
 async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
   const missing: string[] = [];
   const nonEmpty: string[] = [];
@@ -253,7 +253,7 @@ async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
       "new-tables",
       "WARN",
       [`present but not empty: ${nonEmpty.join(", ")}`],
-      "Expected empty on arrival. Non-empty means the backfill has already dispatched — expected on any deployment that did not set BASE_RPC_MAX_CALLS_PER_SEC=0, since the transport paces by default.",
+      "Non-empty operational tables mean repair already dispatched; non-empty evidence tables mean 0037 archived an rc-era quarantined cohort. Reconcile the reported counts before tagging.",
     );
     return;
   }
