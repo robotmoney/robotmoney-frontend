@@ -31,7 +31,7 @@ env:
 
 on:
   push:
-    branches: [main]
+    branches: [main, "releases-*"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does — so a red nightly means exactly what a red merge would

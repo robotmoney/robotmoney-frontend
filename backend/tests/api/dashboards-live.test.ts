@@ -561,22 +561,47 @@ const HISTORIC_TS = 1_774_270_000; // inside the 2026-03-23 UTC day (bucket 1774
 const HISTORIC_DAY = "2026-03-23";
 const DAY_CLOSE = 2179.3; // that day's settled WETH/USD close
 const TODAY_SPOT = 1884.55; // what the old per-run spot read would have used
+// The other token in the pool that ties WETH's on 24h volume, measured the same
+// day WETH closed at 2460.91. A pool answers with THIS unless the request names
+// the token it wants.
+const CBBTC_CLOSE = 77621.21;
 const SWAP_TX = "0x00000000000000000000000000000000000000000000000000000000000640a1";
 const WETH_OUT = 116_534_000_000_000_000n; // 0.116534 WETH, the seeded trade size
 const ROBOTMONEY_IN = 18_450_000n * 10n ** 18n;
 
 // One historical buyback in a single scanned window. `ohlcv` decides what the
 // daily-candle endpoint does, which is the only thing these two cases differ on.
-function mockHistoricBuyback(ohlcv: "ok" | "unavailable") {
+function mockHistoricBuyback(ohlcv: "ok" | "unavailable" | "other-side") {
   const calls = { ohlcv: 0, spot: 0 };
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("/ohlcv/")) {
       calls.ohlcv += 1;
       if (ohlcv === "unavailable") return new Response("nope", { status: 400 });
+      if (ohlcv === "other-side") {
+        // The measured cbBTC/WETH reply: the pool priced its OWN base side
+        // while the request named WETH. Plausible, finite, ~25x too large, and
+        // the only thing that gives it away is the meta block it comes with.
+        return new Response(JSON.stringify({
+          data: { attributes: { ohlcv_list: [[1_774_224_000, 76_000, 78_000, 75_500, CBBTC_CLOSE, 1234]] } },
+          meta: {
+            base: { name: "Coinbase Wrapped BTC", symbol: "cbBTC", address: "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf" },
+            quote: { name: "Wrapped Ether", symbol: "WETH", address: "0x4200000000000000000000000000000000000006" },
+          },
+        }), { status: 200 });
+      }
       // [bucketTs, open, high, low, close, volume] — the real 2026-03-23 candle
-      // shape, close pinned to the value the seeded rows imply.
-      return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [[1_774_224_000, 2052.63, 2188.0, 2026.51, DAY_CLOSE, 1234]] } } }), { status: 200 });
+      // shape, close pinned to the value the seeded rows imply. `meta` is the
+      // vendor's own statement of which token these candles price, and the read
+      // refuses a body without it, so a mock that omitted it would model a
+      // response GeckoTerminal never sends. WETH is this pool's base side.
+      return new Response(JSON.stringify({
+        data: { attributes: { ohlcv_list: [[1_774_224_000, 2052.63, 2188.0, 2026.51, DAY_CLOSE, 1234]] } },
+        meta: {
+          base: { name: "Wrapped Ether", symbol: "WETH", address: "0x4200000000000000000000000000000000000006" },
+          quote: { name: "USD Coin", symbol: "USDC", address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" },
+        },
+      }), { status: 200 });
     }
     if (u.includes("geckoterminal.com")) {
       calls.spot += 1; // today's spot: reading it at all is the bug under test
@@ -621,7 +646,7 @@ function mockHistoricBuyback(ohlcv: "ok" | "unavailable") {
   return calls;
 }
 
-async function indexOneHistoricSwap(ohlcv: "ok" | "unavailable") {
+async function indexOneHistoricSwap(ohlcv: "ok" | "unavailable" | "other-side") {
   process.env.BASE_RPC_SOURCE = "live";
   // BUYBACK_LOG_CHUNK / BUYBACK_MAX_CHUNKS are committed constants now (#641);
   // the mock window is wide enough that the first 9000-block window contains
@@ -673,6 +698,25 @@ test("buyback indexer: an unavailable historical price persists the swap with a 
     // today's spot, which the mock would happily have served.
     expect(row!.value_usd).toBeNull();
     expect(calls.spot).toBe(0);
+  } finally {
+    await cleanupHistoricSwap();
+  }
+});
+
+test("buyback indexer: a candle for the OTHER side of the pool is REFUSED — the swap keeps a NULL value_usd, not a BTC-denominated one", async () => {
+  try {
+    const { calls, result, row } = await indexOneHistoricSwap("other-side");
+    // The swap is real and fully attested, so it is still indexed…
+    expect(result.indexed).toBe(1);
+    expect(Number(row!.weth_spent)).toBeCloseTo(0.116534, 6);
+    // …and its USD value is UNKNOWN. Believing that candle would have written
+    // 0.116534 × 77,621.21 = $9,045.51 for a trade worth ~$254: a number with
+    // nothing wrong with it except which asset it prices.
+    expect(row!.value_usd).toBeNull();
+    expect(Math.round(0.116534 * CBBTC_CLOSE * 100) / 100).toBe(9045.51); // what believing it would have stored
+    // And no substitute was reached for either: not the spot endpoint, not a
+    // second pool.
+    expect(`ohlcv:${calls.ohlcv >= 1} spot:${calls.spot}`).toBe("ohlcv:true spot:0");
   } finally {
     await cleanupHistoricSwap();
   }

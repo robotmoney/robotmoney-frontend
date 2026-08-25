@@ -22,7 +22,7 @@
  * (`0033_swarm_member_uuid_ids.sql`), so preflight's `schema-migrations` check
  * reports it as out-of-order and returns WARN. See the runbook §6 for why that
  * warning is the correct output here and what makes it safe — in short, the
- * append-only guard is already installed by then, and none of the four touches
+ * append-only guard is already installed by then, and none of the seven touches
  * a protected table.
  */
 export const THIS_RELEASE_MIGRATIONS = [
@@ -30,6 +30,9 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0033_wallet_backfill.sql",
   "0034_job_schedules_catchup_policy.sql",
   "0035_swarm_member_avatar_bytes.sql",
+  "0036_quarantine_backfilled_samples.sql",
+  "0037_aum_repairable_quarantine.sql",
+  "0038_wallet_aum_snapshot_foundation.sql",
 ] as const;
 
 /**
@@ -52,16 +55,54 @@ export const PRIOR_RELEASE_MIGRATIONS = [
  * adds a migration that DOES touch a protected table, the check fails instead
  * of the runbook quietly going stale.
  */
-export const NEW_TABLES = ["chain_day_blocks", "wallet_backfill_state", "swarm_member_avatars"] as const;
+export const NEW_TABLES = [
+  "chain_day_blocks",
+  "wallet_backfill_state",
+  "swarm_member_avatars",
+  "wallet_balance_sample_evidence",
+  "wallet_sleeve_sample_evidence",
+  "wallet_aum_snapshot_runs",
+] as const;
 export const NEW_COLUMNS = [
   { table: "wallet_balance_samples", column: "strategy_nav_idle_only" },
   { table: "job_schedules", column: "catchup_policy" },
+  { table: "wallet_balance_samples", column: "snapshot_run_id" },
+  { table: "wallet_balance_samples", column: "amount_observed_at" },
+  { table: "wallet_balance_samples", column: "price_observed_at" },
+  { table: "wallet_balance_samples", column: "recorded_at" },
+  { table: "wallet_sleeve_samples", column: "snapshot_run_id" },
+  { table: "wallet_sleeve_samples", column: "amount_observed_at" },
+  { table: "wallet_sleeve_samples", column: "price_observed_at" },
+  { table: "wallet_sleeve_samples", column: "recorded_at" },
+  { table: "wallet_balance_sample_evidence", column: "snapshot_run_id" },
+  { table: "wallet_balance_sample_evidence", column: "amount_observed_at" },
+  { table: "wallet_balance_sample_evidence", column: "price_observed_at" },
+  { table: "wallet_balance_sample_evidence", column: "recorded_at" },
+  { table: "wallet_sleeve_sample_evidence", column: "snapshot_run_id" },
+  { table: "wallet_sleeve_sample_evidence", column: "amount_observed_at" },
+  { table: "wallet_sleeve_sample_evidence", column: "price_observed_at" },
+  { table: "wallet_sleeve_sample_evidence", column: "recorded_at" },
+  { table: "chain_day_blocks", column: "block_hash" },
+  { table: "chain_day_blocks", column: "boundary_next_block_number" },
+  { table: "chain_day_blocks", column: "boundary_next_block_hash" },
+  { table: "chain_day_blocks", column: "boundary_next_block_timestamp" },
+] as const;
+
+/** Every table this release creates, alters, locks, or writes. Preflight checks
+ * this complete set against the live append-only trigger catalog. */
+export const MIGRATION_TOUCHED_TABLES = [
+  ...NEW_TABLES,
+  "wallet_balance_samples",
+  "wallet_sleeve_samples",
+  "job_schedules",
+  "swarm_members",
 ] as const;
 
 /**
  * The two schedules migration 0034 rewrites in place
  * (`UPDATE job_schedules SET catchup_policy = 'collapse-per-bucket'`). Captured
- * before and verified after — this is the one data write in the migration set.
+ * before and verified after. Migrations 0036/0037 also write existing wallet
+ * sample rows, but they do not alter schedule policy.
  */
 export const COLLAPSE_PER_BUCKET_KINDS = ["wallet.sample_balances", "wallet.sample_sleeves"] as const;
 
@@ -83,10 +124,26 @@ export const NEW_COLUMN_MIGRATION = "0032_wallet_balance_samples_strategy_nav_id
  *  INSERTS a second enabled row rather than updating the first; whoever changes
  *  it must retire the old row in `seedJobSchedules()` the way `analytics.run`
  *  is retired, and postflight's `repair-schedule` check will FAIL until they
- *  do. */
+ *  do — it compares job_schedules.cron against this constant directly. (That
+ *  was an aspiration rather than a fact until 2026-08-23: the check read only
+ *  kind/enabled/next_run_at, so a schedule seeded on the wrong cadence was a
+ *  clean PASS.) */
 export const NEW_SCHEDULE_CRON = "25 * * * *";
 
-/** The kind `ops.repair_gaps` enqueues, one job per day it decides to repair. */
+/** The kind `ops.repair_gaps` enqueues: ONE job carrying `{dates: [...]}` for
+ *  the whole window it decides to repair, not one job per day.
+ *
+ *  Changed by #739 (`79063ab`), which batches on the axis the provider actually
+ *  meters — a window resolves its days' blocks in lockstep, one HTTP hit per
+ *  round, instead of paying ~5 hits per day to locate blocks alone. The §7.1
+ *  dispatch observation asserts THIS kind: a dispatcher that reverted to one
+ *  job per day would be a regression, and must fail rather than pass quietly. */
+export const BACKFILL_WINDOW_JOB_KIND = "wallet.backfill_window";
+
+/** The pre-#739 per-day kind. Still registered as a handler so rows enqueued by
+ *  a pre-upgrade dispatcher drain after the cutover
+ *  (`backend/src/worker/handlers/repair.ts`), but nothing enqueues it any more —
+ *  which is why §7.1 does not grade it. */
 export const BACKFILL_JOB_KIND = "wallet.backfill_day";
 
 /** What a repaired row's `provenance` column reads
@@ -144,4 +201,23 @@ export const APPEND_ONLY_TABLES = [
   "agent_activity_log",
   "regime_snapshots",
   "schema_migrations",
+] as const;
+
+/** Exact custom guards added by the AUM P0/P1 migrations. Unlike the shared
+ * append-only roster above, these triggers have table-specific names and
+ * functions, so postflight verifies the catalog contract explicitly. `A`
+ * means ENABLE ALWAYS: replication-role writes must not bypass evidence or
+ * published-snapshot immutability. */
+export const AUM_GUARD_TRIGGERS = [
+  { table: "wallet_balance_samples", trigger: "wallet_balance_samples_snapshot_final_guard" },
+  { table: "wallet_sleeve_samples", trigger: "wallet_sleeve_samples_snapshot_final_guard" },
+  { table: "wallet_balance_sample_evidence", trigger: "wallet_balance_sample_evidence_immutable" },
+  { table: "wallet_balance_sample_evidence", trigger: "wallet_balance_sample_evidence_immutable_row" },
+  { table: "wallet_balance_sample_evidence", trigger: "wallet_balance_sample_evidence_snapshot_final_guard" },
+  { table: "wallet_sleeve_sample_evidence", trigger: "wallet_sleeve_sample_evidence_immutable" },
+  { table: "wallet_sleeve_sample_evidence", trigger: "wallet_sleeve_sample_evidence_immutable_row" },
+  { table: "wallet_sleeve_sample_evidence", trigger: "wallet_sleeve_sample_evidence_snapshot_final_guard" },
+  { table: "wallet_aum_snapshot_runs", trigger: "wallet_aum_snapshot_runs_immutable" },
+  { table: "wallet_aum_snapshot_runs", trigger: "wallet_aum_snapshot_runs_immutable_row" },
+  { table: "wallet_aum_snapshot_runs", trigger: "wallet_aum_snapshot_runs_finalize" },
 ] as const;

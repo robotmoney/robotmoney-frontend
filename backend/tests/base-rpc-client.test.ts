@@ -34,6 +34,7 @@ const KNOBS = [
   "BASE_RPC_MAX_RETRIES",
   "BASE_RPC_RETRY_BASE_MS",
   "BASE_RPC_MAX_CALLS_PER_SEC",
+  "BASE_RPC_RETRY_TOTAL_MS",
 ] as const;
 
 function okResult(result: unknown): Response {
@@ -242,18 +243,34 @@ test("a lower concurrency cap is respected too (serialization proof, cap=1)", as
   expect(peak).toBe(1);
 });
 
-test("the request timeout aborts an in-flight retry loop and throws (bounded work)", async () => {
-  // Never-satisfied 429s + a tiny timeout: the AbortController must fire and end
-  // the loop rather than retry forever. Backoff base is small but the fetch here
-  // resolves 429 instantly, so the timeout is what stops it.
+test("a never-satisfied retry loop is bounded by its own ceiling, not by timeoutMs", async () => {
+  // WHAT BOUNDS THIS, AND WHY IT IS NOT `timeoutMs`. The AbortController is armed
+  // per NETWORK ATTEMPT, so it bounds one POST and says nothing about how long
+  // retrying runs. With a high retry count and nothing watching the clock, this
+  // loop ran for HOURS — retries × MAX_BACKOFF_MS — which is what hung this file
+  // and, through it, killed backend CI at GitHub's 6h job ceiling. The bound is
+  // BASE_RPC_RETRY_TOTAL_MS, set tiny here so the assertion is about the property
+  // rather than about waiting.
   process.env.BASE_RPC_MAX_RETRIES = "1000";
   process.env.BASE_RPC_RETRY_BASE_MS = "50";
+  process.env.BASE_RPC_RETRY_TOTAL_MS = "150";
+  let calls = 0;
   globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    calls += 1;
     // Respect the abort signal like real fetch: reject if already aborted.
     if (init?.signal?.aborted) throw new Error("aborted");
     return status(429);
   }) as unknown as typeof fetch;
-  await expect(rpcRequest<string>("eth_call", [{}, "latest"], { rpcUrl: RPC, timeoutMs: 60 })).rejects.toThrow();
+  const started = Date.now();
+  await expect(
+    rpcRequest<string>("eth_call", [{}, "latest"], { rpcUrl: RPC, timeoutMs: 60 }),
+  ).rejects.toThrow(/retry loop hit its .*ceiling/);
+  // Bounded in WALL CLOCK, which is the property that regressed — a retry count
+  // alone would have let this run for hours while still "passing".
+  expect(Date.now() - started).toBeLessThan(5_000);
+  // And it genuinely retried rather than giving up on the first 429.
+  expect(calls).toBeGreaterThan(1);
+  expect(calls).toBeLessThan(1000);
 });
 
 // ── Multicall3 aggregate3 ABI (the 429-storm fix: collapse the wallet-balances

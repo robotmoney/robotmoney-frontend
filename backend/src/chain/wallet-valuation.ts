@@ -62,6 +62,27 @@ import { fetchAssetPriceUsd } from "./token-prices.ts";
 // leg reusing an OLDER persisted value) so none of the three get conflated.
 export type Provenance = "live" | "stub" | "stale" | "seed" | "backfilled";
 
+// A STORAGE-ONLY provenance, deliberately absent from the union above.
+//
+// Migration 0036 moves every row the pre-de5cf06 backfill wrote to this value:
+// the row was written by a price path that asked GeckoTerminal for a POOL
+// without naming the TOKEN it meant, so the number may describe a different
+// asset entirely (a WETH holding priced at ~60,000 USD — cbBTC's price). See
+// docs/code-review/20260823-review-data-integrity-aum-correctness.md §1.
+//
+// It is not a `Provenance` because it must never reach a response. Every read
+// of wallet_balance_samples / wallet_sleeve_samples excludes it, so a
+// quarantined day is ABSENT rather than served with a caveat — the review's
+// first property is "the value that was true at that moment, or nothing, never
+// a plausible substitute", and a badge on a wrong number is a substitute. The
+// compiler enforces the absence: assigning this string to a Provenance does not
+// typecheck.
+//
+// Re-admission is T5.1's job, and it restores rows to 'backfilled' one at a
+// time against a freshly fetched token-addressed price. Nothing else ever
+// writes this value.
+export const QUARANTINED_PROVENANCE = "backfilled-quarantined";
+
 // Price-reader seam for allocation live-data reliability (scout #175).
 // Canonical behavior: docs/architecture.md §10.1 and
 // docs/architecture.md §3. The production reader below still performs
@@ -115,6 +136,15 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
      WHERE symbol = ${symbol}
        AND price_usd IS NOT NULL
        AND sampled_at <= now()
+       -- A quarantined row's price may describe a DIFFERENT ASSET (migration
+       -- 0036), and this reader's output is a price served as the live one with
+       -- provenance 'stale'. The MAX_PERSISTED_PRICE_AGE_MS bound below already
+       -- excludes them in practice — the backfill only fills CLOSED days and
+       -- stamps sampled_at at that day's 23:59, so every backfilled row is more
+       -- than five minutes old. That is a happy accident of two unrelated
+       -- policies, which is exactly the "correct today by luck" shape §3 of the
+       -- review is about; the predicate makes it correct by construction.
+       AND provenance <> ${QUARANTINED_PROVENANCE}
      ORDER BY sampled_at DESC
      LIMIT 1
   `;

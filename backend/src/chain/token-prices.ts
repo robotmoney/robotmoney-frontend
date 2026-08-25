@@ -205,35 +205,87 @@ async function fetchGeckoTokenPricesUsdUncached(addresses: string[], timeoutMs: 
 // --- Historical daily price (issue #640) -------------------------------------
 // GeckoTerminal daily OHLCV for a pool — the SAME vendor and host as the spot
 // read above, a different endpoint:
-//   GET /networks/base/pools/{pool}/ohlcv/day?before_timestamp={ts}&limit=1&currency=usd
-//   → { data: { attributes: { ohlcv_list: [[bucketTs, open, high, low, close, volume]] } } }
+//   GET /networks/base/pools/{pool}/ohlcv/day
+//         ?before_timestamp={ts}&limit=1&token={token}&currency=usd
+//   → { data: { attributes: { ohlcv_list: [[bucketTs, open, high, low, close, volume]] } },
+//       meta: { base: { symbol, address }, quote: { symbol, address } } }
 //
-// Returns the CLOSE of the UTC day containing `atUnixSeconds`. Why the close and
-// not the open/mid: it is the day's settled price, the same convention the rest
-// of this repo's daily series use, and a daily candle cannot be finer than the
-// day anyway — the buyback swaps this prices sit inside a single candle's range
-// (the 2026-03-23 bucket 1774224000 spans 2026.51–2188.00 and the seeded rows
-// imply ~2179.3). It is a bounded, disclosed approximation of a historical fact,
-// which is categorically different from stamping TODAY's spot on a months-old
-// swap — see indexBuybacks.
+// Returns the CLOSE, in USD, of the UTC day containing `atUnixSeconds` — for the
+// token NAMED in the request. Why the close and not the open/mid: it is the
+// day's settled price, the same convention the rest of this repo's daily series
+// use, and a daily candle cannot be finer than the day anyway — the buyback
+// swaps this prices sit inside a single candle's range (the 2026-03-23 bucket
+// 1774224000 spans 2026.51–2188.00 and the seeded rows imply ~2179.3). It is a
+// bounded, disclosed approximation of a historical fact, which is categorically
+// different from stamping TODAY's spot on a months-old swap — see indexBuybacks.
+//
+// A pool holds two tokens and its candles denominate exactly ONE of them, so the
+// request has to say which. Absent `token=`, the endpoint answers for the pool's
+// BASE side; this read returned WETH prices anyway because its only caller pins
+// a pool whose base side happens to be WETH. That was a property of one
+// hardcoded address, not of this code — re-point that constant at a pool holding
+// WETH as the QUOTE side and every buyback quietly becomes denominated in the
+// other token, at the other token's magnitude. Naming the token makes the
+// request say what it wants, and `meta.base` — which follows `token=` — is read
+// back so the ANSWER is checked too, in-band, with no second request and no
+// second vendor. The orientation is now asserted rather than assumed.
 //
 // `before_timestamp` is normalized to the END of that UTC day so every swap in a
 // day produces ONE url: the url is both the withFetchCache key and the in-memory
 // memo key, so a catch-up scan that finds twenty swaps across three days costs
-// three upstream candles, not twenty. Throws when no candle covers the day, so
-// the caller records an honest NULL rather than substituting another day's price.
+// three upstream candles, not twenty. `token` sits inside that url too, which
+// leaves the scan's dedupe exactly as it was (one token throughout a scan) while
+// making it impossible for two tokens read from the same pool to share a key and
+// hand one the other's series. Throws when no candle covers the day, and when
+// the candles are not this token's, so the caller records an honest NULL rather
+// than substituting a price it cannot stand behind.
 const DAY_SECONDS = 86_400;
 const geckoDailyCloseCache = new Map<string, Promise<number>>();
 
+// Refuse a response that priced the other half of the pair.
+//
+// The failure this closes is silent by nature: the other side's candle is
+// finite, plausible, and (cbBTC against WETH) ~25× too large, indistinguishable
+// downstream from a real price and stored as a durable USD figure. A body with
+// no `meta.base` at all is refused for the same reason — an unattributed candle
+// cannot be shown to be this token's, and "shown" is the whole point of asking.
+// The message carries both addresses because the caller's warning line is the
+// only thing an operator sees, and a systematic mis-orientation must not read
+// like a pool with a thin day.
+function assertCandleToken(
+  pool: string,
+  token: string,
+  body: { meta?: { base?: { address?: unknown; symbol?: unknown } } },
+): void {
+  const base = body?.meta?.base;
+  const address = typeof base?.address === "string" ? base.address.toLowerCase() : null;
+  if (address === null) {
+    throw new Error(
+      `geckoterminal: pool ${pool} answered for token ${token} with no meta.base.address — which side of the pair this candle prices cannot be established, so it is not used as a price`,
+    );
+  }
+  if (address !== token) {
+    const symbol = typeof base?.symbol === "string" ? base.symbol : "?";
+    throw new Error(
+      `geckoterminal: pool ${pool} was asked for token ${token} and priced ${symbol} ${address} instead — this candle is the OTHER side of the pair, not this token's price`,
+    );
+  }
+}
+
 export async function fetchGeckoDailyCloseUsd(
   pool: string,
+  tokenAddress: string,
   atUnixSeconds: number,
   timeoutMs = 8000,
 ): Promise<number> {
+  // Required, not defaulted: a caller that cannot name the token it wants
+  // cannot ask this endpoint an unambiguous question, and the compiler is the
+  // cheapest place to say so.
+  const token = tokenAddress.toLowerCase();
   const dayStart = Math.floor(atUnixSeconds / DAY_SECONDS) * DAY_SECONDS;
   const url =
     `${GECKOTERMINAL_BASE}/networks/base/pools/${pool.toLowerCase()}/ohlcv/day` +
-    `?before_timestamp=${dayStart + DAY_SECONDS - 1}&limit=1&currency=usd`;
+    `?before_timestamp=${dayStart + DAY_SECONDS - 1}&limit=1&token=${token}&currency=usd`;
   const memo = geckoDailyCloseCache.get(url);
   if (memo) return memo;
 
@@ -246,7 +298,14 @@ export async function fetchGeckoDailyCloseUsd(
       const body = await (withFetchCache("json", url, async () => {
         const j = (await geckoFetchJson(url, timeoutMs, `ohlcv for ${pool}@${dayStart}`)) as {
           data?: { attributes?: { ohlcv_list?: unknown[][] } };
+          meta?: { base?: { address?: unknown; symbol?: unknown } };
         };
+        // Checked HERE, inside the fetcher, so what the cache holds stays the
+        // bare candle list it has always been — no envelope shape change, and
+        // therefore no stale-shape hazard on disk. A body only reaches the cache
+        // after it has proved which token it prices, so a later hit is serving
+        // an already-attested candle rather than skipping the check.
+        assertCandleToken(pool, token, j);
         return j?.data?.attributes?.ohlcv_list ?? [];
       }) as Promise<unknown>);
       const candle = Array.isArray(body) ? (body[0] as unknown[] | undefined) : undefined;

@@ -59,7 +59,7 @@
 
 import parser from "cron-parser";
 import type { Db } from "../../lib/postflight-utils.ts";
-import { BACKFILL_JOB_KIND, BACKFILL_PROVENANCE, NEW_SCHEDULE_CRON, NEW_SCHEDULE_KIND } from "./release.ts";
+import { BACKFILL_WINDOW_JOB_KIND, BACKFILL_PROVENANCE, NEW_SCHEDULE_CRON, NEW_SCHEDULE_KIND } from "./release.ts";
 
 export interface ObservationResult {
   status: "PASS" | "WARN" | "FAIL";
@@ -180,30 +180,25 @@ export async function observeRepairDispatch(
     nextRunAt = seeded;
   }
 
-  // ── Baselines, taken BEFORE the backdate ──────────────────────────────────
-  const [base] = (await db`
-    SELECT coalesce(max(id), 0)::bigint AS max_run_id FROM job_runs
-  `) as unknown as { max_run_id: string }[];
-  const baselineRunId = base?.max_run_id ?? "0";
-
-  // ── Force exactly one past slot ───────────────────────────────────────────
-  const cadence = cadenceMs();
-  const [moved] = (await db`
-    UPDATE job_schedules
-       SET next_run_at = next_run_at - make_interval(secs => ${cadence / 1000})
-     WHERE id = ${s.id}
-    RETURNING next_run_at
-  `) as unknown as { next_run_at: string }[];
-  log(
-    `  backdated ${NEW_SCHEDULE_KIND} by one cadence (${Math.round(cadence / 1000)}s): ${nextRunAt} → ${moved?.next_run_at} — one past slot, so the next tick enqueues exactly one run`,
-  );
-
   // ── Watch it dispatch ─────────────────────────────────────────────────────
+  //
+  // NO BACKDATE ANY MORE. This used to rewind next_run_at by one cadence so the
+  // scheduler would fire without waiting for the wall-clock :25. That trick had
+  // two problems: it is not idempotent within a cadence (the scheduler dedupes
+  // the re-enqueue on `dedupe_key`, so a second observation in the same hour
+  // reports "the work never ran"), and it observed a run production would never
+  // make. db/seed.ts now enqueues a cold-start ops.repair_gaps job on every
+  // boot, so the FIRST run happens within a worker tick of readiness — the same
+  // first run production gets. We simply watch for it.
+  //
+  // Any finished run at all is this boot's: the twin is restored from a
+  // production dump taken before this release existed, so `ops.repair_gaps` has
+  // never run in that data. That is also why no baseline id is needed.
   const run = await poll(DISPATCH_BUDGET_MS, (m) => log(`  ${m}`), `waiting for a ${NEW_SCHEDULE_KIND} run`, async () => {
     const [r] = (await db`
       SELECT id, status, error, output
         FROM job_runs
-       WHERE kind = ${NEW_SCHEDULE_KIND} AND id > ${baselineRunId} AND finished_at IS NOT NULL
+       WHERE kind = ${NEW_SCHEDULE_KIND} AND finished_at IS NOT NULL
        ORDER BY id DESC LIMIT 1
     `) as unknown as { id: string; status: string; error: string | null; output: Record<string, unknown> | null }[];
     return r ?? null;
@@ -213,11 +208,12 @@ export async function observeRepairDispatch(
     return {
       status: "FAIL",
       detail: [
-        `no ${NEW_SCHEDULE_KIND} run finished within ${Math.round(DISPATCH_BUDGET_MS / 1000)}s of the backdate`,
+        `no ${NEW_SCHEDULE_KIND} run finished within ${Math.round(DISPATCH_BUDGET_MS / 1000)}s of readiness`,
         `(${DISPATCH_BUDGET_MS / TICK_MS} scheduler ticks — the dispatcher does DB-only work, so this is generous)`,
+        `the schedule itself is seeded and next due at ${nextRunAt}`,
       ],
       remediation:
-        "The schedule is seeded but the work never ran. Check the analytics lane is up and claiming: worker/lanes.ts routes ops.* to it.",
+        "The cold-start job (db/seed.ts) should enqueue ops.repair_gaps on boot. Check the analytics lane is up and claiming: worker/lanes.ts routes ops.* to it.",
     };
   }
 
@@ -248,7 +244,7 @@ export async function observeRepairDispatch(
   const detail = [
     `${NEW_SCHEDULE_KIND} run ${run.id} succeeded and dispatched`,
     `  totalMissingDays: ${String(out.totalMissingDays ?? "?")}   perRunCap: ${String(out.perRunCap ?? "?")}`,
-    `  enqueued: ${String(dispatched.enqueued ?? 0)} day(s)${days.length ? ` — ${days.join(", ")}` : ""}`,
+    `  enqueued: ${String(dispatched.enqueued ?? 0)} ${BACKFILL_WINDOW_JOB_KIND} job(s) covering ${days.length} day(s)${days.length ? ` — ${days.join(", ")}` : ""}`,
     `  deferred: ${JSON.stringify(out.deferredDays ?? [])}`,
     `  retrying: ${JSON.stringify(out.retryingDays ?? [])}   exhausted: ${JSON.stringify(out.exhaustedDays ?? [])}`,
     `  dirtySeries: ${JSON.stringify(out.dirtySeries ?? [])}`,
@@ -272,27 +268,100 @@ export async function observeRepairDispatch(
     };
   }
 
+  // A run that dispatched NOTHING proves nothing, and used to return PASS.
+  // `dispatched.classC` is [] whenever a window job is already in flight or every
+  // planned day is claimed (worker/handlers/repair.ts), so the loop below ran
+  // zero times and the function reported "every reported day is covered" —
+  // green-lighting a boot in which the release's headline feature had not been
+  // observed doing anything. The genuinely-nothing-to-do case is the WARN above,
+  // which requires totalMissingDays === 0; reaching here with no days and a
+  // non-zero backlog is a refusal to dispatch, not an absence of work.
+  if (days.length === 0) {
+    return {
+      status: "FAIL",
+      detail: [
+        ...detail,
+        "",
+        `the dispatcher enqueued NOTHING while reporting ${String(out.totalMissingDays ?? "?")} missing day(s)`,
+      ],
+      remediation:
+        "A window job already in flight, or every planned day claimed. Re-run the observation against a clean twin — a run that dispatches nothing cannot evidence dispatch.",
+    };
+  }
+
   // The run must not claim days it did not enqueue — the assertion
   // tests/repair-gaps-dispatch.test.ts makes in-process, made here against a
   // real boot and a real scheduler.
+  //
+  // Since #739 the dispatcher enqueues ONE `wallet.backfill_window` carrying
+  // `{dates: [...]}`, so a day is "enqueued" when some window job's dates array
+  // CONTAINS it — jsonb `@>`, not `payload->>'asof' =`. Graded against the
+  // window kind alone, deliberately: a dispatcher that reverted to one job per
+  // day would leave every reported day uncovered here and fail, which is the
+  // point. `wallet.backfill_day` is still a registered handler for draining
+  // pre-upgrade rows, and draining is not dispatching.
   const missing: string[] = [];
   for (const day of days) {
     const [j] = (await db`
-      SELECT id FROM jobs WHERE kind = ${BACKFILL_JOB_KIND} AND payload->>'asof' = ${day} LIMIT 1
+      SELECT id FROM jobs
+       WHERE kind = ${BACKFILL_WINDOW_JOB_KIND}
+         AND payload->'dates' @> ${JSON.stringify([day])}::jsonb
+       LIMIT 1
     `) as unknown as { id: string }[];
     if (!j) missing.push(day);
   }
   if (missing.length > 0) {
     return {
       status: "FAIL",
-      detail: [...detail, "", `but ${missing.length} reported day(s) have NO ${BACKFILL_JOB_KIND} job: ${missing.join(", ")}`],
+      detail: [
+        ...detail,
+        "",
+        `but ${missing.length} reported day(s) are in NO ${BACKFILL_WINDOW_JOB_KIND} job: ${missing.join(", ")}`,
+      ],
+      remediation: "The dispatcher's report and the queue disagree. Do not carry this into a cutover.",
+    };
+  }
+
+  // Coverage alone does not grade what #739 actually changed. A dispatcher that
+  // emitted N single-date window jobs — the un-batching regression the change
+  // exists to prevent — satisfies every per-day check above while costing the
+  // provider exactly what batching was meant to save. So assert the shape too:
+  // ONE window row, carrying EXACTLY the days the run reported.
+  const windows = (await db`
+    SELECT id, payload->'dates' AS dates
+      FROM jobs
+     WHERE kind = ${BACKFILL_WINDOW_JOB_KIND}
+       AND payload->'dates' ?| ${days}
+  `) as unknown as { id: string; dates: string[] | null }[];
+
+  if (windows.length !== 1) {
+    return {
+      status: "FAIL",
+      detail: [
+        ...detail,
+        "",
+        `expected exactly ONE ${BACKFILL_WINDOW_JOB_KIND} job covering these days, found ${windows.length}`,
+      ],
+      remediation:
+        "One job per day is the pre-#739 shape. Batching is the release's RPC-cost claim; N single-date windows silently give it up.",
+    };
+  }
+  const carried = [...(windows[0]!.dates ?? [])].sort();
+  const reported = [...days].sort();
+  if (JSON.stringify(carried) !== JSON.stringify(reported)) {
+    return {
+      status: "FAIL",
+      detail: [...detail, "", `the window job carries ${JSON.stringify(carried)} but the run reported ${JSON.stringify(reported)}`],
       remediation: "The dispatcher's report and the queue disagree. Do not carry this into a cutover.",
     };
   }
 
   return {
     status: "PASS",
-    detail: [...detail, `  every reported day has a matching ${BACKFILL_JOB_KIND} job`],
+    detail: [
+      ...detail,
+      `  one ${BACKFILL_WINDOW_JOB_KIND} job (id ${windows[0]!.id}) carries exactly the ${days.length} reported day(s)`,
+    ],
   };
 }
 
@@ -333,34 +402,59 @@ export async function observeRepairCompletion(
   const finished = new Map<string, { status: string; last_error: string | null; state: string; detail: string | null }>();
 
   while (Date.now() - startedAt < budgetMs) {
+    // One window job carries many days, so expand `payload->'dates'` and grade
+    // per DAY — the unit §7 asks about is a repaired day, not a queue row. Every
+    // day of one window shares that window's terminal status, which is exactly
+    // the "ONE JOB IS NOT ONE OUTCOME" caveat `repair.ts` documents: a window
+    // that repaired nine days and lost one surfaces as a failed run, so a
+    // per-day `written` count is the only honest read of what landed.
     const rows = (await db`
-      SELECT j.payload->>'asof' AS asof, j.status, j.last_error,
+      SELECT d.asof AS asof, j.status, j.last_error,
              coalesce(w.status, 'absent') AS state, w.detail,
              (SELECT count(*)::int FROM wallet_balance_samples b
-               WHERE b.sample_date = (j.payload->>'asof')::date
-                 AND b.provenance = ${BACKFILL_PROVENANCE}) AS written
+               WHERE b.sample_date = d.asof::date
+                 AND b.provenance = ${BACKFILL_PROVENANCE}) AS balance_written,
+             (SELECT count(*)::int FROM wallet_sleeve_samples v
+               WHERE v.sample_date = d.asof::date
+                 AND v.provenance = ${BACKFILL_PROVENANCE}) AS sleeve_written
         FROM jobs j
-        LEFT JOIN wallet_backfill_state w ON w.sample_date = (j.payload->>'asof')::date
-       WHERE j.kind = ${BACKFILL_JOB_KIND} AND j.status IN ('succeeded', 'failed', 'dead')
-       ORDER BY j.id
+        CROSS JOIN LATERAL jsonb_array_elements_text(j.payload->'dates') AS d(asof)
+        LEFT JOIN wallet_backfill_state w ON w.sample_date = d.asof::date
+       WHERE j.kind = ${BACKFILL_WINDOW_JOB_KIND}
+       ORDER BY j.id, d.asof
     `) as unknown as {
       asof: string;
       status: string;
       last_error: string | null;
       state: string;
       detail: string | null;
-      written: number;
+      balance_written: number;
+      sleeve_written: number;
     }[];
 
-    for (const r of rows) finished.set(r.asof, { status: r.status, last_error: r.last_error, state: r.state, detail: r.detail });
+    // A day is FINISHED when its own checkpoint is terminal, not when the window
+    // job is. One window carries many days and settles once — gating on the job
+    // hid the per-day writes of a window still retrying, which is exactly the
+    // "ONE JOB IS NOT ONE OUTCOME" caveat this function documents above and then
+    // used to contradict.
+    for (const r of rows) {
+      if (r.state === "absent" || r.state === "failed") continue;
+      finished.set(r.asof, { status: r.status, last_error: r.last_error, state: r.state, detail: r.detail });
+    }
 
-    const wrote = rows.find((r) => r.status === "succeeded" && r.written > 0);
+    // BOTH backfilled series count. wallet_sleeve_samples is a Class C series the
+    // executor fills independently (ops/wallet-backfill.ts), so a day whose
+    // balance table was already populated and whose SLEEVE table was genuinely
+    // repaired is a real repair — and counting only balances scored it zero, then
+    // filed it under "false gaps, declining was CORRECT". Observed on the
+    // 2026-08-22 twin: nine of ten days were exactly that.
+    const wrote = rows.find((r) => r.balance_written + r.sleeve_written > 0);
     if (wrote) {
       return {
         status: "PASS",
         detail: [
-          `${BACKFILL_JOB_KIND} for ${wrote.asof} succeeded and WROTE`,
-          `  ${wrote.written} wallet_balance_samples row(s) carry provenance='${BACKFILL_PROVENANCE}'`,
+          `${BACKFILL_WINDOW_JOB_KIND} day ${wrote.asof} WROTE`,
+          `  ${wrote.balance_written} wallet_balance_samples + ${wrote.sleeve_written} wallet_sleeve_samples row(s) carry provenance='${BACKFILL_PROVENANCE}'`,
           `  wallet_backfill_state: status=${wrote.state} detail=${wrote.detail ?? "none"}`,
           `  after ${Math.round((Date.now() - startedAt) / 1000)}s, ${finished.size} day(s) finished`,
         ],
@@ -369,7 +463,7 @@ export async function observeRepairCompletion(
 
     const waited = Math.round((Date.now() - startedAt) / 1000);
     log(
-      `  waiting for a ${BACKFILL_JOB_KIND} that WRITES — ${finished.size} finished so far, ${waited}s elapsed, ${Math.round(budgetMs / 1000) - waited}s left`,
+      `  waiting for a ${BACKFILL_WINDOW_JOB_KIND} day that WRITES — ${finished.size} day(s) finished so far, ${waited}s elapsed, ${Math.round(budgetMs / 1000) - waited}s left`,
     );
     await Bun.sleep(POLL_MS);
   }
@@ -377,7 +471,7 @@ export async function observeRepairCompletion(
   if (finished.size === 0) {
     return {
       status: "WARN",
-      detail: [`no ${BACKFILL_JOB_KIND} reached a terminal status within ${Math.round(budgetMs / 60000)}m`],
+      detail: [`no ${BACKFILL_WINDOW_JOB_KIND} reached a terminal status within ${Math.round(budgetMs / 60000)}m`],
       remediation:
         "Paced chain reads are slow by design (0.25 calls/s, shared with the per-minute samplers). Not blocking: the DISPATCH half is what this release changed and check 2 grades it hard.",
     };
@@ -386,12 +480,20 @@ export async function observeRepairCompletion(
   // Days finished, none wrote. Say WHICH reason, per day — the two are very
   // different and only one of them is interesting.
   const populated = [...finished].filter(([, v]) => (v.detail ?? "").includes("already populated"));
-  const failed = [...finished].filter(([, v]) => v.status !== "succeeded");
+  // Classify from the DAY's checkpoint, not the window job's status: a window
+  // whose every day failed still settles 'succeeded' once its retries are spent
+  // (worker/loop.ts), so this used to count zero failures and print nothing.
+  const failed = [...finished].filter(([, v]) => v.state === "exhausted" || v.state === "failed");
   return {
     status: "WARN",
     detail: [
       `${finished.size} day(s) finished within ${Math.round(budgetMs / 60000)}m, none of them WROTE a provenance='${BACKFILL_PROVENANCE}' row:`,
-      ...[...finished].map(([asof, v]) => `  ${asof} job=${v.status} state=${v.state} detail=${v.detail ?? "none"}`),
+      // last_error is rendered because the remediation below tells the operator
+      // to read it. It was selected, stored, and never printed.
+      ...[...finished].map(
+        ([asof, v]) =>
+          `  ${asof} job=${v.status} state=${v.state} detail=${v.detail ?? "none"}${v.last_error ? ` last_error=${v.last_error}` : ""}`,
+      ),
       "",
       populated.length > 0
         ? `${populated.length} were 'already populated' — the executor never overwrites a non-empty day, so those were false gaps and declining was CORRECT.`

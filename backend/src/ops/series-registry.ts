@@ -13,19 +13,15 @@
 // prior art this borrows the shape from, per the issue's "prior art to build
 // on" note.
 //
-// SCOPE OF "gap": detection here is DATE/HOUR-LEVEL (is there at least one row
-// for this slot at all), not full (date × every possible key) cross-product
-// detection. A day where the sampler wrote 7 of 8 tracked assets is not a
-// date-level gap — that is ordinary sparse byAsset behavior various DTOs
-// already document (e.g. contract/src/dashboards.d.ts WalletHistoryPoint).
-// What actually produced the AUM incident this issue was filed from — and
-// what every operational failure mode in the Motivation section produces — is
-// a slot with ZERO rows at all (a frozen scheduler, a missed producer tick),
-// which date-level detection catches directly. Per-key cross-product
-// detection would additionally require a point-in-time "which keys were
-// EXPECTED to exist on that day" oracle (e.g. which wallets/adapters were
-// configured back then) that does not exist in this codebase and would be
-// speculative to construct.
+// SCOPE OF "gap": detection defaults to DATE/HOUR presence for series without
+// a natural-key manifest. A series may additionally declare `expectedKeys`;
+// then a slot counts as covered only when every expected date × key exists.
+// Wallet balances and sleeves use that stronger contract because a partial AUM
+// point is a plausible but wrong total. P0 resolves the manifest from active
+// configuration; a versioned point-in-time configuration identity remains P1.
+import { QUARANTINED_PROVENANCE } from "../chain/wallet-valuation.ts";
+import { resolveWalletSnapshotManifest } from "./wallet-snapshot-manifest.ts";
+
 export type RemediationClass = "A" | "B" | "C";
 export type Cadence = "daily" | "hourly";
 
@@ -45,6 +41,23 @@ export interface SeriesDef {
   /** BACKFILLABLE_FROM_SOURCE (re-fetch) | BACKFILLABLE_BY_RECOMPUTE (derive
    *  from the stored floor) | NOT_BACKFILLABLE (forward-only, disclose the gap). */
   remediationClass: RemediationClass;
+  /** Rows that EXIST but do not count as coverage.
+   *
+   *  A series' gap report answers "which slots does this series actually
+   *  cover", and a row nothing is allowed to serve covers nothing. Without
+   *  this the detector reads presence off the table while the API reads it off
+   *  a filtered view of the same table, and the operator surface starts
+   *  disagreeing with what a chart draws — the exact drift §6.5.4 unified the
+   *  work list to prevent.
+   *
+   *  Today this carries one case: the samples migration 0036 quarantined. */
+  uncounted?: { column: string; values: readonly string[] };
+  /** Natural keys that must ALL exist before a slot counts as covered. Extra
+   * keys are tolerated; a missing expected key makes the whole slot a gap. */
+  expectedKeys?: {
+    columns: readonly string[];
+    resolve: () => readonly (readonly string[])[];
+  };
 }
 
 // ── Wallet / sleeve / vault samplers (Class C — the LIVE samplers read chain
@@ -74,6 +87,11 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     cadence: "daily",
     seriesStart: "2026-03-18", // chain/wallet-history-seed.ts's earliest seeded day
     remediationClass: "C",
+    uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
+    expectedKeys: {
+      columns: ["symbol"],
+      resolve: () => resolveWalletSnapshotManifest().balanceAssets.map((asset) => [asset.symbol]),
+    },
   },
   {
     key: "wallet_sleeve_samples",
@@ -83,6 +101,11 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     cadence: "daily",
     seriesStart: "2026-03-18",
     remediationClass: "C",
+    uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
+    expectedKeys: {
+      columns: ["wallet_address", "symbol"],
+      resolve: () => resolveWalletSnapshotManifest().sleeveKeys.map((key) => [key.walletAddress, key.asset.symbol]),
+    },
   },
   {
     key: "vault_share_price_history",

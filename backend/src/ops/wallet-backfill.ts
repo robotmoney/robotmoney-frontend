@@ -28,8 +28,9 @@
 //
 //   * It never writes a day it could not read honestly. A failed day stays in
 //     the gap report — an unrepaired day must keep LOOKING unrepaired.
-//   * It never overwrites a day that already has rows. Repair fills holes; it
-//     does not restate history (§7.1's append-only reading).
+//   * It never silently overwrites a day that already has rows. A complete day
+//     is untouched; an incomplete day is copied to immutable evidence before a
+//     complete replacement snapshot is committed (§7.1's append-only intent).
 //   * It never treats `success:true` + `returnData:"0x"` as a zero. That is a
 //     contract with no code at that block, and decoding it to 0 does not read a
 //     balance — it invents one.
@@ -41,7 +42,6 @@
 import type postgresTypes from "postgres";
 import {
   config,
-  isPlaceholderAddress,
   resolveBaseRpcSource,
   resolvePropWallets,
   resolveTrackedAssets,
@@ -59,13 +59,19 @@ import { loadHistoricalPrices, type HistoricalPriceTable } from "../chain/histor
 import {
   readChainAmountsAtBlocks,
   readChainAmountsBatched,
-  SLEEVE_DEFS,
+  QUARANTINED_PROVENANCE,
   type ChainAmount,
   type ChainReadOptions,
   type KeyedAssetRead,
 } from "../chain/wallet-valuation.ts";
 import { detectGaps } from "./gap-detector.ts";
 import { getSeriesDef } from "./series-registry.ts";
+import {
+  lockWalletSnapshotDate,
+  resolveWalletSnapshotManifest,
+  sleeveManifestKey,
+  type WalletSnapshotManifest,
+} from "./wallet-snapshot-manifest.ts";
 
 type Db = postgresTypes.Sql<{}>;
 
@@ -219,25 +225,22 @@ export function missingDaysFromReport(
 /**
  * Choose this run's days from the missing set and what earlier runs recorded.
  *
- * 'filled' and 'skipped' are settled. 'exhausted' is settled too — still a
- * disclosed gap, just no longer worth RPC. 'failed' is RETRIED: the usual cause
- * is a transient RPC or price failure, and a day that is quietly abandoned after
- * one bad minute is not self-healing.
+ * A status cannot overrule the data. Every input here is already a detected
+ * gap, so 'filled' or 'skipped' means the checkpoint and active rows disagree
+ * and the day must be retried. Only 'exhausted' suppresses automatic spending;
+ * it remains disclosed as a gap.
  */
 export function selectBackfillDays(
   orderedMissing: string[],
   byStatus: Map<string, string>,
   cap: number,
 ): WalletBackfillPlan {
-  const candidates = orderedMissing.filter((d) => {
-    const status = byStatus.get(d);
-    return status === undefined || status === "failed";
-  });
+  const candidates = orderedMissing.filter((d) => byStatus.get(d) !== "exhausted");
   return {
     days: candidates.slice(0, cap),
     totalMissing: candidates.length,
     deferred: Math.max(0, candidates.length - cap),
-    retrying: candidates.filter((d) => byStatus.get(d) === "failed").length,
+    retrying: candidates.filter((d) => byStatus.has(d)).length,
     exhausted: orderedMissing.filter((d) => byStatus.get(d) === "exhausted"),
   };
 }
@@ -247,21 +250,55 @@ export function selectBackfillDays(
 export function dayBlockCache(db: Db): DayBlockCache {
   return {
     async get(date) {
-      const rows = await db<{ block_number: string; block_timestamp: Date }[]>`
-        SELECT block_number, block_timestamp FROM chain_day_blocks WHERE sample_date = ${date}
+      const rows = await db<{
+        block_number: string;
+        block_hash: string | null;
+        block_timestamp: Date;
+        boundary_next_block_number: string | null;
+        boundary_next_block_hash: string | null;
+        boundary_next_block_timestamp: Date | null;
+      }[]>`
+        SELECT block_number, block_hash, block_timestamp,
+               boundary_next_block_number, boundary_next_block_hash,
+               boundary_next_block_timestamp
+          FROM chain_day_blocks
+         WHERE sample_date = ${date}
       `;
       const row = rows[0];
       if (!row) return null;
       return {
         blockNumber: Number(row.block_number),
+        blockHash: row.block_hash,
         blockTimestampSec: Math.floor(new Date(row.block_timestamp).getTime() / 1000),
+        boundaryNextBlockNumber:
+          row.boundary_next_block_number === null ? null : Number(row.boundary_next_block_number),
+        boundaryNextBlockHash: row.boundary_next_block_hash,
+        boundaryNextBlockTimestampSec: row.boundary_next_block_timestamp === null
+          ? null
+          : Math.floor(new Date(row.boundary_next_block_timestamp).getTime() / 1000),
       };
     },
-    async set(date, blockNumber, blockTimestampSec) {
+    async set(date, proof) {
       await db`
-        INSERT INTO chain_day_blocks (sample_date, block_number, block_timestamp)
-        VALUES (${date}, ${blockNumber}, ${new Date(blockTimestampSec * 1000)})
-        ON CONFLICT (sample_date) DO NOTHING
+        INSERT INTO chain_day_blocks
+          (sample_date, block_number, block_hash, block_timestamp,
+           boundary_next_block_number, boundary_next_block_hash,
+           boundary_next_block_timestamp)
+        VALUES
+          (${date}, ${proof.blockNumber}, ${proof.blockHash},
+           ${new Date(proof.blockTimestampSec * 1000)},
+           ${proof.boundaryNextBlockNumber}, ${proof.boundaryNextBlockHash},
+           ${proof.boundaryNextBlockTimestampSec === null
+             ? null
+             : new Date(proof.boundaryNextBlockTimestampSec * 1000)})
+        ON CONFLICT (sample_date) DO UPDATE SET
+          block_number = EXCLUDED.block_number,
+          block_hash = EXCLUDED.block_hash,
+          block_timestamp = EXCLUDED.block_timestamp,
+          boundary_next_block_number = EXCLUDED.boundary_next_block_number,
+          boundary_next_block_hash = EXCLUDED.boundary_next_block_hash,
+          boundary_next_block_timestamp = EXCLUDED.boundary_next_block_timestamp,
+          resolved_at = now()
       `;
     },
   };
@@ -341,23 +378,71 @@ export function buildDayReads(
   assets: TrackedAsset[],
   wallets: string[],
 ): { reads: KeyedAssetRead[]; sleeveTargets: { key: string; walletAddress: string; asset: TrackedAsset }[] } {
-  const chainAssets = assets.filter((a) => a.valuationKind !== "config");
-  const bySymbol = new Map(assets.map((a) => [a.symbol, a]));
-  const reads: KeyedAssetRead[] = chainAssets.map((a) => ({ key: AGG(a.symbol), asset: a, wallets }));
+  const manifest = resolveWalletSnapshotManifest(assets, wallets);
+  const reads: KeyedAssetRead[] = manifest.balanceAssets.map((asset) => ({ key: AGG(asset.symbol), asset, wallets }));
 
   const sleeveTargets: { key: string; walletAddress: string; asset: TrackedAsset }[] = [];
-  for (let i = 0; i < SLEEVE_DEFS.length && i < wallets.length; i++) {
-    const address = wallets[i]!;
-    const walletAssets = SLEEVE_DEFS[i]!.symbols
-      .map((s) => bySymbol.get(s))
-      .filter((a): a is TrackedAsset => a != null && (a.valuationKind === "native" || !isPlaceholderAddress(a.address)));
-    for (const a of walletAssets) {
-      const key = SLV(i, a.symbol);
-      reads.push({ key, asset: a, wallets: [address] });
-      sleeveTargets.push({ key, walletAddress: address.toLowerCase(), asset: a });
-    }
+  for (const target of manifest.sleeveKeys) {
+    const key = SLV(target.walletIndex, target.asset.symbol);
+    reads.push({ key, asset: target.asset, wallets: [target.walletAddress] });
+    sleeveTargets.push({ key, walletAddress: target.walletAddress, asset: target.asset });
   }
   return { reads, sleeveTargets };
+}
+
+interface WalletSnapshotCompleteness {
+  complete: boolean;
+  missingBalanceSymbols: string[];
+  missingSleeveKeys: string[];
+  balanceRows: number;
+  sleeveRows: number;
+}
+
+/** Inspect active rows against the same manifest the writer uses.
+ *
+ * counts-quarantined: DELIBERATE — quarantined rows are selected so they can be
+ * counted as occupied evidence awaiting archival, but they are excluded from
+ * the present-key sets and therefore can never make a snapshot complete. */
+async function inspectWalletSnapshot(
+  db: Db,
+  date: string,
+  manifest: WalletSnapshotManifest,
+  lockRows = false,
+): Promise<WalletSnapshotCompleteness> {
+  const balances = await db<{ symbol: string; provenance: string }[]>`
+    SELECT symbol, provenance
+      FROM wallet_balance_samples
+     WHERE sample_date = ${date}
+     ${lockRows ? db`FOR UPDATE` : db``}
+  `;
+  // counts-quarantined: DELIBERATE — same evidence/coverage distinction above.
+  const sleeves = await db<{ wallet_address: string; symbol: string; provenance: string }[]>`
+    SELECT wallet_address, symbol, provenance
+      FROM wallet_sleeve_samples
+     WHERE sample_date = ${date}
+     ${lockRows ? db`FOR UPDATE` : db``}
+  `;
+  const balanceSymbols = new Set(
+    balances.filter((row) => row.provenance !== QUARANTINED_PROVENANCE).map((row) => row.symbol),
+  );
+  const sleeveKeys = new Set(
+    sleeves
+      .filter((row) => row.provenance !== QUARANTINED_PROVENANCE)
+      .map((row) => sleeveManifestKey(row.wallet_address, row.symbol)),
+  );
+  const missingBalanceSymbols = manifest.balanceAssets
+    .map((asset) => asset.symbol)
+    .filter((symbol) => !balanceSymbols.has(symbol));
+  const missingSleeveKeys = manifest.sleeveKeys
+    .map((key) => sleeveManifestKey(key.walletAddress, key.asset.symbol))
+    .filter((key) => !sleeveKeys.has(key));
+  return {
+    complete: missingBalanceSymbols.length === 0 && missingSleeveKeys.length === 0,
+    missingBalanceSymbols,
+    missingSleeveKeys,
+    balanceRows: balances.length,
+    sleeveRows: sleeves.length,
+  };
 }
 
 /** Record a day's refusal. Lifted out of the executor unchanged so the window
@@ -379,6 +464,39 @@ async function failDay(
   return exhausted
     ? { ok: true, sampleDate: date, status, blockNumber, balanceRows: 0, sleeveRows: 0, detail }
     : { ok: false, sampleDate: date, status, blockNumber, balanceRows: 0, sleeveRows: 0, detail, error: detail };
+}
+
+/** Record a refusal that was NOT this day's fault — a shared leg failed and took
+ *  the whole window with it.
+ *
+ *  WHY THIS IS NOT `failDay`. The per-day ceiling
+ *  (WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY, default 3) exists to stop spending
+ *  provider budget on a day that cannot be read. Once #739 made the WINDOW the
+ *  unit, three shared legs — the historical price load, the whole-window chain
+ *  read, and the resolver's head-block probe — began failing every day at once.
+ *  Charging each of them to every day turned a single transient into a
+ *  ten-day-wide charge, and the queue's own degraded retry
+ *  (worker/loop.ts, backoff 2^attempts seconds) lands three of those inside
+ *  about ten seconds. `exhausted` is terminal — selectBackfillDays() re-plans
+ *  only undefined and 'failed' — so roughly ten seconds of provider trouble
+ *  retired ten days permanently, recoverable only by hand-written SQL.
+ *
+ *  So: a day is charged an attempt only for a refusal attributable to that day
+ *  (its block unreadable, its legs unreadable, its own assets unpriced). A
+ *  shared-leg failure is written down as 'failed' with the detail, `attempts`
+ *  left alone (recordState treats null as "leave the counter"), and the day
+ *  stays re-plannable on the next sweep. The gap is still a gap and still
+ *  reported by GET /api/admin/gaps either way — what differs is whether the
+ *  system will ever try again. */
+async function deferDay(
+  db: Db,
+  date: string,
+  detail: string,
+  blockNumber: number | null = null,
+): Promise<BackfillDayResult> {
+  await recordState(db, date, "failed", blockNumber, 0, 0, detail, null);
+  console.warn(`wallet-backfill: ${date} deferred (shared leg, attempt not charged) — ${detail}`);
+  return { ok: false, sampleDate: date, status: "failed", blockNumber, balanceRows: 0, sleeveRows: 0, detail, error: detail };
 }
 
 async function skipDay(
@@ -444,9 +562,49 @@ export async function backfillWalletWindow(
     );
   if (closed.length === 0) return settle();
 
-  assertRpcBudgetConfigured();
   const wallets = resolvePropWallets();
   const assets = resolveTrackedAssets();
+  const manifest = resolveWalletSnapshotManifest(assets, wallets);
+
+  // Checkpoint state is only replayable when the active rows still prove it.
+  // A 'filled' checkpoint beside an incomplete snapshot is stale operational
+  // metadata, not permission to suppress repair. Complete live/seed days need
+  // no historical RPC at all; exhausted incomplete days remain disclosed but
+  // keep their existing budget stop.
+  const priorState = await db<{ sample_date: string; status: BackfillDayStatus; block_number: number | null; balance_rows: number; sleeve_rows: number; detail: string | null }[]>`
+    SELECT sample_date::text AS sample_date, status, block_number, balance_rows, sleeve_rows, detail
+      FROM wallet_backfill_state
+     WHERE sample_date = ANY(${closed}::date[])
+       AND status IN ('filled', 'skipped', 'exhausted')
+  `;
+  const settled = new Map(priorState.map((r) => [r.sample_date, r]));
+  const pending: string[] = [];
+  for (const date of closed) {
+    const s = settled.get(date);
+    const completeness = await inspectWalletSnapshot(db, date, manifest);
+    if (!completeness.complete && s?.status !== "exhausted") {
+      pending.push(date);
+      continue;
+    }
+    if (!s) {
+      out.set(date, await skipDay(db, date, "already populated with a complete expected balance+sleeve snapshot"));
+      continue;
+    }
+    out.set(date, {
+      ok: true,
+      sampleDate: date,
+      status: s.status,
+      blockNumber: s.block_number,
+      balanceRows: s.balance_rows,
+      sleeveRows: s.sleeve_rows,
+      detail: s.detail ?? `already ${s.status} by an earlier pass over this window`,
+    });
+  }
+  if (pending.length === 0) return settle();
+  closed.length = 0;
+  closed.push(...pending);
+
+  assertRpcBudgetConfigured();
 
   // 1. dates → blocks. Permanent cache, so a re-run over the same window is free.
   const resolvedByDate = await resolveWindowBlocks(db, closed, deps, now);
@@ -454,7 +612,10 @@ export async function backfillWalletWindow(
   for (const date of closed) {
     const r = resolvedByDate.get(date);
     if (!r || !r.ok) {
-      out.set(date, await failDay(db, date, `block resolution failed: ${r ? r.error : "no outcome"}`));
+      // A day whose OWN search failed earns an attempt; one that only lost the
+      // window's shared head read does not (DayBlockOutcome.shared).
+      const detail = `block resolution failed: ${r ? r.error : "no outcome"}`;
+      out.set(date, r && !r.ok && r.shared ? await deferDay(db, date, detail) : await failDay(db, date, detail));
       continue;
     }
     readable.push({ date, resolved: r.resolved });
@@ -473,8 +634,10 @@ export async function backfillWalletWindow(
       span[span.length - 1]!,
     );
   } catch (err) {
+    // Shared leg: one load covers every day in the window, so its failure is not
+    // any one day's fault and charges none of them an attempt. See deferDay().
     for (const { date, resolved } of readable) {
-      out.set(date, await failDay(db, date, `historical price load failed: ${String(err)}`, resolved.blockNumber));
+      out.set(date, await deferDay(db, date, `historical price load failed: ${String(err)}`, resolved.blockNumber));
     }
     return settle();
   }
@@ -497,9 +660,10 @@ export async function backfillWalletWindow(
       );
     } catch (err) {
       // A whole-window read failure fails every day it covered — the same
-      // refusal each day would have made alone, made once.
+      // refusal each day would have made alone, made once. Made once, it is
+      // also charged once: no day's attempt counter moves. See deferDay().
       for (const { date, resolved } of readable) {
-        out.set(date, await failDay(db, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber));
+        out.set(date, await deferDay(db, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber));
       }
       return settle();
     }
@@ -535,15 +699,23 @@ export async function backfillWalletDay(
  * does — still drives the real executor. Production supplies both and takes the
  * lockstep path.
  */
+/** A day's block, or why it has none. `shared` is forwarded from
+ *  DayBlockOutcome (chain/block-resolver.ts): true means the window's single
+ *  head read failed, so this day never got its own chance and must not be
+ *  charged an attempt for it. */
+type WindowBlockOutcome =
+  | { ok: true; resolved: ResolvedDayBlock }
+  | { ok: false; error: string; shared?: boolean };
+
 async function resolveWindowBlocks(
   db: Db,
   dates: readonly string[],
   deps: WalletBackfillDeps,
   now: Date,
-): Promise<Map<string, { ok: true; resolved: ResolvedDayBlock } | { ok: false; error: string }>> {
+): Promise<Map<string, WindowBlockOutcome>> {
   const opts = { rpcUrl: config.baseRpcUrl };
   const cache = dayBlockCache(db);
-  const out = new Map<string, { ok: true; resolved: ResolvedDayBlock } | { ok: false; error: string }>();
+  const out = new Map<string, WindowBlockOutcome>();
 
   if (deps.resolveBlocks) {
     const outcomes = await deps.resolveBlocks(dates, opts, cache, now);
@@ -552,7 +724,9 @@ async function resolveWindowBlocks(
       const date = dates[i]!;
       if (!o) out.set(date, { ok: false, error: "no outcome" });
       else if (o.ok) out.set(date, { ok: true, resolved: o });
-      else out.set(date, { ok: false, error: o.error });
+      // `shared` must survive this remap: it is what tells the caller the
+      // failure was the window's one head read, not this day's own search.
+      else out.set(date, { ok: false, error: o.error, shared: o.shared === true });
     }
     return out;
   }
@@ -615,6 +789,18 @@ async function repairResolvedDay(
       resolved.blockNumber,
     );
   }
+  const invalidAmounts = reads
+    .filter((r) => {
+      const amount = amounts.get(r.key);
+      return amount?.ok === true && (!Number.isFinite(amount.amount) || amount.amount < 0);
+    })
+    .map((r) => r.key);
+  if (invalidAmounts.length > 0) {
+    return fail(
+      `${invalidAmounts.length} leg(s) returned a negative or non-finite amount at block ${resolved.blockNumber} (${invalidAmounts.slice(0, 6).join(", ")})`,
+      resolved.blockNumber,
+    );
+  }
 
   // 3. Price at that DATE (not at spot), from the window's shared table. A
   //    missing price fails the day rather than valuing a real holding at zero,
@@ -623,88 +809,193 @@ async function repairResolvedDay(
   const unpriced = reads
     .map((r) => r.asset.symbol)
     .filter((s, i, arr) => arr.indexOf(s) === i)
-    .filter((s) => !Number.isFinite(priceFor(s) ?? NaN));
+    .filter((s) => {
+      const price = priceFor(s);
+      return !Number.isFinite(price ?? NaN) || price! <= 0;
+    });
   if (unpriced.length > 0) {
+    // WHOSE FAULT the missing price is decides whether this day is CHARGED for
+    // it, and the price table says which: a symbol with no entry at all was
+    // refused at its POOL (loadHistoricalPrices leaves a refused symbol out
+    // entirely and gives every symbol it resolved a map, empty or not), while a
+    // symbol whose map is simply blank on this date has a thin day of its own.
+    //
+    // A pool-level refusal is a SHARED LEG by construction — the pool is the
+    // same for every day in the window, and the module's own contract is that
+    // retrying returns the same refusal — so charging it to each day is exactly
+    // the accounting deferDay() exists to prevent: three window retries inside
+    // ten seconds would flip every day to the terminal 'exhausted', and the days
+    // would stay unrepaired after the pin or the vendor was fixed, recoverable
+    // only by hand-written SQL. The gap is disclosed either way; what differs is
+    // whether the system will ever try again.
+    const refused = unpriced.filter((s) => !prices.has(s));
+    if (refused.length > 0) {
+      return deferDay(
+        db,
+        date,
+        `no price source for ${refused.join(", ")} — the pool refused to price it for the whole window`,
+        resolved.blockNumber,
+      );
+    }
     return fail(`no ${date} price for ${unpriced.join(", ")}`, resolved.blockNumber);
   }
+  const invalidValues = reads
+    .filter((r) => {
+      const amount = amounts.get(r.key);
+      const price = priceFor(r.asset.symbol);
+      return amount?.ok === true && price !== undefined && !Number.isFinite(amount.amount * price);
+    })
+    .map((r) => r.key);
+  if (invalidValues.length > 0) {
+    return fail(
+      `${invalidValues.length} leg(s) produced a non-finite USD value at block ${resolved.blockNumber} (${invalidValues.slice(0, 6).join(", ")})`,
+      resolved.blockNumber,
+    );
+  }
 
-  // 4. Write the day in ONE transaction, and only into a day that is still
-  //    empty. Repair fills holes; it never restates a day the sampler wrote.
+  // 4. Commit one COMPLETE active snapshot. If the day is partial or contains
+  //    quarantine, its original rows move to immutable evidence before both
+  //    active tables are rebuilt. Archive, replacement, completeness proof and
+  //    checkpoint are one transaction; any failure restores the original state.
   const sampledAt = new Date(resolved.blockTimestampSec * 1000);
+  const manifest = resolveWalletSnapshotManifest(assets, wallets);
   let balanceRows = 0;
   let sleeveRows = 0;
-  const skippedTables: string[] = [];
+  let status: BackfillDayStatus = "filled";
+  let detail: string | null = null;
 
-  await db.begin(async (tx) => {
-    // Reset the counters inside the closure: if the transaction body ever runs
-    // twice, the recorded row counts must describe THIS attempt, not the sum.
-    balanceRows = 0;
-    sleeveRows = 0;
-    skippedTables.length = 0;
-    const [existingBalance] = await tx<{ n: number }[]>`
-      SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${date}
-    `;
-    const [existingSleeve] = await tx<{ n: number }[]>`
-      SELECT count(*)::int AS n FROM wallet_sleeve_samples WHERE sample_date = ${date}
-    `;
+  try {
+    await db.begin(async (tx) => {
+      const txDb = tx as unknown as Db;
+      balanceRows = 0;
+      sleeveRows = 0;
+      status = "filled";
+      detail = null;
 
-    if ((existingBalance?.n ?? 0) === 0) {
-      for (const r of reads) {
-        if (!r.key.startsWith("agg:")) continue;
-        const amount = amounts.get(r.key)!;
-        if (!amount.ok) continue; // unreachable: checked above
-        const priceUsd = priceFor(r.asset.symbol)!;
-        await tx`
-          INSERT INTO wallet_balance_samples
-            (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
-          VALUES
-            (${date}, ${r.asset.symbol}, ${amount.amount}, ${priceUsd}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
-          ON CONFLICT (sample_date, symbol) DO NOTHING
+      // Serialize every repair/live writer for this date. Row locks alone do
+      // not cover a missing natural key that a concurrent sampler could insert
+      // between evidence copy and DELETE.
+      await lockWalletSnapshotDate(tx, date);
+      // Lock every active row whose value may be archived. Without this, a
+      // concurrent UPDATE could commit after the evidence SELECT but before the
+      // DELETE, removing a version that was never preserved.
+      const before = await inspectWalletSnapshot(txDb, date, manifest, true);
+
+      if (before.complete) {
+        const [existingState] = await tx<{ status: BackfillDayStatus }[]>`
+          SELECT status FROM wallet_backfill_state WHERE sample_date = ${date}
         `;
-        balanceRows += 1;
-      }
-    } else {
-      skippedTables.push("wallet_balance_samples");
-    }
-
-    if ((existingSleeve?.n ?? 0) === 0) {
-      for (const t of sleeveTargets) {
-        const amount = amounts.get(t.key)!;
-        if (!amount.ok) continue; // unreachable: checked above
-        const priceUsd = priceFor(t.asset.symbol)!;
+        status = existingState?.status === "filled" ? "filled" : "skipped";
+        balanceRows = status === "filled" ? manifest.balanceAssets.length : 0;
+        sleeveRows = status === "filled" ? manifest.sleeveKeys.length : 0;
+        detail = "already populated with a complete expected balance+sleeve snapshot";
+      } else {
+        // counts-quarantined: DELIBERATE. Every original row is copied before
+        // active deletion; quarantined rows receive the more specific reason.
         await tx`
-          INSERT INTO wallet_sleeve_samples
-            (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
-          VALUES
-            (${date}, ${t.walletAddress}, ${t.asset.symbol}, ${amount.amount}, ${priceUsd}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
-          ON CONFLICT (sample_date, wallet_address, symbol) DO NOTHING
+          INSERT INTO wallet_balance_sample_evidence
+            (original_id, sample_date, symbol, amount, price_usd, value_usd,
+             provenance, sampled_at, strategy_nav_idle_only, evidence_reason,
+             replacement_block_number, snapshot_run_id, amount_observed_at,
+             price_observed_at, recorded_at)
+          SELECT id, sample_date, symbol, amount, price_usd, value_usd,
+                 provenance, sampled_at, strategy_nav_idle_only,
+                 CASE WHEN provenance = ${QUARANTINED_PROVENANCE}
+                      THEN 'quarantined-replacement'
+                      ELSE 'incomplete-snapshot-replacement' END,
+                 ${resolved.blockNumber}, snapshot_run_id, amount_observed_at,
+                 price_observed_at, recorded_at
+            FROM wallet_balance_samples
+           WHERE sample_date = ${date}
         `;
-        sleeveRows += 1;
+        // counts-quarantined: DELIBERATE — same evidence-preserving transition.
+        await tx`
+          INSERT INTO wallet_sleeve_sample_evidence
+            (original_id, sample_date, wallet_address, symbol, amount, price_usd,
+             value_usd, provenance, sampled_at, evidence_reason,
+             replacement_block_number, snapshot_run_id, amount_observed_at,
+             price_observed_at, recorded_at)
+          SELECT id, sample_date, wallet_address, symbol, amount, price_usd,
+                 value_usd, provenance, sampled_at,
+                 CASE WHEN provenance = ${QUARANTINED_PROVENANCE}
+                      THEN 'quarantined-replacement'
+                      ELSE 'incomplete-snapshot-replacement' END,
+                 ${resolved.blockNumber}, snapshot_run_id, amount_observed_at,
+                 price_observed_at, recorded_at
+            FROM wallet_sleeve_samples
+           WHERE sample_date = ${date}
+        `;
+        await tx`DELETE FROM wallet_balance_samples WHERE sample_date = ${date}`;
+        await tx`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${date}`;
+
+        for (const r of reads) {
+          if (!r.key.startsWith("agg:")) continue;
+          const amount = amounts.get(r.key)!;
+          if (!amount.ok) continue; // unreachable: checked above
+          const priceUsd = priceFor(r.asset.symbol)!;
+          await tx`
+            INSERT INTO wallet_balance_samples
+              (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+            VALUES
+              (${date}, ${r.asset.symbol}, ${amount.amount}, ${priceUsd}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
+          `;
+          balanceRows += 1;
+        }
+
+        for (const t of sleeveTargets) {
+          const amount = amounts.get(t.key)!;
+          if (!amount.ok) continue; // unreachable: checked above
+          const priceUsd = priceFor(t.asset.symbol)!;
+          await tx`
+            INSERT INTO wallet_sleeve_samples
+              (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+            VALUES
+              (${date}, ${t.walletAddress}, ${t.asset.symbol}, ${amount.amount}, ${priceUsd}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
+          `;
+          sleeveRows += 1;
+        }
+
+        const after = await inspectWalletSnapshot(txDb, date, manifest);
+        if (
+          !after.complete ||
+          after.balanceRows !== manifest.balanceAssets.length ||
+          after.sleeveRows !== manifest.sleeveKeys.length
+        ) {
+          throw new Error(
+            `snapshot completeness validation failed: missing balances [${after.missingBalanceSymbols.join(", ")}], ` +
+              `missing sleeves [${after.missingSleeveKeys.join(", ")}], rows ${after.balanceRows}/${after.sleeveRows}`,
+          );
+        }
+        detail = before.balanceRows + before.sleeveRows > 0
+          ? `replaced incomplete snapshot; archived ${before.balanceRows} balance and ${before.sleeveRows} sleeve row(s)`
+          : null;
       }
-    } else {
-      skippedTables.push("wallet_sleeve_samples");
-    }
 
-    // The checkpoint commits WITH the day's rows, so it can never claim a day
-    // that was not actually written.
-    const status: BackfillDayStatus = balanceRows + sleeveRows > 0 ? "filled" : "skipped";
-    const detail = skippedTables.length > 0 ? `already populated: ${skippedTables.join(", ")}` : null;
-    await tx`
-      INSERT INTO wallet_backfill_state
-        (sample_date, status, block_number, balance_rows, sleeve_rows, detail, attempted_at)
-      VALUES
-        (${date}, ${status}, ${resolved.blockNumber}, ${balanceRows}, ${sleeveRows}, ${detail}, now())
-      ON CONFLICT (sample_date) DO UPDATE SET
-        status       = EXCLUDED.status,
-        block_number = EXCLUDED.block_number,
-        balance_rows = EXCLUDED.balance_rows,
-        sleeve_rows  = EXCLUDED.sleeve_rows,
-        detail       = EXCLUDED.detail,
-        attempted_at = EXCLUDED.attempted_at
-    `;
-  });
+      // `filled` is written only after both active key sets passed validation,
+      // and it commits with the evidence and replacement rows.
+      await tx`
+        INSERT INTO wallet_backfill_state
+          (sample_date, status, block_number, balance_rows, sleeve_rows, detail, attempted_at)
+        VALUES
+          (${date}, ${status}, ${resolved.blockNumber}, ${balanceRows}, ${sleeveRows}, ${detail}, now())
+        ON CONFLICT (sample_date) DO UPDATE SET
+          status       = EXCLUDED.status,
+          block_number = EXCLUDED.block_number,
+          balance_rows = EXCLUDED.balance_rows,
+          sleeve_rows  = EXCLUDED.sleeve_rows,
+          detail       = EXCLUDED.detail,
+          attempted_at = EXCLUDED.attempted_at
+      `;
+    });
+  } catch (err) {
+    return deferDay(
+      db,
+      date,
+      `transactional snapshot write failed: ${err instanceof Error ? err.message : String(err)}`,
+      resolved.blockNumber,
+    );
+  }
 
-  const status: BackfillDayStatus = balanceRows + sleeveRows > 0 ? "filled" : "skipped";
   return {
     ok: true,
     sampleDate: date,
@@ -712,7 +1003,7 @@ async function repairResolvedDay(
     blockNumber: resolved.blockNumber,
     balanceRows,
     sleeveRows,
-    detail: skippedTables.length > 0 ? `already populated: ${skippedTables.join(", ")}` : null,
+    detail,
   };
 }
 

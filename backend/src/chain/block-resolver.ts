@@ -49,19 +49,43 @@ export interface ResolvedDayBlock {
   date: string;
   /** The last block of that day. */
   blockNumber: number;
+  /** Canonical hash of the closing block. */
+  blockHash: string;
   /** That block's own timestamp, unix seconds. */
   blockTimestampSec: number;
+  /** The immediately following block, which proves the UTC boundary. */
+  boundaryNextBlockNumber: number;
+  boundaryNextBlockHash: string;
+  boundaryNextBlockTimestampSec: number;
   /** How many RPC probes this resolution cost (0 on a cache hit). */
   rpcCalls: number;
   /** Whether the answer came from the permanent cache. */
   cached: boolean;
 }
 
+export interface CachedDayBlockProof {
+  blockNumber: number;
+  blockHash: string | null;
+  blockTimestampSec: number;
+  boundaryNextBlockNumber: number | null;
+  boundaryNextBlockHash: string | null;
+  boundaryNextBlockTimestampSec: number | null;
+}
+
+type CompleteDayBlockProof = {
+  blockNumber: number;
+  blockHash: string;
+  blockTimestampSec: number;
+  boundaryNextBlockNumber: number;
+  boundaryNextBlockHash: string;
+  boundaryNextBlockTimestampSec: number;
+};
+
 /** Permanent store for resolved days. `get` returning null simply means "not
  *  resolved yet"; there is no expiry, by construction (see the header). */
 export interface DayBlockCache {
-  get(date: string): Promise<{ blockNumber: number; blockTimestampSec: number } | null>;
-  set(date: string, blockNumber: number, blockTimestampSec: number): Promise<void>;
+  get(date: string): Promise<CachedDayBlockProof | null>;
+  set(date: string, proof: CachedDayBlockProof): Promise<void>;
 }
 
 /** A cache that stores nothing — the default, so a caller that does not want
@@ -87,7 +111,14 @@ export function dayEndExclusiveSec(date: string): number {
 
 interface BlockStamp {
   number: number;
+  hash: string;
   timestampSec: number;
+}
+
+function blockNumberMismatch(requested: number, stamp: BlockStamp): string | null {
+  return stamp.number === requested
+    ? null
+    : `block-resolver: requested block ${requested} but RPC returned block ${stamp.number}`;
 }
 
 export interface ResolveDayBlockDeps {
@@ -99,9 +130,52 @@ export const defaultResolveDayBlockDeps: ResolveDayBlockDeps = {
   latestBlockNumber: (opts) => ethBlockNumber(opts),
   async blockAt(blockNumber, opts) {
     const b = await ethGetBlockByNumber(blockNumber, opts);
-    return { number: parseInt(b.number, 16), timestampSec: parseInt(b.timestamp, 16) };
+    if (typeof b.hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(b.hash)) {
+      throw new Error(`block-resolver: block ${blockNumber} has no canonical hash`);
+    }
+    return { number: parseInt(b.number, 16), hash: b.hash, timestampSec: parseInt(b.timestamp, 16) };
   },
 };
+
+function completeCachedProof(date: string, hit: CachedDayBlockProof): ResolvedDayBlock | null {
+  const endSec = dayEndExclusiveSec(date);
+  if (
+    !Number.isSafeInteger(hit.blockNumber)
+    || !Number.isSafeInteger(hit.boundaryNextBlockNumber)
+    || hit.boundaryNextBlockNumber !== hit.blockNumber + 1
+    || typeof hit.blockHash !== "string"
+    || !/^0x[0-9a-fA-F]{64}$/.test(hit.blockHash)
+    || typeof hit.boundaryNextBlockHash !== "string"
+    || !/^0x[0-9a-fA-F]{64}$/.test(hit.boundaryNextBlockHash)
+    || !Number.isFinite(hit.blockTimestampSec)
+    || typeof hit.boundaryNextBlockTimestampSec !== "number"
+    || !Number.isFinite(hit.boundaryNextBlockTimestampSec)
+    || hit.blockTimestampSec >= endSec
+    || hit.boundaryNextBlockTimestampSec < endSec
+  ) return null;
+  return {
+    date,
+    blockNumber: hit.blockNumber,
+    blockHash: hit.blockHash,
+    blockTimestampSec: hit.blockTimestampSec,
+    boundaryNextBlockNumber: hit.boundaryNextBlockNumber,
+    boundaryNextBlockHash: hit.boundaryNextBlockHash,
+    boundaryNextBlockTimestampSec: hit.boundaryNextBlockTimestampSec,
+    rpcCalls: 0,
+    cached: true,
+  };
+}
+
+function cacheProof(closing: BlockStamp, boundaryNext: BlockStamp): CompleteDayBlockProof {
+  return {
+    blockNumber: closing.number,
+    blockHash: closing.hash,
+    blockTimestampSec: closing.timestampSec,
+    boundaryNextBlockNumber: boundaryNext.number,
+    boundaryNextBlockHash: boundaryNext.hash,
+    boundaryNextBlockTimestampSec: boundaryNext.timestampSec,
+  };
+}
 
 /**
  * Resolve UTC day `date` to the last block of that day.
@@ -125,7 +199,8 @@ export async function resolveDayBlock(
 
   const hit = await cache.get(date);
   if (hit) {
-    return { date, blockNumber: hit.blockNumber, blockTimestampSec: hit.blockTimestampSec, rpcCalls: 0, cached: true };
+    const complete = completeCachedProof(date, hit);
+    if (complete) return complete;
   }
 
   // The target instant is the LAST moment of the day; we want the greatest
@@ -140,7 +215,10 @@ export async function resolveDayBlock(
       );
     }
     calls += 1;
-    return deps.blockAt(n, opts);
+    const stamp = await deps.blockAt(n, opts);
+    const mismatch = blockNumberMismatch(n, stamp);
+    if (mismatch) throw new Error(mismatch);
+    return stamp;
   };
 
   const latestNumber = await deps.latestBlockNumber(opts);
@@ -182,15 +260,21 @@ export async function resolveDayBlock(
     if (current.number === 0) throw new Error(`block-resolver: ${date} precedes the chain's genesis block`);
     current = await probe(current.number - 1);
   }
+  let boundaryNext: BlockStamp | null = null;
   for (;;) {
     if (current.number >= latestNumber) break;
     const ahead = await probe(current.number + 1);
-    if (ahead.timestampSec > targetSec) break;
+    if (ahead.timestampSec > targetSec) {
+      boundaryNext = ahead;
+      break;
+    }
     current = ahead;
   }
 
-  await cache.set(date, current.number, current.timestampSec);
-  return { date, blockNumber: current.number, blockTimestampSec: current.timestampSec, rpcCalls: calls, cached: false };
+  if (!boundaryNext) throw new Error(`block-resolver: ${date} could not prove the first block after UTC midnight`);
+  const proof = cacheProof(current, boundaryNext);
+  await cache.set(date, proof);
+  return { date, ...proof, rpcCalls: calls, cached: false };
 }
 
 // ── Resolving MANY days in lockstep (the batched path) ───────────────────────
@@ -235,21 +319,37 @@ export const defaultResolveDayBlocksDeps: ResolveDayBlocksDeps = {
   latestBlockNumber: (opts) => ethBlockNumber(opts),
   async blocksAt(blockNumbers, opts) {
     const res = await ethGetBlockByNumberBatch(blockNumbers, opts);
-    return res.map((r) =>
-      r.ok
-        ? { ok: true as const, stamp: { number: parseInt(r.result.number, 16), timestampSec: parseInt(r.result.timestamp, 16) } }
-        : { ok: false as const, error: r.error.message },
-    );
+    return res.map((r) => {
+      if (!r.ok) return { ok: false as const, error: r.error.message };
+      if (typeof r.result.hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(r.result.hash)) {
+        return { ok: false as const, error: "block-resolver: block has no canonical hash" };
+      }
+      return {
+        ok: true as const,
+        stamp: {
+          number: parseInt(r.result.number, 16),
+          hash: r.result.hash,
+          timestampSec: parseInt(r.result.timestamp, 16),
+        },
+      };
+    });
   },
 };
 
-export type DayBlockOutcome = ({ ok: true } & ResolvedDayBlock) | { ok: false; date: string; error: string };
+/** `shared: true` marks a failure that belongs to the WINDOW, not to this day —
+ *  the one head read every day in the window depends on. The caller uses it to
+ *  decide whether the day has earned an attempt against its own retry ceiling;
+ *  see deferDay() in ops/wallet-backfill.ts. */
+export type DayBlockOutcome =
+  | ({ ok: true } & ResolvedDayBlock)
+  | { ok: false; date: string; error: string; shared?: boolean };
 
 /** Per-day search state while the lockstep loop runs. */
 interface DaySearch {
   date: string;
   targetSec: number;
   current: BlockStamp;
+  boundaryNext: BlockStamp | null;
   secPerBlock: number;
   calls: number;
   /** 'estimate' → proportional convergence; 'back'/'forward' → exact bracketing. */
@@ -294,15 +394,11 @@ export async function resolveDayBlocks(
     }
     const hit = await cache.get(date);
     if (hit) {
-      out.set(date, {
-        ok: true,
-        date,
-        blockNumber: hit.blockNumber,
-        blockTimestampSec: hit.blockTimestampSec,
-        rpcCalls: 0,
-        cached: true,
-      });
-      continue;
+      const complete = completeCachedProof(date, hit);
+      if (complete) {
+        out.set(date, { ok: true, ...complete });
+        continue;
+      }
     }
     unresolved.push(date);
   }
@@ -313,9 +409,14 @@ export async function resolveDayBlocks(
     const latestNumber = await deps.latestBlockNumber(opts);
     const headProbe = (await deps.blocksAt([latestNumber], opts))[0];
 
-    if (!headProbe || !headProbe.ok) {
-      const error = `block-resolver: could not read head block ${latestNumber}${headProbe && !headProbe.ok ? ` — ${headProbe.error}` : ""}`;
-      for (const date of unresolved) out.set(date, { ok: false, date, error });
+    const headMismatch = headProbe?.ok ? blockNumberMismatch(latestNumber, headProbe.stamp) : null;
+    if (!headProbe || !headProbe.ok || headMismatch) {
+      const error = headMismatch
+        ?? `block-resolver: could not read head block ${latestNumber}${headProbe && !headProbe.ok ? ` — ${headProbe.error}` : ""}`;
+      // ONE head read backs every unresolved day, so its failure is the window's
+      // and not any day's. Flagged so the caller does not charge ten retry
+      // ceilings for one transient.
+      for (const date of unresolved) out.set(date, { ok: false, date, error, shared: true });
     } else {
       const head = headProbe.stamp;
       const searches: DaySearch[] = [];
@@ -335,6 +436,7 @@ export async function resolveDayBlocks(
           date,
           targetSec,
           current: head,
+          boundaryNext: null,
           secPerBlock: BASE_BLOCK_TIME_SEC,
           calls: 2,
           phase: "estimate",
@@ -369,6 +471,11 @@ export async function resolveDayBlocks(
             s.failed = `block-resolver: ${s.date} probe of block ${targets[i]} failed${p && !p.ok ? ` — ${p.error}` : ""}`;
             continue;
           }
+          const mismatch = blockNumberMismatch(targets[i]!, p.stamp);
+          if (mismatch) {
+            s.failed = `${mismatch} while resolving ${s.date}`;
+            continue;
+          }
           advance(s, p.stamp, latestNumber);
         }
       }
@@ -378,12 +485,20 @@ export async function resolveDayBlocks(
           out.set(s.date, { ok: false, date: s.date, error: s.failed });
           continue;
         }
-        await cache.set(s.date, s.current.number, s.current.timestampSec);
+        if (!s.boundaryNext) {
+          out.set(s.date, {
+            ok: false,
+            date: s.date,
+            error: `block-resolver: ${s.date} could not prove the first block after UTC midnight`,
+          });
+          continue;
+        }
+        const proof = cacheProof(s.current, s.boundaryNext);
+        await cache.set(s.date, proof);
         out.set(s.date, {
           ok: true,
           date: s.date,
-          blockNumber: s.current.number,
-          blockTimestampSec: s.current.timestampSec,
+          ...proof,
           rpcCalls: s.calls,
           cached: false,
         });
@@ -455,6 +570,7 @@ function advance(s: DaySearch, stamp: BlockStamp, latestNumber: number): void {
     // inside the day; the first block past the boundary ENDS the walk and is
     // discarded, which is what leaves `current` as the day's LAST block.
     if (stamp.timestampSec > s.targetSec) {
+      s.boundaryNext = stamp;
       s.phase = "done";
       return;
     }

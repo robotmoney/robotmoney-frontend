@@ -56,13 +56,36 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
   const expectedHead = truncateToSlot(now, def.cadence);
   const stepMs = STEP_MS[def.cadence];
 
-  const rows = await db<{ slot: Date }[]>`
+  // A row the serving layer is not allowed to serve does not cover its slot
+  // (SeriesDef.uncounted). Filtering here keeps quarantine aligned between the
+  // operator report and repair planner. `expectedKeys` additionally makes the
+  // P0 planner reject partial snapshots; publishing completeness is P1 scope.
+  const uncounted = def.uncounted;
+  const expectedKeys = def.expectedKeys;
+  const rows = await db<(Record<string, unknown> & { slot: Date })[]>`
     SELECT DISTINCT ${db(def.dateColumn)}::timestamptz AS slot
+           ${expectedKeys ? db`, ${db([...expectedKeys.columns])}` : db``}
       FROM ${db(def.table)}
      WHERE ${db(def.dateColumn)}::timestamptz >= ${seriesStart}
+       ${uncounted ? db`AND ${db(uncounted.column)} <> ALL (${db.array([...uncounted.values])})` : db``}
      ORDER BY slot
   `;
-  const observed = new Set(rows.map((r) => new Date(r.slot).getTime()));
+  const keyToken = (parts: readonly string[]): string => JSON.stringify(parts);
+  const expected = expectedKeys ? new Set(expectedKeys.resolve().map((parts) => keyToken(parts))) : null;
+  const observedBySlot = new Map<number, Set<string>>();
+  for (const row of rows) {
+    const slot = new Date(row.slot).getTime();
+    let keys = observedBySlot.get(slot);
+    if (!keys) {
+      keys = new Set();
+      observedBySlot.set(slot, keys);
+    }
+    if (expectedKeys) keys.add(keyToken(expectedKeys.columns.map((column) => String(row[column]))));
+  }
+  const observed = new Set<number>();
+  for (const [slot, keys] of observedBySlot) {
+    if (!expected || [...expected].every((key) => keys.has(key))) observed.add(slot);
+  }
   const headMs = observed.size > 0 ? Math.max(...observed) : null;
 
   const interiorGaps: string[] = [];

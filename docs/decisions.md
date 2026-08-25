@@ -568,6 +568,14 @@ data (see
 
 ## D20 — No-bake preview hosting via Cloudflare Git integration (revises D19)
 
+> **Never enabled, and its script is gone (2026-08-22).** Issue #670 confirmed
+> the Cloudflare Pages Git integration this decision assigns hosting to was
+> never turned on — no dashboard project, no build command, no `.pages.dev`
+> URL. `scripts/cloudflare-statics.sh` was deleted in #608 (`7acf6e7`, #720).
+> The decision below is kept as the record of what was decided; read its
+> mechanism as history, not as a pipeline you can run. `bun run preview`
+> (`scripts/preview-server.ts`) is the surviving half and still works.
+
 **Decision.** Remove the repo-side preview deploy machinery D19 introduced: the
 TypeScript composer (`scripts/compose-preview-deploy.ts`), the
 `preview-pages.yml` GitHub Actions workflow, and their tests. Hosting is owned
@@ -1278,6 +1286,20 @@ shape rather than prompt discipline.
 
 ## D26 — Nightly is a mirror of the merge-to-main set (issue #373; supersedes #280/PR #367)
 
+> **Amended 2026-08-23 — the push set now includes `releases-*`.** Those ten
+> workflows trigger on `push: branches: [main, "releases-*"]`, because a release
+> branch is where release code lives during a rollout: cut from `main`, then
+> accumulating rc commits `main` does not see until the backport. Every one of
+> those commits used to reach a stage host unverified, which is how v0.3.0 came
+> to run its suites by hand and find a broken release gate four rcs deep. The
+> isomorphism D26 asserts is unaffected — it is over the SET OF WORKFLOWS, not
+> the branch list, and `scripts/tests/unit/nightly-mirrors-merge-set.test.ts`
+> keys on `branches` *including* `main` for exactly that reason. One deliberate
+> asymmetry: `e2e.yml`'s paid real-inference eval stays scoped to
+> `refs/heads/main` and the nightly, since an rc push happens several times an
+> hour during a rollout and the eval's coverage argument is one admission per
+> night.
+
 **Decision.** Nightly CI is **isomorphic** to the merge-to-main set. Every
 workflow that runs on `push: branches: [main]` also runs on a nightly
 `schedule:`, and **nothing else runs on a nightly schedule**. The relationship is
@@ -1573,13 +1595,16 @@ with `og:url` pointing at `https://robotmoney.net/` rather than the page — a
 **regression against the site being replaced**, which server-renders per-page
 titles today.
 
-**One metadata table, two hosts.** `scripts/prerender.ts` is unchanged in
+**One metadata table, one host.** `scripts/prerender.ts` is unchanged in
 substance: it still derives every field from `seo.js`'s `metaFor` table, and it
-now takes the assembly directory from `PRERENDER_DIR` (default `_site`). So
-`scripts/cloudflare-statics.sh` (preview) and `scripts/static-assembly.sh`
-(cutover host) run the *same* prerenderer over their own assemblies. There is no
-second, hand-maintained metadata table, and the prerendered path cannot disagree
-with the JS path.
+takes the assembly directory from `PRERENDER_DIR` (default `_site`). It was
+written to be shared by two assemblies — `scripts/cloudflare-statics.sh`
+(preview) and `scripts/static-assembly.sh` (cutover host) — so that neither
+could disagree with the JS path. **`cloudflare-statics.sh` was removed in #608**
+(the Pages pipeline it served was never turned on — D20's note, issue #670), so
+`static-assembly.sh` is now the only caller. The parameterisation stays: there is
+still no second, hand-maintained metadata table, and the prerendered path still
+cannot disagree with the JS path.
 
 **Relationship.** Refines D13's static tier for the cutover: D13 assigns
 marketing on the apex/`www` to a **DO Spaces CDN**, which remains the intended

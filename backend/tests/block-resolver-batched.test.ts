@@ -20,6 +20,7 @@ import {
   resolveDayBlock,
   resolveDayBlocks,
   type BlockProbe,
+  type CachedDayBlockProof,
   type DayBlockCache,
   type ResolveDayBlockDeps,
   type ResolveDayBlocksDeps,
@@ -31,6 +32,7 @@ const HEAD = 2_000_000;
 const AFTER = new Date("2026-03-01T00:00:00Z");
 
 const ts = (n: number, blockTimeSec = 2): number => GENESIS_SEC + n * blockTimeSec;
+const blockHash = (n: number): string => `0x${n.toString(16).padStart(64, "0")}`;
 
 /** The single-day deps, for the equivalence comparison. */
 function singleChain(blockTimeSec = 2): ResolveDayBlockDeps {
@@ -40,7 +42,7 @@ function singleChain(blockTimeSec = 2): ResolveDayBlockDeps {
     },
     async blockAt(n) {
       if (n < 0 || n > HEAD) throw new Error(`no block ${n}`);
-      return { number: n, timestampSec: ts(n, blockTimeSec) };
+      return { number: n, hash: blockHash(n), timestampSec: ts(n, blockTimeSec) };
     },
   };
 }
@@ -49,7 +51,7 @@ function singleChain(blockTimeSec = 2): ResolveDayBlockDeps {
  *  and therefore the unit this file's performance claim is denominated in. */
 function batchedChain(
   blockTimeSec = 2,
-  opts: { missing?: Set<number>; throwOn?: Set<number> } = {},
+  opts: { missing?: Set<number>; throwOn?: Set<number>; mismatchOn?: Set<number> } = {},
 ): { deps: ResolveDayBlocksDeps; rounds: number[]; probes: number[] } {
   const rounds: number[] = [];
   const probes: number[] = [];
@@ -66,7 +68,10 @@ function batchedChain(
         return numbers.map((n) => {
           if (opts.throwOn?.has(n)) return { ok: false, error: `probe of ${n} exploded` };
           if (opts.missing?.has(n) || n < 0 || n > HEAD) return { ok: false, error: `no block ${n}` };
-          return { ok: true, stamp: { number: n, timestampSec: ts(n, blockTimeSec) } };
+          if (opts.mismatchOn?.has(n)) {
+            return { ok: true, stamp: { number: n + 1, hash: blockHash(n + 1), timestampSec: ts(n, blockTimeSec) } };
+          }
+          return { ok: true, stamp: { number: n, hash: blockHash(n), timestampSec: ts(n, blockTimeSec) } };
         });
       },
     },
@@ -115,7 +120,10 @@ test("the bracket property holds exactly for every day in a batch", async () => 
     const endSec = dayEndExclusiveSec(r.date);
     expect(r.blockTimestampSec).toBe(ts(r.blockNumber));
     expect(r.blockTimestampSec).toBeLessThan(endSec); // inside the day
-    expect(ts(r.blockNumber + 1)).toBeGreaterThanOrEqual(endSec); // the next is not
+    expect(r.blockHash).toBe(blockHash(r.blockNumber));
+    expect(r.boundaryNextBlockNumber).toBe(r.blockNumber + 1);
+    expect(r.boundaryNextBlockHash).toBe(blockHash(r.blockNumber + 1));
+    expect(r.boundaryNextBlockTimestampSec).toBeGreaterThanOrEqual(endSec); // the next is not
     expect(new Date(r.blockTimestampSec * 1000).toISOString().slice(0, 10)).toBe(r.date);
   }
 });
@@ -160,6 +168,31 @@ test("a day whose probe fails fails ALONE — its siblings still resolve", async
   expect(probe.rounds.length).toBe(0); // sanity: the unused fixture stayed unused
 });
 
+test("a mismatched response number refuses only the day whose probe was corrupted", async () => {
+  const target = await resolveDayBlock("2026-01-15", OPTS, nullDayBlockCache, singleChain(), AFTER);
+  const { deps } = batchedChain(2, {
+    mismatchOn: new Set([target.blockNumber, target.blockNumber + 1]),
+  });
+
+  const out = await resolveDayBlocks(DAYS, OPTS, nullDayBlockCache, deps, AFTER);
+  const failed = out.filter((result) => !result.ok);
+  expect(failed).toHaveLength(1);
+  expect(failed[0]!.ok === false && failed[0]!.date).toBe("2026-01-15");
+  expect(failed[0]!.ok === false && failed[0]!.error).toMatch(/requested block .* but RPC returned block/);
+  expect(out.filter((result) => result.ok)).toHaveLength(DAYS.length - 1);
+});
+
+test("a mismatched shared head response refuses the whole batch as a shared failure", async () => {
+  const { deps } = batchedChain(2, { mismatchOn: new Set([HEAD]) });
+  const out = await resolveDayBlocks(DAYS, OPTS, nullDayBlockCache, deps, AFTER);
+  expect(out.every((result) => !result.ok)).toBe(true);
+  for (const result of out) {
+    if (result.ok) continue;
+    expect(result.shared).toBe(true);
+    expect(result.error).toMatch(new RegExp(`requested block ${HEAD} but RPC returned block ${HEAD + 1}`));
+  }
+});
+
 test("an OPEN day is refused without consuming a probe, and does not spoil the batch", async () => {
   const { deps, rounds } = batchedChain();
   // 2026-02-11 has not closed as of this `now`.
@@ -182,13 +215,13 @@ test("a malformed date is reported per-day, never thrown at the batch", async ()
 // ── The permanent cache ──────────────────────────────────────────────────────
 
 test("cached days cost ZERO hits and are returned beside freshly resolved ones", async () => {
-  const store = new Map<string, { blockNumber: number; blockTimestampSec: number }>();
+  const store = new Map<string, CachedDayBlockProof>();
   const cache: DayBlockCache = {
     async get(d) {
       return store.get(d) ?? null;
     },
-    async set(d, blockNumber, blockTimestampSec) {
-      store.set(d, { blockNumber, blockTimestampSec });
+    async set(d, proof) {
+      store.set(d, proof);
     },
   };
 
@@ -207,13 +240,13 @@ test("cached days cost ZERO hits and are returned beside freshly resolved ones",
 });
 
 test("a partially cached window resolves only the misses", async () => {
-  const store = new Map<string, { blockNumber: number; blockTimestampSec: number }>();
+  const store = new Map<string, CachedDayBlockProof>();
   const cache: DayBlockCache = {
     async get(d) {
       return store.get(d) ?? null;
     },
-    async set(d, blockNumber, blockTimestampSec) {
-      store.set(d, { blockNumber, blockTimestampSec });
+    async set(d, proof) {
+      store.set(d, proof);
     },
   };
   const warm = batchedChain();

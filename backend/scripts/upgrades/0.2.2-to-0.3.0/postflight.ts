@@ -20,11 +20,14 @@ import type { Checker } from "../../lib/checks.ts";
 import { type Db, runPostflightMain } from "../../lib/postflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
+  AUM_GUARD_TRIGGERS,
   APPEND_ONLY_MIGRATION,
   APPEND_ONLY_TABLES,
+  BACKFILL_PROVENANCE,
   COLLAPSE_PER_BUCKET_KINDS,
   NEW_COLUMN_MIGRATION,
   NEW_COLUMNS,
+  NEW_SCHEDULE_CRON,
   NEW_SCHEDULE_KIND,
   NEW_TABLES,
   TAG_GLOB,
@@ -40,10 +43,10 @@ const repoRoot = join(scriptDir, "..", "..", "..", "..");
  *  in for production. The rehearsal is explicitly not production. */
 const RECEIPT_STEPS = ["P5.postflight-twin", "P8.postflight-prod"] as const;
 
-/** Check 1 — all four migrations recorded, under their FULL filenames.
+/** Check 1 — all seven migrations recorded, under their FULL filenames.
  *
  *  The duplicate-prefix property this release introduces is only real if the
- *  ledger actually holds four new NAMES. If the runner had keyed on the numeric
+ *  ledger actually holds seven new NAMES. If the runner had keyed on the numeric
  *  prefix, two of them would be silently absent here — which is precisely the
  *  failure this check exists to make impossible to miss. */
 async function checkMigrationsApplied(db: Db, { record }: Checker): Promise<void> {
@@ -127,9 +130,22 @@ async function checkStrategyNavColumn(db: Db, { record }: Checker): Promise<void
   // NOTHING: 0032_wallet_* is `ADD COLUMN` nullable with no default, so every
   // row untouched since it applied must still be NULL. Rows written or
   // re-upserted afterwards are the sampler (or a backfill) doing their job.
-  // `wallet_balance_samples.sampled_at` vs `schema_migrations.applied_at` is
-  // the boundary — note `sampled_at` moves on upsert, which is what makes it
-  // the right column here: it asks "untouched since the migration", not "old".
+  // `wallet_balance_samples.sampled_at` vs `schema_migrations.applied_at` is the
+  // boundary for LIVE-SAMPLED rows: sampled_at moves on upsert, so it asks
+  // "untouched since the migration", not "old".
+  //
+  // ⚠ IT IS NOT A WRITE TIME FOR BACKFILLED ROWS, and this release is what makes
+  // that reachable. ops/wallet-backfill.ts sets sampled_at to the repaired day's
+  // BLOCK TIMESTAMP — a historical instant — so every row the gap repair writes
+  // lands on the "untouched since the migration" side of this boundary no matter
+  // when it was written. Today the check survives only because that INSERT does
+  // not list strategy_nav_idle_only, leaving it NULL; the moment anything
+  // backfills that column, a correct system would be told "something asserted a
+  // measurement nobody took. Do NOT tag."
+  //
+  // So backfilled rows are excluded by provenance and reported separately. What
+  // this check is actually about is rows the migration itself may have touched,
+  // and the repair is not the migration.
   const [mig] = (await db`
     SELECT applied_at FROM schema_migrations WHERE name = ${NEW_COLUMN_MIGRATION}
   `) as unknown as { applied_at: string }[];
@@ -145,16 +161,20 @@ async function checkStrategyNavColumn(db: Db, { record }: Checker): Promise<void
   }
 
   const [row] = (await db`
-    SELECT count(*) FILTER (WHERE strategy_nav_idle_only IS NOT NULL AND sampled_at < ${mig.applied_at}) AS historical_non_null,
-           count(*) FILTER (WHERE sampled_at < ${mig.applied_at}) AS historical,
+    SELECT count(*) FILTER (WHERE strategy_nav_idle_only IS NOT NULL AND sampled_at < ${mig.applied_at}
+                              AND provenance <> ${BACKFILL_PROVENANCE}) AS historical_non_null,
+           count(*) FILTER (WHERE sampled_at < ${mig.applied_at}
+                              AND provenance <> ${BACKFILL_PROVENANCE}) AS historical,
            count(*) FILTER (WHERE strategy_nav_idle_only IS NOT NULL) AS non_null,
+           count(*) FILTER (WHERE provenance = ${BACKFILL_PROVENANCE}) AS backfilled,
            count(*) AS total
       FROM wallet_balance_samples
-  `) as unknown as { historical_non_null: number; historical: number; non_null: number; total: number }[];
+  `) as unknown as { historical_non_null: number; historical: number; non_null: number; backfilled: number; total: number }[];
 
   const historicalNonNull = Number(row?.historical_non_null ?? 0);
   const historical = Number(row?.historical ?? 0);
   const nonNull = Number(row?.non_null ?? 0);
+  const backfilled = Number(row?.backfilled ?? 0);
   const total = Number(row?.total ?? 0);
 
   if (historicalNonNull > 0) {
@@ -170,8 +190,10 @@ async function checkStrategyNavColumn(db: Db, { record }: Checker): Promise<void
     return;
   }
   record("strategy-nav-column", "PASS", [
-    `column present; NULL on all ${historical} row(s) untouched since the migration, as intended`,
+    `column present; NULL on all ${historical} live-sampled row(s) untouched since the migration, as intended`,
     `${nonNull} of ${total} row(s) carry a value, all written after it — the sampler doing its job`,
+    `${backfilled} row(s) carry provenance='${BACKFILL_PROVENANCE}' and are graded separately: the repair writes the`,
+    "  repaired day's block timestamp into sampled_at, so they are not datable by that column",
   ]);
 }
 
@@ -212,7 +234,7 @@ async function checkCatchupPolicy(db: Db, { record }: Checker): Promise<void> {
   ]);
 }
 
-/** Check 4 — the three new tables exist and are empty. */
+/** Check 4 — every new table/column exists; report whether migration/repair populated tables. */
 async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
   const missing: string[] = [];
   const nonEmpty: string[] = [];
@@ -224,8 +246,11 @@ async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
     const [row] = (await db.unsafe(`SELECT count(*)::int AS n FROM public.${t}`)) as unknown as { n: number }[];
     if ((row?.n ?? 0) > 0) nonEmpty.push(`${t} (${row!.n} rows)`);
   }
+  for (const { table, column } of NEW_COLUMNS) {
+    if (!(await columnExists(db, table, column))) missing.push(`${table}.${column}`);
+  }
   if (missing.length > 0) {
-    record("new-tables", "FAIL", [`absent: ${missing.join(", ")}`], "The CREATE TABLE(s) did not apply. Do NOT tag.");
+    record("new-tables", "FAIL", [`absent: ${missing.join(", ")}`], "The release schema did not apply completely. Do NOT tag.");
     return;
   }
   if (nonEmpty.length > 0) {
@@ -233,11 +258,15 @@ async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
       "new-tables",
       "WARN",
       [`present but not empty: ${nonEmpty.join(", ")}`],
-      "Expected empty on arrival. Non-empty means the backfill has already dispatched — expected on any deployment that did not set BASE_RPC_MAX_CALLS_PER_SEC=0, since the transport paces by default.",
+      "Non-empty operational tables mean repair already dispatched; non-empty evidence tables mean 0037 archived an rc-era quarantined cohort. Reconcile the reported counts before tagging.",
     );
     return;
   }
-  record("new-tables", "PASS", `all ${NEW_TABLES.length} present and empty`);
+  record(
+    "new-tables",
+    "PASS",
+    `all ${NEW_TABLES.length} table(s) present and empty; all ${NEW_COLUMNS.length} column(s) present`,
+  );
 }
 
 /** Check 5 — the new schedule is seeded, and its dispatch behaviour matches
@@ -280,18 +309,59 @@ async function checkRepairSchedule(db: Db, { record }: Checker): Promise<void> {
     return;
   }
   const s = rows[0]!;
-  // Unset is no longer "off": chain/base-rpc-client.ts paces from a conservative
-  // default, so the ordinary deployment heals. Only an explicit 0 declines.
-  const budget = process.env.BASE_RPC_MAX_CALLS_PER_SEC;
-  const pacingOff = budget !== undefined && Number(budget) <= 0;
-  const detail = [
-    `${s.kind} cron=${s.cron} enabled=${s.enabled} next_run_at=${s.next_run_at ?? "null"}`,
-    pacingOff
-      ? `BASE_RPC_MAX_CALLS_PER_SEC=${budget} — pacing is OFF, so the backfill declines each run`
-      : budget
-        ? `BASE_RPC_MAX_CALLS_PER_SEC=${budget} — the backfill WILL dispatch repair work`
-        : "BASE_RPC_MAX_CALLS_PER_SEC unset — the built-in 0.25 calls/s default applies, so the backfill WILL dispatch repair work",
-  ];
+
+  // ASK THE DEPLOYMENT, DO NOT ASK THIS PROCESS.
+  //
+  // This used to read process.env.BASE_RPC_MAX_CALLS_PER_SEC and narrate what
+  // the backfill "will" do. postflight runs in the operator's shell (or, on the
+  // twin, spawned from the rehearsal host); the app reads that variable inside
+  // the container, from the repo-root .env that docker-compose.yml interpolates.
+  // Those are different environments. An operator taking §5.2's documented
+  // opt-out by putting BASE_RPC_MAX_CALLS_PER_SEC=0 in .env — not exporting it —
+  // got "PASS … the backfill WILL dispatch repair work" while production had the
+  // headline feature switched off. It also disagreed with the app on the empty
+  // string, which resolveRpcRateBudget() treats as unset (→ ON) and Number("")
+  // makes 0 (→ reported OFF), and it could not see BASE_RPC_SOURCE at all.
+  //
+  // The deployment already reports this about itself: every ops.repair_gaps run
+  // records whether it dispatched or declined, and why. That is an observation
+  // rather than an inference, and it is what §9 check 5 claims to be making.
+  const [lastRun] = (await db`
+    SELECT status, output, finished_at
+      FROM job_runs
+     WHERE kind = ${NEW_SCHEDULE_KIND} AND finished_at IS NOT NULL
+     ORDER BY id DESC LIMIT 1
+  `) as unknown as { status: string; output: Record<string, unknown> | null; finished_at: string }[];
+
+  const detail = [`${s.kind} cron=${s.cron} enabled=${s.enabled} next_run_at=${s.next_run_at ?? "null"}`];
+
+  if (s.cron !== NEW_SCHEDULE_CRON) {
+    record(
+      "repair-schedule",
+      "FAIL",
+      [...detail, `cron is '${s.cron}', expected '${NEW_SCHEDULE_CRON}' (release.ts)`],
+      "seed()'s ON CONFLICT key is (kind, cron), so a changed cadence INSERTs a second row rather than updating this one. Do NOT tag.",
+    );
+    return;
+  }
+
+  if (!lastRun) {
+    detail.push("no ops.repair_gaps run has finished yet — cannot say whether it dispatches or declines");
+  } else {
+    const out = (lastRun.output ?? {}) as Record<string, unknown>;
+    const dispatched = (out.dispatched ?? {}) as { enqueued?: number; classC?: string[] };
+    if (out.status === "skipped") {
+      detail.push(`last run DECLINED to dispatch: ${String(out.reason ?? "no reason given")}`);
+      detail.push("That is the BASE_RPC_MAX_CALLS_PER_SEC=0 opt-out (§5.2). Confirm it is the world you chose.");
+    } else if (lastRun.status !== "succeeded") {
+      detail.push(`last run finished status='${lastRun.status}' — see job_runs.error`);
+    } else {
+      detail.push(
+        `last run dispatched ${String(dispatched.enqueued ?? 0)} window job(s) covering ${String((dispatched.classC ?? []).length)} day(s), ` +
+          `${String(out.totalMissingDays ?? "?")} day(s) missing in total`,
+      );
+    }
+  }
   if (!s.enabled) {
     record("repair-schedule", "WARN", [...detail, "seeded but DISABLED"], "Confirm this was deliberate.");
     return;
@@ -304,56 +374,96 @@ async function checkRepairSchedule(db: Db, { record }: Checker): Promise<void> {
  *  A guard that was installed and is now gone is worth refusing over: it means
  *  something dropped triggers during the upgrade, and the retention guarantee
  *  v0.2.2 shipped is no longer real. */
-async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void> {
+export async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void> {
   // `LIKE '%_append_only%'`, not `LIKE '%_append_only'`: append-only-guard.ts
   // installs TWO triggers per table — `<table>_append_only` (statement) and
   // `<table>_append_only_row`. The old anchored pattern matched only the
   // statement trigger, so this check reported "1 trigger(s)" for every table
   // and could not see a row-level trigger that had been dropped on its own.
   const rows = (await db`
-    SELECT c.relname AS table_name, count(*)::int AS triggers
+    SELECT c.relname AS table_name,
+           count(*)::int AS triggers,
+           count(*) FILTER (WHERE t.tgenabled = 'D')::int AS disabled
       FROM pg_trigger t
       JOIN pg_class c ON c.oid = t.tgrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname LIKE '%\_append\_only%'
      GROUP BY c.relname ORDER BY c.relname
-  `) as unknown as { table_name: string; triggers: number }[];
+  `) as unknown as { table_name: string; triggers: number; disabled: number }[];
 
   const [applied] = (await db`
     SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = ${APPEND_ONLY_MIGRATION}) AS present
   `) as unknown as { present: boolean }[];
-
-  if (!applied?.present) {
-    record("append-only-intact", "PASS", [
-      `${APPEND_ONLY_MIGRATION} is not applied here — the guard was never installed`,
-    ]);
-    return;
-  }
 
   // Compare against the roster the guard itself declares, not against zero.
   // Before this, ANY non-empty result PASSed: losing thirteen of the fourteen
   // tables reported "guard live on 1 table(s)" and read as green. The whole
   // point of the check is that a guard silently lost is the §11.1 failure mode,
   // and "silently lost" is exactly what a partial loss is.
-  const present = new Map(rows.map((r) => [r.table_name, r.triggers]));
+  const present = new Map(rows.map((r) => [r.table_name, r]));
   const missing = APPEND_ONLY_TABLES.filter((t) => !present.has(t));
 
-  if (missing.length > 0) {
+  // TWO triggers per table, both ENABLED — not "at least one, in any state".
+  //
+  // The roster comparison above fixed a check that passed on ANY non-empty
+  // result; it left two holes of exactly the same shape. The guard installs a
+  // statement-level and a row-level trigger per table
+  // (src/db/append-only-guard.ts, and append-only-guard-check.test.ts:102 asserts
+  // TABLES * 2), so dropping every row-level trigger left "guard live on 1
+  // trigger(s)" reading green. And `ALTER TABLE ... DISABLE TRIGGER` leaves the
+  // pg_trigger row in place with tgenabled='D', so an inert guard was
+  // indistinguishable from a live one. A guard silently lost is the §11.1
+  // failure mode whether it was dropped or merely switched off.
+  const EXPECTED_TRIGGERS = 2;
+  const partial = APPEND_ONLY_TABLES.filter((t) => {
+    const r = present.get(t);
+    return r !== undefined && r.triggers !== EXPECTED_TRIGGERS;
+  });
+  const disabled = APPEND_ONLY_TABLES.filter((t) => (present.get(t)?.disabled ?? 0) > 0);
+
+  const aumTables = [...new Set(AUM_GUARD_TRIGGERS.map((guard) => guard.table))];
+  const aumRows = (await db`
+    SELECT c.relname AS table_name, t.tgname AS trigger_name, t.tgenabled
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND NOT t.tgisinternal
+       AND c.relname = ANY(${aumTables})
+  `) as unknown as { table_name: string; trigger_name: string; tgenabled: string }[];
+  const aumPresent = new Map(aumRows.map((row) => [`${row.table_name}.${row.trigger_name}`, row.tgenabled]));
+  const missingAum = AUM_GUARD_TRIGGERS.filter(
+    (guard) => !aumPresent.has(`${guard.table}.${guard.trigger}`),
+  );
+  const bypassableAum = AUM_GUARD_TRIGGERS.filter((guard) => {
+    const mode = aumPresent.get(`${guard.table}.${guard.trigger}`);
+    return mode !== undefined && mode !== "A";
+  });
+
+  if (!applied?.present || missing.length > 0 || partial.length > 0 || disabled.length > 0
+    || missingAum.length > 0 || bypassableAum.length > 0) {
     record(
       "append-only-intact",
       "FAIL",
       [
-        `${APPEND_ONLY_MIGRATION} is applied but the guard is gone from ${missing.length} of ${APPEND_ONLY_TABLES.length} table(s):`,
-        ...missing.map((t) => `  ${t}`),
-        `still guarded: ${rows.length} table(s)`,
+        `${APPEND_ONLY_MIGRATION} applied: ${applied?.present === true}`,
+        `shared guard inventory (${APPEND_ONLY_TABLES.length} protected table(s)):`,
+        ...missing.map((t) => `  ${t} — NO append-only trigger at all`),
+        ...partial.map((t) => `  ${t} — ${present.get(t)!.triggers} trigger(s), expected ${EXPECTED_TRIGGERS}`),
+        ...disabled.map((t) => `  ${t} — ${present.get(t)!.disabled} trigger(s) DISABLED (tgenabled='D'), so the guard is inert`),
+        `AUM guard inventory (${AUM_GUARD_TRIGGERS.length} exact trigger(s)):`,
+        ...missingAum.map((guard) => `  ${guard.table}.${guard.trigger} — MISSING`),
+        ...bypassableAum.map((guard) =>
+          `  ${guard.table}.${guard.trigger} — tgenabled='${aumPresent.get(`${guard.table}.${guard.trigger}`)}', expected 'A' (ENABLE ALWAYS)`,
+        ),
       ],
-      "The guard was lost during this upgrade. Do NOT tag. Investigate before writing anything else.",
+      "A shared or AUM-specific guard was lost, disabled, or left replication-bypassable. Do NOT tag.",
     );
     return;
   }
 
   record("append-only-intact", "PASS", [
-    `guard live on all ${APPEND_ONLY_TABLES.length} protected table(s)`,
+    `guard live on all ${APPEND_ONLY_TABLES.length} protected table(s), ${EXPECTED_TRIGGERS} enabled trigger(s) each`,
+    `all ${AUM_GUARD_TRIGGERS.length} P0/P1 AUM trigger(s) present and ENABLE ALWAYS`,
     ...rows.map((r) => `  ${r.table_name} (${r.triggers} trigger(s))`),
   ]);
 }
@@ -373,12 +483,12 @@ async function checkAppendOnlyIntact(db: Db, { record }: Checker): Promise<void>
  *  than the failure it exists to catch. A schedule is late here when it has
  *  missed more than one of its OWN slots, plus a small grace for the scheduler's
  *  30s tick (worker/runtime.ts). */
-const WEDGE_GRACE_MS = 90_000;
+export const WEDGE_GRACE_MS = 90_000;
 
 /** How long one cadence of `cron` is, in ms, from two consecutive occurrences.
  *  Returns null for an expression cron-parser rejects — an unparseable cron is
  *  reported rather than silently given an arbitrary threshold. */
-function cadenceMs(cron: string, timezone: string): number | null {
+export function cadenceMs(cron: string, timezone: string): number | null {
   try {
     const it = parser.parseExpression(cron, { tz: timezone, currentDate: new Date() });
     const a = it.next().toDate().getTime();
@@ -390,6 +500,30 @@ function cadenceMs(cron: string, timezone: string): number | null {
 }
 
 async function checkNoWedge(db: Db, { record }: Checker): Promise<void> {
+  // A NULL next_run_at on an ENABLED schedule is a wedge, not a healthy row.
+  // worker/scheduler.ts seeds next_run_at on its FIRST tick, so NULL means the
+  // scheduler has never ticked for that row since it was created. The late-row
+  // query below cannot see that — `next_run_at < now()` excludes NULL — and
+  // check 5 only printed the value without grading it, so a completely dead
+  // scheduler loop passed both. That is the one condition this check exists to
+  // catch, arriving by the one route it could not observe.
+  const never = (await db`
+    SELECT kind, cron FROM job_schedules WHERE enabled AND next_run_at IS NULL ORDER BY kind
+  `) as unknown as { kind: string; cron: string }[];
+
+  if (never.length > 0) {
+    record(
+      "no-wedge",
+      "FAIL",
+      [
+        `${never.length} enabled schedule(s) have never been picked up by the scheduler (next_run_at IS NULL):`,
+        ...never.map((r) => `  ${r.kind} (${r.cron})`),
+      ],
+      "worker/scheduler.ts seeds next_run_at on its first tick, so NULL means it has not ticked. Check the worker is running before tagging.",
+    );
+    return;
+  }
+
   const rows = (await db`
     SELECT kind, cron, timezone, next_run_at,
            EXTRACT(EPOCH FROM (now() - next_run_at))::int AS seconds_late

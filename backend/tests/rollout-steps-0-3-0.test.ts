@@ -24,7 +24,20 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import { STEPS, THIS_RELEASE_MIGRATIONS } from "../scripts/upgrades/0.2.2-to-0.3.0/steps.ts";
-import { APPEND_ONLY_MIGRATION, APPEND_ONLY_TABLES } from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
+import {
+  AUM_GUARD_TRIGGERS,
+  APPEND_ONLY_MIGRATION,
+  APPEND_ONLY_TABLES,
+  BACKFILL_JOB_KIND,
+  BACKFILL_PROVENANCE,
+  BACKFILL_WINDOW_JOB_KIND,
+  COLLAPSE_PER_BUCKET_KINDS,
+  MIGRATION_TOUCHED_TABLES,
+  NEW_SCHEDULE_CRON,
+  NEW_SCHEDULE_KIND,
+  NEW_COLUMNS,
+  NEW_TABLES,
+} from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(testDir, "..", "..");
@@ -168,6 +181,20 @@ describe("v0.3.0 rollout manifest ↔ runbook", () => {
 });
 
 describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
+  test("the release inventory includes the terminal AUM snapshot foundation migration", () => {
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(7);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0038_wallet_aum_snapshot_foundation.sql");
+    expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
+    expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
+    expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");
+    expect(NEW_COLUMNS).toContainEqual({ table: "chain_day_blocks", column: "block_hash" });
+    expect(NEW_COLUMNS).toContainEqual({ table: "wallet_balance_samples", column: "snapshot_run_id" });
+    expect(NEW_COLUMNS).toContainEqual({ table: "wallet_balance_sample_evidence", column: "snapshot_run_id" });
+    expect(AUM_GUARD_TRIGGERS).toHaveLength(11);
+    expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_balance_samples");
+    expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_sleeve_samples");
+  });
+
   test("every named migration exists on disk", () => {
     for (const m of THIS_RELEASE_MIGRATIONS) {
       expect({ m, exists: existsSync(join(repoRoot, "backend", "migrations", m)) }).toEqual({ m, exists: true });
@@ -223,6 +250,68 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     const m = guard.match(/APPEND_ONLY_MIGRATION\s*=\s*"([^"]+)"/);
     expect({ found: m !== null }).toEqual({ found: true });
     expect({ copy: APPEND_ONLY_MIGRATION }).toEqual({ copy: m![1]! });
+  });
+
+  // ── The copies #739 proved were unguarded ─────────────────────────────────
+  //
+  // release.ts copies these rather than importing them, for the same reason it
+  // copies the append-only pair: the modules that own them pull in db/client.ts,
+  // which demands DATABASE_URL at module load and builds the app's WRITER pool —
+  // unacceptable in a gate script that must connect once, read-only, from
+  // .env.readonly.
+  //
+  // #739 (79063ab) changed the dispatcher's job kind in src/ and nothing failed.
+  // The release's §7.1 observation went on grading `wallet.backfill_day`, a kind
+  // nothing enqueues any more, and reported the release's headline feature as
+  // not dispatching. backend.yml runs this suite on every backend/** PR, so
+  // these guards would have caught it there rather than on a stage rehearsal
+  // four rcs later.
+
+  const readSrc = (...parts: string[]): string => readFileSync(join(repoRoot, "backend", "src", ...parts), "utf8");
+  const constFromSrc = (src: string, name: string): string => {
+    const m = src.match(new RegExp(`${name}\\s*=\\s*"([^"]+)"`));
+    expect({ name, found: m !== null }).toEqual({ name, found: true });
+    return m![1]!;
+  };
+
+  test("BACKFILL_WINDOW_JOB_KIND matches the kind the dispatcher enqueues", () => {
+    const repair = readSrc("worker", "handlers", "repair.ts");
+    expect({ copy: BACKFILL_WINDOW_JOB_KIND }).toEqual({ copy: constFromSrc(repair, "WINDOW_KIND") });
+  });
+
+  test("BACKFILL_JOB_KIND matches the legacy per-day kind still registered as a handler", () => {
+    const repair = readSrc("worker", "handlers", "repair.ts");
+    expect({ copy: BACKFILL_JOB_KIND }).toEqual({ copy: constFromSrc(repair, "BACKFILL_KIND") });
+  });
+
+  test("NEW_SCHEDULE_KIND and NEW_SCHEDULE_CRON match the row db/seed.ts actually seeds", () => {
+    const seed = readSrc("db", "seed.ts");
+    const row = seed.match(/\{\s*kind:\s*"ops\.repair_gaps",\s*cron:\s*"([^"]+)"/);
+    expect({ found: row !== null }).toEqual({ found: true });
+    expect({ kind: NEW_SCHEDULE_KIND }).toEqual({ kind: "ops.repair_gaps" });
+    expect({ cron: NEW_SCHEDULE_CRON }).toEqual({ cron: row![1]! });
+  });
+
+  test("BACKFILL_PROVENANCE matches what the executor writes", () => {
+    // ops/wallet-backfill.ts tags repaired rows with this exact string; §7.1's
+    // completion observation and postflight's strategy-nav-column both filter on
+    // the copy. A drift here makes a working repair look like it wrote nothing.
+    // The executor writes it as a SQL literal in the VALUES list of both series'
+    // upserts, so assert the literal appears at least twice — once per table.
+    const backfill = readSrc("ops", "wallet-backfill.ts");
+    const literals = [...backfill.matchAll(new RegExp(`'${BACKFILL_PROVENANCE}'`, "g"))].length;
+    expect({ atLeastTwoWrites: literals >= 2 }).toEqual({ atLeastTwoWrites: true });
+  });
+
+  test("COLLAPSE_PER_BUCKET_KINDS matches the kinds 0034 actually UPDATEs", () => {
+    // The one data write in the migration set. postflight's catchup-policy check
+    // grades both directions against this copy, so a drift would grade the wrong
+    // rows in silence.
+    const mig = readFileSync(join(repoRoot, "backend", "migrations", "0034_job_schedules_catchup_policy.sql"), "utf8");
+    const inClause = mig.match(/WHERE\s+kind\s+IN\s*\(([^)]*)\)/i);
+    expect({ found: inClause !== null }).toEqual({ found: true });
+    const fromMigration = [...inClause![1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!).sort();
+    expect({ kinds: [...(COLLAPSE_PER_BUCKET_KINDS as readonly string[])].sort() }).toEqual({ kinds: fromMigration });
   });
 
   test("the append-only TABLE ROSTER matches src/db/append-only-guard.ts", () => {
