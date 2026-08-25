@@ -179,7 +179,7 @@ test("performance view discloses the unrecoverable gap window (issue #614 AC5)",
   const seam = page.locator(".a2-seam");
   await expect(seam).toBeVisible();
   const text = await seam.textContent();
-  expect(text).toMatch(/\d+ days? in this range could not be recovered/); // the ~91-day gap
+  expect(text).toMatch(/\d+ days? in this range (is|are) in process of being retrieved/); // the ~91-day gap
 });
 
 test("the served performance view no longer bakes the frozen walletPerfView series (issue #84)", async ({ page }) => {
