@@ -239,7 +239,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — six migrations
+### 2.2 🔴 The database delta — seven migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -255,6 +255,7 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0035_swarm_member_avatar_bytes.sql` | `CREATE TABLE swarm_member_avatars (… bytes bytea …)` | Additive, new table |
 | `0036_quarantine_backfilled_samples.sql` | `UPDATE` every `provenance='backfilled'` row in `wallet_balance_samples` / `wallet_sleeve_samples` to `'backfilled-quarantined'`; `DELETE` the `exhausted` rows from `wallet_backfill_state` | **No DDL — a pure data write** |
 | `0037_aum_repairable_quarantine.sql` | Create immutable balance/sleeve evidence tables; archive every row on a quarantined date; delete that date from the active tables so verified repair can reuse every natural key | Additive DDL **plus evidence-preserving data writes** |
+| `0038_wallet_aum_snapshot_foundation.sql` | Create immutable AUM snapshot-run headers; add nullable snapshot/observation identity to active and evidence rows; enforce canonical exact sets, atomic finalization and published-constituent immutability; add closing/next-block proof to the day-block cache | Additive identity foundation with validated constraints/triggers; legacy rows remain unverified |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
@@ -271,6 +272,16 @@ while sample writes wait for the transaction. On a production database
 upgrading directly from v0.2.2 that cohort is expected to be empty. Expect the
 migration set to complete in well under a second there, but size and time the rc
 cohort separately.
+`0038` creates one empty append-only header table, adds nullable columns and
+indexes, validates all-or-none observation-identity constraints on the four
+active/evidence tables, and installs finalization/immutability triggers. Those
+constraint validations scan the affected tables under the migration's normal
+DDL locks; size them on the twin rather than assuming a catalog-only change. It
+does not backfill snapshot IDs or observation timestamps, and
+it leaves old `chain_day_blocks` proof columns NULL so the resolver must
+re-resolve them. Published runs require an explicit `AUM_PRODUCER_REVISION`;
+unset or blank is recorded as unavailable, never replaced with an invented
+revision.
 **Confirm that on the twin (§7) rather than trusting it here** — §2.2's timings
 are read off the DDL, not measured.
 
@@ -505,17 +516,19 @@ section:     §3.5
 gate:        F
 host-role:   any
 actor:       operator
-verify:      record both decisions on the tracking issue, then: where.ts --record P1.config-decided
+verify:      record all three decisions on the tracking issue, then: where.ts --record P1.config-decided
 ```
 
-New for v0.3.0. The two variables fail in OPPOSITE directions, which is why
-this is one gate and not two (§0.3). Deploying without deciding is not neutral:
+New for v0.3.0. The runtime variables fail in OPPOSITE directions, and the
+build identity determines whether a future snapshot can be published, which is
+why this is one config gate (§0.3). Deploying without deciding is not neutral:
 an unset `WEBAUTHN_ORIGIN` ships a passkey fix that stays broken, while an unset
 `BASE_RPC_MAX_CALLS_PER_SEC` ships a gap repair that starts sweeping on its own.
 
 - `WEBAUTHN_ORIGIN` decided (§5.1)
 - `BASE_RPC_MAX_CALLS_PER_SEC` decided — including a deliberate "leave it
       unset and let the built-in default heal" (§5.2)
+- `AUM_PRODUCER_REVISION` set to the exact commit being built (§5.3)
 
 ---
 
@@ -576,8 +589,9 @@ the api container under `bun smoke`, and for the three variables you cannot set
 at all. This section covers only what is **new in v0.3.0**.
 
 All new variables are documented in `.env.example` and are **commented out by
-default** — the upgrade adds no required configuration. Every one below is a
-decision to make, not a step to perform blindly.
+default**. The two runtime controls remain explicit operator decisions;
+`AUM_PRODUCER_REVISION` must be set to the commit being built so a future
+publisher can prove its producer. None may be filled with a guessed fallback.
 
 ### 5.1 ✅ `WEBAUTHN_ORIGIN` — set this, or passkeys stay broken
 
@@ -650,6 +664,22 @@ Companion knobs: `BASE_RPC_RATE_BURST` (default 5, the measured bucket depth),
 `GECKO_OHLCV_MIN_INTERVAL_MS` (default 3000 — a GeckoTerminal control, unrelated
 to the RPC budget).
 
+### 5.3 ✅ `AUM_PRODUCER_REVISION` — exact build identity, no fallback
+
+Set this in the repo-root `.env` to the full commit being built:
+
+```sh
+AUM_PRODUCER_REVISION=<full git rev-parse HEAD output>
+```
+
+Every backend Compose build passes that value as a Docker build argument, and
+`backend/Dockerfile` exposes the exact bytes to the container. This is a build
+identity: changing `.env` without rebuilding the image does not change it.
+Blank or unset deliberately stays blank, and future snapshot code records the
+run as producer-revision unavailable; it must not substitute a package version,
+branch, timestamp, or `unknown`. Before cutover, compare the value to
+`git rev-parse HEAD` and rebuild through the normal §8 command.
+
 ---
 
 ## 6. Preflight
@@ -691,10 +721,10 @@ pass. The harness, receipt format and verdict wording are
 | Check | Asserts | Why this release needs it |
 |---|---|---|
 | `server-version` | PG 11+ | 0034's `NOT NULL DEFAULT` is instant on 11+ and a full table REWRITE before it (§2.2) |
-| `schema-migrations` | pending set is **exactly** this release's six; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
+| `schema-migrations` | pending set is **exactly** this release's seven; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
 | `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `.env.readonly` points somewhere else |
 | `append-only-safety` | guard installed, and **no** table this release touches is protected | §2.2.1 — this is what makes the out-of-order warning harmless |
-| `clean-targets` | the 5 tables and 2 columns do not exist yet | A target that already exists means an out-of-band change |
+| `clean-targets` | the 6 tables and 22 columns do not exist yet | A target that already exists means an out-of-band change |
 | `catchup-baseline` | records `job_schedules` as it stands now | §4.3 — 0034 OVERWRITES these rows; §9 check 3 grades against this |
 | `wallet-samples-size` | row count + table size | Informational, for §7's wall-clock measurement |
 | `blocking-xacts` | nothing older than 60s | Would queue in front of 0034/0035/0037's locks. Goes stale by the minute |
@@ -706,13 +736,14 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  6 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  7 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
          0035_swarm_member_avatar_bytes.sql
          0036_quarantine_backfilled_samples.sql
          0037_aum_repairable_quarantine.sql
+         0038_wallet_aum_snapshot_foundation.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
@@ -818,7 +849,7 @@ each result in the stage rehearsal report (§7.4):
 
 | Requirement | Proven by |
 |---|---|
-| All six migrations apply in one boot, no error, no skip | boot log's six `migrated:` lines, then postflight's `migrations-applied` |
+| All seven migrations apply in one boot, no error, no skip | boot log's seven `migrated:` lines, then postflight's `migrations-applied` |
 | `schema_migrations` holds **both** `0032_*` and **both** `0033_*` — §2.2.1 observed rather than reasoned | postflight `migrations-applied` |
 | `0034`'s `UPDATE` hit exactly the two wallet samplers, everything else left `'all'` | postflight `catchup-policy` |
 | `ops.repair_gaps` present, enabled, **exactly one row** | postflight `repair-schedule` |
@@ -855,7 +886,7 @@ Run it against a twin that has **already been migrated by the rc**, because that
 is the state a real rollback starts from. Rehearsing against an unmigrated
 database rehearses nothing.
 
-1. Restore a twin and boot the rc against it so the four migrations apply
+1. Restore a twin and boot the rc against it so the seven migrations apply
    (`bun run twin:rehearse` does the restore-and-migrate half).
 2. Capture `job_schedules` **before** rolling back — kind, cron, enabled,
    timezone, payload, next_run_at, catchup_policy. This is the *before* side of
@@ -986,8 +1017,8 @@ budget are **unchanged from v0.2.2**. Follow
 
 The only v0.3.0-specific differences:
 
-1. **Five migrations, not six** (§2.2). The boot log must show five
-   `migrated: …` lines and then `migrations up to date`. The fifth, `0036`, is a
+1. **Seven migrations** (§2.2). The boot log must show seven
+   `migrated: …` lines and then `migrations up to date`. `0036` is a
    data write rather than DDL, and on production it is expected to change
    nothing — see §2.2 for why, and for the check that confirms it.
 2. **`seed()` inserts a new schedule row** — `ops.repair_gaps` (§4.1) — in
@@ -996,6 +1027,8 @@ The only v0.3.0-specific differences:
    `WEBAUTHN_ORIGIN` is read at request time, so a later restart would pick it
    up — but a passkey ceremony attempted in between will fail, and that is
    indistinguishable from the bug still being present.
+4. **`AUM_PRODUCER_REVISION` must equal the deployed commit before the image is
+   built.** A restart cannot repair an image built with an empty or stale value.
 
 ⏱ **The scheduler-wedge budget from rollout-procedure.md §8.2 still binds.** A window longer
 than the shortest enabled schedule's cadence wedges it. `wallet.sample_balances`
@@ -1085,12 +1118,12 @@ All must pass before `v0.3.0` is tagged.
 
 | # | Check id | Asserts | Expected |
 |---|---|---|---|
-| 1 | `migrations-applied` | all six names in `schema_migrations` | Both `0032_*`, both `0033_*`, and `0034_*` through `0037_*` present — the check that would catch a runner keyed on the numeric prefix or an omitted repair migration |
+| 1 | `migrations-applied` | all seven names in `schema_migrations` | Both `0032_*`, both `0033_*`, and `0034_*` through `0038_*` present — the check that would catch a runner keyed on the numeric prefix or an omitted AUM migration |
 | 2 | `strategy-nav-column` | the column exists and **the migration populated nothing** | `NULL` on every row untouched since `0032_wallet_*` applied. Rows written or re-upserted afterwards carry values legitimately — that is the sampler working. (This row used to expect `NULL` on *every* row, which postflight can never see: it runs after readiness, so the per-minute sampler has always written by then, and the check WARNed on every clean run.) |
 | 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). This grades the schedule-policy write; `0036`/`0037` separately quarantine and archive wallet samples |
-| 4 | `new-tables` | all five new tables exist | The two operational tables may already hold repair rows after cold-start dispatch; the two evidence tables may already hold an rc-era quarantined cohort archived by `0037`. A WARN reports those counts for reconciliation; empty is only the fresh direct-from-v0.2.2 expectation |
+| 4 | `new-tables` | all six new tables and all 22 new columns exist | The two operational tables may already hold repair rows after cold-start dispatch; the two evidence tables may already hold an rc-era quarantined cohort archived by `0037`; snapshot-run headers remain empty until a P1 publisher lands. A WARN reports counts for reconciliation; empty is only the fresh direct-from-v0.2.2 expectation |
 | 5 | `repair-schedule` | the new schedule is seeded, exactly once, enabled, on the cron `release.ts` names — and what the DEPLOYMENT reports it actually did | Read from the latest `ops.repair_gaps` `job_runs` row: dispatched, or declined and why. It used to infer this from `BASE_RPC_MAX_CALLS_PER_SEC` **in postflight's own process**, which is not where the app reads it — an operator taking §5.2's opt-out via `.env` was told the backfill "WILL dispatch" while production had it off. **Confirm it is the world you chose** (§5.2) |
-| 6 | `append-only-intact` | the guard survived the migration | **Both** triggers live and **enabled** on all fourteen protected tables. Presence of one of the two used to pass, and `tgenabled` was never read — so a half-dropped guard, or one left `DISABLE TRIGGER`, read green. A guard silently lost is the §11.1 failure mode, and switched-off is a way of being lost |
+| 6 | `append-only-intact` | every shared and AUM-specific guard survived the migration | **Both** shared triggers live and enabled on all fourteen protected tables, plus all eleven exact P0/P1 evidence, constituent-immutability, header-immutability and finalization triggers present with `ENABLE ALWAYS`. A missing, disabled, or replication-bypassable guard fails postflight |
 | 7 | ⛔ **manual — no script** | a real passkey ceremony completes against the public HTTPS origin | The §5.1 fix, verified end-to-end. Step `P8.acceptance`; reading `WEBAUTHN_ORIGIN` back out of the container proves configuration, not function |
 | 8 | `no-wedge` | the cutover window did not wedge a schedule | `next_run_at` within one cadence of now. Compare against preflight's `wedged-schedules` baseline — a pre-existing wedge is not this release's damage |
 
@@ -1110,7 +1143,7 @@ Trigger, procedure and the "what rollback does NOT undo" list are structurally
 unchanged from [rollout-procedure.md §10](./rollout-procedure.md). Two v0.3.0-specific
 notes:
 
-**None of the four migrations has a down migration.** The runner is forward-only
+**None of the seven migrations has a down migration.** The runner is forward-only
 (`backend/src/db/migrate.ts` header). Rollback means restoring the Gate C dump,
 not reversing DDL.
 
@@ -1123,7 +1156,7 @@ both. rollout-procedure.md §10 carries the same warning.
 **Rolling back the code without rolling back the database is survivable here,
 and that is unusual.** The new schema objects and columns are backward-compatible:
 v0.2.2's code does not
-know about `strategy_nav_idle_only`, `catchup_policy`, or the five new tables,
+know about `strategy_nav_idle_only`, `catchup_policy`, snapshot identity, or the six new tables,
 and ignores them. The data-write residues are `0034`'s schedule-policy update
 and `0036`/`0037` moving suspect rc-era samples out of the active tables into
 immutable evidence. v0.2.2 never reads `catchup_policy`, while archived suspect

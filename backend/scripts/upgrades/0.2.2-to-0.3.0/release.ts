@@ -22,7 +22,7 @@
  * (`0033_swarm_member_uuid_ids.sql`), so preflight's `schema-migrations` check
  * reports it as out-of-order and returns WARN. See the runbook §6 for why that
  * warning is the correct output here and what makes it safe — in short, the
- * append-only guard is already installed by then, and none of the six touches
+ * append-only guard is already installed by then, and none of the seven touches
  * a protected table.
  */
 export const THIS_RELEASE_MIGRATIONS = [
@@ -32,6 +32,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0035_swarm_member_avatar_bytes.sql",
   "0036_quarantine_backfilled_samples.sql",
   "0037_aum_repairable_quarantine.sql",
+  "0038_wallet_aum_snapshot_foundation.sql",
 ] as const;
 
 /**
@@ -60,10 +61,31 @@ export const NEW_TABLES = [
   "swarm_member_avatars",
   "wallet_balance_sample_evidence",
   "wallet_sleeve_sample_evidence",
+  "wallet_aum_snapshot_runs",
 ] as const;
 export const NEW_COLUMNS = [
   { table: "wallet_balance_samples", column: "strategy_nav_idle_only" },
   { table: "job_schedules", column: "catchup_policy" },
+  { table: "wallet_balance_samples", column: "snapshot_run_id" },
+  { table: "wallet_balance_samples", column: "amount_observed_at" },
+  { table: "wallet_balance_samples", column: "price_observed_at" },
+  { table: "wallet_balance_samples", column: "recorded_at" },
+  { table: "wallet_sleeve_samples", column: "snapshot_run_id" },
+  { table: "wallet_sleeve_samples", column: "amount_observed_at" },
+  { table: "wallet_sleeve_samples", column: "price_observed_at" },
+  { table: "wallet_sleeve_samples", column: "recorded_at" },
+  { table: "wallet_balance_sample_evidence", column: "snapshot_run_id" },
+  { table: "wallet_balance_sample_evidence", column: "amount_observed_at" },
+  { table: "wallet_balance_sample_evidence", column: "price_observed_at" },
+  { table: "wallet_balance_sample_evidence", column: "recorded_at" },
+  { table: "wallet_sleeve_sample_evidence", column: "snapshot_run_id" },
+  { table: "wallet_sleeve_sample_evidence", column: "amount_observed_at" },
+  { table: "wallet_sleeve_sample_evidence", column: "price_observed_at" },
+  { table: "wallet_sleeve_sample_evidence", column: "recorded_at" },
+  { table: "chain_day_blocks", column: "block_hash" },
+  { table: "chain_day_blocks", column: "boundary_next_block_number" },
+  { table: "chain_day_blocks", column: "boundary_next_block_hash" },
+  { table: "chain_day_blocks", column: "boundary_next_block_timestamp" },
 ] as const;
 
 /** Every table this release creates, alters, locks, or writes. Preflight checks
@@ -179,4 +201,23 @@ export const APPEND_ONLY_TABLES = [
   "agent_activity_log",
   "regime_snapshots",
   "schema_migrations",
+] as const;
+
+/** Exact custom guards added by the AUM P0/P1 migrations. Unlike the shared
+ * append-only roster above, these triggers have table-specific names and
+ * functions, so postflight verifies the catalog contract explicitly. `A`
+ * means ENABLE ALWAYS: replication-role writes must not bypass evidence or
+ * published-snapshot immutability. */
+export const AUM_GUARD_TRIGGERS = [
+  { table: "wallet_balance_samples", trigger: "wallet_balance_samples_snapshot_final_guard" },
+  { table: "wallet_sleeve_samples", trigger: "wallet_sleeve_samples_snapshot_final_guard" },
+  { table: "wallet_balance_sample_evidence", trigger: "wallet_balance_sample_evidence_immutable" },
+  { table: "wallet_balance_sample_evidence", trigger: "wallet_balance_sample_evidence_immutable_row" },
+  { table: "wallet_balance_sample_evidence", trigger: "wallet_balance_sample_evidence_snapshot_final_guard" },
+  { table: "wallet_sleeve_sample_evidence", trigger: "wallet_sleeve_sample_evidence_immutable" },
+  { table: "wallet_sleeve_sample_evidence", trigger: "wallet_sleeve_sample_evidence_immutable_row" },
+  { table: "wallet_sleeve_sample_evidence", trigger: "wallet_sleeve_sample_evidence_snapshot_final_guard" },
+  { table: "wallet_aum_snapshot_runs", trigger: "wallet_aum_snapshot_runs_immutable" },
+  { table: "wallet_aum_snapshot_runs", trigger: "wallet_aum_snapshot_runs_immutable_row" },
+  { table: "wallet_aum_snapshot_runs", trigger: "wallet_aum_snapshot_runs_finalize" },
 ] as const;

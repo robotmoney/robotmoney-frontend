@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import { STEPS, THIS_RELEASE_MIGRATIONS } from "../scripts/upgrades/0.2.2-to-0.3.0/steps.ts";
 import {
+  AUM_GUARD_TRIGGERS,
   APPEND_ONLY_MIGRATION,
   APPEND_ONLY_TABLES,
   BACKFILL_JOB_KIND,
@@ -34,6 +35,7 @@ import {
   MIGRATION_TOUCHED_TABLES,
   NEW_SCHEDULE_CRON,
   NEW_SCHEDULE_KIND,
+  NEW_COLUMNS,
   NEW_TABLES,
 } from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
 
@@ -179,11 +181,16 @@ describe("v0.3.0 rollout manifest ↔ runbook", () => {
 });
 
 describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
-  test("the release inventory includes the terminal quarantine-repair migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(6);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0037_aum_repairable_quarantine.sql");
+  test("the release inventory includes the terminal AUM snapshot foundation migration", () => {
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(7);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0038_wallet_aum_snapshot_foundation.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
+    expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");
+    expect(NEW_COLUMNS).toContainEqual({ table: "chain_day_blocks", column: "block_hash" });
+    expect(NEW_COLUMNS).toContainEqual({ table: "wallet_balance_samples", column: "snapshot_run_id" });
+    expect(NEW_COLUMNS).toContainEqual({ table: "wallet_balance_sample_evidence", column: "snapshot_run_id" });
+    expect(AUM_GUARD_TRIGGERS).toHaveLength(11);
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_balance_samples");
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_sleeve_samples");
   });

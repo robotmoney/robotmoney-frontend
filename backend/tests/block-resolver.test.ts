@@ -15,6 +15,7 @@ import {
   RESOLVER_CALL_BUDGET,
   resolveDayBlock,
   type DayBlockCache,
+  type CachedDayBlockProof,
   type ResolveDayBlockDeps,
 } from "../src/chain/block-resolver.ts";
 
@@ -23,6 +24,7 @@ const OPTS = { rpcUrl: "https://mainnet.base.org" };
 // A fixture chain: block 0 at 2026-01-01T00:00:00Z, one block every 2 seconds.
 const GENESIS_SEC = Math.floor(Date.parse("2026-01-01T00:00:00Z") / 1000);
 const HEAD = 2_000_000; // 2026-01-01 + ~46 days
+const blockHash = (n: number): string => `0x${n.toString(16).padStart(64, "0")}`;
 
 function fixtureChain(blockTimeSec = 2): { deps: ResolveDayBlockDeps; probes: number[] } {
   const probes: number[] = [];
@@ -35,7 +37,7 @@ function fixtureChain(blockTimeSec = 2): { deps: ResolveDayBlockDeps; probes: nu
       async blockAt(n) {
         probes.push(n);
         if (n < 0 || n > HEAD) throw new Error(`no block ${n}`);
-        return { number: n, timestampSec: GENESIS_SEC + n * blockTimeSec };
+        return { number: n, hash: blockHash(n), timestampSec: GENESIS_SEC + n * blockTimeSec };
       },
     },
   };
@@ -52,7 +54,10 @@ test("resolves the LAST block of the day — the bracket property holds exactly"
 
     expect(resolved.blockTimestampSec).toBe(ts(resolved.blockNumber));
     expect(resolved.blockTimestampSec).toBeLessThan(endSec); // inside the day
-    expect(ts(resolved.blockNumber + 1)).toBeGreaterThanOrEqual(endSec); // the next one is not
+    expect(resolved.blockHash).toBe(blockHash(resolved.blockNumber));
+    expect(resolved.boundaryNextBlockNumber).toBe(resolved.blockNumber + 1);
+    expect(resolved.boundaryNextBlockHash).toBe(blockHash(resolved.blockNumber + 1));
+    expect(resolved.boundaryNextBlockTimestampSec).toBeGreaterThanOrEqual(endSec); // the next one is not
   }
 });
 
@@ -98,14 +103,28 @@ test("refuses a day the chain has not reached", async () => {
   ).rejects.toThrow(/not in the chain's past/);
 });
 
+test("refuses an RPC response whose block number does not equal the requested number", async () => {
+  const deps: ResolveDayBlockDeps = {
+    async latestBlockNumber() {
+      return HEAD;
+    },
+    async blockAt(n) {
+      return { number: n + 1, hash: blockHash(n + 1), timestampSec: GENESIS_SEC + n * 2 };
+    },
+  };
+  await expect(resolveDayBlock("2026-01-07", OPTS, nullDayBlockCache, deps, AFTER)).rejects.toThrow(
+    new RegExp(`requested block ${HEAD} but RPC returned block ${HEAD + 1}`),
+  );
+});
+
 test("the cache is PERMANENT: a second resolution of the same day costs zero RPC", async () => {
-  const store = new Map<string, { blockNumber: number; blockTimestampSec: number }>();
+  const store = new Map<string, CachedDayBlockProof>();
   const cache: DayBlockCache = {
     async get(date) {
       return store.get(date) ?? null;
     },
-    async set(date, blockNumber, blockTimestampSec) {
-      store.set(date, { blockNumber, blockTimestampSec });
+    async set(date, proof) {
+      store.set(date, proof);
     },
   };
 
@@ -120,6 +139,61 @@ test("the cache is PERMANENT: a second resolution of the same day costs zero RPC
   expect(b.rpcCalls).toBe(0);
   expect(second.probes).toHaveLength(0);
   expect(b.blockNumber).toBe(a.blockNumber);
+  expect(b.boundaryNextBlockHash).toBe(a.boundaryNextBlockHash);
+});
+
+test("an incomplete legacy cache row is re-resolved and replaced with boundary proof", async () => {
+  let stored: CachedDayBlockProof = {
+    blockNumber: 1,
+    blockHash: null,
+    blockTimestampSec: GENESIS_SEC + 2,
+    boundaryNextBlockNumber: null,
+    boundaryNextBlockHash: null,
+    boundaryNextBlockTimestampSec: null,
+  };
+  let writes = 0;
+  const cache: DayBlockCache = {
+    async get() {
+      return stored;
+    },
+    async set(_date, proof) {
+      writes += 1;
+      stored = proof;
+    },
+  };
+  const chain = fixtureChain();
+  const resolved = await resolveDayBlock("2026-01-07", OPTS, cache, chain.deps, AFTER);
+  expect(resolved.cached).toBe(false);
+  expect(chain.probes.length).toBeGreaterThan(0);
+  expect(writes).toBe(1);
+  expect(stored.blockHash).toBe(blockHash(stored.blockNumber));
+  expect(stored.boundaryNextBlockNumber).toBe(stored.blockNumber + 1);
+});
+
+test("a structurally populated but invalid cache proof is rejected and overwritten", async () => {
+  let stored: CachedDayBlockProof = {
+    blockNumber: 1,
+    blockHash: blockHash(1),
+    blockTimestampSec: GENESIS_SEC + 2,
+    boundaryNextBlockNumber: 3,
+    boundaryNextBlockHash: blockHash(3),
+    boundaryNextBlockTimestampSec: GENESIS_SEC + 6,
+  };
+  let writes = 0;
+  const cache: DayBlockCache = {
+    async get() {
+      return stored;
+    },
+    async set(_date, proof) {
+      stored = proof;
+      writes += 1;
+    },
+  };
+  const chain = fixtureChain();
+  const resolved = await resolveDayBlock("2026-01-07", OPTS, cache, chain.deps, AFTER);
+  expect(resolved.cached).toBe(false);
+  expect(writes).toBe(1);
+  expect(stored.boundaryNextBlockNumber).toBe(stored.blockNumber + 1);
 });
 
 test("a malformed date is refused before any RPC", async () => {
