@@ -20,6 +20,7 @@ const USDC: TrackedAsset = {
   decimals: 6,
   address: "0xABCDEF",
   poolId: null,
+  deployedAt: "2026-03-18",
 };
 const WETH: TrackedAsset = {
   symbol: "WETH",
@@ -30,6 +31,7 @@ const WETH: TrackedAsset = {
   decimals: 18,
   address: "0x123456",
   poolId: "base_pool",
+  deployedAt: "2026-03-18",
 };
 
 function manifest(reverse = false): WalletSnapshotManifest {
