@@ -58,9 +58,6 @@ export interface SeriesDef {
     columns: readonly string[];
     resolve: (asOf?: string) => readonly (readonly string[])[];
   };
-  /** Column holding the asset's deployment date, enabling per-slot filtering
-   *  of expected keys: a slot only expects assets deployed on or before it. */
-  deployedAtColumn?: string;
 }
 
 // ── Wallet / sleeve / vault samplers (Class C — the LIVE samplers read chain
@@ -95,7 +92,6 @@ export const SERIES_REGISTRY: SeriesDef[] = [
       columns: ["symbol"],
       resolve: (asOf?: string) => resolveWalletSnapshotManifest(undefined, undefined, asOf).balanceAssets.map((asset) => [asset.symbol]),
     },
-    deployedAtColumn: "deployed_at",
   },
   {
     key: "wallet_sleeve_samples",
@@ -110,7 +106,6 @@ export const SERIES_REGISTRY: SeriesDef[] = [
       columns: ["wallet_address", "symbol"],
       resolve: (asOf?: string) => resolveWalletSnapshotManifest(undefined, undefined, asOf).sleeveKeys.map((key) => [key.walletAddress, key.asset.symbol]),
     },
-    deployedAtColumn: "deployed_at",
   },
   {
     key: "vault_share_price_history",

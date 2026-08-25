@@ -62,20 +62,16 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
   // P0 planner reject partial snapshots; publishing completeness is P1 scope.
   const uncounted = def.uncounted;
   const expectedKeys = def.expectedKeys;
-  const deployedAtCol = def.deployedAtColumn;
-  const rows = await db<(Record<string, unknown> & { slot: Date; deployed_at?: string })[]>`
+  const rows = await db<(Record<string, unknown> & { slot: Date })[]>`
     SELECT DISTINCT ${db(def.dateColumn)}::timestamptz AS slot
            ${expectedKeys ? db`, ${db([...expectedKeys.columns])}` : db``}
-           ${deployedAtCol ? db`, ${db(deployedAtCol)}::text AS deployed_at` : db``}
       FROM ${db(def.table)}
      WHERE ${db(def.dateColumn)}::timestamptz >= ${seriesStart}
        ${uncounted ? db`AND ${db(uncounted.column)} <> ALL (${db.array([...uncounted.values])})` : db``}
      ORDER BY slot
   `;
   const keyToken = (parts: readonly string[]): string => JSON.stringify(parts);
-
   const observedBySlot = new Map<number, Set<string>>();
-  const deployedAtMap = new Map<string, string>(); // keyToken -> deployedAt (YYYY-MM-DD)
   for (const row of rows) {
     const slot = new Date(row.slot).getTime();
     let keys = observedBySlot.get(slot);
@@ -83,34 +79,22 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
       keys = new Set();
       observedBySlot.set(slot, keys);
     }
-    if (expectedKeys) {
-      const keyParts = expectedKeys.columns.map((column) => String(row[column]));
-      keys.add(keyToken(keyParts));
-      if (deployedAtCol && row.deployed_at) {
-        deployedAtMap.set(keyToken(keyParts), row.deployed_at);
-      }
-    }
+    if (expectedKeys) keys.add(keyToken(expectedKeys.columns.map((column) => String(row[column]))));
   }
 
-  // Per-slot filtering: when a deployedAtColumn is present, each slot only
-  // expects assets deployed on or before that slot's date. This prevents
-  // pre-deployment dates (e.g. March days before SP500's May addition) from
-  // being flagged as incomplete gaps — the root cause of the infinite retry
-  // loop in #709.
-  let expected: Set<string> | null = null;
-  if (expectedKeys && !deployedAtCol) {
-    expected = new Set(expectedKeys.resolve(asOf).map((parts) => keyToken(parts)));
-  }
+  // Per-slot filtering: when expectedKeys is present, each slot is checked
+  // against only the assets deployed on or before that slot's date. This
+  // prevents pre-deployment dates (e.g. March days before SP500's May
+  // addition) from being flagged as incomplete — the root cause of the
+  // infinite retry loop in #709.
   const observed = new Set<number>();
   for (const [slot, keys] of observedBySlot) {
-    if (deployedAtCol) {
+    if (expectedKeys) {
       const slotDate = new Date(slot).toISOString().slice(0, 10);
-      const slotExpected = [...deployedAtMap.entries()]
-        .filter(([, d]) => d <= slotDate)
-        .map(([k]) => k);
-      if (slotExpected.every((key) => keys.has(key))) observed.add(slot);
+      const expected = new Set(expectedKeys.resolve(slotDate).map((parts) => keyToken(parts)));
+      if ([...expected].every((key) => keys.has(key))) observed.add(slot);
     } else {
-      if (!expected || [...expected].every((key) => keys.has(key))) observed.add(slot);
+      observed.add(slot);
     }
   }
   const headMs = observed.size > 0 ? Math.max(...observed) : null;
