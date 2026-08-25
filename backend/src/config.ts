@@ -159,6 +159,11 @@ export interface TrackedAsset {
   // GeckoTerminal pool id for the live OHLCV/price read (Open Question 4 — the
   // authoritative pool is owner data; the stub price path never uses it).
   poolId: string | null;
+  // ISO calendar day the asset was first tracked. The snapshot manifest uses
+  // this so that a historical day is only expected to contain assets that were
+  // live at the time — preventing stale-completeness infinite retry loops when
+  // a new asset is added to the config after historical data was written.
+  deployedAt: string;
 }
 
 // The eight fixed labelled series, in Stable → Protocol → Agent → Stocks
@@ -172,25 +177,31 @@ export function resolveTrackedAssets(
     (env[key] || fallback)?.toLowerCase() ?? null;
   return [
     { symbol: "USDC", group: "Stable", color: "#10b981", valuationKind: "erc20", priceKind: "usdc",
-      decimals: 6, address: addr("USDC_ADDRESS", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"), poolId: null },
+      decimals: 6, address: addr("USDC_ADDRESS", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"), poolId: null,
+      deployedAt: "2026-03-18" },
     // These addresses are the agent's delegated smart-account WALLETS on Base
     // (ZyfAI Safe / Giza Kernel account, source of truth: robotmoney-site),
     // proven by on-chain investigation (#120) — NOT ERC-4626 share tokens.
     // Valued at account NAV (see the `strategy` ValuationKind doc above), not a
     // $1-pegged share. Baked as defaults; override via <SYMBOL>_ADDRESS.
     { symbol: "ZYFAI-SS1", group: "Stable", color: "#10b981", valuationKind: "strategy", priceKind: "usdc",
-      decimals: 18, address: addr("ZYFAI_SS1_ADDRESS", "0xC125200A1a5710af0D8711085F4407863158976D"), poolId: null },
+      decimals: 18, address: addr("ZYFAI_SS1_ADDRESS", "0xC125200A1a5710af0D8711085F4407863158976D"), poolId: null,
+      deployedAt: "2026-03-18" },
     { symbol: "GIZA-SS1", group: "Stable", color: "#10b981", valuationKind: "strategy", priceKind: "usdc",
-      decimals: 18, address: addr("GIZA_SS1_ADDRESS", "0x8E5c5Ab532a2D3Cb6b1Dd159707b2A8588Cf8795"), poolId: null },
+      decimals: 18, address: addr("GIZA_SS1_ADDRESS", "0x8E5c5Ab532a2D3Cb6b1Dd159707b2A8588Cf8795"), poolId: null,
+      deployedAt: "2026-03-18" },
     { symbol: "WETH", group: "Protocol", color: "#f59e0b", valuationKind: "erc20", priceKind: "gecko",
-      decimals: 18, address: addr("WETH_ADDRESS", "0x4200000000000000000000000000000000000006"), poolId: env.WETH_POOL_ID || null },
+      decimals: 18, address: addr("WETH_ADDRESS", "0x4200000000000000000000000000000000000006"), poolId: env.WETH_POOL_ID || null,
+      deployedAt: "2026-03-18" },
     // Native ETH: balance via eth_getBalance (the `native` kind ignores address),
     // but priced off WETH's address (canonical wrapped price) so `address` here
     // is the PRICING address, not a balanceOf target.
     { symbol: "ETH", group: "Protocol", color: "#f59e0b", valuationKind: "native", priceKind: "gecko",
-      decimals: 18, address: addr("WETH_ADDRESS", "0x4200000000000000000000000000000000000006"), poolId: env.WETH_POOL_ID || null },
+      decimals: 18, address: addr("WETH_ADDRESS", "0x4200000000000000000000000000000000000006"), poolId: env.WETH_POOL_ID || null,
+      deployedAt: "2026-03-18" },
     { symbol: "ROBOTMONEY", group: "Agent", color: "#3b82f6", valuationKind: "erc20", priceKind: "gecko",
-      decimals: 18, address: addr("ROBOTMONEY_ADDRESS", "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3"), poolId: env.ROBOTMONEY_POOL_ID || null },
+      decimals: 18, address: addr("ROBOTMONEY_ADDRESS", "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3"), poolId: env.ROBOTMONEY_POOL_ID || null,
+      deployedAt: "2026-03-18" },
     // BNKR ("BankrCoin") real Base address, confirmed (issue #148) against the
     // live GeckoTerminal API: /networks/base/tokens/0x22af33...c76f3b resolves
     // name "BankrCoin"/symbol "BNKR" with an active USD price, and the primary
@@ -202,9 +213,13 @@ export function resolveTrackedAssets(
     // over from before the real address was confirmed. Override via
     // BNKR_ADDRESS for a re-pointed deployment.
     { symbol: "BNKR", group: "Agent", color: "#3b82f6", valuationKind: "erc20", priceKind: "gecko",
-      decimals: 18, address: addr("BNKR_ADDRESS", "0x22af33fe49fd1fa80c7149773dde5890d3c76f3b"), poolId: env.BNKR_POOL_ID || null },
+      decimals: 18, address: addr("BNKR_ADDRESS", "0x22af33fe49fd1fa80c7149773dde5890d3c76f3b"), poolId: env.BNKR_POOL_ID || null,
+      deployedAt: "2026-03-18" },
+    // SP500 is config-valued (no on-chain contract). Added to tracking ~May 2026;
+    // historical days before this date have no SP500 row and are complete without it.
     { symbol: "SP500", group: "Stocks", color: "#8b5cf6", valuationKind: "config", priceKind: "yahoo",
-      decimals: 0, address: null, poolId: null },
+      decimals: 0, address: null, poolId: null,
+      deployedAt: "2026-05-01" },
     // Optional Aave V3 aToken legs — EMPTY by default (Open Q6, owner data). Each
     // configured aToken adds a holding valued by balanceOf → underlying × price.
     // Not part of the fixed 8 chart series unless an operator opts in.
@@ -223,6 +238,7 @@ export function resolveAaveATokens(
     out.push({
       symbol: "aUSDC", group: "Stable", color: "#10b981", valuationKind: "aave", priceKind: "usdc",
       decimals: 6, address: env.AAVE_AUSDC_ADDRESS.toLowerCase(), poolId: null,
+      deployedAt: "2026-03-18",
     });
   }
   return out;
