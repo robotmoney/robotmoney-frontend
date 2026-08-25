@@ -23,6 +23,7 @@ import {
 // leaves (constants and node builtins, no side effects), which is what keeps
 // that edge one-way and cheap.
 import { POSTGRES_IMAGE, POSTGRES_MAJOR } from "../../scripts/lib/postgres-image.ts";
+import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
 
 // SUITE-WIDE: the shared RPC token bucket is OFF unless a test asks for it.
 //
@@ -48,6 +49,27 @@ import { POSTGRES_IMAGE, POSTGRES_MAJOR } from "../../scripts/lib/postgres-image
 // registers later than this one and therefore wins.
 beforeEach(() => {
   process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0";
+});
+
+// SUITE-WIDE: GeckoTerminal request spacing is OFF unless a test asks for it —
+// the same shape, and the same reason, as the RPC bucket above.
+//
+// chain/gecko-rate-limit.ts serializes every GeckoTerminal request behind one
+// process-global chain with a 6s minimum spacing (≤10 req/min, the keyless IP
+// quota). That spacing wraps the REAL transport, so it sleeps around a mocked
+// `globalThis.fetch` too — and the chain and its last-request stamp are shared
+// by every file in the run. Left on, the first gecko call anywhere stamps the
+// clock and every later call in ANY file waits up to 6s, which is how sixteen
+// tests across five unrelated files blew their 5s timeouts at once.
+//
+// The limiter's own behaviour (spacing, Retry-After, serialization) is covered
+// by the files that exercise it, each setting its own interval per test. Their
+// beforeEach registers after this one and therefore wins. The state reset also
+// unhooks this test from any chain entry a timed-out predecessor abandoned
+// mid-sleep.
+beforeEach(() => {
+  process.env.GECKO_MIN_INTERVAL_MS = "0";
+  _resetRateLimitStateForTests();
 });
 
 function freePort(): Promise<number> {
