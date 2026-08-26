@@ -143,7 +143,7 @@ and for use during rollback if needed.
 On a staging host inside the production database's private network, test
 backup and restore of the production read-only database. The test must prove
 that the backup tooling produces a restorable artifact and that the restore
-procedure completes without error. Do not proceed to the digital-smoke-smoke-twin
+procedure completes without error. Do not proceed to the digital-smoke-twin
 rehearsal until this smoke test passes.
 
 The repo ships both halves, and a runbook names them rather than restating
@@ -163,38 +163,38 @@ than the server, and refuses to write inside the checkout. It emits a
 `manifest.json` recording what it captured and from where — §4.5 cites that file
 instead of transcribing its contents.
 
-### 4.4. Digital-smoke-smoke-twin rehearsal
+### 4.4. Digital-smoke-twin rehearsal
 
-Set up a digital smoke-smoke-twin by restoring the backup from §4.3 to a local Postgres
+Set up a digital smoke-twin by restoring the backup from §4.3 to a local Postgres
 container (**not** a remote database) on a staging machine. Run the full upgrade
-on the smoke-smoke-twin, including:
+on the smoke-twin, including:
 
 - preflight checks,
 - the cutover step that applies the upgrade,
 - postflight verification.
 
-The smoke-smoke-twin must use the same release candidate that is planned for production.
-Any failure, warning, or unexpected state change discovered on the smoke-smoke-twin is a
+The smoke-twin must use the same release candidate that is planned for production.
+Any failure, warning, or unexpected state change discovered on the smoke-twin is a
 blocking issue.
 
-The smoke-smoke-twin is a named data path, not an assembly:
+The smoke-twin is a named data path, not an assembly:
 
 ```bash
-bun smoke -- --db smoke-smoke-twin      # restore the backup, boot the real stack against it
-bun run smoke:smoke:smoke-smoke-twin --once       # the same boot, unattended, plus the frontend checks
-bun run smoke:smoke-smoke-twin                # capture + restore + boot on the pinned tunnel port, and stay up
+bun smoke -- --db smoke-twin      # restore the backup, boot the real stack against it
+bun run smoke:smoke:smoke-twin --once       # the same boot, unattended, plus the frontend checks
+bun run smoke:smoke-twin                # capture + restore + boot on the pinned tunnel port, and stay up
 ```
 
-`bun run smoke:smoke-smoke-twin` is for a smoke-smoke-twin that stays up for people to look at. It publishes
+`bun run smoke:smoke-twin` is for a smoke-twin that stays up for people to look at. It publishes
 production data on the public tunnel, so treat the unclaimed admin credential as
 a live exposure and claim it immediately; the gate itself does not need it.
 
-"not a remote database" is now enforced rather than trusted: `--db smoke-smoke-twin`
+"not a remote database" is now enforced rather than trusted: `--db smoke-twin`
 restores into a local container and points the stack at it, and the mode enum
-makes "smoke-smoke-twin" and "external" separate, non-substitutable choices.
+makes "smoke-twin" and "external" separate, non-substitutable choices.
 
-**Which command satisfies the gate.** `smoke:smoke-smoke-twin --once` grades restore + boot +
-serve, and nothing release-specific — use it to check the smoke-smoke-twin machinery itself.
+**Which command satisfies the gate.** `smoke:smoke-twin --once` grades restore + boot +
+serve, and nothing release-specific — use it to check the smoke-twin machinery itself.
 The gate is satisfied by the release's own entry point, which runs the same
 driver and adds this release's checks plus the receipts:
 
@@ -203,12 +203,12 @@ bun scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-rec
 ```
 
 **Postflight runs INSIDE the rehearsal, and cannot be a step after it.** The
-smoke-smoke-twin exists only for the duration of the boot — the driver tears it down on
-every exit path — so "run postflight against the smoke-smoke-twin afterwards" is an
+smoke-twin exists only for the duration of the boot — the driver tears it down on
+every exit path — so "run postflight against the smoke-twin afterwards" is an
 instruction to race teardown from a second terminal. The release's
 `stage-rehearsal.ts` therefore hands its postflight to the driver's `onReady`
 window, between the frontend checks and teardown, and that run is what emits
-`P5.postflight-smoke-smoke-twin`. A rehearsal that cannot reach the smoke-smoke-twin to run those checks
+`P5.postflight-smoke-twin`. A rehearsal that cannot reach the smoke-twin to run those checks
 FAILS; it never reports a clean boot as a clean gate.
 
 Preflight stays a separate, earlier command, because it grades the dump and the
@@ -217,10 +217,10 @@ runbook's own preflight section).
 
 ### 4.5. Stage rehearsal report
 
-After the digital-smoke-smoke-twin rehearsal, produce a written stage rehearsal report
+After the digital-smoke-twin rehearsal, produce a written stage rehearsal report
 that includes at least:
 
-- smoke-smoke-twin setup summary (source backup, container details, RC used),
+- smoke-twin setup summary (source backup, container details, RC used),
 - preflight results,
 - cutover steps executed and their results,
 - postflight results,
@@ -231,14 +231,14 @@ that includes at least:
 The stage rehearsal gate passes only when this report exists, all acceptance
 criteria pass, and the operator has signed off.
 
-The smoke-smoke-twin setup summary should CITE the artifacts rather than restate them:
+The smoke-twin setup summary should CITE the artifacts rather than restate them:
 `manifest.json` in the backup directory records the source, role, replica proof
 and server/client versions, and the boot banner records the container, the volume
 and the backup stamp.
 
 ### 4.6. Fix loop
 
-If the digital-smoke-smoke-twin rehearsal or stage report finds any issue that affects
+If the digital-smoke-twin rehearsal or stage report finds any issue that affects
 production safety or acceptance criteria, do not proceed to production
 execution. Instead:
 
@@ -260,8 +260,8 @@ destructive or irreversible step must be explicitly marked in the runbook and
 authorized by the operator before execution.
 
 Preflight must be re-run or re-confirmed on production before the cutover
-begins, even if the smoke-smoke-twin rehearsal passed, to ensure the production
-environment matches the smoke-smoke-twin assumptions.
+begins, even if the smoke-twin rehearsal passed, to ensure the production
+environment matches the smoke-twin assumptions.
 
 The entire upgrade — preflight, cutover, and postflight — is **agent-executed
 end to end**. No human runs commands against the production server directly;
@@ -276,7 +276,7 @@ rollback only by recording the override reason, the alternate remediation
 plan, and a second sign-off in the production rollout report (§4.9).
 
 The rollback procedure must be written into the per-release runbook and
-rehearsed on the digital smoke-smoke-twin at least once before production execution.
+rehearsed on the digital smoke-twin at least once before production execution.
 
 ### 4.9. Production rollout report
 
@@ -310,9 +310,9 @@ runbook must:
   than described from memory,
 - **name data paths by `--db <mode>`; never describe how to construct one.**
   There are three — `ephemeral` (the smoke's own container), `external` (a managed
-  server from `.env`), `smoke-smoke-twin` (a local restored copy of production) — and the
+  server from `.env`), `smoke-twin` (a local restored copy of production) — and the
   tooling that builds each is shared and version-agnostic. A runbook that
-  re-derives a smoke-smoke-twin out of lower-level flags is how the last one ended up
+  re-derives a smoke-twin out of lower-level flags is how the last one ended up
   pinned to a single release.
 
 By convention the runbook lives on the release's `releases-A.B.x` branch,

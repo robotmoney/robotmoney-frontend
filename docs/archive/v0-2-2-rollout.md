@@ -23,8 +23,8 @@ cites it.** Where the two disagree, the contradiction is called out inline under
 **CONTRADICTS deployment.md**.
 
 > **Flag-surface note (added after this runbook was written).** The smoke/smoke
-> data path is now selected by one enum flag — `--db ephemeral|external|smoke-smoke-twin` —
-> and the digital smoke-smoke-twin has a first-class mode of its own instead of borrowing
+> data path is now selected by one enum flag — `--db ephemeral|external|smoke-twin` —
+> and the digital smoke-twin has a first-class mode of its own instead of borrowing
 > `--external-pg`. **Every command below still works**: `--external-pg` remains
 > an accepted spelling of `--db external` and prints a deprecation notice.
 >
@@ -37,8 +37,8 @@ cites it.** Where the two disagree, the contradiction is called out inline under
 > | This runbook's step | The standing command |
 > |---|---|
 > | §5.1/§5.2 hand-run `pg_dump` + `gpg` | `bun run smoke:smoke:capture` |
-> | §5.3b stage rehearsal | `bun run smoke:smoke:smoke-smoke-twin --once` |
-> | §7.3's `--smoke --external-pg` against a restored copy | `bun smoke -- --db smoke-smoke-twin` |
+> | §5.3b stage rehearsal | `bun run smoke:smoke:smoke-twin --once` |
+> | §7.3's `--smoke --external-pg` against a restored copy | `bun smoke -- --db smoke-twin` |
 >
 > **v0.3.0 onward already uses them** — its `stage-rehearsal.ts` is a thin wrapper
 > over the shared driver. Here, follow the text as written.
@@ -81,7 +81,7 @@ independent:
    all; the probe marks them ⛔ rather than letting you try.
 2. **Code** — each step declares the paths it actually executes (`depends-on`
    in its step block). A commit invalidates a step only if it lands on that
-   step's own inputs. This is what release-runbooks.md §4.4's *"the smoke-smoke-twin must
+   step's own inputs. This is what release-runbooks.md §4.4's *"the smoke-twin must
    use the same release candidate that is planned for production"* means in
    practice: a docs-only commit invalidates nothing, a change to `preflight.ts`
    invalidates Gate C **and** Gate B (Gate C runs preflight's checks —
@@ -311,7 +311,7 @@ this runbook that executes it.
 |---|---|---|
 | **§4.1** Pre-cutover backup | Encrypted dump + globals dump, verified restore | §5.1–§5.3 |
 | **§4.2** Schema-migration preflight | All migrations idempotent and reversible | §4 (preflight) |
-| **§4.3** Digital-smoke-smoke-twin rehearsal | Full runbook against restored smoke-smoke-twin; any failure blocks | §5.5 |
+| **§4.3** Digital-smoke-twin rehearsal | Full runbook against restored smoke-twin; any failure blocks | §5.5 |
 | **§4.4** Stage rehearsal report | Written report with acceptance criteria; gate before §7 | §5.6 |
 | **§4.5** Go/no-go sign-off | Operator sign-off after stage rehearsal report passes | §2 |
 | **§4.6** Cutover execution | Versioned RC tag, then migrate + boot | §7 |
@@ -762,7 +762,7 @@ downgrades the last two to warnings — **do not make that the normal path.**
 |---|---|---|
 | `session-read-only` | The connection can write. Nothing else was queried. | Use port `25060` and the `rm_readonly` URL. Never `PREFLIGHT_ALLOW_PRIVILEGED` for this one — it does not downgrade it. |
 | `role-privileges` / `role-write-grants` | The role is a superuser, or holds write grants / table ownership. | Provision §3's role and re-run. |
-| `server-version` | Server is < PG 11, where `0030`'s `ADD COLUMN` rewrites the table under `ACCESS EXCLUSIVE`. | Upgrade the cluster. (A **WARN** here just means "outside {17, 18}". Since issue #691 the backend suite and the restore smoke-smoke-twin both run **18**, production's major — pinned once in `scripts/lib/postgres-image.ts`. 17 stays warning-free only because the smoke / single-box stack still runs it.) |
+| `server-version` | Server is < PG 11, where `0030`'s `ADD COLUMN` rewrites the table under `ACCESS EXCLUSIVE`. | Upgrade the cluster. (A **WARN** here just means "outside {17, 18}". Since issue #691 the backend suite and the restore smoke-twin both run **18**, production's major — pinned once in `scripts/lib/postgres-image.ts`. 17 stays warning-free only because the smoke / single-box stack still runs it.) |
 | `extensions` | `pgcrypto` absent; `0001_backends.sql:4` needs `gen_random_uuid()`. | `CREATE EXTENSION IF NOT EXISTS pgcrypto;` as `doadmin`. |
 | `schema-migrations` | Either no `schema_migrations` at all (wrong database), or **orphans**: files recorded in the database that are absent from `backend/migrations/`. | Orphans mean the **database is ahead of the checkout** — you are on the wrong tag. Stop and check out the §1 release tip. |
 | `rm-worker-role` | `rm_worker` missing and `0029_admin_passkey.sql` pending. | Gate D above. |
@@ -1164,7 +1164,7 @@ throwaway container is gone whether the run succeeds or fails.
 
 ```yaml step
 id:          P5.rehearsal-boot
-phase:       P5 smoke-smoke-twin rehearsal
+phase:       P5 smoke-twin rehearsal
 section:     §5.3b
 host-role:   stage
 actor:       agent
@@ -1188,10 +1188,10 @@ verify:      bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-
 
 > **Corrected 2026-08-20 — this section used to be headed "Optional but
 > recommended".** It is not optional and never was: §5.5 opens *"⛔ This is a
-> blocking gate. Do not proceed to §7 until the smoke-smoke-twin run exits 0"*, and
-> release-runbooks.md §4.4 makes the digital-smoke-smoke-twin rehearsal part of the
+> blocking gate. Do not proceed to §7 until the smoke-twin run exits 0"*, and
+> release-runbooks.md §4.4 makes the digital-smoke-twin rehearsal part of the
 > foundational workflow with *"any failure, warning, or unexpected state change
-> discovered on the smoke-smoke-twin is a blocking issue."* Two places said required, one
+> discovered on the smoke-twin is a blocking issue."* Two places said required, one
 > said optional, and the optional one was the heading an operator reads first.
 
 `restore-check.ts` proves the dump restores and that static SQL checks pass
@@ -1268,17 +1268,17 @@ What it does:
 Exit `0` means the migration ran for real, the stack came up healthy, and the
 frontend checks passed against production-shaped data.
 
-#### 5.3b.0 ⛔ The rehearsal runs preflight AND POSTFLIGHT against the smoke-smoke-twin
+#### 5.3b.0 ⛔ The rehearsal runs preflight AND POSTFLIGHT against the smoke-twin
 
 **A rehearsal that only proves the stack boots has not rehearsed the
-release.** Run **both** halves against the digital smoke-smoke-twin, in the same order
+release.** Run **both** halves against the digital smoke-twin, in the same order
 production will see them, before production is touched at all:
 
 1. **Preflight** — §5.3's `restore-check.ts` (Gate C), then §4's checks.
 2. **Cutover** — §5.3b's boot, which applies this release's migrations to the
    restored production rows for real.
 3. **Postflight** — **every §8 check, and every §8.1 acceptance criterion**,
-   against the migrated smoke-smoke-twin.
+   against the migrated smoke-twin.
 
 Step 3 is the one that was missing, and its absence is exactly how a real
 defect reached rc.5 while every script reported success: the boot exited `0`,
@@ -1287,10 +1287,10 @@ public handle** (`robot-money` instead of `robotmoney`, `woon-2` instead of
 `woon`) — §8.1. A green mechanism is not a met objective, and only §8.1
 distinguishes them.
 
-The smoke-smoke-twin is the right place for this and the only place it is free: it holds
+The smoke-twin is the right place for this and the only place it is free: it holds
 real production rows, so the ACs are evaluated against the data that will
 actually be migrated, and a failure costs a rerun rather than a rollback.
-**Treat an AC failure on the smoke-smoke-twin exactly as an AC failure in production** —
+**Treat an AC failure on the smoke-twin exactly as an AC failure in production** —
 patch, cut the next rc, rehearse again. Do not carry a known-failing AC into
 a cutover on the theory that production will behave differently; it is the
 same data.
@@ -1309,15 +1309,15 @@ section states the intent and the script is what gets fixed.
 | **G4** | **Verification runs against the booted stack**: `scripts/smoke-frontend-check.ts` on the published port — the same route/content checks CI runs, never a bespoke probe. | A stack that boots but serves the home-page shell for every route is a failed cutover that `/health` alone reports as green (§8 check 11). |
 | **G5** | **Spend is bounded.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack **as soon as verification finishes** (G4 *and* G8) — pass or fail — and must not let the loop keep cycling. G8 costs seconds; it does not license leaving the stack up for anything else. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. |
 | **G6** | **Cleanup is unconditional.** The compose stack, the git worktree, and the throwaway Postgres container are all removed on **every** exit path — success, assertion failure, readiness timeout, and an unhandled throw. | Leftovers from this script are not inert: a surviving container holds a full copy of production data (§5.3b.2), and a surviving stack keeps spending under G5. |
-| **G7** | **Isolation is absolute.** Never the real repo-root `.env`; never a production connection; the smoke-smoke-twin's port bound to a non-routable address. | The rehearsal's whole claim is that it cannot touch production. See §5.3b.2. |
-| **G8** | **Postflight runs against the smoke-smoke-twin, inside the same run** — §8's checks *and* §8.1's AC1–AC5, via `postflight.ts --emit-receipt=P5.postflight-smoke-smoke-twin`, after G4 and before teardown. A failure is exit `1`. | §5.3b.0 step 3 and §5.5 both require it, and the smoke-smoke-twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. |
+| **G7** | **Isolation is absolute.** Never the real repo-root `.env`; never a production connection; the smoke-twin's port bound to a non-routable address. | The rehearsal's whole claim is that it cannot touch production. See §5.3b.2. |
+| **G8** | **Postflight runs against the smoke-twin, inside the same run** — §8's checks *and* §8.1's AC1–AC5, via `postflight.ts --emit-receipt=P5.postflight-smoke-twin`, after G4 and before teardown. A failure is exit `1`. | §5.3b.0 step 3 and §5.5 both require it, and the smoke-twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. |
 
 **Exit codes.**
 
 | Code | Meaning |
 |---|---|
 | `0` | Migrations applied for real, the stack came up healthy, and the frontend checks passed against production-shaped data. |
-| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), a frontend check failed, or postflight failed against the smoke-smoke-twin (G8). |
+| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), a frontend check failed, or postflight failed against the smoke-twin (G8). |
 | `2` | Could not run at all — missing/undecryptable backup files, no `OPENCODE_API_KEY` (§5.3b's box), Docker/git failure. Says nothing about the release. |
 
 ✅ **Conformant as of 2026-08-17, and executed end to end for the first
@@ -1353,7 +1353,7 @@ baseline).
 > its objective. On 2026-08-17 this script exited `0` with every check above
 > green while **two members ended up with the wrong public handle** — the
 > defect §8.1 exists to catch. Always follow a green run with §5.3b.0 step 3:
-> §8's checks *and* §8.1's acceptance criteria, against the same smoke-smoke-twin.
+> §8's checks *and* §8.1's acceptance criteria, against the same smoke-twin.
 
 > **Reading a run.** "Still running" is only ever legitimate *before*
 > readiness, and only up to G3's deadline — a cold first build genuinely
@@ -1362,20 +1362,20 @@ baseline).
 > take is hung, not working; that is now a bug to report, not a state to
 > wait out.
 
-#### 5.3b.2 Contract — the digital smoke-smoke-twin is production data, and must be treated that way
+#### 5.3b.2 Contract — the digital smoke-twin is production data, and must be treated that way
 
 Both §5.3 and §5.3b restore the dump into a throwaway local Postgres. Nothing
-about "throwaway" makes its **contents** low-value: the smoke-smoke-twin holds a complete
+about "throwaway" makes its **contents** low-value: the smoke-twin holds a complete
 copy of production, including `admin_credential` hashes, `admin_session`
 tokens, member access keys and every stored email address — the same inventory
 §5.2 encrypts the dump for. The container is disposable; the data in it is not.
 
 | # | Guarantee | Why |
 |---|---|---|
-| **T1** | **No production credential is used or needed.** The smoke-smoke-twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run *for real* with no production secret in play. It is also why `doadmin` is irrelevant to §5.3/§5.3b: the migrations apply to the smoke-smoke-twin, and at real cutover (§7) they apply as the application's writer from `DATABASE_URL` — `doadmin` applies migrations at no point in this runbook. |
-| **T2** | **The smoke-smoke-twin's superuser is a true superuser, and that is fine.** It holds more Postgres privilege than `doadmin` does (DO withholds real superuser — §3's `pg_read_all_data` box is that limit in action), yet near-zero risk: it reaches one disposable container and dies with it. | Privilege and blast radius are independent. Do not reason about this credential by its power; reason about the state it can reach. |
+| **T1** | **No production credential is used or needed.** The smoke-twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run *for real* with no production secret in play. It is also why `doadmin` is irrelevant to §5.3/§5.3b: the migrations apply to the smoke-twin, and at real cutover (§7) they apply as the application's writer from `DATABASE_URL` — `doadmin` applies migrations at no point in this runbook. |
+| **T2** | **The smoke-twin's superuser is a true superuser, and that is fine.** It holds more Postgres privilege than `doadmin` does (DO withholds real superuser — §3's `pg_read_all_data` box is that limit in action), yet near-zero risk: it reaches one disposable container and dies with it. | Privilege and blast radius are independent. Do not reason about this credential by its power; reason about the state it can reach. |
 | **T3** | **The published port must bind a non-routable address** — `127.0.0.1`, or the Docker bridge gateway when sibling containers must reach it (§5.3b). **Never `0.0.0.0`.** | Docker inserts its own iptables rules ahead of ufw/firewalld, so a `0.0.0.0` bind can be reachable from outside the host *even when the firewall looks closed* (verified 2026-08-17). Given T4, the bind address is the only thing standing between a production-data copy and the internet. |
-| **T4** | **The smoke-smoke-twin's password must be generated per run, not a constant.** | A predictable password is acceptable *only* while T3 holds perfectly; making it unpredictable removes the dependence of one control on another and costs nothing. **Conformant as of 2026-08-17.** `restore-container.ts` previously hardcoded `LOCAL_PASSWORD = "throwaway-local-only"` while §5.3's prose claimed the superuser was "freshly generated" — it was not. It now is: generated per run, never logged, passed to callers on `RestoredContainer`. |
+| **T4** | **The smoke-twin's password must be generated per run, not a constant.** | A predictable password is acceptable *only* while T3 holds perfectly; making it unpredictable removes the dependence of one control on another and costs nothing. **Conformant as of 2026-08-17.** `restore-container.ts` previously hardcoded `LOCAL_PASSWORD = "throwaway-local-only"` while §5.3's prose claimed the superuser was "freshly generated" — it was not. It now is: generated per run, never logged, passed to callers on `RestoredContainer`. |
 
 ### 5.4 🔴 IRREVERSIBLE — capture the swarm schedule rows, which no restore returns
 
@@ -1437,11 +1437,11 @@ restoring those values afterwards is a manual `UPDATE` per row, and you
 cannot write it without this output. Keep it with the dump (it holds no
 credentials, so it does not need §5.2's encryption).
 
-### 5.5 Digital-smoke-smoke-twin rehearsal
+### 5.5 Digital-smoke-twin rehearsal
 
 ```yaml step
-id:          P5.postflight-smoke-smoke-twin
-phase:       P5 smoke-smoke-twin rehearsal
+id:          P5.postflight-smoke-twin
+phase:       P5 smoke-twin rehearsal
 section:     §5.5
 host-role:   stage
 actor:       agent
@@ -1458,7 +1458,7 @@ depends-on:
 verify:      bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022 --emit-receipt   # G8 runs this step
 ```
 
-⛔ **This is a blocking gate.** Do not proceed to §7 until the smoke-smoke-twin run exits
+⛔ **This is a blocking gate.** Do not proceed to §7 until the smoke-twin run exits
 `0` and every acceptance criterion in §5.6 is met.
 
 Restore the backup (§5.3's `restore-check.ts`, then §5.3b's
@@ -1466,28 +1466,28 @@ Restore the backup (§5.3's `restore-check.ts`, then §5.3b's
 against it in sequence:
 
 1. **Preflight (§4)** — run `restore-check.ts` (Gate C) first, then §4's live
-   checks against the restored smoke-smoke-twin. Any failure is blocking. Follow the fix
+   checks against the restored smoke-twin. Any failure is blocking. Follow the fix
    loop: patch, cut the next rc, restore a fresh dump, rehearse again.
 2. **Cutover (§7)** — run `stage-rehearsal.ts`, which executes the exact §7.3
    boot command (`bun scripts/smoke.ts --smoke --external-pg --no-tui`, `CI`
-   unset) against the migrated smoke-smoke-twin. Any failure is blocking.
+   unset) against the migrated smoke-twin. Any failure is blocking.
 3. **Postflight (§8)** — run every §8 check **and** every §8.1 acceptance
-   criterion against the smoke-smoke-twin after the boot reaches readiness. Any failure is
+   criterion against the smoke-twin after the boot reaches readiness. Any failure is
    blocking — do not carry a known-failing AC into a production cutover on the
    theory that production will behave differently.
 
-The smoke-smoke-twin holds real production rows. An AC failure on the smoke-smoke-twin is an AC failure
-in production; it is the same data. Treat a failing smoke-smoke-twin the same as a failing
+The smoke-twin holds real production rows. An AC failure on the smoke-twin is an AC failure
+in production; it is the same data. Treat a failing smoke-twin the same as a failing
 production cutover: diagnose, patch, cut the next rc, re-rehearse from step 1.
 
 ```bash
 cd <checkout>/backend
-# Step 1 — preflight against the smoke-smoke-twin
+# Step 1 — preflight against the smoke-twin
 bun scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts ~/rm-backup-v022
 
-# Steps 2+3 — cutover + postflight against the smoke-smoke-twin
+# Steps 2+3 — cutover + postflight against the smoke-twin
 bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022
-# After EXIT=0: run every §8 check and §8.1 ACs against the smoke-smoke-twin's published port
+# After EXIT=0: run every §8 check and §8.1 ACs against the smoke-twin's published port
 ```
 
 ### 5.6 Stage rehearsal report
@@ -1501,7 +1501,7 @@ actor:       operator
 requires:
   - P4.preflight-live
   - P5.rehearsal-boot
-  - P5.postflight-smoke-smoke-twin
+  - P5.postflight-smoke-twin
 artifacts:
   - *rehearsal-report-*.md
 verify:      write the §5.6 report, then: where.ts --record P6.report --note GO
@@ -1509,27 +1509,27 @@ verify:      write the §5.6 report, then: where.ts --record P6.report --note GO
 
 ⛔ **Gate: do not proceed to §7 until this report exists and all criteria pass.**
 
-Produce a written report covering the smoke-smoke-twin rehearsal just completed. Save it to
+Produce a written report covering the smoke-twin rehearsal just completed. Save it to
 a file alongside the backup artifacts (e.g.
 `stage-rehearsal-report-<STAMP>.md`). The report must include:
 
 **1. Twin setup**
-- RC tag and SHA deployed to the smoke-smoke-twin
+- RC tag and SHA deployed to the smoke-twin
 - Backup stamp used (`rm-preupgrade-<STAMP>.dump.gpg`)
 - `restore-check.ts` exit code and any notable output
 
-**2. Preflight results (§4 on the smoke-smoke-twin)**
+**2. Preflight results (§4 on the smoke-twin)**
 - All **Gate C, B, D, E** results (pass / fail / note) — §2's four gates, in
   execution order. There is no Gate A; an earlier revision of this line asked
   for "Gate A–D" after §2 had abolished it
 - Exit code of `restore-check.ts`
 
-**3. Cutover results (§7 on the smoke-smoke-twin)**
+**3. Cutover results (§7 on the smoke-twin)**
 - `stage-rehearsal.ts` exit code
 - Time to readiness (`ready after …s`)
 - Frontend check verdict
 
-**4. Postflight results (§8 on the smoke-smoke-twin)**
+**4. Postflight results (§8 on the smoke-twin)**
 - Result for every §8 check (check 1–12)
 - All §8.1 acceptance criteria explicitly ticked or failed
 
@@ -2182,9 +2182,9 @@ Where those references should land instead is tracked separately (#687).
 > **AC1–AC6 are automated.** `postflight.ts` now runs AC1–AC5 as
 > named checks (`ac1-member-uuid`, `ac2-handle-derived`, `ac3-no-default-handle`,
 > `ac4-no-derived-suffix`, `ac5-handle-resolves`), so they are evaluated
-> wherever postflight runs — including against the digital smoke-smoke-twin inside §5.3b's
+> wherever postflight runs — including against the digital smoke-twin inside §5.3b's
 > rehearsal (G8), which is where §5.5 requires them and where they were
-> previously impossible to run: the smoke-smoke-twin exists only between readiness and
+> previously impossible to run: the smoke-twin exists only between readiness and
 > teardown. AC2 calls the real `slugifyMemberName` rather than a paraphrase of
 > it.
 >
@@ -2229,7 +2229,7 @@ remapped **explicitly** — it is not a foreign key, so nothing in the deferral
 loop can see it, and it would be left pointing at an id that no longer exists.
 
 **Verified against a restored production dump on 2026-08-17**, not against
-fixtures — the smoke-smoke-twin is where these ACs are cheap to evaluate and the data is
+fixtures — the smoke-twin is where these ACs are cheap to evaluate and the data is
 what will actually be migrated (§5.3b.0):
 
 ```
@@ -2250,7 +2250,7 @@ left `DEFERRABLE`, all three `ON DELETE CASCADE`s preserved.
 > Money) and left the three UUID members (Woon, Maximus, nat) untouched. The
 > AC1 list below names handles, not ids.
 
-**Re-verified against the actual rc.6 smoke-smoke-twin on 2026-08-19:**
+**Re-verified against the actual rc.6 smoke-twin on 2026-08-19:**
 
 - 0033 remapped three slug ids (`athena`→`172155e5`, `woon`→`0ef3c38e`,
   `robotmoney`→`c5e402af`), left three UUID ids untouched
@@ -2381,7 +2381,7 @@ FROM wallet_balance_samples;
 wallet balance sampler has not run since the new code booted — the sampler is
 wedged or the worker container is not running.
 
-If this is a fresh database (e.g. the smoke-smoke-twin), `samples_today` may legitimately be
+If this is a fresh database (e.g. the smoke-twin), `samples_today` may legitimately be
 `0` if the sampler has not fired yet. Wait the full schedule cadence and re-check.
 
 > ⚠ **Check 14 ALREADY FAILS on production, and not because of this release.**

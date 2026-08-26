@@ -1992,10 +1992,10 @@ paths, replacing the former `--external-pg` boolean (still accepted, deprecated)
 |---|---|---|---|
 | `--db ephemeral` *(default)* | a compose `postgres` service | this boot | container removed, **data kept** (`<project>_pgdata`, or the `--pg-data` dir) |
 | `--db external` | a managed server addressed from `.env` | somebody else | nothing kept, because nothing here was ever this boot's |
-| `--db smoke-smoke-twin` | a local container restored from an encrypted production dump | this boot | container removed, **copy kept** in a labelled volume |
+| `--db smoke-twin` | a local container restored from an encrypted production dump | this boot | container removed, **copy kept** in a labelled volume |
 
 They are one flag rather than several booleans because *where postgres lives* and *who
-owns the data* are different questions, and the smoke-smoke-twin is the case that separates them: it
+owns the data* are different questions, and the smoke-twin is the case that separates them: it
 dials a URL like `external` does, but every write lands in a copy this boot may reclaim.
 `scripts/lib/smoke-db-mode.ts` carries both as the exported predicates `usesComposePostgres()`
 and `ownsData()`; the state file records the mode as `db`, which `smoke:down`, `smoke:status`
@@ -2004,17 +2004,17 @@ and `smoke:clean` branch on.
 Unknown flags are refused at parse time rather than ignored — an enum makes a typo'd value
 dangerous in a way a boolean was not, so the argv allowlist ships with it.
 
-The smoke-smoke-twin's tooling is version-agnostic and lives outside any release directory:
+The smoke-twin's tooling is version-agnostic and lives outside any release directory:
 `bun run smoke:smoke:capture` produces the encrypted backup (read-only role, replica only),
-`bun smoke -- --db smoke-smoke-twin` restores and boots against it, `bun run smoke:smoke:smoke-smoke-twin --once` does that
-unattended with the frontend checks, and `bun run smoke:smoke-smoke-twin` is the standing variant on the
+`bun smoke -- --db smoke-twin` restores and boots against it, `bun run smoke:smoke:smoke-twin --once` does that
+unattended with the frontend checks, and `bun run smoke:smoke-twin` is the standing variant on the
 pinned tunnel port. See [release-runbooks.md §4.3–§4.4](./technical/release-runbooks.md).
 
 A release's own rehearsal (`backend/scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts`)
 drives the same shared driver and adds the half that *is* version-specific: it passes an
-`onReady` hook, so that release's postflight runs against the migrated smoke-smoke-twin between the
+`onReady` hook, so that release's postflight runs against the migrated smoke-twin between the
 frontend checks and teardown. That window has to be inside the run — the driver tears the
-smoke-smoke-twin down on every exit path — so the checks cannot be a command issued afterwards.
+smoke-twin down on every exit path — so the checks cannot be a command issued afterwards.
 
 **Postgres data location.** By default each run uses a fresh anonymous named volume
 `<project>_pgdata`, labeled `robotmoney.smoke=1` (so `smoke:clean` can find it). Passing
@@ -2023,9 +2023,9 @@ smoke-smoke-twin down on every exit path — so the checks cannot be a command i
 data — this is a CLI **argument**, never an env var, and is recorded in the state file.
 `--pg-data` applies only to `--db ephemeral`: it binds the data directory *of* the compose
 postgres container, so pairing it with a mode that starts no such container is
-unrepresentable rather than merely rejected. A `--db smoke-smoke-twin` boot keeps its restored copy in
+unrepresentable rather than merely rejected. A `--db smoke-twin` boot keeps its restored copy in
 its own labelled volume under the same contract — teardown keeps it, `smoke:clean` reclaims
-it — and every smoke-smoke-twin boot restores FRESH, because the previous boot migrated that copy.
+it — and every smoke-twin boot restores FRESH, because the previous boot migrated that copy.
 Reuse constraints: the same postgres major (17) and the same baked-in smoke credentials;
 migrate + seed are idempotent (`backend/src/db/seed.ts` uses `ON CONFLICT DO NOTHING`),
 so re-booting on old data converges rather than duplicating rows. (Bind mounts were

@@ -34,7 +34,7 @@ into the per-release runbook — the obligation each one imposes is unchanged (�
 | Goal the policy serves | Under stack | Mechanism |
 |---|---|---|
 | **Reproducibility** — the procedure is written, not remembered | **Better** | The spec file is a versioned artifact. Today nothing describes what staging *is*. |
-| **Rehearsal fidelity** — prove on a smoke-smoke-twin before prod | **Better** | `backup restore --from <prod>` makes the smoke-smoke-twin a *whole-stack* smoke-smoke-twin, not a database smoke-smoke-twin. Repositories are interchangeable across compose and k8s. |
+| **Rehearsal fidelity** — prove on a smoke-twin before prod | **Better** | `backup restore --from <prod>` makes the smoke-twin a *whole-stack* smoke-twin, not a database smoke-twin. Repositories are interchangeable across compose and k8s. |
 | **Recoverability** — always able to get back | **Better**, once §4.2 is adopted | Data: restic snapshots + `backup restore`. Code: published images are commit-addressed, so rollback is a pointer change — but only if we publish rather than stage locally. |
 | **Auditability** — reports, sign-off, go/no-go | **Same** | Human artifacts; the platform is neutral. |
 | **Agent execution** — no human at a production shell | **Same or better** | A CLI plus a kubeconfig, with no interactive step. |
@@ -94,15 +94,15 @@ stack-owned database the same obligation is met by
 *prove the backup produces a restorable artifact before proceeding* — is what
 should stay in the policy.
 
-**policy §4.4 digital-smoke-smoke-twin rehearsal** currently requires restoring "to a local Postgres
+**policy §4.4 digital-smoke-twin rehearsal** currently requires restoring "to a local Postgres
 container (not a remote database) on a staging machine". Under stack this gets
 strictly better and should be allowed to: the documented fan-out pattern makes
-the smoke-smoke-twin a **whole-stack** smoke-smoke-twin, not just a database —
+the smoke-twin a **whole-stack** smoke-twin, not just a database —
 
 ```sh
-stack deploy   --spec-file <spec> --deployment-dir ~/deployments/smoke-smoke-twin
-stack manage   --dir ~/deployments/smoke-smoke-twin start
-stack manage   --dir ~/deployments/smoke-smoke-twin backup restore --from <prod-deployment-name>
+stack deploy   --spec-file <spec> --deployment-dir ~/deployments/smoke-twin
+stack manage   --dir ~/deployments/smoke-twin start
+stack manage   --dir ~/deployments/smoke-twin backup restore --from <prod-deployment-name>
 ```
 
 The policy's intent (rehearse on real data, in isolation, on the same RC) is
@@ -116,7 +116,7 @@ All gate numbers in this table are the policy's.
 |---|---|
 | §4.2 baseline | `stack manage --dir <d> backup now`, plus the app-specific state capture the objective names |
 | §4.3 backup smoke | `backup now` → `backup list` → `backup restore` into a scratch deployment |
-| §4.4 smoke-smoke-twin | `deploy` + `start` + `backup restore --from <prod>` (§2 above) |
+| §4.4 smoke-twin | `deploy` + `start` + `backup restore --from <prod>` (§2 above) |
 | §4.7 cutover | `prepare --publish-images` from a clean release checkout → `manage update` against the durable deployment directory (§4.1, §4.2) |
 | §4.8 rollback | Code: point the reference at the previous version tag → `update`. Data: stop → `backup restore` → start (§4.3). Two axes, reasoned about separately. |
 

@@ -129,11 +129,11 @@ One flag, three named data paths. The default is unchanged:
 |---|---|---|
 | `--db ephemeral` *(default)* | the smoke's own throwaway `postgres` container + fresh-per-run `pgdata` volume | this boot |
 | `--db external` | a managed server whose address comes from `.env`; **no postgres container at all** | somebody else — teardown cannot undo a thing |
-| `--db smoke-smoke-twin` | a local container restored from an encrypted production dump | this boot, and the copy outlives it |
+| `--db smoke-twin` | a local container restored from an encrypted production dump | this boot, and the copy outlives it |
 
 They are one flag rather than three booleans because the two questions that
 matter — *where does postgres live* and *who owns the data* — are not the same
-question, and a smoke-smoke-twin is the case that separates them: it dials a URL like
+question, and a smoke-twin is the case that separates them: it dials a URL like
 `external` does, but every write lands in a copy this boot may reclaim.
 
 ```bash
@@ -185,21 +185,21 @@ each fail the boot with the reason. `--pg-data` applies only to `--db ephemeral`
 — it bind-mounts that container's data directory, so pairing it with a mode that
 starts no such container is refused by name.
 
-### Rehearse an upgrade against a copy of production — `--db smoke-smoke-twin`
+### Rehearse an upgrade against a copy of production — `--db smoke-twin`
 
 ```bash
-bun run smoke:smoke-smoke-twin                # ONE COMMAND: fresh capture + restore + boot on the PINNED tunnel port
+bun run smoke:smoke-twin                # ONE COMMAND: fresh capture + restore + boot on the PINNED tunnel port
 bun run smoke:smoke:capture        # dump the read-only REPLICA, gpg-encrypted (never the primary)
-bun smoke -- --db smoke-smoke-twin      # restore an existing dump and boot against it (Docker-assigned port)
-bun run smoke:smoke:smoke-smoke-twin --once       # one-shot rehearsal: boot + frontend checks, then tears itself down
+bun smoke -- --db smoke-twin      # restore an existing dump and boot against it (Docker-assigned port)
+bun run smoke:smoke:smoke-twin --once       # one-shot rehearsal: boot + frontend checks, then tears itself down
 ```
 
-`bun run smoke:smoke-smoke-twin` is the standing one — it is to `bun run smoke:stage` what production
+`bun run smoke:smoke-twin` is the standing one — it is to `bun run smoke:stage` what production
 data is to simulation fixtures, and it takes the same pinned port cloudflared
 routes to. **It therefore publishes a copy of production on a public URL**, and
 the restored admin claim is usually UNCLAIMED, so whoever reaches the admin
 surface first takes admin on real member data. Claim it immediately, or use
-`bun smoke -- --db smoke-smoke-twin`, which is identical minus the tunnel port. Add `--reuse`
+`bun smoke -- --db smoke-twin`, which is identical minus the tunnel port. Add `--reuse`
 to skip the capture and boot the backup you already have.
 
 All of these read `OPENCODE_API_KEY` from **`.env.readonly`**, never from `.env`
@@ -207,19 +207,19 @@ All of these read `OPENCODE_API_KEY` from **`.env.readonly`**, never from `.env`
 commands is defined by not needing it.
 
 
-The smoke-smoke-twin's data lives in a labelled named volume and follows the same contract as
+The smoke-twin's data lives in a labelled named volume and follows the same contract as
 `pgdata`: teardown removes the container, **keeps** the volume, and `bun run
 smoke:clean` reclaims it. It holds real credential material, so reclaim it when
 you are done. Every boot restores fresh — re-running does not resume, it
 discards, because the previous run migrated the copy.
 
-`--db smoke-smoke-twin` requires `--smoke`: a restored database is populated, and the smoke
+`--db smoke-twin` requires `--smoke`: a restored database is populated, and the smoke
 scenario's fixtures overwrite rows by design.
 
-`smoke:smoke-smoke-twin --once` grades restore + boot + serve and nothing release-specific — it is
-how you check the smoke-smoke-twin machinery itself. A **release** gate is satisfied by that
+`smoke:smoke-twin --once` grades restore + boot + serve and nothing release-specific — it is
+how you check the smoke-twin machinery itself. A **release** gate is satisfied by that
 release's own entry point, which drives the same code and adds this release's
-postflight against the migrated smoke-smoke-twin plus its rollout receipts:
+postflight against the migrated smoke-twin plus its rollout receipts:
 
 ```bash
 bun scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
@@ -333,9 +333,9 @@ bun run smoke:reap -- --dry-run          # SHOW errant containers a sweep would 
 bun run smoke:reap -- --older-than 6h    # …then actually reap them (labels only, never name matching)
 bun run smoke -- --pg-data <host-dir>   # resumable smoke: bind postgres data to <host-dir>
 bun run smoke -- --db external          # run against the MANAGED Postgres in .env (no pg container)
-bun smoke -- --db smoke-smoke-twin                 # boot against a local restored copy of production
+bun smoke -- --db smoke-twin                 # boot against a local restored copy of production
 bun run smoke:smoke:capture         # dump the production REPLICA, gpg-encrypted (rm_readonly)
-bun run smoke:smoke:smoke-smoke-twin --once        # unattended digital-smoke-smoke-twin rehearsal (restore + boot + checks)
+bun run smoke:smoke:smoke-twin --once        # unattended digital-smoke-twin rehearsal (restore + boot + checks)
 bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
 bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)
