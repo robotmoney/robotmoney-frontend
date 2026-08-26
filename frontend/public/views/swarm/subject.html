@@ -21,7 +21,7 @@
           <div class="sv__avatar sv__avatar--xl sp-mark" :style="`--sp-subject:${subjectDot(subject.id)}`"
                x-text="initials(subject.name)"></div>
           <div class="sv__profile-main">
-            <p class="sv__eyebrow">ic subject<span x-show="subject.operator"> · operator <span x-text="subject.operator"></span></span></p>
+            <p class="sv__eyebrow">portfolio<span x-show="subject.operator"> · operator <span x-text="subject.operator"></span></span></p>
             <h1 class="sv__detail-title" x-text="subject.name"></h1>
             <p class="sv__lede sv__lede--compact" x-show="subject.thesisBlurb" x-text="subject.thesisBlurb"></p>
             <p class="sp-links" x-show="subject.homepage || subject.xHandle">
@@ -155,7 +155,7 @@
           </div>
 
           <p class="sv__empty" x-show="!sessions.length" x-cloak>
-            No published session yet. Every session the swarm holds on this subject lands here.
+            No published session yet. Every session the swarm holds on this portfolio lands here.
           </p>
 
           <div class="sv__session-list sv__session-list--compact">

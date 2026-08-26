@@ -9,7 +9,7 @@
     <template x-if="!loading && session">
       <div>
         <header class="sv__detail-head">
-          <p class="sv__eyebrow"><span x-text="formatDate(session.date, 'long')"></span> · subject</p>
+          <p class="sv__eyebrow"><span x-text="formatDate(session.date, 'long')"></span> · portfolio</p>
           <h1 class="sv__detail-title session-title" x-text="session.subjectName"></h1>
           <p class="sv__lede sv__lede--compact" x-text="subject?.thesisBlurb || `${session.subjectName} swarm review.`"></p>
           <!-- Backdrop chips. Label and value are distinct elements: the old
@@ -426,7 +426,7 @@
                          held it and the page published two addresses for one
                          member. One argument, one resolver, one address. -->
                     <a class="sv__avatar sv__avatar--mark" :href="memberHref(t.memberId)" :aria-label="t.memberName"
-                       x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 40, memberById(t.memberId)?.avatar?.path)"></a>
+                       x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 40, memberById(t.memberId)?.avatar?.path, memberById(t.memberId)?.handle)"></a>
                     <div>
                       <a class="sv__member-link" :href="memberHref(t.memberId)" x-text="t.memberName"></a>
                       <div class="sv__take-lens" x-text="memberLens(t.memberId)"></div>

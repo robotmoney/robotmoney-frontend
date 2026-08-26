@@ -10,6 +10,7 @@ import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberAvatarMarkup } from "../lib/member-mark.js";
+import { memberLogo } from "../lib/member-logos.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -233,6 +234,13 @@ export function camelSubject(raw) {
     nftContracts: raw.nft_contracts || raw.nftContracts || [],
     recommendationType: raw.recommendation_type || raw.recommendationType,
     linkedMemberId: raw.linked_member_id || raw.linkedMemberId,
+    // `source.type` is the only field that says what KIND of thing this is:
+    // `framework` has no portfolio to scrape because it IS the allocation
+    // recipe, `vault_tvl` is the vault, `rpc` is a real wallet set. The
+    // normaliser dropped it, which is why every consumer had to guess from the
+    // slug. RM-100 groups on it.
+    source: raw.source || null,
+    status: raw.status || null,
   };
 }
 
@@ -361,13 +369,16 @@ export const helpers = {
       .map((s) => s[0].toUpperCase())
       .join("") || "SW";
   },
-  // Avatar precedence (#625): manifest avatar.path, then the derived identity
-  // mark (#560), then the initials above when there is no seed either. Bound
-  // with x-html: memberAvatarMarkup() only ever writes a path it was handed
-  // and a derived-mark/initials string that cannot carry markup from a member
-  // name, so neither path can inject anything.
-  memberMark(seed, name, size = 40, avatarPath) {
-    return memberAvatarMarkup(avatarPath, seed, name, size, (n) => this.initials(n));
+  // Avatar precedence (#625, RM-100): the curated operator logo, then the
+  // projection's avatar.path, then the derived identity mark (#560), then the
+  // initials above when there is no seed either. The logo wins because every
+  // seeded path production serves 404s and one of them points at the wrong
+  // member; see lib/member-logos.js. Bound with x-html: memberAvatarMarkup()
+  // only ever writes a path it was handed and a derived-mark/initials string
+  // that cannot carry markup from a member name, so neither can inject.
+  memberMark(seed, name, size = 40, avatarPath, handle) {
+    const src = memberLogo({ handle }) || avatarPath || null;
+    return memberAvatarMarkup(src, seed, name, size, (n) => this.initials(n));
   },
   stanceColor(stance) {
     return STANCE_COLORS[stance] || "#7e889e";

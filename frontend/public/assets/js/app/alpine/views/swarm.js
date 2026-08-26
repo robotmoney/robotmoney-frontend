@@ -8,10 +8,30 @@
 // coverage as a drive-by; JSDoc-typing this file is a worthwhile follow-up.
 //
 // Alpine factory for the /swarm directory view. Moved verbatim from the
-// monolithic views.js (finding 025).
-import { api, ROUTES } from "../../lib/api.js";
+// monolithic views.js (finding 025), then reworked for RM-100: three
+// portfolios instead of four subjects, real session counts, and a member
+// register.
+import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
+import { memberLogo } from "../../lib/member-logos.js";
 import { subjectDot } from "./shared.js";
+
+// Every seat proposes today. There is no role field on the projection yet, and
+// the second role (validator) ships with its first holder, so this is a named
+// constant rather than a string sprinkled through the template: when the field
+// lands, this function reads it and nothing else moves. RM-97's roles table.
+const DEFAULT_ROLE = "proposer";
+
+// Operators the house runs itself. Anything else is an external operator, and
+// a member with no operator set gets no chip at all rather than an invented one.
+const HOUSE_OPERATORS = new Set(["robotmoney", "robot money", "rm protocol labs"]);
+
+// The sessions list is paginated and the page used to render only the first
+// page while presenting its counts as totals. 209 published sessions arrive in
+// 3 requests at this limit; the cap is a runaway guard, not a business rule.
+const SESSION_PAGE_SIZE = 100;
+const MAX_SESSION_PAGES = 12;
+const SESSIONS_SHOWN_STEP = 20;
 
 export function registerSwarmView(Alpine) {
   // ── Investment Swarm ──────────────────────────────────────────────────
@@ -21,19 +41,57 @@ export function registerSwarmView(Alpine) {
     members: [],
     sessions: [],
     subjectCache: {},
+    allocation: null,
+    sessionsTruncated: false,
+    shown: SESSIONS_SHOWN_STEP,
     async load() {
       try {
         const [memberData, sessionData] = await Promise.all([
           api.get(ROUTES.swarm.members),
-          api.get(ROUTES.swarm.sessions),
+          this.loadAllSessions(),
         ]);
         this.members = memberData.members || [];
-        this.sessions = sessionData.sessions || [];
+        this.sessions = sessionData;
+        // Subject records carry the operator, the thesis blurb, and the field
+        // this whole regrouping turns on: `source.type`. `subjectCache` has
+        // existed since the port and was never written to, which is why the
+        // panel has always shown a raw id where an operator belongs.
+        await this.loadSubjects();
+        // Current target weights, so the vault can be shown against them.
+        this.allocation = await api.get(ROUTES.dashboards.allocation).catch(() => null);
         this.loading = false;
       } catch (e) {
         this.error = e.message;
         this.loading = false;
       }
+    },
+    // Walk `nextCursor` to exhaustion. Without this the counts below are
+    // first-page artifacts: the panel implied 4 or 5 sessions per subject where
+    // the real figures are 50 to 102.
+    async loadAllSessions() {
+      const rows = [];
+      let cursor = null;
+      for (let page = 0; page < MAX_SESSION_PAGES; page += 1) {
+        const query = { limit: String(SESSION_PAGE_SIZE) };
+        if (cursor) query.cursor = cursor;
+        const res = await api.get(ROUTES.swarm.sessions, query);
+        rows.push(...(res.sessions || []));
+        cursor = res.nextCursor || null;
+        if (!cursor) return rows;
+      }
+      // Ran out of pages before the cursor ran out. Say so rather than
+      // silently presenting a partial set as the total.
+      this.sessionsTruncated = true;
+      return rows;
+    },
+    async loadSubjects() {
+      const ids = [...new Set(this.sessions.map((s) => s.subjectId).filter(Boolean))];
+      const rows = await Promise.all(
+        ids.map((id) => api.get(path(ROUTES.swarm.subject, { id })).catch(() => null)),
+      );
+      const cache = {};
+      ids.forEach((id, i) => { if (rows[i]) cache[id] = rows[i]; });
+      this.subjectCache = cache;
     },
     publishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
     // Link by SESSION ID. Two rows sharing a (date, subject) are two different
@@ -45,26 +103,132 @@ export function registerSwarmView(Alpine) {
     sessionHref(s) {
       return s?.id ? `/swarm/sessions/${encodeURIComponent(s.id)}` : `/swarm/${s.date}/${s.subjectId}`;
     },
-    // Subject encoding + filter, identical in behaviour to the member profile's
-    // track record — the roster is the same problem at larger scale (every
-    // subject interleaved by date), and the two lists must not teach different
-    // conventions for the same data.
+
+    // ── portfolios ───────────────────────────────────────────────────────
+    // A framework subject has no portfolio to scrape: it IS the allocation
+    // recipe for one. So it is not a fourth thing under review, it is the
+    // vault's own sessions wearing a second name, and it folds into the
+    // `vault_tvl` subject of the same operator. Expressed as a rule rather
+    // than a hardcoded slug so a second framework subject behaves correctly,
+    // and it degrades to standing alone when no vault matches.
+    parentFor(id) {
+      const meta = this.subjectCache[id];
+      if (meta?.source?.type !== "framework") return id;
+      const vault = Object.values(this.subjectCache).find(
+        (s) => s?.source?.type === "vault_tvl" && s.operator && s.operator === meta.operator,
+      );
+      return vault?.id || id;
+    },
+    // Grouped id for a session, so counts, colours and filters all agree.
+    portfolioIdOf(s) { return this.parentFor(s?.subjectId); },
+    // Once two subjects retitle to one portfolio, this is what still separates
+    // their sessions. Only qualify where something actually folded in: a
+    // portfolio with a single source needs no qualifier, and adding one to
+    // every row would be noise that distinguishes nothing.
+    foldedInto(id) {
+      const set = new Set(
+        this.publishedSessions()
+          .filter((s) => this.parentFor(s.subjectId) === id)
+          .map((s) => s.subjectId),
+      );
+      return set.size > 1;
+    },
+    qualifierOf(s) {
+      const meta = this.subjectCache[s?.subjectId];
+      if (!meta) return "";
+      if (!this.foldedInto(this.parentFor(s.subjectId))) return "";
+      return meta.source?.type === "framework" ? "target allocation" : "holdings";
+    },
+    portfolioName(id) { return this.subjectCache[id]?.name || id; },
+    portfolios() {
+      const map = new Map();
+      for (const s of this.publishedSessions()) {
+        const id = this.portfolioIdOf(s);
+        if (!id) continue;
+        const meta = this.subjectCache[id] || {};
+        const row = map.get(id) || {
+          id,
+          name: meta.name || s.subjectName || id,
+          operator: meta.operator || null,
+          thesisBlurb: meta.thesisBlurb || null,
+          isVault: meta.source?.type === "vault_tvl",
+          count: 0,
+          latest: null,
+        };
+        row.count += 1;
+        if (!row.latest || String(s.date) > String(row.latest)) row.latest = s.date;
+        map.set(id, row);
+      }
+      const rows = [...map.values()];
+      // The vault leads: it is the only portfolio whose recommendation becomes
+      // a real allocation. The rest fall back to volume.
+      return rows.sort((a, b) => (b.isVault - a.isVault) || (b.count - a.count));
+    },
+    vaultPortfolio() { return this.portfolios().find((p) => p.isVault) || null; },
+    otherPortfolios() { return this.portfolios().filter((p) => !p.isVault); },
+
+    // ── the vault's allocation against the swarm's latest recommendation ──
+    // Target weights only exist when a session publishes `bucket_weights`.
+    // Sessions since the 2026-08-06 cutover carry `position_actions` instead,
+    // so this walks back to the most recent one that has weights and shows its
+    // date. Nothing is invented when none exists: the block simply does not render.
+    latestWeightsSession() {
+      const vault = this.vaultPortfolio();
+      if (!vault) return null;
+      const rows = this.publishedSessions()
+        .filter((s) => this.portfolioIdOf(s) === vault.id)
+        .filter((s) => s.swarmRecommendation?.type === "bucket_weights" && s.swarmRecommendation?.weights)
+        .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      return rows[0] || null;
+    },
+    // Join the recommendation's weight map onto the current targets. Keys are
+    // normalised because the framework labels them "Conservative DeFi Yield"
+    // and the recommendation keys them `conservative_defi_yield`.
+    allocationRows() {
+      const strategy = this.allocation?.strategy;
+      if (!Array.isArray(strategy) || !strategy.length) return [];
+      const rec = this.latestWeightsSession()?.swarmRecommendation?.weights || null;
+      const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const recByKey = {};
+      if (rec) for (const [k, v] of Object.entries(rec)) recByKey[norm(k)] = Number(v) * 100;
+      return strategy.map((b) => {
+        const target = Number(b.targetPct);
+        const recommended = rec ? recByKey[norm(b.label)] : undefined;
+        return {
+          label: b.label,
+          target,
+          recommended: Number.isFinite(recommended) ? recommended : null,
+          delta: Number.isFinite(recommended) ? recommended - target : null,
+        };
+      });
+    },
+    hasRecommendation() { return this.allocationRows().some((r) => r.recommended != null); },
+    recommendationDate() { return this.latestWeightsSession()?.date || null; },
+
+    // ── sessions ─────────────────────────────────────────────────────────
+    // Portfolio encoding + filter, identical in behaviour to the member
+    // profile's track record — the roster is the same problem at larger scale
+    // (every portfolio interleaved by date), and the two lists must not teach
+    // different conventions for the same data.
     subjectFilter: null,
-    subjectDot(subjectId) { return subjectDot(subjectId); },
-    filterBy(id) { this.subjectFilter = this.subjectFilter === id ? null : id; },
+    subjectDot(id) { return subjectDot(id); },
+    // A grouped session wears its portfolio's colour, so one symbol is one
+    // colour everywhere rather than the vault showing two.
+    sessionDot(s) { return subjectDot(this.portfolioIdOf(s)); },
+    filterBy(id) { this.subjectFilter = this.subjectFilter === id ? null : id; this.shown = SESSIONS_SHOWN_STEP; },
     visibleSessions() {
       const rows = this.publishedSessions();
-      return this.subjectFilter ? rows.filter((s) => s.subjectId === this.subjectFilter) : rows;
+      const filtered = this.subjectFilter
+        ? rows.filter((s) => this.portfolioIdOf(s) === this.subjectFilter)
+        : rows;
+      return filtered.slice(0, this.shown);
     },
-    sessionSubjects() {
-      const by = new Map();
-      for (const s of this.publishedSessions()) {
-        const cur = by.get(s.subjectId);
-        if (cur) cur.count += 1;
-        else by.set(s.subjectId, { id: s.subjectId, name: s.subjectName || s.subjectId, count: 1 });
-      }
-      return [...by.values()].sort((a, b) => b.count - a.count);
+    matchingCount() {
+      const rows = this.publishedSessions();
+      return this.subjectFilter ? rows.filter((s) => this.portfolioIdOf(s) === this.subjectFilter).length : rows.length;
     },
+    hasMore() { return this.shown < this.matchingCount(); },
+    showMore() { this.shown += SESSIONS_SHOWN_STEP; },
     // The aggregator fills `synthesis` by joining every take body (see
     // backend swarm/domain.ts), so the preview under each row was a wall of
     // raw markdown that opened with "**REGIME**" on EVERY row — identical text
@@ -75,27 +239,18 @@ export function registerSwarmView(Alpine) {
       if (!t || t.includes("**") || t.length > 600) return "";
       return t;
     },
-    subjects() {
-      const map = new Map();
-      for (const s of this.sessions) {
-        const id = s.subjectId;
-        if (!id) continue;
-        const meta = this.subjectCache[id] || {};
-        const row = map.get(id) || {
-          id,
-          name: meta.name || s.subjectName || id,
-          operator: meta.operator,
-          thesisBlurb: meta.thesisBlurb,
-          count: 0,
-          latest: null,
-        };
-        row.count += 1;
-        if (!row.latest || String(s.date) > String(row.latest)) row.latest = s.date;
-        map.set(id, row);
-      }
-      return [...map.values()].sort((a, b) => String(b.latest).localeCompare(String(a.latest)));
+
+    // ── members ──────────────────────────────────────────────────────────
+    memberRole() { return DEFAULT_ROLE; },
+    // House or external, from the operator. A member with none set gets
+    // nothing: three of the seven have not filled their profile in, and an
+    // invented chip would be a claim the data does not support.
+    operatorLabel(m) {
+      const op = String(m?.operator || "").trim();
+      if (!op) return null;
+      return HOUSE_OPERATORS.has(op.toLowerCase()) ? `${op} · house` : op;
     },
-    memberTagline(m) { return m.tagline || m.mandate || `${m.name} reads the session through a ${m.lens || "swarm"} lens.`; },
+    memberTagline(m) { return m.tagline || m.mandate || ""; },
     memberBiases(m) {
       if (Array.isArray(m.biases)) return m.biases.filter(Boolean);
       return m.lens ? [m.lens] : [];
@@ -111,11 +266,14 @@ export function registerSwarmView(Alpine) {
         .map((s) => s[0].toUpperCase())
         .join("") || "SW";
     },
-    // Avatar precedence (#625); see the twin in static-views.js. x-html is
-    // safe here: memberAvatarMarkup() never interpolates the seed, and
-    // initials() is already stripped to letters and digits.
-    memberMark(seed, name, size = 40, avatarPath) {
-      return memberAvatarMarkup(avatarPath, seed, name, size, (n) => this.initials(n));
+    // Avatar precedence (#625, RM-100); see the twin in static-views.js. The
+    // curated logo wins over the projection's `avatar.path` because every path
+    // production serves 404s and one of them points at the wrong member.
+    // x-html is safe here: memberAvatarMarkup() never interpolates the seed,
+    // and initials() is already stripped to letters and digits.
+    memberMark(seed, name, size = 40, avatarPath, handle) {
+      const src = memberLogo({ handle }) || avatarPath || null;
+      return memberAvatarMarkup(src, seed, name, size, (n) => this.initials(n));
     },
     stanceEntries(s) { return Object.entries(s.swarmRecommendation?.stances || {}); },
     quorumText(s) {

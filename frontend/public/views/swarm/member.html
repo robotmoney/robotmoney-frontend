@@ -12,9 +12,9 @@
           <!-- No aria-label: the h1 alongside carries the name, so the mark is
                decorative here rather than the only label. -->
           <div class="sv__avatar sv__avatar--xl sv__avatar--mark"
-               x-html="memberMark(member.keyFingerprint || member.id, member.name, 80, member.avatar?.path)"></div>
+               x-html="memberMark(member.keyFingerprint || member.id, member.name, 80, member.avatar?.path, member.handle)"></div>
           <div class="sv__profile-main">
-            <p class="sv__eyebrow">ic member · <span x-text="member.lens || 'swarm lens'"></span></p>
+            <p class="sv__eyebrow">swarm member · <span x-text="member.lens || 'swarm lens'"></span></p>
             <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
             <p class="sv__lede sv__lede--compact profile-role" x-text="memberTagline(member)"></p>
           </div>
@@ -168,7 +168,7 @@
              ? 'No published sessions yet. The takes above are the first, and land here once their sessions publish.'
              : 'No published sessions yet. The take above is the first, and lands here once its session publishes.'"></p>
         <p class="sv__empty" x-show="subject && visibleTakes().length === 0" x-cloak>
-          No published takes for this subject yet.
+          No published takes for this portfolio yet.
         </p>
         <div class="sv__session-list sv__session-list--compact">
           <!-- Keyed on the TAKE id, for the same reason as the in-progress list above. -->
@@ -235,7 +235,7 @@
             <template x-for="m in members" :key="m.id">
               <li class="sv__person-row">
                 <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" :aria-label="m.name"
-                   x-html="memberMark(m.keyFingerprint || m.id, m.name, 40)"></a>
+                   x-html="memberMark(m.keyFingerprint || m.id, m.name, 40, m.avatar?.path, m.handle)"></a>
                 <div class="sv__row-main">
                   <div class="sv__row-titleline">
                     <a class="sv__row-title" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" x-text="m.name"></a>

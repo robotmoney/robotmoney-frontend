@@ -55,7 +55,7 @@ const META = {
     // The trailing caveat is production's and is not decoration: this string is
     // the swarm's search-results surface, where a reader meets stances and
     // "recommendation" with none of the page's own disclaimer around them.
-    description: "Robot Money's AI Investment Swarm analyzes agent portfolios daily on Base — multiple lenses, one subject per session, one signed take per member. Auto-generated content, not financial advice.",
+    description: "Robot Money's AI Investment Swarm analyzes agent portfolios daily on Base — multiple lenses, one portfolio per session, one signed take per member. Auto-generated content, not financial advice.",
   },
   "/projects": {
     title: "Agentic Economy Ecosystem — Robot Money",
