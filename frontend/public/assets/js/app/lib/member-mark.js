@@ -19,10 +19,13 @@
 // COLOUR. Two hues per mark, from the same brand set the charts use, with two
 // withheld for reasons that already exist in this codebase:
 //
-// - CYAN IS NEVER A FIGURE. `.sv__avatar` in views.css seams cyan along the
-//   top edge precisely so it stays a line and never fills the plane. A mark is
-//   a figure, so cyan cannot be in its palette. #560's reference list opens
-//   with a cyan; this is the one place it is not followed.
+// - CYAN IS NEVER A FIGURE. Beam is the house colour and the covenant makes it
+//   a LINE: a seam or a rule, never a plane and never a numeral. A mark is a
+//   figure, so cyan cannot be in its palette. #560's reference list opens with
+//   a cyan; this is the one place it is not followed. (This used to cite the
+//   cyan seam on `.sv__avatar` as the precedent. RM-100 removed that seam for
+//   being an accent rail that marked nothing; the covenant reason stands on
+//   its own and is the real one.)
 // - BEACON MEANS LOSS. `subjectDot()` already withholds it for the same
 //   reason: letting a hash land an ordinary member on the attention colour
 //   would say something untrue about that member, permanently.

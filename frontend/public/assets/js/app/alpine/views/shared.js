@@ -161,9 +161,22 @@ export const assetDot = (sym) => {
 // Beacon is withheld: it means loss/drawdown/attention in the covenant, so
 // letting the hash land an ordinary subject on it would say something untrue
 // about that subject permanently.
+//
+// Beam is withheld for the same reason one step further. Cyan is the house
+// colour and the covenant's rule is that it is a LINE and never a figure, so a
+// subject wearing it reads as interface rather than as one of the things under
+// review. It was not hypothetical: `woon` hashed to PALETTE.accent, which put
+// the only externally-operated subject on the page in Robot Money's own colour,
+// on its session rail and its filter chip. member-mark.js already withholds
+// both hues from the derived marks for exactly this pair of reasons; this is
+// the same withholding, one file over.
+//
+// Withholding a second hue leaves five, and the three subjects under review
+// (robotmoney-vault, robotmoney-treasury, woon) still hash to three distinct
+// ones. Existing subjects do change colour once, which is the cost of the fix.
 /** @param {string} subjectId */
 export const subjectDot = (subjectId) => {
-  const hues = CATEGORICAL.filter((c) => c !== SERIES.beacon);
+  const hues = CATEGORICAL.filter((c) => c !== SERIES.beacon && c !== PALETTE.accent);
   let h = 0;
   for (const ch of String(subjectId || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return hues[h % hues.length];

@@ -316,17 +316,26 @@
 .sv__person-row, .sv__subject-row { display: flex; align-items: flex-start; gap: 0.8rem; min-width: 0; }
 .sv__avatar, .sv__subject-mark { width: 2.5rem; height: 2.5rem; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 0.78rem; font-weight: 700; text-decoration: none; }
 /* Identity mark: a square plane, not a disc — the covenant is flat planes and
-   radius <= 2px. Beam cyan is a LINE, so it seams the top edge rather than
-   filling the plane, and the monogram stays neutral: cyan is never a figure. */
+   radius <= 2px. It used to carry a 1px Beam seam along the top edge. That was
+   covenant-legal (cyan as a line) and still wrong: the seam repeated down every
+   row of an identical card grid, marking nothing, which is the accent rail the
+   brand sheet argues against. The border is uniform now and the mark carries
+   the identity on its own. RM-100. */
 .sv__avatar { justify-content: center; border-radius: var(--radius); background: var(--color-surface);
-  color: var(--color-text); border-top: 1px solid var(--color-accent); letter-spacing: 0.06em; }
-.sv__avatar--xl { width: 5rem; height: 5rem; font-size: 1.35rem; border-top-width: 2px; }
+  color: var(--color-text); letter-spacing: 0.06em; }
+.sv__avatar--xl { width: 5rem; height: 5rem; font-size: 1.35rem; }
 /* Derived identity mark (#560): the SVG fills the plane the monogram used to
-   sit inside, so the box keeps its border and cyan top seam and loses only its
-   centred letters. The mark's own palette excludes cyan for the reason stated
-   above — cyan is a line here, never a figure. */
+   sit inside, so the box keeps its border and loses only its centred letters.
+   The mark's palette excludes cyan and beacon: cyan is a line and never a
+   figure, and beacon means loss, so neither may colour a member. */
 .sv__avatar--mark { overflow: hidden; padding: 0; }
 .sv__avatar--mark > .sv__mark-svg { display: block; width: 100%; height: 100%; }
+/* Uploaded or curated art (#625, RM-100). This had no rule at all: the <img>
+   was sized by its width/height attributes, so a non-square asset stretched.
+   `contain` letterboxes it instead, and the inset keeps a full-bleed logo off
+   the border. */
+.sv__avatar--mark > .sv__mark-img { display: block; width: 100%; height: 100%;
+  object-fit: contain; padding: 12%; }
 .sv__subject-mark { border-radius: var(--radius); color: var(--color-green); background: rgba(16,185,129,0.08); }
 .sv__row-main { min-width: 0; flex: 1; }
 .sv__row-titleline, .sv__session-titleline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.65rem; min-width: 0; }
@@ -336,6 +345,93 @@
 .sv__row-copy, .sv__session-copy, .sv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; }
 .sv__mini-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem; }
 .sv__mini-tags span { background: rgba(255,255,255,0.04); color: var(--color-text-dim); font-family: var(--font-mono); font-size: 0.58rem; padding: 0.15rem 0.38rem; }
+
+/* ── RM-100: portfolios, not subjects ─────────────────────────────────────
+   Three portfolios under review, the vault leading because it is the only one
+   whose recommendation becomes a real allocation. Every selector below is new;
+   css-duplicate-selectors.test.ts enforces one block per selector. */
+.sv__pf-grid { display: grid; gap: 1rem; margin-bottom: 2.5rem; }
+.sv__vault { border: 1px solid var(--color-border); border-top-color: var(--color-border-light);
+  background: var(--color-surface); padding: 1.35rem; }
+.sv__vault-top { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 1rem; }
+.sv__vault-mark { width: 3rem; height: 3rem; flex: 0 0 auto; display: grid; place-items: center;
+  border: 1px solid var(--color-border); border-left: 2px solid var(--color-green);
+  border-radius: var(--radius); background: var(--color-deep); font-family: var(--font-mono);
+  font-size: 0.7rem; color: var(--color-text-soft); text-decoration: none; }
+.sv__vault-name { font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
+  font-size: 1.55rem; line-height: 1; margin: 0.15rem 0 0; letter-spacing: -0.01em; color: var(--color-text); }
+.sv__vault-main { min-width: 0; flex: 1; }
+
+/* Allocation against holdings. Money is a MASS so the held weight is a green
+   area; a target is a proposal rather than money, so it is a Beam LINE. Both
+   percentages share one denominator, which is the whole point. */
+.sv__cmp { margin-top: 1.25rem; padding-top: 1.1rem; border-top: 1px solid var(--color-border); }
+.sv__cmp-head { font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
+  letter-spacing: 0.14em; color: var(--color-text-muted); margin: 0 0 0.75rem; }
+.sv__cmp-row { display: grid; grid-template-columns: minmax(7rem, 11rem) 1fr 5.4rem 3.2rem;
+  gap: 0.7rem; align-items: center; padding: 0.32rem 0; font-family: var(--font-mono);
+  font-size: 0.68rem; color: var(--color-text-muted); }
+.sv__cmp-track { display: block; position: relative; height: 0.55rem; width: 100%;
+  background: rgba(255,255,255,0.05); border: 1px solid var(--color-border); }
+.sv__cmp-fill { display: block; height: 100%; background: var(--color-green); }
+.sv__cmp-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--color-accent); }
+.sv__cmp-num { text-align: right; color: var(--color-text-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sv__cmp-num b { color: var(--color-text); font-weight: 500; }
+.sv__cmp-num em { font-style: normal; color: var(--color-text-muted); padding: 0 0.15rem; }
+.sv__cmp-delta { text-align: right; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.sv__cmp-stale { display: flex; align-items: flex-start; gap: 0.55rem; margin: 0.9rem 0 0;
+  padding-left: 0.7rem; border-left: 1px solid var(--color-border-light); }
+.sv__cmp-stale i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%;
+  background: var(--color-beacon); margin-top: 0.5rem; }
+.sv__cmp-stale p { margin: 0; font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.6; }
+
+.sv__pf-pair { display: grid; gap: 1rem; }
+.sv__pcard { border: 1px solid var(--color-border); background: var(--color-surface); padding: 1.1rem; }
+.sv__pcard-mark { width: 2.5rem; height: 2.5rem; flex: 0 0 auto; display: grid; place-items: center;
+  border: 1px solid var(--color-border); border-left: 2px solid var(--pf-hue, var(--color-border-light));
+  border-radius: var(--radius); background: var(--color-deep); font-family: var(--font-mono);
+  font-size: 0.68rem; color: var(--color-text-soft); text-decoration: none; }
+
+/* Members as a register: the interesting fact is which cells are empty. */
+.sv__mwrap { overflow-x: auto; }
+.sv__mtable { width: 100%; border-collapse: collapse; font-size: 0.88rem; min-width: 34rem; }
+.sv__mtable th { text-align: left; font-family: var(--font-mono); font-size: 0.62rem; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.14em; color: var(--color-text-muted);
+  padding: 0 0.8rem 0.55rem 0; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+.sv__mtable td { padding: 0.7rem 0.8rem 0.7rem 0; border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted); vertical-align: middle; }
+.sv__mtable tr:last-child td { border-bottom: 0; }
+.sv__mwho { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
+.sv__mwho a { color: var(--color-text); font-weight: 500; text-decoration: none; white-space: nowrap; }
+.sv__mwho a:hover { color: var(--color-accent); }
+.sv__mmark { width: 2.1rem; height: 2.1rem; flex: 0 0 auto; border: 1px solid var(--color-border);
+  border-radius: var(--radius); overflow: hidden; background: var(--color-surface);
+  display: grid; place-items: center; font-family: var(--font-mono); font-size: 0.68rem;
+  font-weight: 700; color: var(--color-text); letter-spacing: 0.04em; }
+.sv__mmark svg, .sv__mmark img { display: block; width: 100%; height: 100%; }
+.sv__mmark img { object-fit: contain; padding: 12%; }
+.sv__unset { color: var(--color-text-muted); font-style: italic; }
+.sv__operator { font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-text-muted); }
+
+/* Role is function, lens is flavour, so role carries the heavier form. */
+.sv__tag--role { color: var(--color-text-soft); border-color: var(--color-border-light);
+  background: var(--color-surface-light); white-space: nowrap; }
+.sv__tag--role i { width: 0.3rem; height: 0.3rem; flex: 0 0 auto; background: var(--color-green); margin-right: 0.35rem; }
+
+/* Once allocation sessions retitle to the vault, this is what separates a
+   target-allocation review from a holdings review. It carries the distinction,
+   so it cannot be the dimmest thing on the row. */
+.sv__qualifier { font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border-light); padding-bottom: 0.05rem; }
+
+.sv__more { display: block; width: 100%; margin-top: 0.75rem; padding: 0.7rem; cursor: pointer;
+  background: none; border: 1px solid var(--color-border); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted); }
+.sv__more:hover { border-color: var(--color-border-light); color: var(--color-text-soft); }
+.sv__more[disabled] { opacity: 0.5; cursor: default; }
 .sv__sessions-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0 0 1rem; }
 .sv__session-count, .sv__date, .sv__session-meta { font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-dim); }
 .sv__session-list { display: grid; gap: 0.75rem; }
@@ -517,6 +613,11 @@
 .sv__synthesis div { margin: 0.75rem 0 0; color: var(--color-text); font-family: var(--font-sans); line-height: 1.75; font-size: 1.05rem; }
 .sv__synthesis p { margin: 0 0 0.75rem; }
 @media (max-width: 720px) {
+  .sv__cmp-row { grid-template-columns: 1fr auto auto; grid-template-areas: "l l l" "t n d"; gap: 0.35rem 0.55rem; }
+  .sv__cmp-label { grid-area: l; }
+  .sv__cmp-track { grid-area: t; }
+  .sv__cmp-num { grid-area: n; }
+  .sv__cmp-delta { grid-area: d; }
   .sv__body--narrow { padding-top: 6.5rem; }
   .sv__session-top, .sv__take-head { align-items: flex-start; }
   .sv__action-row { grid-template-columns: 1fr; }
@@ -561,6 +662,8 @@
   .rv__panels.rv--cols2 { grid-template-columns: repeat(2, 1fr); }
   .rv__panels.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
   .sv__rail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sv__pf-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sv__vault { padding: 1.75rem; }
   .sv__backdrop-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   /* .sv__discussion stays single-column at every width. Consensus and
      Disagreements are different KINDS of claim about the session, not a pair to
