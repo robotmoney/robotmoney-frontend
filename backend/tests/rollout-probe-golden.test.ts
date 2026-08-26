@@ -27,7 +27,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PROBE = "scripts/upgrades/0.2.2-to-0.3.0/where.ts";
+const PROBE = "scripts/upgrades/runbook.ts";
 const STAMP = "20260101T000000Z";
 
 let fixture: string;
