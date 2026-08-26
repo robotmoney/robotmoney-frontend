@@ -132,7 +132,8 @@ configuration from you.** See decisions.md's PD6 amendment for why.
 What that means for this rollout:
 
 - **The wallet AUM and sleeve gaps start closing by themselves**, ten days per
-  hourly run (`WALLET_BACKFILL_MAX_DAYS_PER_RUN`), converging over hours. That
+  five-minute run (`WALLET_BACKFILL_MAX_DAYS_PER_RUN`), converging in minutes
+  to hours. That
   is the point of the release; it is no longer something you opt into.
 - **Every chain read in the app is now paced**, including the request path.
   A `/api/dashboards/vault-economics` cache miss (30s TTL) costs 3 core reads
@@ -231,7 +232,7 @@ Grouped by what they mean for an operator:
 
 | Group | Commits | Operator impact |
 |---|---|---|
-| **Wallet/AUM self-healing** | `5788ba6` (#711), `c3540a4` (#667), `7664cb1` (#713) | New hourly schedule, **opt-out** — it dispatches on arrival (§5.2). Two new migrations. |
+| **Wallet/AUM self-healing** | `5788ba6` (#711), `c3540a4` (#667), `7664cb1` (#713) | New five-minute schedule, **opt-out** — it dispatches on arrival (§5.2). Two new migrations. |
 | **Analytics/regime** | `d1e769d` (#714), `1bc4e05` (#717), `e88ccf2` (#715), `8e6d4aa` (#712), `c5d5fad` (#716), `ac0bb91` (#718), `6d1042a` (#725) | One migration; changes **existing** schedule behaviour (§4.3). |
 | **Admin auth** | `94748a3` (#721) | **Fixes the v0.2.2 known-broken passkey item.** Requires two new env vars (§5.1). |
 | **Swarm** | `64cc1d5` (#722), `bac7273` (#723), `f34c918` (#726), `de41647` (#727) | One migration (new table). |
@@ -536,11 +537,13 @@ an unset `WEBAUTHN_ORIGIN` ships a passkey fix that stays broken, while an unset
 
 Beyond the schema. Read this before §5; it is what the config decisions are for.
 
-### 4.1 A new hourly schedule appears
+### 4.1 A new gap-repair schedule appears
 
-`seed()` inserts `ops.repair_gaps` (`cron: "25 * * * *"`, `enabled: true`). It
+`seed()` inserts `ops.repair_gaps` (`cron: "*/5 * * * *"`, `enabled: true`). It
 will show up in `job_schedules` on the first boot and start being dispatched
-hourly at :25. Unless you set `BASE_RPC_MAX_CALLS_PER_SEC=0`, each run **detects
+every five minutes. (An earlier cut of this release seeded it hourly at `25 *
+* * *`; `seed()` now deletes that superseded row, so a re-seeded deployment
+carries exactly one.) Unless you set `BASE_RPC_MAX_CALLS_PER_SEC=0`, each run **detects
 gaps and enqueues ONE `wallet.backfill_window` job carrying up to ten days**,
 and its `job_runs` output names the days dispatched, deferred, retrying and
 exhausted. (It was one job per day until #739 (`79063ab`) batched on the axis
@@ -833,7 +836,7 @@ wallet days the dump is missing, against ~1 minute before the sequence existed.
 > depend on a provider's mood on rehearsal day. The path this release *changed*
 > is the dispatch, and check 2 grades that hard.
 
-> **Check 2 does not wait for the wall-clock `:25`, and no longer needs to cheat
+> **Check 2 does not wait for the next wall-clock slot, and no longer needs to cheat
 > to avoid it.** `db/seed.ts` enqueues a cold-start `ops.repair_gaps` job on
 > every boot, so the first run happens within a worker tick of readiness — the
 > same first run production gets. The observation simply watches for it.

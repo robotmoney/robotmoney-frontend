@@ -56,7 +56,7 @@ export interface SeriesDef {
    * keys are tolerated; a missing expected key makes the whole slot a gap. */
   expectedKeys?: {
     columns: readonly string[];
-    resolve: () => readonly (readonly string[])[];
+    resolve: (asOf?: string) => readonly (readonly string[])[];
   };
 }
 
@@ -90,7 +90,7 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
     expectedKeys: {
       columns: ["symbol"],
-      resolve: () => resolveWalletSnapshotManifest().balanceAssets.map((asset) => [asset.symbol]),
+      resolve: (asOf?: string) => resolveWalletSnapshotManifest(undefined, undefined, asOf).balanceAssets.map((asset) => [asset.symbol]),
     },
   },
   {
@@ -104,7 +104,7 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
     expectedKeys: {
       columns: ["wallet_address", "symbol"],
-      resolve: () => resolveWalletSnapshotManifest().sleeveKeys.map((key) => [key.walletAddress, key.asset.symbol]),
+      resolve: (asOf?: string) => resolveWalletSnapshotManifest(undefined, undefined, asOf).sleeveKeys.map((key) => [key.walletAddress, key.asset.symbol]),
     },
   },
   {

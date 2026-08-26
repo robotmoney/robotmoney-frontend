@@ -128,7 +128,7 @@ export const NEW_COLUMN_MIGRATION = "0032_wallet_balance_samples_strategy_nav_id
  *  was an aspiration rather than a fact until 2026-08-23: the check read only
  *  kind/enabled/next_run_at, so a schedule seeded on the wrong cadence was a
  *  clean PASS.) */
-export const NEW_SCHEDULE_CRON = "25 * * * *";
+export const NEW_SCHEDULE_CRON = "*/5 * * * *";
 
 /** The kind `ops.repair_gaps` enqueues: ONE job carrying `{dates: [...]}` for
  *  the whole window it decides to repair, not one job per day.

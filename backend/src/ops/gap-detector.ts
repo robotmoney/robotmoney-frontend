@@ -51,7 +51,7 @@ const STEP_MS: Record<Cadence, number> = { daily: 86_400_000, hourly: 3_600_000 
 // its own cadence.
 const STALE_TICKS = 2;
 
-export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now: Date = new Date()): Promise<GapReport> {
+export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now: Date = new Date(), asOf?: string): Promise<GapReport> {
   const seriesStart = truncateToSlot(new Date(def.seriesStart), def.cadence);
   const expectedHead = truncateToSlot(now, def.cadence);
   const stepMs = STEP_MS[def.cadence];
@@ -71,7 +71,6 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
      ORDER BY slot
   `;
   const keyToken = (parts: readonly string[]): string => JSON.stringify(parts);
-  const expected = expectedKeys ? new Set(expectedKeys.resolve().map((parts) => keyToken(parts))) : null;
   const observedBySlot = new Map<number, Set<string>>();
   for (const row of rows) {
     const slot = new Date(row.slot).getTime();
@@ -82,9 +81,21 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
     }
     if (expectedKeys) keys.add(keyToken(expectedKeys.columns.map((column) => String(row[column]))));
   }
+
+  // Per-slot filtering: when expectedKeys is present, each slot is checked
+  // against only the assets deployed on or before that slot's date. This
+  // prevents pre-deployment dates (e.g. March days before SP500's May
+  // addition) from being flagged as incomplete — the root cause of the
+  // infinite retry loop in #709.
   const observed = new Set<number>();
   for (const [slot, keys] of observedBySlot) {
-    if (!expected || [...expected].every((key) => keys.has(key))) observed.add(slot);
+    if (expectedKeys) {
+      const slotDate = new Date(slot).toISOString().slice(0, 10);
+      const expected = new Set(expectedKeys.resolve(slotDate).map((parts) => keyToken(parts)));
+      if ([...expected].every((key) => keys.has(key))) observed.add(slot);
+    } else {
+      observed.add(slot);
+    }
   }
   const headMs = observed.size > 0 ? Math.max(...observed) : null;
 
@@ -119,6 +130,6 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
 
 /** Every registered series, detected in parallel — the operator-surface feed
  *  (GET /api/admin/gaps). */
-export async function detectAllGaps(db: DbHandle = defaultSql, now: Date = new Date()): Promise<GapReport[]> {
-  return Promise.all(SERIES_REGISTRY.map((def) => detectGaps(def, db, now)));
+export async function detectAllGaps(db: DbHandle = defaultSql, now: Date = new Date(), asOf?: string): Promise<GapReport[]> {
+  return Promise.all(SERIES_REGISTRY.map((def) => detectGaps(def, db, now, asOf)));
 }
