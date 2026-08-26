@@ -26,7 +26,7 @@
 //
 // This module MUST stay side-effect free apart from the explicit readFileSync in
 // loadEnvFile() — no process.env reads, no spawning — so the unit tests
-// (scripts/tests/unit/smoke-external-pg.test.ts) can drive every branch without a
+// () can drive every branch without a
 // smoke boot. It is imported by scripts/lib/smoke-main.ts and re-exported from
 // scripts/smoke.ts alongside resolveSmokeEnv.
 import { readFileSync } from "node:fs";

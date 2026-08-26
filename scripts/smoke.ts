@@ -7,7 +7,7 @@
 // directly.
 export { resolveSmokeEnv, type SmokeEnvResolution } from "./lib/smoke-env.ts";
 // Same reason: the --external-pg resolver (scripts/lib/smoke-external-pg.ts) is
-// importable by scripts/tests/unit/smoke-external-pg.test.ts without dragging in
+// importable by  without dragging in
 // smoke-main's side-effectful bring-up.
 export {
   externalPgOverlayYaml,

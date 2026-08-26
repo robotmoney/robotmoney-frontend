@@ -357,7 +357,7 @@ export function parseDataPath(
 
   if (mode === "external") {
     // Delegate to the existing resolver, which already throws for every bad-.env
-    // case and is what scripts/tests/unit/smoke-external-pg.test.ts pins. It keys
+    // case and is what  pins. It keys
     // off so hand it a canonical argv rather than this one.
     const ext = resolveExternalPg(["--db", "external"], {
       envFilePath: opts.envFilePath,
@@ -390,7 +390,7 @@ export function parseDataPath(
  * externalPgOverlayYaml() rather than growing a second generator that could
  * drift from it. Only the leading comment differs, and it is prepended rather
  * than substituted so the generated body stays byte-identical to the form
- * scripts/tests/unit/smoke-external-pg.test.ts already pins.
+ *  already pins.
  */
 export function dataPathOverlayYaml(dp: ResolvedDataPath): string {
   // Narrowed on `kind` rather than via usesComposePostgres() so the compiler —
