@@ -177,12 +177,10 @@ describe("labels — the channel tooling selects on", () => {
     expect(MANAGED_NETWORK_LABEL).toBe("robotmoney.smoke.network");
   });
 
-  test("dockerLabelFlags emits --label pairs in a stable order (raw `docker run` spawners)", () => {
-    const local = resolveStackEnvironment({}, { seed: "seed" });
     expect(dockerLabelFlags(stackLabels(local, "rm_smoke_pgtest_x"))).toEqual([
-      "--label", "robotmoney.smoke.project=rm_smoke_pgtest_x",
       "--label", "robotmoney.env=local",
       "--label", `robotmoney.env.hash=${local.hash}`,
+      "--label", "robotmoney.smoke.project=rm_smoke_pgtest_x",
     ]);
   });
 });

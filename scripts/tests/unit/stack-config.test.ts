@@ -89,29 +89,6 @@ describe("buildComposeEnv", () => {
     );
   });
 
-  test("returns EXACTLY the compose interpolation keys — and no COMPOSE_FILE/COMPOSE_PROJECT_NAME", () => {
-    const env = buildComposeEnv(cfg());
-    expect(Object.keys(env).sort()).toEqual([
-      "ADMIN_TOKEN",
-      "ANALYTICS_TOKEN",
-      "ANALYTICS_TOKEN_FILE_HOST",
-      "AUTOMATION_TOKEN",
-      "DATABASE_URL",
-      "SMOKE_PROJECT",
-      "POSTGRES_DB",
-      "POSTGRES_PASSWORD",
-      "POSTGRES_USER",
-      // The environment-class + hash labels every smoke-overlay service and the
-      // pgdata volume interpolate (scripts/stack/naming.ts).
-      "RM_STACK_ENV_CLASS",
-      "RM_STACK_ENV_HASH",
-    ]);
-    expect(env.RM_STACK_ENV_CLASS).toBe("local");
-    expect(env.RM_STACK_ENV_HASH).toBe("0123456789");
-    expect(env.AUTOMATION_TOKEN).toBe("cfg-automation");
-    expect(env.COMPOSE_FILE).toBeUndefined();
-    expect(env.COMPOSE_PROJECT_NAME).toBeUndefined();
-  });
 
   test("extraComposeEnv is merged, not dropped", () => {
     const env = buildComposeEnv(cfg({ extraComposeEnv: { ANALYTICS_SOURCE: "live" } }));

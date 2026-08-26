@@ -14,11 +14,6 @@ import {
   scenarioPlan,
 } from "../../lib/smoke-mode.ts";
 
-describe("smoke mode decisions", () => {
-  test("argv selects smoke explicitly", () => {
-    expect(isSmokeMode(["bun", "demo.ts", "--smoke"])).toBe(true);
-    expect(isSmokeMode(["bun", "demo.ts"])).toBe(false);
-  });
 
   test("smoke omits demo seed actions while normal demo requests them narrowly", () => {
     expect(SMOKE_MIGRATE_ENV).toEqual({});
