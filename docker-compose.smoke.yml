@@ -11,10 +11,10 @@
 #                                              across runs/attempts/workflows),
 #                                              or one local boot.
 #
-# Names encode the same facts (`rm_ci_stack_<hash>` / `rm_demo_stack_<hash>`) so
+# Names encode the same facts (`rm_ci_stack_<hash>` / `rm_smoke_stack_<hash>`) so
 # `docker ps` is readable, but tools must select on these LABELS: name-substring
 # matching is the fragile channel, and on this host — which runs the standing
-# stage demo, the self-hosted CI runner and local evals at once — getting a
+# stage smoke, the self-hosted CI runner and local evals at once — getting a
 # selector wrong means killing the live site.
 #
 # The two RM_STACK_* values are set by scripts/stack/config.ts's buildComposeEnv
@@ -39,44 +39,44 @@ services:
       # With no env set, every knob resolves EMPTY so backend config.ts /
       # analytics/index.ts fall through to their own live production defaults
       # (BASE_RPC_URL -> https://mainnet.base.org, ANALYTICS_SOURCE -> live,
-      # BASE_RPC_SOURCE -> live). scripts/lib/demo-env.ts (the resolver
+      # BASE_RPC_SOURCE -> live). scripts/lib/smoke-env.ts (the resolver
       # `bun run smoke` actually goes through) pins these explicitly instead of
       # relying on this raw-compose fallback; this file's own defaults only
-      # matter for a bare `docker compose -f ... -f docker-compose.demo.yml up`
-      # that bypasses scripts/demo.ts. An explicit override always wins.
+      # matter for a bare `docker compose -f ... -f docker-compose.smoke.yml up`
+      # that bypasses scripts/smoke.ts. An explicit override always wins.
       BASE_RPC_URL: ${BASE_RPC_URL:-}
       BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
-      # Projects data source (backend/src/projects/access/select.ts). The demo
+      # Projects data source (backend/src/projects/access/select.ts). The smoke
       # deliberately stays on the offline fixture directory (unset), which is
-      # allowed in demo/ephemeral; only RM_ENV=prod fail-closes on it and
+      # allowed in smoke/ephemeral; only RM_ENV=prod fail-closes on it and
       # requires an explicit PROJECTS_SOURCE=live. Passthrough so an operator
-      # can opt a standing demo into the live providers.
+      # can opt a standing smoke into the live providers.
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       # Cold-DB floor seed: load the vendored real raw floor ONCE so a fresh LIVE
       # boot doesn't re-fetch years of history (esp. ~200 EDGAR requests).
-      # Idempotent (no-op once warm). scripts/lib/demo-env.ts defaults this to 1
-      # on every demo boot now. Raw compose (no demo.ts) leaves it off, matching
+      # Idempotent (no-op once warm). scripts/lib/smoke-env.ts defaults this to 1
+      # on every smoke boot now. Raw compose (no smoke.ts) leaves it off, matching
       # the prod default.
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
-      # Shared demo/smoke orchestration supplies one-hour capability TTLs.
+      # Shared smoke/smoke orchestration supplies one-hour capability TTLs.
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
-      # PINNED off (issue #208): repo demo/e2e never auto-runs the swarm.*
-      # session crons — the demo drives lifecycle jobs itself via the explicit
+      # PINNED off (issue #208): repo smoke/e2e never auto-runs the swarm.*
+      # session crons — the smoke drives lifecycle jobs itself via the explicit
       # admin enqueue-job endpoint (unaffected by this issue). This overrides
       # docker-compose.yml's prod-shaped default (enabled) regardless of
       # whatever SWARM_SCHEDULES_ENABLED the invoking shell happens to have.
       SWARM_SCHEDULES_ENABLED: "0"
 
-  # Internal worker lanes share demo data-path knobs for their remaining queue
+  # Internal worker lanes share smoke data-path knobs for their remaining queue
   # work: worker-swarm owns lifecycle jobs and worker-analytics owns chain/
   # projects samplers. worker-research remains only for unreachable legacy rows;
   # the independent analytics-producer owns regime/research compute and cadence.
   # The share-price sampler still reads the vault over eth_call.
-  worker-swarm: &demo-worker
+  worker-swarm: &smoke-worker
     labels:
       robotmoney.smoke.project: ${SMOKE_PROJECT}
       robotmoney.env: ${RM_STACK_ENV_CLASS}
@@ -86,7 +86,7 @@ services:
       BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
       # Same PROJECTS_SOURCE passthrough as api — the analytics worker runs the
-      # projects.* pipelines (unset = offline fixture directory; demo-legal).
+      # projects.* pipelines (unset = offline fixture directory; smoke-legal).
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
@@ -94,8 +94,8 @@ services:
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
       # Shared Base RPC rate budget + repair-driver bounds (issue #709). Left
-      # UNSET for the demo on purpose: the seeded ops.repair_gaps schedule is a
-      # no-op without a measured budget, so a demo boot never starts sweeping
+      # UNSET for the smoke on purpose: the seeded ops.repair_gaps schedule is a
+      # no-op without a measured budget, so a smoke boot never starts sweeping
       # months of history against the public RPC.
       BASE_RPC_MAX_CALLS_PER_SEC: ${BASE_RPC_MAX_CALLS_PER_SEC:-}
       BASE_RPC_RATE_BURST: ${BASE_RPC_RATE_BURST:-}
@@ -103,9 +103,9 @@ services:
       WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY: ${WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY:-}
       GECKO_OHLCV_MIN_INTERVAL_MS: ${GECKO_OHLCV_MIN_INTERVAL_MS:-}
 
-  worker-analytics: *demo-worker
+  worker-analytics: *smoke-worker
 
-  worker-research: *demo-worker
+  worker-research: *smoke-worker
 
   # The independent producer performs the heavy analytics HTTP fetches. Token
   # price caching is irrelevant to this service.
@@ -154,15 +154,15 @@ services:
       - api
     restart: "no"
 
-# Namespace the postgres data volume so `bun run smoke:clean` (scripts/demo-clean.ts)
-# can find and delete demo pgdata volumes by LABEL, never by fragile name-substring
+# Namespace the postgres data volume so `bun run smoke:clean` (scripts/smoke-clean.ts)
+# can find and delete smoke pgdata volumes by LABEL, never by fragile name-substring
 # matching. Two labels, mirroring the per-container label pattern above:
-#   - robotmoney.smoke=1              → "this volume belongs to the demo" (the filter
-#                                       smoke:clean uses to enumerate ALL demo volumes).
+#   - robotmoney.smoke=1              → "this volume belongs to the smoke" (the filter
+#                                       smoke:clean uses to enumerate ALL smoke volumes).
 #   - robotmoney.smoke.project=<proj> → which run created it (lets CI / smoke:clean
 #                                       scope a delete to a single run's volume).
-# Demo lifecycle (issue: demo persistent volumes): teardown (SIGTERM/Ctrl-C and
-# `smoke:down`) now keeps this volume — `docker compose down` WITHOUT -v — so demo
+# Demo lifecycle (issue: smoke persistent volumes): teardown (SIGTERM/Ctrl-C and
+# `smoke:down`) now keeps this volume — `docker compose down` WITHOUT -v — so smoke
 # data survives a reboot. `smoke:clean` is the ONLY path that deletes it. When the
 # operator passes `bun run smoke -- --pg-data <host-dir>`, postgres is bind-mounted
 # to that host dir instead (a generated overlay replaces this mount by target

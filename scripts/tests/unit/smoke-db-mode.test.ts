@@ -129,13 +129,6 @@ describe("loud refusals — every one before any restore work", () => {
   });
 });
 
-describe("--external-pg — deprecated, still works", () => {
-  test("alone → external, plus a DEPRECATED warning", () => {
-    const { dataPath, warnings } = parse(argv("--external-pg"));
-    expect(dataPath.kind).toBe("external");
-    expect(warnings.join(" ")).toMatch(/DEPRECATED/);
-    expect(warnings.join(" ")).toMatch(/--db external/);
-  });
 
   test("paired with the equivalent --db external: allowed, one warning", () => {
     const { dataPath, warnings } = parse(argv("--external-pg", DB_FLAG, "external"));

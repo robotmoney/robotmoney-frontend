@@ -235,8 +235,8 @@ describe("admissionDelayMs — a skipped name costs nothing", () => {
 // through planAdoptions() — the same call scripts/lib/smoke-main.ts and
 // scripts/smoke-session.ts make — rather than re-asserting the predicate alone.
 describe("planAdoptions under the smoke allowlist (issue #537)", () => {
-  const smokeFilter = adoptionFilter(true);
-  const otherFilter = adoptionFilter(false);
+  const smokeTwinFilter = adoptionFilter(true);
+  const smokeFilter = adoptionFilter(false);
   const RESTORED = [
     row({ name: "Athena", id: "athena" }),
     row({ name: "Robot Money", id: "robotmoney" }),
@@ -244,7 +244,7 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
   ];
 
   test("the three restored personas are seated, by id", () => {
-    const plan = planAdoptions(RESTORED, new Set(), otherFilter);
+    const plan = planAdoptions(RESTORED, new Set(), smokeFilter);
     expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
     // The ALLOWLIST is spelled in handles, not ids (issue #685): member ids are
     // generated per deployment now, so a literal id list here could only be
@@ -266,15 +266,15 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
       row({ name: "Helios", id: "helios" }),
       row({ name: "Some Real Member", id: "real-1" }),
     ];
-    const smoke = planAdoptions([...RESTORED, ...outsiders], new Set(), otherFilter);
-    expect(smoke.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
-    for (const o of outsiders) expect(smoke.adopt.some((m) => m.id === o.id)).toBe(false);
+    const smokeTwin = planAdoptions([...RESTORED, ...outsiders], new Set(), smokeTwinFilter);
+    expect(smokeTwin.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
+    for (const o of outsiders) expect(smokeTwin.adopt.some((m) => m.id === o.id)).toBe(false);
 
     // …and the smoke path is UNCHANGED: it still adopts every character that
     // owns a committed identity.
-    const smokeTwin = planAdoptions([...RESTORED, ...outsiders], new Set(), otherFilter);
-    expect(smokeTwin.adopt.some((m) => m.id === "boreas")).toBe(true);
-    expect(smokeTwin.adopt.some((m) => m.id === "real-1")).toBe(false);
+    const smoke = planAdoptions([...RESTORED, ...outsiders], new Set(), smokeFilter);
+    expect(smoke.adopt.some((m) => m.id === "boreas")).toBe(true);
+    expect(smoke.adopt.some((m) => m.id === "real-1")).toBe(false);
   });
 
   test("names are matched case- and whitespace-insensitively, and only active rows count", () => {
@@ -283,13 +283,13 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
       row({ name: "ATHENA", id: "athena" }),
       row({ name: "Noop analyst", id: "woon-applied", status: "applied" }),
     ];
-    const plan = planAdoptions(roster, new Set(), otherFilter);
+    const plan = planAdoptions(roster, new Set(), smokeFilter);
     expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney"]);
   });
 
   test("a duplicate row for a restored persona takes no second seat", () => {
     const roster = [...RESTORED, row({ name: "Athena", id: "athena-dupe" })];
-    const plan = planAdoptions(roster, new Set(), otherFilter);
+    const plan = planAdoptions(roster, new Set(), smokeFilter);
     expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
     expect(plan.duplicates.map((m) => m.id)).toEqual(["athena-dupe"]);
   });
@@ -299,7 +299,7 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
     // fixture before and after a full plan and assert byte-identity: if any
     // path minted, rotated or removed a persona key, this changes.
     const before = JSON.stringify(personaIdentities());
-    const plan = planAdoptions([...RESTORED, row({ name: "Helios", id: "helios" })], new Set(), otherFilter);
+    const plan = planAdoptions([...RESTORED, row({ name: "Helios", id: "helios" })], new Set(), smokeTwinFilter);
     expect(plan.adopt.length).toBe(3);
     expect(JSON.stringify(personaIdentities())).toBe(before);
     // Every seated persona signs with a key that ALREADY existed — never one

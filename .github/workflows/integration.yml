@@ -25,7 +25,7 @@
 # job `if:` below), so a merge to main always runs this in full.
 #
 # `docker-compose*.yml` is in that category (issue #602) because this job owns
-# the compose-layer assertions — scripts/tests/integration/demo-compose-config.test.ts
+# the compose-layer assertions — scripts/tests/integration/smoke-compose-config.test.ts
 # renders real `docker compose config` and asserts what the api service is
 # handed. Without it, a PR that changed ONLY a compose file would skip the one
 # required job able to see the regression it introduced. backend.yml's filter
@@ -76,7 +76,7 @@ jobs:
               - 'tsconfig.json'
               - 'package.json'
               - 'bun.lock'
-              # Issue #602: demo-compose-config.test.ts asserts the rendered
+              # Issue #602: smoke-compose-config.test.ts asserts the rendered
               # compose environment, so a compose-only change must select this
               # job rather than skip the assertions that cover it.
               - 'docker-compose*.yml'
@@ -106,7 +106,7 @@ jobs:
       - name: Install root tooling
         run: bun install --frozen-lockfile
       # Installed BEFORE test steps (issue #108): scripts/tests/
-      # integration/demo-edgar-bootstrap.test.ts spawns backend/scripts/edgar-seed-bootstrap.ts
+      # integration/smoke-edgar-bootstrap.test.ts spawns backend/scripts/edgar-seed-bootstrap.ts
       # as a host-side subprocess (cwd: backend/), which needs backend's own
       # node_modules (@robotmoney/contract) resolvable — the same reason the
       # rest of this job's backend steps need it, just moved earlier.
