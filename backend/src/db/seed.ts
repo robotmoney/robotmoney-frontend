@@ -92,7 +92,7 @@ export const SCHEDULES: SeedSchedule[] = [
   // Projects "Agentic Economy Ecosystem" pipelines (issue #87). Ordered so a
   // day's chain is coherent: discover identity → refresh live metrics → snapshot
   // today → roll revenue up → recompute coverage. Daily cadence (not the fast
-  // smoke cadence), so a short smoke run never races DEMO_SEED_PROJECTS. Each kind
+  // smoke cadence), so a short smoke run never races SMOKE_SEED_PROJECTS. Each kind
   // has a handler in worker/handlers/index.ts and upserts on natural keys, so an
   // extra firing is harmless. In prod the worker needs PROJECTS_SOURCE=live
   // (select.ts fails closed rather than serving fixture data as production).
@@ -336,10 +336,10 @@ export async function seed(): Promise<void> {
 
   // Demo-only: populate the "Agentic Economy Ecosystem" projects directory so
   // GET /api/projects returns a full table instead of "No projects yet.". Gated
-  // behind DEMO_SEED_PROJECTS so prod/CI seeds stay byte-for-byte unchanged (the
+  // behind SMOKE_SEED_PROJECTS so prod/CI seeds stay byte-for-byte unchanged (the
   // flag is set ONLY on the smoke migrate/seed run in scripts/lib/smoke-main.ts).
   // Idempotent (upsert-on-slug + delete/re-insert facets), so safe on every boot.
-  if (process.env.DEMO_SEED_PROJECTS === "1") {
+  if (process.env.SMOKE_SEED_PROJECTS === "1") {
     await seedSmokeProjects();
   }
 

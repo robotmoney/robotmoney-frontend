@@ -27,12 +27,11 @@
     "smoke:status": "bun scripts/smoke-status.ts",
     "smoke:clean": "bun scripts/smoke-clean.ts",
     "smoke:reap": "bun scripts/smoke-reap.ts",
-    "smoke-twin": "bun scripts/smoke-twin.ts",
     "smoke:capture": "bun run --cwd backend scripts/smoke-twin-capture.ts",
-    "smoke:smoke-twin --once": "bun scripts/smoke-twin-rehearse.ts",
-    "smoke": "bun scripts/smoke.ts --smoke",
     "credentials": "bun scripts/gitops-credentials.ts",
-    "credentials:check": "bun scripts/gitops-credentials.ts --check"
+    "credentials:check": "bun scripts/gitops-credentials.ts --check",
+    "smoke:twin": "bun scripts/smoke-twin.ts",
+    "smoke:twin --once": "bun scripts/smoke-twin-rehearse.ts"
   },
   "dependencies": {
     "@simplewebauthn/browser": "13.3.0",

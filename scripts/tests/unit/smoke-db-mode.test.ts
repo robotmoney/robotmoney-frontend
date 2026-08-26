@@ -4,7 +4,7 @@
 // Imported from scripts/smoke.ts — the `bun run smoke` entrypoint re-exports the
 // module and only triggers the side-effectful bring-up under `import.meta.main`,
 // so this import is safe and proves the tested resolver is exactly the one the
-// smoke consumes (same arrangement as smoke-env.test.ts and smoke-external-pg.test.ts).
+// smoke consumes (same arrangement as smoke-env.test.ts and ).
 //
 // Contract under test:
 //   - THREE named modes, one flag. Default is ephemeral; no env var can change it.

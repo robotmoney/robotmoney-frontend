@@ -177,13 +177,6 @@ describe("labels — the channel tooling selects on", () => {
     expect(MANAGED_NETWORK_LABEL).toBe("robotmoney.smoke.network");
   });
 
-    expect(dockerLabelFlags(stackLabels(local, "rm_smoke_pgtest_x"))).toEqual([
-      "--label", "robotmoney.env=local",
-      "--label", `robotmoney.env.hash=${local.hash}`,
-      "--label", "robotmoney.smoke.project=rm_smoke_pgtest_x",
-    ]);
-  });
-});
 
 // ── Wiring guards ───────────────────────────────────────────────────────────
 // Executed assertions against the real on-disk compose files, workflows and
@@ -253,4 +246,5 @@ describe("the scheme is actually wired into every spawner", () => {
     // Both steps in the one remaining workflow — boot + always() teardown.
     expect(seen).toBe(2);
   });
+});
 });

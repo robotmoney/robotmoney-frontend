@@ -2617,7 +2617,7 @@ git grep -nE '(bun +smoke|--smoke)' <the §1 tip> -- .github/workflows/
 ```
 
 The smoke boot path is exercised by unit tests
-(`scripts/tests/unit/smoke-mode.test.ts`) but not end-to-end in CI. Treat the
+(``) but not end-to-end in CI. Treat the
 cutover as the first real execution of this path for this release, and keep §9
 within reach.
 

@@ -139,7 +139,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const STATIC_PORT_FLAG = "--static-port";
 // `bun smoke` → `bun scripts/smoke.ts --smoke`. Every decision the flag implies
 // lives in scripts/lib/smoke-mode.ts (executed by
-// scripts/tests/unit/smoke-mode.test.ts); this file holds only the wiring.
+// ); this file holds only the wiring.
 const smokeMode = isSmokeMode(process.argv);
 const scenario = scenarioPlan(smokeMode);
 const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);

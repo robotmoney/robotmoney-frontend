@@ -115,7 +115,7 @@ x-worker-env: &worker-env
   # never mutate analytics data tables (issue #106). Falls back to DATABASE_URL
   # when unset.
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
-  RM_ENV: ${RM_ENV:-demo}
+  RM_ENV: ${RM_ENV:-smoke}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   # Capability-specific cache controls. Blank/unset is intentionally passed
   # through: backend parsing treats it as absent, preserving the production
@@ -207,7 +207,7 @@ services:
     command: ["bun", "run", "src/api/index.ts"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      RM_ENV: ${RM_ENV:-demo}
+      RM_ENV: ${RM_ENV:-smoke}
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS
       # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here
@@ -255,7 +255,7 @@ services:
       # Swarm session-lifecycle cron cadence (issue #208). Read at
       # `bun run migrate` time (seed() -> resolveSwarmSchedules) — this is
       # the SINGLE-BOX/prod compose file, so it explicitly enables the daily
-      # 06:00-08:00 UTC sequence by default; docker-compose.demo.yml pins
+      # 06:00-08:00 UTC sequence by default; docker-compose.smoke.yml pins
       # SWARM_SCHEDULES_ENABLED off (repo demo/e2e never auto-runs the
       # swarm on its own). Staging overrides any of these per-kind crons
       # (or SWARM_WINDOW_MINUTES) to an accelerated cadence via its own env.

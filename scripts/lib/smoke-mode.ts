@@ -6,7 +6,7 @@
 // restores the production archive and reconnects its committed IC identities.
 //
 // Every one of those is a DECISION, not I/O, so it lives here and is executed
-// directly by scripts/tests/unit/smoke-mode.test.ts rather than grepped out of
+// directly by  rather than grepped out of
 // scripts/lib/smoke-main.ts. smoke-main.ts holds only the wiring.
 //
 // NOT in scope here (issue #537's "Out of scope"): the archive import pipeline,
@@ -39,7 +39,7 @@ export const SMOKE_MIGRATE_ENV: Readonly<Record<string, string>> = Object.freeze
 
 /** Project seeding is the only normal-smoke migration environment setting. */
 export const DEMO_MIGRATE_ENV: Readonly<Record<string, string>> =
-  Object.freeze({ DEMO_SEED_PROJECTS: "1" });
+  Object.freeze({ SMOKE_SEED_PROJECTS: "1" });
 
 /** Demo schedules are an explicit migration action, not environment state. */
 export const DEMO_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze(["--seed-smoke-schedules"]);
