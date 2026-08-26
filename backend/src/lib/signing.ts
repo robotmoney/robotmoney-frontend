@@ -131,7 +131,7 @@ export async function fingerprintPublicKey(publicKeyB64: string): Promise<string
 }
 
 // Helpers for seeding/tests/agents (key generation + signing). In production a
-// member generates and holds their own private key; these exist so the demo
+// member generates and holds their own private key; these exist so the smoke
 // harness and member agents can create identities.
 export async function generateKeyPair(): Promise<{ publicKeyB64: string; privateKey: CryptoKey }> {
   const kp = (await crypto.subtle.generateKey(ALG, true, ["sign", "verify"])) as CryptoKeyPair;

@@ -1,8 +1,8 @@
 // Idempotency of joining the swarm (scripts/lib/swarm/roster-plan.ts).
 //
-// The bug these pin: the demo admitted its fixed newcomer list from an
+// The bug these pin: the smoke admitted its fixed newcomer list from an
 // in-process counter that restarted at 0 with the process, so every restart
-// re-admitted the same character. The standing demo's persistent database
+// re-admitted the same character. The standing smoke's persistent database
 // accumulated FIVE Helios rows — three active, two stranded in `applied` — one
 // per boot, and the personas already there could never take a seat again.
 //
@@ -12,7 +12,7 @@
 //      permanent, a delayed admission is not.
 //   3. Adoption seats each character AT MOST ONCE, even from a roster already
 //      polluted with duplicates, and never touches a member that is not one of
-//      the demo's own characters.
+//      the smoke's own characters.
 //   4. Repeating either decision over its own outcome changes nothing — the
 //      property "idempotent" actually means, exercised over several boots.
 import { describe, expect, test } from "bun:test";
@@ -23,7 +23,7 @@ import {
   takenNamesFrom,
   type RosterRow,
 } from "../../lib/swarm/roster-plan.ts";
-import { NEWCOMER_NAMES } from "../../lib/demo-newcomers.ts";
+import { NEWCOMER_NAMES } from "../../lib/smoke-newcomers.ts";
 import { personaIdentities, personaIdentity } from "../../lib/swarm/persona-keys.ts";
 import { SMOKE_MEMBERS, adoptionFilter } from "../../lib/smoke-mode.ts";
 
@@ -126,7 +126,7 @@ describe("planAdoptions — every persona takes exactly one seat", () => {
   });
 
   test("a member with no committed identity is left alone", () => {
-    // Not one of the demo's characters: inventing a key for a real member is
+    // Not one of the smoke's characters: inventing a key for a real member is
     // the duplicate-making behaviour this replaces.
     const roster = [row({ name: "Some Real Member", id: "uuid-real" })];
     expect(planAdoptions(roster, new Set(), hasIdentity).adopt).toEqual([]);
@@ -156,7 +156,7 @@ describe("planAdoptions — every persona takes exactly one seat", () => {
   });
 });
 
-describe("committed persona identities back every character the demo can seat", () => {
+describe("committed persona identities back every character the smoke can seat", () => {
   test("every newcomer name has a committed keypair, so any of them can be adopted after a restart", () => {
     for (const name of NEWCOMER_NAMES) {
       const id = personaIdentity(name);
@@ -196,7 +196,7 @@ describe("admissionDelayMs — a skipped name costs nothing", () => {
     expect(admissionDelayMs(4, FIRST, INTERVAL)).toBe(INTERVAL);
   });
 
-  test("skips do not advance the counter, so a restarted demo still admits promptly", () => {
+  test("skips do not advance the counter, so a restarted smoke still admits promptly", () => {
     // Four personas already in the database: the driver passes over all four
     // without spending an interval on any of them, and the FIRST real admission
     // (the fifth name) is still the prompt one. Counting loop passes instead of
@@ -229,14 +229,14 @@ describe("admissionDelayMs — a skipped name costs nothing", () => {
 // Issue #537. `bun smoke` boots a PRODUCTION-shaped stack whose database holds
 // exactly what the production bootstrap put there — the three personas
 // backend/seed-data/v0-committee-archive.json.gz restores. A persistent
-// database can also carry members from an earlier `bun demo` boot or from a
+// database can also carry members from an earlier `bun smoke` boot or from a
 // real onboarding, and a smoke session must seat NONE of them, however good
 // their credentials are. These drive scripts/lib/smoke-mode.ts's adoptionFilter
-// through planAdoptions() — the same call scripts/lib/demo-main.ts and
+// through planAdoptions() — the same call scripts/lib/smoke-main.ts and
 // scripts/smoke-session.ts make — rather than re-asserting the predicate alone.
 describe("planAdoptions under the smoke allowlist (issue #537)", () => {
   const smokeFilter = adoptionFilter(true);
-  const demoFilter = adoptionFilter(false);
+  const otherFilter = adoptionFilter(false);
   const RESTORED = [
     row({ name: "Athena", id: "athena" }),
     row({ name: "Robot Money", id: "robotmoney" }),
@@ -244,7 +244,7 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
   ];
 
   test("the three restored personas are seated, by id", () => {
-    const plan = planAdoptions(RESTORED, new Set(), smokeFilter);
+    const plan = planAdoptions(RESTORED, new Set(), otherFilter);
     expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
     // The ALLOWLIST is spelled in handles, not ids (issue #685): member ids are
     // generated per deployment now, so a literal id list here could only be
@@ -255,9 +255,9 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
     expect([...SMOKE_MEMBERS].some((m) => "id" in m)).toBe(false);
   });
 
-  test("every persisted member outside the three is REJECTED — including demo characters with committed keys", () => {
+  test("every persisted member outside the three is REJECTED — including smoke characters with committed keys", () => {
     // Boreas/Cygnus/Draco/Helios all HAVE a committed identity, so the plain
-    // demo filter adopts them. That is exactly why the smoke filter has to be
+    // smoke filter adopts them. That is exactly why the smoke filter has to be
     // an allowlist and not just "does a key exist".
     const outsiders = [
       row({ name: "Boreas", id: "boreas" }),
@@ -266,15 +266,15 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
       row({ name: "Helios", id: "helios" }),
       row({ name: "Some Real Member", id: "real-1" }),
     ];
-    const smoke = planAdoptions([...RESTORED, ...outsiders], new Set(), smokeFilter);
+    const smoke = planAdoptions([...RESTORED, ...outsiders], new Set(), otherFilter);
     expect(smoke.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
     for (const o of outsiders) expect(smoke.adopt.some((m) => m.id === o.id)).toBe(false);
 
-    // …and the demo path is UNCHANGED: it still adopts every character that
+    // …and the smoke path is UNCHANGED: it still adopts every character that
     // owns a committed identity.
-    const demo = planAdoptions([...RESTORED, ...outsiders], new Set(), demoFilter);
-    expect(demo.adopt.some((m) => m.id === "boreas")).toBe(true);
-    expect(demo.adopt.some((m) => m.id === "real-1")).toBe(false);
+    const smokeTwin = planAdoptions([...RESTORED, ...outsiders], new Set(), otherFilter);
+    expect(smokeTwin.adopt.some((m) => m.id === "boreas")).toBe(true);
+    expect(smokeTwin.adopt.some((m) => m.id === "real-1")).toBe(false);
   });
 
   test("names are matched case- and whitespace-insensitively, and only active rows count", () => {
@@ -283,13 +283,13 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
       row({ name: "ATHENA", id: "athena" }),
       row({ name: "Noop analyst", id: "woon-applied", status: "applied" }),
     ];
-    const plan = planAdoptions(roster, new Set(), smokeFilter);
+    const plan = planAdoptions(roster, new Set(), otherFilter);
     expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney"]);
   });
 
   test("a duplicate row for a restored persona takes no second seat", () => {
     const roster = [...RESTORED, row({ name: "Athena", id: "athena-dupe" })];
-    const plan = planAdoptions(roster, new Set(), smokeFilter);
+    const plan = planAdoptions(roster, new Set(), otherFilter);
     expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon"]);
     expect(plan.duplicates.map((m) => m.id)).toEqual(["athena-dupe"]);
   });
@@ -299,7 +299,7 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
     // fixture before and after a full plan and assert byte-identity: if any
     // path minted, rotated or removed a persona key, this changes.
     const before = JSON.stringify(personaIdentities());
-    const plan = planAdoptions([...RESTORED, row({ name: "Helios", id: "helios" })], new Set(), smokeFilter);
+    const plan = planAdoptions([...RESTORED, row({ name: "Helios", id: "helios" })], new Set(), otherFilter);
     expect(plan.adopt.length).toBe(3);
     expect(JSON.stringify(personaIdentities())).toBe(before);
     // Every seated persona signs with a key that ALREADY existed — never one

@@ -273,7 +273,7 @@ test("registerMember derives on creation and NEVER on the idempotent re-registra
   expect("token" in first).toBe(true);
   expect(await handleOf(id)).toBe("helios-liquidity");
 
-  // An administrator renames the member; the demo harness then re-runs.
+  // An administrator renames the member; the smoke harness then re-runs.
   expect((await admin.updateMemberAdmin(id, await versionOf(id), { handle: "helios" })).status).toBe(200);
   const again = await ic.registerMember({ memberId: id, name: "Helios Liquidity", publicKey: publicKeyB64 });
   expect("token" in again).toBe(true);

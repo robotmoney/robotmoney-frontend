@@ -96,7 +96,7 @@ process verifies it on `POST /api/swarm/regime` and every `/api/analytics/*`
 route, and the **worker** presents the same value when its updater jobs submit
 computed outputs through that boundary (`ANALYTICS_API_URL` points the worker at
 the api; docker-compose defaults it to `http://api:8787`). The worker refuses to
-boot in demo/prod without it. It is never a substitute for `ADMIN_TOKEN` and
+boot in smoke/prod without it. It is never a substitute for `ADMIN_TOKEN` and
 vice versa. Optionally, `WORKER_DATABASE_URL` points the worker's pool at the
 restricted `rm_worker` role (migration `0016_worker_role.sql`; password set by
 the operator, never baked in a migration) so database permissions also deny the

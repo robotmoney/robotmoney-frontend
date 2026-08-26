@@ -163,7 +163,7 @@ const EXPECTED: [string, string, string][] = [
   ["P4.preflight-live", "expired", "<age> · TTL 2h"],
   ["P4.postflight-dryrun", "invalid", "changed since <rc>: <files>"],
   ["P5.rehearsal-boot", "missing", "no receipt"],
-  ["P5.postflight-twin", "missing", "no receipt"],
+  ["P5.postflight-smoke-twin", "missing", "no receipt"],
   ["P6.report", "missing", "no receipt"],
   ["P7.cutover", "missing", "no receipt"],
   ["P8.postflight-prod", "missing", "no receipt"],

@@ -320,7 +320,7 @@ test("a placeholder override flips only that adapter to configured:false; the re
   }
 });
 
-test("resolveVaultAdapters: unset env → the real deployed adapter addresses, all configured:true (fixes the 'Not configured' demo bug)", () => {
+test("resolveVaultAdapters: unset env → the real deployed adapter addresses, all configured:true (fixes the 'Not configured' smoke bug)", () => {
   const adapters = resolveVaultAdapters({});
   expect(adapters.every((a) => a.configured === true)).toBe(true);
   expect(adapters.map((a) => a.address.toLowerCase())).toEqual([

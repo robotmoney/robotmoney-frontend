@@ -2,7 +2,7 @@
 // docs/audits/v0-v1-parity/R11-projects-supabase-audit.md, Verdict). The ONLY way
 // the committed backend/src/projects/seed/v0-roster-data.json +
 // .manifest.json pair is produced or replaced — NEVER implicit during
-// migrations, demo boot, or required per-PR CI (no other code path imports
+// migrations, smoke boot, or required per-PR CI (no other code path imports
 // roster-seed-generator.ts). An operator runs it deliberately, with read-only
 // anon-key access to v0's Supabase, reviews the printed row counts and
 // skip/mapping notes, then commits the result.

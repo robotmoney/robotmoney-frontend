@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const session = readFileSync(join(repoRoot, "scripts/lib/swarm/session.ts"), "utf8");
-const demoMain = readFileSync(join(repoRoot, "scripts/lib/demo-main.ts"), "utf8");
+const smokeMain = readFileSync(join(repoRoot, "scripts/lib/smoke-main.ts"), "utf8");
 
 describe("runSession's initializer is a stated obligation, not a default", () => {
   test("the opts field is REQUIRED — an omitted initializer must not compile", () => {
@@ -50,15 +50,15 @@ describe("runSession's initializer is a stated obligation, not a default", () =>
   });
 });
 
-describe("every demo-side session caller states its scenario", () => {
+describe("every smoke-side session caller states its scenario", () => {
   test("both the first session and the STANDING loop pass the scenario's initializer", () => {
-    const passes = demoMain.match(/initializer: scenario\.initializer/g) ?? [];
+    const passes = smokeMain.match(/initializer: scenario\.initializer/g) ?? [];
     // One for the opening session, one for the standing loop that runs forever.
     // The standing loop was the omission that caused the corruption.
     expect(passes.length).toBeGreaterThanOrEqual(2);
   });
 
-  test("no demo-side caller hardcodes simulation, which would defeat a smoke boot", () => {
-    expect(demoMain).not.toContain('initializer: "simulation"');
+  test("no smoke-side caller hardcodes simulation, which would defeat a smoke boot", () => {
+    expect(smokeMain).not.toContain('initializer: "simulation"');
   });
 });

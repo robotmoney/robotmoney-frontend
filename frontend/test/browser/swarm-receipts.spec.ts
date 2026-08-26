@@ -24,7 +24,7 @@ test("public swarm take shows an exact verified badge on the session view, membe
   request,
 }) => {
   // ?state=published (issue #243): the default list response is now a light,
-  // paginated (20-most-recent, ANY state) projection — on a long-running demo
+  // paginated (20-most-recent, ANY state) projection — on a long-running smoke
   // stack the newest 20 sessions across every state could easily contain fewer
   // than 2 published ones, even though plenty of published history exists.
   // Ask the server to filter to `published` directly instead of relying on

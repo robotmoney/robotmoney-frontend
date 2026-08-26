@@ -1,9 +1,9 @@
 // WHO JOINS, WHO IS ADOPTED, WHO IS SKIPPED — pure decisions, no I/O.
 //
-// The demo's roster logic used to be an in-process counter: admit newcomer #0,
+// The smoke's roster logic used to be an in-process counter: admit newcomer #0,
 // #1, #2 … starting from 0 in every boot. Against a throwaway database that was
 // right. Against a persistent one it re-admitted the same character on every
-// restart — the standing demo accumulated FIVE Helios rows, three active and two
+// restart — the standing smoke accumulated FIVE Helios rows, three active and two
 // stranded in `applied`, one per boot — while the personas that were already
 // there sat on the roster unable to file a take.
 //
@@ -13,7 +13,7 @@
 // every branch (including the unreadable-roster branch, which is the one that
 // must never quietly admit a duplicate) without booting anything.
 //
-// Consumed by scripts/lib/demo-main.ts's onboarding and swarm drivers.
+// Consumed by scripts/lib/smoke-main.ts's onboarding and swarm drivers.
 
 /**
  * How long to wait before the NEXT admission attempt.
@@ -21,7 +21,7 @@
  * The interval paces real admissions, so it is counted from admissions that
  * actually happened — not from names the driver skipped. The loop used to sleep
  * before deciding, which meant a persona already in the database cost a full
- * interval to say "no" to: on the standing demo (6 h interval) a restart with
+ * interval to say "no" to: on the standing smoke (6 h interval) a restart with
  * four known personas would idle a full DAY before admitting the first genuinely
  * new character. A skip is a no-op and must cost nothing.
  *
@@ -90,7 +90,7 @@ export interface AdoptionPlan {
  *   - ACTIVE only. An `applied`/`deactivated` row is not a swarm member.
  *   - NOT ALREADY SEATED. The built-in characters are on the list already, under
  *     the same ids the database holds.
- *   - HAS A COMMITTED IDENTITY. Only the demo's own characters have a key in
+ *   - HAS A COMMITTED IDENTITY. Only the smoke's own characters have a key in
  *     fixtures/persona-keys.json; anyone else is somebody's real member, and
  *     inventing a key for them is precisely the behaviour being removed.
  *

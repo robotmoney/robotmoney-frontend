@@ -6,7 +6,7 @@
 // silent-skip) for this spec's own module-load guard.
 //
 // This suite proves, by ACTUALLY RUNNING the real `bun run test:browser`
-// entrypoint (the exact command scripts/lib/demo-main.ts's "browser checks"
+// entrypoint (the exact command scripts/lib/smoke-main.ts's "browser checks"
 // step invokes), both directions:
 //   - NEGATIVE: without BACKEND_URL/ADMIN_TOKEN, the whole test:browser run
 //     fails loudly (non-zero exit) with the guard's own message — never a
@@ -15,7 +15,7 @@
 //     playwright.config.ts's default testDir glob alongside every other
 //     frontend/test/browser/*.spec.ts file — i.e. this spec is ALREADY wired
 //     into the required e2e job's live-stack boot with no additional CI
-//     config, because demo-main.ts invokes the bare `test:browser` script
+//     config, because smoke-main.ts invokes the bare `test:browser` script
 //     (playwright test), not an explicit file list.
 //
 // `--list` only imports/collects test files — it never launches a browser —
@@ -87,10 +87,10 @@ describe("admin-live.spec.ts is wired into the required e2e job's live-stack boo
     expect(config).toContain('testDir: "./frontend/test/browser"');
   });
 
-  test("scripts/lib/demo-main.ts's 'browser checks' step runs the real `test:browser` script with BACKEND_URL and ADMIN_TOKEN exported explicitly", () => {
-    const src = readFileSync(join(repoRoot, "scripts/lib/demo-main.ts"), "utf8");
+  test("scripts/lib/smoke-main.ts's 'browser checks' step runs the real `test:browser` script with BACKEND_URL and ADMIN_TOKEN exported explicitly", () => {
+    const src = readFileSync(join(repoRoot, "scripts/lib/smoke-main.ts"), "utf8");
 
-    // Issue #456: demo-main.ts no longer mutates process.env.ADMIN_TOKEN
+    // Issue #456: smoke-main.ts no longer mutates process.env.ADMIN_TOKEN
     // globally (the 2026-07-14 maintainability review's flagged
     // module-level-mutable-state shape) — every child process that needs the
     // admin token, including this one, now gets it as an explicit

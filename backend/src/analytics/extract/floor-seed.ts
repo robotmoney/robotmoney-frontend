@@ -12,9 +12,9 @@ import { gunzipSync } from "node:zlib";
 import type { RawIndicatorHistory } from "../types.ts";
 
 // Default vendored seed: the raw-indicator-history fixture already in the repo
-// (same CSV.gz shape as update.js writeRawHistoryCsv). A demo/operator can point
+// (same CSV.gz shape as update.js writeRawHistoryCsv). A smoke/operator can point
 // at a different file via FLOOR_SEED_PATH. Kept out of the source tree so we do not
-// duplicate the ~530 KB payload; a demo that seeds passes the path explicitly.
+// duplicate the ~530 KB payload; a smoke that seeds passes the path explicitly.
 export const DEFAULT_FLOOR_SEED_PATH = new URL(
   "../../../tests/fixtures/regime/raw-indicator-history.csv.gz",
   import.meta.url,

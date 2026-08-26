@@ -12,7 +12,7 @@ const destDir = join(root, "frontend/public/assets/js/app/contract");
 // verbatim. Each entry must be import-free (no node_modules dependencies) —
 // it's served to the browser as-is, the same discipline `routes.js` already
 // follows. `swarm-application.js` carries ONBOARDING_PROMPT (§11 R4) so
-// the /swarm/apply page and the demo onboarding prompt can never drift
+// the /swarm/apply page and the smoke onboarding prompt can never drift
 // onto two different copies of the same prompt.
 const FILES = ["routes.js", "swarm-application.js"];
 

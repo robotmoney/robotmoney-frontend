@@ -1,9 +1,9 @@
 // Hermetic (offline, deterministic) analytics data source for the DEMO / e2e path.
 //
-// The PRODUCTION default is `liveDataSource` (real keyless fetchers). The demo
-// spec forbids the demo reaching out to FRED/Yahoo/DefiLlama/EDGAR/etc. — the
-// seeded provider must supply deterministic data. So `bun run scripts/demo.ts`
-// and the CI `e2e` job select THIS source (ANALYTICS_SOURCE=hermetic, or the demo
+// The PRODUCTION default is `liveDataSource` (real keyless fetchers). The smoke
+// spec forbids the smoke reaching out to FRED/Yahoo/DefiLlama/EDGAR/etc. — the
+// seeded provider must supply deterministic data. So `bun run scripts/smoke.ts`
+// and the CI `e2e` job select THIS source (ANALYTICS_SOURCE=hermetic, or the smoke
 // e2e entry passes it explicitly): every series is a deterministic seeded walk
 // (access/provider.ts `seededProvider`), so a full analytics run is completely
 // network-free, deterministic, and fast. NEVER used on the prod path.
@@ -36,11 +36,11 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 export const hermeticDataSource: AnalyticsDataSource = {
   // Registry indicators: one deterministic seeded series per id. fetchIndicators
-  // carries no `asof`, so we anchor at today (the demo always runs for today).
+  // carries no `asof`, so we anchor at today (the smoke always runs for today).
   async fetchIndicators(indicators: Indicator[], logger: Logger = console) {
     logger.warn?.(
       "[analytics] HERMETIC data source — deterministic seeded series, NO network " +
-        "(demo/e2e path; prod uses liveDataSource)",
+        "(smoke/e2e path; prod uses liveDataSource)",
     );
     const asof = today();
     const out: Record<string, Point[]> = {};
@@ -49,7 +49,7 @@ export const hermeticDataSource: AnalyticsDataSource = {
   },
 
   // Research-only inputs (BTC/QQQ/SPY/RSP/top-7/MNA/MARGIN/CONF). Per-series
-  // base/vol picked so the gauges land in a believable range for the demo UI.
+  // base/vol picked so the gauges land in a believable range for the smoke UI.
   async fetchResearchInputs(asof: string, logger: Logger = console): Promise<ResearchInputs> {
     logger.warn?.("[analytics] HERMETIC research inputs — deterministic seeded series, NO network");
     return {
@@ -65,8 +65,8 @@ export const hermeticDataSource: AnalyticsDataSource = {
   },
 
   // Backtest/correlations overlays: deterministic seeded price/yield walks anchored
-  // at today (the demo always runs for today). Magnitudes are illustrative — the
-  // demo only needs a coherent equity chart + correlations panel, never parity.
+  // at today (the smoke always runs for today). Magnitudes are illustrative — the
+  // smoke only needs a coherent equity chart + correlations panel, never parity.
   async fetchBacktestExtras(logger: Logger = console): Promise<BacktestExtras> {
     logger.warn?.("[analytics] HERMETIC backtest extras — deterministic seeded series, NO network");
     const asof = today();

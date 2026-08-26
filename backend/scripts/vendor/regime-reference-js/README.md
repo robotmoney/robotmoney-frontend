@@ -70,7 +70,7 @@ port.
   changes, re-fetch and re-verify blob shas rather than hand-editing.
 - **Never imported by `src/`.** Only `regime-independent-reference-regenerate.ts`
   requires/imports these files, and only at regeneration time (an explicit,
-  human-invoked `bun run` command, never CI, never demo boot, never
+  human-invoked `bun run` command, never CI, never smoke boot, never
   production).
 - **`backend/tsconfig.json` never gains a `.js` include glob and never sets
   `allowJs`.** This directory sits *inside* an included path — `include` covers

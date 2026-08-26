@@ -69,7 +69,7 @@ describe("session.html take loops key on the member, not the take row id", () =>
     }
   });
 
-  // The red direction, asserted in CI rather than demonstrated by hand once:
+  // The red direction, asserted in CI rather than smokenstrated by hand once:
   // the extractor really does reject the pre-#573 markup.
   test("the pre-#573 key form would fail this test", () => {
     const regressed = takeLoopKeys(

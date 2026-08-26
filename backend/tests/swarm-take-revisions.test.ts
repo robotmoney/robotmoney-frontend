@@ -403,7 +403,7 @@ test("nonce replay is refused before the verify too, and says something differen
 
 test("participation and quorum count DISTINCT MEMBERS, not rows — the assertion that catches the takes.length bug", async () => {
   const { subj, session, date } = await openCollectingSession("quorum");
-  // Exactly three seated members — openSession takes the legacy/demo path with
+  // Exactly three seated members — openSession takes the legacy/smoke path with
   // no frozen roster, so aggregateSession's denominator is the live active
   // roster, which beforeEach has just emptied. Three seats, and the numbers
   // below are checked against them.

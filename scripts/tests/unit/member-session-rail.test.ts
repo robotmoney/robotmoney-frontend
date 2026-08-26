@@ -2,7 +2,7 @@
 // the `docker compose run` argv the session-participation mode emits, the
 // persistent-home volume naming, the client stdout protocol parser, and the
 // standalone entry point's rail resolution. No Docker, no network, no model
-// call — the live path is executed by the required e2e demo gate (every
+// call — the live path is executed by the required e2e smoke gate (every
 // present member's take is containerized there and asserted post-publish by
 // assertAuthoredTakes).
 import { describe, expect, test } from "bun:test";
@@ -67,7 +67,7 @@ describe("buildMemberAgentArgv — session-participation mode", () => {
 
   test("mount set excludes the repo, .agents, .env, and analytics-token host path", () => {
     const repo = "/workspace/robotmoney-frontend";
-    const analyticsTokenFile = "/tmp/robotmoney-demo-secrets/analytics-token";
+    const analyticsTokenFile = "/tmp/robotmoney-smoke-secrets/analytics-token";
     const mounts = memberSessionMounts(
       "/tmp/robotmoney-member-client-safe/member-session-client.js",
       "rm_ci_stack_x_member_home_athena",
@@ -148,20 +148,20 @@ describe("parseClientLine — the RM_* stdout protocol", () => {
 });
 
 describe("railFromEnv — the standalone session driver's rail resolution", () => {
-  test("throws loudly when DEMO_PROJECT is missing", () => {
-    expect(() => railFromEnv({ AGENT_MODEL: "free" })).toThrow(/DEMO_PROJECT is required/);
+  test("throws loudly when SMOKE_PROJECT is missing", () => {
+    expect(() => railFromEnv({ AGENT_MODEL: "free" })).toThrow(/SMOKE_PROJECT is required/);
   });
 
   test("resolves project, compose files, and a defined-only spawn env", () => {
     const rail = railFromEnv({
-      DEMO_PROJECT: "rm_ci_stack_y",
-      COMPOSE_FILE: "docker-compose.yml:docker-compose.demo.yml",
+      SMOKE_PROJECT: "rm_ci_stack_y",
+      COMPOSE_FILE: "docker-compose.yml:docker-compose.smoke.yml",
       AGENT_MODEL: "free",
       AUTOMATION_TOKEN: "automation-token",
       UNDEF: undefined,
     });
     expect(rail.composeProject).toBe("rm_ci_stack_y");
-    expect(rail.composeFiles).toEqual(["docker-compose.yml", "docker-compose.demo.yml"]);
+    expect(rail.composeFiles).toEqual(["docker-compose.yml", "docker-compose.smoke.yml"]);
     expect("UNDEF" in rail.composeSpawnEnv).toBe(false);
     expect(rail.automationToken).toBe("automation-token");
     // Keyless selection resolves with no credential.

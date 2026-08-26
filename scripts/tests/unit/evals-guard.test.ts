@@ -152,7 +152,7 @@ describe("real-inference evals stay OFF the per-PR trigger", () => {
 
   // ── negative controls: the assertion above must be able to FAIL ───────────
   test("FIRES when an eval target is wired into the per-PR e2e workflow", () => {
-    const e2e = readFileSync(join(wfDir, "e2e.yml"), "utf8").replace("bun run scripts/demo.ts", "bun run eval");
+    const e2e = readFileSync(join(wfDir, "e2e.yml"), "utf8").replace("bun run scripts/smoke.ts", "bun run eval");
     expect(evalRunsUnderPullRequest(e2e)).toEqual(["bun run eval"]);
   });
 

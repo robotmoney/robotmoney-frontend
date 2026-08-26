@@ -14,7 +14,7 @@
 //
 // Fail-closed: a configured token (constant-time compared) authorizes in any
 // env; WITHOUT a token the role opens only when config.allowInsecure
-// (RM_ENV=ephemeral / explicit RM_ALLOW_INSECURE=1). demo/prod with no token →
+// (RM_ENV=ephemeral / explicit RM_ALLOW_INSECURE=1). smoke/prod with no token →
 // locked. ADMIN_TOKEN and member bearers are NEVER substitutes for the
 // analytics-provider credential (distinct comparisons against distinct secrets).
 import { createHash, timingSafeEqual } from "node:crypto";

@@ -1,6 +1,6 @@
 // Real-inference onboarding eval harness (docs/architecture.md §11 R8, Stage 5
 // of docs/plans/onboarding-ic-workflow.md). Launches ONE vanilla member-agent
-// container (docker-compose.demo.yml's `member-agent` service,
+// container (docker-compose.smoke.yml's `member-agent` service,
 // scripts/lib/member-agent/Dockerfile) per admission, injects the canonical
 // copy-paste prompt (contract's ONBOARDING_PROMPT text, with only its skill URL
 // pointed at this checkout's static asset) with a generated identity,
@@ -58,7 +58,7 @@
 //     server as a real application), and a headless container has no owner to
 //     ask, so the note answers the question the prompt raised;
 //   - the swarm REST API base URL for this run (the prompt's doc link is a
-//     production host this ephemeral demo stack cannot serve; a real human, per
+//     production host this ephemeral smoke stack cannot serve; a real human, per
 //     the real docs, would be applying against swarm.robotmoney.net);
 //   - the keystore passphrase, exported into the container's environment
 //     (KEYSTORE_PASSPHRASE_ENV) — the repo-owned swarm-onboarding skill
@@ -118,7 +118,7 @@ export {
   type MemberAgentModel,
 } from "../agent/member-agent.ts";
 // One outcome classifier for every member-agent run (§11.3 E4/E5) — the retry
-// predicate below, the demo's onboarding driver, and the layer-4 scorecard all
+// predicate below, the smoke's onboarding driver, and the layer-4 scorecard all
 // read the SAME definition. Re-exported so importers of this module keep
 // working unchanged.
 export {
@@ -166,7 +166,7 @@ export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7
 // The env var `rmpc` reads its keystore passphrase from — the ONE secret the
 // repo-owned swarm-onboarding skill tells the agent to have its human owner
 // export before launching it. The harness plays the owner here (see
-// demoHarnessNote); it is not a hint about what the agent should do with it.
+// smokeHarnessNote); it is not a hint about what the agent should do with it.
 // Same name scripts/rmpc-release-e2e.ts and the rails check already use.
 export const KEYSTORE_PASSPHRASE_ENV = "RMPC_COMMITTEE_IDENTITY_PASSPHRASE";
 
@@ -199,7 +199,7 @@ export function generateIdentity(runId: string = crypto.randomUUID().slice(0, 8)
 //     identity, so the harness answers that question here instead of rewriting
 //     the canonical text — which is what keeps this an eval of the real prompt
 //     rather than of a harness-only variant;
-//  2. the swarm API base URL — the ephemeral demo stack cannot serve the
+//  2. the swarm API base URL — the ephemeral smoke stack cannot serve the
 //     production host the docs name;
 //  3. that the owner has already put the secrets they'd otherwise be asked to
 //     type into the session's environment.
@@ -216,7 +216,7 @@ export function generateIdentity(runId: string = crypto.randomUUID().slice(0, 8)
 // it. The note deliberately names no tool, no env var, no endpoint and no step:
 // discovering all of that is still 100% the agent's own inference from the
 // prompt + the skill.
-function demoHarnessNote(identity: OnboardingIdentity, apiBaseUrl: string): string {
+function smokeHarnessNote(identity: OnboardingIdentity, apiBaseUrl: string): string {
   return (
     "\n\n---\n" +
     "Demo harness note (environment info, not part of your task):\n" +
@@ -224,8 +224,8 @@ function demoHarnessNote(identity: OnboardingIdentity, apiBaseUrl: string): stri
     "instructions above tell you to ask for these; this run is unattended, so " +
     "take them from here rather than waiting for a reply.\n" +
     `- The Robot Money swarm REST API for this run is reachable at ${apiBaseUrl} ` +
-    "over this local demo network. Apply against that base URL instead of the " +
-    "production host in the docs, which this ephemeral demo stack does not serve.\n" +
+    "over this local smoke network. Apply against that base URL instead of the " +
+    "production host in the docs, which this ephemeral smoke stack does not serve.\n" +
     "- Your owner is not at the keyboard for this session and cannot answer " +
     "anything else, but has already exported into this environment every secret " +
     "you would otherwise have had to ask them to type — so proceed on your own " +
@@ -246,7 +246,7 @@ export function buildEvalOnboardingPrompt(apiBaseUrl: string = DEFAULT_API_URL_I
 // prompt as the prefix, plus the harness note (kept clearly delimited and
 // separate, per the module doc comment above).
 export function buildAgentPrompt(identity: OnboardingIdentity, apiBaseUrl: string = DEFAULT_API_URL_INTERNAL): string {
-  return `${buildEvalOnboardingPrompt(apiBaseUrl)}${demoHarnessNote(identity, apiBaseUrl)}`;
+  return `${buildEvalOnboardingPrompt(apiBaseUrl)}${smokeHarnessNote(identity, apiBaseUrl)}`;
 }
 
 // ── Model configuration ─────────────────────────────────────────────────────
@@ -400,7 +400,7 @@ export function createObserverPollTracker(log: (message: string) => void): Obser
 // Auto-approve watcher (§11 R7): after an application completes ("applied"),
 // wait autoApproveDelayMs then approve through the SAME admin API a human
 // uses — config only, no separate code path. Exported standalone so Stage 6's
-// demo-wide watcher (or a test) can reuse it without going through the full
+// smoke-wide watcher (or a test) can reuse it without going through the full
 // per-admission eval.
 export function scheduleAutoApprove(
   backendUrl: string,
@@ -426,7 +426,7 @@ export function scheduleAutoApprove(
 // ── Orchestration ────────────────────────────────────────────────────────────
 export interface RunOnboardingEvalOptions {
   repoRoot: string;
-  composeProject: string; // the ALREADY-RUNNING demo stack's compose project name
+  composeProject: string; // the ALREADY-RUNNING smoke stack's compose project name
   composeFiles?: string[];
   backendUrl: string; // host-published backend URL for THIS harness's own polling
   apiUrlInternal?: string; // the swarm REST API base the CONTAINER reaches over the compose network
@@ -439,7 +439,7 @@ export interface RunOnboardingEvalOptions {
   onEvent?: (msg: string) => void;
   /** Exact environment returned by createStack; used by Compose child calls. */
   composeSpawnEnv?: Record<string, string>;
-  /** Optional structured stream; omitted by existing demo/CI callers. */
+  /** Optional structured stream; omitted by existing smoke/CI callers. */
   onStructuredEvent?: OnboardingEventSink;
   /** Shared sequencer for callers that also merge service/cleanup logs. */
   telemetry?: OnboardingTelemetry;
@@ -449,7 +449,7 @@ export interface RunOnboardingEvalOptions {
    * is a persistent, labeled named volume (created here if absent, named per
    * ATTEMPT identity so every attempt still starts on a vanilla machine), so
    * an ADMITTED member's rmpc keystore, member id, and claimed token survive
-   * the eval container — the demo's session rail later mounts the same volume
+   * the eval container — the smoke's session rail later mounts the same volume
    * and the identity that onboarded keeps signing. Omitted (CI sweeps, local
    * one-shot evals) ⇒ exactly the old behavior: the container's filesystem
    * dies with it.
@@ -498,12 +498,12 @@ export interface OnboardingEvalResult {
   //
   // REDACTED at the source of every secret the harness injected (the model
   // credential and the keystore passphrase) — scripts/agent/member-agent.ts's
-  // redactSecrets. This string is printed whole into CI logs and the demo
+  // redactSecrets. This string is printed whole into CI logs and the smoke
   // console, and an agent exploring its container runs `env`.
   transcript?: string;
   /**
    * The persistent HOME volume THIS run (this attempt's identity) mounted, or
-   * null when continuity was not wired — how the demo maps an admitted
+   * null when continuity was not wired — how the smoke maps an admitted
    * memberId onto the volume its keystore lives in (issue #361 Phase 3).
    */
   homeVolume: string | null;
@@ -594,7 +594,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     mounts: homeVolume ? [{ source: homeVolume, target: "/home/agent" }] : undefined,
     // The owner's half of onboarding, left in the environment exactly the way a
     // real owner would leave it before launching their agent (see
-    // demoHarnessNote's comment). Never logged, never read back by this
+    // smokeHarnessNote's comment). Never logged, never read back by this
     // harness — the keystore it protects lives in the member's own HOME
     // (a volume only when the caller wired continuity, else the container's
     // ephemeral filesystem).
@@ -704,14 +704,14 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 //   1. `rate-limited` — a provider 429/overload that DOMINATES the run (see
 //      scripts/agent/classify-outcome.ts: a 429 appearing only inside tool
 //      output is NOT this). The self-hosted CI runner shares its IP with the
-//      standing rmdemo_* demo stack, which has caused 429 flake on other
+//      standing rmsmoke_* smoke stack, which has caused 429 flake on other
 //      live-model-call gates before. Checked regardless of which model is
 //      configured.
 //   2. `refused` — the model declined the prompt outright, so the agent never
 //      ATTEMPTED onboarding at all. Identical reasoning to case 1. This is the
-//      fix for the 2026-07-25 demo run that admitted zero members: the agent
+//      fix for the 2026-07-25 smoke run that admitted zero members: the agent
 //      refused, exited 0 in ~15s, nothing retried it, and the finite newcomer
-//      roster (scripts/lib/demo-newcomers.ts) permanently lost a seat. See
+//      roster (scripts/lib/smoke-newcomers.ts) permanently lost a seat. See
 //      scripts/agent/classify-outcome.ts for the three-conjunct evidence a
 //      refusal must show before it earns a retry.
 //   3. `timed-out` — on ANY tier. This used to be restricted to the KEYLESS
@@ -741,7 +741,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 //
 // ONE definition of both the classification and the retry decision (§11.3 E5):
 // `classifyOutcome` + `shouldRetry` come from scripts/agent/classify-outcome.ts
-// and are shared with the demo's onboarding driver and the layer-4 scorecard.
+// and are shared with the smoke's onboarding driver and the layer-4 scorecard.
 // Nothing is added on top of `shouldRetry` here any more: dropping case 3's
 // tier gate removed the one place this wrapper's policy diverged from the
 // shared one, so there is now exactly one retry decision in the repo.
@@ -768,9 +768,9 @@ export const DEFAULT_RETRY_BACKOFF_MS = [45_000];
 
 // Identity for attempt N. Attempt 1 uses the caller's identity exactly as
 // before. Later attempts DERIVE from it instead of discarding it: the display
-// NAME is preserved (the demo's roster records the planned newcomer's name, and
+// NAME is preserved (the smoke's roster records the planned newcomer's name, and
 // a retry that admitted "Onboarding Eval ci-retry-2-…" instead would put a
-// different person on the swarm than the one the demo announced), while the
+// different person on the swarm than the one the smoke announced), while the
 // runId and the contact local-part get an -rN suffix so no attempt ever re-uses
 // a contact — the key this harness matches the server-minted member row on.
 export function retryIdentity(base: OnboardingIdentity | undefined, attempt: number): OnboardingIdentity {
@@ -841,8 +841,8 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
 // unit-testable with a synthetic result, no Docker and no inference — which is
 // the only way a reporting path gets executed-in-CI coverage at all.
 /**
- * Repo-root-relative path the demo writes the rendered record to. ONE
- * definition: scripts/lib/demo-main.ts writes it, `.github/workflows/e2e.yml`
+ * Repo-root-relative path the smoke writes the rendered record to. ONE
+ * definition: scripts/lib/smoke-main.ts writes it, `.github/workflows/e2e.yml`
  * reads and uploads it, and scripts/tests/unit/admission-record.test.ts pins
  * that the workflow names this exact path.
  */

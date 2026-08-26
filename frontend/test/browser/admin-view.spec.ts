@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { mockVendorScripts } from "./vendor-scripts.ts";
 
-const ADMIN_PASSWORD = "demo-password";
+const ADMIN_PASSWORD = "smoke-password";
 const WEBAUTHN_BROWSER_URL = "**/assets/js/vendor/simplewebauthn-browser-13.3.0.umd.min.js";
 
 // These are deterministic unit-level UI tests. The required live suite uses a
@@ -664,7 +664,7 @@ async function signIn(page: Page, path: string): Promise<void> {
   // Scoped to the login card specifically — every admin page also carries
   // several (initially hidden) .adm-input form fields of its own, which would
   // otherwise make this a strict-mode-ambiguous locator.
-  await page.locator(".adm-login .adm-input").fill("demo-password");
+  await page.locator(".adm-login .adm-input").fill("smoke-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
 }
 

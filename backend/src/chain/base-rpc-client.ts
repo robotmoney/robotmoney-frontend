@@ -960,7 +960,7 @@ export async function ethGetBlockByNumber(blockNumber: number, opts: RpcCallOpti
   return result;
 }
 
-// MANY block headers in ONE POST. The batched twin of ethGetBlockByNumber, and
+// MANY block headers in ONE POST. The batched smoke-twin of ethGetBlockByNumber, and
 // the reason rpcBatchRequest exists: block resolution is a node method, so it
 // can never ride inside an aggregate3, and it is the dominant RPC cost of a
 // backfill (§6.5.1 — ≤8 probes per day against a per-IP-metered provider).

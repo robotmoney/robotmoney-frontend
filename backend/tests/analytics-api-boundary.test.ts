@@ -8,7 +8,7 @@
 // through db/worker-client.ts (the restricted-role pool) — never db/client.ts —
 // and must never import an analytics store writer. Only API persistence
 // (src/api/**, src/analytics/store/**, src/analytics/report/**) and
-// migration/import/demo tooling (src/db/**, src/demo/**) may touch analytics
+// migration/import/smoke tooling (src/db/**, src/smoke/**) may touch analytics
 // SQL. A new violating import fails this test with the offending file + line.
 //
 // PART 2 — retained-handler boundary at runtime: legacy worker handlers execute
@@ -83,8 +83,8 @@ test("worker modules never import db/client or analytics store writers (queue ac
   expect(violations).toEqual([]);
 });
 
-test("only API persistence + migration/demo tooling import the analytics store writers", () => {
-  const allowedPrefixes = ["api/", "analytics/store/", "db/", "demo/"];
+test("only API persistence + migration/smoke tooling import the analytics store writers", () => {
+  const allowedPrefixes = ["api/", "analytics/store/", "db/", "smoke/"];
   const files = tsFiles(SRC);
   const violations: Violation[] = [];
   for (const file of files) {

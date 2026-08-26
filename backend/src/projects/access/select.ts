@@ -20,7 +20,7 @@ export function selectProjectsDataSource(
   if (wantsLive) return liveProjectsDataSource;
   // Fail-closed: prod must opt into live explicitly. Refuse to serve the vendored
   // fixture dataset as production data (the "nothing fabricated on the prod path"
-  // invariant); demo may use the fixture directory freely.
+  // invariant); smoke may use the fixture directory freely.
   if (config.env === "prod") {
     throw new Error(
       "projects pipelines require PROJECTS_SOURCE=live in prod — refusing to serve fixture data as production",

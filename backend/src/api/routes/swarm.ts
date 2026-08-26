@@ -208,7 +208,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
 
   // Member onboarding + admin lifecycle are PRIVILEGED. Guard: if ADMIN_TOKEN is
   // set, require it as X-Admin-Token (works in every env, incl. a public box);
-  // if unset, allow only outside prod (demo/ephemeral convenience). This closes
+  // if unset, allow only outside prod (smoke/ephemeral convenience). This closes
   // the unauthenticated identity-takeover / state-drive holes. Proper
   // per-member onboarding + OAuth is the IC-remainder work.
   // Role definitions + the fail-closed rule live in api/auth.ts (issue #106).
@@ -277,7 +277,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   }
 
   // Onboarding (privileged alias): register a member's public key and mint a
-  // bearer token in one shot (apply + activate combined). Kept for the demo/E2E
+  // bearer token in one shot (apply + activate combined). Kept for the smoke/E2E
   // harness. Privileged because it can rotate/replace an existing member's key.
   if (m === "POST" && p === C.register) {
     if (!(await privileged())) return { status: 403, body: { error: "onboarding requires admin authorization" } };
@@ -303,7 +303,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     if (adminSurface) return adminSurface;
   }
 
-  // Admin lifecycle. Drives a session for demos/E2E.
+  // Admin lifecycle. Drives a session for smokes/E2E.
   if (m === "POST" && p.startsWith(ADMIN_PREFIX)) {
     if (!(await privileged())) return { status: 403, body: { error: "admin authorization required" } };
     const action = p.split("/").pop();
@@ -317,7 +317,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
       }
       // The former `reset` action — a TRUNCATE of swarm_sessions,
       // swarm_briefs and swarm_recommendations (with memos following by
-      // CASCADE) — is REMOVED. It existed so a demo could re-run "today's"
+      // CASCADE) — is REMOVED. It existed so a smoke could re-run "today's"
       // session on a throwaway database, and it destroyed real published
       // history the moment a stack was pointed at a persistent one. An
       // ephemeral database is deleted or inspected as a whole; no endpoint
@@ -338,22 +338,22 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
           ? { status: 200, body: await ic.ensureSubject(id, name) }
           : { status: 400, body: { error: "id and name required" } };
       }
-      // Seed the reference-shaped demo fixtures (subject row + subject snapshot the
+      // Seed the reference-shaped smoke fixtures (subject row + subject snapshot the
       // portfolio donut reads + trailing regime history for the sparkline) so the
       // LIVE session path renders the same charts as the committed archive. Called
-      // by the demo before opening a session. Idempotent.
+      // by the smoke before opening a session. Idempotent.
       case "subject_fixtures": {
         const id = requiredString(b, "id", 100);
         const name = requiredString(b, "name", 200);
         const date = typeof b.date === "string" ? b.date.slice(0, 10) : undefined;
         return id && name
-          ? { status: 200, body: await ic.ensureDemoSubjectFixtures(id, name, date) }
+          ? { status: 200, body: await ic.ensureSmokeSubjectFixtures(id, name, date) }
           : { status: 400, body: { error: "id and name required" } };
       }
       case "open": {
         // No `date` input. The session's date is derived from the convened_at
         // Postgres stamps (migration 0022); a caller-supplied date is exactly
-        // the affordance the demo used to invent synthetic days. A body that
+        // the affordance the smoke used to invent synthetic days. A body that
         // still carries one is accepted and ignored rather than rejected, so an
         // older client keeps working.
         const subjectId = requiredString(b, "subjectId", 100);

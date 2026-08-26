@@ -169,7 +169,7 @@ async function memberCount(): Promise<number> {
 // migration 0030's BEFORE INSERT default is what guarantees no published URL
 // moved when 0030 deployed, and it is still the last-resort fallback for the
 // writers that supply no handle and go nowhere near the derivation
-// (roster-seed.ts, demo/e2e.ts, scripts/v0-seed-bootstrap.ts — the seeded
+// (roster-seed.ts, smoke/e2e.ts, scripts/v0-seed-bootstrap.ts — the seeded
 // roster `woon`/`athena`/`robotmoney` among them, which #562 explicitly
 // declined to rename). A raw insert is the honest way to exercise that
 // fallback, because a raw insert is precisely what those three writers do.
@@ -426,7 +426,7 @@ test("POST /api/swarm/admin/members: the conflict class is GONE — the route re
   expect(((await getMemberRoute(CONTENDED))!.body as any).id).toBe(a.id);
 
   // The 23505 → 409 mapping itself is NOT orphaned by this: registerMember
-  // still takes a caller-supplied id (the demo/E2E shortcut), and the test
+  // still takes a caller-supplied id (the smoke/E2E shortcut), and the test
   // below drives the same conflict through it. The admin path's own residual
   // race — on the DERIVED handle — is driven further down this file.
 });

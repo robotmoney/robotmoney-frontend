@@ -24,7 +24,7 @@ const read = (rel: string) => readFileSync(join(repoRoot, rel), "utf8");
 const OPERATOR_SURFACES = [
   ".env.example",
   "docker-compose.yml",
-  "docker-compose.demo.yml",
+  "docker-compose.smoke.yml",
   "docs/runbooks/deployment.md",
 ] as const;
 
@@ -48,7 +48,7 @@ describe("PROJECTS_SOURCE is documented on every operator surface", () => {
     // The passthrough (`${PROJECTS_SOURCE:-}`) is what lets a droplet/.env set
     // the knob without editing the compose files.
     expect(read("docker-compose.yml")).toContain("${PROJECTS_SOURCE:-}");
-    expect(read("docker-compose.demo.yml")).toContain("${PROJECTS_SOURCE:-}");
+    expect(read("docker-compose.smoke.yml")).toContain("${PROJECTS_SOURCE:-}");
   });
 });
 

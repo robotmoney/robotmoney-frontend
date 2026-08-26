@@ -46,7 +46,7 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dir, "../../..");
 const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e.yml"), "utf8");
 // Issue #275 addendum: the inference-off infra-rails step moved out of e2e.yml
-// into its own workflow (it never needed the full LIVE demo boot).
+// into its own workflow (it never needed the full LIVE smoke boot).
 const onboardingRailsYml = readFileSync(
   join(repoRoot, ".github/workflows/onboarding-eval-rails.yml"),
   "utf8",
@@ -637,7 +637,7 @@ describe("red control: the guards reject workflows that spend an eval per PR", (
     "          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}",
     "        run: |",
     '          echo "eval running" >> "$GITHUB_STEP_SUMMARY"',
-    "      - name: Full-stack demo (demo readiness gate)",
+    "      - name: Full-stack smoke (smoke readiness gate)",
     "        env:",
     '          ONBOARDING_REAL_EVAL: "1"',
     "",
@@ -716,7 +716,7 @@ describe("the expression interpreter reproduces Actions semantics", () => {
 // ---------------------------------------------------------------------------
 describe("the coverage that replaces the per-PR eval is really there", () => {
   // Issue #275 addendum: this step moved out of e2e.yml into its own
-  // onboarding-eval-rails.yml workflow (it never needed the full LIVE demo
+  // onboarding-eval-rails.yml workflow (it never needed the full LIVE smoke
   // boot e2e.yml exists for — its own minimal postgres+api stack was always
   // enough). The STEP itself still carries no additional if: guard beyond the
   // JOB-level draft+path gate onboarding-eval-rails.yml declares — an `if:`

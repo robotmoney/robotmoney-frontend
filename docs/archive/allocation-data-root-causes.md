@@ -1,7 +1,7 @@
 # Temporary: `/allocation` missing-data investigation
 
 Investigation date: 2026-07-16 UTC  
-Environment checked: `https://robotmonet.net/allocation` (`RM_ENV=demo`)
+Environment checked: `https://robotmonet.net/allocation` (`RM_ENV=smoke`)
 
 ## Revised finding
 
@@ -222,8 +222,8 @@ cause for the priced Bankr holdings. No production deployment has been changed.
 
 ## CI evidence: PR #174, e2e run 29508089249 (2026-07-16)
 
-The required `e2e` job's "Full-stack demo (demo readiness gate)" step failed
-after `scripts/demo-live-smoke.ts` polled for its full `LIVE_SMOKE_DEADLINE_MS`
+The required `e2e` job's "Full-stack smoke (smoke readiness gate)" step failed
+after `scripts/smoke-live-smoke.ts` polled for its full `LIVE_SMOKE_DEADLINE_MS`
 (240s) budget without reaching a clean LIVE steady state. This was investigated
 to distinguish a regression in this PR's degrade path from a pre-existing
 external-provider limitation (already documented above as "persistently
@@ -255,10 +255,10 @@ Findings from the full job log
     behaving exactly as documented: retries mask a transient blip, then
     throw so the caller degrades honestly. No unhandled rejection or
     container crash appears anywhere in the log.
-- `demo-live-smoke.ts` itself is working as designed (issue #128/#163): it
+- `smoke-live-smoke.ts` itself is working as designed (issue #128/#163): it
   requires `wallet-balances.source==='live'` and `vault-economics.stale===
   false` (see `evaluateWallet`/`evaluateVaultEconomics` in
-  `scripts/demo-live-smoke.ts`), treating any other outcome — including an
+  `scripts/smoke-live-smoke.ts`), treating any other outcome — including an
   honestly-degraded `stale` leg outside the documented `#120` allowlist — as
   a named, loud CI failure. The workflow's own header comment in
   `.github/workflows/e2e.yml` calls this out explicitly: "a genuinely-
@@ -273,8 +273,8 @@ Findings from the full job log
 **Conclusion**: this is the known, already-documented pre-existing
 GeckoTerminal/Base-RPC quota exhaustion for this CI deployment/IP (see
 "Root causes, ranked" #3 above), not a regression introduced by this PR —
-the PR's own retry/backoff and fallback code is demonstrably active and
+the PR's own retry/backoff and fallback code is smokenstrably active and
 correctly classified as caught degrade, not a crash. Consistent with this
 repo's prior 429-flake precedent, the correct remedy is re-running the `e2e`
 job for a fresh attempt against the live upstreams, not changing
-`demo-live-smoke.ts`'s pass/fail semantics.
+`smoke-live-smoke.ts`'s pass/fail semantics.

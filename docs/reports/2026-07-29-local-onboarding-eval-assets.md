@@ -101,7 +101,7 @@ One local run exercised the existing harness with
 This is evidence that an unmerged local skill can drive the real onboarding
 path. It is one sample, not a model-quality benchmark.
 
-The transcript also demonstrates why detailed evidence matters. The agent
+The transcript also smokenstrates why detailed evidence matters. The agent
 first assumed `rmpc` returned raw strings, discovered that the commands return
 JSON, attempted an unavailable Perl JSON module, installed Python, extracted
 the fields, and recovered. The skill should state the actual JSON extraction

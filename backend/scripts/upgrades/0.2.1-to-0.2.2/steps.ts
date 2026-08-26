@@ -183,9 +183,9 @@ export const STEPS: RolloutStep[] = [
   },
   {
     id: "P5.rehearsal-boot",
-    phase: "P5 twin rehearsal",
+    phase: "P5 smoke-twin rehearsal",
     section: "§5.3b",
-    title: "real migrate + boot + frontend checks against the restored twin",
+    title: "real migrate + boot + frontend checks against the restored smoke-twin",
     hostRole: "stage",
     actor: "agent",
     requires: ["P3.gate-c"],
@@ -198,16 +198,16 @@ export const STEPS: RolloutStep[] = [
     note: "Spends real credit on the production model, by design (§5.3b). Depends on app code, NOT on the gate scripts.",
   },
   {
-    id: "P5.postflight-twin",
-    phase: "P5 twin rehearsal",
+    id: "P5.postflight-smoke-twin",
+    phase: "P5 smoke-twin rehearsal",
     section: "§5.5",
-    title: "§8 checks + §8.1 ACs against the migrated twin",
+    title: "§8 checks + §8.1 ACs against the migrated smoke-twin",
     hostRole: "stage",
     actor: "agent",
     requires: ["P5.rehearsal-boot"],
     dependsOn: [...POSTFLIGHT_CODE, "backend/scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts"],
     verify: "bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022 --emit-receipt   # G8 runs this step",
-    note: "Has no standalone command: the twin exists only between readiness and teardown, so §5.3b.1's G8 runs it inside the rehearsal.",
+    note: "Has no standalone command: the smoke-twin exists only between readiness and teardown, so §5.3b.1's G8 runs it inside the rehearsal.",
   },
   {
     id: "P6.report",
@@ -216,7 +216,7 @@ export const STEPS: RolloutStep[] = [
     title: "stage rehearsal report written, verdict GO",
     hostRole: "stage",
     actor: "operator",
-    requires: ["P4.preflight-live", "P5.rehearsal-boot", "P5.postflight-twin"],
+    requires: ["P4.preflight-live", "P5.rehearsal-boot", "P5.postflight-smoke-twin"],
     dependsOn: [],
     // ONE pattern covering both names §5.6 has used. Multiple patterns are
     // ANDed — correct for P3.backup, where the dump and the globals must both
@@ -224,7 +224,7 @@ export const STEPS: RolloutStep[] = [
     // this step permanently unrecordable. Found by trying to record it.
     artifacts: ["*rehearsal-report-*.md"],
     verify: "write the §5.6 report, then: where.ts --record P6.report --note GO",
-    note: "⛔ Blocking gate for §7 — an AC failure on the twin is an AC failure in production; it is the same data.",
+    note: "⛔ Blocking gate for §7 — an AC failure on the smoke-twin is an AC failure in production; it is the same data.",
   },
   {
     id: "P7.cutover",
@@ -235,7 +235,7 @@ export const STEPS: RolloutStep[] = [
     actor: "agent",
     requires: ["P6.report"],
     dependsOn: APP_CODE,
-    verify: "DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: where.ts --record P7.cutover",
+    verify: "SMOKE_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: where.ts --record P7.cutover",
     note: "Needs the writer DATABASE_URL in repo-root .env; a stage host cannot run this and must not try (§2).",
   },
   {

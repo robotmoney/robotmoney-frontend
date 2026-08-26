@@ -27,7 +27,7 @@
 // is DELIVERED to the deployed container — compose passes only what
 // docker-compose.yml's api `environment:` allowlist names, and Bun.spawn
 // bypasses that entirely. That half is asserted against real `docker compose
-// config` output in scripts/tests/integration/demo-compose-config.test.ts.
+// config` output in scripts/tests/integration/smoke-compose-config.test.ts.
 //
 // The databases are throwaways created on the suite's ephemeral Postgres
 // (tests/preload.ts, which throws rather than skips when Docker is absent):

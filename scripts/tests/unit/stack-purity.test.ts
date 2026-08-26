@@ -2,7 +2,7 @@
 // invariants — docs/decisions.md D22 "shared components", docs/architecture.md
 // §11.3 E5:
 //
-//   1. Nothing runs on import. demo-main.ts does its port allocation, secret
+//   1. Nothing runs on import. smoke-main.ts does its port allocation, secret
 //      generation and log-file opening at MODULE scope, which is exactly why
 //      no test could import it and why the rails check had to fork its own
 //      mini-stack. If scripts/stack/ ever grows the same habit, this test goes

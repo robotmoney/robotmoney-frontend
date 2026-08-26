@@ -118,11 +118,11 @@ no import map are needed. Keeps the runtime dependency to plain static files.
 ## D8 — One Postgres, run in Docker (not Supabase)
 
 > **Prod mode refined by D13:** production is a DigitalOcean Managed Postgres HA
-> cluster; the ephemeral (CI) and demo (Docker) modes are unchanged.
+> cluster; the ephemeral (CI) and smoke (Docker) modes are unchanged.
 
 **Decision.** Consolidate comments (was Upstash), committee (was GitHub-as-DB),
 and dashboard data (was committed CSV/JSON) into a single self-hosted Postgres in
-Docker. Mode is chosen by `DATABASE_URL` + volume: ephemeral (CI), demo
+Docker. Mode is chosen by `DATABASE_URL` + volume: ephemeral (CI), smoke
 (persistent volume), prod (external/managed URL).
 
 **Why.** One datastore, owned by the backend, portable across environments. Self-
@@ -157,7 +157,7 @@ single versioned seam (the contract) that makes the eventual split mechanical.
 
 > **Superseded for production by D13** (vendor-split tiered topology: Cloudflare
 > DNS+observability, DO compute+storage, surfaces on subdomains). The single-box
-> `docker-compose` remains the **CI and demo** deployment; same-origin/no-CORS is
+> `docker-compose` remains the **CI and smoke** deployment; same-origin/no-CORS is
 > preserved *within* each surface because the Bun `api` co-serves its SPA assets at
 > the subdomain root.
 
@@ -213,7 +213,7 @@ double-CDN, no proxy hop). The seamless look is carried by the shared design lay
 DO; same-origin/no-CORS is preserved *within* a surface because the Bun `api`
 co-serves its SPA assets at the subdomain root — and there is still no reverse
 proxy). Refines D8's prod mode to a managed HA cluster. The single-box
-`docker-compose` (D8/D11) remains the CI and demo deployment.
+`docker-compose` (D8/D11) remains the CI and smoke deployment.
 
 **Alternatives rejected.**
 - **Cloudflare Worker doing path-prefix routing** (single origin) — real software
@@ -248,7 +248,7 @@ from one goldens file keeps the SPA byte-for-byte the source (no app changes) an
 makes edits show on refresh.
 
 **Correctness.** Goldens are **captured from a real running system** (a deployed
-test cluster or `bun run demo`), not hand-written and not derived from other
+test cluster or `bun run smoke`), not hand-written and not derived from other
 fixtures — so **field shapes** stay faithful; values are point-in-time. Keeping
 them correct is the **change author's responsibility** (no nightly regeneration);
 a CI drift gate blocks a PR whose goldens no longer match the code (wired per
@@ -266,8 +266,8 @@ important check is that the **fields** are correct, not the numbers.
   gate.
 
 **Fidelity caveat.** Preview is for layout/copy/components/navigation; for
-realistic, evolving data run `bun run demo` (see
-[architecture.md § Demo Specification](architecture.md#demo-specification)).
+realistic, evolving data run `bun run smoke` (see
+[architecture.md § Demo Specification](architecture.md#smoke-specification)).
 See [architecture.md § Preview mode](architecture.md#preview-mode-goldens-backed-no-backend)
 for the full design (revised by D19: the replay engine is now the client-side
 wrapper, not a server).
@@ -560,9 +560,9 @@ Cloudflare's, not ours; we own none of that subdomain. D13's properties
   understand the app's structure.
 
 **Fidelity caveat.** Unchanged from D14: preview is for layout/copy/components
-/navigation; values are mock/point-in-time. Run `bun run demo` for realistic
+/navigation; values are mock/point-in-time. Run `bun run smoke` for realistic
 data (see
-[architecture.md § Demo Specification](architecture.md#demo-specification)).
+[architecture.md § Demo Specification](architecture.md#smoke-specification)).
 
 ---
 
@@ -620,8 +620,8 @@ same PR.
 
 **Fidelity caveat.** Unchanged from D14/D19: preview is for
 layout/copy/components/navigation; values are mock/point-in-time. Run
-`bun run demo` for realistic data (see
-[architecture.md § Demo Specification](architecture.md#demo-specification)).
+`bun run smoke` for realistic data (see
+[architecture.md § Demo Specification](architecture.md#smoke-specification)).
 
 ---
 
@@ -654,7 +654,7 @@ This retires D18 (the `mcp.` subdomain, port `8443`, the fourth surface in
 the topology's subdomain map) outright rather than refining it — there is no
 narrower scope of D18 left standing once the surface it provisioned is gone.
 The `mcp/` package, its Dockerfile/compose service, CI jobs
-(`demo-live-smoke-nightly.yml`, `committee-opencode-nightly.yml`,
+(`smoke-live-smoke-nightly.yml`, `committee-opencode-nightly.yml`,
 `e2e.yml`'s MCP steps, `rmpc-release-e2e-nightly.yml`'s OAuth flow), and the
 `mcp.<domain>` DNS/firewall provisioning are **not removed by this decision
 alone** — this entry is the architecture/docs change; the code and
@@ -663,7 +663,7 @@ own issue so it gets its own review and CI verification rather than riding
 along with a docs commit.
 
 **Why.** MCP has no customer: no committee member has connected over it, and
-the only consumers of the MCP surface in this repo are our own demo/e2e
+the only consumers of the MCP surface in this repo are our own smoke/e2e
 drivers exercising it end-to-end — the "member" was always our own harness.
 Meanwhile the REST sibling has existed for every MCP tool since §9.5 was
 written ("two transports" over one domain layer), so nothing about member
@@ -720,7 +720,7 @@ secure.
 - **Keep MCP as an optional/secondary transport, REST primary.** Rejected:
   running two transports for one consumer set with zero MCP-only capability
   is carrying cost for no capability delta — every reason to keep it (dual
-  auth server, dual CI matrix, dual demo path) is a cost, not a benefit, once
+  auth server, dual CI matrix, dual smoke path) is a cost, not a benefit, once
   nothing requires it.
 - **Wait and see — leave MCP deployed but stop building on it.** Rejected: an
   undeprecated surface with a live subdomain, port, and OAuth server invites
@@ -736,7 +736,7 @@ secure.
 
 ---
 
-## D22 — Evals run a registry-selected OpenCode model; the onboarding eval is layered and shares the demo's stack
+## D22 — Evals run a registry-selected OpenCode model; the onboarding eval is layered and shares the smoke's stack
 
 **Local suite refinement (2026-07-29).** Development evals are registered as
 native Bun tests under `evals/` and run through the separate `bun run eval`
@@ -774,7 +774,7 @@ selector.
    it, no conditional skip — a missing Docker daemon or missing network egress
    **fails loudly** rather than passing by absence.
 3. **Layered, not monolithic.** The onboarding eval is a graded sequence, not one
-   pass/fail run, and it never boots the full demo cluster — only a `core` stack,
+   pass/fail run, and it never boots the full smoke cluster — only a `core` stack,
    and only for the final layer.
 4. **Scored by sampling, not by a single run.** An eval measures a stochastic
    system, so it takes K samples, classifies every outcome, and reports the rate.
@@ -785,9 +785,9 @@ Rules 3 and 4 are specified normatively in
 the layer table, the observation mechanism, the outcome classes, and the CI
 placement live there, not here.
 
-The eval shares the demo's components rather than paralleling them: one stack
+The eval shares the smoke's components rather than paralleling them: one stack
 module with a `core`/`full` profile, one member-agent container primitive, one
-outcome classifier. The onboarding eval **is** the demo's onboarding path with
+outcome classifier. The onboarding eval **is** the smoke's onboarding path with
 the rest of the cluster not booted.
 
 **Why.**
@@ -802,7 +802,7 @@ inference against a real provider, which is exactly why it is the right and only
 default (see `scripts/lib/onboarding-eval.ts`'s own rationale).
 
 *No inference-off mode.* The failure this eval exists to catch is invisible to
-every rails check. On 2026-07-25 a demo run recorded zero admissions because the
+every rails check. On 2026-07-25 a smoke run recorded zero admissions because the
 member agent **refused** the canonical prompt as a suspicious request; the
 container exited cleanly in 15 seconds with all seven steps pending. Every
 inference-off rail — image builds, container reaches the api, `rmpc` signs a
@@ -826,13 +826,13 @@ rate is a regression in prompt quality, and this is the only instrument that
 would show it.
 
 *Shared components.* The duplication is structural, not incidental.
-`scripts/lib/demo-main.ts` performs its setup at **module scope** — port
+`scripts/lib/smoke-main.ts` performs its setup at **module scope** — port
 allocation, admin-token generation (including a `process.env` write), compose-env
-construction, log-file opening — so importing anything from it boots a demo.
+construction, log-file opening — so importing anything from it boots a smoke.
 `scripts/tests/integration/onboarding-eval-infra.test.ts` therefore had no choice but to fork
 its own mini-stack (`bringUpInfra()`). Extracting a side-effect-free stack module
 removes that fork rather than adding a second one, and continues the split
-already begun by `demo-env.ts` and `demo-newcomers.ts`, both of which exist for
+already begun by `smoke-env.ts` and `smoke-newcomers.ts`, both of which exist for
 exactly this reason.
 
 **Relationship.**
@@ -851,16 +851,16 @@ exactly this reason.
   rule 1 and are removed, not preserved. The trusted-context gating in `e2e.yml`
   disappears with them: with no secret to withhold, a fork PR and a same-repo PR
   run the identical eval.
-- **Moves the sweep out of the demo.** `demo-main.ts`'s env-gated
+- **Moves the sweep out of the smoke.** `smoke-main.ts`'s env-gated
   `ONBOARDING_REAL_EVAL` block moves to the eval, where sampling belongs. The
-  demo goes back to being a demo; it keeps admitting members through the same
+  smoke goes back to being a smoke; it keeps admitting members through the same
   shared harness.
 - **Adds no workflow.** `committee-opencode-nightly.yml` is repointed at the eval
   on a `core` stack. It gets smaller: no Chromium install, no backend deps for
-  the EDGAR seed bootstrap, no demo-volume reclaim, and no `env:` block. It stays
+  the EDGAR seed bootstrap, no smoke-volume reclaim, and no `env:` block. It stays
   `CI_CLASS: heavy` (sweep-only — no `pull_request` trigger). ~~On
   `ubuntu-latest`, because the self-hosted runner shares its IP with the standing
-  `rm_demo_*` stack and has a documented history of 429 flake on live-call
+  `rm_smoke_*` stack and has a documented history of 429 flake on live-call
   gates.~~ **Superseded by the rule-1 amendment (2026-07-28):** that IP-flake
   rationale was a property of the FREE tier, which rate-limits per source IP.
   Funded models bill the workspace, not an IP quota — verified from the
@@ -1039,9 +1039,9 @@ default, opt-in per PR, nightly for the trend.
    external network), `evals/` (real inference — D22). A test's cost class is
    legible from its path before anything is run.
 2. **Shared code is named for its domain, never for its consumer.** Code shared
-   between demo runtime and test/eval time lives in `stack/`, `agent/`,
+   between smoke runtime and test/eval time lives in `stack/`, `agent/`,
    `toolchain/` — not in a bucket named `lib/`. Harness code separates by role
-   (`bin/`, `demo/`, `checks/`, `ops/`) rather than by medium.
+   (`bin/`, `smoke/`, `checks/`, `ops/`) rather than by medium.
 
 Dependency direction is fixed and enforced: tests and evals may import runtime
 and shared code; **runtime must never import test or eval code**. The full target
@@ -1054,7 +1054,7 @@ moves.
 
 **Why.** The organizing failure is concrete and measurable: `scripts/tests/`
 holds **32 test files**, of which 4 require a Docker daemon
-(`demo-compose-config`, `demo-live-research`, `demo-volume-lifecycle`,
+(`smoke-compose-config`, `smoke-live-research`, `smoke-volume-lifecycle`,
 `onboarding-eval-infra`) and 2 require network egress to GitHub Releases
 (`onboarding-eval-infra`, `rmpc-canonical-apply`) — and all 32 run on every PR
 under one `bun test scripts/tests` command, because there is no path by which CI
@@ -1062,9 +1062,9 @@ could select a cheaper subset. That single bucket is why the onboarding eval
 (D22) had nowhere to live: any home inside `scripts/tests/` would have put an
 8-minute, Docker-plus-real-inference run into the per-PR path.
 
-`scripts/lib/` has the mirrored problem on the other axis: it holds demo
-*runtime* (`demo-main.ts`, `tui.ts`, `demo-schedule.ts`, `committee/`) beside
-shared harness code (`onboarding-eval.ts`, `rmpc-fetch.ts`, `demo-volumes.ts`)
+`scripts/lib/` has the mirrored problem on the other axis: it holds smoke
+*runtime* (`smoke-main.ts`, `tui.ts`, `smoke-schedule.ts`, `committee/`) beside
+shared harness code (`onboarding-eval.ts`, `rmpc-fetch.ts`, `smoke-volumes.ts`)
 with nothing marking or enforcing the difference, so nothing stops a test-only
 helper being imported into runtime.
 
@@ -1172,7 +1172,7 @@ original ok:false-on-price-failure behavior unchanged.
   sampler run.** Out of scope — the indexer accumulates forward only, same as
   every other samples table in this repo (`wallet_balance_samples`,
   `vault_share_price_history`).
-- **Weakening the cold-boot demo-readiness gate to tolerate the new samplers'
+- **Weakening the cold-boot smoke-readiness gate to tolerate the new samplers'
   empty-table window.** Ratified at intake (2026-07-28): the gate is not
   weakened; both new samplers get the same boot-time one-shot enqueue the
   existing wallet-balances sampler already relies on, and `ALLOWED_STALE_LEGS`
@@ -1183,12 +1183,12 @@ original ok:false-on-price-failure behavior unchanged.
 ## D25 — External-actor rail for simulated independent entities
 
 **Decision (required topology, not an implementation-status claim).** Every
-process that the product, demo, or an eval presents as an independent actor must
+process that the product, smoke, or an eval presents as an independent actor must
 run on one shared **external-actor rail**: one disposable container per actor, a
 private writable filesystem, no ambient environment inheritance, explicitly
 injected scoped credentials only, self-held signing keys, and REST-only access
 to Robot Money. This applies to an onboarding-eval candidate, every sitting
-committee member in demo/e2e, and the independent analytics/research producer
+committee member in smoke/e2e, and the independent analytics/research producer
 described in §9.6 of [architecture.md](./architecture.md). A long-lived actor
 gets a private persistent home volume so its identity survives disposable
 executions; actors must never share a home, state database, keystore, or bearer
@@ -1201,7 +1201,7 @@ decision. The analytics/research boundary is also implemented: a dedicated
 `analytics-producer` service has no database or admin credential, owns its cron
 cadence, computes outside the API process, and submits through authenticated
 HTTP. Its bearer is mounted from a secret file only into that producer and the
-API verifier; the demo host, committee members, and shared workers do not receive
+API verifier; the smoke host, committee members, and shared workers do not receive
 the value. Consumer-DB analytics schedules are forced disabled, queued legacy
 jobs are dead-lettered, and admin retry/toggle/rerun/enqueue plus the retired
 `research-eligibility` path cannot reactivate them.
@@ -1209,7 +1209,7 @@ jobs are dead-lettered, and admin retry/toggle/rerun/enqueue plus the retired
 Two compatibility artifacts remain explicit. The old worker handler/lane code
 and disabled schedule rows remain readable for tests, migrations, and historical
 queue visibility, but have neither a supported control-plane caller nor the
-producer bearer. The demo TUI still observes those retired queue rows rather
+producer bearer. The smoke TUI still observes those retired queue rows rather
 than producer-native run/cadence telemetry. These are cleanup and observability
 gaps, not alternate production paths or exceptions to the trust boundary.
 
@@ -1226,7 +1226,7 @@ key; it does not give the harness the key.
 
 **The harness plays only the owner/operator.** It may launch and stop the actor,
 provide connection coordinates and owner-held secrets, open/close a committee
-session, register a fixed demo member's *public* key once as the protocol
+session, register a fixed smoke member's *public* key once as the protocol
 operator, and observe externally visible results. It must not fetch analytical
 context for a member, author or repair a take, hold a member private key, sign,
 post a memo, or submit on the member's behalf. Those actions execute inside the
@@ -1249,7 +1249,7 @@ seed ingestion, not a consumer queue enqueue.
 **Relationship to earlier decisions.** D21 remains the transport rule: REST is
 the only member/provider boundary. D22 remains the normative eval policy and
 model-selection rule. D25 generalizes D22's container primitive and zero-ambient
-trust boundary to every simulated independent actor, including required demo
+trust boundary to every simulated independent actor, including required smoke
 and test executions. Internal protocol-host components (API, session worker,
 aggregation) are not external actors and remain on the stack rail.
 
@@ -1261,7 +1261,7 @@ made one member fail nondeterministically. A temporary per-call XDG workaround
 isolated that CLI database collision, but it is now retired: every sitting
 member runs with its own private persistent `HOME` inside its container, and its
 model credential reaches that environment only through the rail's explicit,
-zero-ambient injection. The more serious defect was that the demo could claim
+zero-ambient injection. The more serious defect was that the smoke could claim
 independent authorship without executing an independent trust boundary. One
 rail makes the production claim executable: isolation, identity continuity,
 credential scope, and owner/member separation are properties of the launch
@@ -1277,7 +1277,7 @@ shape rather than prompt discipline.
   drift on cleanup, redaction, credential injection, and failure semantics; the
   onboarding eval, sitting members, and producer must share the primitive.
 - **Privileged shortcuts in the surface under test.** Admin registration may
-  seed the fixed demo roster once, but cannot replace real admission for an
+  seed the fixed smoke roster once, but cannot replace real admission for an
   onboarding candidate, rotate an admitted member's identity, synthesize a
   take, or impersonate the analytics role.
 - **Mocks, templates, and inference-off substitutes in behavioral gates.** A
@@ -1328,7 +1328,7 @@ otherwise.** Cost is a consequence of that rule, never the criterion.
 | Workflow | Disposition | Reason |
 | --- | --- | --- |
 | `committee-opencode-nightly.yml` | **Retired** | Its real-inference admission is the same measurement `e2e.yml` already spends on a push to `main`. `e2e.yml` now also carries the `37 4 * * *` slot it held. |
-| `demo-live-smoke-nightly.yml` | **Retired** | It booted the same LIVE stack and ran the same `scripts/demo-live-smoke.ts` assertions as `e2e.yml`; its own header said its "only distinguishing input is the schedule". |
+| `smoke-live-smoke-nightly.yml` | **Retired** | It booted the same LIVE stack and ran the same `scripts/smoke-live-smoke.ts` assertions as `e2e.yml`; its own header said its "only distinguishing input is the schedule". |
 | `onboarding-evals-nightly.yml` | **Folded** (`push: branches: [main]` added) | The four isolated claims bisect the funnel `e2e.yml`'s single admission reports as one opaque red. Nothing in the merge set duplicates them. |
 | `rmpc-release-e2e-nightly.yml` | **Folded** | Nothing else proves a *released* rmpc binary drives the documented flow. Its "not every PR" rationale is about release-CDN flake on a **required PR gate**; push-to-`main` is not one. |
 | `nightly-fetchers.yml` | **Folded** | The per-PR suites for these surfaces are fully offline/mocked, so the live sweep is not duplicated. Same PR-only rationale as above. |
@@ -1449,7 +1449,7 @@ identifiers only, deliberately leaving the wire contract (routes), storage
 coordinated release. This pass finishes it: the `committee_*` Postgres
 schema, `/api/committee/*` routes, the contract package's `Committee*`
 types, the frontend SPA's `/committee/*` routes and every identifier/CSS
-class/file name, the public onboarding skill file, demo data fixtures,
+class/file name, the public onboarding skill file, smoke data fixtures,
 tests, CI path filters, and user-facing copy ("Committee" → "Swarm" /
 "Investment Swarm"). None of it was needed to ship the visible rebrand,
 which pass 1 already delivered — this pass exists to finish it precisely
@@ -1492,7 +1492,7 @@ have the OLD name memorized keeps resolving rather than hard-404ing:
   router involved) pointing to the new one, rather than deleting the old
   path outright.
 
-**Historical demo data kept its old field name — reader carries the
+**Historical smoke data kept its old field name — reader carries the
 fallback.** `frontend/public/data/swarm/{sessions,briefs}/*.json` (~50
 files, `git mv`'d from `data/committee/` per an explicit decision below) is
 frozen historical content and was deliberately NOT content-swept — it still
@@ -1579,7 +1579,7 @@ copies `frontend/public` into `_static/` and then runs `scripts/prerender.ts`
 over it (`PRERENDER_DIR=_static`), writing a `<route>/index.html` for every
 `<loc>` in `frontend/public/sitemap.xml`. `docker-compose.yml` bind-mounts
 `./_static` at `/srv/frontend`, and `scripts/stack/stack.ts`'s `up()` runs the
-assembly before `docker compose up`, so every stack this repo brings up — demo,
+assembly before `docker compose up`, so every stack this repo brings up — smoke,
 evals, CI, single-box production — serves prerendered HTML. `serveStatic`
 (`backend/src/api/static.ts`) answers an extensionless client route with that
 route's prerendered file when one exists, and with the home-page shell when it
@@ -1801,21 +1801,21 @@ the sha256 hex of an operator-chosen password (≥ 12 characters) into the new
 one-row `admin_credential` table (migration
 `backend/migrations/0028_admin_credential.sql`). While that row exists,
 `backend/src/api/auth.ts`'s `isPrivileged()` treats the stored hash as the
-durable operator credential: it survives every restart, so `bun run demo` /
-`bun run demo:stage` re-boots stop rotating the operator out — the lockout
+durable operator credential: it survives every restart, so `bun run smoke` /
+`bun run smoke:stage` re-boots stop rotating the operator out — the lockout
 this issue is about. A public boolean probe, `GET /api/admin/is-claimed`,
-lets the demo boot decide whether the TUI may display the per-boot token.
+lets the smoke boot decide whether the TUI may display the per-boot token.
 
 **Superseded, not revoked.** After a claim, the per-boot `ADMIN_TOKEN` env
 mint *remains valid* — but only as the stack-internal automation credential,
 and it is never displayed again (the TUI shows the `Admin pass` line only
 once the post-ready probe confirms *unclaimed*). This is deliberate, and is
-the refinement of the issue's "stop minting" sketch: the demo's own drivers
+the refinement of the issue's "stop minting" sketch: the smoke's own drivers
 (swarm session runner, onboarding driver, e2e children) authenticate against
 `X-Admin-Token`-guarded routes with the per-boot token threaded through
 in-process, and the server holds only a *hash* of the claimed password, so it
 cannot hand the claimed secret to that automation. Revoking the env token on
-claim would kill the standing demo's core loops on the next boot. The issue's
+claim would kill the standing smoke's core loops on the next boot. The issue's
 test plan anticipates exactly this shape ("or is superseded, per the chosen
 design").
 
@@ -1837,9 +1837,9 @@ on the table so a worker-role compromise cannot read the hash at all.
 propagates to the router's sanitized 500 — it never silently falls back to
 the env token while a claim might exist.
 
-**Recovery path.** There is no self-serve reset for the single demo admin. A
+**Recovery path.** There is no self-serve reset for the single smoke admin. A
 forgotten claimed password is an explicit operator action against the
-database — `DELETE FROM admin_credential;` (or `bun run demo:clean` for a
+database — `DELETE FROM admin_credential;` (or `bun run smoke:clean` for a
 full wipe) — which re-arms the first-boot one-time-claim state, restoring
 today's "restart shows a fresh TUI token" behaviour.
 
@@ -2026,7 +2026,7 @@ three explicit properties, each of which is a choice rather than an omission:
   them to set the variable they just set. A documented emergency control that
   cannot be delivered is worse than none, so the delivery path is asserted
   against real `docker compose config` output over every composition the repo
-  boots (`scripts/tests/integration/demo-compose-config.test.ts`) — the
+  boots (`scripts/tests/integration/smoke-compose-config.test.ts`) — the
   spawn-based backend tests structurally cannot see it.
 
 **Why bounded is not optional.** This is the only database round trip that has
@@ -2249,7 +2249,7 @@ batch cap 10, Multicall3 giving 27:1 leverage) was taken from a developer IP. Th
 bucket's parameters are therefore **configuration, not constants**, and a live
 backfill **refuses to run** until `BASE_RPC_MAX_CALLS_PER_SEC` is set. Unset
 means no pacing (exactly the prior behaviour) *and* means the seeded
-`ops.repair_gaps` schedule is a no-op — so a demo or CI boot never sweeps months
+`ops.repair_gaps` schedule is a no-op — so a smoke or CI boot never sweeps months
 of history, and a deployment opts into repair by measuring its own limit.
 
 > **Superseded in part (2026-08-22): the opt-in is retired; the parameters stay
@@ -2448,7 +2448,7 @@ final `seed-provenance:verify` step alongside `v0-seed:bootstrap` and
 `edgar-seed:bootstrap`. It runs on every `bun run bootstrap` /
 `prod-bootstrap.ts --already-migrated` invocation — the same real deploy path
 `docker-compose`'s `Stack.up()` already drives for the `archive` scenario
-(`scripts/lib/demo-main.ts`) and the one `bun run bootstrap` (root
+(`scripts/lib/smoke-main.ts`) and the one `bun run bootstrap` (root
 `package.json`) drives standalone. `main()` stays as a thin CLI wrapper around
 the same core, for the manual/CI usage `backend/tests/seed-provenance-verify.test.ts`
 already exercised.
@@ -2471,7 +2471,7 @@ two independent, structural grounds, not preference:
 - **The source-level boundary refuses the import.** `tests/analytics-api-
   boundary.test.ts` scans `src/worker/**` and fails the suite on any import of
   an `analytics/store/**` writer (`IMPORT_STORE`), and separately asserts only
-  `api/`, `analytics/store/`, `db/`, and `demo/` may import one at all.
+  `api/`, `analytics/store/`, `db/`, and `smoke/` may import one at all.
   `seed-provenance.ts` (the module `verifySeedProvenance` lives in) is exactly
   such a writer. Wiring it into `worker/handlers/repair.ts` — or any
   `worker/**` module — would have failed that guard outright, not passed it

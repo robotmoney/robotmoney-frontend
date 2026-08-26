@@ -3,7 +3,7 @@
 // in the committed vendored floor (backend/tests/fixtures/regime/raw-indicator-
 // history.csv.gz), merged additively (append-only — fetched wins on overlap)
 // against whatever is already committed, then reviews and commits the result.
-// Never implicit during migrations, demo boot, or required per-PR CI (no
+// Never implicit during migrations, smoke boot, or required per-PR CI (no
 // other code path imports floor-seed-generator.ts).
 //
 // Usage (regenerate BTC_MVRV from Coinmetrics — the default; #127 repointed

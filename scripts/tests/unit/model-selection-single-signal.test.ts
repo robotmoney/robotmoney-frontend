@@ -190,7 +190,7 @@ describe("resolveAgentModel is the SINGLE model-selection signal (real tree)", (
     expect(files.length).toBeGreaterThan(20);
     expect(files).toContain(join("scripts", "lib", "onboarding-eval.ts"));
     expect(files).toContain(join("scripts", "agent", "member-agent.ts"));
-    expect(files).toContain(join("scripts", "lib", "demo-main.ts"));
+    expect(files).toContain(join("scripts", "lib", "smoke-main.ts"));
   });
 
   test("no competing model-selection path exists anywhere in the runtime tree", () => {
@@ -250,7 +250,7 @@ describe("red controls: a reintroduced selection path is caught", () => {
   });
 
   test("RULE A — a raw model id in a COMPOSE file is RED", () => {
-    const root = tree({ "docker-compose.demo.yml": '      OPENCODE_DEFAULT: "opencode/gpt-5.4"\n' });
+    const root = tree({ "docker-compose.smoke.yml": '      OPENCODE_DEFAULT: "opencode/gpt-5.4"\n' });
     expect(competingSelectionPaths(root).map((f) => f.rule)).toEqual(["model-id-literal"]);
   });
 

@@ -12,7 +12,7 @@
 //
 // The bring-up is the SHARED scripts/stack module on its `core` profile
 // (postgres + api — docs/architecture.md §11.3 E5, docs/decisions.md D22):
-// this file used to carry a forked `bringUpInfra()` because demo-main.ts does
+// this file used to carry a forked `bringUpInfra()` because smoke-main.ts does
 // its setup at module scope and could not be imported. That fork is gone.
 //
 // Cost class `integration` (docs/architecture.md §3 L1, docs/decisions.md D23):
@@ -26,7 +26,7 @@
 // scripts/tests/integration/rmpc-canonical-apply.test.ts), and network egress
 // to pull/build base images are all hard dependencies of the describe block
 // below — same policy as
-// scripts/tests/integration/demo-compose-config.test.ts. A missing or unusable
+// scripts/tests/integration/smoke-compose-config.test.ts. A missing or unusable
 // Docker daemon THROWS out of `stack.up()`'s `assertDockerAvailable()` (which
 // returns void or throws — there is no boolean a caller could turn into a
 // skip), which fails every test in the block loudly; nothing here quietly
@@ -68,7 +68,7 @@ import {
   type StackCredentials,
   type StackEnvironment,
 } from "../../stack/index.ts";
-import { makeDockerRunner, purgeDemoEvalContainers } from "../../lib/demo-volumes.ts";
+import { makeDockerRunner, purgeSmokeEvalContainers } from "../../lib/smoke-volumes.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -136,7 +136,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     stack = createStack(
       {
         repoRoot,
-        // Environment-scoped (rm_ci_infra_<job hash> / rm_demo_infra_<random>)
+        // Environment-scoped (rm_ci_infra_<job hash> / rm_smoke_infra_<random>)
         // so a container this check leaks on the shared self-hosted runner is
         // attributable to the job that leaked it, by label as well as by name.
         project: stackProjectName("infra", environment),
@@ -163,7 +163,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
   afterAll(() => {
     if (!stack) return;
     try {
-      purgeDemoEvalContainers(makeDockerRunner(stack.spawnEnv), { project: stack.config.project });
+      purgeSmokeEvalContainers(makeDockerRunner(stack.spawnEnv), { project: stack.config.project });
     } catch {}
     // The session-rail check's member home volume is created OUTSIDE the
     // compose model (docker volume create), so `down --volumes` does not know
@@ -616,7 +616,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       // mounted. It generates its ed25519 key INSIDE the container (persisted
       // in a labeled named volume), and the harness's only privileged act is
       // registering the PUBLIC key. The authoring/submission half (a real model
-      // call) is executed and asserted by the required e2e demo gate's
+      // call) is executed and asserted by the required e2e smoke gate's
       // swarm sessions (assertAuthoredTakes).
       const memberId = "rails-check";
       const volume = memberHomeVolumeName(stack!.config.project, memberId);

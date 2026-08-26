@@ -92,7 +92,7 @@ that distinction is recorded under limitations.
 ### 001 — STALE_HEADER — low
 
 Source back-links no longer identify stable canonical sections. The e2e workflow
-points to deleted docs/demo-spec.md; migration 0017 says architecture section 5
+points to deleted docs/smoke-spec.md; migration 0017 says architecture section 5
 although the concatenated file has several unrelated section-5 headings; admin
 and frontend module headers use labels such as US-A2 and section 4 that are
 ambiguous after the fold.
@@ -139,7 +139,7 @@ executed DTO-conformance check rather than redeclaring browser-local interfaces.
 
 docs/architecture.md is structurally a bundle of old documents, not one
 current-state architecture. It has a second H1 at line 986, restarts numbered
-sections repeatedly, includes an implementation checklist, a demo specification,
+sections repeatedly, includes an implementation checklist, a smoke specification,
 an admin implementation plan and definition of done, a preview specification
 with an open decision, and a topology document. Its own documentation map says
 mutable roadmaps, task checklists, and phase ordering do not belong in docs.
@@ -213,7 +213,7 @@ invariant to optional hardening.
 
 The production configuration inventory is self-contradictory. Architecture says
 DATABASE_URL is the only required environment variable, while the worker refuses
-to boot in demo/prod without ANALYTICS_TOKEN and production project pipelines
+to boot in smoke/prod without ANALYTICS_TOKEN and production project pipelines
 fail closed without PROJECTS_SOURCE=live. The runbook includes PROJECTS_SOURCE
 but omits ANALYTICS_TOKEN/ANALYTICS_API_URL/ADMIN_TOKEN/WORKER_DATABASE_URL and
 still names RPC_URL instead of the implemented BASE_RPC_URL.
@@ -234,7 +234,7 @@ and fail-closed behavior; link architecture to it instead of repeating values.
 
 ### 007 — INCONSISTENT — medium
 
-The same architecture defines two persisted committee lifecycles. Early and demo
+The same architecture defines two persisted committee lifecycles. Early and smoke
 sections include brief_published; the admin specification says explicitly that
 brief_published is not persisted. Migration, contract, and implementation use
 scheduled → collecting directly.
@@ -255,7 +255,7 @@ publication as the scheduled-to-collecting transition/action, not a state.
 ### 008 — GAP_IMPL — medium
 
 Architecture says committee lifecycle cron jobs autonomously orchestrate the
-session chain and that demo schedules allow no-intervention progress. All five
+session chain and that smoke schedules allow no-intervention progress. All five
 committee schedules are seeded disabled; source comments call cron triggering a
 future addition. Open issue #208 is the current plan to make them configurable.
 
@@ -265,12 +265,12 @@ backend/src/db/seed.ts:23-30;
 backend/src/db/seed.ts:65-72;
 https://github.com/robotmoney/robotmoney-frontend/issues/208.
 
-**Impact:** a non-demo installation never opens or advances committee sessions
+**Impact:** a non-smoke installation never opens or advances committee sessions
 without an external/manual driver, contrary to the architecture's operating
 model.
 
 **Recommendation:** until #208 lands, state that committee scheduling is
-disabled and demo-driven. After implementation, document only the resolved
+disabled and smoke-driven. After implementation, document only the resolved
 environment contract and durable orchestration invariant.
 
 ### 009 — TEST_CLAIM_MISMATCH — medium
@@ -295,22 +295,22 @@ or narrow the architecture claim to what the harness really asserts.
 
 ### 010 — INCONSISTENT — medium
 
-The demo specification allows a seeded provider for hermetic runs, while its
-later hermeticity section and the actual resolver say every local and CI demo is
-live and that no hermetic demo mode exists. The per-PR e2e workflow also declares
+The smoke specification allows a seeded provider for hermetic runs, while its
+later hermeticity section and the actual resolver say every local and CI smoke is
+live and that no hermetic smoke mode exists. The per-PR e2e workflow also declares
 live external providers.
 
 **Evidence:** docs/architecture.md:1469-1481;
 docs/architecture.md:1594-1609;
-scripts/lib/demo-env.ts:1-23;
+scripts/lib/smoke-env.ts:1-23;
 .github/workflows/e2e.yml:86-104.
 
 **Impact:** an agent cannot tell whether deterministic offline execution is a
-supported demo contract or only a backend-unit-test source.
+supported smoke contract or only a backend-unit-test source.
 
-**Recommendation:** state one current rule: demo/e2e defaults are live;
+**Recommendation:** state one current rule: smoke/e2e defaults are live;
 ANALYTICS_SOURCE=hermetic is a local debugging/backend test override, not a
-supported demo mode.
+supported smoke mode.
 
 ### 011 — UNRESOLVED_DECISION — medium
 
@@ -378,7 +378,7 @@ only the trust boundary and domain ownership in architecture.
 ### 014 — GAP_IMPL — high
 
 The admin specification's required committee-domain corrections have not landed
-on the worker/demo domain path. openSession resets an existing session to
+on the worker/smoke domain path. openSession resets an existing session to
 scheduled, publishBrief has no state/roster/active-subject/future-close guards
 and reads unbounded latest regime plus exact-date signals, closeWindow reports
 success after a zero-row update, aggregation reads the latest subject snapshot
@@ -405,15 +405,15 @@ architecture and Plan.
 
 Architecture defines a shared dependency-aware /health contract for every
 surface. The API always returns HTTP 200 with status ok even when its DB probe
-says down; MCP returns ok without probing the backend; demo readiness accepts any
+says down; MCP returns ok without probing the backend; smoke readiness accepts any
 successful HTTP response.
 
 **Evidence:** docs/architecture.md:3053-3063;
 backend/src/api/index.ts:79-84;
 mcp/src/server.ts:206-214;
-scripts/lib/demo-main.ts:1006-1019.
+scripts/lib/smoke-main.ts:1006-1019.
 
-**Impact:** Cloudflare/demo readiness can certify a surface whose required
+**Impact:** Cloudflare/smoke readiness can certify a surface whose required
 dependency is unavailable, defeating the documented keystone health contract.
 
 **Recommendation:** define one small health DTO in contract, return non-2xx or a
@@ -477,7 +477,7 @@ the participation/API-reference guard.
 ### 018 — STALE — medium
 
 The GitHub Plan and open issues still declare deleted docs/plan-admin-surface.md
-and docs/demo-spec.md, plus nonexistent docs/prd.md, as canonical sources.
+and docs/smoke-spec.md, plus nonexistent docs/prd.md, as canonical sources.
 Issue #206 currently names the deleted admin plan as canonical, and Plan metadata
 retains old expected touchpoints. No PRD is tracked anywhere in the snapshot.
 
@@ -537,7 +537,7 @@ public protocol docs and stop referencing docs/prd.md.
 ## 8. Documentation changes
 
 The concise architecture should not retain exact endpoint tables, DTO
-definitions, SQL, cron expressions, demo choreography, acceptance criteria,
+definitions, SQL, cron expressions, smoke choreography, acceptance criteria,
 test matrices, issue histories, or delivery order. Canonical destinations:
 
 | Information | Canonical owner |

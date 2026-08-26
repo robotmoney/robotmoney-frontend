@@ -29,7 +29,7 @@ const getMemberRoute = (ref: string) => {
 };
 
 // Same shortcut swarm-member-handle.test.ts's activeMember() uses: registerMember
-// is the demo/E2E path that upserts a member straight to active with no
+// is the smoke/E2E path that upserts a member straight to active with no
 // approval flow, which is all this file needs — a real row to resolve.
 async function activeMember() {
   const id = rid("m");

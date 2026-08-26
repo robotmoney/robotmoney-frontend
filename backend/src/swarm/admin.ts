@@ -5,7 +5,7 @@
 //
 // Kept as a SEPARATE module from swarm/domain.ts (the member/public-facing
 // surface) so the existing apply/activate/submit/open/publish/aggregate paths —
-// used by the demo, the worker, and their tests — are untouched by this admin
+// used by the smoke, the worker, and their tests — are untouched by this admin
 // surface. Where this module's session lifecycle overlaps with domain.ts (e.g.
 // aggregateSessionGuarded still calls domain.aggregateSession for the rich
 // rollup), it composes those functions rather than duplicating them.

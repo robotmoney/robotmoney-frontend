@@ -66,13 +66,13 @@ const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cl
 // therefore the worker/api that call runAnalytics) honors:
 //
 //   unset      → live       (production default: real keyless fetchers)
-//   "live"     → live       (explicit opt-in — demos that want REAL numbers)
-//   "hermetic" → hermetic   (deterministic, offline seeded — CI + the demo default)
+//   "live"     → live       (explicit opt-in — smokes that want REAL numbers)
+//   "hermetic" → hermetic   (deterministic, offline seeded — CI + the smoke default)
 //
 // Any other value is REFUSED loudly (fail-closed, mirroring config.ts RM_ENV) so a
 // typo like "seeded"/"prod" can never silently fall through to the live network.
 //
-// `ANALYTICS_SOURCE` is the only knob the live/demo data path reads (the legacy
+// `ANALYTICS_SOURCE` is the only knob the live/smoke data path reads (the legacy
 // `PROVIDER` env knob and its test scaffolding were removed —
 // review-maintainability-011).
 const VALID_ANALYTICS_SOURCES = ["live", "hermetic"] as const;
@@ -129,7 +129,7 @@ function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, u
 // AnalyticsPersistence port. The DEFAULT is the authenticated HTTP client
 // (analytics/api-client.ts) — what the independent producer uses, wired from
 // ANALYTICS_API_URL + its scoped bearer at call time. The API process (its
-// swarm regime routes), tests, and demo tooling inject the API-owned direct
+// swarm regime routes), tests, and smoke tooling inject the API-owned direct
 // service (analytics/store/direct.ts) instead.
 //
 // TELEMETRY (issue #151): every access/extract/transform/analyze/store/report
@@ -172,7 +172,7 @@ export async function runAnalytics(
   try {
   // ── REGIME ────────────────────────────────────────────────────────────────
   if (want("regime")) {
-    // Opt-in cold-DB floor seed (issue #13): on the real-live demo path a fresh DB
+    // Opt-in cold-DB floor seed (issue #13): on the real-live smoke path a fresh DB
     // would re-fetch years of history (esp. ~200 EDGAR requests) before the first
     // classify. ANALYTICS_FLOOR_SEED=1 parses the vendored real floor and submits
     // it through the seed-ingestion port (server-side gap-fill: existing rows win,

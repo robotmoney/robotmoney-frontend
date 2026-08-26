@@ -24,7 +24,7 @@
 // resolved ONCE by the caller (resolveIsolatedEvalModelConfig, below) and
 // threaded through to `runMemberAgent`, never re-derived per claim.
 //
-// Retry policy, deliberately narrower than the demo's: ONLY `rate-limited` is
+// Retry policy, deliberately narrower than the smoke's: ONLY `rate-limited` is
 // retried, and at most once. A 429 never let the agent reason, so it measured
 // nothing. A REFUSAL, by contrast, is the diagnostic an isolated claim exists
 // to produce — retrying it here would erase the very signal that made D22

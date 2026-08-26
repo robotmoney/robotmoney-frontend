@@ -1,13 +1,13 @@
 // Shared compose-stack CONFIGURATION — pure builders, nothing else.
 //
-// Written in the style of scripts/lib/demo-env.ts, and binding for the whole
+// Written in the style of scripts/lib/smoke-env.ts, and binding for the whole
 // scripts/stack/ directory (docs/decisions.md D22 "shared components",
 // docs/architecture.md §11.3 E5 and §3 L2/L3):
 //
 //   1. This module MUST stay side-effect free. Nothing runs on import — no
 //      port is bound, no secret is generated, no child process is spawned.
-//      scripts/lib/demo-main.ts does its setup at module scope, which is
-//      exactly why nothing could import it; this module exists so the demo,
+//      scripts/lib/smoke-main.ts does its setup at module scope, which is
+//      exactly why nothing could import it; this module exists so the smoke,
 //      the inference-off rails check, and the onboarding eval can share ONE
 //      bring-up without booting anything by merely importing it.
 //   2. This module MUST never read or write the process environment. Every
@@ -27,9 +27,9 @@ import {
 // ── Profiles ────────────────────────────────────────────────────────────────
 // `core` is postgres + api: everything apply/approve/claim needs (Postgres CRUD
 // plus signature verification), and nothing else. `full` adds the three worker
-// execution lanes that the standing demo drives. The member-agent service is
+// execution lanes that the standing smoke drives. The member-agent service is
 // deliberately in NEITHER *running* list: it is compose-profile gated
-// (docker-compose.demo.yml `profiles: ["member-agent"]`) and is only ever
+// (docker-compose.smoke.yml `profiles: ["member-agent"]`) and is only ever
 // started one-shot via `docker compose run`.
 export type StackProfile = "core" | "full";
 
@@ -43,8 +43,8 @@ export const MEMBER_AGENT_SERVICE = "member-agent" as const;
 // so a compose service added in the future can never leak into `core`.
 //
 // `externalPostgres` drops the `postgres` service from either profile: with
-// `bun run demo -- --external-pg` the stack talks to a managed server and the
-// ephemeral container is not started at all (scripts/lib/demo-external-pg.ts).
+// `bun run smoke -- --external-pg` the stack talks to a managed server and the
+// ephemeral container is not started at all (scripts/lib/smoke-external-pg.ts).
 // Naming it here — rather than filtering at the call site — keeps "which
 // services does this stack consist of" answerable in one place.
 export function servicesFor(profile: StackProfile, opts: { externalPostgres?: boolean } = {}): string[] {
@@ -68,13 +68,13 @@ export function buildServicesFor(profile: StackProfile, opts: { externalPostgres
   return profile === "full" ? [...running, MEMBER_AGENT_SERVICE] : running;
 }
 
-// The compose file list every consumer of this module defaults to. The demo
+// The compose file list every consumer of this module defaults to. The smoke
 // overrides it (it may append the stage overlay and/or a generated pg-data bind
 // overlay); the eval harness and the rails check, which today each spell their
 // own copy out, take this one as they adopt the module.
-export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo.yml"];
+export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.smoke.yml"];
 
-// The `bun run demo -- --stage` overlay: the ONLY file in the repo that names a
+// The `bun run smoke -- --stage` overlay: the ONLY file in the repo that names a
 // host port. APPENDED to the list above (never a replacement, and never
 // selected from the environment) exactly the way the generated `--pg-data` bind
 // overlay is. See docker-compose.stage.yml's header for why it uses
@@ -110,17 +110,17 @@ export interface StackDatabase {
    * An EXTERNAL/managed Postgres URL. When set, this stack starts no postgres
    * container: `url` is what every container connects with, `servicesFor` drops
    * the service, and the caller appends the generated overlay that removes it
-   * from the compose model (scripts/lib/demo-external-pg.ts). The three fields
+   * from the compose model (scripts/lib/smoke-external-pg.ts). The three fields
    * above stay as they are — they interpolate POSTGRES_* for a compose model
    * that no longer contains the service, so they are inert, not authoritative.
    *
-   * NEVER log or serialize this: unlike the baked-in demo credentials it is a
+   * NEVER log or serialize this: unlike the baked-in smoke credentials it is a
    * real secret. Print `redactPostgresUrl()` instead.
    */
   url?: string;
 }
 
-// The baked-in demo credentials (previously spelled out in demo-main.ts). They
+// The baked-in smoke credentials (previously spelled out in smoke-main.ts). They
 // are not secrets: postgres is reachable only over the compose network plus a
 // random host port, and every consumer of this stack is ephemeral.
 export const DEFAULT_STACK_DATABASE: StackDatabase = {
@@ -186,16 +186,16 @@ export interface StackConfig {
   // labels every container carries, and an optional field is one a spawner
   // forgets — which is exactly how the host accumulated containers that could
   // not be attributed to a CI job or to an operator's shell, and therefore
-  // could not be reaped without risking the standing demo.
+  // could not be reaped without risking the standing smoke.
   environment: StackEnvironment;
-  // Extra compose interpolation values a specific consumer needs (the demo
+  // Extra compose interpolation values a specific consumer needs (the smoke
   // passes its resolved data-path env here). Merged LAST so a consumer can
   // extend, and deliberately never sourced from the ambient environment.
   extraComposeEnv?: Record<string, string>;
 }
 
 // ── Compose env (PURE) ──────────────────────────────────────────────────────
-// Exactly the interpolation values docker-compose.yml / docker-compose.demo.yml
+// Exactly the interpolation values docker-compose.yml / docker-compose.smoke.yml
 // need, and nothing else. Deliberately does NOT spread the caller's ambient
 // environment, and deliberately does NOT set COMPOSE_FILE / COMPOSE_PROJECT_NAME:
 // topology is expressed as argv (`-p` / `-f`, see composeArgs) so a stale
@@ -207,11 +207,11 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     );
   }
   return {
-    DEMO_PROJECT: cfg.project,
-    // The environment labels every demo-overlay service and the pgdata volume
-    // stamp (docker-compose.demo.yml). Threaded through compose interpolation
+    SMOKE_PROJECT: cfg.project,
+    // The environment labels every smoke-overlay service and the pgdata volume
+    // stamp (docker-compose.smoke.yml). Threaded through compose interpolation
     // rather than applied by a wrapper so a bare `docker compose -f … up` gets
-    // them too, and so `demo:down`/`demo:status` reproduce them from the state
+    // them too, and so `smoke:down`/`smoke:status` reproduce them from the state
     // file without a second code path.
     [ENV_CLASS_COMPOSE_VAR]: cfg.environment.class,
     [ENV_HASH_COMPOSE_VAR]: cfg.environment.hash,
@@ -224,7 +224,7 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     // right up until the compose files stopped naming a host port at all
     // (`ports: ["8787"]` / `["5432"]` — Docker assigns the host side). Emitting
     // them now would be a value nothing reads, which is how the last one
-    // survived long enough to look like configuration; `bun demo` warns loudly
+    // survived long enough to look like configuration; `bun smoke` warns loudly
     // when it finds either in the operator's environment.
     POSTGRES_USER: cfg.database.user,
     POSTGRES_PASSWORD: cfg.database.password,

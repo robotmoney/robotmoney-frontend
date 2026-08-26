@@ -1,7 +1,7 @@
 // Classify the target database before the boot's first write: fresh bootstrap,
 // or adopted production data.
 //
-// WHY THIS EXISTS. A `--db external` boot points the demo at a real managed
+// WHY THIS EXISTS. A `--db external` boot points the smoke at a real managed
 // server, and its migrate one-shot does not only migrate: it seeds job
 // schedules, enqueues cold-start sampler jobs, backfills wallet samples and
 // writes the allocation framework. This step runs BEFORE any of that and states
@@ -30,9 +30,9 @@
 // writers themselves (ON CONFLICT DO NOTHING, insert-or-report-drift), where it
 // also protects the resumed-volume case the old refusal never covered.
 //
-// THE REFUSAL THAT REMAINS. A SIMULATION boot (plain `bun demo`) against a
-// populated database is still refused: its demo fixtures overwrite by design
-// (ON CONFLICT DO UPDATE is how corrected demo copy reaches a demo stack), so
+// THE REFUSAL THAT REMAINS. A SIMULATION boot (plain `bun smoke`) against a
+// populated database is still refused: its smoke fixtures overwrite by design
+// (ON CONFLICT DO UPDATE is how corrected smoke copy reaches a smoke stack), so
 // "idempotent and deduplicated" does not hold on that path. The initializer
 // arrives as --initializer=archive|simulation; when the flag is missing we
 // assume simulation, so the strict branch is the one a forgotten parameter
@@ -51,13 +51,13 @@
 //
 // WHERE THAT RE-CHECK ACTUALLY RUNS — not only here. This file used to claim
 // the detection query ran "HERE, on every boot". It did not: this script is a
-// step of the `--external-pg` demo boot (scripts/lib/demo-external-pg.ts) and
+// step of the `--external-pg` smoke boot (scripts/lib/smoke-external-pg.ts) and
 // nothing else invoked it, so on the documented production bring-up
 // (`docker compose up -d`, which runs neither migrate nor this script) a
 // restored violation reached serving traffic unchecked. That was issue #602.
 // The query now lives in src/db/handle-namespace.ts and has three callers:
 //   - this script, before a pre-populated boot's first write (`--db external`
-//     against a managed server, or `--db twin` against a restored copy);
+//     against a managed server, or `--db smoke-twin` against a restored copy);
 //   - src/api/index.ts, before Bun.serve binds a port;
 //   - scripts/prod-bootstrap.ts, as its first step, before migrate().
 // The api guard is the one that covers the compose path, and it is deliberately
@@ -205,7 +205,7 @@ export function reportLines(target: string, r: PreflightResult): string[] {
   } else {
     lines.push(`[db-preflight] all ${r.tables} table(s) are empty — schema present, no rows.`);
   }
-  // LAST, and it is a block: demo-failure.ts anchors on the first refusal line
+  // LAST, and it is a block: smoke-failure.ts anchors on the first refusal line
   // and reads FORWARD, so the header has to precede the pairs it names.
   if (r.handleNamespaceConflicts.length > 0) {
     // Shared with the api and prod-bootstrap guards (src/db/handle-namespace.ts)

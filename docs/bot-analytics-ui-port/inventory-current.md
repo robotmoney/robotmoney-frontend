@@ -108,7 +108,7 @@ ids). **None of them is a bot-analytics dashboard page.**
   pagination, no row click-through** — rows are not links; there is **no
   `/projects/:slug` profile page** (no fragment, no routes.js entry, no API).
 - **Provenance caveat (issue #346)**: the table renders the development seed
-  (`backend/src/projects/demo-seed.ts`, behind `DEMO_SEED_PROJECTS`); the page carries a
+  (`backend/src/projects/smoke-seed.ts`, behind `DEMO_SEED_PROJECTS`); the page carries a
   visible "Development data" notice (`projects.html:31-35`), is `noindex` (`seo.js`
   /projects entry), out of sitemap, and the nav's ANALYTICS link points at the *old*
   `analytics.robotmoney.net/projects` (`index.html:127-130`).
@@ -207,7 +207,7 @@ New API endpoints will be needed for every list/detail page (only the aggregate
    META entry, sitemap decision, and a2 CSS carried inline or promoted to shared css.
 2. **Goldens discipline** (`CONTRIBUTING.md:40-68`): every new/changed API call must be
    captured into `goldens/api-goldens.json` **from a real running backend** (`bun run
-   demo` + `goldens:update`); CI drift gate `scripts/tests/unit/goldens-drift.test.ts`
+   smoke` + `goldens:update`); CI drift gate `scripts/tests/unit/goldens-drift.test.ts`
    blocks stale goldens; preview mode must keep working backend-free. ~15 new routes ⇒
    ~15+ new goldens entries and preview-intercept coverage.
 3. **Test pyramid** (`playwright.config.ts`, `frontend/test/browser/`,
@@ -215,7 +215,7 @@ New API endpoints will be needed for every list/detail page (only the aggregate
    e.g. `projects.spec.ts`, `allocation-view.spec.ts`); there is a **visual-snapshot
    golden** spec (`regime-visual.spec.ts` + `-snapshots/`, 1% maxDiffPixelRatio,
    animations disabled). `frontend.yml` alone runs only `preview-smoke.spec.ts`; the
-   full browser suite runs inside `e2e.yml`'s **full-stack `bun run demo` readiness
+   full browser suite runs inside `e2e.yml`'s **full-stack `bun run smoke` readiness
    gate** (single Blacksmith runner; cycles are hours-long per memory notes, and the
    user's global test-coverage invariants forbid silent skips / zero-test greens).
 4. **Contract boundary**: endpoint paths live only in `contract/src/routes.js`,

@@ -22,10 +22,10 @@
 // named volume (memberHomeVolumeName), so the key that enrolled — or, for a
 // real-onboarded member, the rmpc keystore its own vanilla agent created
 // during admission — is the key that signs every subsequent take. Enrollment
-// for the FIXED demo roster is the one remaining privileged-register use: the
-// harness, playing the RM operator seeding a demo swarm, registers the
+// for the FIXED smoke roster is the one remaining privileged-register use: the
+// harness, playing the RM operator seeding a smoke swarm, registers the
 // container-generated public key ONCE per identity; ongoing participation
-// never re-registers and never mints a "demo-only simulation key" (that path
+// never re-registers and never mints a "smoke-only simulation key" (that path
 // is retired). A real-onboarded member is never registered from here at all —
 // its admission already bound its key, and a broken stored credential renders
 // it absent rather than re-keyed.
@@ -122,7 +122,7 @@ export interface SessionRail {
   /** REST base the HARNESS reaches for the one-time public-key registration
    *  (default: BACKEND_URL env, then http://localhost:8787). */
   backendUrl?: string;
-  /** Automation token for that registration. The in-process demo driver
+  /** Automation token for that registration. The in-process smoke driver
    *  threads it explicitly; railFromEnv() is the only legitimate place this
    *  standalone entry point reads AUTOMATION_TOKEN from its child environment. */
   automationToken?: string;
@@ -131,17 +131,17 @@ export interface SessionRail {
 }
 
 // Build a rail from the environment — the standalone `bun run
-// scripts/lib/swarm/session.ts` entry point (CI's demo readiness gate)
-// receives the demo's exact compose env as its own process env, so everything
-// needed is already there: DEMO_PROJECT names the stack, COMPOSE_FILE lists
+// scripts/lib/swarm/session.ts` entry point (CI's smoke readiness gate)
+// receives the smoke's exact compose env as its own process env, so everything
+// needed is already there: SMOKE_PROJECT names the stack, COMPOSE_FILE lists
 // the overlay files, and resolveModelConfig() reads AGENT_MODEL +
 // OPENCODE_API_KEY. Throws loudly on a missing piece — a session driver that
 // cannot launch member containers must not silently fall back to anything.
 export function railFromEnv(env: Record<string, string | undefined> = process.env): SessionRail {
-  const composeProject = env.DEMO_PROJECT?.trim();
+  const composeProject = env.SMOKE_PROJECT?.trim();
   if (!composeProject) {
     throw new Error(
-      "railFromEnv: DEMO_PROJECT is required — the swarm session driver launches member containers " +
+      "railFromEnv: SMOKE_PROJECT is required — the swarm session driver launches member containers " +
         "against the already-running stack's compose project and cannot guess its name.",
     );
   }
@@ -159,7 +159,7 @@ export function railFromEnv(env: Record<string, string | undefined> = process.en
     // antipattern: railFromEnv() is only ever called by (or defaulted for)
     // the standalone session.ts entry point, which runs as its own child
     // process with AUTOMATION_TOKEN set on its own spawn env. Every other rail
-    // (e.g. demo-main.ts's in-process sessionRail) sets it directly.
+    // (e.g. smoke-main.ts's in-process sessionRail) sets it directly.
     automationToken: env.AUTOMATION_TOKEN,
   };
 }
@@ -277,7 +277,7 @@ async function runMemberContainer(rail: SessionRail, o: MemberRunOpts) {
 }
 
 // ── Enrollment (once per identity per harness process) ──────────────────────
-// Memoized so a long-running demo enrolls each roster member once per boot;
+// Memoized so a long-running smoke enrolls each roster member once per boot;
 // the durable state (key + persisted token) lives in the member's own volume.
 const enrolledIdentities = new Map<string, Promise<{ freshToken?: string }>>();
 
@@ -318,7 +318,7 @@ async function ensureMemberIdentityUncached(
     // A committed persona identity (scripts/lib/swarm/persona-keys.ts) is
     // passed as OWNER material, not plain extraEnv: it carries a private key, so
     // it belongs on the redacted-from-transcripts channel alongside the token and
-    // the rmpc passphrase. It is only ever present for the demo's named
+    // the rmpc passphrase. It is only ever present for the smoke's named
     // characters; anyone else enrolls exactly as before.
     extraEnv: { RM_MEMBER_ID: m.memberId },
     ownerEnv: personaIdentityEnv(m.name)
@@ -356,7 +356,7 @@ async function ensureMemberIdentityUncached(
   }
 
   // The ONE privileged step, performed by the harness AS the RM operator
-  // seeding the demo roster: register the container-generated PUBLIC key.
+  // seeding the smoke roster: register the container-generated PUBLIC key.
   // The private key never left the member's volume. rail.automationToken is
   // the only source — no local env-reading fallback lives here;
   // the legitimate standalone-entry-point fallback already happened once,

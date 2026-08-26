@@ -25,7 +25,7 @@ import {
   WINDOW_WAIT_POLL_MS,
   type SessionWindowReading,
 } from "../../lib/swarm/session.ts";
-import { resolveDemoCadence, swarmWindowMinutes } from "../../lib/demo-schedule.ts";
+import { resolveSmokeCadence, swarmWindowMinutes } from "../../lib/smoke-schedule.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const T0 = Date.UTC(2026, 7, 7, 12, 0, 0);
@@ -83,8 +83,8 @@ describe("planWindowWait — the pure decision, on the SERVER's clock", () => {
   });
 
   test("the ceiling is derived from the profile's own window, and bounds the fast one", () => {
-    const fast = resolveDemoCadence({ stage: false });
-    const realistic = resolveDemoCadence({ stage: true });
+    const fast = resolveSmokeCadence({ stage: false });
+    const realistic = resolveSmokeCadence({ stage: true });
     expect(windowWaitCeilingMs(fast)).toBe(2 * fast.swarmWindowMs + 60_000); // 5 min
     expect(windowWaitCeilingMs(fast)).toBeLessThanOrEqual(300_000);
     expect(windowWaitCeilingMs(realistic)).toBe(2 * realistic.swarmWindowMs + 60_000);
@@ -224,7 +224,7 @@ describe("runSession closes on the WINDOW, not on its own agents settling", () =
     // …and never from an env var. SWARM_WINDOW_MINUTES already exists and means
     // the api container's seed-time cron payload (backend/src/config.ts); giving
     // it a second meaning here would let a stale shell export silently change
-    // production behaviour, which is the rule demo-schedule.ts's header states.
+    // production behaviour, which is the rule smoke-schedule.ts's header states.
     expect(sessionSrc).not.toContain("SWARM_WINDOW_MINUTES");
   });
 
@@ -243,8 +243,8 @@ describe("runSession closes on the WINDOW, not on its own agents settling", () =
   });
 
   test("the fast profile's window is the one CI actually runs, and it is two minutes", () => {
-    expect(swarmWindowMinutes(resolveDemoCadence({ stage: false }))).toBe(2);
-    expect(sessionSrc).toContain("resolveDemoCadence({ stage: false })");
+    expect(swarmWindowMinutes(resolveSmokeCadence({ stage: false }))).toBe(2);
+    expect(sessionSrc).toContain("resolveSmokeCadence({ stage: false })");
   });
 });
 

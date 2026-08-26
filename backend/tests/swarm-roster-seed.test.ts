@@ -52,7 +52,7 @@ function manifest(name: string): Record<string, any> {
 }
 
 // Throwaway off-roster members the prune tests insert. Deliberately prefixed
-// ids that no demo driver, manifest or archive uses, so cleaning them up by id
+// ids that no smoke driver, manifest or archive uses, so cleaning them up by id
 // can never delete a row another suite owns.
 const FIXTURE_IDS = ["prune-fixture-draco", "prune-fixture-helios", "prune-fixture-applicant"] as const;
 
@@ -182,7 +182,7 @@ test("seeding leaves credentials and lifecycle timestamps alone", async () => {
 });
 
 // The gate, driven through the REAL seed() entry point `bun run migrate` calls
-// — not by re-reading the env var here. With the flag unset, CI, `bun run demo`
+// — not by re-reading the env var here. With the flag unset, CI, `bun run smoke`
 // and a local dev seed must produce exactly the database they produced before
 // this issue.
 test("SWARM_SEED_ROSTER gates the seeding: inert unset, seats when =1", async () => {

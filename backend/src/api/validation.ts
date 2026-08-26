@@ -339,12 +339,12 @@ export function parseManualMember(body: JsonObject | null): ManualMemberParse {
 // oversight. The two routes shared one parser only because they happened to
 // take the same fields; they do NOT have the same contract about the id.
 //
-// `registerMember` is the demo/E2E apply+activate shortcut and its whole point
+// `registerMember` is the smoke/E2E apply+activate shortcut and its whole point
 // is `ON CONFLICT (id) DO UPDATE` — re-running the harness with the same
 // memberId must land on the same member rather than seat a second one. So the
 // caller-supplied id is load-bearing HERE and must keep being accepted, while
 // the admin add path above no longer takes one at all. Narrowing the roster
-// seed and the demo harness onto handles is #685's job, not this one.
+// seed and the smoke harness onto handles is #685's job, not this one.
 export function parseRegisterMember(body: JsonObject | null): {
   memberId: string; name: string; publicKey: string; lens?: string; contact?: string;
 } | null {

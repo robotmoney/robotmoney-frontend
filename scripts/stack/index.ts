@@ -1,7 +1,7 @@
 // scripts/stack/ — the SHARED compose lifecycle (docs/architecture.md §3 L2,
 // §11.3 E5; docs/decisions.md D22/D23). One bring-up with a `core` (postgres +
-// api) and a `full` (+ the three worker lanes) profile. The demo
-// (scripts/lib/demo-main.ts, `full`) is its runtime consumer today; the
+// api) and a `full` (+ the three worker lanes) profile. The smoke
+// (scripts/lib/smoke-main.ts, `full`) is its runtime consumer today; the
 // onboarding eval and the inference-off rails check adopt `core` next, and the
 // profile split exists so they can, without a second bring-up.
 //

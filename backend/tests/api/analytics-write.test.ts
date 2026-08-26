@@ -12,7 +12,7 @@
 //   • valid batches persist atomically + idempotently on their natural keys; a
 //     forced mid-operation error rolls back the whole mutation;
 //   • credentials are never returned in responses or emitted in logs, and the
-//     updater startup guard fails loudly in demo/prod without its token.
+//     updater startup guard fails loudly in smoke/prod without its token.
 import { test, expect, afterEach } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
@@ -108,9 +108,9 @@ test("every mutation: 401 with no bearer, 403 with a wrong/admin/member bearer �
   }
 });
 
-test("fail-closed: no token configured → locked in demo/prod, open only under allowInsecure", async () => {
+test("fail-closed: no token configured → locked in smoke/prod, open only under allowInsecure", async () => {
   prodAuth();
-  config.analyticsToken = null; // demo/prod misconfiguration
+  config.analyticsToken = null; // smoke/prod misconfiguration
   const [method, path] = ["POST", A.rawHistory] as const;
   const body = { history: { [rid()]: [{ date: "2020-01-01", value: 1 }] } };
   expect((await call(req(method, path, body)))?.status).toBe(401);
@@ -311,10 +311,10 @@ test("credentials never appear in responses or logs", async () => {
   expect(captured.join("\n")).not.toContain(ADMIN);
 });
 
-test("startup guard: demo/prod updater without ANALYTICS_TOKEN fails loudly; token or insecure opt-in boots", () => {
+test("startup guard: smoke/prod updater without ANALYTICS_TOKEN fails loudly; token or insecure opt-in boots", () => {
   expect(() => assertAnalyticsUpdaterCredentials({ env: "prod", allowInsecure: false, analyticsToken: null }))
     .toThrow(/ANALYTICS_TOKEN/);
-  expect(() => assertAnalyticsUpdaterCredentials({ env: "demo", allowInsecure: false, analyticsToken: null }))
+  expect(() => assertAnalyticsUpdaterCredentials({ env: "smoke", allowInsecure: false, analyticsToken: null }))
     .toThrow(/ANALYTICS_TOKEN/);
   // The thrown message never contains a secret (there is none) and setting one boots.
   expect(() => assertAnalyticsUpdaterCredentials({ env: "prod", allowInsecure: false, analyticsToken: TOKEN })).not.toThrow();

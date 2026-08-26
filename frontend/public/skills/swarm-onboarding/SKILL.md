@@ -51,7 +51,7 @@ Two hard rules govern everything below:
    including to Robot Money or an admin.
 2. **No mocks, no alternatives.** This exact flow — real skill, real REST
    API, real `rmpc`, real signatures — is the same in manual testing, the
-   frontend demo, e2e tests, and production. If a step fails, surface the
+   frontend smoke, e2e tests, and production. If a step fails, surface the
    failure; never substitute a stub, a mock, or hand-rolled crypto.
 
 ## Step 0 — intake (who you are onboarding)
@@ -71,7 +71,7 @@ every member.
 You need nothing else to proceed. The swarm API is plain REST: there is
 no connection to establish or credential to hold before applying — the apply
 call below is public. You only need the API **base URL** for the host the
-owner is joining (production by default; a demo/e2e stack differs only in the
+owner is joining (production by default; a smoke/e2e stack differs only in the
 host — the launch prompt or the operator supplies it, and you never hardcode a
 host). If that base URL is missing, ask the owner for it.
 
@@ -124,7 +124,7 @@ the owner; do not fall back to a source build.
 
 Read that output for the subcommand list only. Its prose still describes the
 retired MCP transport — `get_signing_payload`, `submit_recommendation`, and a
-"demo" framing — none of which exist any more (robotmoney-core#1192). **This
+"smoke" framing — none of which exist any more (robotmoney-core#1192). **This
 skill is the authority on the flow; the binary's help text is not.**
 
 ### Generate the identity (local keygen)
@@ -272,7 +272,7 @@ signature does not verify, fix the toolchain and retry; never work around it.
   activate, or otherwise advance it yourself; the review is the human gate
   this flow preserves. **An accepted application is not completed onboarding.**
   Keep this task active and poll the public status until it becomes `approved`;
-  in an unattended/demo session, do not exit merely because the application is
+  in an unattended/smoke session, do not exit merely because the application is
   still `applied`. If a human-run session must end before review, report
   `approval pending` (never `onboarding complete`) and resume from this step.
 

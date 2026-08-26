@@ -22,9 +22,9 @@ namespace guard's full behaviour (§2.1). **This runbook does not repeat it; it
 cites it.** Where the two disagree, the contradiction is called out inline under
 **CONTRADICTS deployment.md**.
 
-> **Flag-surface note (added after this runbook was written).** The demo/smoke
-> data path is now selected by one enum flag — `--db ephemeral|external|twin` —
-> and the digital twin has a first-class mode of its own instead of borrowing
+> **Flag-surface note (added after this runbook was written).** The smoke/smoke
+> data path is now selected by one enum flag — `--db ephemeral|external|smoke-smoke-twin` —
+> and the digital smoke-smoke-twin has a first-class mode of its own instead of borrowing
 > `--external-pg`. **Every command below still works**: `--external-pg` remains
 > an accepted spelling of `--db external` and prints a deprecation notice.
 >
@@ -36,9 +36,9 @@ cites it.** Where the two disagree, the contradiction is called out inline under
 >
 > | This runbook's step | The standing command |
 > |---|---|
-> | §5.1/§5.2 hand-run `pg_dump` + `gpg` | `bun run twin:capture` |
-> | §5.3b stage rehearsal | `bun run twin:rehearse` |
-> | §7.3's `--smoke --external-pg` against a restored copy | `bun smoke -- --db twin` |
+> | §5.1/§5.2 hand-run `pg_dump` + `gpg` | `bun run smoke:smoke:capture` |
+> | §5.3b stage rehearsal | `bun run smoke:smoke:smoke-smoke-twin --once` |
+> | §7.3's `--smoke --external-pg` against a restored copy | `bun smoke -- --db smoke-smoke-twin` |
 >
 > **v0.3.0 onward already uses them** — its `stage-rehearsal.ts` is a thin wrapper
 > over the shared driver. Here, follow the text as written.
@@ -81,7 +81,7 @@ independent:
    all; the probe marks them ⛔ rather than letting you try.
 2. **Code** — each step declares the paths it actually executes (`depends-on`
    in its step block). A commit invalidates a step only if it lands on that
-   step's own inputs. This is what release-runbooks.md §4.4's *"the twin must
+   step's own inputs. This is what release-runbooks.md §4.4's *"the smoke-smoke-twin must
    use the same release candidate that is planned for production"* means in
    practice: a docs-only commit invalidates nothing, a change to `preflight.ts`
    invalidates Gate C **and** Gate B (Gate C runs preflight's checks —
@@ -127,17 +127,17 @@ between the two — and each invalidates something an operator would otherwise
 assume. Re-check them against the tip you pin in §1 before you rely on them.
 
 1. **`bun smoke` boots a DEMO-shaped stack, not a production one.** It always
-   appends `docker-compose.demo.yml` (`scripts/lib/demo-main.ts:284-288`, which
+   appends `docker-compose.smoke.yml` (`scripts/lib/smoke-main.ts:284-288`, which
    never consults smoke mode), which sets `RM_ALLOW_INSECURE: "1"`
-   (`docker-compose.demo.yml:35`) and pins `SWARM_SCHEDULES_ENABLED: "0"`
+   (`docker-compose.smoke.yml:35`) and pins `SWARM_SCHEDULES_ENABLED: "0"`
    (`:72`). deployment.md §3.3 says this out loud about the pinned-port origin:
-   *"a pinned-port origin serves a **demo** stack (`RM_ALLOW_INSECURE=1`,
-   explicit demo schedules…), not a production one."* You are running the demo
+   *"a pinned-port origin serves a **smoke** stack (`RM_ALLOW_INSECURE=1`,
+   explicit smoke schedules…), not a production one."* You are running the smoke
    composition against production data. Nothing below can change that — it is a
    property of the workflow, not a setting.
 2. **Without `--external-pg`, `bun smoke` builds a brand-new empty database
    every single boot and your production data is not touched.** The compose
-   project name is `rm_demo_stack_<10 hex>` where the hex is
+   project name is `rm_smoke_stack_<10 hex>` where the hex is
    `shortHash(crypto.randomUUID())` (`scripts/stack/naming.ts:138`, `:149-151`)
    — **random per boot** outside GitHub Actions. A new project means a new
    `<project>_pgdata` volume. The previous boot's volume is orphaned, not
@@ -311,7 +311,7 @@ this runbook that executes it.
 |---|---|---|
 | **§4.1** Pre-cutover backup | Encrypted dump + globals dump, verified restore | §5.1–§5.3 |
 | **§4.2** Schema-migration preflight | All migrations idempotent and reversible | §4 (preflight) |
-| **§4.3** Digital-twin rehearsal | Full runbook against restored twin; any failure blocks | §5.5 |
+| **§4.3** Digital-smoke-smoke-twin rehearsal | Full runbook against restored smoke-smoke-twin; any failure blocks | §5.5 |
 | **§4.4** Stage rehearsal report | Written report with acceptance criteria; gate before §7 | §5.6 |
 | **§4.5** Go/no-go sign-off | Operator sign-off after stage rehearsal report passes | §2 |
 | **§4.6** Cutover execution | Versioned RC tag, then migrate + boot | §7 |
@@ -401,7 +401,7 @@ replaces it.
 
 ⚠ **`DATABASE_URL` is not in your shell, and nothing in this workflow puts it
 there.** `--external-pg` reads it out of the repo-root `.env` **file** —
-`loadEnvFile()` is `readFileSync` (`scripts/lib/demo-external-pg.ts:163-165`),
+`loadEnvFile()` is `readFileSync` (`scripts/lib/smoke-external-pg.ts:163-165`),
 called at `:294`, and the value is taken at `:303` — and `process.env` is never
 consulted (§6.5).
 
@@ -762,7 +762,7 @@ downgrades the last two to warnings — **do not make that the normal path.**
 |---|---|---|
 | `session-read-only` | The connection can write. Nothing else was queried. | Use port `25060` and the `rm_readonly` URL. Never `PREFLIGHT_ALLOW_PRIVILEGED` for this one — it does not downgrade it. |
 | `role-privileges` / `role-write-grants` | The role is a superuser, or holds write grants / table ownership. | Provision §3's role and re-run. |
-| `server-version` | Server is < PG 11, where `0030`'s `ADD COLUMN` rewrites the table under `ACCESS EXCLUSIVE`. | Upgrade the cluster. (A **WARN** here just means "outside {17, 18}". Since issue #691 the backend suite and the restore twin both run **18**, production's major — pinned once in `scripts/lib/postgres-image.ts`. 17 stays warning-free only because the demo / single-box stack still runs it.) |
+| `server-version` | Server is < PG 11, where `0030`'s `ADD COLUMN` rewrites the table under `ACCESS EXCLUSIVE`. | Upgrade the cluster. (A **WARN** here just means "outside {17, 18}". Since issue #691 the backend suite and the restore smoke-smoke-twin both run **18**, production's major — pinned once in `scripts/lib/postgres-image.ts`. 17 stays warning-free only because the smoke / single-box stack still runs it.) |
 | `extensions` | `pgcrypto` absent; `0001_backends.sql:4` needs `gen_random_uuid()`. | `CREATE EXTENSION IF NOT EXISTS pgcrypto;` as `doadmin`. |
 | `schema-migrations` | Either no `schema_migrations` at all (wrong database), or **orphans**: files recorded in the database that are absent from `backend/migrations/`. | Orphans mean the **database is ahead of the checkout** — you are on the wrong tag. Stop and check out the §1 release tip. |
 | `rm-worker-role` | `rm_worker` missing and `0029_admin_passkey.sql` pending. | Gate D above. |
@@ -1164,7 +1164,7 @@ throwaway container is gone whether the run succeeds or fails.
 
 ```yaml step
 id:          P5.rehearsal-boot
-phase:       P5 twin rehearsal
+phase:       P5 smoke-smoke-twin rehearsal
 section:     §5.3b
 host-role:   stage
 actor:       agent
@@ -1177,7 +1177,7 @@ depends-on:
   - frontend/**
   - scripts/**
   - docker-compose.yml
-  - docker-compose.demo.yml
+  - docker-compose.smoke.yml
   - package.json
   - bun.lock
   - scripts/lib/restore-container.ts
@@ -1188,10 +1188,10 @@ verify:      bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-
 
 > **Corrected 2026-08-20 — this section used to be headed "Optional but
 > recommended".** It is not optional and never was: §5.5 opens *"⛔ This is a
-> blocking gate. Do not proceed to §7 until the twin run exits 0"*, and
-> release-runbooks.md §4.4 makes the digital-twin rehearsal part of the
+> blocking gate. Do not proceed to §7 until the smoke-smoke-twin run exits 0"*, and
+> release-runbooks.md §4.4 makes the digital-smoke-smoke-twin rehearsal part of the
 > foundational workflow with *"any failure, warning, or unexpected state change
-> discovered on the twin is a blocking issue."* Two places said required, one
+> discovered on the smoke-smoke-twin is a blocking issue."* Two places said required, one
 > said optional, and the optional one was the heading an operator reads first.
 
 `restore-check.ts` proves the dump restores and that static SQL checks pass
@@ -1250,35 +1250,35 @@ What it does:
    (`opencode/deepseek-v4-flash`) — the one production runs. See the box
    below: this rehearsal spends real credit, on purpose.
 4. Boots with the **exact command §7.3 runs for real cutover**:
-   `bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI` unset, a
-   scoped `DEMO_PROJECT` (lowercased — Compose project names reject the
+   `bun scripts/smoke.ts --smoke --external-pg --no-tui`, `CI` unset, a
+   scoped `SMOKE_PROJECT` (lowercased — Compose project names reject the
    uppercase `T`/`Z` in the backup's own timestamp).
 5. **Supervises** that boot rather than waiting for it to exit (G2 — it never
-   would), polling the worktree's `.agents/demo-state.json` for the api's
+   would), polling the worktree's `.agents/smoke-state.json` for the api's
    published port and `GET /health` on it until both answer, against G3's
    deadline. A boot that exits at all fails the run immediately, since a
    healthy `CI`-unset boot runs forever.
-6. Once ready, runs `scripts/demo-frontend-check.ts` against that port — the
+6. Once ready, runs `scripts/smoke-frontend-check.ts` against that port — the
    same route/content checks CI runs on every boot, not a bespoke probe.
 7. Tears down on **every** exit path (G6): stops the supervised boot first,
-   then `demo-down.ts` with an explicit `DEMO_PROJECT`, the `member_home_*`
-   volumes `demo-down` deliberately keeps, `git worktree remove --force`, and
+   then `smoke-down.ts` with an explicit `SMOKE_PROJECT`, the `member_home_*`
+   volumes `smoke-down` deliberately keeps, `git worktree remove --force`, and
    the throwaway Postgres container.
 
 Exit `0` means the migration ran for real, the stack came up healthy, and the
 frontend checks passed against production-shaped data.
 
-#### 5.3b.0 ⛔ The rehearsal runs preflight AND POSTFLIGHT against the twin
+#### 5.3b.0 ⛔ The rehearsal runs preflight AND POSTFLIGHT against the smoke-smoke-twin
 
 **A rehearsal that only proves the stack boots has not rehearsed the
-release.** Run **both** halves against the digital twin, in the same order
+release.** Run **both** halves against the digital smoke-smoke-twin, in the same order
 production will see them, before production is touched at all:
 
 1. **Preflight** — §5.3's `restore-check.ts` (Gate C), then §4's checks.
 2. **Cutover** — §5.3b's boot, which applies this release's migrations to the
    restored production rows for real.
 3. **Postflight** — **every §8 check, and every §8.1 acceptance criterion**,
-   against the migrated twin.
+   against the migrated smoke-smoke-twin.
 
 Step 3 is the one that was missing, and its absence is exactly how a real
 defect reached rc.5 while every script reported success: the boot exited `0`,
@@ -1287,10 +1287,10 @@ public handle** (`robot-money` instead of `robotmoney`, `woon-2` instead of
 `woon`) — §8.1. A green mechanism is not a met objective, and only §8.1
 distinguishes them.
 
-The twin is the right place for this and the only place it is free: it holds
+The smoke-smoke-twin is the right place for this and the only place it is free: it holds
 real production rows, so the ACs are evaluated against the data that will
 actually be migrated, and a failure costs a rerun rather than a rollback.
-**Treat an AC failure on the twin exactly as an AC failure in production** —
+**Treat an AC failure on the smoke-smoke-twin exactly as an AC failure in production** —
 patch, cut the next rc, rehearse again. Do not carry a known-failing AC into
 a cutover on the theory that production will behave differently; it is the
 same data.
@@ -1304,20 +1304,20 @@ section states the intent and the script is what gets fixed.
 | # | Guarantee | Why it is load-bearing |
 |---|---|---|
 | **G1** | **It terminates on its own, always.** A run reaches one of the exit codes below without an operator interrupting it. "Still going" after the deadline is a **failure**, not patience. | This is the last gate before a production cutover, often at 3am. A step that can hang indefinitely cannot be sequenced, cannot be timed, and silently converts "rehearsal passed" into "nobody waited long enough to find out." |
-| **G2** | **It boots exactly what §7.3 boots** — `bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI` unset — and **supervises** that boot rather than waiting for it to finish. | With `CI` unset the boot **never self-terminates by design**: it falls past demo-main's CI-gated exits (`scripts/lib/demo-main.ts:1175`, `:1212`) into the LIVE steady-state loop and cycles sessions forever. That is correct for §7.3, where the stack must stay up serving production. A rehearsal that `await`s that process therefore waits forever — the two requirements are only compatible if the rehearsal supervises. Setting `CI` to escape this is **not** an acceptable fix: a truthy `CI` tears the stack down regardless of exit code (§7.3), so the frontend checks would have nothing left to hit, and the boot would no longer be the one §7.3 runs. |
-| **G3** | **Readiness is polled, with a deadline.** Ready ⇔ the worktree's `.agents/demo-state.json` exists **and** `/health` on its `apiPort` answers `200`. Not reached within the deadline ⇒ exit `1`. | Readiness is the only honest signal that migration + seed + serve all succeeded, and a deadline is what turns G1 from an intention into a property. Allow generously for a cold image build (a first build pulls base images and compiles); this is minutes, not seconds. |
-| **G4** | **Verification runs against the booted stack**: `scripts/demo-frontend-check.ts` on the published port — the same route/content checks CI runs, never a bespoke probe. | A stack that boots but serves the home-page shell for every route is a failed cutover that `/health` alone reports as green (§8 check 11). |
+| **G2** | **It boots exactly what §7.3 boots** — `bun scripts/smoke.ts --smoke --external-pg --no-tui`, `CI` unset — and **supervises** that boot rather than waiting for it to finish. | With `CI` unset the boot **never self-terminates by design**: it falls past smoke-main's CI-gated exits (`scripts/lib/smoke-main.ts:1175`, `:1212`) into the LIVE steady-state loop and cycles sessions forever. That is correct for §7.3, where the stack must stay up serving production. A rehearsal that `await`s that process therefore waits forever — the two requirements are only compatible if the rehearsal supervises. Setting `CI` to escape this is **not** an acceptable fix: a truthy `CI` tears the stack down regardless of exit code (§7.3), so the frontend checks would have nothing left to hit, and the boot would no longer be the one §7.3 runs. |
+| **G3** | **Readiness is polled, with a deadline.** Ready ⇔ the worktree's `.agents/smoke-state.json` exists **and** `/health` on its `apiPort` answers `200`. Not reached within the deadline ⇒ exit `1`. | Readiness is the only honest signal that migration + seed + serve all succeeded, and a deadline is what turns G1 from an intention into a property. Allow generously for a cold image build (a first build pulls base images and compiles); this is minutes, not seconds. |
+| **G4** | **Verification runs against the booted stack**: `scripts/smoke-frontend-check.ts` on the published port — the same route/content checks CI runs, never a bespoke probe. | A stack that boots but serves the home-page shell for every route is a failed cutover that `/health` alone reports as green (§8 check 11). |
 | **G5** | **Spend is bounded.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack **as soon as verification finishes** (G4 *and* G8) — pass or fail — and must not let the loop keep cycling. G8 costs seconds; it does not license leaving the stack up for anything else. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. |
 | **G6** | **Cleanup is unconditional.** The compose stack, the git worktree, and the throwaway Postgres container are all removed on **every** exit path — success, assertion failure, readiness timeout, and an unhandled throw. | Leftovers from this script are not inert: a surviving container holds a full copy of production data (§5.3b.2), and a surviving stack keeps spending under G5. |
-| **G7** | **Isolation is absolute.** Never the real repo-root `.env`; never a production connection; the twin's port bound to a non-routable address. | The rehearsal's whole claim is that it cannot touch production. See §5.3b.2. |
-| **G8** | **Postflight runs against the twin, inside the same run** — §8's checks *and* §8.1's AC1–AC5, via `postflight.ts --emit-receipt=P5.postflight-twin`, after G4 and before teardown. A failure is exit `1`. | §5.3b.0 step 3 and §5.5 both require it, and the twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. |
+| **G7** | **Isolation is absolute.** Never the real repo-root `.env`; never a production connection; the smoke-smoke-twin's port bound to a non-routable address. | The rehearsal's whole claim is that it cannot touch production. See §5.3b.2. |
+| **G8** | **Postflight runs against the smoke-smoke-twin, inside the same run** — §8's checks *and* §8.1's AC1–AC5, via `postflight.ts --emit-receipt=P5.postflight-smoke-smoke-twin`, after G4 and before teardown. A failure is exit `1`. | §5.3b.0 step 3 and §5.5 both require it, and the smoke-smoke-twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. |
 
 **Exit codes.**
 
 | Code | Meaning |
 |---|---|
 | `0` | Migrations applied for real, the stack came up healthy, and the frontend checks passed against production-shaped data. |
-| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), a frontend check failed, or postflight failed against the twin (G8). |
+| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), a frontend check failed, or postflight failed against the smoke-smoke-twin (G8). |
 | `2` | Could not run at all — missing/undecryptable backup files, no `OPENCODE_API_KEY` (§5.3b's box), Docker/git failure. Says nothing about the release. |
 
 ✅ **Conformant as of 2026-08-17, and executed end to end for the first
@@ -1330,7 +1330,7 @@ progress past `booting:`, 5 analytics cycles, 3 live swarm sessions, killed
 and torn down by hand. That is why §5.3b's own text used to say the rehearsal
 had never completed — it could not have.
 
-The script now supervises the boot and polls `demo-state.json` + `/health`
+The script now supervises the boot and polls `smoke-state.json` + `/health`
 against G3's deadline, fails fast if the boot exits at all (with `CI` unset a
 healthy boot never does), and tears down the stack, the leftover volumes,
 the worktree and the container on every exit path. First clean run:
@@ -1353,7 +1353,7 @@ baseline).
 > its objective. On 2026-08-17 this script exited `0` with every check above
 > green while **two members ended up with the wrong public handle** — the
 > defect §8.1 exists to catch. Always follow a green run with §5.3b.0 step 3:
-> §8's checks *and* §8.1's acceptance criteria, against the same twin.
+> §8's checks *and* §8.1's acceptance criteria, against the same smoke-smoke-twin.
 
 > **Reading a run.** "Still running" is only ever legitimate *before*
 > readiness, and only up to G3's deadline — a cold first build genuinely
@@ -1362,20 +1362,20 @@ baseline).
 > take is hung, not working; that is now a bug to report, not a state to
 > wait out.
 
-#### 5.3b.2 Contract — the digital twin is production data, and must be treated that way
+#### 5.3b.2 Contract — the digital smoke-smoke-twin is production data, and must be treated that way
 
 Both §5.3 and §5.3b restore the dump into a throwaway local Postgres. Nothing
-about "throwaway" makes its **contents** low-value: the twin holds a complete
+about "throwaway" makes its **contents** low-value: the smoke-smoke-twin holds a complete
 copy of production, including `admin_credential` hashes, `admin_session`
 tokens, member access keys and every stored email address — the same inventory
 §5.2 encrypts the dump for. The container is disposable; the data in it is not.
 
 | # | Guarantee | Why |
 |---|---|---|
-| **T1** | **No production credential is used or needed.** The twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run *for real* with no production secret in play. It is also why `doadmin` is irrelevant to §5.3/§5.3b: the migrations apply to the twin, and at real cutover (§7) they apply as the application's writer from `DATABASE_URL` — `doadmin` applies migrations at no point in this runbook. |
-| **T2** | **The twin's superuser is a true superuser, and that is fine.** It holds more Postgres privilege than `doadmin` does (DO withholds real superuser — §3's `pg_read_all_data` box is that limit in action), yet near-zero risk: it reaches one disposable container and dies with it. | Privilege and blast radius are independent. Do not reason about this credential by its power; reason about the state it can reach. |
+| **T1** | **No production credential is used or needed.** The smoke-smoke-twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run *for real* with no production secret in play. It is also why `doadmin` is irrelevant to §5.3/§5.3b: the migrations apply to the smoke-smoke-twin, and at real cutover (§7) they apply as the application's writer from `DATABASE_URL` — `doadmin` applies migrations at no point in this runbook. |
+| **T2** | **The smoke-smoke-twin's superuser is a true superuser, and that is fine.** It holds more Postgres privilege than `doadmin` does (DO withholds real superuser — §3's `pg_read_all_data` box is that limit in action), yet near-zero risk: it reaches one disposable container and dies with it. | Privilege and blast radius are independent. Do not reason about this credential by its power; reason about the state it can reach. |
 | **T3** | **The published port must bind a non-routable address** — `127.0.0.1`, or the Docker bridge gateway when sibling containers must reach it (§5.3b). **Never `0.0.0.0`.** | Docker inserts its own iptables rules ahead of ufw/firewalld, so a `0.0.0.0` bind can be reachable from outside the host *even when the firewall looks closed* (verified 2026-08-17). Given T4, the bind address is the only thing standing between a production-data copy and the internet. |
-| **T4** | **The twin's password must be generated per run, not a constant.** | A predictable password is acceptable *only* while T3 holds perfectly; making it unpredictable removes the dependence of one control on another and costs nothing. **Conformant as of 2026-08-17.** `restore-container.ts` previously hardcoded `LOCAL_PASSWORD = "throwaway-local-only"` while §5.3's prose claimed the superuser was "freshly generated" — it was not. It now is: generated per run, never logged, passed to callers on `RestoredContainer`. |
+| **T4** | **The smoke-smoke-twin's password must be generated per run, not a constant.** | A predictable password is acceptable *only* while T3 holds perfectly; making it unpredictable removes the dependence of one control on another and costs nothing. **Conformant as of 2026-08-17.** `restore-container.ts` previously hardcoded `LOCAL_PASSWORD = "throwaway-local-only"` while §5.3's prose claimed the superuser was "freshly generated" — it was not. It now is: generated per run, never logged, passed to callers on `RestoredContainer`. |
 
 ### 5.4 🔴 IRREVERSIBLE — capture the swarm schedule rows, which no restore returns
 
@@ -1437,11 +1437,11 @@ restoring those values afterwards is a manual `UPDATE` per row, and you
 cannot write it without this output. Keep it with the dump (it holds no
 credentials, so it does not need §5.2's encryption).
 
-### 5.5 Digital-twin rehearsal
+### 5.5 Digital-smoke-smoke-twin rehearsal
 
 ```yaml step
-id:          P5.postflight-twin
-phase:       P5 twin rehearsal
+id:          P5.postflight-smoke-smoke-twin
+phase:       P5 smoke-smoke-twin rehearsal
 section:     §5.5
 host-role:   stage
 actor:       agent
@@ -1458,7 +1458,7 @@ depends-on:
 verify:      bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022 --emit-receipt   # G8 runs this step
 ```
 
-⛔ **This is a blocking gate.** Do not proceed to §7 until the twin run exits
+⛔ **This is a blocking gate.** Do not proceed to §7 until the smoke-smoke-twin run exits
 `0` and every acceptance criterion in §5.6 is met.
 
 Restore the backup (§5.3's `restore-check.ts`, then §5.3b's
@@ -1466,28 +1466,28 @@ Restore the backup (§5.3's `restore-check.ts`, then §5.3b's
 against it in sequence:
 
 1. **Preflight (§4)** — run `restore-check.ts` (Gate C) first, then §4's live
-   checks against the restored twin. Any failure is blocking. Follow the fix
+   checks against the restored smoke-smoke-twin. Any failure is blocking. Follow the fix
    loop: patch, cut the next rc, restore a fresh dump, rehearse again.
 2. **Cutover (§7)** — run `stage-rehearsal.ts`, which executes the exact §7.3
-   boot command (`bun scripts/demo.ts --smoke --external-pg --no-tui`, `CI`
-   unset) against the migrated twin. Any failure is blocking.
+   boot command (`bun scripts/smoke.ts --smoke --external-pg --no-tui`, `CI`
+   unset) against the migrated smoke-smoke-twin. Any failure is blocking.
 3. **Postflight (§8)** — run every §8 check **and** every §8.1 acceptance
-   criterion against the twin after the boot reaches readiness. Any failure is
+   criterion against the smoke-smoke-twin after the boot reaches readiness. Any failure is
    blocking — do not carry a known-failing AC into a production cutover on the
    theory that production will behave differently.
 
-The twin holds real production rows. An AC failure on the twin is an AC failure
-in production; it is the same data. Treat a failing twin the same as a failing
+The smoke-smoke-twin holds real production rows. An AC failure on the smoke-smoke-twin is an AC failure
+in production; it is the same data. Treat a failing smoke-smoke-twin the same as a failing
 production cutover: diagnose, patch, cut the next rc, re-rehearse from step 1.
 
 ```bash
 cd <checkout>/backend
-# Step 1 — preflight against the twin
+# Step 1 — preflight against the smoke-smoke-twin
 bun scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts ~/rm-backup-v022
 
-# Steps 2+3 — cutover + postflight against the twin
+# Steps 2+3 — cutover + postflight against the smoke-smoke-twin
 bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts ~/rm-backup-v022
-# After EXIT=0: run every §8 check and §8.1 ACs against the twin's published port
+# After EXIT=0: run every §8 check and §8.1 ACs against the smoke-smoke-twin's published port
 ```
 
 ### 5.6 Stage rehearsal report
@@ -1501,7 +1501,7 @@ actor:       operator
 requires:
   - P4.preflight-live
   - P5.rehearsal-boot
-  - P5.postflight-twin
+  - P5.postflight-smoke-smoke-twin
 artifacts:
   - *rehearsal-report-*.md
 verify:      write the §5.6 report, then: where.ts --record P6.report --note GO
@@ -1509,27 +1509,27 @@ verify:      write the §5.6 report, then: where.ts --record P6.report --note GO
 
 ⛔ **Gate: do not proceed to §7 until this report exists and all criteria pass.**
 
-Produce a written report covering the twin rehearsal just completed. Save it to
+Produce a written report covering the smoke-smoke-twin rehearsal just completed. Save it to
 a file alongside the backup artifacts (e.g.
 `stage-rehearsal-report-<STAMP>.md`). The report must include:
 
 **1. Twin setup**
-- RC tag and SHA deployed to the twin
+- RC tag and SHA deployed to the smoke-smoke-twin
 - Backup stamp used (`rm-preupgrade-<STAMP>.dump.gpg`)
 - `restore-check.ts` exit code and any notable output
 
-**2. Preflight results (§4 on the twin)**
+**2. Preflight results (§4 on the smoke-smoke-twin)**
 - All **Gate C, B, D, E** results (pass / fail / note) — §2's four gates, in
   execution order. There is no Gate A; an earlier revision of this line asked
   for "Gate A–D" after §2 had abolished it
 - Exit code of `restore-check.ts`
 
-**3. Cutover results (§7 on the twin)**
+**3. Cutover results (§7 on the smoke-smoke-twin)**
 - `stage-rehearsal.ts` exit code
 - Time to readiness (`ready after …s`)
 - Frontend check verdict
 
-**4. Postflight results (§8 on the twin)**
+**4. Postflight results (§8 on the smoke-smoke-twin)**
 - Result for every §8 check (check 1–12)
 - All §8.1 acceptance criteria explicitly ticked or failed
 
@@ -1568,7 +1568,7 @@ before cutover" plan. **Both of those steps are impossible through the operator'
 workflow.** Verified by tracing the spawn environment, not assumed — first at
 `ccf983f`, re-verified 2026-08-17 against `origin/releases-0.2.x` (`d852329`),
 where `scripts/stack/stack.ts`, `scripts/stack/config.ts`,
-`scripts/lib/demo-main.ts` and `docker-compose.yml` are all byte-identical to
+`scripts/lib/smoke-main.ts` and `docker-compose.yml` are all byte-identical to
 `ccf983f`. The mechanism is structural, not a commit-local accident.
 
 ### 6.1 Why: how environment reaches the api container under `bun smoke`
@@ -1585,7 +1585,7 @@ Two consequences:
 
 - Your exported shell variable is **dropped** unless it is in
   `DOCKER_CLIENT_ENV_ALLOWLIST` or in `DEMO_COMPOSE_PASSTHROUGH`
-  (`scripts/lib/demo-main.ts:427-444`).
+  (`scripts/lib/smoke-main.ts:427-444`).
 - A repo-root `.env` **is** auto-loaded by Compose for `${VAR}` interpolation
   (no `--env-file` or `--project-directory` is passed anywhere; the child's cwd
   is the repo root, `scripts/stack/stack.ts:216`) — but process env beats `.env`,
@@ -1596,7 +1596,7 @@ Two consequences:
 `buildComposeEnv` sets `AUTOMATION_TOKEN: cfg.credentials.automationToken`
 (`scripts/stack/config.ts:220`), minted fresh **every boot** by
 `generateStackCredentials()` (`:162-168`, called at
-`scripts/lib/demo-main.ts:381-383`). Putting it in `.env` or exporting it in your
+`scripts/lib/smoke-main.ts:381-383`). Putting it in `.env` or exporting it in your
 shell changes nothing — the generated value overrides both.
 
 So the established finding that `AUTOMATION_TOKEN` is *"absent from `.env.example`
@@ -1609,7 +1609,7 @@ mints it. **No action required. Do not try to set it.**
 ### 6.3 ❌ `SWARM_PUBLIC_BASE_URL` — cannot reach the container at all
 
 It appears in **no compose file**: not in `docker-compose.yml`'s api
-`environment:` block (`:171-223`), not in `docker-compose.demo.yml`'s (`:34-72`),
+`environment:` block (`:171-223`), not in `docker-compose.smoke.yml`'s (`:34-72`),
 not in `docker-compose.stage.yml`, not in the `x-worker-env` anchor
 (`docker-compose.yml:109-137`). There is no `env_file:` in any compose file and
 `backend/Dockerfile` sets no `ENV`, so an unlisted name is simply never
@@ -1640,8 +1640,8 @@ rollout** — it is unreachable from `.env` and from your shell either way. See
 Same mechanism: `buildComposeEnv` sets `ADMIN_TOKEN:
 cfg.credentials.adminToken` (`scripts/stack/config.ts:219`), a fresh random
 20-character value per launch (`:164`). It is **never logged, never written to
-`.agents/demo-state.json`, and never printed in the plain non-TUI READY block**
-(`scripts/lib/demo-main.ts:374-378`; the block itself is `:1407-1421`, whose
+`.agents/smoke-state.json`, and never printed in the plain non-TUI READY block**
+(`scripts/lib/smoke-main.ts:374-378`; the block itself is `:1407-1421`, whose
 Admin line at `:1413` prints only `(password shown in the interactive TUI
 only)`). The TUI renders it at `:964`, and only while the credential is
 unclaimed.
@@ -1667,15 +1667,15 @@ cat .env      # must contain, at minimum:
 ```
 
 `--external-pg` reads `DATABASE_URL` from **that file directly**
-(`scripts/lib/demo-external-pg.ts:288-305`), not from `process.env`. A missing or
+(`scripts/lib/smoke-external-pg.ts:288-305`), not from `process.env`. A missing or
 unreadable `.env` is a fatal exit 1 before anything starts.
 
 Optional, and genuinely honoured because they are in `DEMO_COMPOSE_PASSTHROUGH`.
-**`scripts/lib/demo-main.ts:427-444` is the authoritative list** — read it there,
+**`scripts/lib/smoke-main.ts:427-444` is the authoritative list** — read it there,
 not here, before concluding anything is unconfigurable. Reproduced verbatim at
 `origin/releases-0.2.x` (`d852329`, 2026-08-17) — sixteen names, unchanged
 since `ccf983f`. Re-derive on your tag rather than trusting this block:
-`git show <the §1 tip>:scripts/lib/demo-main.ts | sed -n '427,444p'`.
+`git show <the §1 tip>:scripts/lib/smoke-main.ts | sed -n '427,444p'`.
 
 ```
 BASE_RPC_URL
@@ -1701,13 +1701,13 @@ An earlier revision of this runbook listed six of these and glossed the crons as
 unconfigurable** on this workflow — it is not: the three
 `SWARM_NOTIFICATION_EMAIL_*` names pass through, and so do `FETCH_CACHE_DIR`,
 `FLOOR_SEED_PATH` and `WORKER_DATABASE_URL`. Values `buildComposeEnv()` owns
-(ports, credentials, `DATABASE_URL`, `POSTGRES_*`, `DEMO_PROJECT`) are
+(ports, credentials, `DATABASE_URL`, `POSTGRES_*`, `SMOKE_PROJECT`) are
 deliberately **not** on the list and cannot be shadowed (§6.1, §6.2, §6.4).
 Passthrough reads your **shell** environment, and an empty string counts as
-unset (`demoPassthroughEnv`, `:446-453`).
+unset (`smokePassthroughEnv`, `:446-453`).
 
 > ⚠ **`SWARM_SCHEDULES_ENABLED` is on the list and still loses.**
-> `docker-compose.demo.yml:72` pins it to `"0"` in the overlay regardless of what
+> `docker-compose.smoke.yml:72` pins it to `"0"` in the overlay regardless of what
 > you pass, and `seedSwarmSchedules()` (`backend/src/db/seed.ts:137-152`)
 > rewrites all five `swarm.*` rows' `cron`/`enabled`/`payload`/`timezone` on
 > **every** boot — `seed()` is called unconditionally from
@@ -1729,9 +1729,9 @@ unset (`demoPassthroughEnv`, `:446-453`).
 
 ```bash
 cd <checkout>
-bun run demo:status          # prints project=<name>; confirm it is the live one
-bun run demo:down            # keeps the data; does NOT delete volumes
-docker compose ls            # confirm no rm_demo_stack_* project is still up
+bun run smoke:status          # prints project=<name>; confirm it is the live one
+bun run smoke:down            # keeps the data; does NOT delete volumes
+docker compose ls            # confirm no rm_smoke_stack_* project is still up
 ```
 
 If `docker compose ls` shows leftovers from earlier boots, tear each down
@@ -1741,13 +1741,13 @@ command resolves a different topology than the one running:
 
 ```bash
 docker compose -p <that project> \
-  -f docker-compose.yml -f docker-compose.demo.yml \
+  -f docker-compose.yml -f docker-compose.smoke.yml \
   down --remove-orphans
 ```
 
 The stakes are lower here than at §11 step 6 — `down` removes by project label,
 so it cannot start anything — but without the overlay Compose does not know the
-demo-only services and leaves them behind as orphans, which is exactly the
+smoke-only services and leaves them behind as orphans, which is exactly the
 leftover you came here to clear. `--remove-orphans` covers the gap. See
 deployment.md §2.1, "FIRST: find the project name".
 
@@ -1830,10 +1830,10 @@ depends-on:
   - frontend/**
   - scripts/**
   - docker-compose.yml
-  - docker-compose.demo.yml
+  - docker-compose.smoke.yml
   - package.json
   - bun.lock
-verify:      DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: where.ts --record P7.cutover
+verify:      SMOKE_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: where.ts --record P7.cutover
 ```
 
 > 🔴 **IRREVERSIBLE.** This command is not a dry run and there is no "boot and
@@ -1841,7 +1841,7 @@ verify:      DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: 
 > anything: the six migrations (§7.4), `seed()` rewriting the five `swarm.*`
 > schedule rows (§6.5, §5.4), and the **archive initializer** — `prod-bootstrap.ts`
 > run as `docker compose run --rm … api bun run scripts/prod-bootstrap.ts
-> --already-migrated` (`scripts/lib/demo-main.ts:1136-1140`) — which adopts and
+> --already-migrated` (`scripts/lib/smoke-main.ts:1136-1140`) — which adopts and
 > writes archive rows into the live database (§8 verification 8). None of it has
 > a down migration (§7 header). Do not run this before Gates B, D, E, C and A
 > are all green.
@@ -1866,25 +1866,25 @@ verify:      DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui   # then: 
 
 ```bash
 cd <checkout>
-DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
+SMOKE_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
 BOOT_STATUS=$?                # capture it HERE — §8 verification 1 reads this
 echo "boot exit=$BOOT_STATUS" # MUST be 0
 ```
 
 ⚠ **Capture the status on the same line-group as the boot.** `$?` holds only the
 *previous* command's status, and §8 opens with two commands of its own
-(`export RM_PROJECT=…`, `bun run demo:status`) before its first check. By then
-`$?` reports `demo:status`, not the boot. `BOOT_STATUS` survives that; `$?` does
+(`export RM_PROJECT=…`, `bun run smoke:status`) before its first check. By then
+`$?` reports `smoke:status`, not the boot. `BOOT_STATUS` survives that; `$?` does
 not.
 
 **Each flag, justified:**
 
 | Flag / var | Why it is here | What happens without it |
 |---|---|---|
-| `--external-pg` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/demo-external-pg.ts:288-305`). | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §0. |
-| `DEMO_PROJECT=rm_prod` | **MANDATORY.** Pins the compose project name (`scripts/lib/demo-main.ts:261`). Without it the name is `rm_demo_stack_<random>` per boot (`scripts/stack/naming.ts:138`). | Every restart leaves an orphaned project. `docker compose -p …` commands in deployment.md address the wrong stack. Note: `--external-pg` does **not** by itself stabilise the project name — only `DEMO_PROJECT` does. |
-| `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/demo-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Always pass it.** Needing the per-boot `ADMIN_TOKEN` — the expected unclaimed case (§2) — is *not* a reason to omit it: read the token out of the container instead (§12.0). |
-| **`CI` must be UNSET** | ⛔ With any truthy `CI` the boot runs a bounded scenario and then **tears the whole stack down**. Under smoke the branch taken is `CI && smokeMode` (`scripts/lib/demo-main.ts:1175`): it runs one live swarm session against production and then `scripts/smoke-e2e-assert.ts` (`:1206`). The swarm-session *driver* at `:1212` is the **other** branch, `CI && !smokeMode`, and never runs here. Either way control reaches `if (process.env.CI)` at `:1390`, which calls `cleanup()` — a full `compose down` (`:697`, `:711-715`) — then `cleanCiVolume()` (`:1393`) and `process.exit(0)` (`:1394`). `cleanCiVolume()` also runs on the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/demo-volumes.ts:105`). | The volume removal is harmless under `--external-pg` (no volume exists), but the teardown is not. Success exits `0` (`:1394`) and failure exits `1` (`:1894`) — the exit code still works — yet **either way the stack is torn down**, so the site does not stay up and there is nothing left to inspect or verify in §8. Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |
+| `--external-pg` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/smoke-external-pg.ts:288-305`). | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §0. |
+| `SMOKE_PROJECT=rm_prod` | **MANDATORY.** Pins the compose project name (`scripts/lib/smoke-main.ts:261`). Without it the name is `rm_smoke_stack_<random>` per boot (`scripts/stack/naming.ts:138`). | Every restart leaves an orphaned project. `docker compose -p …` commands in deployment.md address the wrong stack. Note: `--external-pg` does **not** by itself stabilise the project name — only `SMOKE_PROJECT` does. |
+| `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/smoke-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Always pass it.** Needing the per-boot `ADMIN_TOKEN` — the expected unclaimed case (§2) — is *not* a reason to omit it: read the token out of the container instead (§12.0). |
+| **`CI` must be UNSET** | ⛔ With any truthy `CI` the boot runs a bounded scenario and then **tears the whole stack down**. Under smoke the branch taken is `CI && smokeMode` (`scripts/lib/smoke-main.ts:1175`): it runs one live swarm session against production and then `scripts/smoke-e2e-assert.ts` (`:1206`). The swarm-session *driver* at `:1212` is the **other** branch, `CI && !smokeMode`, and never runs here. Either way control reaches `if (process.env.CI)` at `:1390`, which calls `cleanup()` — a full `compose down` (`:697`, `:711-715`) — then `cleanCiVolume()` (`:1393`) and `process.exit(0)` (`:1394`). `cleanCiVolume()` also runs on the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/smoke-volumes.ts:105`). | The volume removal is harmless under `--external-pg` (no volume exists), but the teardown is not. Success exits `0` (`:1394`) and failure exits `1` (`:1894`) — the exit code still works — yet **either way the stack is torn down**, so the site does not stay up and there is nothing left to inspect or verify in §8. Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |
 
 ```bash
 echo "CI=[$CI]"     # MUST be empty
@@ -1943,13 +1943,13 @@ this order:
 1. **`backend/src/api/index.ts:59`, before `Bun.serve` binds a port.** On a
    violation the api prints `[api] REFUSING the boot: …` naming both members and
    calls `process.exit(1)`. Because `docker-compose.yml:265` sets `restart:
-   unless-stopped` on the api — and `docker-compose.demo.yml`'s only `restart:
+   unless-stopped` on the api — and `docker-compose.smoke.yml`'s only `restart:
    "no"` is on the unrelated `member-agent` service (`:146`) — the container
    **restart-loops until the data is repaired.**
 2. **`backend/scripts/prod-bootstrap.ts:86-113`, step 0, before it writes
    anything.** Under smoke this is the archive initializer, run as `docker
    compose run --rm … api bun run scripts/prod-bootstrap.ts --already-migrated`
-   (`scripts/lib/demo-main.ts:1136-1140`). The precheck leads **both** step
+   (`scripts/lib/smoke-main.ts:1136-1140`). The precheck leads **both** step
    shapes, `--already-migrated` included (`stepsFor`, `:272-275`), and is the
    only step marked `haltOnFailure` (`:266-270`). It refuses and writes nothing.
 
@@ -1973,7 +1973,7 @@ Two further traps if you try it anyway:
   (`scripts/stack/config.ts:241-271`). Neither
   `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION` nor `PG_NAMESPACE_GUARD_TIMEOUT_MS` is on
   that allowlist, in `buildComposeEnv`, or in `DEMO_COMPOSE_PASSTHROUGH`
-  (`scripts/lib/demo-main.ts:427-444`), so the export is dropped before `docker`
+  (`scripts/lib/smoke-main.ts:427-444`), so the export is dropped before `docker`
   is invoked. This is the **opposite** of the droplet topology deployment.md §2.1
   describes, where CI runs `docker compose up -d` directly and the ambient
   environment *is* the interpolation source. Being in the api `environment:`
@@ -1988,7 +1988,7 @@ Two further traps if you try it anyway:
   reports `handle_namespace: "overridden"` at `/health` — and a boot that still
   exits 1 at the archive initializer. With `CI` unset (which §7.3 requires) the
   failure path deliberately leaves the stack **up** for inspection
-  (`scripts/lib/demo-main.ts:1897-1909`), so the site answers and looks alive.
+  (`scripts/lib/smoke-main.ts:1897-1909`), so the site answers and looks alive.
   **That is not a completed cutover:** the archive/EDGAR initializer never ran,
   smoke's archive-continuity assertion never ran, and you have no evidence the
   release is good. Do not sign off on it, and do not leave it running as "the
@@ -2081,7 +2081,7 @@ the wrong database (§2.0):
 export RM_PROJECT=rm_prod
 [ -n "${DATABASE_URL:-}" ] || { echo "re-do §2.0 in this shell"; exit 1; }
 psql "$DATABASE_URL" -Atc "SELECT current_database(), inet_server_addr(), inet_server_port();"
-bun run demo:status
+bun run smoke:status
 ```
 
 ⚠ Every command in that block overwrites `$?`. Check 1 therefore reads
@@ -2090,7 +2090,7 @@ and never `$?`.
 
 | # | Check | Command | Expected |
 |---|---|---|---|
-| 1 | Boot exited clean | `echo "$BOOT_STATUS"` — the variable captured on §7.3's own command line. **Not `echo $?`**: by the time you reach §8 that reports `demo:status`, not the boot, and it will read `0` after a failed cutover. | `0`. On a TTY without `--no-tui` this proves nothing (§7.3). If `BOOT_STATUS` is unset you did not capture it; you cannot recover it, so re-run §7.3 (it is idempotent — migrations resume, seed and adopt are idempotent) rather than assume. |
+| 1 | Boot exited clean | `echo "$BOOT_STATUS"` — the variable captured on §7.3's own command line. **Not `echo $?`**: by the time you reach §8 that reports `smoke:status`, not the boot, and it will read `0` after a failed cutover. | `0`. On a TTY without `--no-tui` this proves nothing (§7.3). If `BOOT_STATUS` is unset you did not capture it; you cannot recover it, so re-run §7.3 (it is idempotent — migrations resume, seed and adopt are idempotent) rather than assume. |
 | 2 | All six migrations recorded | `psql "$DATABASE_URL" -c "SELECT name FROM schema_migrations WHERE name LIKE '0029%' OR name LIKE '003%' ORDER BY 1;"` | six rows: `0029_admin_auth_recovery.sql`, `0029_admin_passkey.sql`, `0030_swarm_member_handle.sql`, `0031_swarm_member_handle_namespace.sql`, `0032_append_only_history.sql`, `0033_swarm_member_uuid_ids.sql` |
 | 3 | Namespace guard ran and was clean | `curl -s "http://127.0.0.1:$(docker compose -p "$RM_PROJECT" port api 8787 \| cut -d: -f2)/health"` | `"handle_namespace":"clean"`. **`"unchecked"` means the guard could not run — this boot proves nothing.** `"overridden"` means you are serving a violation. |
 | 4 | No violation in the data | `psql "$DATABASE_URL" -c "SELECT a.id, a.handle, b.id FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id;"` | 0 rows |
@@ -2101,7 +2101,7 @@ and never `$?`.
 | 9 | `admin_credential` untouched by the boot | `psql "$DATABASE_URL" -c "SELECT count(*) AS rows, count(*) FILTER (WHERE recovery_hash IS NOT NULL) AS with_recovery FROM admin_credential;"` | `rows = 0` and `with_recovery = 0`, matching §2's pre-cutover check. **Use this form, not `GROUP BY`** — see the box below. (This is the first point in the runbook where `recovery_hash` is a legal thing to select: the column exists only after `0029` applied.) **No seed path ever writes this table.** |
 | 10 | Admin surface reachable, and claimed | This is the expected path: §2's pre-cutover check found `rows = 0`, so **run §12.1 now — prompt the operator to claim the credential.** This is a mandatory step, not a spot check: until it runs, the one-time claim is open to whoever reaches the surface first. (Unexpected path: if §2's check found `rows = 1` — it should not have — stop and investigate; this runbook does not carry a remedy for it.) | `/api/admin/is-claimed` returns `{"claimed":true}` and you hold both the password and a recovery code. |
 | 11 | Site serves prerendered HTML | `curl -s http://127.0.0.1:<port>/swarm/ \| grep -o '<title>[^<]*'` | Not the home page's title. **"Assembly did not run" is not a possible cause here** — see the diagnosis below. |
-| 12 | Swarm schedules state | `psql "$DATABASE_URL" -c "SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;"` | five rows, **all `enabled = f`** — expected under the demo composition (§6.5). Compare against §5.4's capture: the difference is what this boot clobbered, and it is not coming back on its own. Drive sessions manually. |
+| 12 | Swarm schedules state | `psql "$DATABASE_URL" -c "SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1;"` | five rows, **all `enabled = f`** — expected under the smoke composition (§6.5). Compare against §5.4's capture: the difference is what this boot clobbered, and it is not coming back on its own. Drive sessions manually. |
 
 ### 8.1 ⛔ Release acceptance criteria — member identity
 
@@ -2156,7 +2156,7 @@ Where those references should land instead is tracked separately (#687).
 | **AC2** | **Every handle is the derived one.** `slugifyMemberName(name)` for every member, with no exceptions: `Athena`→`athena`, `Robot Money`→`robot-money`, `Noop Analyst`→`noop-analyst`, `Woon`→`woon`, `Maximus`→`maximus`, `nat`→`nat`. | `SELECT name, handle FROM swarm_members ORDER BY name;` — every row must equal the derivation, and the six above are what a clean run produced against a production dump |
 | **AC3** | **No member is left at `0030`'s default.** A handle still equal to its own id means the backfill never reached that member — the failure mode that would have left `Maximus`, `nat` and `Woon` at UUID handles, since the other derivation sites only fire on acceptance/registration events they had already passed. | `SELECT id, handle FROM swarm_members WHERE handle = id;` → **0 rows**. Manifest **filenames are not handles** and deliberately do not move (`robotmoney.json` stays), so do not compare handles against that directory |
 | **AC4** | **No member carries a derived-suffix handle.** `woon-2` and anything shaped `<stem>-<n>` is a **failure**: it means derivation ran where an exact handle was required. | `SELECT id, handle FROM swarm_members WHERE handle ~ '-[0-9]+$';` → **0 rows** |
-| **AC5** | **Demo/smoke tooling still works by handle.** A member is resolvable by handle through the API, and the demo/smoke path finds its member id by handle rather than a hardcoded literal — so no tooling depends on a slug id continuing to exist. | `curl -s "$API/api/swarm/members/robot-money"` returns that member (**not** `robotmoney` — the API returns HTTP 200 with a null body for non-existent members, standing behavior; the frontend URL `/swarm/members/robotmoney` may 404 — see above); `bun scripts/demo-frontend-check.ts` passes; a smoke boot seats its roster |
+| **AC5** | **Demo/smoke tooling still works by handle.** A member is resolvable by handle through the API, and the smoke/smoke path finds its member id by handle rather than a hardcoded literal — so no tooling depends on a slug id continuing to exist. | `curl -s "$API/api/swarm/members/robot-money"` returns that member (**not** `robotmoney` — the API returns HTTP 200 with a null body for non-existent members, standing behavior; the frontend URL `/swarm/members/robotmoney` may 404 — see above); `bun scripts/smoke-frontend-check.ts` passes; a smoke boot seats its roster |
 | **AC6** | **History stayed attached across the re-id.** Take, memo and key counts per member are unchanged, and signatures still verify — the re-id must carry every FK, **including `swarm_member_keys`**, or verification silently goes false. | per-member `count(*)` on `swarm_recommendations`/`swarm_memos` matches the pre-upgrade capture, and `/api/swarm/sessions/<id>` reports takes as `verified` |
 
 > ⚠ **Check 9 must not use `GROUP BY`, and the reason is a false pass.** An
@@ -2182,9 +2182,9 @@ Where those references should land instead is tracked separately (#687).
 > **AC1–AC6 are automated.** `postflight.ts` now runs AC1–AC5 as
 > named checks (`ac1-member-uuid`, `ac2-handle-derived`, `ac3-no-default-handle`,
 > `ac4-no-derived-suffix`, `ac5-handle-resolves`), so they are evaluated
-> wherever postflight runs — including against the digital twin inside §5.3b's
+> wherever postflight runs — including against the digital smoke-smoke-twin inside §5.3b's
 > rehearsal (G8), which is where §5.5 requires them and where they were
-> previously impossible to run: the twin exists only between readiness and
+> previously impossible to run: the smoke-smoke-twin exists only between readiness and
 > teardown. AC2 calls the real `slugifyMemberName` rather than a paraphrase of
 > it.
 >
@@ -2229,7 +2229,7 @@ remapped **explicitly** — it is not a foreign key, so nothing in the deferral
 loop can see it, and it would be left pointing at an id that no longer exists.
 
 **Verified against a restored production dump on 2026-08-17**, not against
-fixtures — the twin is where these ACs are cheap to evaluate and the data is
+fixtures — the smoke-smoke-twin is where these ACs are cheap to evaluate and the data is
 what will actually be migrated (§5.3b.0):
 
 ```
@@ -2250,7 +2250,7 @@ left `DEFERRABLE`, all three `ON DELETE CASCADE`s preserved.
 > Money) and left the three UUID members (Woon, Maximus, nat) untouched. The
 > AC1 list below names handles, not ids.
 
-**Re-verified against the actual rc.6 twin on 2026-08-19:**
+**Re-verified against the actual rc.6 smoke-smoke-twin on 2026-08-19:**
 
 - 0033 remapped three slug ids (`athena`→`172155e5`, `woon`→`0ef3c38e`,
   `robotmoney`→`c5e402af`), left three UUID ids untouched
@@ -2381,7 +2381,7 @@ FROM wallet_balance_samples;
 wallet balance sampler has not run since the new code booted — the sampler is
 wedged or the worker container is not running.
 
-If this is a fresh database (e.g. the twin), `samples_today` may legitimately be
+If this is a fresh database (e.g. the smoke-smoke-twin), `samples_today` may legitimately be
 `0` if the sampler has not fired yet. Wait the full schedule cadence and re-check.
 
 > ⚠ **Check 14 ALREADY FAILS on production, and not because of this release.**
@@ -2481,7 +2481,7 @@ release-runbooks.md §6).
 
 **Code rollback is safe against the new schema.** `0030`'s `BEFORE INSERT`
 trigger defaults `handle := id` (`0030_swarm_member_handle.sql:41`), and all six
-`INSERT INTO swarm_members` sites omit `handle` — `backend/src/demo/e2e.ts:58`,
+`INSERT INTO swarm_members` sites omit `handle` — `backend/src/smoke/e2e.ts:58`,
 `backend/src/swarm/roster-seed.ts:117`, `backend/src/swarm/admin.ts:277`,
 `backend/src/swarm/domain.ts:834` and `:1189`, and
 `backend/scripts/v0-seed-bootstrap.ts:237`. So v0.2.1 code writing to a v0.2.2
@@ -2503,11 +2503,11 @@ loop: patch, next rc, preflight again.
 
 ```bash
 cd <checkout>
-bun run demo:down
+bun run smoke:down
 git checkout v0.2.1                    # or the last deployed, healthy v0.2.2-rc.<N-1>
 git rev-parse HEAD                     # MUST print 5970f2d… (or that rc's SHA)
 echo "CI=[$CI]"                        # MUST be empty
-DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
+SMOKE_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
 BOOT_STATUS=$?; echo "rollback boot exit=$BOOT_STATUS"   # capture it here (§7.3)
 ```
 
@@ -2742,9 +2742,9 @@ socket, stop — you are about to "repair" the wrong server.
    > it is the worst command in the document.
    >
    > A `bun smoke --external-pg` stack is **three** compose files, not one:
-   > `docker-compose.yml` + `docker-compose.demo.yml`
-   > (`scripts/lib/demo-main.ts:284-288`) + a **generated** overlay written to
-   > `.agents/demo-<project>-external-pg.yml` (`:299-304`), which is what removes
+   > `docker-compose.yml` + `docker-compose.smoke.yml`
+   > (`scripts/lib/smoke-main.ts:284-288`) + a **generated** overlay written to
+   > `.agents/smoke-<project>-external-pg.yml` (`:299-304`), which is what removes
    > the `postgres` service and drops every `depends_on: postgres` so a
    > dependency edge cannot pull the container back in. Compose learns that list
    > from `COMPOSE_FILE` in the boot's own environment (`:463`), never from the
@@ -2768,27 +2768,27 @@ socket, stop — you are about to "repair" the wrong server.
    ```bash
    cd <checkout>
    echo "CI=[$CI]"                       # MUST be empty
-   DEMO_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
+   SMOKE_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
    BOOT_STATUS=$?; echo "boot exit=$BOOT_STATUS"
    ```
 
    If you must drive Compose directly, pass the **exact** file list this boot
-   used. `.agents/demo-state.json` does record a `composeFiles` field
-   (`scripts/lib/demo-main.ts:778`) — but ⚠ **do not use it verbatim**: it
+   used. `.agents/smoke-state.json` does record a `composeFiles` field
+   (`scripts/lib/smoke-main.ts:778`) — but ⚠ **do not use it verbatim**: it
    stores `composeFilesBase`, deliberately **without** the generated
-   `--external-pg` overlay, because `demo:down`/`demo:status` act by project and
+   `--external-pg` overlay, because `smoke:down`/`smoke:status` act by project and
    do not need it (`:752-756`). That value reintroduces the entire defect above.
-   Append the overlay yourself. For this rollout (`DEMO_PROJECT=rm_prod`, no
+   Append the overlay yourself. For this rollout (`SMOKE_PROJECT=rm_prod`, no
    `--stage`) the full list is:
 
    ```bash
    cd <checkout>
-   ls -l .agents/demo-rm_prod-external-pg.yml   # must exist — no file, no boot to repair
-   COMPOSE_FILE="docker-compose.yml:docker-compose.demo.yml:.agents/demo-rm_prod-external-pg.yml" \
+   ls -l .agents/smoke-rm_prod-external-pg.yml   # must exist — no file, no boot to repair
+   COMPOSE_FILE="docker-compose.yml:docker-compose.smoke.yml:.agents/smoke-rm_prod-external-pg.yml" \
      docker compose -p rm_prod up -d api
    ```
 
-   Cross-check the first two names against `.agents/demo-state.json`'s
+   Cross-check the first two names against `.agents/smoke-state.json`'s
    `composeFiles` before running it; if that field lists a third file
    (`docker-compose.stage.yml`), keep it and append the overlay after it.
 

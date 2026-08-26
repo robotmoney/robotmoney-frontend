@@ -8,7 +8,7 @@
 import { expect, type Page } from "@playwright/test";
 import { navigate } from "./navigation.ts";
 
-export const DASH_ACCESS_KEY = "demo-access-key";
+export const DASH_ACCESS_KEY = "smoke-access-key";
 
 export function mockDashGateApi(page: Page): void {
   page.route("**/api/admin/auth", async (route) => {

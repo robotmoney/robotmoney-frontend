@@ -2,7 +2,7 @@
 //
 // WHY THIS EXISTS. Migration 0030 gave every member a `handle` and defaulted it
 // to the member's own `id` via a BEFORE INSERT trigger. That default is exactly
-// right for the six writers that supply no handle (roster seed, demo/e2e, the
+// right for the six writers that supply no handle (roster seed, smoke/e2e, the
 // v0 archive backfill) — a seeded member's id was already its published URL, so
 // nothing moved on deploy. It is useless for a member admitted through the
 // public front door: `applyMember` mints `id = crypto.randomUUID()`, so the

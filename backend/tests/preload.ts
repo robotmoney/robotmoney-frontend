@@ -15,9 +15,9 @@ import {
   stackProjectName,
 } from "../../scripts/stack/naming.ts";
 // The SHARED ephemeral-Postgres pin, owned by scripts/lib/ because the rollout
-// tooling's digital twin (scripts/lib/restore-container.ts) needs the identical
+// tooling's digital smoke-twin (scripts/lib/restore-container.ts) needs the identical
 // image and this file needs it too. It used to be a private literal here, one
-// major behind that twin and behind production, so every migration was
+// major behind that smoke-twin and behind production, so every migration was
 // validated against a server it would never run on (issue #691). Reached over
 // the same backend -> scripts edge as the naming import above — both modules are
 // leaves (constants and node builtins, no side effects), which is what keeps
@@ -82,15 +82,15 @@ function freePort(): Promise<number> {
 
 const port = await freePort();
 // Environment-scoped name + labels: `rm_ci_pgtest_<job hash>` under GitHub
-// Actions, `rm_demo_pgtest_<per-boot random>` locally. The host running these
-// tests is also the self-hosted CI runner and the stage demo box, so a
+// Actions, `rm_smoke_pgtest_<per-boot random>` locally. The host running these
+// tests is also the self-hosted CI runner and the stage smoke box, so a
 // container left behind by a killed test run has to say which environment made
 // it — and the labels are what a reaper selects on (`docker ps --filter
 // label=robotmoney.env=ci`), because name-substring matching on this host is
 // how you accidentally kill the live site.
 const environment = resolveStackEnvironment(process.env);
 const name = stackProjectName("pgtest", environment);
-// This is a raw `docker run`, NOT compose, so the labels docker-compose.demo.yml
+// This is a raw `docker run`, NOT compose, so the labels docker-compose.smoke.yml
 // applies to every other container must be passed explicitly here.
 const labelFlags = dockerLabelFlags(stackLabels(environment, name));
 

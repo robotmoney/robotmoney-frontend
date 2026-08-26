@@ -2,7 +2,7 @@
 //
 // This file exists because its predecessor did not execute anything. The
 // ordering guarantee "scenario initialization runs only after the API answers
-// /health" used to be checked by reading demo-main.ts's SOURCE and comparing
+// /health" used to be checked by reading smoke-main.ts's SOURCE and comparing
 // the byte offsets of two string literals. That check was not merely weak, it
 // was WRONG: initialization is passed to `up()` as a callback, so
 // `initializeScenario` is written above the `await stack.up(...)` that invokes

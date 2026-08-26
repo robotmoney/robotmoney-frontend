@@ -86,7 +86,7 @@ test("a hard GeckoTerminal 400 is not retried", async () => {
   expect(calls).toBe(1);
 });
 
-// ── micro-batching (the demo/CI per-IP quota fix — one request per burst) ────
+// ── micro-batching (the smoke/CI per-IP quota fix — one request per burst) ────
 
 test("concurrent distinct-address reads coalesce into ONE batched request with a sorted lowercase URL and correct per-address prices", async () => {
   const urls: string[] = [];
@@ -174,7 +174,7 @@ test("a failed batch request rejects EVERY address in it (equivalent to the old 
 
 // ── capability-specific cache window ──
 
-test("capability TTL selects one hour for normal demo while production/smoke default to 30s", async () => {
+test("capability TTL selects one hour for normal smoke while production/smoke default to 30s", async () => {
   const realNow = Date.now;
   let calls = 0;
   globalThis.fetch = (async () => {

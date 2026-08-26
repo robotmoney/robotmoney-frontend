@@ -6,7 +6,7 @@
 // semantics of mergeSeries), which makes seeding idempotent: a second run finds
 // every date present, writes nothing, and is a no-op.
 //
-// API-OWNED (issue #106): only the API process and migration/demo tooling may
+// API-OWNED (issue #106): only the API process and migration/smoke tooling may
 // import this module; updaters submit seeds through the AnalyticsPersistence
 // port. File PARSING of the vendored seed lives in extract/floor-seed.ts (pure).
 import { sql, type DbHandle } from "../../db/client.ts";

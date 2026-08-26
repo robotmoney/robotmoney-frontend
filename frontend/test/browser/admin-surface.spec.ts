@@ -16,7 +16,7 @@ const vendorScripts = {
     "node_modules/p5/lib/p5.min.js",
 };
 
-const ADMIN_PASSWORD = "demo-password";
+const ADMIN_PASSWORD = "smoke-password";
 
 const OVERVIEW_FIXTURE = {
   serverDate: "2026-07-16",
@@ -172,7 +172,7 @@ test("admin password recovery posts code and password, confirms success, and sur
   await expect(page.getByText("API 400: Recovery code is invalid.", { exact: true })).toBeVisible();
 });
 
-test("admin schedules: toggle button is hidden for swarm demo rows and PATCHes for analytics rows", async ({ page }) => {
+test("admin schedules: toggle button is hidden for swarm smoke rows and PATCHes for analytics rows", async ({ page }) => {
   mockAdminApi(page);
   await login(page);
 
@@ -181,7 +181,7 @@ test("admin schedules: toggle button is hidden for swarm demo rows and PATCHes f
 
   const analyticsRow = page.locator("tr").filter({ hasText: "regime.classify" }).first();
   const swarmRow = page.locator("tr").filter({ hasText: "swarm.open_session" }).first();
-  await expect(swarmRow.getByText("legacy/demo")).toBeVisible();
+  await expect(swarmRow.getByText("legacy/smoke")).toBeVisible();
   await expect(swarmRow.getByRole("button")).toHaveCount(0);
 
   const [patchRequest] = await Promise.all([

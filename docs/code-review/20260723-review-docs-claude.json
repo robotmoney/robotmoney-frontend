@@ -60,9 +60,9 @@
       "evidence": [
         "backend/src/api/index.ts:80-84 (/health returns HTTP 200 {status:'ok'} even when db='down')",
         "mcp/src/server.ts:214 (MCP health returns ok without probing the backend)",
-        "scripts/lib/demo-main.ts:280-296 (readiness polls those /health URLs, so any 200 certifies)"
+        "scripts/lib/smoke-main.ts:280-296 (readiness polls those /health URLs, so any 200 certifies)"
       ],
-      "impact": "Cloudflare and demo readiness can certify API or MCP while required dependencies are down, defeating the documented shared health contract.",
+      "impact": "Cloudflare and smoke readiness can certify API or MCP while required dependencies are down, defeating the documented shared health contract.",
       "recommendation": "Make /health report a non-ok status (or non-200) on required dependency loss, have MCP probe the API, and execute negative dependency tests in CI.",
       "owner": "code",
       "related_findings": ["review-docs-015"]
@@ -100,7 +100,7 @@
         "backend/src/committee/admin.ts:573-575 (reopen only flips state; no new close time, no job cancel/recreate)",
         "docs/architecture.md:2572-2577 (spec: reopen atomically sets new close time, cancels pending jobs, creates suffixed jobs)"
       ],
-      "impact": "Worker and demo lifecycle calls can rewind existing sessions, report zero-row transitions as success, read future data, or perform an incomplete reopen that does not replace deadlines and jobs, all contrary to the canonical spec.",
+      "impact": "Worker and smoke lifecycle calls can rewind existing sessions, report zero-row transitions as success, read future data, or perform an incomplete reopen that does not replace deadlines and jobs, all contrary to the canonical spec.",
       "recommendation": "Resolve whether the documented domain corrections remain requirements; if so implement them in the shared domain path with adversarial state/timestamp/reopen tests, otherwise remove them from canonical docs and Plan.",
       "owner": "code",
       "related_findings": ["review-docs-014"]
@@ -152,7 +152,7 @@
         "docs/architecture.md:7, docs/architecture.md:35, docs/architecture.md:90, docs/architecture.md:177, docs/architecture.md:206, docs/architecture.md:223, docs/architecture.md:556, docs/architecture.md:592, docs/architecture.md:825, docs/architecture.md:2874, docs/architecture.md:3233 (anchor-less links from architecture.md to itself)",
         "docs/architecture.md:367 (See docs/architecture.md for the full target contract — self-reference)",
         "docs/architecture.md:2874 (companion to architecture.md — inside architecture.md)",
-        "docs/decisions.md:188, docs/decisions.md:267-268, docs/decisions.md:392 (formerly distinct links to topology/demo-spec/preview/live-data docs all became bare architecture.md links with no anchor)"
+        "docs/decisions.md:188, docs/decisions.md:267-268, docs/decisions.md:392 (formerly distinct links to topology/smoke-spec/preview/live-data docs all became bare architecture.md links with no anchor)"
       ],
       "impact": "Circular see-X pointers created by the link repoint no longer direct the reader anywhere; the specific absorbed section each formerly targeted is lost.",
       "recommendation": "Convert each self-link to an intra-doc anchor to the specific absorbed section, or delete it where the target is the surrounding text.",
@@ -205,15 +205,15 @@
       "confidence": "high",
       "requirement": "docs/architecture.md:1617",
       "evidence": [
-        "docs/architecture.md:387-389 (hermeticDataSource called used by CI and the demo default)",
-        ".env.example:105-106 (unset/live labelled the demo opt-in; hermetic labelled CI + the demo default)",
+        "docs/architecture.md:387-389 (hermeticDataSource called used by CI and the smoke default)",
+        ".env.example:105-106 (unset/live labelled the smoke opt-in; hermetic labelled CI + the smoke default)",
         "docs/architecture.md:1499 (FetcherProvider / seededProvider acceptable for hermetic runs — component removed)",
-        "docs/architecture.md:1617-1623 and docs/architecture.md:1675-1684 (same doc: there is no hermetic/offline demo mode; live is the only demo default)",
-        "scripts/lib/demo-env.ts:54 (analyticsSource = env.ANALYTICS_SOURCE || live)",
+        "docs/architecture.md:1617-1623 and docs/architecture.md:1675-1684 (same doc: there is no hermetic/offline smoke mode; live is the only smoke default)",
+        "scripts/lib/smoke-env.ts:54 (analyticsSource = env.ANALYTICS_SOURCE || live)",
         "backend/tests/no-dead-provider-chain.test.ts (guard confirming fetcher-provider removal)"
       ],
-      "impact": "An operator or agent reading §7.1, the demo-spec lifecycle row, or .env.example concludes the demo is offline/hermetic; the required per-PR e2e gate actually hits live providers — wrong debugging model and wrong quota expectations.",
-      "recommendation": "Fix the §7.1 and .env.example lines to used-by-CI-backend-tests / explicit local-debug override, and replace the demo-spec row's provider language with ANALYTICS_SOURCE=live semantics.",
+      "impact": "An operator or agent reading §7.1, the smoke-spec lifecycle row, or .env.example concludes the smoke is offline/hermetic; the required per-PR e2e gate actually hits live providers — wrong debugging model and wrong quota expectations.",
+      "recommendation": "Fix the §7.1 and .env.example lines to used-by-CI-backend-tests / explicit local-debug override, and replace the smoke-spec row's provider language with ANALYTICS_SOURCE=live semantics.",
       "owner": "architecture",
       "related_findings": ["review-docs-010"]
     },
@@ -231,7 +231,7 @@
         "backend/src/committee/domain.ts:683 (publishBrief sets state='collecting' directly; zero brief_published occurrences in backend/contract/frontend, grep confirmed)"
       ],
       "impact": "The canonical IC sections document a six-state machine including a state that never exists in the DB or API, so readers of §9/§9.4 design against a lifecycle the same document later forbids.",
-      "recommendation": "Rewrite the §9/§9.4/demo-spec lifecycle chains to the persisted states and note brief publication is the scheduled-to-collecting transition, not a state.",
+      "recommendation": "Rewrite the §9/§9.4/smoke-spec lifecycle chains to the persisted states and note brief publication is the scheduled-to-collecting transition, not a state.",
       "owner": "architecture",
       "related_findings": ["review-docs-007"]
     },
@@ -246,12 +246,12 @@
         "docs/architecture.md:702-709 (issue #208 contract: COMMITTEE_SCHEDULES_ENABLED, production enables the daily sequence)",
         "docs/architecture.md:1902-1906 (absorbed admin spec: seeded recurring committee schedules remain disabled and must not be enabled by this UI)",
         "docs/architecture.md:2066-2067 (cannot be enabled from the UI)",
-        "docs/architecture.md:1515-1516 (demo-spec §2: job schedules are seeded so a no-intervention run progresses — contradicts the opt-in default)",
-        "backend/src/config.ts:390-405 and backend/src/db/seed.ts:66-71 (issue #208 wiring; docker-compose.yml:111 defaults enabled, demo compose pins 0)",
+        "docs/architecture.md:1515-1516 (smoke-spec §2: job schedules are seeded so a no-intervention run progresses — contradicts the opt-in default)",
+        "backend/src/config.ts:390-405 and backend/src/db/seed.ts:66-71 (issue #208 wiring; docker-compose.yml:111 defaults enabled, smoke compose pins 0)",
         "backend/src/db/seed.ts:28-32 (stale header: committee schedules are intentionally no-cron — contradicted by seed.ts:66-71 below it)"
       ],
       "impact": "Sections of the same canonical doc (plus a stale seed.ts header) give opposite answers to whether recurring committee scheduling is a product mechanism, so operators and agents cannot tell whether enabling the crons is supported, forbidden, or automatic.",
-      "recommendation": "Mark the admin-surface schedules-disabled bullets as superseded by issue #208 (or delete them and point at §9.4), amend demo-spec §2 to the seeded-disabled default, and rewrite the seed.ts header comment.",
+      "recommendation": "Mark the admin-surface schedules-disabled bullets as superseded by issue #208 (or delete them and point at §9.4), amend smoke-spec §2 to the seeded-disabled default, and rewrite the seed.ts header comment.",
       "owner": "architecture",
       "related_findings": ["review-docs-008"]
     },
@@ -285,7 +285,7 @@
         "docs/architecture.md:1 and docs/architecture.md:1007 (two top-level # Architecture H1s; 1007 is the pasted contract-live-data doc)",
         "docs/architecture.md:1008 (stray literal + diff character on its own line)",
         "docs/architecture.md:13, docs/architecture.md:1064, docs/architecture.md:1488, docs/architecture.md:1858, docs/architecture.md:2746, docs/architecture.md:2921 (six independent ## 1. restarts)",
-        "docs/architecture.md:1621 (demo-spec §7 says vault-economics slice (§10 below); the intended §10 is above and the nearest §10 below is Demo output)",
+        "docs/architecture.md:1621 (smoke-spec §7 says vault-economics slice (§10 below); the intended §10 is above and the nearest §10 below is Demo output)",
         "docs/architecture.md:1633 vs docs/architecture.md:1671 (§7b ordered before §7a)",
         "docs/architecture.md:3238-3239 (documentation map claims the folded specs live under their dedicated sections below — the map is at the end of the file)"
       ],
@@ -322,7 +322,7 @@
         "docs/architecture.md:706 and .env.example:92 (06:00-08:00 UTC sequence; backend/src/config.ts:395-399 defaults span 06:00-10:00)",
         "docs/archive/allocation-data-root-causes.md:4 (hostname typo robotmonet.net in preserved evidence)"
       ],
-      "impact": "Minor factual slips: a wrong route spelling in the demo spec, an understated cron window, and a hostname typo that could mislead someone copying the URL.",
+      "impact": "Minor factual slips: a wrong route spelling in the smoke spec, an understated cron window, and a hostname typo that could mislead someone copying the URL.",
       "recommendation": "Fix the session route spelling, say 06:00-10:00 sequence (window 07:00-08:00), and annotate the archive typo inline in brackets if touched at all.",
       "owner": "architecture",
       "related_findings": []
@@ -335,9 +335,9 @@
       "confidence": "high",
       "requirement": null,
       "evidence": [
-        "git log -1 6e5cfb4 (commit message claims demo-plan.md was folded into docs/architecture.md)",
-        "git show c42c47a:docs/demo-plan.md (282 lines, 11 phases; none of its content exists in architecture.md, docs/archive/, or recyclebin/ — grep confirmed)",
-        "docs/architecture.md:1781 (the former demo-plan.md §10 link was retargeted to this specification's §10, silently changing the referent from demo-plan's Phase-10 fidelity rationale)",
+        "git log -1 6e5cfb4 (commit message claims smoke-plan.md was folded into docs/architecture.md)",
+        "git show c42c47a:docs/smoke-plan.md (282 lines, 11 phases; none of its content exists in architecture.md, docs/archive/, or recyclebin/ — grep confirmed)",
+        "docs/architecture.md:1781 (the former smoke-plan.md §10 link was retargeted to this specification's §10, silently changing the referent from smoke-plan's Phase-10 fidelity rationale)",
         "docs/archive/index.md:1-8 (no record of the drop)"
       ],
       "impact": "The commit message misstates provenance, one in-text citation now points at different content, and a future auditor cannot tell an intentional drop from a loss.",
@@ -445,7 +445,7 @@
       "confidence": "high",
       "requirement": null,
       "evidence": [
-        "docs/decisions.md:425 (architecture.md §3.1 — was topology.md §3.1; first-match §3.1 is the demo-spec MCP server at docs/architecture.md:1520; intended docs/architecture.md:2974)",
+        "docs/decisions.md:425 (architecture.md §3.1 — was topology.md §3.1; first-match §3.1 is the smoke-spec MCP server at docs/architecture.md:1520; intended docs/architecture.md:2974)",
         "docs/decisions.md:427 (architecture.md §9 — first-match §9 at docs/architecture.md:596 is Investment Committee; intended docs/architecture.md:3066)",
         "docs/decisions.md:446 (refines D13 (architecture.md §3/§3.1) — intended the topology subdomain map at docs/architecture.md:2958/2974, not Repository layout at docs/architecture.md:67)",
         "docs/runbooks/deployment.md:98 (loose (architecture.md §3.1) — ambiguous; contrast docs/runbooks/deployment.md:61 which correctly uses the explicit heading anchor)"
@@ -523,7 +523,7 @@
         "frontend/public/assets/js/app/alpine/views/admin-surface.js:3 (same §7 mismatch)",
         "frontend/public/assets/js/app/contract/routes.js:159 and contract/src/routes.js:159 (§6.3 and §7.1 — first-match §7.1 at docs/architecture.md:372 is Analytics suite; intended Routing and structure at docs/architecture.md:2608; synced copies, fix both)",
         "frontend/public/assets/js/app/alpine/views/admin/committee-member.js:3, committee-overview.js:3, committee-session.js:4, committee-subject.js:3 (§4 US-Cx — first-match §4 at docs/architecture.md:112 is Frontend; intended docs/architecture.md:1941)",
-        "frontend/public/views/docs/investment-committee/participation.html:534 (§3.1 — was topology.md §3.1; first-match is the demo-spec MCP server at docs/architecture.md:1520; intended docs/architecture.md:2974)"
+        "frontend/public/views/docs/investment-committee/participation.html:534 (§3.1 — was topology.md §3.1; first-match is the smoke-spec MCP server at docs/architecture.md:1520; intended docs/architecture.md:2974)"
       ],
       "impact": "Frontend and contract back-links misdirect the same way as the backend set; routes.js §7.1 is the worst case because a plausible-looking wrong section (the analytics pipeline) exists at first match.",
       "recommendation": "Update the citations to unique numbers or heading anchors after renumbering; fix both synced copies of routes.js.",
@@ -575,7 +575,7 @@
       "confidence": "high",
       "requirement": null,
       "evidence": [
-        "recyclebin/MANIFEST.md:22-25 (the 2026-07-10 pre-move verification list now reads docs/architecture.md four times; git diff c42c47a..HEAD shows the originals were docs/topology.md, docs/deployment.md, docs/demo-spec.md, docs/preview-server-spec.md)",
+        "recyclebin/MANIFEST.md:22-25 (the 2026-07-10 pre-move verification list now reads docs/architecture.md four times; git diff c42c47a..HEAD shows the originals were docs/topology.md, docs/deployment.md, docs/smoke-spec.md, docs/preview-server-spec.md)",
         "recyclebin/MANIFEST.md:10-12 (2026-07-10 reasons retro-edited to cite docs/architecture.md, which was not the target at that date)",
         "docs/code-review/20260714-review-maintainability-claude.json (finding 022 evidence rewritten to docs/architecture.md:1, destroying the kebab-case point; finding 033 requirement rewritten to docs/architecture.md:5, originally docs/preview-server-spec.md:5)"
       ],
@@ -592,12 +592,12 @@
       "confidence": "high",
       "requirement": null,
       "evidence": [
-        "scripts/check-docs-analytics.sh (asserts only that ANALYTICS_SOURCE is mentioned; exited 0 with the stale demo-default lines of review-docs-011 present)",
+        "scripts/check-docs-analytics.sh (asserts only that ANALYTICS_SOURCE is mentioned; exited 0 with the stale smoke-default lines of review-docs-011 present)",
         "bun test scripts/tests (163 pass / 0 fail / 527 expect() / 27 files — the doc-guard tier executes, but every guard covers claims that happen to be correct)",
-        "no guard binds: architecture.md lifecycle-state strings (review-docs-012), .env.example/architecture hermetic-default lines (review-docs-011), deployment.md app-secret names vs consumed env vars (review-docs-026), architecture.md admin route tables vs contract/src/routes.js (review-docs-020), how-it-works.html mechanics (review-docs-029 — committee-docs test scans only participation + api-reference), demo-spec MCP tool table vs mcp/src/server.ts registrations"
+        "no guard binds: architecture.md lifecycle-state strings (review-docs-012), .env.example/architecture hermetic-default lines (review-docs-011), deployment.md app-secret names vs consumed env vars (review-docs-026), architecture.md admin route tables vs contract/src/routes.js (review-docs-020), how-it-works.html mechanics (review-docs-029 — committee-docs test scans only participation + api-reference), smoke-spec MCP tool table vs mcp/src/server.ts registrations"
       ],
       "impact": "Every doc claim found drifted in this review sits outside the executing doc-guard suite, so the claims that drifted during or before this consolidation would all merge green.",
-      "recommendation": "Extend the existing guard pattern: assert the persisted-state list against a constant exported by backend/src/committee/domain.ts; add how-it-works.html and the §9.5/admin route mentions to the committee-docs test; grep-assert deployment.md secret names against consumed process.env keys; compare the demo-spec MCP tool table to mcp/src/server.ts registrations.",
+      "recommendation": "Extend the existing guard pattern: assert the persisted-state list against a constant exported by backend/src/committee/domain.ts; add how-it-works.html and the §9.5/admin route mentions to the committee-docs test; grep-assert deployment.md secret names against consumed process.env keys; compare the smoke-spec MCP tool table to mcp/src/server.ts registrations.",
       "owner": "tests",
       "related_findings": []
     },
@@ -626,7 +626,7 @@
       "confidence": "high",
       "requirement": null,
       "evidence": [
-        "https://github.com/robotmoney/robotmoney-frontend/issues/15 (body path census: docs/preview-server-spec.md x7, docs/plan-admin-surface.md x5, docs/deployment.md x2, docs/topology.md x1, docs/demo-spec.md x1, docs/tmp-allocation-data-root-causes.md x1 — all deleted or moved)",
+        "https://github.com/robotmoney/robotmoney-frontend/issues/15 (body path census: docs/preview-server-spec.md x7, docs/plan-admin-surface.md x5, docs/deployment.md x2, docs/topology.md x1, docs/smoke-spec.md x1, docs/tmp-allocation-data-root-causes.md x1 — all deleted or moved)",
         "issue #15 also references docs/prd.md x8, docs/site-split.md, docs/design-critique.md, docs/brand-rollout.md — absent from the tree entirely",
         "docs/ tree at 6e5cfb4 contains only architecture.md, decisions.md, runbooks/, archive/, code-review/"
       ],
@@ -637,12 +637,12 @@
     }
   ],
   "clean_areas": [
-    "Consolidation fidelity: all five folded specs are verbatim carries (topology, plan-admin-surface, demo-spec, contract-live-data, preview-server-spec); diffs show only H1-to-H2 demotion, whitespace, separators, and link retargets — no normative content lost.",
+    "Consolidation fidelity: all five folded specs are verbatim carries (topology, plan-admin-surface, smoke-spec, contract-live-data, preview-server-spec); diffs show only H1-to-H2 smoketion, whitespace, separators, and link retargets — no normative content lost.",
     "Deleted-path residue: zero references to the seven deleted docs or old runbook paths anywhere in tracked sources outside point-in-time code-review artifacts; all inbound runbook links updated and docs/runbooks internal links resolve.",
     "All relative file links in the canonical docs resolve, including anchored links (D15/D16/D17 slugs, deployment.md environment anchor, architecture.md MCP anchor, participation.html#mcp).",
     "D1-D18 all exist in decisions.md with a consistent supersession chain (D11-to-D13, D8 refined by D13, D15/D16/D17 vs D1, D18 refines D13).",
     "Hostname/subdomain/port map consistent across topology section, D13/D18, deployment.md, README, credential-doctor.md, docker-compose.yml, and backend config; MCP endpoints guarded by an executed passing test.",
-    "Cron/schedule values agree docs-to-code for the five analytics jobs; env vars named in docs exist in code; removal claims (demo-rpc-guard, DEMO_HERMETIC, fetcher-provider, base-rpc-stub) verified true.",
+    "Cron/schedule values agree docs-to-code for the five analytics jobs; env vars named in docs exist in code; removal claims (smoke-rpc-guard, DEMO_HERMETIC, fetcher-provider, base-rpc-stub) verified true.",
     "Migration references check out (0001-0018, 0020); EDGAR seed pair exists; section table attributions in §6/§10/§11 accurate.",
     "Demo-spec MCP tool table exactly matches mcp/src/server.ts registrations, including the honest actual_vs_target_weights not-implemented row; OAuth 2.1 client_credentials + discovery implemented.",
     "participation.html and api-reference.html route literals (including token-claim) match contract/src/routes.js, with executed route-literal consistency coverage.",

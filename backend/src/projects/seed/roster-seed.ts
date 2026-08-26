@@ -71,7 +71,7 @@ export interface RosterSeedManifest {
 // did shrink" acknowledgement.
 export const MAX_PROJECT_COUNT_DROP_RATIO = 0.1;
 
-// Committed pair (same directory as this module — a demo/CI/prod boot never
+// Committed pair (same directory as this module — a smoke/CI/prod boot never
 // needs network or DB access to read the roster). Overridable via
 // ROSTER_SEED_PATH/ROSTER_SEED_MANIFEST_PATH for tests and the regenerate CLI.
 // fileURLToPath, not URL.pathname: pathname is percent-encoded, so a checkout

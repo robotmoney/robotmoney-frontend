@@ -1,11 +1,11 @@
-// §7.1 — watch `ops.repair_gaps` actually DISPATCH, on the twin, inside the
+// §7.1 — watch `ops.repair_gaps` actually DISPATCH, on the smoke-twin, inside the
 // rehearsal's window.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHY THIS FILE EXISTS
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// §7 has always required the twin to prove that, with the RPC budget unset,
+// §7 has always required the smoke-twin to prove that, with the RPC budget unset,
 // `ops.repair_gaps` fires and dispatches — that `job_runs` names the days it
 // enqueued and the days it deferred, that matching `wallet.backfill_day` jobs
 // exist, and that at least one completed day writes rows carrying
@@ -18,7 +18,7 @@
 // point of v0.3.0 is that this stopped being opt-in).
 //
 // And it was not merely unimplemented, it was unreachable: the rehearsal tore
-// the twin down the instant `onReady` returned — a 42-second window measured on
+// the smoke-twin down the instant `onReady` returned — a 42-second window measured on
 // 2026-08-22 — while the seeded schedule's first fire was the next wall-clock
 // `:25`, eleven minutes later. Requiring an observation that the apparatus made
 // impossible is how a runbook acquires a bullet nobody has ever ticked.
@@ -68,7 +68,7 @@ export interface ObservationResult {
 }
 
 /** The scheduler ticks every 30s (worker/runtime.ts, SCHEDULER_TICK_MS — not
- *  plumbed through compose, so 30s is what a twin actually runs). Everything
+ *  plumbed through compose, so 30s is what a smoke-twin actually runs). Everything
  *  below is expressed in multiples of it rather than in bare seconds, so the
  *  budgets stay legible as "N ticks of headroom". */
 const TICK_MS = 30_000;
@@ -76,7 +76,7 @@ const POLL_MS = 5_000;
 
 /** Up to 3 ticks for the row to gain a next_run_at. seed() inserts it NULL and
  *  the first tick seeds it to the next FUTURE occurrence without firing a stale
- *  slot, so on a fresh twin there is a genuine wait here — and surviving it is
+ *  slot, so on a fresh smoke-twin there is a genuine wait here — and surviving it is
  *  itself proof the scheduler loop is alive. */
 const SEED_BUDGET_MS = 3 * TICK_MS;
 
@@ -146,7 +146,7 @@ export async function observeRepairDispatch(
     return {
       status: "FAIL",
       detail: [`${NEW_SCHEDULE_KIND} is on cron '${s.cron}', but this release ships '${NEW_SCHEDULE_CRON}'`],
-      remediation: "This twin is not running the cadence this release ships. Re-seed, or fix release.ts.",
+      remediation: "This smoke-twin is not running the cadence this release ships. Re-seed, or fix release.ts.",
     };
   }
   if (s.catchup_policy !== "all") {
@@ -159,7 +159,7 @@ export async function observeRepairDispatch(
     };
   }
 
-  // A fresh twin's row is NULL until the first tick seeds it.
+  // A fresh smoke-twin's row is NULL until the first tick seeds it.
   let nextRunAt = s.next_run_at;
   if (nextRunAt === null) {
     log(`  ${NEW_SCHEDULE_KIND}.next_run_at is NULL (freshly seeded) — waiting for the scheduler's first tick`);
@@ -191,7 +191,7 @@ export async function observeRepairDispatch(
   // boot, so the FIRST run happens within a worker tick of readiness — the same
   // first run production gets. We simply watch for it.
   //
-  // Any finished run at all is this boot's: the twin is restored from a
+  // Any finished run at all is this boot's: the smoke-twin is restored from a
   // production dump taken before this release existed, so `ops.repair_gaps` has
   // never run in that data. That is also why no baseline id is needed.
   const run = await poll(DISPATCH_BUDGET_MS, (m) => log(`  ${m}`), `waiting for a ${NEW_SCHEDULE_KIND} run`, async () => {
@@ -219,7 +219,7 @@ export async function observeRepairDispatch(
 
   const out = (run.output ?? {}) as Record<string, unknown>;
 
-  // The inert path this release exists to eliminate. On a twin with the budget
+  // The inert path this release exists to eliminate. On a smoke-twin with the budget
   // unset it must not appear — if it does, the release ships its headline
   // feature switched off, which is precisely the bug §0.3 records fixing.
   if (out.status === "skipped") {
@@ -229,7 +229,7 @@ export async function observeRepairDispatch(
         `${NEW_SCHEDULE_KIND} ran and DECLINED to dispatch: ${String(out.reason ?? "no reason given")}`,
         "With BASE_RPC_MAX_CALLS_PER_SEC unset the built-in 0.25 calls/s default should apply and the backfill should dispatch (§5.2).",
       ],
-      remediation: "Something set BASE_RPC_MAX_CALLS_PER_SEC=0 for this boot. That is the opt-OUT, and this twin took it.",
+      remediation: "Something set BASE_RPC_MAX_CALLS_PER_SEC=0 for this boot. That is the opt-OUT, and this smoke-twin took it.",
     };
   }
   if (run.status !== "succeeded") {
@@ -250,7 +250,7 @@ export async function observeRepairDispatch(
     `  dirtySeries: ${JSON.stringify(out.dirtySeries ?? [])}`,
   ];
 
-  // A clean twin has nothing to repair. That is a legitimate outcome and NOT a
+  // A clean smoke-twin has nothing to repair. That is a legitimate outcome and NOT a
   // silent pass: the dispatch half is proven, the completion half was never
   // exercised, and saying so is the difference between evidence and a green
   // tick that graded nothing.
@@ -260,7 +260,7 @@ export async function observeRepairDispatch(
       detail: [
         ...detail,
         "",
-        "This twin had NO wallet gaps, so the dispatcher correctly enqueued nothing.",
+        "This smoke-twin had NO wallet gaps, so the dispatcher correctly enqueued nothing.",
         "The DISPATCH half of §7's bullet is proven; the COMPLETION half was not exercised here.",
       ],
       remediation:
@@ -285,7 +285,7 @@ export async function observeRepairDispatch(
         `the dispatcher enqueued NOTHING while reporting ${String(out.totalMissingDays ?? "?")} missing day(s)`,
       ],
       remediation:
-        "A window job already in flight, or every planned day claimed. Re-run the observation against a clean twin — a run that dispatches nothing cannot evidence dispatch.",
+        "A window job already in flight, or every planned day claimed. Re-run the observation against a clean smoke-twin — a run that dispatches nothing cannot evidence dispatch.",
     };
   }
 
@@ -447,7 +447,7 @@ export async function observeRepairCompletion(
     // balance table was already populated and whose SLEEVE table was genuinely
     // repaired is a real repair — and counting only balances scored it zero, then
     // filed it under "false gaps, declining was CORRECT". Observed on the
-    // 2026-08-22 twin: nine of ten days were exactly that.
+    // 2026-08-22 smoke-twin: nine of ten days were exactly that.
     const wrote = rows.find((r) => r.balance_written + r.sleeve_written > 0);
     if (wrote) {
       return {

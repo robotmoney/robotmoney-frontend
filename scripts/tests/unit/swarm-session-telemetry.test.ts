@@ -20,7 +20,7 @@ describe("swarm session diagnostic artifacts", () => {
     const secret = "sk-planted-secret-123456789";
     const writer = createSwarmSessionArtifactWriter({
       repoRoot: root,
-      composeProject: "rm_demo_stack_x",
+      composeProject: "rm_smoke_stack_x",
       sessionId: "42",
       memberId: "athena",
       runId: "athena-s42-test",
@@ -29,7 +29,7 @@ describe("swarm session diagnostic artifacts", () => {
       redactions: [{ value: secret, placeholder: "<OPENCODE_API_KEY redacted>" }],
     });
     const telemetry = createOnboardingTelemetry(
-      { composeProject: "rm_demo_stack_x", runId: "athena-s42-test", model: "opencode/deepseek-v4-flash" },
+      { composeProject: "rm_smoke_stack_x", runId: "athena-s42-test", model: "opencode/deepseek-v4-flash" },
       writer.sink,
       [{ value: secret, placeholder: "<OPENCODE_API_KEY redacted>" }],
     );
@@ -51,7 +51,7 @@ describe("swarm session diagnostic artifacts", () => {
     for (const line of events.trim().split("\n")) expect(() => JSON.parse(line)).not.toThrow();
     const manifest = JSON.parse(readFileSync(join(writer.directory, "manifest.json"), "utf8"));
     expect(manifest.model).toBe("opencode/deepseek-v4-flash");
-    expect(writer.directory).toContain("/.agents/swarm-sessions/rm_demo_stack_x/42/athena/athena-s42-test");
+    expect(writer.directory).toContain("/.agents/swarm-sessions/rm_smoke_stack_x/42/athena/athena-s42-test");
   });
 
   test("host-controlled path segments cannot traverse outside the artifact root", () => {

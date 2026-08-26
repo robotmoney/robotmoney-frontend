@@ -4,7 +4,7 @@
 //
 // Callers configured with a positive HTTP_FETCH_CACHE_TTL_MS memoize each GET
 // body via fetch-cache.ts. Production and smoke default to uncached; normal
-// demo orchestration supplies one hour to protect shared-host provider quotas.
+// smoke orchestration supplies one hour to protect shared-host provider quotas.
 
 import { withFetchCache } from "./fetch-cache.ts";
 

@@ -217,12 +217,12 @@ describe("the record is wired into e2e.yml on both green and red runs", () => {
     expect(step).toContain(`path: ${ADMISSION_RECORD_FILE}`);
   });
 
-  test("the demo writes the record BEFORE it throws on a failed admission", () => {
+  test("the smoke writes the record BEFORE it throws on a failed admission", () => {
     // Otherwise a RED admission — the one an on-call reader most needs the
     // record for — would record nothing at all.
-    const demoMain = readFileSync(join(repoRoot, "scripts/lib/demo-main.ts"), "utf8");
-    const writeAt = demoMain.indexOf("formatAdmissionRecords(records)");
-    const throwAt = demoMain.indexOf("admission(s) did not reach the active roster");
+    const smokeMain = readFileSync(join(repoRoot, "scripts/lib/smoke-main.ts"), "utf8");
+    const writeAt = smokeMain.indexOf("formatAdmissionRecords(records)");
+    const throwAt = smokeMain.indexOf("admission(s) did not reach the active roster");
     expect(writeAt).toBeGreaterThan(0);
     expect(throwAt).toBeGreaterThan(writeAt);
   });

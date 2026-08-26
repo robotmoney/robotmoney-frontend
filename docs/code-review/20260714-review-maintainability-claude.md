@@ -8,7 +8,7 @@
 - **Scope**: complete repository, weighted toward surfaces changed by the recent
   cross-cutting PRs — #112 (baked-data removal / live APIs), #119 (Multicall3
   wallet balances + 429 retry), #117 (admin jobs dashboard), #122 (committee
-  inference bounding), #103 (EDGAR/demo hardening).
+  inference bounding), #103 (EDGAR/smoke hardening).
 - **Dimensions**: duplicated semantics & coupling; dead paths & obsolete
   compatibility; hot files, hidden state, config & naming; test seams & CI
   execution honesty.
@@ -21,7 +21,7 @@
 **The core seams are well designed, but each has 1–2 uncontrolled bypasses
 accumulating, and two high-churn shared files are re-growing the exact
 collision pattern that caused prior regressions.** The single-RPC-transport,
-contract-routes, demo/live-selection, and loud-skip-test invariants all exist
+contract-routes, smoke/live-selection, and loud-skip-test invariants all exist
 and are mostly honored — the maintenance risk is concentrated in the
 exceptions: one hand-rolled RPC path, a three-way regime-threshold fork, the
 committee URL/casing surface outside the contract, and `views.js`/`views.css`
@@ -105,10 +105,10 @@ in the JSON artifact; this section narrates them in priority order.
 - **008** — roster cap, no-show rule, and stance ladder maintained as
   comment-enforced mirrors across backend/mcp/scripts; `@robotmoney/contract`
   is already the sanctioned shared channel — move them there.
-- **009** — demo fixture generation and synthetic regime backfill live inside
+- **009** — smoke fixture generation and synthetic regime backfill live inside
   the production committee domain and run on the live path; templated
   synthesis hardcodes the 95/5/0/0 mandate that is admin-editable in
-  `allocation_framework`. Separate rollup math from narrative/demo enrichment
+  `allocation_framework`. Separate rollup math from narrative/smoke enrichment
   (also the seam #77 real-inference needs).
 - **010** — ~20 backend env knobs read deep in call stacks; ~56 of 66 env vars
   absent from `.env.example`. Centralize resolvers in `config.ts` + regenerate
@@ -140,9 +140,9 @@ in the JSON artifact; this section narrates them in priority order.
 - **031** — `RM_ALLOW_INSECURE` has opposite default polarity in backend
   (opt-in insecure) vs `mcp/src/e2e.ts:500` (opt-out insecure) — a copied
   idiom away from a fail-open regression.
-- **032** — `scripts/lib/demo-main.ts` (1131 lines, ≥9 concerns, global
-  `process.env.ADMIN_TOKEN` mutation) inherited demo.ts's churn crown; every
-  demo-visible feature edits it.
+- **032** — `scripts/lib/smoke-main.ts` (1131 lines, ≥9 concerns, global
+  `process.env.ADMIN_TOKEN` mutation) inherited smoke.ts's churn crown; every
+  smoke-visible feature edits it.
 - **033** — the goldens CI drift gate is specified but unwired while
   `scripts/update-goldens.ts:11` claims it exists; Playwright stubs replay the
   goldens, so stale goldens self-certify.
@@ -172,13 +172,13 @@ owner decision), 004 (fetch/semaphore test coupling — watch item).
   loud-skip contract and the grandchild-keeps-pipes-open worst case proven
   hermetically.
 - **Loud-skip discipline**: DB preload throws without Postgres; CI executes
-  tests on every surface (root, backend, mcp, Playwright, hermetic demo with
+  tests on every surface (root, backend, mcp, Playwright, hermetic smoke with
   live-leak guard); 3 of 4 live suites carry gate-off fallback assertions.
 - **Frontend URL contract**: zero hardcoded `/api/` paths in browser code;
   vendored routes byte-identical and CI-guarded.
-- **Demo/live seams**: no api→demo imports; `ProjectsDataSource` fail-closed
-  selection; canonicalizeSubmission single-sourced in the contract; demo flag
-  layering in `demo-env.ts` coherent and tested.
+- **Demo/live seams**: no api→smoke imports; `ProjectsDataSource` fail-closed
+  selection; canonicalizeSubmission single-sourced in the contract; smoke flag
+  layering in `smoke-env.ts` coherent and tested.
 - **Not dead despite #112**: `frontend/public/data/committee/**` (live archive
   path), goldens route keys, compose env keys, all package scripts, all SPA
   views reachable.
@@ -196,11 +196,11 @@ owner decision), 004 (fetch/semaphore test coupling — watch item).
 5. Delete the dead committee lib pair and re-point its test at the real path
    (026); delete the `PROVIDER` chain (011).
 6. Contract completion: `ROUTES.committee`, typed `RegimeSummary` /
-   `CommitteeRecommendation`, shared stance enum, shared demo constants
+   `CommitteeRecommendation`, shared stance enum, shared smoke constants
    (019, 024, 027, 008).
 7. Test-honesty hardening: nightly `EXPECT_LIVE` guard, goldens drift gate or
    honest header, sleeves/balances shared valuation module (017, 033, 007).
-8. Extract demo-main.ts concerns; align `RM_ALLOW_INSECURE` polarity;
+8. Extract smoke-main.ts concerns; align `RM_ALLOW_INSECURE` polarity;
    `BACKEND_URL` rename; env-knob inventory (032, 031, 014, 010).
 9. Docs pass: FEATURE_PARITY/REGIME_PIXEL status banners, blog provenance
    comments, screenshots deletion decision (020, 021, 029, 030 — can ride the

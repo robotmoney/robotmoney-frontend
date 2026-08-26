@@ -184,7 +184,7 @@ export interface WalletBalances {
 // source actually wrote this row, mirroring the honesty-contract enum other
 // dashboard DTOs already use (VaultEconomics.source, WalletHoldingProvenance).
 // 'live' = the production orchestrator's real keyless fetchers; 'hermetic' =
-// the deterministic seeded source (CI/demo default); 'fixture' = a
+// the deterministic seeded source (CI/smoke default); 'fixture' = a
 // test-injected source; 'seed' = raw_indicator_history's vendored floor-seed
 // gap-fill / regime_snapshots' reference-snapshot import — real historical
 // data, not computed this run. Pre-migration rows have no recorded

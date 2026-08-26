@@ -48,11 +48,11 @@ test("edgar-seed loader/repopulation/generator CLI entrypoints carry zero databa
   expect(violations).toEqual([]);
 });
 
-test("the root demo bootstrap orchestration (scripts/lib/demo-main.ts) gained NO new database access alongside its EDGAR-seed wiring", () => {
-  // demo-main.ts already talks to postgres via `docker compose exec ... psql`
+test("the root smoke bootstrap orchestration (scripts/lib/smoke-main.ts) gained NO new database access alongside its EDGAR-seed wiring", () => {
+  // smoke-main.ts already talks to postgres via `docker compose exec ... psql`
   // subprocess calls (never a JS SQL tag/import) — this only guards that the
   // NEW edgar-seed-bootstrap wiring didn't introduce a direct import.
-  const file = join(import.meta.dir, "..", "..", "scripts", "lib", "demo-main.ts");
+  const file = join(import.meta.dir, "..", "..", "scripts", "lib", "smoke-main.ts");
   const src = readFileSync(file, "utf8");
   expect(src).toContain('"analytics-producer", "bun", "run", "src/producer/index.ts", "seed"');
   expect(src).not.toMatch(/from\s+["'][^"']*db\/client(\.ts)?["']/);

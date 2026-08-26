@@ -2,7 +2,7 @@
 // chain/buyback-logs.ts eth_getLogs indexer to discover NEW WETH -> ROBOTMONEY
 // buyback swaps into the primary prop wallet and upsert them (keyed on tx_hash,
 // so a re-run never duplicates a swap). Under a non-live source (hermetic
-// demo/CI) the indexer no-ops, leaving the seeded historical rows in place — it
+// smoke/CI) the indexer no-ops, leaving the seeded historical rows in place — it
 // never reaches a live log indexer. Idempotent and degrade-safe: an RPC failure
 // leaves the persisted rows untouched rather than 5xx-ing the worker.
 import { indexBuybacks } from "../../chain/buyback-logs.ts";

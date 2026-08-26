@@ -142,7 +142,7 @@ export interface Persona {
   memberId: string;
   name: string;
   lens: string;
-  // Directional disposition in [-1, 1]; wired from the demo roster's `bias`.
+  // Directional disposition in [-1, 1]; wired from the smoke roster's `bias`.
   bias: number;
 }
 

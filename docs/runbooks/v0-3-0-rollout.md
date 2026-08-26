@@ -106,12 +106,12 @@ Nothing in this delta changes them, and they are still the three ways this
 rollout goes silently wrong. Do not re-derive them — read
 [rollout-procedure.md §2](./rollout-procedure.md) and treat all three as in force:
 
-1. `bun smoke` boots a **demo-shaped** stack, not a production one.
+1. `bun smoke` boots a **smoke-shaped** stack, not a production one.
 2. **`--db external` is mandatory** — without it you boot an empty database and
    serve an empty site while believing the rollout worked. (v0.2.2 spelled this
    `--external-pg`; that spelling still works and now prints a deprecation
    notice. The data path is one enum flag —
-   `--db ephemeral|external|twin` — and this cutover is `external`.)
+   `--db ephemeral|external|smoke-smoke-twin` — and this cutover is `external`.)
 3. `AUTOMATION_TOKEN`, `ADMIN_TOKEN` and `SWARM_PUBLIC_BASE_URL` cannot be set
    for a `bun smoke` boot; read `ADMIN_TOKEN` out of the container instead.
 
@@ -277,13 +277,13 @@ cohort separately.
 indexes, validates all-or-none observation-identity constraints on the four
 active/evidence tables, and installs finalization/immutability triggers. Those
 constraint validations scan the affected tables under the migration's normal
-DDL locks; size them on the twin rather than assuming a catalog-only change. It
+DDL locks; size them on the smoke-smoke-twin rather than assuming a catalog-only change. It
 does not backfill snapshot IDs or observation timestamps, and
 it leaves old `chain_day_blocks` proof columns NULL so the resolver must
 re-resolve them. Published runs require an explicit `AUM_PRODUCER_REVISION`;
 unset or blank is recorded as unavailable, never replaced with an invented
 revision.
-**Confirm that on the twin (§7) rather than trusting it here** — §2.2's timings
+**Confirm that on the smoke-smoke-twin (§7) rather than trusting it here** — §2.2's timings
 are read off the DDL, not measured.
 
 `0036` and `0037` are the exceptions to "additive DDL", and on **production they are expected to
@@ -291,7 +291,7 @@ touch zero rows**. They process rows the wallet backfill wrote, and the backfill
 (`0033`, #709/#711) ships in THIS release — a database at v0.2.2 has never run
 it, so there is nothing tagged `provenance='backfilled'` for `0036` to find and
 `wallet_backfill_state` does not yet exist as a populated table. It matters on
-any database that has already run a `v0.3.0-rc.*`: **every twin**, and any stack
+any database that has already run a `v0.3.0-rc.*`: **every smoke-smoke-twin**, and any stack
 an rc was ever deployed to. Confirm which side you are on before the cutover:
 
 ```bash
@@ -300,7 +300,7 @@ psql "$DATABASE_URL" -c "SELECT provenance, count(*) FROM wallet_balance_samples
 
 A row count against `backfilled` on production would mean an rc reached it, and
 that is a different conversation from this runbook — stop and establish how
-before continuing. On a twin, expect the count to move to
+before continuing. On a smoke-smoke-twin, expect the count to move to
 `backfilled-quarantined` and the served AUM history to lose exactly those days.
 
 ### 2.2.1 ⚠ Two migrations reuse a number already applied in production
@@ -466,7 +466,7 @@ verify:      bun scripts/upgrades/0.2.2-to-0.3.0/restore-check.ts $RM_BACKUP_DIR
 Unchanged from v0.2.2. Follow
 [rollout-procedure.md §5](./rollout-procedure.md) verbatim — the dump, the separate
 globals dump, the encryption-at-rest step, and the restore verification. The
-only thing that changes for v0.3.0 is which migrations the restored twin must
+only thing that changes for v0.3.0 is which migrations the restored smoke-smoke-twin must
 then accept (§7).
 
 🔴 **The dump is a credential store.** rollout-procedure.md §5.2 is not optional; encrypt at
@@ -762,7 +762,7 @@ migration in this set writes to a protected table.
 > `append-only-safety` is the expected shape of a clean v0.3.0 preflight.** A
 > WARN on `schema-migrations` with anything else on `append-only-safety` is not.
 
-## 7. Digital-twin rehearsal (release-runbooks.md §4.4)
+## 7. Digital-smoke-smoke-twin rehearsal (release-runbooks.md §4.4)
 
 ```yaml step
 id:          P5.rehearsal-boot
@@ -780,7 +780,7 @@ depends-on:
   - frontend/**
   - scripts/**
   - docker-compose.yml
-  - docker-compose.demo.yml
+  - docker-compose.smoke.yml
   - package.json
   - bun.lock
   - backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts
@@ -789,7 +789,7 @@ verify:      bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_D
 ```
 
 ```yaml step
-id:          P5.postflight-twin
+id:          P5.postflight-smoke-smoke-twin
 phase:       P5 rehearsal
 section:     §7
 host-role:   stage
@@ -812,21 +812,21 @@ Non-negotiable, and for this release it is where every §2 claim gets tested for
 the first time. Procedure and container mechanics: follow
 [rollout-procedure.md §6](./rollout-procedure.md) exactly.
 
-The twin must run the **same rc** you intend to deploy, against a restore of the
+The smoke-smoke-twin must run the **same rc** you intend to deploy, against a restore of the
 **production** dump from Gate C.
 
 ### 7.1 The graded sequence
 
-**The rehearsal runs a graded SEQUENCE inside one twin window**, not a single
-check. `stage-rehearsal.ts` holds the twin up for the whole sequence — the
-duration of its `onReady` hook *is* the twin's lifetime — under a 45-minute
+**The rehearsal runs a graded SEQUENCE inside one smoke-smoke-twin window**, not a single
+check. `stage-rehearsal.ts` holds the smoke-smoke-twin up for the whole sequence — the
+duration of its `onReady` hook *is* the smoke-smoke-twin's lifetime — under a 45-minute
 ceiling enforced by the driver, because G1 says a rehearsal terminates on its
 own and G5 says spend is bounded. Expect **5–30 minutes** depending on how many
 wallet days the dump is missing, against ~1 minute before the sequence existed.
 
 | # | Check | Blocking | Proves |
 |---|---|---|---|
-| 1 | `postflight` | **yes** | Every §9 check against the migrated twin, including the migration wall-clock. §6.4: a twin that fails postflight is a failed cutover, so the sequence stops here. |
+| 1 | `postflight` | **yes** | Every §9 check against the migrated smoke-smoke-twin, including the migration wall-clock. §6.4: a smoke-smoke-twin that fails postflight is a failed cutover, so the sequence stops here. |
 | 2 | `repair-dispatch` | no (FAIL still fails the run) | §4.1 — `ops.repair_gaps` fires and **dispatches**: `job_runs` names the days enqueued, deferred, retrying and exhausted, and **exactly one** `wallet.backfill_window` job carries **exactly** those days. A run that dispatched nothing while days were missing FAILs rather than passing vacuously, and N single-date windows FAIL — that is the un-batching regression #739 exists to prevent. |
 | 3 | `repair-completion` | no — **WARN only** | One dispatched day writes rows carrying `provenance='backfilled'`, in **either** backfilled series (`wallet_balance_samples` or `wallet_sleeve_samples`). |
 
@@ -847,7 +847,7 @@ wallet days the dump is missing, against ~1 minute before the sequence existed.
 > never ran" and blamed the analytics lane), and it observed a run production
 > would never make.
 
-What this release requires the twin to prove, and what now proves it. Record
+What this release requires the smoke-smoke-twin to prove, and what now proves it. Record
 each result in the stage rehearsal report (§7.4):
 
 | Requirement | Proven by |
@@ -859,22 +859,22 @@ each result in the stage rehearsal report (§7.4):
 | It **dispatches** with the budget unset; `job_runs` names enqueued and deferred days; a `wallet.backfill_window` job covers every one of them | check 2 `repair-dispatch` |
 | One day completes and writes `provenance='backfilled'` | check 3 `repair-completion` |
 | **The migration set's wall-clock** — the number that sizes the maintenance window | postflight `migrations-applied` reports it from `schema_migrations.applied_at`, which nothing used to read. §2.2's "well under a second" is no longer a prediction |
-| Every §9 postflight check green against the twin | check 1 |
-| The §10 rollback procedure executed at least once on the twin | **§7.2 — a separate command**, not part of this sequence |
+| Every §9 postflight check green against the smoke-smoke-twin | check 1 |
+| The §10 rollback procedure executed at least once on the smoke-smoke-twin | **§7.2 — a separate command**, not part of this sequence |
 | A real passkey ceremony (§9 Check 7) | **§7.3 — a separate command**, and it does not substitute for `P8.acceptance` |
 
-### 7.2 Rollback rehearsal — §10, executed on the twin
+### 7.2 Rollback rehearsal — §10, executed on the smoke-smoke-twin
 
 ```yaml step
-id:          P5.rollback-twin
+id:          P5.rollback-smoke-smoke-twin
 phase:       P5 rehearsal
 section:     §7.2
 host-role:   stage
 actor:       operator
 requires:
-  - P5.postflight-twin
+  - P5.postflight-smoke-smoke-twin
 ttl:         48h
-verify:      execute §10 against a migrated twin per the procedure below, then: where.ts --record P5.rollback-twin
+verify:      execute §10 against a migrated smoke-smoke-twin per the procedure below, then: where.ts --record P5.rollback-smoke-smoke-twin
 ```
 
 ⚠ **Nothing has ever executed this, for any release.** There is no rollback
@@ -885,18 +885,18 @@ reading of the schema, not an observation."* This step is where it stops being a
 reading. It is a **manual procedure with a manifest step** rather than a script,
 so that the requirement is at least tracked; automating it is open work.
 
-Run it against a twin that has **already been migrated by the rc**, because that
+Run it against a smoke-smoke-twin that has **already been migrated by the rc**, because that
 is the state a real rollback starts from. Rehearsing against an unmigrated
 database rehearses nothing.
 
-1. Restore a twin and boot the rc against it so the seven migrations apply
-   (`bun run twin:rehearse` does the restore-and-migrate half).
+1. Restore a smoke-smoke-twin and boot the rc against it so the seven migrations apply
+   (`bun run smoke:smoke:smoke-smoke-twin --once` does the restore-and-migrate half).
 2. Capture `job_schedules` **before** rolling back — kind, cron, enabled,
    timezone, payload, next_run_at, catchup_policy. This is the *before* side of
    rollout-procedure.md §10's IRREVERSIBLE seed-clobber warning.
 3. Stop the rc's stack, then follow
    [rollout-procedure.md §10](./rollout-procedure.md)'s commands against the
-   surviving twin — **`--external-pg`, never `--db external`**, because the tag
+   surviving smoke-smoke-twin — **`--external-pg`, never `--db external`**, because the tag
    you check out predates the enum.
 4. Record each of the following. Every one is a claim this runbook currently
    makes on the strength of reading the schema:
@@ -910,19 +910,19 @@ database rehearses nothing.
    | `DELETE FROM schema_migrations WHERE name = '0034_…'` inside a transaction is **refused** | `0032_append_only_history.sql` protects the ledger itself, so a true ledger rewind would require dropping the guard. Expect SQLSTATE `0A000`, then `ROLLBACK`. **Do not drop the trigger.** |
    | Whether passkey sign-in still works | rollout-procedure.md §10's mandatory question 2. §10 already states the expected answer — no — so this confirms it rather than discovers it. |
 
-### 7.3 Passkey ceremony on a tunnel-published twin
+### 7.3 Passkey ceremony on a tunnel-published smoke-smoke-twin
 
 ```yaml step
-id:          P5.passkey-twin
+id:          P5.passkey-smoke-smoke-twin
 phase:       P5 rehearsal
 section:     §7.3
 host-role:   stage
 actor:       operator
 requires:
-  - P5.postflight-twin
+  - P5.postflight-smoke-smoke-twin
   - P1.config-decided
 ttl:         48h
-verify:      complete a passkey ceremony against the tunnel-published twin, then: where.ts --record P5.passkey-twin
+verify:      complete a passkey ceremony against the tunnel-published smoke-smoke-twin, then: where.ts --record P5.passkey-smoke-smoke-twin
 ```
 
 §9 Check 7 — a real passkey ceremony against a public HTTPS origin — is this
@@ -930,15 +930,15 @@ release's headline acceptance criterion, and without this step its **first real
 test is production, after the irreversible cutover.** That is avoidable:
 `WEBAUTHN_ORIGIN` is plumbed to the api container
 (`docker-compose.yml`, `${WEBAUTHN_ORIGIN:-}`), unlike `AUTOMATION_TOKEN` and
-`SWARM_PUBLIC_BASE_URL` which §0.2 says cannot be set — so a twin published on
+`SWARM_PUBLIC_BASE_URL` which §0.2 says cannot be set — so a smoke-smoke-twin published on
 the stage tunnel can run the real ceremony.
 
 ```sh
-WEBAUTHN_ORIGIN=https://stage.robotmoney-labs.dev   bun run twin --reuse --backup-dir $RM_BACKUP_DIR
+WEBAUTHN_ORIGIN=https://stage.robotmoney-labs.dev   bun run smoke:smoke-smoke-twin --reuse --backup-dir $RM_BACKUP_DIR
 ```
 
 🔴 **Claim the admin credential as your very first action — before you open the
-public URL, before anything else.** `scripts/twin.ts`'s own banner spells out
+public URL, before anything else.** `scripts/smoke-smoke-twin.ts`'s own banner spells out
 why: the restored `admin_credential` is typically *empty*, and on the tunnel
 whoever reaches the admin surface first claims admin over a database of **real
 member data**. This is not a footnote to the procedure; it is step one of it.
@@ -947,8 +947,8 @@ Then register a passkey and sign in with it. The proof is a stored credential
 plus a verified assertion — the bug being fixed is an origin mismatch, which
 fails the assertion, so a completed sign-in *is* the fix working.
 
-When you are done: tear the stack down and `bun run demo:clean` immediately. The
-twin volume holds password hashes, session tokens and member emails.
+When you are done: tear the stack down and `bun run smoke:clean` immediately. The
+smoke-smoke-twin volume holds password hashes, session tokens and member emails.
 
 ⚠ **This does not substitute for `P8.acceptance`.** It proves the fix works
 behind a cloudflared TLS tunnel — which is the exact v0.2.2 failure mode — but
@@ -966,10 +966,10 @@ section:     §7.4
 host-role:   any
 actor:       operator
 requires:
-  - P5.postflight-twin
+  - P5.postflight-smoke-smoke-twin
   - P4.postflight-dryrun
-  - P5.rollback-twin
-  - P5.passkey-twin
+  - P5.rollback-smoke-smoke-twin
+  - P5.passkey-smoke-smoke-twin
 artifacts:
   - stage-rehearsal-report-*.md
 verify:      write the report per rollout-procedure.md §6.5, then: where.ts --record P6.report
@@ -999,10 +999,10 @@ depends-on:
   - frontend/**
   - scripts/**
   - docker-compose.yml
-  - docker-compose.demo.yml
+  - docker-compose.smoke.yml
   - package.json
   - bun.lock
-verify:      DEMO_PROJECT=rm_prod bun smoke -- --db external --no-tui   # then: where.ts --record P7.cutover
+verify:      SMOKE_PROJECT=rm_prod bun smoke -- --db external --no-tui   # then: where.ts --record P7.cutover
 ```
 
 ⛔ **Preconditions specific to this release, beyond the `requires:` above.**
@@ -1163,7 +1163,7 @@ know about `strategy_nav_idle_only`, `catchup_policy`, snapshot identity, or the
 and ignores them. The data-write residues are `0034`'s schedule-policy update
 and `0036`/`0037` moving suspect rc-era samples out of the active tables into
 immutable evidence. v0.2.2 never reads `catchup_policy`, while archived suspect
-rows remain intentionally unserved. **Verify this on the twin (§7.2) before relying on it**;
+rows remain intentionally unserved. **Verify this on the smoke-smoke-twin (§7.2) before relying on it**;
 until that step runs it is a reading of the schema, not an observation. This is
 [rollout-procedure.md §10](./rollout-procedure.md)'s mandatory question 1, and
 that is its answer.
@@ -1264,7 +1264,7 @@ confirm in prose — the tickable copy lives on #661.
 
 - Gate C (backup + restore verified): `________`
 - Twin rehearsal report: `________`
-- Migration wall-clock on the twin: `______`
+- Migration wall-clock on the smoke-smoke-twin: `______`
 - Cutover start / stack up: `________`
 - Postflight complete: `________`
 

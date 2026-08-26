@@ -12,7 +12,7 @@
 # via PRERENDER_DIR. There is no second metadata table.
 #
 # Run automatically before every `docker compose up` by scripts/stack/stack.ts
-# (so `bun run demo`, the evals, and CI all serve prerendered HTML), and by
+# (so `bun run smoke`, the evals, and CI all serve prerendered HTML), and by
 # `bun run static:assemble` for a hand-run `docker compose up -d`.
 set -euo pipefail
 cd "$(dirname "$0")/.."

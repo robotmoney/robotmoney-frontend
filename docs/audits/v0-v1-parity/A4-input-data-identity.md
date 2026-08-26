@@ -236,12 +236,12 @@ does not exercise the cap that production applies.
 
 ### Cross-cutting: fetch cache and hermetic substitution
 
-- `extract/fetch-cache.ts` defaults GET memoisation off; normal demo supplies
+- `extract/fetch-cache.ts` defaults GET memoisation off; normal smoke supplies
   an explicit one-hour TTL. No production parity impact; cached inputs
   can be up to 1 h staler than v0's.
-- `access/hermetic-source.ts:37-49` — with `ANALYTICS_SOURCE=hermetic` (the demo
+- `access/hermetic-source.ts:37-49` — with `ANALYTICS_SOURCE=hermetic` (the smoke
   and CI e2e path) **every** series is replaced by a deterministic seeded random
-  walk. Any parity observed on the demo surface is vacuous; parity claims must be
+  walk. Any parity observed on the smoke surface is vacuous; parity claims must be
   validated against `liveDataSource` (`access/data-source.ts:107-155`) only.
 - v1 adds hard fetch timeouts (8 s default, 15 s for these callers,
   `extract/http.ts:16-57`) where v0 has none. A slow-but-healthy upstream that v0
@@ -334,9 +334,9 @@ certifiable window at all** for the composite.
    reproducible from a later fetch. Shared limitation, but it means "identical
    inputs" can never be guaranteed by re-fetching — only by pinning the floor.
 
-9. **Hermetic substitution on the demo/e2e path.** `ANALYTICS_SOURCE=hermetic`
+9. **Hermetic substitution on the smoke/e2e path.** `ANALYTICS_SOURCE=hermetic`
    replaces all inputs with seeded random walks. Parity must never be signed off
-   from a demo or e2e observation.
+   from a smoke or e2e observation.
    *v1:* `backend/src/analytics/access/hermetic-source.ts:37-49`.
 
 ### COSMETIC

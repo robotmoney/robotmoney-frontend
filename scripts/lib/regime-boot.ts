@@ -1,9 +1,9 @@
 // Demo-boot regime freshness decision (issue #126). The boot self-heal loop in
-// demo-main.ts (verify the seed regime run landed a FRESH snapshot; re-run the
+// smoke-main.ts (verify the seed regime run landed a FRESH snapshot; re-run the
 // analytics up to 3× on stale; log LOUDLY if still stale) used to hold this
 // decision inline in an untestable for-loop. The pure "is the served snapshot
 // fresh? should we re-run? give up loudly?" classification lives HERE so it can
-// be unit-tested (scripts/tests/unit/regime-boot.test.ts) while demo-main.ts keeps
+// be unit-tested (scripts/tests/unit/regime-boot.test.ts) while smoke-main.ts keeps
 // only the I/O (fetch the snapshot, run e2e.admin, log the returned message).
 // No I/O, no imports — safe for the root scripts test suite.
 

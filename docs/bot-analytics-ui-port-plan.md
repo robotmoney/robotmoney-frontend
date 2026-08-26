@@ -131,7 +131,7 @@ Rules of the scope:
 | sessionStorage/localStorage keys | identical keys preserved: `list:state`, `list:lastViewed`, `projects-col-widths-v2`; `admin_password` replaced by the repo's admin session token (§8 D2) |
 
 **Testing per repo convention** (INV-C §6.2–6.3): every new endpoint gets a
-goldens entry captured from `bun run demo` + `goldens:update` (never
+goldens entry captured from `bun run smoke` + `goldens:update` (never
 hand-authored); every view gets a Playwright spec under
 `frontend/test/browser/`; visual-snapshot goldens for the designated pixel-QA
 pages (§7). Preview mode must serve every new view backend-free.
@@ -718,7 +718,7 @@ becomes → `/list` (D3). **API/backend**: `POST /api/analytics/submissions`
 (P4.4 includes the intake table migration + validation + a moderation story —
 minimum viable: submissions land in a table read by the existing `/admin`
 surface; no auto-publish). `GET /api/analytics/agents` feeds the Select.
-**Acceptance**: golden (GET) + submit e2e against demo backend;
+**Acceptance**: golden (GET) + submit e2e against smoke backend;
 `submit-view.spec.ts` — form validation, sub-panel toggle, copy buttons,
 non-GET no-op in preview.
 
@@ -836,17 +836,17 @@ parallel unless a dependency is listed. 35 items total.
 | # | Title | Scope & deliverables | Acceptance | Deps |
 |---|---|---|---|---|
 | P0.1 | `a3` dashboard theme scope | `assets/css/dash.css` per §2: scoped tokens (radius 0.25rem, HSL set), `.metric-card`, glows, status badges, data-label/value, table shell, badge/pill variants, scrollbar utils, animations; font-weight additions to the tokens.css import | Style-guide fixture fragment `views/dash/_styleguide.html` renders all classes; visual golden; `/` unaffected (no `.a3`) | — |
-| P0.2 | Dash UI primitives | `alpine/lib/dash-ui.js` + CSS: tabs/pills, tooltip (hover + rich content), dialog, right sheet (sm:max-w-xl and -md), select, switch, toggle-group, progress, skeleton, scroll-area, toast (sonner look, §4.5), copy-button, icon sprite `dash-icons.svg` (§3 glyph list) | Each primitive demonstrated on the styleguide fixture; keyboard/esc close on dialog/sheet; spec asserts behaviors | P0.1 |
+| P0.2 | Dash UI primitives | `alpine/lib/dash-ui.js` + CSS: tabs/pills, tooltip (hover + rich content), dialog, right sheet (sm:max-w-xl and -md), select, switch, toggle-group, progress, skeleton, scroll-area, toast (sonner look, §4.5), copy-button, icon sprite `dash-icons.svg` (§3 glyph list) | Each primitive smokenstrated on the styleguide fixture; keyboard/esc close on dialog/sheet; spec asserts behaviors | P0.1 |
 | P0.3 | Router layout composition + dash shell + route/SEO scaffolding | Router `layout:` support (~25 lines, preserves `rm:*` events); `views/dash/_layout.html` + `dash-shell.js` (sidebar/topbar per §5.0); routes.js entries + 5 param regexes; seo.js META (all noindex); file-permissions.json additions | `dash-shell.spec.ts` per §5.0; navigation between two stub dash views keeps layout state | P0.1, P0.2 |
-| P0.4 | Access gate on admin-token auth | `dash-gate.js` per §5.0; `gated:true` route flag; session storage + re-verify + logout | Gate visual golden; auth flow spec against demo backend + goldens for `/api/admin/auth` | P0.3 |
-| P0.5 | Sparkline lib + Chart.js dash theme | `alpine/lib/sparkline.js` (Sparkline, RowSparkline, exact geometry/colors per §4.3); `applyDashChartDefaults` per §4.2 | Unit tests on sparkline path output (fixed inputs → fixed `d`/points strings, `—` under 4 pts); chart theme demoed on styleguide | P0.1 |
+| P0.4 | Access gate on admin-token auth | `dash-gate.js` per §5.0; `gated:true` route flag; session storage + re-verify + logout | Gate visual golden; auth flow spec against smoke backend + goldens for `/api/admin/auth` | P0.3 |
+| P0.5 | Sparkline lib + Chart.js dash theme | `alpine/lib/sparkline.js` (Sparkline, RowSparkline, exact geometry/colors per §4.3); `applyDashChartDefaults` per §4.2 | Unit tests on sparkline path output (fixed inputs → fixed `d`/points strings, `—` under 4 pts); chart theme smokeed on styleguide | P0.1 |
 | P0.6 | Formatting + relative-time lib | `alpine/lib/dash-format.js`: USD abbreviation variants, smart price precision, `fmtRel`, dates | Unit tests pinning every formatter to original outputs (table of cases lifted from INV-O) | — |
 
 ### Phase 1 — Read APIs & schema (7 items) — contract-first, goldens for every endpoint
 
 | # | Title | Scope & deliverables | Acceptance | Deps |
 |---|---|---|---|---|
-| P1.1 | Facet list endpoints | `GET /api/analytics/{agents,coins,vaults,wallets}` in contract + backend: projections per §5.7/5.9/5.11/5.13 incl. wallet-balance joins, agent-wallet merge, managing-agent names; provenance fields on every DTO (`source`, `stale`) per architecture §12 | Goldens captured from `bun run demo`; unit tests on projections; drift gate green | — |
+| P1.1 | Facet list endpoints | `GET /api/analytics/{agents,coins,vaults,wallets}` in contract + backend: projections per §5.7/5.9/5.11/5.13 incl. wallet-balance joins, agent-wallet merge, managing-agent names; provenance fields on every DTO (`source`, `stale`) per architecture §12 | Goldens captured from `bun run smoke`; unit tests on projections; drift gate green | — |
 | P1.2 | Series endpoint + weekly bucketing | `GET /api/analytics/series/:entity/:id?days=` over the four `daily_*_snapshots`; server-side `toWeeklyBuckets` (26 Monday weeks, last/sum aggs, forward-fill) and raw daily mode for profile charts | Golden per entity type; bucketing unit tests against fixture snapshot rows | — |
 | P1.3 | Aggregate endpoints: entities, overview, leaderboard | `GET /api/analytics/entities` (unified /list rows + spark series), `/overview` (counts, deltas, leaders, RM token), `/leaderboard` (List3 evidence pipeline ported server-side from `list3Evidence.ts` incl. signal-score formula, confidence labels, facilitator exclusion, per-source freshness) | Goldens; unit tests pinning the score formula to original outputs on fixtures | P1.1, P1.2 |
 | P1.4 | Project profile endpoint | `GET /api/projects/:slug`: project + facet rows + KPI inputs + 90d series + holdings + activity (empty-tolerant) | Golden incl. a full-facet project and a sparse one; 404 shape | P1.1, P1.2 |

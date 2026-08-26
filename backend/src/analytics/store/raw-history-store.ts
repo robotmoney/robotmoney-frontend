@@ -6,7 +6,7 @@
 // persisted history, never to synthetic data. Pure I/O — no compute.
 //
 // API-OWNED (issue #106): only the API process (via api/routes/analytics.ts +
-// store/direct.ts) and migration/demo tooling may import this module. Updater/
+// store/direct.ts) and migration/smoke tooling may import this module. Updater/
 // orchestrator/worker code persists through the AnalyticsPersistence port
 // (analytics/persistence.ts) instead — enforced by
 // tests/analytics-api-boundary.test.ts. Writers accept an injectable Sql handle

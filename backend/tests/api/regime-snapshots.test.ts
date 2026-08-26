@@ -152,7 +152,7 @@ test("#398: an invalid (unparseable) raw_date on one panel fails the WHOLE snaps
 });
 
 test("a future-dated row never shadows the real latest — fetchRegimeSnapshots enforces date <= today", async () => {
-  // Regression for #382: a future-dated row (demo/seed bug, manual insert, or
+  // Regression for #382: a future-dated row (smoke/seed bug, manual insert, or
   // clock skew on whatever produced it) sorts FIRST under `ORDER BY date DESC`
   // and, without the `date <= today` boundary, would be served as `latest` —
   // shadowing the real current snapshot and reading falsely fresh. Planted

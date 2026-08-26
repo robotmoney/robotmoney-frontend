@@ -145,9 +145,9 @@ describe("copyablePrompt: the base-URL fact the canonical prompt cannot carry, a
     );
   });
 
-  // A deliberately ARBITRARY high port, not 48787: demo host ports are drawn
+  // A deliberately ARBITRARY high port, not 48787: smoke host ports are drawn
   // free on every run, so an off-production origin is whatever this boot got.
-  // (48787 as a fixture would quietly re-teach "the demo port" — the exact
+  // (48787 as a fixture would quietly re-teach "the smoke port" — the exact
   // assumption that raced the stage tunnel.)
   test("off-production origin → the roster URL rehosts to that origin's own /swarm route, and the base URL is appended", () => {
     const origin = "http://localhost:53127";

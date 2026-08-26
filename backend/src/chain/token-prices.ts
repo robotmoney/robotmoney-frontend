@@ -42,7 +42,7 @@ const GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2";
 const GECKO_TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
 
 // Production defaults to 30s, short enough that the one-minute sampler never
-// persists the same spot twice as fresh. Shared demo/smoke orchestration
+// persists the same spot twice as fresh. Shared smoke/smoke orchestration
 // explicitly supplies one hour through this capability-specific setting.
 export const TOKEN_PRICE_CACHE_TTL_ENV = "TOKEN_PRICE_CACHE_TTL_MS";
 export const DEFAULT_TOKEN_PRICE_CACHE_TTL_MS = 30_000;
@@ -81,7 +81,7 @@ function geckoRetryBaseMs(): number {
 // Promise.all fan-out over legs, or callers queued behind the batch gate —
 // coalesces into ONE comma-separated token_price request. A sampler run that
 // values WETH/ROBOTMONEY/BNKR therefore costs 1 upstream call, not 3 (the
-// demo/CI quota-exhaustion fix; symptom tracked in #202).
+// smoke/CI quota-exhaustion fix; symptom tracked in #202).
 const geckoPending = new Map<string, Promise<number>>();
 // The shared keyed TTL-cache primitive (chain/ttl-cache.ts, issue #455), keyed
 // per lowercased token address. ttlMs is passed as a resolver function (not a
@@ -118,7 +118,7 @@ export function _resetTokenPriceCacheForTests(): void {
 }
 
 // Deterministic hermetic fixtures (PRICE_SOURCE=stub). Recognizable, stable
-// magnitudes so the demo's rendered totals are reproducible without touching a
+// magnitudes so the smoke's rendered totals are reproducible without touching a
 // live rate-limited price host. USDC is pinned $1 without a fixture.
 const STUB_PRICES: Record<string, number> = {
   WETH: 1600,

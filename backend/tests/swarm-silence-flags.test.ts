@@ -22,7 +22,7 @@ const N = admin.SWARM_SILENCE_THRESHOLD_SESSIONS;
 useCleanDatabasePerTest(import.meta.file);
 
 // addMemberAdmin, not registerMember: it sets activated_at = now() at
-// creation (registerMember, the demo/e2e shortcut most other swarm tests use,
+// creation (registerMember, the smoke/e2e shortcut most other swarm tests use,
 // deliberately does not — see roster-seed.ts's header — which would make
 // every session read as "before activation" and no eligible session would
 // ever accumulate).

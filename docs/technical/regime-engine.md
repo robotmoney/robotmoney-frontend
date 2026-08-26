@@ -253,7 +253,7 @@ classification. Neither is the production path:
   regime *engine* — the composite it classifies has to come from somewhere,
   and that somewhere is `compute.ts`. It also disagrees with `bucketFn` at
   the exact `0.67` boundary and on `NaN` (A1 finding F7) — off the hot path
-  today (its only consumers are the swarm demo-synthesis path and the dead
+  today (its only consumers are the swarm smoke-synthesis path and the dead
   `regimeTool`), but a reason not to treat it as a drop-in replacement for
   `bucketFn` either.
 

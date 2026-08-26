@@ -32,7 +32,7 @@ const FUTURE = "2099-04-01"; // sorts after every real row, so DISTINCT ON picks
 const OURS = [PAST, FUTURE];
 
 // A quarantined WETH row at the price the broken path actually wrote on the
-// 2026-08-23 twin, against the amount it held. If any of these numbers reaches
+// 2026-08-23 smoke-twin, against the amount it held. If any of these numbers reaches
 // a response, the response is wrong by ~25x.
 const BAD_PRICE = 59_988.42;
 const AMOUNT = 15.4378;

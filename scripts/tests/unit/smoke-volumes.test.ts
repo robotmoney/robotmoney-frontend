@@ -1,0 +1,198 @@
+// Unit tests for the smoke-volume clean library (scripts/lib/smoke-volumes.ts) —
+// the label-based discovery + deletion logic that `bun run smoke:clean` and the CI
+// teardown share. These use an INJECTED fake docker runner against synthetic
+// `docker volume` fixtures (no daemon), so they run fast and deterministically and
+// still prove the exact filter args, label scoping, and in-use skip behavior.
+// (The real docker round-trip — label actually lands, down keeps the volume — is
+// proven separately in smoke-volume-lifecycle.test.ts, which boots postgres.)
+import { describe, expect, test } from "bun:test";
+import {
+  SMOKE_VOLUME_LABEL,
+  SMOKE_VOLUME_PROJECT_LABEL,
+  listSmokeVolumes,
+  parseVolumeLine,
+  purgeSmokeEvalContainers,
+  removeSmokeVolumes,
+  type DockerRunResult,
+  type DockerRunner,
+} from "../../lib/smoke-volumes.ts";
+
+// A fixture line as `docker volume ls --format json` emits it (Labels is a flat
+// comma-joined k=v string).
+function volLine(name: string, labels: Record<string, string>): string {
+  const Labels = Object.entries(labels).map(([k, v]) => `${k}=${v}`).join(",");
+  return JSON.stringify({ Name: name, Labels, Driver: "local", Scope: "local" });
+}
+
+// Build a fake runner that records every argv it received and answers `volume ls`
+// from a fixture set and `volume rm <name>` from an in-use set.
+function fakeRunner(opts: {
+  volumes?: string[];
+  containers?: string[];
+  inUse?: Set<string>;
+  lsExit?: number;
+  psExit?: number;
+  rmExit?: Record<string, number>;
+}): { run: DockerRunner; calls: string[][] } {
+  const calls: string[][] = [];
+  const run: DockerRunner = (args) => {
+    calls.push(args);
+    if (args[0] === "volume" && args[1] === "ls") {
+      const exitCode = opts.lsExit ?? 0;
+      return { exitCode, stdout: exitCode === 0 ? (opts.volumes ?? []).join("\n") + "\n" : "", stderr: exitCode === 0 ? "" : "daemon down" } satisfies DockerRunResult;
+    }
+    if (args[0] === "volume" && args[1] === "rm") {
+      const name = args[2];
+      if (opts.inUse?.has(name)) {
+        return { exitCode: 1, stdout: "", stderr: `Error response from daemon: remove ${name}: volume is in use - [abc123]` };
+      }
+      return { exitCode: 0, stdout: `${name}\n`, stderr: "" };
+    }
+    if (args[0] === "ps") {
+      const exitCode = opts.psExit ?? 0;
+      if (exitCode !== 0) {
+        return { exitCode, stdout: "", stderr: "docker ps failed" };
+      }
+      const lines = (opts.containers ?? []).map((c) => JSON.stringify({ Names: c }));
+      return { exitCode: 0, stdout: lines.join("\n") + "\n", stderr: "" };
+    }
+    if (args[0] === "rm") {
+      const name = args.includes("-f") ? args[args.indexOf("-f") + 1] : args[1];
+      if (opts.inUse?.has(name) || (opts.rmExit && opts.rmExit[name])) {
+        return { exitCode: 1, stdout: "", stderr: `Error response from daemon: container ${name} in use` };
+      }
+      return { exitCode: 0, stdout: `${name}\n`, stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  return { run, calls };
+}
+
+
+describe("parseVolumeLine", () => {
+  test("pulls name + the project label out of the flat Labels string", () => {
+    const v = parseVolumeLine(volLine("rm_smoke_stack_ab12_pgdata", { "robotmoney.smoke": "1", "robotmoney.smoke.project": "rm_smoke_stack_ab12" }));
+    expect(v).toEqual({ name: "rm_smoke_stack_ab12_pgdata", project: "rm_smoke_stack_ab12" });
+  });
+  test("project is null when the project label is absent", () => {
+    const v = parseVolumeLine(volLine("x", { "robotmoney.smoke": "1" }));
+    expect(v).toEqual({ name: "x", project: null });
+  });
+  test("blank lines are ignored", () => {
+    expect(parseVolumeLine("   ")).toBeNull();
+  });
+});
+
+describe("listSmokeVolumes", () => {
+  test("filters by the robotmoney.smoke=1 label and parses every row", () => {
+    const { run, calls } = fakeRunner({
+      volumes: [
+        volLine("rm_smoke_stack_a_pgdata", { "robotmoney.smoke": "1", "robotmoney.smoke.project": "rm_smoke_stack_a" }),
+        volLine("rm_smoke_stack_b_pgdata", { "robotmoney.smoke": "1", "robotmoney.smoke.project": "rm_smoke_stack_b" }),
+      ],
+    });
+    const vols = listSmokeVolumes(run);
+    expect(vols.map((v) => v.name)).toEqual(["rm_smoke_stack_a_pgdata", "rm_smoke_stack_b_pgdata"]);
+    // The label filter is what makes this "ours only" — assert it is actually passed.
+    expect(calls[0]).toContain("--filter");
+    expect(calls[0]).toContain(`label=${SMOKE_VOLUME_LABEL}`);
+  });
+
+  test("scoping to a project adds the project label filter (CI reclaims only its own run)", () => {
+    const { run, calls } = fakeRunner({ volumes: [volLine("rm_ci_stack_1_pgdata", { "robotmoney.smoke": "1", "robotmoney.smoke.project": "rm_ci_stack_1" })] });
+    const vols = listSmokeVolumes(run, { project: "rm_ci_stack_1" });
+    expect(vols).toHaveLength(1);
+    expect(calls[0]).toContain(`label=${SMOKE_VOLUME_PROJECT_LABEL}=rm_ci_stack_1`);
+  });
+
+  test("a docker/daemon failure throws loudly — never a silent empty list", () => {
+    const { run } = fakeRunner({ volumes: [], lsExit: 1 });
+    expect(() => listSmokeVolumes(run)).toThrow(/docker volume ls failed/);
+  });
+
+  test("no smoke volumes → empty list (clean exit for callers)", () => {
+    const { run } = fakeRunner({ volumes: [] });
+    expect(listSmokeVolumes(run)).toEqual([]);
+  });
+});
+
+describe("removeSmokeVolumes", () => {
+  test("removes free volumes and LOUDLY skips in-use ones (never force-removes)", () => {
+    const { run, calls } = fakeRunner({
+      volumes: [],
+      inUse: new Set(["rm_smoke_stack_busy_pgdata"]),
+    });
+    const res = removeSmokeVolumes(run, ["rm_smoke_stack_free_pgdata", "rm_smoke_stack_busy_pgdata"]);
+    expect(res.removed).toEqual(["rm_smoke_stack_free_pgdata"]);
+    expect(res.skipped).toHaveLength(1);
+    expect(res.skipped[0].name).toBe("rm_smoke_stack_busy_pgdata");
+    expect(res.skipped[0].reason).toMatch(/in use/i);
+    // Never a `-f`: an in-use volume is reported, not forced.
+    for (const c of calls) expect(c).not.toContain("-f");
+  });
+
+  test("one in-use volume never aborts the rest", () => {
+    const { run } = fakeRunner({ volumes: [], inUse: new Set(["b"]) });
+    const res = removeSmokeVolumes(run, ["a", "b", "c"]);
+    expect(res.removed).toEqual(["a", "c"]);
+    expect(res.skipped.map((s) => s.name)).toEqual(["b"]);
+  });
+});
+
+describe("purgeSmokeEvalContainers", () => {
+  test("scoped project purge finds and force-removes ${project}-member-agent-eval-*", () => {
+    const { run, calls } = fakeRunner({
+      containers: [
+        "rm_ci_stack_123-member-agent-eval-woon",
+        "rm_ci_stack_123-member-agent-eval-mav",
+        "otherproj-member-agent-eval-woon",
+        "rm_ci_stack_123-api",
+      ],
+    });
+    const res = purgeSmokeEvalContainers(run, { project: "rm_ci_stack_123" });
+    expect(res.removed).toEqual([
+      "rm_ci_stack_123-member-agent-eval-woon",
+      "rm_ci_stack_123-member-agent-eval-mav",
+    ]);
+    expect(res.skipped).toHaveLength(0);
+
+    const rmCalls = calls.filter((c) => c[0] === "rm");
+    expect(rmCalls).toHaveLength(2);
+    expect(rmCalls[0]).toEqual(["rm", "-f", "rm_ci_stack_123-member-agent-eval-woon"]);
+    expect(rmCalls[1]).toEqual(["rm", "-f", "rm_ci_stack_123-member-agent-eval-mav"]);
+  });
+
+  test("unscoped purge finds and force-removes all *-member-agent-eval-* containers", () => {
+    const { run, calls } = fakeRunner({
+      containers: [
+        "rm_ci_stack_123-member-agent-eval-woon",
+        "otherproj-member-agent-eval-mav",
+        "member-agent-eval-standalone",
+        "rm_ci_stack_123-api",
+      ],
+    });
+    const res = purgeSmokeEvalContainers(run);
+    expect(res.removed).toEqual([
+      "rm_ci_stack_123-member-agent-eval-woon",
+      "otherproj-member-agent-eval-mav",
+      "member-agent-eval-standalone",
+    ]);
+    expect(res.skipped).toHaveLength(0);
+
+    const rmCalls = calls.filter((c) => c[0] === "rm");
+    expect(rmCalls).toHaveLength(3);
+  });
+
+  test("gracefully handles empty lists and docker CLI error outputs", () => {
+    const { run: runEmpty } = fakeRunner({ containers: [] });
+    const resEmpty = purgeSmokeEvalContainers(runEmpty, { project: "rm_ci_stack_123" });
+    expect(resEmpty.removed).toEqual([]);
+    expect(resEmpty.skipped).toEqual([]);
+
+    const { run: runErr } = fakeRunner({ containers: [], psExit: 1 });
+    const resErr = purgeSmokeEvalContainers(runErr, { project: "rm_ci_stack_123" });
+    expect(resErr.removed).toEqual([]);
+    expect(resErr.skipped).toEqual([]);
+  });
+});
+

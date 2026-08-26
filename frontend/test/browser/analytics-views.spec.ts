@@ -293,7 +293,7 @@ test("late-cycle view renders live gauges, and no hardcoded readings beside them
   await page.goto("/");
   await navigate(page, "/research/late-cycle-signals");
 
-  // The long-form prose (stub__ markup, which demo-frontend-check.ts also
+  // The long-form prose (stub__ markup, which smoke-frontend-check.ts also
   // asserts against) is unchanged; what this page gained is the researchView
   // wiring that R4 added, so the numbers now come from the signal payload.
   await expect(page.locator(".stub__title")).toContainText("How late in the rally");

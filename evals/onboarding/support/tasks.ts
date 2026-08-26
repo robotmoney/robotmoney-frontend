@@ -99,7 +99,7 @@ export function generateClaimIdentity(runId: string = crypto.randomUUID().slice(
 
 // ── Harness note: non-interactive container ─────────────────────────────────
 // ENVIRONMENT INFO, never how-to — the same category as the admission eval's
-// demoHarnessNote (scripts/lib/onboarding-eval.ts), kept clearly delimited and
+// smokeHarnessNote (scripts/lib/onboarding-eval.ts), kept clearly delimited and
 // appended after the task rather than blended into it.
 //
 // Required for skill-install and toolchain: a container with no owner to

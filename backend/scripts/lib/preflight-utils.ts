@@ -37,7 +37,7 @@ export type Db = postgresTypes.Sql<{}>;
 
 export const READONLY_ENV_REQUIRED_KEYS = ["host", "port", "username", "password", "database"] as const;
 
-/** Minimal KEY=VALUE parser — same shape as scripts/lib/demo-external-pg.ts's,
+/** Minimal KEY=VALUE parser — same shape as scripts/lib/smoke-external-pg.ts's,
  *  duplicated rather than imported to keep the standalone story intact. */
 export function parseEnvFile(text: string): Record<string, string> {
   const out: Record<string, string> = {};

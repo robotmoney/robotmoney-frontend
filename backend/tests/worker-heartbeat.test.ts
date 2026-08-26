@@ -92,7 +92,7 @@ test("an IDLE lane with nothing queued stays healthy and keeps reporting — idl
   await sleep(1200); // several idle poll cycles AND past the write-coalescing window
   const second = await record();
 
-  // Still healthy, and demonstrably still WRITING — not one boot record frozen
+  // Still healthy, and smokenstrably still WRITING — not one boot record frozen
   // in place that would age out later.
   expect((await checkHeartbeatFile(path)).healthy).toBe(true);
   expect(second.ts).toBeGreaterThan(first.ts);

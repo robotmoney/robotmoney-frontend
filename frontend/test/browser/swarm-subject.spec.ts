@@ -7,9 +7,9 @@ import { navigate } from "./navigation.ts";
 // failOnBrowserErrors/expectNoBrowserErrors pattern used for
 // /swarm/members/athena.
 //
-// The live swarm API's demo-seed path (backend/src/swarm/domain.ts's
-// ensureDemoSubjectFixtures) only ever writes id/name/thesis_blurb — it never
-// populates wallets/nft_contracts/structural_notes on a demo subject row, so
+// The live swarm API's smoke-seed path (backend/src/swarm/domain.ts's
+// ensureSmokeSubjectFixtures) only ever writes id/name/thesis_blurb — it never
+// populates wallets/nft_contracts/structural_notes on a smoke subject row, so
 // asserting against whatever the live stack happens to have seeded would be
 // non-deterministic and could pass with every optional section empty. This
 // spec instead forces the page down its OTHER production data path: the
@@ -55,7 +55,7 @@ test("public subject profile renders holdings, wallets, NFT contracts, and struc
   // Force every swarm API call to fail so subjectProfile.init() and its
   // loadSnapshots()/loadSessions() side-fetches take their real archive
   // fallback branch (the same branch every pre-2026-07-01 swarm surface
-  // relies on) instead of whatever the live demo stack has or hasn't seeded
+  // relies on) instead of whatever the live smoke stack has or hasn't seeded
   // for this id.
   await page.route("**/api/swarm/**", (route) =>
     route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),

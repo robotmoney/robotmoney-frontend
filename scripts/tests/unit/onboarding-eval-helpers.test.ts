@@ -137,7 +137,7 @@ describe("onboarding-eval pure helpers", () => {
   });
 
   // ── Transcript redaction ──────────────────────────────────────────────────
-  // A failed run's transcript is printed WHOLE into CI logs and the demo
+  // A failed run's transcript is printed WHOLE into CI logs and the smoke
   // console. The container is handed its secrets by `-e`, and a curious agent
   // runs `env` — observed verbatim in a local run.
   test("redactSecrets scrubs every injected secret from a transcript, and leaves the evidence intact", () => {
@@ -312,15 +312,15 @@ describe("member-agent container primitive", () => {
   const KEYLESS: MemberAgentModel = { model: "opencode/nemotron-3-ultra-free", apiKeyEnv: null, apiKey: null };
 
   const base = {
-    composeProject: "rm_demo_stack_abc",
-    containerName: "rm_demo_stack_abc-member-agent-eval-run1",
+    composeProject: "rm_smoke_stack_abc",
+    containerName: "rm_smoke_stack_abc-member-agent-eval-run1",
     opencodeConfigPath: "/tmp/wd/opencode.json",
     title: "onboarding-eval-run1",
     prompt: "PROMPT TEXT",
   };
 
   test("memberAgentContainerName is the exact <project>-member-agent-eval-<runId> format cleanup targets", () => {
-    expect(memberAgentContainerName("rm_demo_stack_abc", "run1")).toBe("rm_demo_stack_abc-member-agent-eval-run1");
+    expect(memberAgentContainerName("rm_smoke_stack_abc", "run1")).toBe("rm_smoke_stack_abc-member-agent-eval-run1");
   });
 
   test("a failed diagnostic capture cannot skip container cleanup", async () => {
@@ -363,13 +363,13 @@ describe("member-agent container primitive", () => {
   test("FUNDED: the argv is byte-for-byte what the eval spawns, with exactly one -e credential", () => {
     expect(buildMemberAgentArgv({ ...base, modelConfig: FUNDED })).toEqual([
       "docker",
-      "compose", "-p", "rm_demo_stack_abc",
+      "compose", "-p", "rm_smoke_stack_abc",
       "-f", "docker-compose.yml",
-      "-f", "docker-compose.demo.yml",
+      "-f", "docker-compose.smoke.yml",
       "run",
       "--rm",
       "--no-deps",
-      "--name", "rm_demo_stack_abc-member-agent-eval-run1",
+      "--name", "rm_smoke_stack_abc-member-agent-eval-run1",
       "-v", "/tmp/wd/opencode.json:/home/agent/opencode.json:ro",
       "-e", "OPENCODE_API_KEY=sk-zen",
       "member-agent",
@@ -500,20 +500,20 @@ describe("member-agent container primitive", () => {
   });
 
   // ── The compose child's environment (2026-07-27) ──────────────────────────
-  // `docker compose run` re-resolves the WHOLE project, and docker-compose.demo.yml
-  // labels the pgdata volume with ${DEMO_PROJECT}. A child without it hashes a
+  // `docker compose run` re-resolves the WHOLE project, and docker-compose.smoke.yml
+  // labels the pgdata volume with ${SMOKE_PROJECT}. A child without it hashes a
   // different volume definition than `stack.up()` recorded, and compose then
   // asks — interactively — whether to recreate the live database. Reproduced on
   // this repo's own compose files with compose 2.40.3; with a terminal on stdin
   // the invocation never returns.
   describe("memberAgentSpawnEnv", () => {
-    test("always carries DEMO_PROJECT, and it is exactly the compose project name", () => {
-      expect(memberAgentSpawnEnv("rm_demo_eval_abc", {}).DEMO_PROJECT).toBe("rm_demo_eval_abc");
+    test("always carries SMOKE_PROJECT, and it is exactly the compose project name", () => {
+      expect(memberAgentSpawnEnv("rm_smoke_eval_abc", {}).SMOKE_PROJECT).toBe("rm_smoke_eval_abc");
     });
 
     test("a host value can never shadow it — the compose model must match the project it runs against", () => {
-      const env = memberAgentSpawnEnv("rm_demo_eval_abc", { DEMO_PROJECT: "rm_demo_stack_someone_else" });
-      expect(env.DEMO_PROJECT).toBe("rm_demo_eval_abc");
+      const env = memberAgentSpawnEnv("rm_smoke_eval_abc", { SMOKE_PROJECT: "rm_smoke_stack_someone_else" });
+      expect(env.SMOKE_PROJECT).toBe("rm_smoke_eval_abc");
     });
 
     test("docker-client plumbing from the host survives (a child that cannot find the daemon runs nothing)", () => {
@@ -524,16 +524,16 @@ describe("member-agent container primitive", () => {
     });
 
     test("the generated stack label environment survives into member-agent Compose resolution", () => {
-      const env = memberAgentSpawnEnv("rm_demo_eval_abc", {
+      const env = memberAgentSpawnEnv("rm_smoke_eval_abc", {
         PATH: "/usr/bin",
         RM_STACK_ENV_CLASS: "local",
         RM_STACK_ENV_HASH: "abc123",
-        DEMO_PROJECT: "from-stack",
+        SMOKE_PROJECT: "from-stack",
       });
       expect(env).toMatchObject({
         RM_STACK_ENV_CLASS: "local",
         RM_STACK_ENV_HASH: "abc123",
-        DEMO_PROJECT: "rm_demo_eval_abc",
+        SMOKE_PROJECT: "rm_smoke_eval_abc",
       });
     });
   });
@@ -721,7 +721,7 @@ describe("runOnboardingEvalWithRetry", () => {
     });
   }
 
-  // ── Refusal is retryable (the 2026-07-25 zero-admission demo run) ─────────
+  // ── Refusal is retryable (the 2026-07-25 zero-admission smoke run) ─────────
   // The classifier itself is unit-tested exhaustively (positives AND the
   // false-positive guards) in
   // scripts/tests/unit/member-agent-classify.test.ts; these cases test only
@@ -826,7 +826,7 @@ describe("runOnboardingEvalWithRetry", () => {
       },
     });
     expect(seen.length).toBe(2);
-    // The demo announces the planned newcomer by NAME and records it in
+    // The smoke announces the planned newcomer by NAME and records it in
     // e2e.MEMBERS — a retry that admitted a generated name would put a
     // different person on the swarm than the one it announced.
     expect(seen.map((s) => s.name)).toEqual(["Ada Lovelace", "Ada Lovelace"]);

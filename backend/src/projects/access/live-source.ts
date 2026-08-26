@@ -119,7 +119,7 @@ export const liveProjectsDataSource: ProjectsDataSource = {
     const key = process.env.COINGECKO_API_KEY || "";
     const url = `${CG_BASE}/coins/markets?vs_currency=usd&ids=${ids.join(",")}&per_page=250&page=1&sparkline=false&price_change_percentage=24h`;
     const headers: Record<string, string> = { accept: "application/json" };
-    if (key) headers["x-cg-demo-api-key"] = key;
+    if (key) headers["x-cg-smoke-api-key"] = key;
     const r = await timedFetch(url, { headers });
     if (!r.ok) throw new Error(`coingecko markets ${r.status}`);
     return (await r.json()) as CoinGeckoMarketRow[];

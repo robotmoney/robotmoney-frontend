@@ -22,10 +22,10 @@ backend/    Bun server (API + static) + Postgres queue/workers + migrations
 ## Prerequisites
 
 - [Bun](https://bun.sh) ≥ 1.2
-- Docker (for Postgres and the full-stack demo)
-- Network access — `bun run demo` always boots the production-parity LIVE data
+- Docker (for Postgres and the full-stack smoke)
+- Network access — `bun run smoke` always boots the production-parity LIVE data
   path (public Base mainnet RPC + the keyless analytics/research providers).
-  There is no offline/hermetic demo mode; a required credential or provider
+  There is no offline/hermetic smoke mode; a required credential or provider
   that is unreachable fails the boot loudly instead of falling back to a
   fixture (issue #147).
 
@@ -43,11 +43,11 @@ bun run preview      # open the printed URL
 ```
 
 Preview binds a random free port, so multiple previews can run at once. Goldens
-carry real field shapes but mock point-in-time values; use `bun run demo` for
+carry real field shapes but mock point-in-time values; use `bun run smoke` for
 real backend behavior.
 
 ```bash
-BACKEND_URL=http://127.0.0.1:<demo api port> bun run goldens:update
+BACKEND_URL=http://127.0.0.1:<smoke api port> bun run goldens:update
 ```
 
 ## Develop
@@ -80,45 +80,45 @@ bun run sync-contract
 
 ## Demo — run the full stack
 
-Use the demo when you need the real backend, Postgres, worker, and Investment
+Use the smoke when you need the real backend, Postgres, worker, and Investment
 Swarm cycle. Make sure Bun and Docker are installed first.
 
 ```bash
 bun install
-bun run demo         # provisions the stack and stays up
+bun run smoke         # provisions the stack and stays up
 ```
 
 Every published host port is drawn **free at boot, on every run** — there is no
 fixed default, and `WEB_PORT` / `POSTGRES_PORT` are no longer inputs (see
-[Ports](#ports-always-random-except---static-port) below). The demo prints the port it
-picked; open `http://127.0.0.1:<that port>/swarm`. The demo writes its run
-state to `.agents/demo-state.json`. Stop it with Ctrl-C, or manage a
+[Ports](#ports-always-random-except---static-port) below). The smoke prints the port it
+picked; open `http://127.0.0.1:<that port>/swarm`. The smoke writes its run
+state to `.agents/smoke-state.json`. Stop it with Ctrl-C, or manage a
 backgrounded/stale run from that state file:
 
 ```bash
-bun run demo:status
-bun run demo:down
+bun run smoke:status
+bun run smoke:down
 ```
 
-### `bun run demo:stage` — the standing/public demo in one command
+### `bun run smoke:stage` — the standing/public smoke in one command
 
 ```bash
-bun run demo:stage
+bun run smoke:stage
 ```
 
-A thin wrapper that decides two flags and then runs the ordinary demo, printing
-the equivalent `bun run demo -- …` so the choice is always reproducible by hand:
+A thin wrapper that decides two flags and then runs the ordinary smoke, printing
+the equivalent `bun run smoke -- …` so the choice is always reproducible by hand:
 
 - **`--static-port` always** — this is the boot a tunnel points at, so it takes
   the fixed host port rather than whatever Docker hands out.
-- **`--db external` when `.env` describes a Postgres** — otherwise the demo's own
-  ephemeral container, exactly as a plain `bun run demo` would use. An `.env`
+- **`--db external` when `.env` describes a Postgres** — otherwise the smoke's own
+  ephemeral container, exactly as a plain `bun run smoke` would use. An `.env`
   that is missing, has no database, or has an unusable one falls back quietly;
   nothing about probing may fail a boot.
 
 This is the one command allowed to *infer* a data path, because inferring is its
-documented job and it announces the choice before anything starts. `bun run demo
--- …` stays fully explicit. Extra flags pass through: `bun run demo:stage --
+documented job and it announces the choice before anything starts. `bun run smoke
+-- …` stays fully explicit. Extra flags pass through: `bun run smoke:stage --
 --no-tui`.
 
 ### Which database a boot runs against — `--db`
@@ -127,29 +127,29 @@ One flag, three named data paths. The default is unchanged:
 
 | Mode | What it is | Who owns the data |
 |---|---|---|
-| `--db ephemeral` *(default)* | the demo's own throwaway `postgres` container + fresh-per-run `pgdata` volume | this boot |
+| `--db ephemeral` *(default)* | the smoke's own throwaway `postgres` container + fresh-per-run `pgdata` volume | this boot |
 | `--db external` | a managed server whose address comes from `.env`; **no postgres container at all** | somebody else — teardown cannot undo a thing |
-| `--db twin` | a local container restored from an encrypted production dump | this boot, and the copy outlives it |
+| `--db smoke-smoke-twin` | a local container restored from an encrypted production dump | this boot, and the copy outlives it |
 
 They are one flag rather than three booleans because the two questions that
 matter — *where does postgres live* and *who owns the data* — are not the same
-question, and a twin is the case that separates them: it dials a URL like
+question, and a smoke-smoke-twin is the case that separates them: it dials a URL like
 `external` does, but every write lands in a copy this boot may reclaim.
 
 ```bash
-bun run demo -- --db external
+bun run smoke -- --db external
 ```
 
 `--external-pg` still works as a deprecated spelling of `--db external`, with a
 warning.
 
-Unknown flags are now **errors**. `bun run demo -- --fixed-ports` used to be
+Unknown flags are now **errors**. `bun run smoke -- --fixed-ports` used to be
 silently ignored and boot the default data path looking healthy; it now refuses
 before anything starts.
 
 The connection details come from **`.env`**, which the flag reads directly (not
 from the ambient environment — a stray exported `host` must never decide which
-database a demo writes to). `DATABASE_URL` wins when present; otherwise the
+database a smoke writes to). `DATABASE_URL` wins when present; otherwise the
 discrete keys DigitalOcean's connection panel prints are assembled into one, so
 a pasted panel works unedited:
 
@@ -167,14 +167,14 @@ sslmode  = require
 ```
 
 The **switch** stays a CLI argument (same hard rule as `--pg-data` and
-`--static-port`): pointing a demo at a persistent database is a property of one
+`--static-port`): pointing a smoke at a persistent database is a property of one
 deliberate invocation, never of a shell that happens to have something exported.
 `.env` only supplies the address.
 
 **This writes to a real database.** The boot runs migrations and seeds against
-that server, and the workers write to it for as long as the demo runs.
-`demo:down` and `demo:clean` cannot undo any of it — they only ever touch
-containers and Docker volumes, and there are none here. `demo:status` reports
+that server, and the workers write to it for as long as the smoke runs.
+`smoke:down` and `smoke:clean` cannot undo any of it — they only ever touch
+containers and Docker volumes, and there are none here. `smoke:status` reports
 `pg=EXTERNAL` rather than a port, and the state file records only a
 password-redacted URL.
 
@@ -185,21 +185,21 @@ each fail the boot with the reason. `--pg-data` applies only to `--db ephemeral`
 — it bind-mounts that container's data directory, so pairing it with a mode that
 starts no such container is refused by name.
 
-### Rehearse an upgrade against a copy of production — `--db twin`
+### Rehearse an upgrade against a copy of production — `--db smoke-smoke-twin`
 
 ```bash
-bun run twin                # ONE COMMAND: fresh capture + restore + boot on the PINNED tunnel port
-bun run twin:capture        # dump the read-only REPLICA, gpg-encrypted (never the primary)
-bun smoke -- --db twin      # restore an existing dump and boot against it (Docker-assigned port)
-bun run twin:rehearse       # one-shot rehearsal: boot + frontend checks, then tears itself down
+bun run smoke:smoke-smoke-twin                # ONE COMMAND: fresh capture + restore + boot on the PINNED tunnel port
+bun run smoke:smoke:capture        # dump the read-only REPLICA, gpg-encrypted (never the primary)
+bun smoke -- --db smoke-smoke-twin      # restore an existing dump and boot against it (Docker-assigned port)
+bun run smoke:smoke:smoke-smoke-twin --once       # one-shot rehearsal: boot + frontend checks, then tears itself down
 ```
 
-`bun run twin` is the standing one — it is to `bun run demo:stage` what production
+`bun run smoke:smoke-smoke-twin` is the standing one — it is to `bun run smoke:stage` what production
 data is to simulation fixtures, and it takes the same pinned port cloudflared
 routes to. **It therefore publishes a copy of production on a public URL**, and
 the restored admin claim is usually UNCLAIMED, so whoever reaches the admin
 surface first takes admin on real member data. Claim it immediately, or use
-`bun smoke -- --db twin`, which is identical minus the tunnel port. Add `--reuse`
+`bun smoke -- --db smoke-smoke-twin`, which is identical minus the tunnel port. Add `--reuse`
 to skip the capture and boot the backup you already have.
 
 All of these read `OPENCODE_API_KEY` from **`.env.readonly`**, never from `.env`
@@ -207,19 +207,19 @@ All of these read `OPENCODE_API_KEY` from **`.env.readonly`**, never from `.env`
 commands is defined by not needing it.
 
 
-The twin's data lives in a labelled named volume and follows the same contract as
+The smoke-smoke-twin's data lives in a labelled named volume and follows the same contract as
 `pgdata`: teardown removes the container, **keeps** the volume, and `bun run
-demo:clean` reclaims it. It holds real credential material, so reclaim it when
+smoke:clean` reclaims it. It holds real credential material, so reclaim it when
 you are done. Every boot restores fresh — re-running does not resume, it
 discards, because the previous run migrated the copy.
 
-`--db twin` requires `--smoke`: a restored database is populated, and the demo
+`--db smoke-smoke-twin` requires `--smoke`: a restored database is populated, and the smoke
 scenario's fixtures overwrite rows by design.
 
-`twin:rehearse` grades restore + boot + serve and nothing release-specific — it is
-how you check the twin machinery itself. A **release** gate is satisfied by that
+`smoke:smoke-smoke-twin --once` grades restore + boot + serve and nothing release-specific — it is
+how you check the smoke-smoke-twin machinery itself. A **release** gate is satisfied by that
 release's own entry point, which drives the same code and adds this release's
-postflight against the migrated twin plus its rollout receipts:
+postflight against the migrated smoke-smoke-twin plus its rollout receipts:
 
 ```bash
 bun scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
@@ -227,11 +227,11 @@ bun scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-rec
 
 ### Attach a prospective agent
 
-Give the external agent the API URL the running demo printed (the port is
-random per run — `bun run demo:status` reprints it):
+Give the external agent the API URL the running smoke printed (the port is
+random per run — `bun run smoke:status` reprints it):
 
 ```text
-API: http://127.0.0.1:<demo api port>
+API: http://127.0.0.1:<smoke api port>
 ```
 
 Use this prompt for a prospective agent such as Claude (REST-only — the MCP
@@ -240,7 +240,7 @@ transport was retired, see [`docs/decisions.md`](./docs/decisions.md) D21):
 ```text
 You are a prospective Robot Money Investment Swarm member.
 
-- API base URL: http://127.0.0.1:<demo api port>
+- API base URL: http://127.0.0.1:<smoke api port>
 
 Install the `swarm-onboarding` skill from robotmoney-core
 (https://github.com/robotmoney/robotmoney-core) into your agent harness — it
@@ -260,8 +260,8 @@ post a memo, canonicalize + `rmpc`-sign the submission, POST it to
 stance, confidence, and memo URL.
 ```
 
-The built-in demo agents and the built-in onboarding loop keep running at the same
-time. A separately prompted agent proves that a non-demo member can join through
+The built-in smoke agents and the built-in onboarding loop keep running at the same
+time. A separately prompted agent proves that a non-smoke member can join through
 the public apply → activation → claim → `rmpc`-signed REST submission path.
 
 ### Ports: always random, except `--static-port`
@@ -270,20 +270,20 @@ Every published host port (api **and** postgres) is drawn free at boot, on every
 run. There is no fixed default anywhere: `docker-compose.yml` requires
 `WEB_PORT`/`POSTGRES_PORT` (`${VAR:?…}` — it refuses to start rather than fall
 back), `.env.example` no longer ships them, and setting them in your shell or
-`.env` **does nothing**. `bun run demo` prints a loud warning if it finds one so
+`.env` **does nothing**. `bun run smoke` prints a loud warning if it finds one so
 you don't believe a pin took effect — **delete both lines from any existing
 `.env`.**
 
 Why: the api port used to *prefer* 48787 and either port could be pinned from
 the environment. The operator's `.env` pinned both (so nothing was ever random
 locally), while CI — which has no `.env` — took the preferred-48787 path and
-raced the standing stage demo for the exact port `cloudflared` routes
+raced the standing stage smoke for the exact port `cloudflared` routes
 `stage.robotmoney-labs.dev` to. That was a real outage.
 
 The single exception is the pinned boot:
 
 ```bash
-bun run demo -- --static-port
+bun run smoke -- --static-port
 ```
 
 (Previously spelled `--stage`. That name described an environment when the flag
@@ -305,18 +305,18 @@ Every container this repo starts is named for the environment that started it
 
 | | GitHub Actions | Local |
 |---|---|---|
-| demo / stack | `rm_ci_stack_<hash>` | `rm_demo_stack_<hash>` |
-| onboarding eval | `rm_ci_eval_<hash>` | `rm_demo_eval_<hash>` |
-| infra rails check | `rm_ci_infra_<hash>` | `rm_demo_infra_<hash>` |
-| backend test postgres | `rm_ci_pgtest_<hash>` | `rm_demo_pgtest_<hash>` |
+| smoke / stack | `rm_ci_stack_<hash>` | `rm_smoke_stack_<hash>` |
+| onboarding eval | `rm_ci_eval_<hash>` | `rm_smoke_eval_<hash>` |
+| infra rails check | `rm_ci_infra_<hash>` | `rm_smoke_infra_<hash>` |
+| backend test postgres | `rm_ci_pgtest_<hash>` | `rm_smoke_pgtest_<hash>` |
 
 Under Actions the hash is derived from workflow + run + attempt + job, so it is
 stable for every step of one job and distinct across runs; locally it is a
 per-boot random value. The same facts are attached as **labels** —
 `robotmoney.env=ci|local`, `robotmoney.env.hash=<hash>`, plus the existing
-`robotmoney.demo.project` — which is the channel tooling should select on
+`robotmoney.smoke.project` — which is the channel tooling should select on
 (`docker ps --filter label=robotmoney.env=ci`); name matching is for humans.
-Set `DEMO_PROJECT` to override the compose project name if you want re-runs to
+Set `SMOKE_PROJECT` to override the compose project name if you want re-runs to
 reuse / tear down the same containers.
 
 ## Useful commands
@@ -327,15 +327,15 @@ bun run api                  # API only (no static)   — backend/
 bun run worker               # task-queue worker      — backend/
 bun test                     # hermetic suite (spins ephemeral Postgres) — backend/
 bun run typecheck            # tsc --noEmit            — backend/
-bun run demo:down            # tear down the standing demo (containers + network; KEEPS pg data)
-bun run demo:clean           # delete stopped demos' pg data volumes (label robotmoney.demo=1)
-bun run demo:reap -- --dry-run          # SHOW errant containers a sweep would remove (changes nothing)
-bun run demo:reap -- --older-than 6h    # …then actually reap them (labels only, never name matching)
-bun run demo -- --pg-data <host-dir>   # resumable demo: bind postgres data to <host-dir>
-bun run demo -- --db external          # run against the MANAGED Postgres in .env (no pg container)
-bun smoke -- --db twin                 # boot against a local restored copy of production
-bun run twin:capture         # dump the production REPLICA, gpg-encrypted (rm_readonly)
-bun run twin:rehearse        # unattended digital-twin rehearsal (restore + boot + checks)
+bun run smoke:down            # tear down the standing smoke (containers + network; KEEPS pg data)
+bun run smoke:clean           # delete stopped smokes' pg data volumes (label robotmoney.smoke=1)
+bun run smoke:reap -- --dry-run          # SHOW errant containers a sweep would remove (changes nothing)
+bun run smoke:reap -- --older-than 6h    # …then actually reap them (labels only, never name matching)
+bun run smoke -- --pg-data <host-dir>   # resumable smoke: bind postgres data to <host-dir>
+bun run smoke -- --db external          # run against the MANAGED Postgres in .env (no pg container)
+bun smoke -- --db smoke-smoke-twin                 # boot against a local restored copy of production
+bun run smoke:smoke:capture         # dump the production REPLICA, gpg-encrypted (rm_readonly)
+bun run smoke:smoke:smoke-smoke-twin --once        # unattended digital-smoke-smoke-twin rehearsal (restore + boot + checks)
 bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
 bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)

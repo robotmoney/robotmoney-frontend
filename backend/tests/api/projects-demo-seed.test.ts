@@ -1,11 +1,11 @@
 // Demo projects seed (issue #70 deferred ingestion). Runs against the ephemeral
 // Postgres the preload provisions + migrates (tests/preload.ts) — a real DB, never
-// a mock. Asserts seedDemoProjects() populates the 0013 tables so fetchProjects()
+// a mock. Asserts seedSmokeProjects() populates the 0013 tables so fetchProjects()
 // returns a full, gated, faceted directory, and that the seed is idempotent (row
 // counts stable across repeated runs).
 import { test, expect } from "bun:test";
 import { sql } from "../../src/db/client.ts";
-import { seedDemoProjects } from "../../src/projects/demo-seed.ts";
+import { seedSmokeProjects } from "../../src/projects/smoke-seed.ts";
 import { fetchProjects } from "../../src/projects/projections.ts";
 
 async function rowCounts() {
@@ -21,8 +21,8 @@ async function rowCounts() {
   return { projects: p.n, agents: a.n, coins: c.n, wallets: w.n, vaults: v.n, revenue: r.n, snapshots: s.n };
 }
 
-test("seedDemoProjects populates a gated, faceted, sparkline-bearing directory", async () => {
-  await seedDemoProjects();
+test("seedSmokeProjects populates a gated, faceted, sparkline-bearing directory", async () => {
+  await seedSmokeProjects();
   const { projects } = await fetchProjects();
 
   // ≥ 8 projects, all clearing the MIN_SCORE (55) gate.
@@ -46,7 +46,7 @@ test("seedDemoProjects populates a gated, faceted, sparkline-bearing directory",
   expect(withSpark.length).toBeGreaterThan(0);
   expect(withSpark[0].sparkline.length).toBe(30);
 
-  // Revenue is no longer surfaced on the DTO (issue #346), but the demo seed
+  // Revenue is no longer surfaced on the DTO (issue #346), but the smoke seed
   // still writes real agent_revenue_daily rows (feeding the sparkline
   // fallback for tokenless projects) — assert that directly against the table.
   const [{ n: revenueRows }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM agent_revenue_daily WHERE revenue_usd > 0`;
@@ -68,18 +68,18 @@ test("seedDemoProjects populates a gated, faceted, sparkline-bearing directory",
   expect(projects[0].isSticky).toBe(true);
 });
 
-test("seedDemoProjects is idempotent — a second run does not duplicate rows", async () => {
-  await seedDemoProjects();
+test("seedSmokeProjects is idempotent — a second run does not duplicate rows", async () => {
+  await seedSmokeProjects();
   const before = await rowCounts();
 
-  await seedDemoProjects();
+  await seedSmokeProjects();
   const after = await rowCounts();
 
   expect(after).toEqual(before);
 
   // And the DTO count is unchanged too.
   const first = (await fetchProjects()).projects.length;
-  await seedDemoProjects();
+  await seedSmokeProjects();
   const second = (await fetchProjects()).projects.length;
   expect(second).toBe(first);
 });
