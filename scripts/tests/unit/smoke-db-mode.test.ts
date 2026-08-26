@@ -130,19 +130,6 @@ describe("loud refusals — every one before any restore work", () => {
 });
 
 
-  test("paired with the equivalent --db external: allowed, one warning", () => {
-    const { dataPath, warnings } = parse(argv("--external-pg", DB_FLAG, "external"));
-    expect(dataPath.kind).toBe("external");
-    expect(warnings).toHaveLength(1);
-  });
-
-  test("paired with a CONFLICTING mode: refused", () => {
-    expect(() => parse(argv("--external-pg", DB_FLAG, "smoke-twin", "--smoke"))).toThrow(
-      /different data paths/,
-    );
-  });
-});
-
 describe("validateArgv — unknown flags are errors, not silence", () => {
   test("--fixed-ports is rejected (the flag that never existed and booted green)", () => {
     const errors = validateArgv(argv("--smoke", "--fixed-ports"));

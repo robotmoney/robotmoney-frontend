@@ -5,7 +5,7 @@
 // dependency. restore-container.ts lives in the root tree, which the smoke and
 // stack tooling import, and dragging a backend-only driver into that graph to
 // serve one caller would be the wrong trade. So the root tree owns the
-// CONTAINER lifecycle (withSmokeSmokeTwinContainer) and this thin backend-side wrapper
+// CONTAINER lifecycle (withSmokeTwinContainer) and this thin backend-side wrapper
 // adds the CONNECTION lifecycle on top.
 //
 // Both halves guarantee cleanup in a `finally`, which is the whole point of the
@@ -13,7 +13,7 @@
 // exactly how a container holding a copy of production, or a pool holding it
 // open, gets left behind.
 import postgres from "postgres";
-import { withSmokeSmokeTwinContainer } from "../../../scripts/lib/restore-container.ts";
+import { withSmokeTwinContainer } from "../../../scripts/lib/restore-container.ts";
 import type { Db } from "./preflight-utils.ts";
 
 /**
@@ -29,7 +29,7 @@ export async function withSmokeSmokeTwinDatabase<T>(
   opts: { backupDir?: string; log: (m: string) => void; bindHost?: string },
   fn: (db: Db) => Promise<T>,
 ): Promise<T | { error: string; code: 2 }> {
-  return withSmokeSmokeTwinContainer(opts, async (restored) => {
+  return withSmokeTwinContainer(opts, async (restored) => {
     const db = postgres({
       host: restored.host,
       port: restored.port,

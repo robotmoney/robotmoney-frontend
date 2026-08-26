@@ -46,7 +46,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBackupFiles } from "../../../../scripts/lib/restore-container.ts";
-import { runSmokeSmokeTwinRehearsal } from "../../../../scripts/lib/smoke-twin-rehearsal.ts";
+import { runSmokeTwinRehearsal } from "../../../../scripts/lib/smoke-twin-rehearsal.ts";
 import { connect, type Db } from "../../lib/postflight-utils.ts";
 import { cadenceMs, WEDGE_GRACE_MS } from "./postflight.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
@@ -143,7 +143,7 @@ async function waitForScheduleDrain(
 }
 
 async function run(backupDirArg?: string): Promise<number> {
-  return runSmokeSmokeTwinRehearsal({
+  return runSmokeTwinRehearsal({
     name: NAME,
     backupDir: backupDirArg,
     // §6.1 step 3 / G8 — this release's postflight, inside the smoke-twin's window,
