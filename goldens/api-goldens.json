@@ -166271,7 +166271,7 @@
     },
     "/health": {
       "status": "ok",
-      "env": "smoke",
+      "env": "demo",
       "db": "up"
     },
     "/api/swarm/brief": {

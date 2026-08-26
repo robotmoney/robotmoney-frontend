@@ -335,16 +335,16 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
     }
   });
 
-  test("smoke and smoke share one migrate path with scenario-specific initialization", async () => {
+  test("smoke and twin share one migrate path with scenario-specific initialization", async () => {
     const smoke = scenarioPlan(false);
-    const otherSmoke = scenarioPlan(true);
+    const twin = scenarioPlan(true);
 
     expect(smoke.initializer).toBe("simulation");
-    expect(smoke.migrateEnv).toEqual({ DEMO_SEED_PROJECTS: "1" });
+    expect(smoke.migrateEnv).toEqual({ SMOKE_SEED_PROJECTS: "1" });
     expect(smoke.migrateScriptArgs).toEqual(["--seed-smoke-schedules"]);
-    expect(smoke.initializer).toBe("archive");
-    expect(smoke.migrateEnv).toEqual({});
-    expect(smoke.migrateScriptArgs).toEqual([]);
+    expect(twin.initializer).toBe("archive");
+    expect(twin.migrateEnv).toEqual({});
+    expect(twin.migrateScriptArgs).toEqual([]);
 
     const smokeMain = await Bun.file(join(repoRoot, "scripts/lib/smoke-main.ts")).text();
     expect(smokeMain.match(/await stack\.up\(/g) ?? []).toHaveLength(1);

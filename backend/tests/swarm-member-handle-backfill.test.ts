@@ -83,14 +83,14 @@ describe("handle backfill — every member gets the derived handle, once", () =>
     expect(ha).not.toBe(hb);
     // One gets the stem, the other a suffix — that is the derivation working,
     // and it is legitimate here because the NAMES genuinely collide.
-    expect([ha, hb].sort()).toEqual(["smoke-twin-backfill", "smoke-twin-backfill-2"]);
+    expect([ha, hb].sort()).toEqual(["twin-backfill", "twin-backfill-2"]);
   });
 
   test("a derived handle never collides with another member's id", async () => {
     // 0031 refuses a handle equal to another member's id. With UUID ids that
     // cannot happen, but a legacy slug id still in the table would make it
     // possible — so prove the derivation avoids it rather than raising.
-    const squatterId = "smoke-twin-squatter-backfill";
+    const squatterId = "twin-squatter-backfill";
     await sql`INSERT INTO swarm_members (id, handle, status, name)
               VALUES (${squatterId}, ${squatterId}, 'active', 'Unrelated Name')`;
     const victim = await memberWithUnsetHandle("Twin Squatter Backfill");
@@ -99,6 +99,6 @@ describe("handle backfill — every member gets the derived handle, once", () =>
 
     const got = await handleOf(victim);
     expect(got).not.toBe(squatterId);
-    expect(got.startsWith("smoke-twin-squatter-backfill")).toBe(true);
+    expect(got.startsWith("twin-squatter-backfill")).toBe(true);
   });
 });

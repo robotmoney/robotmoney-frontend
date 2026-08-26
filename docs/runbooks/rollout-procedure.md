@@ -2,7 +2,7 @@
 
 Everything a production rollout does that is **the same every release**: how to
 find your position, how the backup is taken and proven, how the stage rehearsal
-and digital smoke-smoke-twin work, how environment actually reaches the api container, how
+and digital smoke-twin work, how environment actually reaches the api container, how
 the stack is stopped and started, and what rollback does and does not undo.
 
 **This document is not runnable on its own and is not a release plan.** It has
@@ -83,7 +83,7 @@ independent:
    all; the probe marks them ⛔ rather than letting you try.
 2. **Code** — each step declares the paths it actually executes (`depends-on`
    in its step block). A commit invalidates a step only if it lands on that
-   step's own inputs. This is what release-runbooks.md §4.4's *"the smoke-smoke-twin must
+   step's own inputs. This is what release-runbooks.md §4.4's *"the smoke-twin must
    use the same release candidate that is planned for production"* means in
    practice: a docs-only commit invalidates nothing, a change to `preflight.ts`
    invalidates Gate C **and** Gate B (Gate C runs preflight's checks —
@@ -626,10 +626,10 @@ credentials, so it does not need §5.2's encryption).
 
 > **Corrected 2026-08-20 — this section used to be headed "Optional but
 > recommended".** It is not optional and never was: §6.4 opens *"⛔ This is a
-> blocking gate. Do not proceed to §7 until the smoke-smoke-twin run exits 0"*, and
-> release-runbooks.md §4.4 makes the digital-smoke-smoke-twin rehearsal part of the
+> blocking gate. Do not proceed to §7 until the smoke-twin run exits 0"*, and
+> release-runbooks.md §4.4 makes the digital-smoke-twin rehearsal part of the
 > foundational workflow with *"any failure, warning, or unexpected state change
-> discovered on the smoke-smoke-twin is a blocking issue."* Two places said required, one
+> discovered on the smoke-twin is a blocking issue."* Two places said required, one
 > said optional, and the optional one was the heading an operator reads first.
 
 `restore-check.ts` proves the dump restores and that static SQL checks pass
@@ -653,7 +653,7 @@ restored data, `seed()`, and a full health-wait.
 > point.** `OPENCODE_API_KEY` must be set — in your shell, or in the
 > checkout's **`.env.readonly`**, and deliberately **not** `.env`. On a staging
 > host `.env` holds the application's writer `DATABASE_URL`, and this whole
-> family of commands (`smoke:capture`, `smoke:smoke-smoke-twin --once`, `stage-rehearsal.ts`,
+> family of commands (`smoke:capture`, `smoke:smoke-twin --once`, `stage-rehearsal.ts`,
 > preflight) is defined by not needing that credential; reading `.env` for the
 > key would have made them depend on the one file they exist to stay away from,
 > and made "which key did that run use?" a question with two answers. It
@@ -682,7 +682,7 @@ What it does:
    that looks like it blocks the port — verified 2026-08-17, this is not
    hypothetical).
 2. Boots the real stack against it with `bun scripts/smoke.ts --smoke --db
-   smoke-smoke-twin --no-tui`, `CI` unset, a scoped `SMOKE_PROJECT` (lowercased — Compose
+   smoke-twin --no-tui`, `CI` unset, a scoped `SMOKE_PROJECT` (lowercased — Compose
    project names reject the uppercase `T`/`Z` in the backup's own timestamp).
    The funded **`OPENCODE_API_KEY`** is passed in the child's environment, and
    **no `AGENT_MODEL`** is set, so the model resolves to `DEFAULT_AGENT_MODEL`
@@ -695,12 +695,12 @@ What it does:
    forever.
 4. Once ready, runs `scripts/smoke-frontend-check.ts` against that port — the
    same route/content checks CI runs on every boot, not a bespoke probe.
-5. Then, **while the smoke-smoke-twin is still up**, runs this release's `postflight.ts`
+5. Then, **while the smoke-twin is still up**, runs this release's `postflight.ts`
    against it (G8, §6.1 step 3). This is the step that emits
-   `P5.postflight-smoke-smoke-twin`.
+   `P5.postflight-smoke-twin`.
 6. Tears down on **every** exit path (G6): stops the supervised boot first,
    then `smoke-down.ts` with an explicit `SMOKE_PROJECT`, the `member_home_*`
-   volumes `smoke-down` deliberately keeps, and the smoke-smoke-twin's own volume — which
+   volumes `smoke-down` deliberately keeps, and the smoke-twin's own volume — which
    `smoke-down` keeps by contract but which, for a rehearsal, is pure litter
    holding production-derived data.
 
@@ -708,19 +708,19 @@ What it does:
 > Earlier revisions of this step checked out a detached worktree, symlinked
 > `node_modules` into it and wrote it a private `.env`, for exactly one reason:
 > `--external-pg` reads `DATABASE_URL` from the repo-root `.env` **file**, and
-> on a staging host that file holds a real credential. `--db smoke-smoke-twin` builds its
+> on a staging host that file holds a real credential. `--db smoke-twin` builds its
 > URL in-process and writes no file at all, so the whole apparatus was
 > insurance against a risk the mode no longer takes. What it was protecting is
 > now asserted rather than arranged — see G7.
 
 Exit `0` means the migration ran for real, the stack came up healthy, the
 frontend checks passed against production-shaped data, and this release's
-postflight is clean against the migrated smoke-smoke-twin.
+postflight is clean against the migrated smoke-twin.
 
-#### 6.1 ⛔ The rehearsal runs preflight AND POSTFLIGHT against the smoke-smoke-twin
+#### 6.1 ⛔ The rehearsal runs preflight AND POSTFLIGHT against the smoke-twin
 
 **A rehearsal that only proves the stack boots has not rehearsed the
-release.** Run **both** halves against the digital smoke-smoke-twin, in the same order
+release.** Run **both** halves against the digital smoke-twin, in the same order
 production will see them, before production is touched at all:
 
 1. **Preflight** — §5.3's `restore-check.ts` (Gate C), then the release's own
@@ -728,7 +728,7 @@ production will see them, before production is touched at all:
 2. **Cutover** — §6's boot, which applies this release's migrations to the
    restored production rows for real.
 3. **Postflight** — **every check the release's postflight runs, and every acceptance criterion the per-release runbook states**,
-   against the migrated smoke-smoke-twin.
+   against the migrated smoke-twin.
 
 Step 3 is the one that was missing, and its absence is exactly how a real
 defect reached rc.5 while every script reported success: the boot exited `0`,
@@ -738,10 +738,10 @@ public handle** (`robot-money` instead of `robotmoney`, `woon-2` instead of
 not a met objective, and only those criteria
 distinguishes them.
 
-The smoke-smoke-twin is the right place for this and the only place it is free: it holds
+The smoke-twin is the right place for this and the only place it is free: it holds
 real production rows, so the ACs are evaluated against the data that will
 actually be migrated, and a failure costs a rerun rather than a rollback.
-**Treat an AC failure on the smoke-smoke-twin exactly as an AC failure in production** —
+**Treat an AC failure on the smoke-twin exactly as an AC failure in production** —
 patch, cut the next rc, rehearse again. Do not carry a known-failing AC into
 a cutover on the theory that production will behave differently; it is the
 same data.
@@ -755,20 +755,20 @@ section states the intent and the script is what gets fixed.
 | # | Guarantee | Why it is load-bearing |
 |---|---|---|
 | **G1** | **It terminates on its own, always.** A run reaches one of the exit codes below without an operator interrupting it. "Still going" after the deadline is a **failure**, not patience. | This is the last gate before a production cutover, often at 3am. A step that can hang indefinitely cannot be sequenced, cannot be timed, and silently converts "rehearsal passed" into "nobody waited long enough to find out." |
-| **G2** | **It boots what §8.2 boots, and supervises it.** Same scenario (`--smoke`), same `--no-tui`, same `CI`-unset supervision, same compose topology — the one difference is the data path: `--db smoke-smoke-twin` here, `--db external` at cutover. Those two modes take the *identical* structural path through the boot (`smoke-db-mode.ts` generates one overlay for both: no postgres service, no volume, no `depends_on`); they differ only in who resolves `DATABASE_URL`, and `--db smoke-smoke-twin` additionally *asserts* the answer (G7). Before the mode enum existed the rehearsal borrowed `--external-pg` to get byte-identical flags, and paid for it with the worktree apparatus above. | With `CI` unset the boot **never self-terminates by design**: it falls past smoke-main's CI-gated exits (`scripts/lib/smoke-main.ts:1175`, `:1212`) into the LIVE steady-state loop and cycles sessions forever. That is correct for §8.2, where the stack must stay up serving production. A rehearsal that `await`s that process therefore waits forever — the two requirements are only compatible if the rehearsal supervises. Setting `CI` to escape this is **not** an acceptable fix: a truthy `CI` tears the stack down regardless of exit code (§8.2), so the frontend checks would have nothing left to hit, and the boot would no longer be the one §8.2 runs. |
+| **G2** | **It boots what §8.2 boots, and supervises it.** Same scenario (`--smoke`), same `--no-tui`, same `CI`-unset supervision, same compose topology — the one difference is the data path: `--db smoke-twin` here, `--db external` at cutover. Those two modes take the *identical* structural path through the boot (`smoke-db-mode.ts` generates one overlay for both: no postgres service, no volume, no `depends_on`); they differ only in who resolves `DATABASE_URL`, and `--db smoke-twin` additionally *asserts* the answer (G7). Before the mode enum existed the rehearsal borrowed `--external-pg` to get byte-identical flags, and paid for it with the worktree apparatus above. | With `CI` unset the boot **never self-terminates by design**: it falls past smoke-main's CI-gated exits (`scripts/lib/smoke-main.ts:1175`, `:1212`) into the LIVE steady-state loop and cycles sessions forever. That is correct for §8.2, where the stack must stay up serving production. A rehearsal that `await`s that process therefore waits forever — the two requirements are only compatible if the rehearsal supervises. Setting `CI` to escape this is **not** an acceptable fix: a truthy `CI` tears the stack down regardless of exit code (§8.2), so the frontend checks would have nothing left to hit, and the boot would no longer be the one §8.2 runs. |
 | **G3** | **Readiness is polled, with a deadline.** Ready ⇔ `.agents/smoke-state.json` exists **and** `/health` on its `apiPort` answers `200`. Not reached within the deadline ⇒ exit `1`. | Readiness is the only honest signal that migration + seed + serve all succeeded, and a deadline is what turns G1 from an intention into a property. Allow generously for a cold image build (a first build pulls base images and compiles); this is minutes, not seconds. |
 | **G4** | **Verification runs against the booted stack**: `scripts/smoke-frontend-check.ts` on the published port — the same route/content checks CI runs, never a bespoke probe. | A stack that boots but serves the home-page shell for every route is a failed cutover that `/health` alone reports as green (§9.1's check table). |
 | **G5** | **Spend is bounded, and the bound is explicit.** The boot runs production's model on a **funded** key, and the steady-state loop authors real swarm takes on a timer. The rehearsal must stop the stack as soon as its checks finish — pass or fail — and must never let the loop cycle unattended. Where a release's checks genuinely need longer than seconds (watching a scheduler tick, waiting on a paced backfill), the window is **bounded by `RehearsalOptions.checkDeadlineMs`**, default 45 minutes, enforced by the driver as a race against the `onReady` hook. A check that cannot bound its own wait must say so rather than hold a metered stack open. | Cost here is unbounded and grows with wall-clock, so a hang is not merely slow, it is expensive. Verified 2026-08-17: a hung run reached 5 analytics cycles and 3 live swarm sessions before it was killed by hand. **And verified again 2026-08-22, against the assumption that `--smoke` makes this cheap: it does not.** A smoke boot does suppress the scripted-newcomer narrative (`smoke-mode.ts`'s `runsNewcomerOnboarding: false`) and the `swarm.*` schedules (`docker-compose.smoke.yml` pins `SWARM_SCHEDULES_ENABLED: "0"`), but the steady-state session loop still ran and authored verified memos throughout a ~20-minute observation window. Budget the window deliberately; do not assume smoke mode makes it free. |
-| **G6** | **Cleanup is unconditional.** The compose stack, the smoke-smoke-twin container and the smoke-smoke-twin's volume are all removed on **every** exit path — success, assertion failure, readiness timeout, and an unhandled throw. The volume is explicit: a `--db smoke-smoke-twin` boot *keeps* it by contract (`smoke:clean` reclaims it), which is right for an operator looking at a smoke-smoke-twin and wrong for an unattended rehearsal, where it is production-derived data nobody asked to keep. | Leftovers from this script are not inert: a surviving container holds a full copy of production data (§6.3), and a surviving stack keeps spending under G5. |
-| **G7** | **Isolation is absolute, and asserted rather than arranged.** No file is written — not the real repo-root `.env`, not a throwaway one; the smoke-smoke-twin's port is bound to a non-routable address; and `assertSmokeTwinIsTarget()` refuses the boot outright unless the compose environment's `DATABASE_URL` **is** the smoke-smoke-twin's. | The rehearsal's whole claim is that it cannot touch production. Compose auto-loads the repo-root `.env`, so "the stack config wins over that file" is a precedence *argument*; this is a check. A rehearsal that silently ran against production would be the worst outcome this repo has. See §6.3. |
-| **G8** | **Postflight runs against the smoke-smoke-twin, inside the same run** — this release's postflight checks *and* its acceptance criteria, via `postflight.ts --emit-receipt=P5.postflight-smoke-smoke-twin`, after G4 and before teardown. A failure is exit `1`. **So is being unable to run it at all**: a rehearsal that cannot reach the smoke-smoke-twin to grade it must not report the boot's green as the gate's green. | §6.1 step 3 and §6.4 both require it, and the smoke-smoke-twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. The shared driver (`scripts/lib/smoke-smoke-smoke-twin-rehearsal.ts`) cannot know a release's checks, so it hands the window back through an `onReady` hook and the release's own `stage-rehearsal.ts` fills it. |
+| **G6** | **Cleanup is unconditional.** The compose stack, the smoke-twin container and the smoke-twin's volume are all removed on **every** exit path — success, assertion failure, readiness timeout, and an unhandled throw. The volume is explicit: a `--db smoke-twin` boot *keeps* it by contract (`smoke:clean` reclaims it), which is right for an operator looking at a smoke-twin and wrong for an unattended rehearsal, where it is production-derived data nobody asked to keep. | Leftovers from this script are not inert: a surviving container holds a full copy of production data (§6.3), and a surviving stack keeps spending under G5. |
+| **G7** | **Isolation is absolute, and asserted rather than arranged.** No file is written — not the real repo-root `.env`, not a throwaway one; the smoke-twin's port is bound to a non-routable address; and `assertSmokeTwinIsTarget()` refuses the boot outright unless the compose environment's `DATABASE_URL` **is** the smoke-twin's. | The rehearsal's whole claim is that it cannot touch production. Compose auto-loads the repo-root `.env`, so "the stack config wins over that file" is a precedence *argument*; this is a check. A rehearsal that silently ran against production would be the worst outcome this repo has. See §6.3. |
+| **G8** | **Postflight runs against the smoke-twin, inside the same run** — this release's postflight checks *and* its acceptance criteria, via `postflight.ts --emit-receipt=P5.postflight-smoke-twin`, after G4 and before teardown. A failure is exit `1`. **So is being unable to run it at all**: a rehearsal that cannot reach the smoke-twin to grade it must not report the boot's green as the gate's green. | §6.1 step 3 and §6.4 both require it, and the smoke-twin exists only between readiness and teardown. Until this was part of the contract there was no supported way to obey them: the rc.6 rehearsal satisfied step 3 by racing a watcher against teardown from a second terminal, which is not a procedure anyone should have to invent at 3am. The shared driver (`scripts/lib/smoke-twin-rehearsal.ts`) cannot know a release's checks, so it hands the window back through an `onReady` hook and the release's own `stage-rehearsal.ts` fills it. |
 
 **Exit codes.**
 
 | Code | Meaning |
 |---|---|
 | `0` | Migrations applied for real, the stack came up healthy, and the frontend checks passed against production-shaped data. |
-| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), a frontend check failed, or postflight failed against the smoke-smoke-twin (G8). |
+| `1` | The rehearsal ran and the release failed it: the boot died, readiness was not reached within the deadline (G3), a frontend check failed, or postflight failed against the smoke-twin (G8). |
 | `2` | Could not run at all — missing/undecryptable backup files, no `OPENCODE_API_KEY` (§6's box), Docker/git failure. Says nothing about the release. |
 
 ✅ **Conformant as of 2026-08-17, and executed end to end for the first
@@ -805,7 +805,7 @@ baseline).
 > green while **two members ended up with the wrong public handle** — the
 > defect the acceptance criteria exist to catch. Always follow a green run with
 > §6.1 step 3: the release's postflight checks *and* its acceptance criteria,
-> against the same smoke-smoke-twin.
+> against the same smoke-twin.
 
 > **Reading a run.** "Still running" is only ever legitimate *before*
 > readiness, and only up to G3's deadline — a cold first build genuinely
@@ -814,30 +814,30 @@ baseline).
 > take is hung, not working; that is now a bug to report, not a state to
 > wait out.
 
-#### 6.3 Contract — the digital smoke-smoke-twin is production data, and must be treated that way
+#### 6.3 Contract — the digital smoke-twin is production data, and must be treated that way
 
 Both §5.3 and §6 restore the dump into a throwaway local Postgres. Nothing
-about "throwaway" makes its **contents** low-value: the smoke-smoke-twin holds a complete
+about "throwaway" makes its **contents** low-value: the smoke-twin holds a complete
 copy of production, including `admin_credential` hashes, `admin_session`
 tokens, member access keys and every stored email address — the same inventory
 §5.2 encrypts the dump for. The container is disposable; the data in it is not.
 
 | # | Guarantee | Why |
 |---|---|---|
-| **T1** | **No production credential is used or needed.** The smoke-smoke-twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run *for real* with no production secret in play. It is also why `doadmin` is irrelevant to §5.3/§6: the migrations apply to the smoke-smoke-twin, and at real cutover (§8) they apply as the application's writer from `DATABASE_URL` — `doadmin` applies migrations at no point in this runbook. |
-| **T2** | **The smoke-smoke-twin's superuser is a true superuser, and that is fine.** It holds more Postgres privilege than `doadmin` does (DO withholds real superuser — §4's `pg_read_all_data` box is that limit in action), yet near-zero risk: it reaches one disposable container and dies with it. | Privilege and blast radius are independent. Do not reason about this credential by its power; reason about the state it can reach. |
+| **T1** | **No production credential is used or needed.** The smoke-twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run *for real* with no production secret in play. It is also why `doadmin` is irrelevant to §5.3/§6: the migrations apply to the smoke-twin, and at real cutover (§8) they apply as the application's writer from `DATABASE_URL` — `doadmin` applies migrations at no point in this runbook. |
+| **T2** | **The smoke-twin's superuser is a true superuser, and that is fine.** It holds more Postgres privilege than `doadmin` does (DO withholds real superuser — §4's `pg_read_all_data` box is that limit in action), yet near-zero risk: it reaches one disposable container and dies with it. | Privilege and blast radius are independent. Do not reason about this credential by its power; reason about the state it can reach. |
 | **T3** | **The published port must bind a non-routable address** — `127.0.0.1`, or the Docker bridge gateway when sibling containers must reach it (§6). **Never `0.0.0.0`.** | Docker inserts its own iptables rules ahead of ufw/firewalld, so a `0.0.0.0` bind can be reachable from outside the host *even when the firewall looks closed* (verified 2026-08-17). Given T4, the bind address is the only thing standing between a production-data copy and the internet. |
-| **T4** | **The smoke-smoke-twin's password must be generated per run, not a constant.** | A predictable password is acceptable *only* while T3 holds perfectly; making it unpredictable removes the dependence of one control on another and costs nothing. **Conformant as of 2026-08-17.** `restore-container.ts` previously hardcoded `LOCAL_PASSWORD = "throwaway-local-only"` while §5.3's prose claimed the superuser was "freshly generated" — it was not. It now is: generated per run, never logged, passed to callers on `RestoredContainer`. |
+| **T4** | **The smoke-twin's password must be generated per run, not a constant.** | A predictable password is acceptable *only* while T3 holds perfectly; making it unpredictable removes the dependence of one control on another and costs nothing. **Conformant as of 2026-08-17.** `restore-container.ts` previously hardcoded `LOCAL_PASSWORD = "throwaway-local-only"` while §5.3's prose claimed the superuser was "freshly generated" — it was not. It now is: generated per run, never logged, passed to callers on `RestoredContainer`. |
 
-### 6.4 Digital-smoke-smoke-twin rehearsal
+### 6.4 Digital-smoke-twin rehearsal
 
-> **Manifest step `P5.postflight-smoke-smoke-twin`.** The machine-readable block for this step —
+> **Manifest step `P5.postflight-smoke-twin`.** The machine-readable block for this step —
 > its id, artifacts, TTL and `verify:` command — lives in the **per-release**
 > runbook, because every one of those fields names that release's own scripts
 > and backup directory. This document describes the mechanic; the release binds
 > it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
 
-⛔ **This is a blocking gate.** Do not proceed to §7 until the smoke-smoke-twin run exits
+⛔ **This is a blocking gate.** Do not proceed to §7 until the smoke-twin run exits
 `0` and every acceptance criterion in §6.5 is met.
 
 Restore the backup (§5.3's `restore-check.ts`, then §6's
@@ -845,29 +845,29 @@ Restore the backup (§5.3's `restore-check.ts`, then §6's
 against it in sequence:
 
 1. **Preflight** — run `restore-check.ts` (Gate C) first, then the release's live
-   checks against the restored smoke-smoke-twin. Any failure is blocking. Follow the fix
+   checks against the restored smoke-twin. Any failure is blocking. Follow the fix
    loop: patch, cut the next rc, restore a fresh dump, rehearse again.
 2. **Cutover** — run `stage-rehearsal.ts`, which boots the §8.2 stack
    (`--smoke`, `--no-tui`, `CI` unset; see G2 on the one flag that differs)
-   against the migrated smoke-smoke-twin. Any failure is blocking.
+   against the migrated smoke-twin. Any failure is blocking.
 3. **Postflight** — every check the release's postflight runs **and** every
    acceptance criterion the per-release runbook states
-   against the smoke-smoke-twin, after readiness and before teardown. **`stage-rehearsal.ts`
+   against the smoke-twin, after readiness and before teardown. **`stage-rehearsal.ts`
    runs this for you** (G8) — it is not a command you issue afterwards, because
-   the smoke-smoke-twin does not survive step 2. Any failure is blocking; do not carry a
+   the smoke-twin does not survive step 2. Any failure is blocking; do not carry a
    known-failing AC into a production cutover on the theory that production will
    behave differently.
 
-The smoke-smoke-twin holds real production rows. An AC failure on the smoke-smoke-twin is an AC failure
-in production; it is the same data. Treat a failing smoke-smoke-twin the same as a failing
+The smoke-twin holds real production rows. An AC failure on the smoke-twin is an AC failure
+in production; it is the same data. Treat a failing smoke-twin the same as a failing
 production cutover: diagnose, patch, cut the next rc, re-rehearse from step 1.
 
 ```bash
 cd <checkout>/backend
-# Step 1 — preflight against the smoke-smoke-twin
+# Step 1 — preflight against the smoke-twin
 bun scripts/upgrades/<FROM>-to-<TO>/restore-check.ts $RM_BACKUP_DIR
 
-# Steps 2+3 — cutover AND postflight, in one run, against the same smoke-smoke-twin
+# Steps 2+3 — cutover AND postflight, in one run, against the same smoke-twin
 bun scripts/upgrades/<FROM>-to-<TO>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
 ```
 
@@ -881,16 +881,16 @@ bun scripts/upgrades/<FROM>-to-<TO>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-rec
 
 ⛔ **Gate: do not proceed to §7 until this report exists and all criteria pass.**
 
-Produce a written report covering the smoke-smoke-twin rehearsal just completed. Save it to
+Produce a written report covering the smoke-twin rehearsal just completed. Save it to
 a file alongside the backup artifacts (e.g.
 `stage-rehearsal-report-<STAMP>.md`). The report must include:
 
 **1. Twin setup**
-- RC tag and SHA deployed to the smoke-smoke-twin
+- RC tag and SHA deployed to the smoke-twin
 - Backup stamp used (`rm-preupgrade-<STAMP>.dump.gpg`)
 - `restore-check.ts` exit code and any notable output
 
-**2. Preflight results (on the smoke-smoke-twin)**
+**2. Preflight results (on the smoke-twin)**
 - Every gate the per-release runbook defines, in its stated execution order,
   with pass / fail / note for each. Gate letters are stable NAMES, not an
   order, and which letters exist is the release's business — v0.3.0 defines
@@ -900,12 +900,12 @@ a file alongside the backup artifacts (e.g.
   all along.
 - Exit code of `restore-check.ts`
 
-**3. Cutover results (on the smoke-smoke-twin)**
+**3. Cutover results (on the smoke-twin)**
 - `stage-rehearsal.ts` exit code
 - Time to readiness (`ready after …s`)
 - Frontend check verdict
 
-**4. Postflight results (§8 on the smoke-smoke-twin)**
+**4. Postflight results (§8 on the smoke-twin)**
 - A result for **every check the release's `postflight.ts` records** — the count
   is whatever `runChecks` runs, not a fixed number (v0.2.2 ran twelve; v0.3.0
   runs seven plus one manual). The per-release runbook's postflight table is the
@@ -1194,7 +1194,7 @@ not.
 
 | Flag / var | Why it is here | What happens without it |
 |---|---|---|
-| `--db external` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/smoke-external-pg.ts:288-305`). One enum flag names the data path — `ephemeral \| external \| smoke-smoke-twin` — and `external` is the only one that means "a server this boot did not create and cannot reclaim". The older `--external-pg` spelling still works and prints a deprecation notice; runbooks written before the enum use it throughout. | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §2. Since the enum landed an unknown flag is also a hard error rather than a silent default, so a typo'd data path stops the boot instead of quietly picking `ephemeral`. |
+| `--db external` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/smoke-external-pg.ts:288-305`). One enum flag names the data path — `ephemeral \| external \| smoke-twin` — and `external` is the only one that means "a server this boot did not create and cannot reclaim". The older `--external-pg` spelling still works and prints a deprecation notice; runbooks written before the enum use it throughout. | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §2. Since the enum landed an unknown flag is also a hard error rather than a silent default, so a typo'd data path stops the boot instead of quietly picking `ephemeral`. |
 | `SMOKE_PROJECT=rm_prod` | **MANDATORY.** Pins the compose project name (`scripts/lib/smoke-main.ts:261`). Without it the name is `rm_smoke_stack_<random>` per boot (`scripts/stack/naming.ts:138`). | Every restart leaves an orphaned project. `docker compose -p …` commands in deployment.md address the wrong stack. Note: `--db external` does **not** by itself stabilise the project name — only `SMOKE_PROJECT` does. |
 | `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/smoke-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Always pass it.** Needing the per-boot `ADMIN_TOKEN` — the expected unclaimed case (§2) — is *not* a reason to omit it: read the token out of the container instead (§7.4). |
 | **`CI` must be UNSET** | ⛔ With any truthy `CI` the boot runs a bounded scenario and then **tears the whole stack down**. Under smoke the branch taken is `CI && smokeMode` (`scripts/lib/smoke-main.ts:1175`): it runs one live swarm session against production and then `scripts/smoke-e2e-assert.ts` (`:1206`). The swarm-session *driver* at `:1212` is the **other** branch, `CI && !smokeMode`, and never runs here. Either way control reaches `if (process.env.CI)` at `:1390`, which calls `cleanup()` — a full `compose down` (`:697`, `:711-715`) — then `cleanCiVolume()` (`:1393`) and `process.exit(0)` (`:1394`). `cleanCiVolume()` also runs on the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/smoke-volumes.ts:105`). | The volume removal is harmless under `--db external` (no volume exists), but the teardown is not. Success exits `0` (`:1394`) and failure exits `1` (`:1894`) — the exit code still works — yet **either way the stack is torn down**, so the site does not stay up and there is nothing left to inspect or verify in §8. Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |
@@ -1356,7 +1356,7 @@ FROM wallet_balance_samples;
 wallet balance sampler has not run since the new code booted — the sampler is
 wedged or the worker container is not running.
 
-If this is a fresh database (e.g. the smoke-smoke-twin), `samples_today` may legitimately be
+If this is a fresh database (e.g. the smoke-twin), `samples_today` may legitimately be
 `0` if the sampler has not fired yet. Wait the full schedule cadence and re-check.
 
 > ⚠ **Check 14 ALREADY FAILS on production, and not because of this release.**
