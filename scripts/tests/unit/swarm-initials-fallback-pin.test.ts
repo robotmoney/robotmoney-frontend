@@ -24,7 +24,7 @@
 //      the Committee→Swarm rename in two places at once.
 //
 // Both halves are driven over planted violations below, so the red direction is
-// asserted in CI rather than demonstrated by hand once.
+// asserted in CI rather than smokenstrated by hand once.
 //
 // Runs in the required `unit.yml` job — `bun run test:unit`, and again in that
 // same workflow's `bun run test` sweep over scripts/tests. It is NOT run by

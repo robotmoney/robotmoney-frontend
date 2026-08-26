@@ -4,7 +4,7 @@
 // the invalidation churn: steps.ts is the step MANIFEST (ids, titles, phases,
 // which host may run what), and gates listed it in their `depends-on` only
 // because the migration list happened to live there too. So editing a step's
-// title — pure display metadata — invalidated Gate C, Gate B and the twin
+// title — pure display metadata — invalidated Gate C, Gate B and the smoke-twin
 // postflight, and each of those costs minutes to re-earn.
 //
 // The rule this file encodes: `depends-on` must name what a step EXECUTES, and

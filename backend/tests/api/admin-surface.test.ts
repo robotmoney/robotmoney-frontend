@@ -399,7 +399,7 @@ test("schedule toggle: admin cannot enable retired consumer analytics schedules"
   expect(updated.kind).toBe("regime.classify"); // untouched
 });
 
-test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields, non-analytics kind, swarm demo rows", async () => {
+test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields, non-analytics kind, swarm smoke rows", async () => {
   const [regime] = await sql`SELECT id FROM job_schedules WHERE kind = 'regime.classify' LIMIT 1`;
   const reason = "a perfectly fine operational reason";
 
@@ -416,7 +416,7 @@ test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields
   const [vault] = await sql`SELECT id FROM job_schedules WHERE kind = 'vault.sample_share_price' LIMIT 1`;
   expect((await call(req("PATCH", `/api/admin/schedules/${vault.id}`, PROD.adminToken, { enabled: false, reason })))?.status).toBe(400);
 
-  // swarm demo row
+  // swarm smoke row
   const [swarm] = await sql`SELECT id FROM job_schedules WHERE kind LIKE 'swarm.%' LIMIT 1`;
   expect((await call(req("PATCH", `/api/admin/schedules/${swarm.id}`, PROD.adminToken, { enabled: true, reason })))?.status).toBe(409);
   const [unchanged] = await sql`SELECT enabled FROM job_schedules WHERE id = ${swarm.id}`;

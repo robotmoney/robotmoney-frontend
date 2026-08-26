@@ -3,7 +3,7 @@
 Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that
 drops React/Next.js in favor of a **buildless, browser-native** stack, with a
 small HTTP API and a Postgres-backed task queue, self-hosted on DigitalOcean — a
-single `docker-compose` box for CI/demo, and a tiered topology (DO compute+storage,
+single `docker-compose` box for CI/smoke, and a tiered topology (DO compute+storage,
 Cloudflare for DNS+observability) in production (see the
 [network topology section](#network-topology--dns-origins--vendors)).
 
@@ -32,7 +32,7 @@ For the *why* behind each choice, see [decisions.md](./decisions.md).
   worker job). Nothing of the original out-of-scope line remains a static port.
 - **No build step.** No bundler, transpiler, or compiler — the browser does all
   the work at runtime; only evergreen browsers are supported.
-- **Consolidate backends onto one Postgres** (Docker for CI/demo; a DO Managed
+- **Consolidate backends onto one Postgres** (Docker for CI/smoke; a DO Managed
   Postgres HA cluster in production — see the topology's
   [data tier section](#7-data-tier--postgres-ha-cluster-do)).
 - **Rebuild the data pipeline** as a custom Postgres-backed task queue (replacing
@@ -184,12 +184,12 @@ the GitHub UI, not something automatable from this repo.
   (`scripts/tests/integration/onboarding-eval-infra.test.ts`), split out of the
   `e2e` monolith: it brings up its own minimal `core`-profile stack
   (postgres + api only, via the shared `scripts/stack` module) and never needed
-  `e2e`'s full LIVE demo boot. It stays system-correctness (Docker-backed,
+  `e2e`'s full LIVE smoke boot. It stays system-correctness (Docker-backed,
   deferred on draft PRs), gated on the paths that surface actually depends on
   (`evals/**`, `scripts/lib/member-agent/**`, `scripts/lib/rmpc-fetch.ts`,
   `scripts/lib/onboarding-eval.ts`, `scripts/lib/swarm/**`,
   `backend/src/swarm/**`). The REAL-inference eval (the one that spends a
-  model token) stays inside `e2e.yml`'s "Full-stack demo" step, unchanged — it
+  model token) stays inside `e2e.yml`'s "Full-stack smoke" step, unchanged — it
   deliberately reuses that already-booted LIVE stack rather than standing up a
   second one.
 - `frontend` (issue #275 addendum, critical-bug fix — see "No fan-in gate"
@@ -200,7 +200,7 @@ the GitHub UI, not something automatable from this repo.
   `scripts/preview-server.ts` (no `BACKEND_URL`, no Docker) — as a fast,
   feature-correctness-class addition, not a substitute: `e2e.yml`'s
   `test:browser` step still runs the ENTIRE `frontend/test/browser/` suite,
-  including specs that need the live backend the full demo boot provides.
+  including specs that need the live backend the full smoke boot provides.
 
 System-correctness workflows (`backend`, `research-pipeline`, `integration`,
 `onboarding-eval-rails`, `e2e`) defer on draft PRs; the feature-correctness
@@ -221,7 +221,7 @@ unreachable external resource must fail, never skip.
 
 **L2 — Shared code is named for its domain, never for its consumer.** `stack/`,
 `agent/`, `toolchain/` state what belongs in them; `lib/`, `utils/`, `helpers/`
-invite anything. Code shared between the demo runtime and test/eval time lives in
+invite anything. Code shared between the smoke runtime and test/eval time lives in
 a domain directory, not in a bucket named after who imports it.
 
 Per-package test layout, by cost class:
@@ -242,7 +242,7 @@ Harness code (today `scripts/`) separates by role rather than by medium:
 
 ```
 bin/         executable entrypoints — the `bun run` targets
-demo/        demo RUNTIME (the long-lived process): main, tui, schedule, swarm/
+smoke/        smoke RUNTIME (the long-lived process): main, tui, schedule, swarm/
 stack/       SHARED compose lifecycle: profiles (core | full), ports, volumes
 agent/       SHARED member-agent primitives: Dockerfile, run, config, classify
 toolchain/   SHARED external-binary fetchers (rmpc)
@@ -400,7 +400,7 @@ described above; there is no hosted equivalent.
 **Goldens (`goldens/api-goldens.json`).** One committed JSON keyed by request
 pathname → response body, covering every route the frontend calls. It is a *mock*:
 **field shapes are real, values are point-in-time.** Goldens are **captured from a
-real running system** (a deployed test cluster or a local `bun run demo` stack)
+real running system** (a deployed test cluster or a local `bun run smoke` stack)
 via `bun run goldens:update` — never hand-authored and never derived from other
 fixtures, so the shapes stay faithful to what the backend actually returns.
 
@@ -412,7 +412,7 @@ deploy-side check. Two gates run in the normal PR suite:
   real `bun run preview` server and asserts the wrapper renders the SPA,
   goldens-backed GET mocking, non-GET no-ops, the 404 behavior, and hash deep
   links. It runs in the regular Playwright suite (`bun run test:browser`),
-  executed by the **`e2e` workflow's `e2e` job** (demo readiness gate) on every
+  executed by the **`e2e` workflow's `e2e` job** (smoke readiness gate) on every
   ready PR.
 - **Goldens drift gate** — `scripts/tests/unit/goldens-drift.test.ts` blocks a PR
   whose goldens no longer match the code (route set or field shapes). It runs in
@@ -427,7 +427,7 @@ tests or the contract).
 **Data fidelity caveat.** Because values are mock/point-in-time, preview is for
 **layout, copy, components, and navigation** — not for trusting numbers or charts.
 For realistic, evolving data (real analytics + simulations) run the full stack
-with `bun run demo` (see the [Demo Specification](#demo-specification)).
+with `bun run smoke` (see the [Demo Specification](#smoke-specification)).
 
 ---
 
@@ -583,9 +583,9 @@ All four are PRIVILEGED with the same guard the swarm/projects admin routes
 use: `ADMIN_TOKEN` presented as `X-Admin-Token` (constant-time compared), or —
 only outside prod — the `config.allowInsecure` convenience path. Fail-closed: the
 403 check runs before any DB work. The `/admin` view is intentionally NOT in the
-public nav; the token is kept in `sessionStorage` for the tab. The `bun run demo`
+public nav; the token is kept in `sessionStorage` for the tab. The `bun run smoke`
 launcher generates a fresh random password each run and prints it to the
-interactive TUI ONLY (never logged, never written to `demo-state.json`).
+interactive TUI ONLY (never logged, never written to `smoke-state.json`).
 
 The frontend shell also renders `/admin/research` and `/admin/queue` sections
 (stage timeline, bounded artifact previews, filtered queue jobs, and
@@ -619,7 +619,7 @@ into six independently testable stages — **access → extract → transform �
   seeded data). `hermetic-source.ts` is the deterministic, offline
   **`hermeticDataSource`** (seeded walks from `provider.ts`'s `seededProvider`) used by
   the CI backend unit tests and available as an explicit local-debug override — never
-  a demo default (the demo default is `live`; see §7a of the Demo Specification).
+  a smoke default (the smoke default is `live`; see §7a of the Demo Specification).
   **`ANALYTICS_SOURCE`**, resolved by
   **`resolveAnalyticsSource()`** in `backend/src/analytics/index.ts`, is the SINGLE
   authoritative selector: unset/`live` → `liveDataSource`, `hermetic` →
@@ -655,7 +655,7 @@ into six independently testable stages — **access → extract → transform �
   (ported from the original `regime-snapshot.json`).
 - **`store/`** — the only SQL writes, and **API-owned** (issue #106): only the
   API process (its `/api/analytics` + swarm regime routes via
-  `store/direct.ts`), tests, and migration/demo tooling may import these
+  `store/direct.ts`), tests, and migration/smoke tooling may import these
   writers. `regime-store.ts` (`saveRegimeSnapshots`), `research-store.ts`
   (`persistResearchSignal`), and `raw-history-store.ts` (the append-only
   persisted raw floor) all upsert on natural keys and accept an injectable
@@ -741,7 +741,7 @@ rows past the pinned as-of) live in
   floor seed uses (`POST /api/analytics/raw-history/seed` →
   `store/floor-seed.ts`'s server-side gap-fill: existing real rows always win, a
   second run is a no-op). After ingestion, that same producer command runs one
-  immediate producer-owned research refresh over HTTP, so demo readiness never
+  immediate producer-owned research refresh over HTTP, so smoke readiness never
   depends on a consumer queue. `POST /api/analytics/research-eligibility` is a
   retained fail-closed compatibility path: after provider authentication it
   returns `409 producer_owned` and mutates neither `job_schedules` nor `jobs`.
@@ -755,7 +755,7 @@ rows past the pinned as-of) live in
   real value — correctly left standing) counts.
 - **Regeneration** (`extract/edgar-seed-generator.ts` →
   `backend/scripts/edgar-seed-regenerate.ts`) is the ONLY way the committed
-  pair is ever produced or replaced — never implicit in migrations, demo boot,
+  pair is ever produced or replaced — never implicit in migrations, smoke boot,
   or required per-PR CI. An operator runs `bun run edgar-seed:regenerate --end
   <last day of a complete month> --asof <today>` (optionally `--start`,
   default the declared 2010-01-01 baseline); it fetches live EDGAR bounded
@@ -860,7 +860,7 @@ are NEVER in the seed; they are fetched live per
   discovery raises an alert — an exhausted degrade settles the job
   `'succeeded'`, so the run-health entry is the only signal that survives.
 - **Regeneration** (`bun run projects-roster-seed:regenerate`) is the ONLY way
-  the pair is produced or replaced — never implicit in migrations, demo boot,
+  the pair is produced or replaced — never implicit in migrations, smoke boot,
   or per-PR CI. **Credentials:** read-only `V0_ANALYTICS_SOURCE_URL` /
   `V0_ANALYTICS_SOURCE_KEY` in the environment, required only to regenerate,
   never to read the committed seed and never present in any deployment path.
@@ -895,9 +895,9 @@ renders `/regime` (including the backtest + predictive-correlations panels) and 
 carries an explicit **staleness block** — `{ asof, serverDate, ageDays, stale,
 thresholdDays }`, computed in `backend/src/analytics/report/regime-projection.ts`
 (zero snapshots counts as stale, #124) — which `/regime` surfaces as a loud
-staleness banner (`frontend/public/views/regime.html`); the demo boot self-heals
+staleness banner (`frontend/public/views/regime.html`); the smoke boot self-heals
 with loud logging if the boot classify leaves a frozen snapshot
-(`scripts/lib/demo-main.ts`). Adding an analytic =
+(`scripts/lib/smoke-main.ts`). Adding an analytic =
 write a tool + register it + add a job schedule + a route; nothing else changes.
 
 ---
@@ -909,7 +909,7 @@ the [network topology section](#network-topology--dns-origins--vendors) (decisio
 / DO credentials CI needs are in [deployment.md](./runbooks/deployment.md). This section
 covers what *this repo* ships.
 
-**CI & demo — single box**, `docker-compose.yml`:
+**CI & smoke — single box**, `docker-compose.yml`:
 
 - `postgres` + `api` + the three worker lanes (`worker-swarm` /
   `worker-analytics` / `worker-research`, §7). The `api` process **also serves
@@ -924,7 +924,7 @@ covers what *this repo* ships.
   `bun run static:assemble` first.
 - **DB modes** are driven by `DATABASE_URL` + the postgres volume:
   - *ephemeral* (CI): throwaway, `docker compose down -v`.
-  - *demo*: named `pgdata` volume persists across restarts.
+  - *smoke*: named `pgdata` volume persists across restarts.
 
 **Production — tiered on DigitalOcean, Cloudflare for DNS+observability** (D13;
 credentials in [deployment.md](./runbooks/deployment.md)):
@@ -1078,8 +1078,8 @@ The five `swarm.*` cron rows are **environment-configurable** (issue #208):
 `SWARM_SCHEDULES_ENABLED` (default `false`) is the single switch for the whole
 sequence, plus a `SWARM_*_CRON` variable per kind and `SWARM_WINDOW_MINUTES`
 for the submission-window length. Production explicitly enables the daily
-06:00–10:00 UTC sequence; staging may accelerate the cadence; repo demo/e2e stays
-disabled (the demo drives lifecycle jobs itself via the admin enqueue-job endpoint,
+06:00–10:00 UTC sequence; staging may accelerate the cadence; repo smoke/e2e stays
+disabled (the smoke drives lifecycle jobs itself via the admin enqueue-job endpoint,
 unaffected). Re-running the migrate/seed step applies a changed value to the
 existing `job_schedules` rows, not just a fresh database.
 
@@ -1148,18 +1148,18 @@ substitute for the analytics role.
 **Implemented boundary.** `analytics-producer` has no database or admin
 credential, owns the regime/research cron timers, computes on its side, and
 submits through the typed analytics routes. Its bearer is file-mounted only into
-the producer and API verifier; shared workers, the demo host, and swarm
+the producer and API verifier; shared workers, the smoke host, and swarm
 members do not receive it. Consumer schedules are disabled and legacy queued
 analytics jobs are dead-lettered. Admin retry/toggle/rerun/enqueue operations and
 the retired research-eligibility endpoint fail closed, so no supported consumer
 path can substitute for the producer. Remaining legacy handler/lane code and the
-demo TUI's queue-based analytics display are compatibility/observability debt,
+smoke TUI's queue-based analytics display are compatibility/observability debt,
 not active producer paths.
 
-### 9.7 Testing & demo
+### 9.7 Testing & smoke
 
 Decision [D25](./decisions.md#d25--external-actor-rail-for-simulated-independent-entities)
-defines the required topology for every actor the demo or an eval presents as
+defines the required topology for every actor the smoke or an eval presents as
 independent.
 
 **Implemented member/eval topology.** E2E runs the real single-box stack
@@ -1178,7 +1178,7 @@ container, `scripts/agent/member-session-client.ts` fetches regime and brief dat
 over REST, performs the member's live inference, builds and signs the canonical
 payload, posts its memo, and submits its recommendation. The harness-side
 `scripts/lib/swarm/agent.ts` only launches/observes the container and may
-register a fixed demo member's public key once; `scripts/lib/swarm/session.ts`
+register a fixed smoke member's public key once; `scripts/lib/swarm/session.ts`
 owns session orchestration. Neither harness module holds a member private key or
 authors, signs, repairs, or submits a take.
 
@@ -1187,7 +1187,7 @@ live in the dedicated producer service; provider output crosses only the REST
 ingestion gate under the file-mounted provider credential. The consumer API
 validates/persists but cannot compute, schedule, retry, or enqueue producer work.
 The required tests assert both positive submission and negative authority: API,
-admin, shared-worker, member, and demo-host paths cannot obtain the bearer or
+admin, shared-worker, member, and smoke-host paths cannot obtain the bearer or
 reactivate a legacy consumer job.
 
 **No mocks of the submit path; no host-authored takes.** The required execution
@@ -1203,7 +1203,7 @@ selected model requires it (§11.3 E1). Inference is time-bounded
 bracketed cleanup, and member outcomes are settled independently so one failure
 does not sink the session (#122).
 
-The required `e2e` demo boot therefore executes and asserts live swarm-take
+The required `e2e` smoke boot therefore executes and asserts live swarm-take
 authorship on every run. The nightly workflow additionally measures
 real-inference **onboarding** (§11.3), a distinct surface.
 
@@ -1346,7 +1346,7 @@ degrade rules) those feeds were built against is the
   `stale` badge, a non-live badge when `source === 'stub'`, an explicit
   "Not configured" cell for a placeholder adapter, and last-known/null text
   instead of the retired static 2026-06-26 literals.
-- **Preview/demo fidelity (D14)** — `goldens/api-goldens.json` carries a real
+- **Preview/smoke fidelity (D14)** — `goldens/api-goldens.json` carries a real
   captured `/api/dashboards/vault-economics` entry so `bun run preview` and the
   e2e Playwright spec (`frontend/test/browser/allocation-view.spec.ts`) render
   this section offline.
@@ -1532,8 +1532,8 @@ Everything here follows the **issue #50 honesty contract** already enforced by
 
 Shared conventions (identical to `wallet-balances`):
 - `asOf`: ISO-8601 timestamp of the read (`new Date(now).toISOString()`).
-- `source`: `resolveBaseRpcSource()` result — always `"live"` in prod/demo
-  (issue #147 removed the hermetic CI/demo layer); `"stub"` is still a valid
+- `source`: `resolveBaseRpcSource()` result — always `"live"` in prod/smoke
+  (issue #147 removed the hermetic CI/smoke layer); `"stub"` is still a valid
   value backend unit tests set directly via `BASE_RPC_SOURCE=stub`.
 - Short-TTL in-process cache (`CACHE_TTL_MS = 30_000`) + a
   `_reset<Name>CacheForTests()` export, matching the existing modules.
@@ -1855,14 +1855,14 @@ interface AllocationFramework {
 
 ## Demo Specification
 
-What `bun run demo` must demonstrate to exercise the full Investment Swarm lifecycle —
+What `bun run smoke` must smokenstrate to exercise the full Investment Swarm lifecycle —
 a single command that provisions everything, runs the session lifecycle end-to-end, and
-keeps the stack live as a **standing demo** (see §0). Ctrl-C / SIGTERM tears the stack
+keeps the stack live as a **standing smoke** (see §0). Ctrl-C / SIGTERM tears the stack
 down **but keeps the postgres data** (see §0(c)); a startup failure leaves it up for
-inspection; `bun run demo:down` tears down an already-running (e.g. backgrounded) demo,
-also keeping its data. `bun run demo -- --pg-data <host-dir>` bind-mounts postgres to a
-host directory so a reboot resumes from it; `bun run demo:clean` is the only command that
-deletes demo data volumes.
+inspection; `bun run smoke:down` tears down an already-running (e.g. backgrounded) smoke,
+also keeping its data. `bun run smoke -- --pg-data <host-dir>` bind-mounts postgres to a
+host directory so a reboot resumes from it; `bun run smoke:clean` is the only command that
+deletes smoke data volumes.
 
 > **One swarm, not many.** Everything below exercises the *single* Investment
 > Swarm. The harness drives it through **two sessions** (session 1 = today's
@@ -1873,7 +1873,7 @@ deletes demo data volumes.
 
 > **D21 migration note.** MCP is retired (see [decisions.md
 > D21](./decisions.md)); the normative sections below (§1, §§3–6, §11) already
-> describe the target REST-only demo. The runtime/TUI mechanics elsewhere in
+> describe the target REST-only smoke. The runtime/TUI mechanics elsewhere in
 > this spec (docker-compose bring-up in §0, tuning notes in §7a, TUI panels in
 > §10) still name the `mcp` compose service, its `/health` check, and
 > `mcp/src/e2e.ts::runSession` as currently shipped — that code moves to a
@@ -1937,14 +1937,14 @@ flowchart TB
 
 ---
 
-## 0. Standing demo mode (`bun run demo`, local)
+## 0. Standing smoke mode (`bun run smoke`, local)
 
-Locally, `bun run demo` is a **long-lived standing demo**, not a one-shot. It runs in
+Locally, `bun run smoke` is a **long-lived standing smoke**, not a one-shot. It runs in
 three phases and stays up until you stop it (Ctrl-C / SIGTERM):
 
 **(a) Bring-up.** Build images → start Postgres → migrate (seeds `job_schedules`) →
 start api + worker + mcp → wait for `/health` on api and mcp. Once healthy it writes a
-run state file at `.agents/demo-state.json` (compose project name + this run's random
+run state file at `.agents/smoke-state.json` (compose project name + this run's random
 ports + compose env + the postgres data location, so teardown/status can find the run)
 and prints the READY route table.
 
@@ -1956,30 +1956,30 @@ back), `.env.example` ships neither, and the env-pin **input** path is gone — 
 `WEB_PORT`/`POSTGRES_PORT` left in a shell or `.env` influences nothing and produces a
 loud warning at boot. The names survive only as compose interpolation **outputs**, set
 from the allocated values by `buildComposeEnv`. This is the fix for a real outage: the
-api port used to *prefer* 48787, so a CI boot (no `.env`) raced the standing stage demo
+api port used to *prefer* 48787, so a CI boot (no `.env`) raced the standing stage smoke
 for the exact port `cloudflared` routes `stage.robotmoney-labs.dev` to, while the
 operator's `.env` pinned both ports and meant nothing was random locally at all.
 
-The one exception is `bun run demo -- --static-port`, a CLI **argument** (never an env var —
+The one exception is `bun run smoke -- --static-port`, a CLI **argument** (never an env var —
 same rule as `--pg-data`), which pins **only** the web/api port to 48787, the tunnel
 origin, warns prominently that it has done so, and — when the port is held — **fails
 without starting**, naming the holder from `docker ps`/`ss -tlnp`. It never falls back:
 `cloudflared` routes 48787 and nothing else, so a fallback would boot green and serve a
 502. Postgres stays random even when pinned. The flag is recorded in
-`.agents/demo-state.json` so `demo:down`/`demo:status` reconstruct the same env.
+`.agents/smoke-state.json` so `smoke:down`/`smoke:status` reconstruct the same env.
 
 **Container naming and labels — environment-scoped.** Four families spawn containers on
-this host (the demo, the local onboarding eval, the inference-off rails check, and the
+this host (the smoke, the local onboarding eval, the inference-off rails check, and the
 backend suite's ephemeral postgres), and the host is simultaneously the self-hosted
-Actions runner and the stage demo box. `scripts/stack/naming.ts` gives all four ONE
+Actions runner and the stage smoke box. `scripts/stack/naming.ts` gives all four ONE
 scheme: `<prefix>_<role>_<hash>`, where the prefix is `rm_ci` under GitHub Actions
-(`GITHUB_ACTIONS === "true"`) and `rm_demo` otherwise, the role is
+(`GITHUB_ACTIONS === "true"`) and `rm_smoke` otherwise, the role is
 `stack`/`eval`/`infra`/`pgtest`, and the hash is a short digest of the ENVIRONMENT —
 `GITHUB_WORKFLOW`+`GITHUB_RUN_ID`+`GITHUB_RUN_ATTEMPT`+`GITHUB_JOB` under Actions
 (stable across every step of one job, distinct across runs/attempts/workflows), a
 per-boot random value locally. The same facts are also attached as **labels** —
 `robotmoney.env=ci|local` and `robotmoney.env.hash=<hash>` alongside the existing
-`robotmoney.demo.project` — on every service in `docker-compose.demo.yml`, on the
+`robotmoney.smoke.project` — on every service in `docker-compose.smoke.yml`, on the
 pgdata volume, and (via explicit `--label` flags, since it is a raw `docker run`) on
 `backend/tests/preload.ts`'s postgres. Names are the human channel; **labels are the
 channel tooling must select on**, because on a host that also serves the live site a
@@ -1992,54 +1992,54 @@ paths, replacing the former `--external-pg` boolean (still accepted, deprecated)
 |---|---|---|---|
 | `--db ephemeral` *(default)* | a compose `postgres` service | this boot | container removed, **data kept** (`<project>_pgdata`, or the `--pg-data` dir) |
 | `--db external` | a managed server addressed from `.env` | somebody else | nothing kept, because nothing here was ever this boot's |
-| `--db twin` | a local container restored from an encrypted production dump | this boot | container removed, **copy kept** in a labelled volume |
+| `--db smoke-twin` | a local container restored from an encrypted production dump | this boot | container removed, **copy kept** in a labelled volume |
 
 They are one flag rather than several booleans because *where postgres lives* and *who
-owns the data* are different questions, and the twin is the case that separates them: it
+owns the data* are different questions, and the smoke-twin is the case that separates them: it
 dials a URL like `external` does, but every write lands in a copy this boot may reclaim.
-`scripts/lib/demo-db-mode.ts` carries both as the exported predicates `usesComposePostgres()`
-and `ownsData()`; the state file records the mode as `db`, which `demo:down`, `demo:status`
-and `demo:clean` branch on.
+`scripts/lib/smoke-db-mode.ts` carries both as the exported predicates `usesComposePostgres()`
+and `ownsData()`; the state file records the mode as `db`, which `smoke:down`, `smoke:status`
+and `smoke:clean` branch on.
 
 Unknown flags are refused at parse time rather than ignored — an enum makes a typo'd value
 dangerous in a way a boolean was not, so the argv allowlist ships with it.
 
-The twin's tooling is version-agnostic and lives outside any release directory:
-`bun run twin:capture` produces the encrypted backup (read-only role, replica only),
-`bun smoke -- --db twin` restores and boots against it, `bun run twin:rehearse` does that
-unattended with the frontend checks, and `bun run twin` is the standing variant on the
+The smoke-twin's tooling is version-agnostic and lives outside any release directory:
+`bun run smoke:smoke:capture` produces the encrypted backup (read-only role, replica only),
+`bun smoke -- --db smoke-twin` restores and boots against it, `bun run smoke:smoke:smoke-twin --once` does that
+unattended with the frontend checks, and `bun run smoke:smoke-twin` is the standing variant on the
 pinned tunnel port. See [release-runbooks.md §4.3–§4.4](./technical/release-runbooks.md).
 
 A release's own rehearsal (`backend/scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts`)
 drives the same shared driver and adds the half that *is* version-specific: it passes an
-`onReady` hook, so that release's postflight runs against the migrated twin between the
+`onReady` hook, so that release's postflight runs against the migrated smoke-twin between the
 frontend checks and teardown. That window has to be inside the run — the driver tears the
-twin down on every exit path — so the checks cannot be a command issued afterwards.
+smoke-twin down on every exit path — so the checks cannot be a command issued afterwards.
 
 **Postgres data location.** By default each run uses a fresh anonymous named volume
-`<project>_pgdata`, labeled `robotmoney.demo=1` (so `demo:clean` can find it). Passing
-`bun run demo -- --pg-data <host-dir>` instead bind-mounts postgres's data directory to
+`<project>_pgdata`, labeled `robotmoney.smoke=1` (so `smoke:clean` can find it). Passing
+`bun run smoke -- --pg-data <host-dir>` instead bind-mounts postgres's data directory to
 `<host-dir>` (created if absent), so the SAME value on a later boot resumes the SAME
 data — this is a CLI **argument**, never an env var, and is recorded in the state file.
 `--pg-data` applies only to `--db ephemeral`: it binds the data directory *of* the compose
 postgres container, so pairing it with a mode that starts no such container is
-unrepresentable rather than merely rejected. A `--db twin` boot keeps its restored copy in
-its own labelled volume under the same contract — teardown keeps it, `demo:clean` reclaims
-it — and every twin boot restores FRESH, because the previous boot migrated that copy.
-Reuse constraints: the same postgres major (17) and the same baked-in demo credentials;
+unrepresentable rather than merely rejected. A `--db smoke-twin` boot keeps its restored copy in
+its own labelled volume under the same contract — teardown keeps it, `smoke:clean` reclaims
+it — and every smoke-twin boot restores FRESH, because the previous boot migrated that copy.
+Reuse constraints: the same postgres major (17) and the same baked-in smoke credentials;
 migrate + seed are idempotent (`backend/src/db/seed.ts` uses `ON CONFLICT DO NOTHING`),
 so re-booting on old data converges rather than duplicating rows. (Bind mounts were
 verified working on the Linux CI host — postgres:17-alpine chowns the bind dir to its own
 container user and inits/resumes cleanly — so the named-volume fallback was not needed.)
 
-**(b) Staggered scheduled actions.** The demo continuously produces
+**(b) Staggered scheduled actions.** The smoke continuously produces
 fresh activity, driven two ways (hybrid).
 
 **Cadence is a PROFILE, selected by the `--static-port` argument** (never an env var —
 same hard rule as `--pg-data` and the port pin), and every value for every
-profile is stated once in `scripts/lib/demo-schedule.ts`:
+profile is stated once in `scripts/lib/smoke-schedule.ts`:
 
-| | `bun run demo` / CI (**fast**) | `bun run demo -- --static-port` (**realistic**) |
+| | `bun run smoke` / CI (**fast**) | `bun run smoke -- --static-port` (**realistic**) |
 |---|---|---|
 | Swarm session, per subject | ~2 min | 6 h |
 | Subjects (2) phase offset → a session lands | ~1 min | ~3 h |
@@ -2048,18 +2048,18 @@ profile is stated once in `scripts/lib/demo-schedule.ts`:
 | Newcomer admissions | first ~1 min, then every 5 min | first ~1 min, then every 6 h |
 
 A real investment swarm does not sit every two minutes, so the standing
-public demo reads as a plausibly-paced record rather than a toy — and it stops
+public smoke reads as a plausibly-paced record rather than a toy — and it stops
 burning ~30 sessions/hour/subject of provider quota on a host that shares its
 per-IP limits with CI. **Bring-up is prompt under both profiles**: every
 subject's first session is scheduled within 120 s of boot (`planSubjectSchedules`
-in `scripts/lib/demo-schedule.ts`, executed in
-`scripts/tests/unit/demo-schedule.test.ts`), so the site is never empty on first
+in `scripts/lib/smoke-schedule.ts`, executed in
+`scripts/tests/unit/smoke-schedule.test.ts`), so the site is never empty on first
 load; the slow profile governs only steady state. The fast profile is what CI
 runs and is pinned to today's values — the nightly LIVE smoke derives its poll
-deadline from the **fast** profile explicitly (`scripts/demo-live-smoke.ts`), so
+deadline from the **fast** profile explicitly (`scripts/smoke-live-smoke.ts`), so
 a 6 h swarm interval can never become a 12 h poll budget. A `--static-port` boot is
 the only thing that injects `PRODUCER_*_CRON` into compose (through
-`resolveDemoEnv`'s `composeEnv`); every other boot resolves the committed
+`resolveSmokeEnv`'s `composeEnv`); every other boot resolves the committed
 `docker-compose.yml` defaults untouched.
 
 - **Regime + research** — driven by `analytics-producer`'s own
@@ -2067,21 +2067,21 @@ the only thing that injects `PRODUCER_*_CRON` into compose (through
   queue; their values come from the cadence profile above. On boot its finite
   `seed` command ingests the EDGAR floor and performs
   an immediate producer-owned research refresh before readiness checks. Legacy
-  `regime.classify` / `research.refresh` rows (including the old fast-demo
+  `regime.classify` / `research.refresh` rows (including the old fast-smoke
   cadences) are forced disabled and pending/running jobs dead-lettered; no
   supported endpoint can revive them.
-  The demo CLI's explicit schedule step also slows the wallet sampler: it seeds an hourly
+  The smoke CLI's explicit schedule step also slows the wallet sampler: it seeds an hourly
   `wallet.sample_balances` row (`3 * * * *`, staggered off the hourly vault
-  sample) and disables the per-minute baseline — the standing demo and the
+  sample) and disables the per-minute baseline — the standing smoke and the
   self-hosted CI runner share one host IP, and per-minute GeckoTerminal/Base-RPC
-  sampling exhausts the per-IP quotas (hourly token prices are an accepted demo
+  sampling exhausts the per-IP quotas (hourly token prices are an accepted smoke
   tradeoff; the seed's cold-start enqueue still lands a live sample at boot).
-- **Swarm opinions** — driven by a loop inside `scripts/demo.ts`, because a
+- **Swarm opinions** — driven by a loop inside `scripts/smoke.ts`, because a
   swarm session needs live member agents to sign + submit takes. After a
   one-time setup it runs one full session (open → brief → collect → agents →
   close → aggregate → publish) on the profile's swarm interval, so sessions
   accumulate. The timetable is the pure `planSubjectSchedules` / `plannedRunAt`
-  pair in `scripts/lib/demo-schedule.ts` — the driver keeps only the I/O. It
+  pair in `scripts/lib/smoke-schedule.ts` — the driver keeps only the I/O. It
   reuses the `runSession` runner exported from
   `scripts/lib/swarm/session.ts` (whose entry-point `main()` is guarded so
   importing it does not trigger the standalone flow).
@@ -2119,41 +2119,41 @@ the only thing that injects `PRODUCER_*_CRON` into compose (through
   midnight UTC read the previous day's classification.
 
 One immediate tick of each runs at startup so the site has data on first load; the
-one-shot frontend check (`scripts/demo-frontend-check.ts`) also runs once,
+one-shot frontend check (`scripts/smoke-frontend-check.ts`) also runs once,
 non-fatally.
 
 **(c) Teardown — keeps data by default.** The stack stays up until you stop it. **Ctrl-C
 / SIGTERM tears it down** (`docker compose down`, **no `-v`**), printing the log-file path
 first (the log persists for post-mortem). Containers + network are removed but the
-**postgres data volume (or `--pg-data` host dir) is KEPT**, so a later `bun run demo`
+**postgres data volume (or `--pg-data` host dir) is KEPT**, so a later `bun run smoke`
 resumes from it. The state file is **kept too** — the data it points to survives, so the
 pointer must survive; it is overwritten by the next boot and only cleared when
-`demo:clean` deletes the volume it names. A **startup failure** is the exception: it dumps
-diagnostics and leaves the containers up for inspection. For a demo that is already
+`smoke:clean` deletes the volume it names. A **startup failure** is the exception: it dumps
+diagnostics and leaves the containers up for inspection. For a smoke that is already
 running (e.g. started in the background, or its process was killed with SIGKILL):
 
-- `bun run demo:down` — `docker compose down` (no `-v`) for the recorded run; keeps the
+- `bun run smoke:down` — `docker compose down` (no `-v`) for the recorded run; keeps the
   data volume/dir and the state file.
-- `bun run demo:status` — `docker compose ps` for the recorded run (also prints the log
-  path and the postgres data location). A stopped-but-preserved demo shows no running
+- `bun run smoke:status` — `docker compose ps` for the recorded run (also prints the log
+  path and the postgres data location). A stopped-but-preserved smoke shows no running
   containers while the state file still points at the kept data.
-- `bun run demo:clean` — the **only** command that deletes demo data. It removes every
-  volume labeled `robotmoney.demo=1` (with `--project <name>` it scopes to one run),
-  listing what it removed and **loudly skipping** any in-use volume (a demo still running
+- `bun run smoke:clean` — the **only** command that deletes smoke data. It removes every
+  volume labeled `robotmoney.smoke=1` (with `--project <name>` it scopes to one run),
+  listing what it removed and **loudly skipping** any in-use volume (a smoke still running
   on it). It **never** touches a `--pg-data` host directory (those are not docker volumes).
   Its exit code is **role-dependent**: with `--project` (the CI-backstop role) any
   surviving resource is a **leak** and exits non-zero; without it (the operator role) an
-  in-use volume just means your demo is up, so it is reported and exits 0. See "Teardown
+  in-use volume just means your smoke is up, so it is reported and exits 0. See "Teardown
   leaks" below.
-- `bun run demo:reap` — the cross-run **reaper**. Removes errant containers left by any of
+- `bun run smoke:reap` — the cross-run **reaper**. Removes errant containers left by any of
   the four spawner families, selected by the `robotmoney.env` / `robotmoney.env.hash`
   **labels** (never a name substring), older than `--older-than` (default `6h`), then
   their compose networks and now-unreferenced labeled volumes. `--dry-run` first is the
   safe posture: it performs every read and no mutation, so what it prints is exactly what
   a real run would remove. `--env-class ci|local|all` scopes the sweep. Three guards make
-  it safe (`scripts/lib/demo-reap.ts`; assertions in
-  `scripts/tests/unit/demo-reap.test.ts`):
-  **G1** never touches the project named in `.agents/demo-state.json`; **G2** never
+  it safe (`scripts/lib/smoke-reap.ts`; assertions in
+  `scripts/tests/unit/smoke-reap.test.ts`):
+  **G1** never touches the project named in `.agents/smoke-state.json`; **G2** never
   touches a non-CI project with a running container that is healthcheck-healthy or
   publishing a host port (belt-and-braces, because that state file *has been observed
   stale* — pointing at a dead project while a different stack served `:48787`); **G3**
@@ -2163,24 +2163,24 @@ running (e.g. started in the background, or its process was killed with SIGKILL)
 
 **Teardown leaks — the shared self-hosted runner.** CI (`process.env.CI`) runs the checks
 once and then tears down. Because keep-by-default would leak a volume on a runner shared
-with the standing stage demo, the CI path also reclaims **its own run's** volume (scoped
-by the `robotmoney.demo.project` label) on success and failure, and both
+with the standing stage smoke, the CI path also reclaims **its own run's** volume (scoped
+by the `robotmoney.smoke.project` label) on success and failure, and both
 `.github/workflows/e2e.yml` carries an `if: always()`
 backstop for a killed/cancelled/timed-out boot. That backstop has **three parts, in this
 order**, and the order is the fix:
 
-1. `docker compose -p "$DEMO_PROJECT" down -v --remove-orphans` — scoped to this run's
+1. `docker compose -p "$SMOKE_PROJECT" down -v --remove-orphans` — scoped to this run's
    project only (never a bare `compose down`, never `docker system prune`, never a name
    glob). `--remove-orphans` is what clears the dynamically spawned member-agent eval
    containers the compose model does not declare.
-2. `bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"` — reclaims the volume and,
+2. `bun run scripts/smoke-clean.ts --project "$SMOKE_PROJECT"` — reclaims the volume and,
    in this role, **exits non-zero** if anything survived.
-3. `bun run scripts/demo-reap.ts --env-class ci --older-than 6h` — sweeps leftovers from
+3. `bun run scripts/smoke-reap.ts --env-class ci --older-than 6h` — sweeps leftovers from
    **prior** runs, non-blocking (someone else's leak must not fail this PR).
 
 > Why the order and the exit code changed: e2e run **30406428674** was cancelled
 > mid-boot, so its in-process teardown never ran and the stack survived. The backstop of
-> the day ran `demo:clean` **alone** — which removes volumes only — found the pgdata
+> the day ran `smoke:clean` **alone** — which removes volumes only — found the pgdata
 > volume still referenced by a live container, printed `SKIPPED 1 volume(s)` and **exited
 > 0**. The step reported success over a live leak, and the surviving api container held
 > host port `48787` (the `cloudflared` origin for `stage.robotmoney-labs.dev`) for over an
@@ -2196,12 +2196,12 @@ Every stage of the session state machine must be exercised with the real domain 
 scheduled → collecting → window_closed → aggregated → published   (+ cancelled)
 ```
 
-| Stage | What the demo must exercise |
+| Stage | What the smoke must exercise |
 |---|---|
 | **Research pipeline** | At least one research signal tool runs (channel-divergence, late-cycle, or future tool) and its output lands in `research_signals`. The brief that members read must include research signal data alongside regime. |
 | **Regime classification** | A regime snapshot is written and readable. If the live provider (`FetcherProvider`) is unavailable, the seeded provider (`seededProvider`) is acceptable for hermetic runs — but the write path (same tables, same domain logic) must match production. |
 | **Open session** | A new session is created with `scheduled` state, assigned a subject from the rotation. |
-| **Publish brief** | Brief is assembled from regime + research signals + subject snapshot + recent session history. Window opens with a `window_closes_at` deadline equal to ONE FULL CADENCE INTERVAL (`scripts/lib/demo-schedule.ts` `swarmWindowMs` = `swarmIntervalMs`; 6 h per subject in production), so this session's cutoff is the next session's convene and there is no interval in which a subject accepts nothing. The host driver waits that deadline out before it enqueues `close_window` (issue #570). |
+| **Publish brief** | Brief is assembled from regime + research signals + subject snapshot + recent session history. Window opens with a `window_closes_at` deadline equal to ONE FULL CADENCE INTERVAL (`scripts/lib/smoke-schedule.ts` `swarmWindowMs` = `swarmIntervalMs`; 6 h per subject in production), so this session's cutoff is the next session's convene and there is no interval in which a subject accepts nothing. The host driver waits that deadline out before it enqueues `close_window` (issue #570). |
 | **Collecting (submission window)** | Multiple autonomous agents call the REST API, read regime/brief, sign payloads, and submit. At least one agent no-shows (recorded absent, not fabricated). Out-of-window submissions are rejected. Cross-role writes are denied. |
 | **Close window** | Window transitions to `window_closed`, at the advertised deadline rather than when the driver's own in-process agents settle. Submissions are rejected once `window_closes_at` has passed — the TIMESTAMP is the only timing gate; a session's `state` never refuses a take on its own (issue #570). |
 | **Aggregate** | Deterministic rollup: stance counts, mean confidence, absence list, synthesis string. No host-authored takes. |
@@ -2213,12 +2213,12 @@ Transitions must go through the **worker job pipeline**, not direct domain calls
 
 - Each lifecycle transition is a job kind (`swarm.open_session`,
   `swarm.publish_brief`, `swarm.close_window`, `swarm.aggregate`,
-  `swarm.publish`) enqueued via the scheduler or explicitly for the demo.
+  `swarm.publish`) enqueued via the scheduler or explicitly for the smoke.
 - Jobs are claimed and executed through the real `FOR UPDATE SKIP LOCKED` claim loop.
 - Job schedules are seeded so a no-intervention run would also progress through the
-  lifecycle (even if the demo also triggers them explicitly for determinism).
+  lifecycle (even if the smoke also triggers them explicitly for determinism).
   *(As shipped: the `swarm.*` schedule rows are seeded disabled by default —
-  `SWARM_SCHEDULES_ENABLED`, issue #208 / PR #229 — and the demo pins them
+  `SWARM_SCHEDULES_ENABLED`, issue #208 / PR #229 — and the smoke pins them
   disabled, driving the lifecycle transitions explicitly via the admin
   enqueue-job endpoint.)*
 
@@ -2227,7 +2227,7 @@ Transitions must go through the **worker job pipeline**, not direct domain calls
 ### 3.1 REST API
 
 REST is the only transport (D21 retired the MCP server); the routes below
-must be demonstrated exercising the same domain code:
+must be smokenstrated exercising the same domain code:
 
 - `POST /api/swarm/admin/open`
 - `POST /api/swarm/admin/brief`
@@ -2257,7 +2257,7 @@ correctly in the SPA:
 
 Every actor role must be exercised and cross-role write denial asserted:
 
-| Actor | What the demo must do |
+| Actor | What the smoke must do |
 |---|---|
 | **Swarm member** (× N agents) | Call the REST API, read regime/brief, sign with own ed25519 key, submit recommendation. One agent deliberately no-shows. Members must NOT be able to write regime data or mutate sessions. |
 | **RM analytics provider** | Write a regime snapshot (and optionally research signals) under a scoped credential. Must NOT be able to submit recommendations or mutate sessions. |
@@ -2267,7 +2267,7 @@ Every actor role must be exercised and cross-role write denial asserted:
 ## 5. Security invariants
 
 Each invariant must be asserted (either via E2E assertions or hermetic tests that the
-demo also runs):
+smoke also runs):
 
 | Invariant | Assertion |
 |---|---|
@@ -2278,7 +2278,7 @@ demo also runs):
 | Cross-role denial | Member cannot write regime; analytics provider cannot submit; neither can close/aggregate/publish. |
 | TOCTOU safety | Concurrent submissions for the same session from different members both succeed (different nonces, different members). |
 | No plaintext secrets | Access keys are stored as sha256 hashes; private keys are never transmitted. |
-| memoUrl covered by signature | Tampering with memoUrl after submission invalidates the signature (`backend/tests/signing.test.ts` already covers this — the demo must also exercise it). |
+| memoUrl covered by signature | Tampering with memoUrl after submission invalidates the signature (`backend/tests/signing.test.ts` already covers this — the smoke must also exercise it). |
 
 ## 6. Agent autonomy
 
@@ -2306,54 +2306,54 @@ RM never holds the private key at any point.
 
 ## 7. Hermeticity and cleanup
 
-- **Production parity, always (issues #50, #147).** `bun run demo` — local or CI,
+- **Production parity, always (issues #50, #147).** `bun run smoke` — local or CI,
   including the required per-PR `e2e` gate — runs the **live** data path
   end-to-end: the real keyless analytics pipeline (FRED/Yahoo/DeFiLlama/EDGAR/…)
   and a real Base mainnet JSON-RPC read for the `/allocation` vault-economics
-  slice (§10 below). There is no hermetic/offline demo mode: issue #147 removed
+  slice (§10 below). There is no hermetic/offline smoke mode: issue #147 removed
   `DEMO_HERMETIC`, the in-compose `base-rpc-stub` fixture service, and
-  `scripts/demo-rpc-guard.ts` entirely (decision: issue #163 — every PR's merge
+  `scripts/smoke-rpc-guard.ts` entirely (decision: issue #163 — every PR's merge
   gate now depends on live external providers). A required credential or
   provider that is unavailable must fail the boot loudly (non-zero exit,
   actionable message naming the missing dependency) — never a silent fallback
   to a fixture or stub.
-- The resolver (`scripts/lib/demo-env.ts::resolveDemoEnv`, re-exported by
-  `scripts/demo.ts`) is the single source of truth for the live data path;
-  `docker-compose.demo.yml` mirrors its defaults so the two layers can never
-  disagree (asserted by `scripts/tests/integration/demo-compose-config.test.ts`).
+- The resolver (`scripts/lib/smoke-env.ts::resolveSmokeEnv`, re-exported by
+  `scripts/smoke.ts`) is the single source of truth for the live data path;
+  `docker-compose.smoke.yml` mirrors its defaults so the two layers can never
+  disagree (asserted by `scripts/tests/integration/smoke-compose-config.test.ts`).
 
 ### 7b. Demo readiness gate
 
-The **demo readiness gate** is the LIVE boot-and-check step block in the required
-`e2e` workflow (`.github/workflows/e2e.yml`, step "Full-stack demo (demo
+The **smoke readiness gate** is the LIVE boot-and-check step block in the required
+`e2e` workflow (`.github/workflows/e2e.yml`, step "Full-stack smoke (smoke
 readiness gate)"; job id `e2e`, unchanged so branch protection's required-status-check
-mapping stays intact). On every PR targeting main it boots the full LIVE demo stack
-and runs the loud-failure guards that keep broken demos off main:
+mapping stays intact). On every PR targeting main it boots the full LIVE smoke stack
+and runs the loud-failure guards that keep broken smokes off main:
 
-- `scripts/demo-frontend-check.ts` — the **core-surface-missing detector**: fetches
+- `scripts/smoke-frontend-check.ts` — the **core-surface-missing detector**: fetches
   each route fragment from the live backend and exits non-zero if a core surface marker
   (e.g. `x-data="swarmView()"`) is absent. Its wallet-balances provenance
   assertion (issue #134) always expects `live` (`stale`/`seed` are allowed
-  degrades, loudly logged) now that there is only one supported demo mode.
+  degrades, loudly logged) now that there is only one supported smoke mode.
 - `test:browser` (Playwright, `spa.spec.ts`) — drives the rendered SPA.
-- `scripts/demo-live-smoke.ts` (issue #128) — asserts the LIVE steady state:
+- `scripts/smoke-live-smoke.ts` (issue #128) — asserts the LIVE steady state:
   ≥2 published swarm sessions (the #101 starvation guard), a fresh regime
   snapshot, wallet + vault-economics provenance `live` (only the documented
   #120 ZYFAI/GIZA degrades tolerated, loud-logged), and both research signals
   landed. The required gate, the push-to-`main` run and the nightly `schedule`
   mirror all run this one script off the same boot, so they cannot drift apart.
-  Issue #373 retired the separate `demo-live-smoke-nightly.yml`: it booted the
+  Issue #373 retired the separate `smoke-live-smoke-nightly.yml`: it booted the
   same stack and ran these same assertions, and once `e2e.yml` carried the
   nightly schedule it was pure duplication.
 
 The core-surface detector's own loud-failure path is **self-tested**, not assumed:
-`scripts/tests/integration/demo-frontend-check.test.ts` (run in the required `integration` job via
-`bun run test`) spawns the real `scripts/demo-frontend-check.ts` against an in-process
+`scripts/tests/integration/smoke-frontend-check.test.ts` (run in the required `integration` job via
+`bun run test`) spawns the real `scripts/smoke-frontend-check.ts` against an in-process
 stub backend and proves both directions — it exits non-zero when the
 `x-data="swarmView()"` marker is stripped from the served `/views/swarm.html`,
 and exits 0 against the correct, unmodified content — so a change that silently weakened
-the detector's assertions is caught. The `demo-live-smoke.ts` assertions are likewise
-self-tested by `scripts/tests/integration/demo-live-smoke.test.ts`.
+the detector's assertions is caught. The `smoke-live-smoke.ts` assertions are likewise
+self-tested by `scripts/tests/integration/smoke-live-smoke.test.ts`.
 
 Because every PR's required gate now depends on live external providers (public
 Base mainnet RPC, FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR), this job runs
@@ -2364,20 +2364,20 @@ external blocker to file, not a bug in the workflow.
 
 ### 7a. Tuning the live path
 
-The live path (the only path) can still be tuned via env before `bun run demo`.
+The live path (the only path) can still be tuned via env before `bun run smoke`.
 
 - **`ANALYTICS_SOURCE`** — the single, authoritative source knob honored by the
   orchestrator (`analytics/index.ts::resolveAnalyticsSource`, called by api + worker):
-  - unset / `live` → real keyless fetchers (the only value the demo default
+  - unset / `live` → real keyless fetchers (the only value the smoke default
     selects),
   - `hermetic` → the deterministic offline seeded source backend unit tests
     depend on directly (`backend/src/analytics/access/hermetic-source.ts`);
-    still a valid explicit override for local debugging, but no demo default
+    still a valid explicit override for local debugging, but no smoke default
     ever selects it,
   - any other value is **refused loudly** (fail-closed — a typo never silently hits
     the network).
   The legacy `PROVIDER` / `config.analyticsProvider` knob is **deprecated** for source
-  selection and no longer influences the live/demo path; do not use it to opt in.
+  selection and no longer influences the live/smoke path; do not use it to opt in.
 - **`ANALYTICS_FLOOR_SEED`** — one-time cold-DB raw floor seed: load a vendored real
   `raw_indicator_history` floor once so a fresh live boot doesn't re-fetch years of
   history (esp. ~200 SEC-EDGAR requests; live EDGAR fetches are themselves
@@ -2385,11 +2385,11 @@ The live path (the only path) can still be tuned via env before `bun run demo`.
   ~90s aggregate sweep ceiling in `analytics/extract/edgar.ts` — so a slow SEC
   upstream can't pin the run) before the first classify. Idempotent
   (append-only — existing DB rows win on overlap; no-op once warm). Defaults to `1`
-  on every demo boot (`scripts/lib/demo-env.ts`); set `0` explicitly to disable it.
+  on every smoke boot (`scripts/lib/smoke-env.ts`); set `0` explicitly to disable it.
   `FLOOR_SEED_PATH` overrides the seed file (must be readable inside the container).
 - Cache TTLs are capability-specific. `HTTP_FETCH_CACHE_TTL_MS` defaults off
   and `TOKEN_PRICE_CACHE_TTL_MS` defaults to 30 seconds in production; shared
-  demo/smoke orchestration supplies one hour for both. Optional
+  smoke/smoke orchestration supplies one hour for both. Optional
   `FETCH_CACHE_DIR` overrides only the HTTP cache directory.
 - **`BASE_RPC_URL`** — the vault-economics eth_call endpoint (§10). Unset →
   backend `config.ts` falls through to its production default
@@ -2398,40 +2398,40 @@ The live path (the only path) can still be tuned via env before `bun run demo`.
 The live path preserves the honesty model: empty fetch → persisted real floor; a
 no-history indicator is excluded + logged (never synthetic).
 - Random ports (Postgres, API) on every run, with no fixed default and no env-pin path
-  — `bun run demo -- --static-port` is the sole exception and pins only the api port to the
+  — `bun run smoke -- --static-port` is the sole exception and pins only the api port to the
   cloudflared origin — plus an environment-scoped compose project name
-  (`rm_ci_stack_<hash>` / `rm_demo_stack_<hash>`): concurrent runs do not collide, and a
+  (`rm_ci_stack_<hash>` / `rm_smoke_stack_<hash>`): concurrent runs do not collide, and a
   leaked container is attributable to the environment that made it. The run identity
   (project + environment class/hash + ports + compose env) is written to
-  `.agents/demo-state.json` so the explicit teardown command can find it.
+  `.agents/smoke-state.json` so the explicit teardown command can find it.
 - **Teardown on exit (local).** Ctrl-C / SIGTERM tears the stack down
   (`docker compose down`, **no `-v`** — containers + network removed, postgres data
   **kept**, state file **kept**) and prints the log-file path first. A **startup failure**
   is the exception — it leaves the stack RUNNING so it can be inspected. `bun run
-  demo:down` tears down an already-running demo the same way (keeps data); `bun run
-  demo:status` shows the containers, the log path, and the postgres data location; `bun
-  run demo:clean` is the only command that deletes demo data volumes (by
-  `robotmoney.demo=1` label; loud skip on in-use; never a `--pg-data` host dir).
-- **CI reclaims its own volume:** when `process.env.CI` is set the demo runs its checks
+  smoke:down` tears down an already-running smoke the same way (keeps data); `bun run
+  smoke:status` shows the containers, the log path, and the postgres data location; `bun
+  run smoke:clean` is the only command that deletes smoke data volumes (by
+  `robotmoney.smoke=1` label; loud skip on in-use; never a `--pg-data` host dir).
+- **CI reclaims its own volume:** when `process.env.CI` is set the smoke runs its checks
   once, tears down (`docker compose down`, no `-v`), then deletes **only its own run's**
-  volume (scoped by the `robotmoney.demo.project` label) so the shared self-hosted runner
-  leaks nothing while a co-tenant standing demo is untouched.
+  volume (scoped by the `robotmoney.smoke.project` label) so the shared self-hosted runner
+  leaks nothing while a co-tenant standing smoke is untouched.
 - **A killed boot cannot leak silently.** The in-process teardown above dies with the
   process, so both CI workflows carry an `if: always()` backstop that runs
-  `docker compose -p "$DEMO_PROJECT" down -v --remove-orphans` **before** `demo:clean
-  --project`, and `demo:clean` in that role **exits non-zero** on any surviving resource.
+  `docker compose -p "$SMOKE_PROJECT" down -v --remove-orphans` **before** `smoke:clean
+  --project`, and `smoke:clean` in that role **exits non-zero** on any surviving resource.
   A separate always() step reaps `robotmoney.env=ci` leftovers older than 6h from prior
-  runs (`bun run demo:reap`). Full rationale — and the incident that produced it, e2e run
+  runs (`bun run smoke:reap`). Full rationale — and the incident that produced it, e2e run
   30406428674 — under §"Demo Specification" (c).
 - A missing Docker dependency (Postgres image, build failure) must fail the run
   loudly, never silently skip.
 
 ## 8. Agent memo workflow (`memoUrl` + `post_memo`)
 
-The demo must demonstrate the full agent memo lifecycle:
+The smoke must smokenstrate the full agent memo lifecycle:
 
 1. At least one agent publishes a long-form memo at a member-hosted URL (or a
-   simulated URL within the demo).
+   simulated URL within the smoke).
 2. The `memoUrl` is included in the submission payload and covered by the signature.
 3. `ROUTES.swarm.memos` writes the memo to the member's own storage and
    returns the URL.
@@ -2441,7 +2441,7 @@ The demo must demonstrate the full agent memo lifecycle:
 
 ## 9. Multi-session awareness
 
-The demo should demonstrate at least two sessions (or the concept of rotation):
+The smoke should smokenstrate at least two sessions (or the concept of rotation):
 
 - Session N completes the full lifecycle.
 - The brief for session N+1 references the outcome of session N.
@@ -2451,7 +2451,7 @@ The demo should demonstrate at least two sessions (or the concept of rotation):
 
 ### 10.1 TUI (default, interactive terminal)
 
-In an interactive terminal the demo takes over the screen with a zero-dependency ANSI
+In an interactive terminal the smoke takes over the screen with a zero-dependency ANSI
 TUI (`scripts/lib/tui.ts`) that repaints ~4×/s. Raw logs are **suppressed** on screen;
 the TUI shows only distilled state. Layout:
 
@@ -2459,8 +2459,8 @@ the TUI shows only distilled state. Layout:
   Admin), on `127.0.0.1:<random port>`. The **Admin** entry is the `/admin`
   task-queue jobs dashboard (#117); its password (`ADMIN_TOKEN`) is a fresh
   random value generated per run and rendered **only** here, on the pane's
-  `Admin pass` line — never logged, never written to `demo-state.json`
-  (`scripts/lib/demo-main.ts`).
+  `Admin pass` line — never logged, never written to `smoke-state.json`
+  (`scripts/lib/smoke-main.ts`).
 - **Startup** — per-container status (postgres, api, worker, mcp) plus migrate and the
   `/health` checks, each shown pending / in-progress (spinner) / healthy / failed. After
   bring-up the icons are kept live by polling the **real docker container state**
@@ -2475,7 +2475,7 @@ the TUI shows only distilled state. Layout:
   launches a vanilla OpenCode member-agent container and hands it the canonical
   copy-paste prompt with a generated identity, and the agent works out skill
   install, `rmpc` install, keygen, and the signed application entirely on its
-  own via real inference — the demo only observes the public application-status
+  own via real inference — the smoke only observes the public application-status
   API and the admin roster (§11 R8). `session`/`memo`/`admitted` flip the same
   way as before: when the newly-admitted member is separately observed
   submitting a signed take + posting a memo in a live swarm session. A
@@ -2505,20 +2505,20 @@ the TUI shows only distilled state. Layout:
 
 Full verbose output from every process (api, worker, mcp, migrations, the swarm
 driver, and the orchestrator's own narration) is written to
-`.agents/demo-<project>.log` (path shown in the TUI header, recorded in the state file,
-and shown by `bun run demo:status`). On Ctrl-C / SIGTERM the terminal is restored first,
+`.agents/smoke-<project>.log` (path shown in the TUI header, recorded in the state file,
+and shown by `bun run smoke:status`). On Ctrl-C / SIGTERM the terminal is restored first,
 the log path is printed, the stack is torn down (data kept), and a resume/reclaim hint is
 printed. A startup failure instead restores the terminal and leaves the containers up for
 inspection (with the log path).
 
 ### 10.2 Plain fallback (non-TTY, CI, `--no-tui` / `NO_TUI=1`)
 
-When stdout is not a TTY, in CI, or when the TUI is disabled, the demo keeps the plain
+When stdout is not a TTY, in CI, or when the TUI is disabled, the smoke keeps the plain
 line-logging behavior: once healthy it prints a READY route table, then logs each
 scheduled action as it fires.
 
 ```
-── Robot Money demo ── READY ────────────────────────────
+── Robot Money smoke ── READY ────────────────────────────
   Site:       http://127.0.0.1:<api>/
   Regime:     http://127.0.0.1:<api>/regime
   Swarm:  http://127.0.0.1:<api>/swarm
@@ -2526,16 +2526,16 @@ scheduled action as it fires.
   MCP:        http://127.0.0.1:<mcp>/health
   Admin:      http://127.0.0.1:<api>/admin  (password shown in the interactive TUI only)
 
-  State file: .agents/demo-state.json
-  Log file:   .agents/demo-<project>.log
+  State file: .agents/smoke-state.json
+  Log file:   .agents/smoke-<project>.log
   PG data:    volume <project>_pgdata (fresh-per-run; kept on teardown)
   Demo actions: a swarm session per subject every ~2 min (2 subjects staggered → one lands about every ~1 min); research daily at 23:00, regime daily at 22:30.
   Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).
-  Reclaim stopped demos' data volumes with: bun run demo:clean
+  Reclaim stopped smokes' data volumes with: bun run smoke:clean
 ```
 
 The cadence line is **rendered from the resolved profile** (`renderCadenceLine`
-in `scripts/lib/demo-schedule.ts`), never hardcoded, so it always states the
+in `scripts/lib/smoke-schedule.ts`), never hardcoded, so it always states the
 cadence actually in force. The same boot with `--static-port` prints:
 
 ```
@@ -2545,8 +2545,8 @@ cadence actually in force. The same boot with `--static-port` prints:
 ## 11. Member onboarding (normative spec)
 
 Status: target sequence. This section is the plan of record for how a prospective
-swarm member joins; the demo (§10.1), e2e suite, and user-facing docs are aligned to
-it (`scripts/lib/onboarding-eval.ts` drives the demo and e2e admission path;
+swarm member joins; the smoke (§10.1), e2e suite, and user-facing docs are aligned to
+it (`scripts/lib/onboarding-eval.ts` drives the smoke and e2e admission path;
 `scripts/rmpc-release-e2e.ts` is the no-inference proof of the same signed-apply chain).
 Where any other code differs, this section wins.
 
@@ -2593,7 +2593,7 @@ Where any other code differs, this section wins.
   MCP-server `apply-how-to` tool that previously served this role; the skill
   now carries that property on its own.)
 - **R6 — Setup-gated apply.** An application **cannot complete** unless the owner's
-  agent demonstrably works: the application carries the member's username, contact,
+  agent smokenstrably works: the application carries the member's username, contact,
   and public key together with an `rmpc` signature over the canonical application
   payload, and the server verifies that signature against the submitted key before
   recording anything. Setup — `rmpc` install, keygen — therefore happens
@@ -2602,12 +2602,12 @@ Where any other code differs, this section wins.
   applications whose toolchain is already proven; no separate setup-proof step
   exists.
 - **R7 — Approval.** In production, the application then waits for a human admin to
-  approve it. In `bun run demo`, approval is automatic after 10 seconds — invoked
+  approve it. In `bun run smoke`, approval is automatic after 10 seconds — invoked
   through the same admin API, not a different code path.
 - **R8 — Isomorphism, no mocks: onboarding is an eval.** The whole process is
-  isomorphic across (a) manual testing, (b) the `bun run demo` simulation,
+  isomorphic across (a) manual testing, (b) the `bun run smoke` simulation,
   (c) production, and (d) e2e tests. All four use the real skill, the real
-  `rmpc` binary, the real REST API, and real signature verification. In the demo and
+  `rmpc` binary, the real REST API, and real signature verification. In the smoke and
   e2e, the member's side is not a script: each new member is a **vanilla OpenCode
   agent container** handed the same canonical copy-paste prompt (R4) a human would
   paste, doing **real inference** — onboarding doubles as a continuous eval of
@@ -2639,7 +2639,7 @@ Where any other code differs, this section wins.
    the application, and mints and returns the member's UUID (R2), which the status
    page tracks from then on. An unsigned or badly-signed submission never
    completes — so no human review time is ever spent on a broken toolchain.
-5. **review / approve** — a human admin approves in production; the demo auto-approves
+5. **review / approve** — a human admin approves in production; the smoke auto-approves
    via the same admin API after 10 s (R7).
 6. **claim + participate** — the member claims its bearer token by signing the server
    challenge (existing self-serve seating, issue #205), and from the next session on
@@ -2671,30 +2671,30 @@ in a blank profile never needs. It is versioned (`expectedVersion`, 409
 that changed plus the operator's optional `reason`. It changes no status (that
 is deactivate/reactivate) and no credential (that is rotate-key).
 
-The demo's Onboarding strip (§10.1) renders exactly this checklist — its step names
+The smoke's Onboarding strip (§10.1) renders exactly this checklist — its step names
 track this sequence, and each step is driven by the real flow (R8): for every
-admission the demo launches a vanilla OpenCode agent container, pastes the canonical
+admission the smoke launches a vanilla OpenCode agent container, pastes the canonical
 prompt with a generated identity, and the agent onboards **itself** with real
 inference — skill install, `rmpc` install, keygen, signed apply, claim,
-participation. The demo only observes, deriving the strip's step states from the
+participation. The smoke only observes, deriving the strip's step states from the
 public application-status API, with the 10 s auto-approval as the only scripted
 divergence. A member that fails to onboard is a red eval result — evidence the
-instructions or tooling regressed, not something the demo papers over. The demo
+instructions or tooling regressed, not something the smoke papers over. The smoke
 admits its first member ~1 min after start and attempts the next ~5 minutes after
 the previous admission finishes (real eval duration is additive, so a 30-minute
 timeout pushes the next attempt out by that much). The newcomer roster is
-**fixed and finite** — the five names in `scripts/lib/demo-newcomers.ts`, in
+**fixed and finite** — the five names in `scripts/lib/smoke-newcomers.ts`, in
 order, with no generated fallback once the list is exhausted (#260). The driver
 then stops; the roster cap (`SWARM_ROSTER_CAP`) is defence in depth and is
-never reached by the standing demo. A failed admission is not retried and is not
-replaced, so the demo can finish with fewer than five newcomers seated — that is
+never reached by the standing smoke. A failed admission is not retried and is not
+replaced, so the smoke can finish with fewer than five newcomers seated — that is
 the eval result, reported rather than hidden.
 
 ### 11.3 Onboarding eval (normative)
 
 Status: target design (D22). R8 makes onboarding an eval; this section specifies
 what that eval is, how it is scored, and which components it shares with
-`bun run demo`. Where any other code differs, this section wins.
+`bun run smoke`. Where any other code differs, this section wins.
 
 The local entrypoint is an eval-only native Bun test suite: `bun run eval`
 discovers files under `evals/`, and Bun's normal path and
@@ -2753,7 +2753,7 @@ agent can sequence the whole thing itself.
 
 Layers 0-3 need **no server**. Layer 4 needs a `core` stack only — postgres and
 the api — because apply/approve/claim is Postgres CRUD plus signature
-verification and never touches the job queue. The eval never boots the full demo
+verification and never touches the job queue. The eval never boots the full smoke
 cluster: no worker lanes, no EDGAR seed, no frontend checks, no session drivers.
 
 Layers 1-3 observe by inspecting the **stopped container's filesystem** before
@@ -2790,20 +2790,20 @@ regression in prompt quality, and this is the only instrument that surfaces it.
 The scorecard asserts K samples actually ran, so a zero-sample run is red rather
 than a vacuous green.
 
-**E5 — Shared components, not parallel ones.** The eval is the demo's onboarding
+**E5 — Shared components, not parallel ones.** The eval is the smoke's onboarding
 path with fewer services booted. Three components are shared by construction:
 
-- **`scripts/lib/demo-stack.ts`** — one bring-up with a `core`/`full` profile,
+- **`scripts/lib/smoke-stack.ts`** — one bring-up with a `core`/`full` profile,
   free of module-scope side effects and of `process.env` reads or writes
   (compose's env map is built from an explicit config object and passed to that
-  one child process). Consumed by the demo (`full`), the eval (`core`), and the
+  one child process). Consumed by the smoke (`full`), the eval (`core`), and the
   rails check (`core`, replacing its forked `bringUpInfra()`).
 - **`runMemberAgent()`** — the member-agent container primitive (deterministic
   name, compose-run argv, pipe draining, guaranteed removal), extracted from
   `runOnboardingEval` so layers 0-3 and layer 4 launch containers the same way.
 - **`classifyOutcome()`** — one definition, three consumers: the retry predicate
-  in `runOnboardingEvalWithRetry`, the demo's onboarding driver, and the eval's
-  scorecard. A refusal is retryable under this classifier, which is why the demo
+  in `runOnboardingEvalWithRetry`, the smoke's onboarding driver, and the eval's
+  scorecard. A refusal is retryable under this classifier, which is why the smoke
   no longer forfeits a finite roster seat to one unlucky sample.
 
 **A dead run's cause is read, never guessed (issue #527).** `opencode run
@@ -2872,7 +2872,7 @@ scorecard. The accepted tradeoff is time-to-detection: a shift in the admission
 rate surfaces over about a week rather than in one night.
 
 **Reporting rides on the admission that already runs.** No sampling loop, no
-scorecard module, no second stack bring-up. `scripts/lib/demo-main.ts`
+scorecard module, no second stack bring-up. `scripts/lib/smoke-main.ts`
 classifies the run with the existing `scripts/agent/classify-outcome.ts` and
 renders a small structured record — outcome, resolved model id, duration, member
 id, agent-liveness counts, and whether the sample belongs in the admission-rate
@@ -2912,7 +2912,7 @@ exactly what an owner supplies before their agent ever starts —
   fill-in-the-blank placeholders for a harness to substitute (R4) — it **asks**
   its owner — so the harness answers that question in its appended note rather
   than rewriting the canonical text;
-- the swarm API base URL for this run, because the ephemeral demo stack
+- the swarm API base URL for this run, because the ephemeral smoke stack
   cannot serve the production host the docs name;
 - the keystore passphrase, exported into the agent's environment. The published
   `swarm-onboarding` skill tells the agent to ask its owner for this and to
@@ -2935,19 +2935,19 @@ mean the published instructions do not stand on their own.
 
 **E8 — Retained, tailable, per-prospect transcripts (issue #317).** The
 member-agent primitive already redacts and returns a transcript for every run
-(`scripts/agent/member-agent.ts`), but until #317 the demo's onboarding driver
-only ever wrote it to the shared `.agents/demo-<project>.log`, and only when
+(`scripts/agent/member-agent.ts`), but until #317 the smoke's onboarding driver
+only ever wrote it to the shared `.agents/smoke-<project>.log`, and only when
 the prospect FAILED — a successful or still-running prospect left no
 discoverable record, and the container's own filesystem is removed at
 teardown (`--rm`). Rather than a second persistence mechanism, the standing
 driver now wires in the SAME artifact primitive the local eval entrypoint
 already used (`createOnboardingArtifactWriter` /
-`scripts/lib/demo-prospect-transcript.ts`), so both converge on one directory
+`scripts/lib/smoke-prospect-transcript.ts`), so both converge on one directory
 per prospect:
 
 ```text
 .agents/onboarding-evals/<composeProject>/<runId>/
-  manifest.json         — candidate display name, demo run, model, limits
+  manifest.json         — candidate display name, smoke run, model, limits
   events.ndjson         — the consolidated lifecycle timeline: launch,
                           container-observed ("ready"), every redacted
                           agent/API/Postgres line, exit, cleanup
@@ -2961,8 +2961,8 @@ per prospect:
 Every file is appended to synchronously as events arrive, so it is
 **tail-able while the prospect's container is still running** and **remains
 inspectable after the container is removed** — both live on the host, not
-inside the container. `<composeProject>` is the demo's own project name
-(shown in the TUI header and `bun run demo:status`); `<runId>` is the
+inside the container. `<composeProject>` is the smoke's own project name
+(shown in the TUI header and `bun run smoke:status`); `<runId>` is the
 candidate's slug, printed in the log line `onboarding <name> transcript: …`
 the driver emits the moment it starts an attempt. **Operator workflow:**
 
@@ -2979,7 +2979,7 @@ A retried attempt (a `refused` or `rate-limited` first try —
 keyed by the prospect's base identity, and each attempt tags its own events
 with its own attempt number, so a retried admission reads as one continuous
 record rather than fragmenting across two. This directory is git-ignored
-runtime state (`.agents/`), identical in that respect to the demo log file and
+runtime state (`.agents/`), identical in that respect to the smoke log file and
 the local eval's own artifacts (docs/reports/2026-07-29-local-onboarding-eval-assets.md).
 
 ---
@@ -3207,7 +3207,7 @@ Acceptance:
   and new job ids. It never changes the dead row.
 - Schedule editing is limited to enabled/disabled for existing analytics
   schedules. Cron, timezone, kind, and payload are read-only in this phase.
-- The five disabled recurring `swarm.*` rows are labelled “legacy/demo —
+- The five disabled recurring `swarm.*` rows are labelled “legacy/smoke —
   not product scheduling” and cannot be enabled from the UI. *(Superseded by
   issue #208 / PR #229: schedules are environment-configurable via
   `SWARM_SCHEDULES_ENABLED` — see §9.4 of the main document.)*
@@ -3264,7 +3264,7 @@ Acceptance:
 - Rejecting an application sets its application status to `rejected`, sets the
   member inactive, and leaves its key inactive.
 - `SWARM_ROSTER_CAP` is HARD-ENFORCED on every transition-to-active. The
-  production admin API (manual add, activate/approve, reactivate — and the demo
+  production admin API (manual add, activate/approve, reactivate — and the smoke
   `registerMember` shortcut) refuses an admission that would exceed the cap with
   a 409, race-safely (a transaction-scoped advisory lock serializes admissions
   so two concurrent activations cannot both slip past the last free seat).
@@ -3731,9 +3731,9 @@ close/aggregate/publish jobs suffixed with the reopen event id. Cancel atomicall
 changes the session to `cancelled` and marks all pending scoped jobs cancelled.
 Neither operation touches running or terminal queue rows.
 
-The generic existing `/api/swarm/admin/:action` endpoints remain for demo
+The generic existing `/api/swarm/admin/:action` endpoints remain for smoke
 compatibility but the new browser must not call them. Mark `reset` and
-`subject_fixtures` dev/demo-only and return 403 for them when `RM_ENV=prod`.
+`subject_fixtures` dev/smoke-only and return 403 for them when `RM_ENV=prod`.
 
 ### 6.4 Required domain corrections
 
@@ -3754,13 +3754,13 @@ Before wiring UI controls, correct these current behaviors:
 - `publishSession` must require `aggregated` and non-null recommendation and
   synthesis.
 - `submitRecommendation` must require an `expected` roster row for the member.
-- `registerMember` remains a demo helper and is not used for production admin
+- `registerMember` remains a smoke helper and is not used for production admin
   workflows. It is idempotent by member id (`ON CONFLICT (id) DO UPDATE`,
   rebinding the key and minting a token, with the roster cap exempting an
-  existing member), which is what lets a restarted demo re-adopt a persona
+  existing member), which is what lets a restarted smoke re-adopt a persona
   rather than admit a duplicate.
 - `resetSessions` is REMOVED — it TRUNCATEd published session/brief/
-  recommendation/memo history so a demo could reuse today's date. See §5's
+  recommendation/memo history so a smoke could reuse today's date. See §5's
   "the database dates a session" note.
 - Every transition writes `swarm_session_events` and `audit_log` in the same
   transaction as the state update.
@@ -3832,7 +3832,7 @@ Add tests proving:
   telemetry warning behavior;
 - dead-job retry clones rather than mutates; and
 - analytics retry/rerun/schedule paths return `409` with zero queue/schedule
-  mutation; swarm demo rows remain protected too.
+  mutation; swarm smoke rows remain protected too.
 
 ### 8.2 Browser tests
 
@@ -4065,7 +4065,7 @@ Durable state is a **DigitalOcean Managed Postgres high-availability cluster**:
 primary + standby with automated failover, daily backups, and point-in-time
 recovery. Only the API tier connects, via `DATABASE_URL`. This refines D8's
 production mode (one Postgres) to a managed HA cluster; the single-box Dockerized
-Postgres remains the CI and demo mode (D8).
+Postgres remains the CI and smoke mode (D8).
 
 ---
 
@@ -4123,9 +4123,9 @@ own same-host API) use CORS.
 - **D11 (single box, no reverse proxy)** — **superseded for production by D13.**
   Production splits across subdomains on DO with Cloudflare for DNS+observability;
   there is still **no reverse proxy** (host-based DNS routing, not a proxy). The
-  single-box `docker-compose` remains the **CI and demo** deployment.
+  single-box `docker-compose` remains the **CI and smoke** deployment.
 - **D8 (one Postgres in Docker)** — **prod mode refined by D13:** production is a
-  **DO Managed Postgres HA cluster**; ephemeral (CI) and demo modes unchanged.
+  **DO Managed Postgres HA cluster**; ephemeral (CI) and smoke modes unchanged.
 - **D10 (split-ready repos)** — reinforced: each surface is already an independent
   host, so a repo split stays mechanical.
 - **D4 (SPA history router)** — works **unmodified at the subdomain root**; the
@@ -4276,12 +4276,12 @@ These documents describe current product and system commitments:
   it was written, not necessarily current state.
 - [Deployment](./runbooks/deployment.md) — GitOps environments, credentials, and
   operational setup.
-- The demo, live-data, admin-surface, and topology specifications are
+- The smoke, live-data, admin-surface, and topology specifications are
   incorporated in this document under their dedicated sections above. (The
   former preview-server spec was retired by decision D19 — preview mode is
   now described in §4 "Preview mode (goldens-backed, no backend)".)
 - [Credential doctor](./runbooks/credential-doctor.md)
-- [Demo/CI container leaks](./runbooks/demo-container-leaks.md) — reading the
+- [Demo/CI container leaks](./runbooks/smoke-container-leaks.md) — reading the
   `robotmoney.env` labels, clearing one project, and running the reaper on the
   host that also serves `stage.robotmoney-labs.dev`.
 

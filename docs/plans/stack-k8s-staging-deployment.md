@@ -40,13 +40,13 @@ Three companions, each with a distinct job:
 
 ## 0. Naming — two things are called "stack"
 
-`scripts/stack/` is **ours**: the compose bring-up behind `bun run demo`
+`scripts/stack/` is **ours**: the compose bring-up behind `bun run smoke`
 (`stack.ts`, `ports.ts`, `config.ts`). bozemanpass `stack` is the **tool** this
 plan adopts. They are unrelated and both will exist in this repo.
 
 Convention: the tool is written **`stack(bp)`** in prose and invoked as `stack`
 only inside fenced commands. Ours is always `scripts/stack/`. Do not rename
-either — renaming `scripts/stack/` touches the port-policy tests, the demo TUI
+either — renaming `scripts/stack/` touches the port-policy tests, the smoke TUI
 and the lifecycle-order test for no benefit.
 
 ---
@@ -88,15 +88,15 @@ is verified; the field-guide section carries the evidence.
 | `RM_ENV` per environment | No `staging` value exists — `config.ts:539` throws | Staging runs **`RM_ENV=prod`** semantics, `PROJECTS_SOURCE=live` included | §16 |
 | Inline `environment:` literals | Inline literals **beat** `--config` | Forward operator-facing values as `${VAR}`, don't default them | §5 |
 | `healthcheck:` blocks | Become a **livenessProbe only** — no readiness, no startup probe | Decide whether liveness-only is acceptable | §12 |
-| `ports: - "8787"` (Docker picks the host port) | Cluster-internal; ingress fronts them. A port is *not* needed for service DNS | Drop the stray `postgres` publish; `ports.ts` doctrine is moot in prod but stays load-bearing for `bun run demo` | §5 |
-| `docker-compose.stage.yml` `!override` + cloudflared | Gateway API + cert-manager | Not carried over. Keep the file — it still serves `bun run demo -- --stage` | §22 |
+| `ports: - "8787"` (Docker picks the host port) | Cluster-internal; ingress fronts them. A port is *not* needed for service DNS | Drop the stray `postgres` publish; `ports.ts` doctrine is moot in prod but stays load-bearing for `bun run smoke` | §5 |
+| `docker-compose.stage.yml` `!override` + cloudflared | Gateway API + cert-manager | Not carried over. Keep the file — it still serves `bun run smoke -- --stage` | §22 |
 | `depends_on: condition: service_healthy` | No equivalent; dropped | api/workers crash-loop until Postgres answers. Noisy but works — migrations must not rely on it | §12 |
 | YAML anchors | Expand at parse time | No work | — |
 | `logging: json-file 10m×3` | Ignored; cluster rotation applies | Drop from the k8s composefile | — |
 | `restart: unless-stopped` | Default `Always` | No work | — |
 
 **One more, easy to miss:** `postgres:17-alpine` is pinned to 17 *deliberately*,
-because it owns a persistent data directory the demo resumes across boots. Prod
+because it owns a persistent data directory the smoke resumes across boots. Prod
 parity is 18.6 (DO Managed). Staging under this plan runs **stack-owned**
 Postgres — so pin it to the major staging should rehearse, decide that once, and
 write the reason beside the pin. A later major bump is a dump-and-restore, not a
@@ -330,7 +330,7 @@ corrected container name, the Dockerfile static layer, operator-facing env
 forwarded rather than defaulted, `API_PORT` set explicitly, and no stray
 `postgres` publish. Add the `Number.isFinite` guard to `config.ts`.
 `stack validate` and `stack check` pass.
-*Gate: `bun run demo` still green — the compose path must not regress, since
+*Gate: `bun run smoke` still green — the compose path must not regress, since
 `_static` would then exist both baked and bind-mounted.*
 
 **Phase 2 — a provisioned cluster.** Stand up staging with `k3s-node.sh` (or
@@ -382,7 +382,7 @@ written once this one has evidence.
 ## 9. Explicitly not in scope
 
 - Any production change. Prod stays on SSH + compose.
-- Retiring `scripts/stack/` or changing `bun run demo`.
+- Retiring `scripts/stack/` or changing `bun run smoke`.
 - Moving the marketing static tier off its current path (D13's Spaces CDN
   end-state is unaffected).
 - Horizontal scaling or HPA — one replica per service until there is a reason.

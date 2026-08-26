@@ -1,6 +1,6 @@
 // Test helper: a projects data source that serves the vendored fixture payloads
 // but rewrites each discovered project's slug with a unique prefix, so DB-backed
-// pipeline tests never collide on slug with each other or with the demo-seed
+// pipeline tests never collide on slug with each other or with the smoke-seed
 // suite in the shared ephemeral Postgres. Provider lookups (coins/dex/vault/
 // wallet) are keyed by shared address/id constants, so they need no rewriting.
 import { fixtureProjectsDataSource } from "../../src/projects/access/fixture-source.ts";

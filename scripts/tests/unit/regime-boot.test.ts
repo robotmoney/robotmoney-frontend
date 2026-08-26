@@ -1,10 +1,10 @@
 // Demo-boot regime freshness/retry decision (issue #126). The boot self-heal
-// loop in scripts/lib/demo-main.ts re-checks GET /api/dashboards/regime-snapshots
+// loop in scripts/lib/smoke-main.ts re-checks GET /api/dashboards/regime-snapshots
 // after the seed regime run and must: stop when the served snapshot is FRESH,
 // re-run the analytics while attempts remain when it is STALE (or the check
 // itself failed), and give up with the LOUD operator warning on the final
 // attempt. That decision is the pure decideRegimeBootAction — imported here from
-// the exact module demo-main.ts consumes, so these assertions cover the shipped
+// the exact module smoke-main.ts consumes, so these assertions cover the shipped
 // boot behaviour, not a copy.
 import { expect, test } from "bun:test";
 import {
@@ -58,7 +58,7 @@ test("an empty-table verdict (stale:true, asof:null) reports 'asof none' rather 
 });
 
 test("the shipped boot sequence: stale, stale, then fresh → rerun, rerun, fresh (bounded at 3 attempts)", () => {
-  // Drive the decision exactly as demo-main.ts's for-loop does, over the
+  // Drive the decision exactly as smoke-main.ts's for-loop does, over the
   // self-heal scenario the feature exists for: the first two checks see the
   // frozen seed floor, the third sees the re-run's fresh snapshot.
   const checks = [

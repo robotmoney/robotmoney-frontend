@@ -234,7 +234,7 @@ const memoBody = (subj: string) => [
 
 test("full open→brief→submit→aggregate cycle enriches the session (regime_summary, recommendation, synthesis, memo body)", async () => {
   const subj = rid("sub");
-  await ic.ensureDemoSubjectFixtures(subj, "Woon Treasury", "2026-07-05");
+  await ic.ensureSmokeSubjectFixtures(subj, "Woon Treasury", "2026-07-05");
   const session = await ic.openSession(subj);
   // The DATABASE dates the session (migration 0022) — read it back rather
   // than asserting a date this test chose.
@@ -975,7 +975,7 @@ test("two sessions for one subject on one day: BOTH briefs survive, each keeping
 });
 
 // ── Joining is idempotent by member id ──────────────────────────────────────
-// The demo re-registers a persona's COMMITTED key against the id the database
+// The smoke re-registers a persona's COMMITTED key against the id the database
 // already holds, on every boot. That must rebind the key and mint a working
 // token WITHOUT creating a second member — otherwise a restart grows the roster
 // by one row per persona, which is exactly what the hosted database suffered
@@ -1021,8 +1021,8 @@ test("re-registering an active member does not consume roster capacity", async (
     const r = await ic.registerMember({ memberId: id, name: `Member ${i}`, publicKey: `K${i}${"k".repeat(40)}` });
     expect(r).toHaveProperty("token");
   }
-  // …then re-register one of them, as every demo boot does. A full roster must
-  // not turn an existing persona's re-key into a rejection, or a restarted demo
+  // …then re-register one of them, as every smoke boot does. A full roster must
+  // not turn an existing persona's re-key into a rejection, or a restarted smoke
   // would lose its own members.
   const again = await ic.registerMember({ memberId: ids[0], name: "Member 0", publicKey: `R${"r".repeat(43)}` });
   expect(again).toHaveProperty("token");

@@ -12,7 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockVendorScripts } from "./vendor-scripts.ts";
 import { navigate } from "./navigation.ts";
 
-const ACCESS_KEY = "demo-access-key";
+const ACCESS_KEY = "smoke-access-key";
 
 // a1's three sparkline series deliberately have DIFFERENT point counts (4 /
 // 3 / 5) so switching the Sparkline metric selector visibly flips its 6M

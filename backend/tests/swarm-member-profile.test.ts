@@ -20,7 +20,7 @@ const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 // file admits into is its own, with no reset of anyone else's rows.
 useCleanDatabase(import.meta.file);
 
-// registerMember is the privileged apply+activate shortcut (demo/E2E harness) —
+// registerMember is the privileged apply+activate shortcut (smoke/E2E harness) —
 // it mints an ACTIVE member with an ACTIVE key + bearer token in one shot, the
 // same end state `apply → admin activate → claim` produces for a real member.
 async function activeMember() {

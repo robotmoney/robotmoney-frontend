@@ -96,9 +96,9 @@ async function checkServerVersion(db: Db, { record }: Checker): Promise<void> {
   }
   const major = Math.floor(v.num / 10000);
   // Production runs 18 (DigitalOcean managed, confirmed 2026-08-17), and since
-  // issue #691 so do the backend test suite and the restore twin — both pinned
+  // issue #691 so do the backend test suite and the restore smoke-twin — both pinned
   // by scripts/lib/postgres-image.ts. 17 is still tolerated without a
-  // warning because the demo / single-box stack (docker-compose.yml's
+  // warning because the smoke / single-box stack (docker-compose.yml's
   // `postgres` service) is on it and a preflight may legitimately be pointed at
   // one; anything outside {17,18} is genuinely untested.
   if (major !== 17 && major !== 18) {
@@ -539,7 +539,7 @@ export async function runChecks(db: Db, checker: Checker): Promise<void> {
 export async function main(overrideEnvPath?: string): Promise<number> {
   // --emit-receipt records this run as step P4.preflight-live for where.ts.
   // Opt-in, because runChecks is also called against a restored dump by
-  // restore-check.ts (a DIFFERENT step, Gate C) and against the twin during a
+  // restore-check.ts (a DIFFERENT step, Gate C) and against the smoke-twin during a
   // rehearsal — a receipt claiming "live replica" must only be written by a run
   // that actually was one.
   const emit = process.argv.includes("--emit-receipt");

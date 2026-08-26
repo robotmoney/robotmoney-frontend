@@ -38,10 +38,10 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..", "..", "..");
 
 /** The two steps this script can be evidence for. It must be TOLD which — a
- *  twin rehearsal and a production postflight run the identical checks against
- *  different databases, and a receipt that guessed would let a twin run stand
+ *  smoke-twin rehearsal and a production postflight run the identical checks against
+ *  different databases, and a receipt that guessed would let a smoke-twin run stand
  *  in for production. The rehearsal is explicitly not production. */
-const RECEIPT_STEPS = ["P5.postflight-twin", "P8.postflight-prod"] as const;
+const RECEIPT_STEPS = ["P5.postflight-smoke-twin", "P8.postflight-prod"] as const;
 
 /** Check 1 — all seven migrations recorded, under their FULL filenames.
  *
@@ -123,7 +123,7 @@ async function checkStrategyNavColumn(db: Db, { record }: Checker): Promise<void
   // in the place it runs. postflight runs after readiness — G8 requires it, and
   // on production the stack is up by definition — so the per-minute sampler has
   // necessarily written at least one fresh row with the column populated, which
-  // is correct behaviour. Every twin rehearsal therefore produced the same
+  // is correct behaviour. Every smoke-twin rehearsal therefore produced the same
   // WARN, and a warning that always fires is one an operator learns to skim.
   //
   // What the check actually cares about is that THE MIGRATION POPULATED
@@ -314,7 +314,7 @@ async function checkRepairSchedule(db: Db, { record }: Checker): Promise<void> {
   //
   // This used to read process.env.BASE_RPC_MAX_CALLS_PER_SEC and narrate what
   // the backfill "will" do. postflight runs in the operator's shell (or, on the
-  // twin, spawned from the rehearsal host); the app reads that variable inside
+  // smoke-twin, spawned from the rehearsal host); the app reads that variable inside
   // the container, from the repo-root .env that docker-compose.yml interpolates.
   // Those are different environments. An operator taking §5.2's documented
   // opt-out by putting BASE_RPC_MAX_CALLS_PER_SEC=0 in .env — not exporting it —

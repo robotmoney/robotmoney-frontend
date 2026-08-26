@@ -3,7 +3,7 @@
 // PR #328's acceptance criteria for /skill.md and /articles/treasury-allocation
 // were checked off on the strength of a prior worker's manual browser-rendering
 // pass alone — no executed test navigated either URL. These two specs exercise
-// the real dev/demo backend (same baseURL every other frontend/test/browser
+// the real dev/smoke backend (same baseURL every other frontend/test/browser
 // spec runs against — see playwright.config.ts) so a future regression that
 // reintroduces either 404 fails CI, not just a human's memory of having once
 // checked it.

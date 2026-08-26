@@ -1,5 +1,5 @@
 // Central environment configuration. The only required input is DATABASE_URL.
-// RM_ENV selects behavior hints (ephemeral | demo | prod) but the connection
+// RM_ENV selects behavior hints (ephemeral | smoke | prod) but the connection
 // itself is always driven by DATABASE_URL so the same code runs everywhere.
 import parser from "cron-parser";
 import { envSecret } from "./lib/env-secret.ts";
@@ -13,8 +13,8 @@ function required(name: string): string {
 // --- Base RPC provenance (issue #50) ----------------------------------------
 // The vault-economics DTO labels where its numbers came from: 'live' (a real
 // Base JSON-RPC endpoint — the production default, and the ONLY source the
-// demo/CI path selects since issue #147 removed DEMO_HERMETIC and the
-// hermetic demo/CI fixture stub entirely) or 'stub' (a deterministic fixture
+// smoke/CI path selects since issue #147 removed DEMO_HERMETIC and the
+// hermetic smoke/CI fixture stub entirely) or 'stub' (a deterministic fixture
 // value backend unit tests set directly via BASE_RPC_SOURCE=stub with their
 // own in-process mocked transport — see backend/tests/vault-economics.test.ts
 // — so stub-served payloads are never presented as live chain data). Resolved
@@ -49,7 +49,7 @@ export function isPlaceholderAddress(address: string | null | undefined): boolea
 // --- Vault adapter set (issues #40/#50) --------------------------------------
 // Decision (issue #40): adapter set comes from config, NOT on-chain discovery.
 // The three real Base-mainnet adapter contract addresses are baked as defaults
-// so a demo with only DATABASE_URL set reads real per-adapter TVL. Override any
+// so a smoke with only DATABASE_URL set reads real per-adapter TVL. Override any
 // of them via ADAPTER_*_ADDRESS for a re-pointed deployment.
 //
 // `configured` (issue #50) is true iff the resolved address is a REAL
@@ -91,7 +91,7 @@ export function resolveVaultAdapters(
 // backend/tests/api/wallet-balances.test.ts) so those tests never reach an
 // uncontrolled rate-limited price host. When PRICE_SOURCE is unset it FOLLOWS
 // the RPC source (BASE_RPC_SOURCE) — 'live' unless a test explicitly sets
-// BASE_RPC_SOURCE=stub. The demo/CI path (issue #147) never selects 'stub' for
+// BASE_RPC_SOURCE=stub. The smoke/CI path (issue #147) never selects 'stub' for
 // either knob; both always resolve 'live'. An explicit PRICE_SOURCE overrides.
 // Fail-closed: an unrecognized value refuses rather than silently claiming 'live'.
 export type PriceSource = "live" | "stub";
@@ -108,7 +108,7 @@ export function resolvePriceSource(
 // Canonical prop-wallet addresses on Base (source of truth: robotmoney-site
 // wallet.ts). These are the holders whose balances are summed per tracked asset;
 // the first is the primary/Bankr wallet (also the buyback destination). Baked as
-// real defaults so a demo with only DATABASE_URL set reads real wallet balances.
+// real defaults so a smoke with only DATABASE_URL set reads real wallet balances.
 // Override via PROP_WALLET_ADDRESSES=comma,separated. Base-only by design (#84).
 export function resolvePropWallets(
   env: Record<string, string | undefined> = process.env,
@@ -402,7 +402,7 @@ export const SP500_TICKER = "^GSPC";
 // --- ROBOTMONEY token / WETH / buyback feed ----------------------------------
 // Exposed to the token-metrics + token-buyback dashboards (and any other module)
 // so the real Base addresses live in ONE place. All baked as real defaults so a
-// demo with only DATABASE_URL set produces real reads; each is env-overridable.
+// smoke with only DATABASE_URL set produces real reads; each is env-overridable.
 
 // The ROBOTMONEY governance/reward ERC-20 on Base (source of truth:
 // robotmoney-site). Backs token-metrics (totalSupply/price/marketCap) and is the
@@ -427,7 +427,7 @@ export function resolveWeth(
 // Buyback feed config (token-buyback dashboard). Buybacks are ROBOTMONEY
 // transfers INTO the primary prop wallet (WETH → ROBOTMONEY swaps; source of
 // truth: robotmoney-site wallet.ts fetchBuybackTransactions). `source` mirrors
-// BASE_RPC_SOURCE so the hermetic demo/CI (BASE_RPC_SOURCE=stub) never reaches a
+// BASE_RPC_SOURCE so the hermetic smoke/CI (BASE_RPC_SOURCE=stub) never reaches a
 // live log indexer and a stub payload is never labelled live (#50).
 export interface BuybackConfig {
   primaryWallet: string; // buyback destination (receives ROBOTMONEY)
@@ -438,7 +438,7 @@ export interface BuybackConfig {
 }
 
 // The block the buyback era began on Base — an IMMUTABLE MAINNET FACT, identical
-// in demo, stage and prod, so it is a committed constant with NO env override
+// in smoke, stage and prod, so it is a committed constant with NO env override
 // (#640), the same treatment ROBOTMONEY_ADDRESS / WETH_ADDRESS /
 // BUYBACK_PRIMARY_WALLET already get above: a baked real default, absent from
 // docker-compose.yml's `environment:` allowlist, which is reserved for secrets
@@ -567,13 +567,13 @@ export function assertNoVaultAddressCollision(
 // --- Swarm session-lifecycle cron cadence (issue #208) -------------------
 // The five swarm.* job_schedules rows (open_session/publish_brief/
 // close_window/aggregate/publish) ship seed-time DISABLED by default so a
-// fresh CI/e2e/demo database never auto-enqueues real swarm lifecycle jobs
-// alongside the demo's own explicit enqueue-job admin path.
+// fresh CI/e2e/smoke database never auto-enqueues real swarm lifecycle jobs
+// alongside the smoke's own explicit enqueue-job admin path.
 // SWARM_SCHEDULES_ENABLED is the single switch that turns the WHOLE
 // managed sequence on for a deployment: production sets it explicitly (daily
 // 06:00-08:00 UTC — see the per-kind CRON defaults below); staging may set the
-// same flag with accelerated SWARM_*_CRON overrides; repo demo/e2e never
-// sets it (docker-compose.demo.yml pins it off). Resolved once at seed-time
+// same flag with accelerated SWARM_*_CRON overrides; repo smoke/e2e never
+// sets it (docker-compose.smoke.yml pins it off). Resolved once at seed-time
 // (backend/src/db/seed.ts) — job_schedules
 // rows are the persisted source of truth thereafter; the scheduler
 // (worker/scheduler.ts) owns next_run_at/last_enqueued_at bookkeeping.
@@ -654,11 +654,11 @@ export function resolveSwarmSchedules(
 //
 // THIS DEFAULT IS THE EFFECTIVE PRODUCTION VALUE, not a placeholder.
 // SWARM_PUBLIC_BASE_URL is named by NO compose file: not docker-compose.yml's
-// api `environment:` allowlist, not docker-compose.demo.yml's, not the
+// api `environment:` allowlist, not docker-compose.smoke.yml's, not the
 // x-worker-env anchor — and there is no `env_file:` anywhere and
 // backend/Dockerfile sets no ENV, so the variable can never reach the
-// container. It is also absent from scripts/lib/demo-main.ts's
-// DEMO_COMPOSE_PASSTHROUGH, so a `bun smoke` / `bun run demo` operator cannot
+// container. It is also absent from scripts/lib/smoke-main.ts's
+// DEMO_COMPOSE_PASSTHROUGH, so a `bun smoke` / `bun run smoke` operator cannot
 // inject it either. Whatever is written here is what every swarm notification
 // email links to. It is exported and pinned by
 // backend/tests/swarm-public-base-url.test.ts precisely because the tests that
@@ -691,7 +691,7 @@ export function resolveSwarmNotificationEmailFrom(
 // unrecognized value (so a typo like "production" can never silently open the
 // privileged surface). The unauthenticated convenience path is opt-in: it is
 // allowed only in the "ephemeral" (CI/throwaway) env or with RM_ALLOW_INSECURE=1.
-const VALID_ENVS = ["ephemeral", "demo", "prod"] as const;
+const VALID_ENVS = ["ephemeral", "smoke", "prod"] as const;
 const RM_ENV = process.env.RM_ENV ?? "prod";
 if (!(VALID_ENVS as readonly string[]).includes(RM_ENV)) {
   throw new Error(`invalid RM_ENV "${RM_ENV}" — expected one of ${VALID_ENVS.join(" | ")}`);
@@ -712,13 +712,13 @@ export const config = {
   workerId: process.env.WORKER_ID ?? `worker-${process.pid}`,
   // Shared secret guarding privileged endpoints (member onboarding + admin
   // lifecycle). If set, callers must present it as `X-Admin-Token`. If unset,
-  // those endpoints are allowed only outside prod (demo/ephemeral convenience).
+  // those endpoints are allowed only outside prod (smoke/ephemeral convenience).
   adminToken: process.env.ADMIN_TOKEN || null,
   automationToken: process.env.AUTOMATION_TOKEN || null,
   // Credential for the analytics-provider role. Only this role may write the
   // regime via POST /api/swarm/regime. Presented as a Bearer token. If set,
   // it is required (every env); if unset, the role is allowed only outside prod
-  // (demo/ephemeral convenience), mirroring adminToken.
+  // (smoke/ephemeral convenience), mirroring adminToken.
   analyticsToken: envSecret("ANALYTICS_TOKEN"),
   // Swarm activation email uses a durable outbox + swarm worker job.
   // The sender is persisted with the message; the deployment transport is an

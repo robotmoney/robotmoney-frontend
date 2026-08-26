@@ -20,12 +20,12 @@
 # MORE likely, not less. Docker's own allocator has no such window.
 #
 # Read the assignment back with `docker compose -p <project> port <svc> <port>`
-# (scripts/stack/ports.ts's parseComposePortOutput); `bun run demo` prints both
-# in its READY banner and records them in .agents/demo-state.json.
+# (scripts/stack/ports.ts's parseComposePortOutput); `bun run smoke` prints both
+# in its READY banner and records them in .agents/smoke-state.json.
 #
 # THE ONE FIXED PORT in the whole system is the stage tunnel origin, and it
 # lives in its own overlay: docker-compose.stage.yml pins api to 48787 with
-# `ports: !override`, applied only by `bun run demo -- --stage`.
+# `ports: !override`, applied only by `bun run smoke -- --stage`.
 #
 # Local dev / CI usually only needs Postgres:   docker compose up -d postgres
 # Full box:                                     docker compose up -d
@@ -115,7 +115,7 @@ x-worker-env: &worker-env
   # never mutate analytics data tables (issue #106). Falls back to DATABASE_URL
   # when unset.
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
-  RM_ENV: ${RM_ENV:-demo}
+  RM_ENV: ${RM_ENV:-smoke}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   # Capability-specific cache controls. Blank/unset is intentionally passed
   # through: backend parsing treats it as absent, preserving the production
@@ -167,7 +167,7 @@ services:
     # 18.6) in the test harness and the rollout tooling's digital twin. This
     # service is neither: it is the demo / single-box stack, and it owns a
     # PERSISTENT data directory — the `pgdata` volume below, or a host dir
-    # under `bun run demo -- --pg-data`, whose documented contract is that the
+    # under `bun run smoke -- --pg-data`, whose documented contract is that the
     # same value on a later boot resumes the same data (docs/architecture.md
     # "Postgres data location"). A data directory initialised by one major is
     # not readable by another, so moving this to 18 is a dump-and-restore for
@@ -207,7 +207,7 @@ services:
     command: ["bun", "run", "src/api/index.ts"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      RM_ENV: ${RM_ENV:-demo}
+      RM_ENV: ${RM_ENV:-smoke}
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS
       # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here
@@ -255,7 +255,7 @@ services:
       # Swarm session-lifecycle cron cadence (issue #208). Read at
       # `bun run migrate` time (seed() -> resolveSwarmSchedules) — this is
       # the SINGLE-BOX/prod compose file, so it explicitly enables the daily
-      # 06:00-08:00 UTC sequence by default; docker-compose.demo.yml pins
+      # 06:00-08:00 UTC sequence by default; docker-compose.smoke.yml pins
       # SWARM_SCHEDULES_ENABLED off (repo demo/e2e never auto-runs the
       # swarm on its own). Staging overrides any of these per-kind crons
       # (or SWARM_WINDOW_MINUTES) to an accelerated cadence via its own env.

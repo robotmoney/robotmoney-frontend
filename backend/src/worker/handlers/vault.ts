@@ -106,7 +106,7 @@ export async function sampleVaultAdapters(payload: Record<string, unknown> = {})
   // the existing Multicall3 batching here and this sampler never did: three
   // separate reads per tick against the free public Base RPC is exactly the
   // per-IP burst that 429s on the shared CI runner (#285/#287), which leaves
-  // every adapter unsampled and the LIVE demo smoke red on `stale` provenance.
+  // every adapter unsampled and the LIVE smoke smoke red on `stale` provenance.
   let results: Aggregate3Result[];
   try {
     results = await multicall3Aggregate3(

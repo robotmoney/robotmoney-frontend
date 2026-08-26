@@ -9,7 +9,7 @@
 // - hash deep links round-trip
 //
 // Runs in the regular Playwright suite (`bun run test:browser`, executed by the
-// e2e workflow's demo readiness gate on every ready PR). Self-contained: it
+// e2e workflow's smoke readiness gate on every ready PR). Self-contained: it
 // starts and stops its own server on a random free port.
 
 import { test, expect } from "@playwright/test";

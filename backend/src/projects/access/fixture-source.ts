@@ -1,6 +1,6 @@
 // Hermetic (offline, deterministic) projects data source. Serves the vendored
 // fixtures/dataset.ts payloads with NO network — the source selected under
-// CI/tests/demo so the per-PR suite never opens a live socket (issue #87
+// CI/tests/smoke so the per-PR suite never opens a live socket (issue #87
 // hermeticity AC). A missing key throws loudly rather than fabricating data.
 import type { CoinGeckoMarketRow, DexPayload } from "../transforms.ts";
 import type { DiscoveredProject, Erc4626Read, ProjectsDataSource } from "./data-source.ts";

@@ -1,11 +1,11 @@
-// REST-path end-to-end swarm demo (D21 — the MCP transport is retired; see
+// REST-path end-to-end swarm smoke (D21 — the MCP transport is retired; see
 // docs/decisions.md D21). Drives one or more full swarm sessions where N
 // independent agents participate over the swarm REST API (each its own key
 // + token). One member per session is a deliberate no-show. The session
 // lifecycle is driven through the worker job queue (admin enqueue-job → worker
-// handler → domain) so the demo exercises the real FOR UPDATE SKIP LOCKED claim
+// handler → domain) so the smoke exercises the real FOR UPDATE SKIP LOCKED claim
 // loop. Multi-session: the second session's brief references the first session's
-// outcome, demonstrating rotation awareness.
+// outcome, smokenstrating rotation awareness.
 //
 // This module replaces the retired mcp/src/e2e.ts. The lifecycle was always
 // driven over the REST admin API; only the per-member participation (./agent.ts)
@@ -13,8 +13,8 @@
 import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, railFromEnv } from "./agent.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
-import { resolveDemoCadence, swarmWindowMinutes } from "../demo-schedule.ts";
-import type { DemoCadence } from "../demo-schedule.ts";
+import { resolveSmokeCadence, swarmWindowMinutes } from "../smoke-schedule.ts";
+import type { SmokeCadence } from "../smoke-schedule.ts";
 import type { ScenarioInitializer } from "../smoke-mode.ts";
 import { missingSectionLeadIns } from "./inference.ts";
 import { generateKeyPair } from "./crypto.ts";
@@ -183,8 +183,8 @@ export function absenceReport(pub: any, tag = "session"): AbsenceReport {
   return { active: quorum.active, submitted: quorum.submitted, absent };
 }
 
-// Deterministic attendance comes from the SHARED demo no-show rule in
-// @robotmoney/contract (contract/src/swarm.js) — the backend demo e2e
+// Deterministic attendance comes from the SHARED smoke no-show rule in
+// @robotmoney/contract (contract/src/swarm.js) — the backend smoke e2e
 // consumes the same rule, so the two drivers can no longer drift (finding 008
 // retired the comment-enforced mirror). The roster outcome stays fixed (draco
 // absent; athena/boreas/cygnus present) so the required hermetic e2e and any
@@ -210,9 +210,9 @@ export const DEMO_SUBJECTS: readonly SessionSubject[] = Object.freeze([
   { id: "mav", name: "Mav Holdings" },
 ]);
 
-// The standing-demo roster cap now lives in @robotmoney/contract
+// The standing-smoke roster cap now lives in @robotmoney/contract
 // (SWARM_ROSTER_CAP) — the mirror this module used to carry is gone;
-// consumers (scripts/lib/demo-main.ts, backend domain) import the contract.
+// consumers (scripts/lib/smoke-main.ts, backend domain) import the contract.
 
 // `token` lets an in-process caller pass the dedicated automation credential
 // explicitly instead of relying on a process.env mutation shared across the
@@ -244,10 +244,10 @@ export async function admin(action: string, body: unknown = {}, automationToken?
 }
 
 // Active swarm roster size, read from the backend — the gate the standing
-// demo checks against SWARM_ROSTER_CAP before admitting a newcomer. A read
+// smoke checks against SWARM_ROSTER_CAP before admitting a newcomer. A read
 // failure (network blip, backend momentarily busy) must NEVER be treated as
 // "roster is empty" — that silently waves admission through regardless of the
-// TRUE count, which is exactly what let the demo's onboarding driver keep
+// TRUE count, which is exactly what let the smoke's onboarding driver keep
 // admitting past its intended bound. Fail CONSERVATIVELY instead: report
 // Infinity (always "full"), loudly logged, so a transient read problem pauses
 // onboarding rather than silently bypassing the cap check.
@@ -270,13 +270,13 @@ export async function activeMemberCount(targetUrl: string = backendUrl()): Promi
 /**
  * Every member NAME already on the roster, in ANY status, lower-cased.
  *
- * The demo admits a FIXED, finite list of named newcomers (Helios, Selene, …)
+ * The smoke admits a FIXED, finite list of named newcomers (Helios, Selene, …)
  * indexed by a counter that starts at 0 in each process. Against a throwaway
  * database that was right; against a persistent one it re-admits Helios on every
  * boot, and the roster grows a duplicate Helios per restart (four of them were
- * observed on the standing demo — two active, two stuck in `applied`).
+ * observed on the standing smoke — two active, two stuck in `applied`).
  *
- * Names are the identity here because the SERVER mints the member id: the demo
+ * Names are the identity here because the SERVER mints the member id: the smoke
  * cannot look up "did I already admit this one" by id, only by who they are.
  * The admin route is used because it lists every status — a newcomer stuck at
  * `applied` still owns its name, and re-admitting it just makes a second stuck
@@ -354,7 +354,7 @@ export async function waitForSessionState(date: string, subject: string, expecte
   }
   throw new Error(
     `session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms ` +
-      `(the worker may still be draining an earlier job — check 'bun run demo:status' or the worker container logs)`,
+      `(the worker may still be draining an earlier job — check 'bun run smoke:status' or the worker container logs)`,
   );
 }
 
@@ -395,7 +395,7 @@ export async function waitForSubjectSession(
   }
   throw new Error(
     `no session for subject '${subject}' reached ${wanted.map((w) => `'${w}'`).join(" or ")} within ${timeoutMs}ms ` +
-      `(the worker may still be draining an earlier job — check 'bun run demo:status' or the worker container logs)`,
+      `(the worker may still be draining an earlier job — check 'bun run smoke:status' or the worker container logs)`,
   );
 }
 
@@ -442,7 +442,7 @@ export interface WindowWaitLimits {
  * minute. Wide enough for clock skew and for a brief that was republished once,
  * narrow enough that a fast-profile CI run can never wait more than ~5 minutes.
  */
-export function windowWaitCeilingMs(cadence: DemoCadence): number {
+export function windowWaitCeilingMs(cadence: SmokeCadence): number {
   return cadence.swarmWindowMs * 2 + 60_000;
 }
 
@@ -660,7 +660,7 @@ export async function runRegimeClassify(
 // only drives the session lifecycle and observes. `rail` carries the compose
 // coordinates of the already-running stack; when omitted it is resolved from
 // this process's environment (the standalone CI entry point receives the
-// demo's exact compose env).
+// smoke's exact compose env).
 export async function runSession(
   subject: SessionSubject,
   sessionIndex: number,
@@ -683,14 +683,14 @@ export async function runSession(
     // block above says a continuity boot must never do. Stating it is now a
     // compile-time obligation.
     initializer: ScenarioInitializer;
-    // The CADENCE PROFILE this invocation resolved (scripts/lib/demo-schedule.ts).
+    // The CADENCE PROFILE this invocation resolved (scripts/lib/smoke-schedule.ts).
     // REQUIRED, for the same reason `initializer` is: the submission window is a
     // cadence timing, and a default would make the six-hour production value the
     // thing you get by forgetting the parameter — or, worse, make CI inherit it.
-    // Every caller already knows which invocation it is: demo-main resolved the
+    // Every caller already knows which invocation it is: smoke-main resolved the
     // profile from `--static-port` at module load, and the standalone CI entry
     // point below is always the fast profile by definition.
-    cadence: DemoCadence;
+    cadence: SmokeCadence;
   },
 ) {
   const prevOutcome = opts?.prevOutcome;
@@ -699,7 +699,7 @@ export async function runSession(
   const cadence = opts.cadence;
   const windowMinutes = swarmWindowMinutes(cadence);
 
-  // THE DATE IS NOT AN INPUT. It used to be — the demo passed `today + N days`
+  // THE DATE IS NOT AN INPUT. It used to be — the smoke passed `today + N days`
   // so repeat runs would not collide on the old UNIQUE(date, subject_id), and
   // wiped session history when it wanted today back. Now the session is opened
   // first and its date is READ BACK from the row Postgres created (convened_at,
@@ -752,7 +752,7 @@ export async function runSession(
   // indicators, so it can never be produced for a date that has not happened —
   // fetchRegimeSnapshots enforces `date <= today` (issue #382). It used to be
   // possible to violate that from here, because a session could be LABELLED
-  // with any demo-narrative date, including tomorrow. It no longer can be:
+  // with any smoke-narrative date, including tomorrow. It no longer can be:
   // Postgres stamps convened_at and derives the date, so a session date is
   // always "now" and can never run ahead of the boundary. What survives is the
   // ability to pin a classification to a different day than the sitting — e.g.
@@ -768,7 +768,7 @@ export async function runSession(
   // just AFTER the session row exists, because that row is what says what the
   // date is; the brief (which reads these fixtures) is still published after.
   //
-  // ARCHIVE SCENARIOS DO NOT GET THIS. `ensureDemoSubjectFixtures` synthesizes
+  // ARCHIVE SCENARIOS DO NOT GET THIS. `ensureSmokeSubjectFixtures` synthesizes
   // a subject snapshot and a trailing regime history; under the archive
   // initializer those series were RESTORED from
   // backend/seed-data/v0-committee-archive.json.gz and are the real v0 record.
@@ -821,7 +821,7 @@ export async function runSession(
     onProgress && ((stage, info) => onProgress({ type: "member", memberId: m.memberId, stage, ...info })),
   ));
   // Partition: fulfilled takes flow downstream; each rejected member is logged and
-  // surfaced to the demo pane as a no-show ('absent') instead of a frozen row, so
+  // surfaced to the smoke pane as a no-show ('absent') instead of a frozen row, so
   // the session proceeds to close/aggregate/publish with whatever takes succeeded.
   const results: Awaited<ReturnType<typeof runAgent>>[] = [];
   settled.forEach((s, i) => {
@@ -905,16 +905,16 @@ async function main() {
   console.log(`\n=== Swarm REST E2E (regime as-of ${today}; sessions dated by the database) ===`);
 
   // The member-container rail for this stack (issue #361 Phase 2), resolved
-  // once from this process's environment — the demo readiness gate hands this
+  // once from this process's environment — the smoke readiness gate hands this
   // entry point the stack's exact compose env.
   const rail = railFromEnv();
   // This entry point IS the CI/e2e path (`bun run scripts/lib/swarm/session.ts`,
-  // spawned by the demo readiness gate) and a plain local run. Neither is the
-  // standing/public demo, so the profile is the fast one — resolved explicitly
+  // spawned by the smoke readiness gate) and a plain local run. Neither is the
+  // standing/public smoke, so the profile is the fast one — resolved explicitly
   // rather than defaulted, so the window this run advertises is a stated
   // decision. Its window is two minutes, which is what keeps the e2e step's
   // two sessions inside `timeout-minutes: 105`.
-  const cadence = resolveDemoCadence({ stage: false });
+  const cadence = resolveSmokeCadence({ stage: false });
   console.log(`  cadence profile: ${cadence.profile}; submission window ${swarmWindowMinutes(cadence)} min`);
   const subjects = DEMO_SUBJECTS.map((subject) => ({ ...subject }));
   const members: SessionMember[] = DEMO_MEMBERS.map((member) => ({ ...member }));
@@ -936,7 +936,7 @@ async function main() {
   // WITHOUT any host-held credential: eos enrolls on the container rail at its
   // first session — its key is generated inside its own container, the
   // harness registers only the PUBLIC key (the RM-operator half of seeding a
-  // demo roster; the real §11 public apply→approve→claim flow is exercised by
+  // smoke roster; the real §11 public apply→approve→claim flow is exercised by
   // the real-inference eval harness in scripts/lib/onboarding-eval.ts and the
   // no-inference proof in scripts/rmpc-release-e2e.ts).
   members.push({ memberId: "eos", name: "Eos", lens: "newcomer", bias: 0.05, present: true });
@@ -944,7 +944,7 @@ async function main() {
 
   // ── Cross-role denial assertions ─────────────────────────────────────────
   // Register a test member and verify identity-layer checks (always enforced
-  // regardless of RM_ALLOW_INSECURE). The demo runs in insecure mode so role
+  // regardless of RM_ALLOW_INSECURE). The smoke runs in insecure mode so role
   // gates on regime write (analyticsProvider) and admin lifecycle (privileged)
   // are open — the identity-layer submit checks are the universal enforcement.
   const testReg = await fetch(`${backendUrl()}${ROUTES.swarm.register}`, {
@@ -993,7 +993,7 @@ async function main() {
   });
   console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
-  // Session 2: a SECOND sitting, different subject (demonstrates rotation +
+  // Session 2: a SECOND sitting, different subject (smokenstrates rotation +
   // cross-session awareness). Eos (added to the roster mid-run above) enrolls and
   // participates in its own container alongside the original members.
   //
@@ -1015,8 +1015,8 @@ async function main() {
 
 // Only run the full E2E flow (reset + 2 sessions + cross-role checks) when this
 // file is the entry point (e.g. CI's `bun run session.ts`). Guarded so the
-// standing demo can `import { runSession, admin, SUBJECTS }` WITHOUT triggering
-// a reset that would wipe accumulating demo history. main()'s behaviour as an
+// standing smoke can `import { runSession, admin, SUBJECTS }` WITHOUT triggering
+// a reset that would wipe accumulating smoke history. main()'s behaviour as an
 // entry point is unchanged.
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((e) => { console.error(e); process.exit(1); });

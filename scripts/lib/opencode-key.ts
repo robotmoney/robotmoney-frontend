@@ -13,7 +13,7 @@
 // attributable and one environment's spend or revocation never touches
 // another's:
 //   CI     → `secrets.OPENCODE_API_KEY` (GitHub Actions)
-//   Stage  → `OPENCODE_API_KEY` in the standing demo host's .env
+//   Stage  → `OPENCODE_API_KEY` in the standing smoke host's .env
 //   Local  → `OPENCODE_API_KEY` in the developer's own .env
 // Nothing in the code distinguishes them, and nothing should: the credential is
 // environment-supplied by design. Rotating one is a secret change, never a

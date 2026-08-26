@@ -39,7 +39,7 @@ test("fetchAgentDetail returns null for an unknown id (never fabricated)", async
 
 // Regression for the dash-shell smoke test's `/agents/clawd` placeholder URL
 // (frontend/test/browser/dash-shell.spec.ts) crashing the full-stack e2e
-// demo: openclaw_agents.id is a `uuid` column, so an unvalidated non-UUID id
+// smoke: openclaw_agents.id is a `uuid` column, so an unvalidated non-UUID id
 // used to reach Postgres and throw "invalid input syntax for type uuid"
 // instead of resolving to this function's null -> 404 contract. Same
 // malformed-id convention as dossier-projections.test.ts's fetchCoinProfile

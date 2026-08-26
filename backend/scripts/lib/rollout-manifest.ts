@@ -53,7 +53,7 @@ export interface RolloutStep<G extends string = string> {
   dependsOn: string[];
   /**
    * Artifacts, relative to the backup dir. `<STAMP>` expands to .last-stamp.
-   * Their absence demotes the step to `missing` no matter what a receipt says.
+   * Their absence smoketes the step to `missing` no matter what a receipt says.
    *
    * Patterns are ANDed: every one listed must match something. Two spellings of
    * the same file are therefore ONE pattern, not two entries.
@@ -130,7 +130,7 @@ export function postflightCode(dir: ReleaseDir, certifies: string[]): string[] {
   ];
 }
 
-/** The twin restore path. Identical in every release, and release-independent
+/** The smoke-twin restore path. Identical in every release, and release-independent
  *  by construction — it lives in the root tree, not an upgrade directory. */
 export const RESTORE_CODE: readonly string[] = Object.freeze([
   "scripts/lib/restore-container.ts",
@@ -146,7 +146,7 @@ export const APP_CODE: readonly string[] = Object.freeze([
   "frontend/**",
   "scripts/**",
   "docker-compose.yml",
-  "docker-compose.demo.yml",
+  "docker-compose.smoke.yml",
   "package.json",
   "bun.lock",
 ]);

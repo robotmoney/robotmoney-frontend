@@ -1,10 +1,10 @@
 // EXECUTED proof that `.agents/` is runtime state git never sees.
 //
-// The repo's `.agents/` directory holds agent/loop runtime state only — demo
-// state files, demo logs, snapshot caches, plan backups, loop-suggestion
+// The repo's `.agents/` directory holds agent/loop runtime state only — smoke
+// state files, smoke logs, snapshot caches, plan backups, loop-suggestion
 // archives. None of it is source and none of it has ever been tracked. The
 // ignore rule used to name exactly ONE file inside it
-// (`.agents/demo-state.json`), so every other runtime artefact showed up as
+// (`.agents/smoke-state.json`), so every other runtime artefact showed up as
 // untracked noise in `git status` in every checkout and every stale worktree
 // forever. This test pins the directory-wide rule that replaced it.
 //
@@ -32,11 +32,11 @@ const repoRoot = join(import.meta.dir, "..", "..", "..");
 // disk: `git check-ignore` matches path patterns, so a fresh CI checkout that
 // has never run the loop is graded identically to a developer machine.
 const RUNTIME_PATHS = [
-  ".agents/demo-state.json",
+  ".agents/smoke-state.json",
   ".agents/cache/github-snapshot.json",
   ".agents/plan-backups/plan-2026-07-28.md",
   ".agents/loop-suggestions-archive/2026-07-28.md",
-  ".agents/demo-rmdemo1234.log",
+  ".agents/smoke-rmdemo1234.log",
   ".agents/agent-warnings.md",
 ];
 
@@ -72,7 +72,7 @@ describe(".agents/ is git-invisible runtime state", () => {
   for (const path of RUNTIME_PATHS) {
     test(`${path} is ignored by the directory-wide rule, not a per-file one`, () => {
       // Exactly `.agents/`: a rule naming a single file (the pre-change
-      // `.agents/demo-state.json`) fails this even for that one file.
+      // `.agents/smoke-state.json`) fails this even for that one file.
       expect(ignoringPattern(repoRoot, path)).toBe(".agents/");
     });
   }
@@ -105,11 +105,11 @@ describe("the checks go red against the pre-change single-file rule", () => {
   }
 
   test("the OLD single-file rule leaves every other runtime artefact unignored", () => {
-    const root = plantRepo("# Standing local demo state.\n.agents/demo-state.json\n");
+    const root = plantRepo("# Standing local smoke state.\n.agents/smoke-state.json\n");
     try {
       // The one named file is ignored, but by a per-file pattern, not `.agents/`.
-      expect(ignoringPattern(root, ".agents/demo-state.json")).toBe(".agents/demo-state.json");
-      for (const path of RUNTIME_PATHS.filter((p) => p !== ".agents/demo-state.json")) {
+      expect(ignoringPattern(root, ".agents/smoke-state.json")).toBe(".agents/smoke-state.json");
+      for (const path of RUNTIME_PATHS.filter((p) => p !== ".agents/smoke-state.json")) {
         expect(ignoringPattern(root, path)).toBeNull();
       }
     } finally {

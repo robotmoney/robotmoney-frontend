@@ -44,10 +44,10 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..", "..", "..");
 
 /** The two steps this script can be evidence for. It must be told WHICH — a
- *  twin rehearsal and a production postflight run the identical checks against
- *  different databases, and a receipt that guesses would let a twin run stand
- *  in for production. §5.5 is explicit that the twin is not production. */
-const RECEIPT_STEPS = ["P5.postflight-twin", "P8.postflight-prod"] as const;
+ *  smoke-twin rehearsal and a production postflight run the identical checks against
+ *  different databases, and a receipt that guesses would let a smoke-twin run stand
+ *  in for production. §5.5 is explicit that the smoke-twin is not production. */
+const RECEIPT_STEPS = ["P5.postflight-smoke-twin", "P8.postflight-prod"] as const;
 
 const baseUrlArg = process.argv.find((a) => a.startsWith("--base-url="))?.slice("--base-url=".length);
 
@@ -284,7 +284,7 @@ async function checkPrerenderedRoute(_db: Db, { record }: Checker): Promise<void
 // §8.1 is the release's OBJECTIVE, not a spot check: "EXIT=0 from any script
 // above does not satisfy them; only these queries do." They were manual, which
 // made them impossible to satisfy where §5.5 most needs them — against the
-// digital twin, which exists only between the rehearsal's readiness and its
+// digital smoke-twin, which exists only between the rehearsal's readiness and its
 // teardown. AC1-AC5 are the runbook's own queries, verbatim in intent.
 //
 // AC6 needs a pre-upgrade capture (§5.0's member-baseline-<STAMP>.json, via

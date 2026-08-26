@@ -8,10 +8,10 @@
 // get wrong — a FALSE `refused` would make runOnboardingEvalWithRetry retry away
 // a genuine navigation failure and silently weaken a required gate.
 //
-// The failure under test is real: on 2026-07-25 a standing demo run admitted zero
+// The failure under test is real: on 2026-07-25 a standing smoke run admitted zero
 // members because the member agent REFUSED the canonical prompt and exited 0 in
 // ~15 seconds, and nothing retried it — permanently costing one seat of the
-// finite newcomer roster (scripts/lib/demo-newcomers.ts).
+// finite newcomer roster (scripts/lib/smoke-newcomers.ts).
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

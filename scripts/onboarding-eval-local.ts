@@ -3,7 +3,7 @@
 // backwards-compatible one-case entrypoint.
 import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
-import { makeDockerRunner, purgeDemoEvalContainers } from "./lib/demo-volumes.ts";
+import { makeDockerRunner, purgeSmokeEvalContainers } from "./lib/smoke-volumes.ts";
 import {
   buildAgentPrompt,
   classifyOutcome,
@@ -231,7 +231,7 @@ try {
   }
 
   try {
-    purgeDemoEvalContainers(makeDockerRunner(stack.spawnEnv), { project });
+    purgeSmokeEvalContainers(makeDockerRunner(stack.spawnEnv), { project });
     cleanup.evalContainersPurged = true;
     telemetry.emit({ source: "cleanup", stream: "event", message: "eval containers purged" });
   } catch (error) {

@@ -1,7 +1,7 @@
 // Swarm session-cron configurability (issue #208; resolved design scout
 // #214). Three things proven here:
 //   1. resolveSwarmSchedules() resolves enabled/cron/window from the
-//      environment and DEFAULTS TO DISABLED when unset, so a plain CI/e2e/demo
+//      environment and DEFAULTS TO DISABLED when unset, so a plain CI/e2e/smoke
 //      boot (no SWARM_* env set) never auto-enqueues real swarm
 //      lifecycle jobs.
 //   2. seedSwarmSchedules() is an explicit conflict-update BY KIND (not the

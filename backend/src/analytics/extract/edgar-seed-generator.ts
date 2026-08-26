@@ -1,9 +1,9 @@
 // Extract stage: generate the canonical EDGAR/MNA seed artifact from LIVE (or
 // injected/mocked, for tests) EDGAR responses over an explicit,
 // caller-supplied pinned range. Pure orchestration + atomic filesystem
-// replace — no SQL, no analytics store writer, no demo/bootstrap wiring.
+// replace — no SQL, no analytics store writer, no smoke/bootstrap wiring.
 // Used ONLY by the explicit `backend/scripts/edgar-seed-regenerate.ts`
-// operator command — never implicitly by migrations, demo boot, or CI.
+// operator command — never implicitly by migrations, smoke boot, or CI.
 import { gzipSync, gunzipSync } from "node:zlib";
 import { writeFileSync, readFileSync, renameSync, unlinkSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";

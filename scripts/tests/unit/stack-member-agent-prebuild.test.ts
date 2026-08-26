@@ -45,7 +45,7 @@ describe("shared full-stack member-agent prebuild", () => {
         repoRoot: dir,
         project: "rm_ci_stack_prebuild",
         profile: "full",
-        composeFiles: ["docker-compose.yml", "docker-compose.demo.yml"],
+        composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
         database: { ...DEFAULT_STACK_DATABASE, url: "postgres://managed.example/db" },
         credentials: {
           adminToken: "admin",
@@ -57,7 +57,7 @@ describe("shared full-stack member-agent prebuild", () => {
       };
       const stack = createStack(cfg, { hostEnv: { PATH: `${dir}:/usr/bin:/bin` } });
 
-      // `up()` is the shared barrier used by normal demo and smoke. Only after
+      // `up()` is the shared barrier used by normal smoke and smoke. Only after
       // it resolves may runSession fan out its member containers.
       await stack.up({ healthTimeoutMs: 1_000 });
       await Promise.all(

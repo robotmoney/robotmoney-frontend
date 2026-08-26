@@ -117,7 +117,7 @@ regime-backtest-correlations-reference.json.gz  meta.source =
 | `regime-history.csv.gz` | `6985188` (#444) | **v1-derived** |
 | `regime-snapshot.json.gz` | `6985188` (#444) | **v1-derived** (except `history[]`) |
 | `regime-backtest-correlations-reference.json.gz` | `6985188` (#444) | **v1-derived** |
-| `goldens/api-goldens.json` | `scripts/update-goldens.ts` | **v1-self-captured** (`"source": "capture:http://127.0.0.1:48787"`), point-in-time, demo-seeded |
+| `goldens/api-goldens.json` | `scripts/update-goldens.ts` | **v1-self-captured** (`"source": "capture:http://127.0.0.1:48787"`), point-in-time, smoke-seeded |
 
 **Loudly:** `backend/tests/regime-fidelity.test.ts`'s STRICT multi-day test asserts
 `< 1e-12` against `regime-compute-reference.json.gz`. Since both sides now come from
@@ -329,7 +329,7 @@ and needs a live-API comparison (see §8).
 |---|---|---|
 | **Regenerating v1's floor** (`backend/scripts/floor-seed-regenerate.ts`) | **Network required.** Fetches `https://community-api.coinmetrics.io/v4/timeseries/asset-metrics`. No DB, no API key (keyless community API). | Outbound HTTPS to Coinmetrics. Not faked. |
 | **The 4-day tail 2026-06-26 … 06-29** | This v0 checkout stops at 2026-06-25/26; v1's fixtures were vendored from a later v0 state | A v0 checkout at or past 2026-06-29 (`git fetch` on the v0 repo — deliberately **not** run, v0 is read-only here) |
-| **`/api/dashboards/*` served payloads** | Postgres-backed; requires a running v1 stack + seeded DB | `bun run demo` + `import-regime-eq.ts`, then diff live responses against v0 |
+| **`/api/dashboards/*` served payloads** | Postgres-backed; requires a running v1 stack + seeded DB | `bun run smoke` + `import-regime-eq.ts`, then diff live responses against v0 |
 | **`goldens/api-goldens.json` as a v0 baseline** | Self-captured from v1's own server (`"source": "capture:http://127.0.0.1:48787"`), values explicitly point-in-time, history clamped to 180 days (2026-01-14 → **2026-07-12**, past v0's data entirely) | Nothing — it is structurally incapable of being a v0 baseline. Measured anyway: 163 shared dates, **163/163 differing, max abs 0.2106 @ 2026-05-12** — meaningless as parity evidence, recorded to close the loop. |
 | **v0's six wallet/price/treasury exports** (§7) | v1 has no file counterpart; delivery moved to DB-backed routes | Live-API comparison against a seeded v1 stack |
 

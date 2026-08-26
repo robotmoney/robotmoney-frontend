@@ -34,7 +34,7 @@ import { expect, test, type Page } from "@playwright/test";
 // retroactively.
 //
 // WHY THE API IS MOCKED. These are assertions about the RENDER, not about what
-// the demo stack happens to have seeded: the exact bucket weights and the
+// the smoke stack happens to have seeded: the exact bucket weights and the
 // published allocation framework of a live session are not a stable thing to
 // assert numbers against, and a session's takes are written by live inference.
 // Each test therefore serves the session, the roster and the framework itself

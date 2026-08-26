@@ -3,7 +3,7 @@
 //
 // WHAT WENT WRONG, AND WHY A GREEN SUITE DID NOT CATCH IT. tests/preload.ts
 // provisioned postgres:17-alpine while production is 18 and the rollout
-// tooling's digital twin (scripts/lib/restore-container.ts) had already moved
+// tooling's digital smoke-twin (scripts/lib/restore-container.ts) had already moved
 // to postgres:18 on purpose. So every migration in backend/migrations/ — the
 // artefacts most likely to behave differently across a major — was validated
 // on 17 and applied on 18, and the whole suite passed the entire time. There

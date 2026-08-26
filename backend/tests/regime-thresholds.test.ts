@@ -8,8 +8,8 @@
 //     memo surface);
 //   * buildRegimeSummary (live aggregation) READS stored labels, re-derives
 //     only when the stored label is NULL, and never writes synthetic rows;
-//   * synthetic backfill is demo-gated (refused under RM_ENV=prod) and reserved
-//     for the demo fixture path (ensureDemoSubjectFixtures).
+//   * synthetic backfill is smoke-gated (refused under RM_ENV=prod) and reserved
+//     for the smoke fixture path (ensureSmokeSubjectFixtures).
 import { test, expect, afterEach } from "bun:test";
 import { classifyRegime, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
 import { classifyRegime as classifierLabel } from "../src/analytics/analyze/regime.ts";
@@ -18,7 +18,7 @@ import { sql } from "../src/db/client.ts";
 import {
   backfillRegimeHistory,
   buildRegimeSummary,
-  ensureDemoSubjectFixtures,
+  ensureSmokeSubjectFixtures,
 } from "../src/swarm/domain.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
@@ -115,9 +115,9 @@ test("LIVE aggregation path: buildRegimeSummary writes NO synthetic rows when re
   for (const p of padded) expect(p.regime).toBe(classifyRegime(p.composite));
 });
 
-// ── AC: synthetic backfill is demo-gated ─────────────────────────────────────
+// ── AC: synthetic backfill is smoke-gated ─────────────────────────────────────
 
-test("demo-gated backfill still seeds >= 8 persisted points, labeled by the canonical classifier", async () => {
+test("smoke-gated backfill still seeds >= 8 persisted points, labeled by the canonical classifier", async () => {
   expect(config.env).not.toBe("prod"); // tests run under RM_ENV=ephemeral
   await backfillRegimeHistory("2026-07-05");
   expect(await snapshotCount()).toBeGreaterThanOrEqual(8);
@@ -131,8 +131,8 @@ test("demo-gated backfill still seeds >= 8 persisted points, labeled by the cano
   }
 });
 
-test("demo fixture path (ensureDemoSubjectFixtures) keeps demo sparklines at >= 8 persisted points", async () => {
-  await ensureDemoSubjectFixtures("regime_thresholds_subj", "Threshold Subject", "2026-07-06");
+test("smoke fixture path (ensureSmokeSubjectFixtures) keeps smoke sparklines at >= 8 persisted points", async () => {
+  await ensureSmokeSubjectFixtures("regime_thresholds_subj", "Threshold Subject", "2026-07-06");
   expect(await snapshotCount()).toBeGreaterThanOrEqual(8);
   const summary = await buildRegimeSummary("2026-07-06");
   expect(summary.history.length).toBeGreaterThanOrEqual(8);

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { resolveAdmissionEvalModelConfig } from "./onboarding-eval-local.ts";
 import { admin, DEMO_MEMBERS, DEMO_SUBJECTS, runRegimeClassify, runSession } from "./lib/swarm/session.ts";
-import { resolveDemoCadence } from "./lib/demo-schedule.ts";
+import { resolveSmokeCadence } from "./lib/smoke-schedule.ts";
 import {
   createStack,
   composeArgs,
@@ -17,7 +17,7 @@ import {
   resolveStackEnvironment,
   stackProjectName,
 } from "./stack/index.ts";
-import { provisionDemoAnalyticsToken, removeDemoAnalyticsToken } from "./lib/demo-secret.ts";
+import { provisionSmokeAnalyticsToken, removeSmokeAnalyticsToken } from "./lib/smoke-secret.ts";
 
 export interface SwarmEvalCaseOptions {
   repoRoot?: string;
@@ -76,7 +76,7 @@ export function cleanupKeptSwarmEval(
   const db = DEFAULT_STACK_DATABASE;
   const env: Record<string, string> = {
     ...dockerClientHostEnv(hostEnv),
-    DEMO_PROJECT: project,
+    SMOKE_PROJECT: project,
     RM_STACK_ENV_CLASS: state.envClass,
     RM_STACK_ENV_HASH: state.envHash,
     DATABASE_URL: internalDatabaseUrl(db),
@@ -90,7 +90,7 @@ export function cleanupKeptSwarmEval(
     env,
   );
   if (code !== 0) throw new Error(`swarm eval cleanup failed (docker compose exit ${code}); state retained at ${stateFile}`);
-  if (!removeDemoAnalyticsToken(state.analyticsTokenFile, project)) {
+  if (!removeSmokeAnalyticsToken(state.analyticsTokenFile, project)) {
     throw new Error(`refused unsafe swarm eval token cleanup path: ${state.analyticsTokenFile}`);
   }
   rmSync(stateFile, { force: true });
@@ -108,7 +108,7 @@ export async function runSwarmAuthoringEvalCase(
   const project = options.project ?? stackProjectName("eval-swarm", stackEnvironment);
   const selectedModel = modelConfig.model;
   const credentials = generateStackCredentials();
-  credentials.analyticsTokenFile = provisionDemoAnalyticsToken(project, credentials.analyticsToken);
+  credentials.analyticsTokenFile = provisionSmokeAnalyticsToken(project, credentials.analyticsToken);
   const stack = createStack(
     {
       repoRoot,
@@ -178,10 +178,10 @@ export async function runSwarmAuthoringEvalCase(
 
     // Member-container rail (issue #361 Phase 2): the session's members run in
     // their own containers against this eval stack.
-    // A throwaway eval stack, never the standing demo — so the fast profile, whose
+    // A throwaway eval stack, never the standing smoke — so the fast profile, whose
     // two-minute submission window bounds this run (issue #570).
     const sessionRun = await runSession(subject, 1, {
-      rail, members, initializer: "simulation", cadence: resolveDemoCadence({ stage: false }),
+      rail, members, initializer: "simulation", cadence: resolveSmokeCadence({ stage: false }),
     });
     sessionState = sessionRun.pub?.session?.state ?? null;
     const presentMembers = members.filter((m) => m.present);
@@ -196,7 +196,7 @@ export async function runSwarmAuthoringEvalCase(
   } finally {
     if (!keep) {
       stack.down({ removeVolumes: true, removeOrphans: true });
-      removeDemoAnalyticsToken(credentials.analyticsTokenFile!, project);
+      removeSmokeAnalyticsToken(credentials.analyticsTokenFile!, project);
     } else {
       console.log(`[swarm-eval] --keep state: ${keptStateFile}`);
       console.log(`[swarm-eval] cleanup: bun scripts/swarm-eval-local.ts --cleanup --project ${project}`);

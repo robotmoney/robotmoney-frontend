@@ -157,7 +157,7 @@ export function _resetBuybackCacheForTests(): void {
 // input amount; a swap whose historical price cannot be read is persisted with a
 // NULL value_usd — absence, which the migration's "a value is NEVER fabricated"
 // invariant asks for, not a substituted number. Skips entirely under a non-live
-// source (hermetic demo/CI never reaches a live log indexer). Bounded per run so
+// source (hermetic smoke/CI never reaches a live log indexer). Bounded per run so
 // a single refresh never scans an unbounded block range on a rate-limited public
 // RPC.
 function topicAddress(address: string): string {
@@ -339,7 +339,7 @@ export interface IndexResult {
 export async function indexBuybacks(): Promise<IndexResult> {
   const cfg = resolveBuybackConfig();
   if (cfg.source !== "live") {
-    // Hermetic demo / CI: never reach a live log indexer; the seeded rows stand.
+    // Hermetic smoke / CI: never reach a live log indexer; the seeded rows stand.
     return { indexed: 0, skipped: `source-${cfg.source}`, scannedToBlock: null };
   }
 

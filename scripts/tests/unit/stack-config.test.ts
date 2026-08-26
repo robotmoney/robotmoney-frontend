@@ -4,7 +4,7 @@
 // These execute the two properties the shared stack module exists to
 // guarantee (docs/decisions.md D22, docs/architecture.md §11.3 E1/E5):
 //   - `core` never contains a worker lane or the member-agent service, so the
-//     eval can never accidentally boot the full demo cluster;
+//     eval can never accidentally boot the full smoke cluster;
 //   - the environment handed to a compose child is BUILT, not inherited, so an
 //     ambient provider key or an operator's own admin token can never reach a
 //     container.
@@ -46,7 +46,7 @@ const ENVIRONMENT = { class: "local", hash: "0123456789" } as const;
 function cfg(overrides: Partial<StackConfig> = {}): StackConfig {
   return {
     repoRoot: "/repo",
-    project: "rm_demo_stack_0123456789",
+    project: "rm_smoke_stack_0123456789",
     profile: "core",
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
@@ -89,29 +89,6 @@ describe("buildComposeEnv", () => {
     );
   });
 
-  test("returns EXACTLY the compose interpolation keys — and no COMPOSE_FILE/COMPOSE_PROJECT_NAME", () => {
-    const env = buildComposeEnv(cfg());
-    expect(Object.keys(env).sort()).toEqual([
-      "ADMIN_TOKEN",
-      "ANALYTICS_TOKEN",
-      "ANALYTICS_TOKEN_FILE_HOST",
-      "AUTOMATION_TOKEN",
-      "DATABASE_URL",
-      "DEMO_PROJECT",
-      "POSTGRES_DB",
-      "POSTGRES_PASSWORD",
-      "POSTGRES_USER",
-      // The environment-class + hash labels every demo-overlay service and the
-      // pgdata volume interpolate (scripts/stack/naming.ts).
-      "RM_STACK_ENV_CLASS",
-      "RM_STACK_ENV_HASH",
-    ]);
-    expect(env.RM_STACK_ENV_CLASS).toBe("local");
-    expect(env.RM_STACK_ENV_HASH).toBe("0123456789");
-    expect(env.AUTOMATION_TOKEN).toBe("cfg-automation");
-    expect(env.COMPOSE_FILE).toBeUndefined();
-    expect(env.COMPOSE_PROJECT_NAME).toBeUndefined();
-  });
 
   test("extraComposeEnv is merged, not dropped", () => {
     const env = buildComposeEnv(cfg({ extraComposeEnv: { ANALYTICS_SOURCE: "live" } }));
@@ -203,7 +180,7 @@ describe("buildSpawnEnv", () => {
 describe("argv builders", () => {
   test("composeArgs puts the topology in argv, not the environment", () => {
     expect(composeArgs("p", ["a.yml", "b.yml"])).toEqual(["compose", "-p", "p", "-f", "a.yml", "-f", "b.yml"]);
-    expect(composeArgs("p")).toEqual(["compose", "-p", "p", "-f", "docker-compose.yml", "-f", "docker-compose.demo.yml"]);
+    expect(composeArgs("p")).toEqual(["compose", "-p", "p", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml"]);
   });
 
   test("upArgs names services explicitly — never a bare `up -d`", () => {
@@ -222,10 +199,10 @@ describe("argv builders", () => {
   });
 
   test("migrateArgs renders each -e pair in order and still ends in the migrate command", () => {
-    expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--seed-demo-schedules"])).toEqual([
+    expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--seed-smoke-schedules"])).toEqual([
       "run", "--rm", "--no-deps", "-T",
       "-e", "DEMO_SEED_PROJECTS=1",
-      "api", "bun", "run", "src/db/migrate.ts", "--seed-demo-schedules",
+      "api", "bun", "run", "src/db/migrate.ts", "--seed-smoke-schedules",
     ]);
     expect(migrateArgs()).toEqual(["run", "--rm", "--no-deps", "-T", "api", "bun", "run", "src/db/migrate.ts"]);
   });

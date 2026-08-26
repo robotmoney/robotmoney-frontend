@@ -55,7 +55,7 @@ test("populated + archive boot → adopt, with a census the operator can recogni
   expect(r.census.length).toBeGreaterThan(0);
 });
 
-test("populated + simulation boot → refuse: demo fixtures overwrite by design", async () => {
+test("populated + simulation boot → refuse: smoke fixtures overwrite by design", async () => {
   const r = await classifyDatabase("simulation");
   expect(r.mode).toBe("refuse");
   expect(r.tables).toBeGreaterThan(0);
@@ -109,7 +109,7 @@ test("a restored violation is DETECTED and the boot is refused, with both member
   expect(conflicts[0]).toContain(shadowed);
 
   // The report is a refusal that says nothing has been written, and it names
-  // the pair underneath the header — demo-failure.ts anchors on the first
+  // the pair underneath the header — smoke-failure.ts anchors on the first
   // refusal line and reads FORWARD, so the order is load-bearing.
   const lines = reportLines("db:5432/x", {
     mode: "adopt",

@@ -8,15 +8,15 @@
 // against it with the EXACT command §7.3 runs for real cutover —
 // `bun smoke -- --external-pg --no-tui` — so this release's actual
 // migrations run for real, not just the static checks preflight.ts makes.
-// Then verifies the site actually serves, reusing scripts/demo-frontend-check.ts
+// Then verifies the site actually serves, reusing scripts/smoke-frontend-check.ts
 // (the same route/content checks CI runs), not a bespoke health probe, and
-// finally runs §8's postflight against the migrated twin (§5.3b.0 step 3, G8)
-// while the twin still exists — the teardown below is why that cannot be a
+// finally runs §8's postflight against the migrated smoke-twin (§5.3b.0 step 3, G8)
+// while the smoke-twin still exists — the teardown below is why that cannot be a
 // separate command run afterwards.
 //
 // Runs the boot from an ISOLATED git worktree, never the checkout you are
 // sitting in: `--external-pg` reads DATABASE_URL from repo-root .env
-// (scripts/lib/demo-external-pg.ts), and overwriting the real .env — even
+// (scripts/lib/smoke-external-pg.ts), and overwriting the real .env — even
 // temporarily — risks corrupting it (crash mid-run, concurrent access) or
 // leaking the throwaway DB into a boot you run later by hand. The worktree
 // gets its own throwaway .env instead; node_modules is symlinked in from the
@@ -33,8 +33,8 @@
 //   bun scripts/upgrades/0.2.1-to-0.2.2/stage-rehearsal.ts [backupDir]
 //
 // Exit codes: 0 = migrated and booted clean, frontend checks pass, and
-// postflight is clean against the twin; 1 = the boot, a frontend check or the
-// twin postflight failed; 2 = could not run (missing files, docker/git failure).
+// postflight is clean against the smoke-twin; 1 = the boot, a frontend check or the
+// smoke-twin postflight failed; 2 = could not run (missing files, docker/git failure).
 
 import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -66,7 +66,7 @@ async function spawn(cmd: string[], opts: { cwd?: string; env?: Record<string, s
 const READY_DEADLINE_MS = 20 * 60 * 1000;
 const READY_POLL_MS = 5_000;
 
-interface DemoState {
+interface SmokeState {
   project: string;
   apiPort: number;
 }
@@ -131,7 +131,7 @@ async function main(backupDirArg?: string): Promise<number> {
 
   // The api/worker containers this script boots will dial this same Postgres
   // from INSIDE their own network namespace, where 127.0.0.1 means the
-  // container itself, not this host — demo-external-pg.ts's own
+  // container itself, not this host — smoke-external-pg.ts's own
   // assertReachableFromContainer() rejects that. Bind to the Docker bridge
   // gateway instead of the default 127.0.0.1: still not internet-routable
   // (unlike 0.0.0.0, which Docker's own iptables rules can expose past a
@@ -188,19 +188,19 @@ async function main(backupDirArg?: string): Promise<number> {
     log(`wrote worktree .env pointing at the restored container via ${restored.host} (never the real .env)`);
     log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key`);
 
-    log(`booting: bun scripts/demo.ts --smoke --external-pg --no-tui  (project=${project}, this can take several minutes)`);
+    log(`booting: bun scripts/smoke.ts --smoke --external-pg --no-tui  (project=${project}, this can take several minutes)`);
     // §7.3's box: CI unset, or the boot tears itself down on exit.
     const { CI: _ci, ...envWithoutCi } = process.env as Record<string, string | undefined>;
-    const bootEnv = { ...envWithoutCi, DEMO_PROJECT: project };
+    const bootEnv = { ...envWithoutCi, SMOKE_PROJECT: project };
     // SUPERVISED, NOT AWAITED (§5.3b.1 G2). With CI unset this boot never
-    // self-terminates BY DESIGN: it falls past demo-main's CI-gated exits
-    // (scripts/lib/demo-main.ts:1175, :1212) into the LIVE steady-state loop
+    // self-terminates BY DESIGN: it falls past smoke-main's CI-gated exits
+    // (scripts/lib/smoke-main.ts:1175, :1212) into the LIVE steady-state loop
     // and cycles swarm sessions forever. That is correct for §7.3, where the
     // stack must stay up serving production — so awaiting it here hangs the
     // rehearsal permanently, which is exactly what it used to do. Setting CI
     // is NOT the fix: a truthy CI tears the stack down regardless of exit
     // code, leaving the frontend checks below nothing to hit.
-    bootProc = Bun.spawn(["bun", "scripts/demo.ts", "--smoke", "--external-pg", "--no-tui"], {
+    bootProc = Bun.spawn(["bun", "scripts/smoke.ts", "--smoke", "--external-pg", "--no-tui"], {
       cwd: worktree,
       env: bootEnv,
       stdout: "inherit",
@@ -212,10 +212,10 @@ async function main(backupDirArg?: string): Promise<number> {
       bootExit = c;
     });
 
-    const stateFile = join(worktree, ".agents", "demo-state.json");
+    const stateFile = join(worktree, ".agents", "smoke-state.json");
     log(`waiting for readiness (deadline ${Math.round(READY_DEADLINE_MS / 60000)}m): ${stateFile} + GET /health`);
     const startedAt = Date.now();
-    let ready: DemoState | null = null;
+    let ready: SmokeState | null = null;
     let lastNote = "";
     while (Date.now() - startedAt < READY_DEADLINE_MS) {
       // Fail fast rather than burning the whole deadline: with CI unset a
@@ -226,7 +226,7 @@ async function main(backupDirArg?: string): Promise<number> {
       }
       if (existsSync(stateFile)) {
         try {
-          const state = JSON.parse(readFileSync(stateFile, "utf8")) as DemoState;
+          const state = JSON.parse(readFileSync(stateFile, "utf8")) as SmokeState;
           if (state?.apiPort) {
             const health = await fetch(`http://127.0.0.1:${state.apiPort}/health`).catch(() => null);
             if (health?.ok) {
@@ -236,10 +236,10 @@ async function main(backupDirArg?: string): Promise<number> {
             lastNote = `api port ${state.apiPort} not healthy yet (${health?.status ?? "no response"})`;
           }
         } catch {
-          lastNote = "demo-state.json present but not yet parseable";
+          lastNote = "smoke-state.json present but not yet parseable";
         }
       } else {
-        lastNote = "demo-state.json not written yet (still building/starting)";
+        lastNote = "smoke-state.json not written yet (still building/starting)";
       }
       await Bun.sleep(READY_POLL_MS);
     }
@@ -253,8 +253,8 @@ async function main(backupDirArg?: string): Promise<number> {
     const backendUrl = `http://127.0.0.1:${ready.apiPort}`;
     log(`ready after ${Math.round((Date.now() - startedAt) / 1000)}s: project=${ready.project} api=${backendUrl} (/health OK)`);
 
-    log("running scripts/demo-frontend-check.ts against the booted stack (same checks CI runs)");
-    const checkCode = await spawn(["bun", "scripts/demo-frontend-check.ts"], {
+    log("running scripts/smoke-frontend-check.ts against the booted stack (same checks CI runs)");
+    const checkCode = await spawn(["bun", "scripts/smoke-frontend-check.ts"], {
       cwd: worktree,
       env: { ...process.env, BACKEND_URL: backendUrl },
     });
@@ -264,18 +264,18 @@ async function main(backupDirArg?: string): Promise<number> {
     }
 
     // §5.3b.0 step 3 — the half that used to have nowhere to run. §5.5 mandates
-    // "every §8 check and every §8.1 AC against the twin after the boot reaches
-    // readiness", but the twin exists only inside this function's try block:
+    // "every §8 check and every §8.1 AC against the smoke-twin after the boot reaches
+    // readiness", but the smoke-twin exists only inside this function's try block:
     // the finally below tears it down. Before this, the only way to satisfy
     // step 3 was to race a watcher against teardown from another terminal,
     // which is not a procedure. G8 makes the window part of the contract.
-    log("running §8's postflight checks against the migrated twin (§5.3b.0 step 3)");
+    log("running §8's postflight checks against the migrated smoke-twin (§5.3b.0 step 3)");
     const postflightCode = await spawn(
       [
         "bun",
         "scripts/upgrades/0.2.1-to-0.2.2/postflight.ts",
         `--base-url=${backendUrl}`,
-        "--emit-receipt=P5.postflight-twin",
+        "--emit-receipt=P5.postflight-smoke-twin",
         ...(backupDirArg ? [`--backup-dir=${backupDirArg}`] : []),
       ],
       {
@@ -287,12 +287,12 @@ async function main(backupDirArg?: string): Promise<number> {
       },
     );
     if (postflightCode !== 0) {
-      err("postflight FAILED against the migrated twin — §5.5: treat this exactly as a failed production");
+      err("postflight FAILED against the migrated smoke-twin — §5.5: treat this exactly as a failed production");
       err("cutover. Diagnose, patch, cut the next rc, re-rehearse. Do not carry it into §7.");
       return 1;
     }
 
-    log("VERDICT: migrated and booted clean, frontend checks pass, postflight clean against the twin");
+    log("VERDICT: migrated and booted clean, frontend checks pass, postflight clean against the smoke-twin");
     return 0;
   } finally {
     // G6: unconditional, and in this order — every path lands here, including
@@ -301,7 +301,7 @@ async function main(backupDirArg?: string): Promise<number> {
     // authors real takes on a timer, so a leftover stack is a leaking meter.
     log("tearing down");
 
-    // 1. Stop the supervisor's child FIRST. demo-down while the boot is still
+    // 1. Stop the supervisor's child FIRST. smoke-down while the boot is still
     //    live races its own orchestration, and a surviving boot keeps spending.
     if (bootProc) {
       try {
@@ -313,13 +313,13 @@ async function main(backupDirArg?: string): Promise<number> {
     }
 
     if (worktreeAdded) {
-      // 2. DEMO_PROJECT explicitly: demo-down resolves the project from state,
+      // 2. SMOKE_PROJECT explicitly: smoke-down resolves the project from state,
       //    and this still has to work when the boot died before writing it.
-      await spawn(["bun", "scripts/demo-down.ts"], {
+      await spawn(["bun", "scripts/smoke-down.ts"], {
         cwd: worktree,
-        env: { ...process.env, DEMO_PROJECT: project },
+        env: { ...process.env, SMOKE_PROJECT: project },
       }).catch(() => {});
-      // 3. demo-down deliberately KEEPS volumes (they outlive a stack restart).
+      // 3. smoke-down deliberately KEEPS volumes (they outlive a stack restart).
       //    For a rehearsal they are pure litter — and member_home_* volumes
       //    hold agent working state from a production-data run.
       try {

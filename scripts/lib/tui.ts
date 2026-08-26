@@ -1,4 +1,4 @@
-// Zero-dependency ANSI terminal-UI renderer for the standing demo. No ink/blessed,
+// Zero-dependency ANSI terminal-UI renderer for the standing smoke. No ink/blessed,
 // no new npm deps — the repo is buildless/minimal-dep. It owns the alternate
 // screen, the repaint timer, and a few text helpers; the caller owns all state
 // and supplies a pure `render(): string[]` that returns the lines to paint.

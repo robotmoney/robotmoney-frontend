@@ -7,17 +7,17 @@
 # /api/swarm/apply — all WITHOUT spending a single model token.
 # (scripts/tests/integration/onboarding-eval-infra.test.ts)
 #
-# Why this is genuinely separable from the full `e2e` LIVE demo boot: the test
+# Why this is genuinely separable from the full `e2e` LIVE smoke boot: the test
 # brings up its OWN minimal stack — the shared scripts/stack module's `core`
 # profile (postgres + api only, no worker lanes, no live RPC/analytics/
 # swarm inference). Applying/activating a swarm membership is pure
 # Postgres CRUD + crypto verification, never touches the job queue, so this
 # never needed the heavy full-stack boot it used to ride inside. Moving it to
 # its own workflow means it no longer waits behind — or pays for — the ~40+
-# minute LIVE demo boot when only paths in the filter below changed.
+# minute LIVE smoke boot when only paths in the filter below changed.
 #
 # The REAL-INFERENCE eval itself (the one that spends a model token) stays
-# INSIDE e2e.yml's "Full-stack demo" step, unchanged: it deliberately reuses
+# INSIDE e2e.yml's "Full-stack smoke" step, unchanged: it deliberately reuses
 # that already-booted LIVE stack rather than standing up a second one (see
 # e2e.yml's own header). Only the inference-off rails check moved here.
 #

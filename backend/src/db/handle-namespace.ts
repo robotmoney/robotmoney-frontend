@@ -20,9 +20,9 @@
 // front of, and a boot-time re-check is the only thing that catches it.
 //
 // WHY IT LIVES HERE. It used to live in backend/scripts/db-preflight.ts, which
-// is invoked from exactly one place: a pre-populated demo boot (`--db
-// external` or `--db twin`)
-// (scripts/lib/demo-external-pg.ts). Nothing in backend/src/** called it, so the
+// is invoked from exactly one place: a pre-populated smoke boot (`--db
+// external` or `--db smoke-twin`)
+// (scripts/lib/smoke-external-pg.ts). Nothing in backend/src/** called it, so the
 // documented production bring-up — `docker compose up -d`, whose api service
 // runs `bun run src/api/index.ts` and neither migrates nor preflights — reached
 // serving traffic with a restored violation completely unchecked (issue #602).
@@ -32,8 +32,8 @@
 //   - backend/src/api/index.ts — assertHandleNamespaceClean(), before
 //     Bun.serve binds a port. This is the `docker compose up -d` path.
 //   - backend/scripts/prod-bootstrap.ts — its first step, before migrate().
-//   - backend/scripts/db-preflight.ts — a pre-populated demo boot (`--db
-//     external` / `--db twin`).
+//   - backend/scripts/db-preflight.ts — a pre-populated smoke boot (`--db
+//     external` / `--db smoke-twin`).
 import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { config } from "../config.ts";

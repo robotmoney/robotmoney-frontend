@@ -1,5 +1,5 @@
 // Regression guard for the #584 role split: every SessionRail passed to
-// enroll() must carry `automationToken` explicitly (see demo-main-split's
+// enroll() must carry `automationToken` explicitly (see smoke-main-split's
 // dedicated automation-token suite for the sibling in-process driver).
 //
 // scripts/swarm-eval-local.ts's runSwarmAuthoringEvalCase() builds

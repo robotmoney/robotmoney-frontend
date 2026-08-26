@@ -4,7 +4,7 @@
 // What this file is really defending: the property that NOBODY IN THIS REPO
 // PICKS A HOST PORT. Two shapes have already failed in production. A fixed
 // default (the api port "preferred" 48787) let a CI boot race the standing
-// stage demo for the cloudflared origin and take the site down. Its replacement
+// stage smoke for the cloudflared origin and take the site down. Its replacement
 // — draw a free port ourselves, close the socket, hand the number to compose —
 // swapped that for a TOCTOU race: anything on this shared host can take the
 // port in the gap before compose binds it, and randomizing more stacks widened
@@ -201,10 +201,10 @@ describe("describePortHolders — the diagnostic on a failed stage pre-flight", 
 
   test("names the container publishing the port and the listening socket", () => {
     const out = describePortHolders(48787, (cmd) => {
-      if (cmd[1] === "ps") return ok("abc123  rm_demo_stack_aa11-api-1  robotmoney/api  0.0.0.0:48787->8787/tcp\n");
+      if (cmd[1] === "ps") return ok("abc123  rm_smoke_stack_aa11-api-1  robotmoney/api  0.0.0.0:48787->8787/tcp\n");
       return ok('LISTEN 0 4096 0.0.0.0:48787 0.0.0.0:* users:(("docker-proxy",pid=999,fd=4))\n');
     });
-    expect(out).toContain("rm_demo_stack_aa11-api-1");
+    expect(out).toContain("rm_smoke_stack_aa11-api-1");
     expect(out).toContain("docker-proxy");
     expect(out).toContain("pid=999");
   });
@@ -240,11 +240,11 @@ describe("describePortHolders — the diagnostic on a failed stage pre-flight", 
 // These read the real on-disk files and assert, so they are executed coverage
 // (test-coverage policy), not doc-grep standing in for behaviour: the artefacts
 // asserted here are compose publish declarations and an entrypoint code path,
-// neither of which any unit test can otherwise reach (demo-main.ts boots a
+// neither of which any unit test can otherwise reach (smoke-main.ts boots a
 // stack at module scope and cannot be imported). The BEHAVIOURAL half — that
 // `docker compose config` really resolves to exactly one api mapping — is
 // asserted from real compose output in
-// scripts/tests/integration/demo-compose-config.test.ts, which is where a
+// scripts/tests/integration/smoke-compose-config.test.ts, which is where a
 // Docker dependency belongs.
 describe("no host port is named anywhere except the stage overlay", () => {
   // EFFECTIVE lines only — the prose in these files explains the removed
@@ -306,8 +306,8 @@ describe("no host port is named anywhere except the stage overlay", () => {
     }
   });
 
-  test("the demo entrypoint neither reads a port pin nor pre-binds one", () => {
-    const src = readFileSync(join(repoRoot, "scripts", "lib", "demo-main.ts"), "utf8");
+  test("the smoke entrypoint neither reads a port pin nor pre-binds one", () => {
+    const src = readFileSync(join(repoRoot, "scripts", "lib", "smoke-main.ts"), "utf8");
     expect(src).not.toContain("process.env.WEB_PORT");
     expect(src).not.toContain("process.env.POSTGRES_PORT");
     // The deleted allocator. Its return is a number nobody else agreed to, and

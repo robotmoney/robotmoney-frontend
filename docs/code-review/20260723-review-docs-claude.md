@@ -114,7 +114,7 @@ artifact IDs appear in `related_findings` in the JSON.
 - **013 — INCONSISTENT — committee crons: enabled contract vs forbidden bullets.**
   `docs/architecture.md:702-709` documents the shipped #208/#229 contract
   (production enables); `docs/architecture.md:1902-1906,2066-2067` say the
-  schedules “remain disabled … must not be enabled”; demo-spec §2
+  schedules “remain disabled … must not be enabled”; smoke-spec §2
   (`docs/architecture.md:1515-1516`) claims a no-intervention run progresses;
   `backend/src/db/seed.ts:28-32` header contradicts `seed.ts:66-71` below it.
   *(review-docs-008 itself is RESOLVED by #229; this is the residual stale text)*
@@ -158,8 +158,8 @@ artifact IDs appear in `related_findings` in the JSON.
 
 - **003 — GAP_IMPL — `/health` returns 200 with db down**
   (`backend/src/api/index.ts:80-84`; MCP health never probes the backend,
-  `mcp/src/server.ts:214`; demo readiness certifies on any 200,
-  `scripts/lib/demo-main.ts:280-296`). *(re-reports review-docs-015)*
+  `mcp/src/server.ts:214`; smoke readiness certifies on any 200,
+  `scripts/lib/smoke-main.ts:280-296`). *(re-reports review-docs-015)*
 - **004 — GAP_IMPL — rerun reason validation divergence**
   (`backend/src/api/routes/admin.ts:575-577` accepts any non-empty ≤500 chars,
   bypassing the shared 10..500 validator at `:118-122`; full reason stored in
@@ -175,9 +175,9 @@ artifact IDs appear in `related_findings` in the JSON.
   reconciliation work as pending (`:795-800`).
 - **011 — STALE — hermetic/FetcherProvider remnants.**
   `docs/architecture.md:387-389` and `.env.example:105-106` call hermetic “the
-  demo default”; `docs/architecture.md:1499` blesses the removed
-  FetcherProvider; the same doc says there is no hermetic demo mode
-  (`:1617-1623,1675-1684`); `scripts/lib/demo-env.ts:54` defaults live.
+  smoke default”; `docs/architecture.md:1499` blesses the removed
+  FetcherProvider; the same doc says there is no hermetic smoke mode
+  (`:1617-1623,1675-1684`); `scripts/lib/smoke-env.ts:54` defaults live.
   *(re-reports review-docs-010, expanded)*
 - **014 — GAP_DOC — §9.5 REST surface incomplete plus phantom route.**
   `docs/architecture.md:731` names `apply/unlock` (zero hits in code); shipped
@@ -239,7 +239,7 @@ artifact IDs appear in `related_findings` in the JSON.
   (`docs/architecture.md:1554`), “06:00–08:00” vs actual 06:00–10:00 defaults
   (`:706`, `.env.example:92`, `backend/src/config.ts:395-399`), `robotmonet`
   hostname typo (`docs/archive/allocation-data-root-causes.md:4`).
-- **018 — GAP_DOC — demo-plan.md silently dropped:** the commit message claims
+- **018 — GAP_DOC — smoke-plan.md silently dropped:** the commit message claims
   it was folded in, but none of its 282 lines survive anywhere; one retargeted
   citation silently changed referent (`docs/architecture.md:1781`).
 - **022 — STALE — documentation map keeps its docs-index framing**
@@ -264,7 +264,7 @@ found to have been fixed silently without trace.
 ## Clean areas
 
 - Consolidation was content-lossless: all five folded specs are verbatim
-  carries (only H1→H2 demotion, whitespace, separators, link retargets).
+  carries (only H1→H2 smoketion, whitespace, separators, link retargets).
 - Zero references to the seven deleted docs or old runbook paths remain
   outside point-in-time review artifacts; all inbound runbook links updated.
 - All relative file links in canonical docs resolve, including anchored links.
@@ -272,7 +272,7 @@ found to have been fixed silently without trace.
 - Hostname/subdomain/port map consistent across topology, D13/D18,
   deployment.md, README, compose, and config; MCP endpoints test-guarded.
 - Cron values, env vars, removal claims, and migration references all verified
-  docs↔code; demo-spec MCP tool table exactly matches server registrations.
+  docs↔code; smoke-spec MCP tool table exactly matches server registrations.
 - participation.html and api-reference.html match `contract/src/routes.js`
   with executed consistency coverage.
 - Doc guards green post-consolidation: 163 pass / 0 fail;
@@ -307,7 +307,7 @@ found to have been fixed silently without trace.
 
 All owner=architecture/decision findings above are documentation changes; no
 canonical documents were modified by this review (reporting only, per
-contract). The single suggested non-doc doc change: record demo-plan.md's
+contract). The single suggested non-doc doc change: record smoke-plan.md's
 intentional drop in `docs/archive/index.md` (018, 023).
 
 ## Unresolved decisions

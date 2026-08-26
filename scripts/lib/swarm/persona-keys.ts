@@ -1,26 +1,26 @@
-// Committed identities for the standing demo's named personas.
+// Committed identities for the standing smoke's named personas.
 //
 // THE PROBLEM THESE SOLVE. A persona's signing key used to be generated fresh
 // inside a per-boot Docker volume (`<project>_member_home_<id>`), and a
-// real-onboarded persona's rmpc passphrase lived only in the demo process's
+// real-onboarded persona's rmpc passphrase lived only in the smoke process's
 // memory. Both are per-boot: the volume name carries the compose project hash,
 // and the passphrase is a crypto.randomUUID() that is never written down. So
 // against a PERSISTENT database — the whole point of `--external-pg` — an
 // already-onboarded persona could be listed on the roster and could never sign
-// again. The demo's two visible symptoms were a roster that grew a duplicate
+// again. The smoke's two visible symptoms were a roster that grew a duplicate
 // Helios per restart, and sessions that ran with three members while the roster
 // claimed six.
 //
-// The fix is to stop treating a demo persona's identity as ephemeral. Each named
+// The fix is to stop treating a smoke persona's identity as ephemeral. Each named
 // persona has ONE keypair, committed in ./fixtures/persona-keys.json, and any
 // boot can adopt it: the harness re-registers the known public key against the
 // member id the database already has (registerMember is idempotent by id — it
 // rebinds the key and mints a fresh token), and the member container signs with
 // the matching private key.
 //
-// THESE ARE NOT SECRETS, and the fixture file says so at length. They are demo
+// THESE ARE NOT SECRETS, and the fixture file says so at length. They are smoke
 // characters; anyone with the repository can sign as them. Nothing outside the
-// demo/eval paths may use this module.
+// smoke/eval paths may use this module.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,7 +58,7 @@ export function personaIdentities(): Record<string, PersonaIdentity> {
  * id is minted by the server for anyone admitted through onboarding, so it
  * cannot be the key here). Returns undefined for anyone not in the fixture,
  * which callers must treat as "generate as before" rather than as an error:
- * a stack may legitimately carry members this demo never invented.
+ * a stack may legitimately carry members this smoke never invented.
  */
 export function personaIdentity(name: string): PersonaIdentity | undefined {
   return personaIdentities()[name.trim().toLowerCase()];

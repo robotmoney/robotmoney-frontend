@@ -126,18 +126,18 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   const CASES: Array<[string, string[]]> = [
     ["backend/src/api/routes.ts", ["backend.yml"]],
     // Issue #602: a compose file must ALSO select integration.yml. That job
-    // owns scripts/tests/integration/demo-compose-config.test.ts, the only
+    // owns scripts/tests/integration/smoke-compose-config.test.ts, the only
     // suite that renders `docker compose config` and asserts what the api
     // service is handed — so a PR touching nothing but a compose file has to
     // run it, or the assertions covering that very file are skipped pre-merge.
     ["docker-compose.yml", ["backend.yml", "integration.yml"]],
-    ["docker-compose.demo.yml", ["backend.yml", "integration.yml"]],
+    ["docker-compose.smoke.yml", ["backend.yml", "integration.yml"]],
     ["docker-compose.stage.yml", ["backend.yml", "integration.yml"]],
     ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml"]],
     ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml"]],
     ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml"]],
     ["contract/src/index.ts", ["contract.yml"]],
-    ["scripts/tests/unit/demo-env.test.ts", ["integration.yml"]],
+    ["scripts/tests/unit/smoke-env.test.ts", ["integration.yml"]],
     ["scripts/lib/swarm/inference.ts", ["integration.yml", "onboarding-eval-rails.yml"]],
     ["scripts/lib/member-agent/Dockerfile", ["integration.yml", "onboarding-eval-rails.yml"]],
     ["scripts/lib/rmpc-fetch.ts", ["integration.yml", "onboarding-eval-rails.yml"]],
@@ -180,7 +180,7 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     const typoedPatterns = realPatterns.map((p) => (p === "scripts/**" ? "scropts/**" : p));
     expect(typoedPatterns).not.toEqual(realPatterns);
 
-    const path = "scripts/tests/unit/demo-env.test.ts";
+    const path = "scripts/tests/unit/smoke-env.test.ts";
     expect(pathMatches(path, realPatterns)).toBe(true);
     expect(pathMatches(path, typoedPatterns)).toBe(false);
   });
@@ -202,7 +202,7 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   });
 
   test("parses a clean planted changes job correctly, as a sanity control", () => {
-    const yaml = "name: x\non: push\njobs:\n  changes:\n    steps:\n      - uses: dorny/paths-filter@abc\n        with:\n          filters: |\n            demo:\n              - 'demo/**'\n";
-    expect(filtersFromYamlText(yaml, "x.yml")).toEqual({ demo: ["demo/**"] });
+    const yaml = "name: x\non: push\njobs:\n  changes:\n    steps:\n      - uses: dorny/paths-filter@abc\n        with:\n          filters: |\n            smoke:\n              - 'smoke/**'\n";
+    expect(filtersFromYamlText(yaml, "x.yml")).toEqual({ smoke: ["smoke/**"] });
   });
 });

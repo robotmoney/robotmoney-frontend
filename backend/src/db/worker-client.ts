@@ -46,7 +46,7 @@ export let sql = makePool(process.env.WORKER_DATABASE_URL || config.databaseUrl)
 
 // Point this pool at a different database, closing the old one.
 //
-// TEST SEAM, the twin of db/client.ts's setDatabase(). It has to be a second
+// TEST SEAM, the smoke-twin of db/client.ts's setDatabase(). It has to be a second
 // function rather than a call from there because the source-level boundary runs
 // the other way: worker/** imports this module and never db/client.ts. Without
 // it, a test file that redirects the shared pool to its own clean database

@@ -188,18 +188,18 @@ So: v0-published ≠ v0-fresh by these margins, and v1 publishes v0-fresh. The g
 
 It is currently **dead in production** — the only importer repo-wide is `backend/tests/analytics.test.ts`. But `contract/src/regime.js:3` names *this file* as "the canon" for regime labelling, which is factually wrong: the canon is `analyze/compute.ts:267`. Anyone following that pointer to reconcile a label will reconcile against the wrong algorithm.
 
-### F5 — Divergent-semantics twins sharing a module with the ported math — **NUMERIC-RISK**
+### F5 — Divergent-semantics smoke-twins sharing a module with the ported math — **NUMERIC-RISK**
 
 `transform/math.ts` holds the verbatim v0 port *and* a set of look-alike helpers with different semantics, in the same file, exported side by side:
 
-| Ported (matches v0) | Look-alike twin | Divergence |
+| Ported (matches v0) | Look-alike smoke-twin | Divergence |
 |---|---|---|
-| `meanArr` — `:84` (NaN for empty) | `mean` — `:20` (**0** for empty) | The twin owns the shorter, more attractive name. EXECUTED: `v0.mean([])` = NaN, `v1.mean([])` = 0. |
+| `meanArr` — `:84` (NaN for empty) | `mean` — `:20` (**0** for empty) | The smoke-twin owns the shorter, more attractive name. EXECUTED: `v0.mean([])` = NaN, `v1.mean([])` = 0. |
 | `stddev` — `:92` (**sample**, n−1) | `std` — `:24` (**population**, n) | EXECUTED: on `[1,2,3,4]`, `stddev` = 1.29099, `std` = 1.11803 — 13.4% apart. `smoothRegimes`' 2σ fast-track depends on the sample form; a one-character import slip silently loosens the circuit-breaker. |
-| `pctChangeLag` — `:125` (length-preserving, NaN pad, skips zero denominators) | `pctChange` — `:39` (length-**shortening**, emits **0** on zero denominator) | The twin again holds the v0 name. |
+| `pctChangeLag` — `:125` (length-preserving, NaN pad, skips zero denominators) | `pctChange` — `:39` (length-**shortening**, emits **0** on zero denominator) | The smoke-twin again holds the v0 name. |
 | `rollingPercentileRank` — `:176` (mid-rank ties, 30-obs warm-up) | `percentileInWindow` — `:31` (`<=` count, no ties, `0.5` for n≤1) | EXECUTED: 0.75 vs 0.625 on `[1,2,3,4]` at value 3. |
 
-No current regime-core call site uses the wrong twin (verified by import-graph grep). The risk is prospective and silent: every one of these pairs is a plausible autocomplete mistake that would produce plausible-looking numbers.
+No current regime-core call site uses the wrong smoke-twin (verified by import-graph grep). The risk is prospective and silent: every one of these pairs is a plausible autocomplete mistake that would produce plausible-looking numbers.
 
 ### F6 — `shapeDaily` back-fills where v0 forward-fills — **COSMETIC (currently dead)**
 
@@ -217,7 +217,7 @@ EXECUTED comparison:
 
 v0/v1 use `p > 0.67` (exclusive); the contract uses `composite >= 0.67` (inclusive). And the contract labels NaN as `neutral` rather than "unknown". Separately, the contract classifies a **raw composite**, whereas the regime label is defined on the composite's **rolling percentile** — different quantities on the same 0–1 scale.
 
-Exactly-0.67 is reachable: `rollingPercentileRank` returns `(below + 0.5·equal)/n`, which is exactly 0.67 in float64 whenever n = 100 and below+0.5·equal = 67, and `slice.length` passes through 100 during every indicator's warm-up. Impact today is nil (the persisted label comes from `compute.ts`, and `contract`'s only consumers are `swarm/domain.ts`'s demo synthesis — gated off prod at `swarm/domain.ts:900` — and the dead `regimeTool`). It becomes real the moment anything adopts the "canonical" classifier for a live composite.
+Exactly-0.67 is reachable: `rollingPercentileRank` returns `(below + 0.5·equal)/n`, which is exactly 0.67 in float64 whenever n = 100 and below+0.5·equal = 67, and `slice.length` passes through 100 during every indicator's warm-up. Impact today is nil (the persisted label comes from `compute.ts`, and `contract`'s only consumers are `swarm/domain.ts`'s smoke synthesis — gated off prod at `swarm/domain.ts:900` — and the dead `regimeTool`). It becomes real the moment anything adopts the "canonical" classifier for a live composite.
 
 ### F8 — Persistence precision — **COSMETIC**
 
@@ -232,7 +232,7 @@ Honest limits of this audit. None of the following is verified-equal; all of it 
 1. **Live fetcher output.** I compared v0's and v1's *stored* floors, not what their fetchers return today. The two floors already disagree on 11,026 overlapping raw values (EXECUTED). Most is 6dp CSV write precision (all ratio indicators — `IWM_SPY`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`, `XLP_XLY` — show ~59-63% of overlap differing at max relative error ~1e-6, which is exactly `toFixed(6)`). But a handful are **not** rounding: `BTC_ACTIVE` max rel 7.1e-2, `DXY` 1.8e-2, `DFII10` 1.8e-2, `DEFI_TVL` / `DEFI_GROWTH` 1.2e-2, `ETH_ACTIVE` 1.0e-2, `HY_OAS` 7.3e-3, `COPPER_GOLD` 5.3e-3. These are single-day disagreements each, plausibly source revisions between the two capture vintages, but I did not confirm that — they could equally be parser differences. **This is W2's scope and I did not resolve it.** Confirming procedure parity does not confirm the pipeline agrees end to end.
 2. **`ages` under realistic sparse production data.** Every measurement of F1 that showed zero divergence relied on the dense seeded floor. I could not obtain a v1 production database with post-seed sparse rows, so I could not measure the cap's real steady-state effect. My synthetic bound (136 label flips) is illustrative, not a production estimate.
 3. **The 9 label rows in F3.** I measured the count and the maximum magnitude, but did not attribute individual rows to a specific cause (source revision vs weight-window drift vs the v3 relock at `update.js:` `writeFullHistoryCsv`). The 2026-06 clustering of the worst days suggests recent-vintage revisions dominate, but I did not prove it.
-4. **Downstream consumers.** `analyze/backtest.ts`, `analyze/correlations.ts`, `analyze/channel-divergence.ts`, `analyze/late-cycle.ts`, `analyze/research-signals.ts` and `report/*` were read only far enough to trace imports out of the core. Their math is not audited here (other workers' scope). Note that `channel-divergence.ts`, `late-cycle.ts` and `research-signals.ts` all consume the `percentileInWindow` twin from F5, so their percentile convention differs from the regime core's by construction — whether that matches *their* v0 counterparts is unverified.
+4. **Downstream consumers.** `analyze/backtest.ts`, `analyze/correlations.ts`, `analyze/channel-divergence.ts`, `analyze/late-cycle.ts`, `analyze/research-signals.ts` and `report/*` were read only far enough to trace imports out of the core. Their math is not audited here (other workers' scope). Note that `channel-divergence.ts`, `late-cycle.ts` and `research-signals.ts` all consume the `percentileInWindow` smoke-twin from F5, so their percentile convention differs from the regime core's by construction — whether that matches *their* v0 counterparts is unverified.
 5. **Frontend re-derivation.** `frontend/public/assets/js/app/alpine/views/blog-charts.js:308-315` derives a combined regime label from macro/onchain votes using a rule that exists nowhere in the backend. I did not check it against v0's equivalent page.
 6. **Ordering assumptions under adversarial input.** Both implementations assume `dateAxis` is ascending and `series` is date-sorted ascending. Neither asserts it. My fuzzing always supplied ascending input, so I did not test whether they *diverge* on descending or unsorted input — only that they agree on well-formed input.
 7. **Float non-determinism across runtimes.** Both engines were executed under Bun 1.3.14 in this session, so the JS-vs-TS comparison shares one float implementation. v0 production runs under Node. IEEE-754 double arithmetic is specified, and all operations here are `+ - * / Math.sqrt` (all correctly rounded), so cross-runtime divergence is not expected — but I did not execute v0 under Node to confirm it empirically.
@@ -250,5 +250,5 @@ Honest limits of this audit. None of the following is verified-equal; all of it 
 | EXTRA | 20 | `forwardFillAge`, `MAX_FORWARD_FILL_DAYS`, `mean`, `std`, `percentileInWindow`, `applySign`, `pctChange`, `ratio`, `rollingBeta`, `clamp01`, `lcg`, `hashStr`, `dateBefore`, `isoDay`, `shapeDaily`, `ratioByDate`, `regimeTool`, `REGIME_INDICATORS`, `WINDOW`, `CURRENT_REGIME_VERSION` |
 
 **Blocking parity:** F2 (BTC_MVRV), F3 (frozen vintage).
-**Numeric risk:** F1 (`ages` cap), F4 (shadow classifier), F5 (semantic twins).
+**Numeric risk:** F1 (`ages` cap), F4 (shadow classifier), F5 (semantic smoke-twins).
 **Cosmetic:** F6 (`shapeDaily` back-fill, dead), F7 (contract boundary, off hot path), F8 (write precision).

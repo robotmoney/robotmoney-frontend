@@ -26,7 +26,7 @@ import { navigate } from "./navigation.ts";
 //
 // Follows swarm-subject.spec.ts's pattern: drive the real, shipped render path
 // against the live SPA served at baseURL, and control the data path with
-// page.route rather than depending on whatever the demo stack seeded.
+// page.route rather than depending on whatever the smoke stack seeded.
 
 // The browser (not app code) logs a console error for every non-2xx or failed
 // network request, regardless of whether the app handled it. Both tests force

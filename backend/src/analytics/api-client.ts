@@ -32,7 +32,7 @@ export function resolveAnalyticsApiConfig(
 }
 
 // Fail-loud startup guard (issue #106 AC): an analytics producer configured to
-// run in demo/prod MUST have its analytics-provider credential. Without it every
+// run in smoke/prod MUST have its analytics-provider credential. Without it every
 // submission would 401 at the boundary — refusing to boot is the honest failure.
 // `allowInsecure` (RM_ENV=ephemeral or explicit RM_ALLOW_INSECURE=1) is the only
 // opt-out, mirroring the API-side gate in config.ts/api auth.
@@ -44,7 +44,7 @@ export function assertAnalyticsUpdaterCredentials(cfg: {
   if (!cfg.allowInsecure && !cfg.analyticsToken) {
     throw new Error(
       `analytics updater is configured for RM_ENV=${cfg.env} without ANALYTICS_TOKEN — ` +
-        "set the analytics-provider bearer credential (or RM_ALLOW_INSECURE=1 for a local throwaway demo)",
+        "set the analytics-provider bearer credential (or RM_ALLOW_INSECURE=1 for a local throwaway smoke)",
     );
   }
 }

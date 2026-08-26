@@ -1,6 +1,6 @@
 // Explicit LIVE EDGAR/MNA seed regeneration command (issue #108). The ONLY
 // way the committed seed artifact + manifest are ever produced or replaced —
-// NEVER implicit during migrations, demo boot, or required per-PR CI (no
+// NEVER implicit during migrations, smoke boot, or required per-PR CI (no
 // other code path imports this file). An operator runs it deliberately,
 // pinning the coverage range, then reviews and commits the result.
 //

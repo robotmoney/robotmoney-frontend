@@ -13,7 +13,7 @@
 //   1. a receipt per completed step, written by the step's own script;
 //   2. the git SHA that receipt was produced at, so code drift can invalidate it;
 //   3. the artifacts it produced, hashed, so a deleted or rewritten file
-//      demotes the step back to not-done.
+//      smoketes the step back to not-done.
 //
 // A receipt is evidence, NOT authority. where.ts re-verifies all three before
 // it believes one. If the filesystem and a receipt disagree, the filesystem

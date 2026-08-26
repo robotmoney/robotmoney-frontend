@@ -131,7 +131,7 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
         (f) =>
           f !== expectedFile &&
           !f.includes("nightly") &&
-          !f.includes("demo"),
+          !f.includes("smoke"),
       );
       expect(
         unexpected,

@@ -26,11 +26,11 @@
 
 ## 1. Purpose
 
-Every environment we have exercised so far — CI, `bun run demo`, and local
+Every environment we have exercised so far — CI, `bun run smoke`, and local
 dev via `docker-compose.yml` — provisions the database, API, workers, and
 frontend **together, from the same checkout, at the same commit**, and
 usually from a freshly seeded database (see
-[architecture.md § Demo Specification](../architecture.md#demo-specification)).
+[architecture.md § Demo Specification](../architecture.md#smoke-specification)).
 That gives us zero signal on what happens when the four components drift
 apart, because in every environment we've run, they never have. Production
 will not have that luxury: per
@@ -50,7 +50,7 @@ Four components, concretely, as they exist in this repo:
   `backend/migrations/*.sql`: forward-only, sequentially numbered files,
   applied once each and tracked in a `schema_migrations` table by
   `backend/src/db/migrate.ts`. There are no down-migrations. `migrate()` runs
-  automatically on every API boot (CI, demo, and prod all take this same
+  automatically on every API boot (CI, smoke, and prod all take this same
   path) and is written to be idempotent/safe to re-run.
 - **(b) API backend** — a single Bun process (`Bun.serve`, no framework) at
   `backend/src/api/index.ts`, talking to Postgres directly via `postgres.js`
@@ -78,7 +78,7 @@ Four components, concretely, as they exist in this repo:
   It talks to the API only over HTTP through `contract/src/routes.js` and
   `frontend/public/assets/js/app/lib/api.js`.
 
-**How these deploy today.** CI and `bun run demo` use one
+**How these deploy today.** CI and `bun run smoke` use one
 `docker-compose.yml` box: postgres + api + the three worker containers +
 the producer, all built from the same checkout, migrated and started
 together. There is no deploy automation in this repo yet — no
@@ -481,10 +481,10 @@ and third are now **resolved by prescribed runner changes** (collected in
   with `await seed()` — inserting `job_schedules` rows and similar
   required state. Left alone, §3.2's pre-deploy migration Job would
   **re-seed production on every deploy**; `seed()` is idempotent, and
-  re-seeding a fresh demo DB is exactly what it is for, but a live
+  re-seeding a fresh smoke DB is exactly what it is for, but a live
   production DB is a different risk posture. Decided: **the production
   migration Job runs schema-only** — seeding is split out of `migrate()`
-  behind a flag or separate entrypoint, demo/CI keep today's combined
+  behind a flag or separate entrypoint, smoke/CI keep today's combined
   behavior, and production seeds deliberately (at bootstrap, or on
   explicit operator action), never implicitly per deploy (§6.1).
 - **No lock or timeout discipline — resolved: runner defaults plus a
@@ -746,7 +746,7 @@ rather than scattered through the sections that motivate them:
    to every migration, so a blocked DDL fails fast instead of queueing
    traffic behind it (§5.3).
 3. **`migrate.ts`: split `seed()` out of `migrate()`** — flag or separate
-   entrypoint; demo/CI keep the combined behavior, the production
+   entrypoint; smoke/CI keep the combined behavior, the production
    migration Job runs schema-only (§5.3).
 4. **Disable migrate-on-boot in-cluster** — env-gated, so the API no
    longer runs `migrate()` as a boot precondition in production (§3.2).

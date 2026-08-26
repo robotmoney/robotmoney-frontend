@@ -208,12 +208,12 @@ export const STEPS: RolloutStep[] = [
     id: "P5.rehearsal-boot",
     phase: "P5 rehearsal",
     section: "§7",
-    title: "the twin migrates and boots on the rc being shipped",
+    title: "the smoke-twin migrates and boots on the rc being shipped",
     hostRole: "stage",
     actor: "script",
     // Gate F as well as Gate C: a rehearsal has to rehearse the world §5.2
-    // chose. With BASE_RPC_MAX_CALLS_PER_SEC unset the twin dispatches repair
-    // work; with it set to 0 the twin does nothing. Those are different
+    // chose. With BASE_RPC_MAX_CALLS_PER_SEC unset the smoke-twin dispatches repair
+    // work; with it set to 0 the smoke-twin does nothing. Those are different
     // rehearsals, and neither is evidence for the other.
     requires: ["P3.gate-c", "P1.config-decided"],
     dependsOn: [...APP_CODE, "backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts"],
@@ -225,27 +225,27 @@ export const STEPS: RolloutStep[] = [
     note: "Record the migration set's WALL-CLOCK here. §2.2's 'well under a second' is read off the DDL, not measured; this step is where it becomes a number.",
   },
   {
-    id: "P5.postflight-twin",
+    id: "P5.postflight-smoke-twin",
     phase: "P5 rehearsal",
     section: "§7",
-    title: "postflight is clean against the MIGRATED twin",
+    title: "postflight is clean against the MIGRATED smoke-twin",
     hostRole: "stage",
     actor: "script",
     requires: ["P5.rehearsal-boot"],
     // stage-rehearsal.ts is in here because it is what DECIDES whether these
-    // checks run against the twin at all: it hands postflight to the shared
+    // checks run against the smoke-twin at all: it hands postflight to the shared
     // driver's onReady window. A commit that drops that hook leaves a green
     // rehearsal that graded nothing, so this step's evidence must die with it.
     dependsOn: [...POSTFLIGHT_CODE, "backend/scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts"],
     ttlHours: 48,
     verify: "bun scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt   # runs this step",
-    note: "A twin that boots but fails postflight is a failed rehearsal, not a partial success.",
+    note: "A smoke-twin that boots but fails postflight is a failed rehearsal, not a partial success.",
   },
   {
-    id: "P5.rollback-twin",
+    id: "P5.rollback-smoke-twin",
     phase: "P5 rehearsal",
     section: "§7.2",
-    title: "the §10 rollback is executed once against a migrated twin",
+    title: "the §10 rollback is executed once against a migrated smoke-twin",
     hostRole: "stage",
     // OPERATOR, not script: there is no rollback driver in this repo, for any
     // release. §7.2 is a written procedure and this step tracks whether anyone
@@ -253,24 +253,24 @@ export const STEPS: RolloutStep[] = [
     // where §7 required the rollback in prose and nothing could report on it at
     // all. Automating it is open work; when it lands, this becomes script.
     actor: "operator",
-    requires: ["P5.postflight-twin"],
+    requires: ["P5.postflight-smoke-twin"],
     dependsOn: [],
     ttlHours: 48,
-    verify: "execute §10 against a migrated twin per the procedure below, then: where.ts --record P5.rollback-twin",
+    verify: "execute §10 against a migrated smoke-twin per the procedure below, then: where.ts --record P5.rollback-smoke-twin",
     note: "Never done, for any release: no rollback driver exists, no down migrations exist, and 'rollback' appears in none of the v0.2.2 rehearsal reports. §10's survivability claim is a reading of the schema until this runs.",
   },
   {
-    id: "P5.passkey-twin",
+    id: "P5.passkey-smoke-twin",
     phase: "P5 rehearsal",
     section: "§7.3",
-    title: "a passkey ceremony completes against a tunnel-published twin",
+    title: "a passkey ceremony completes against a tunnel-published smoke-twin",
     hostRole: "stage",
     actor: "operator",
-    requires: ["P5.postflight-twin", "P1.config-decided"],
+    requires: ["P5.postflight-smoke-twin", "P1.config-decided"],
     dependsOn: [],
     ttlHours: 48,
-    verify: "complete a passkey ceremony against the tunnel-published twin, then: where.ts --record P5.passkey-twin",
-    note: "De-risks §9 Check 7, which is otherwise first tested in PRODUCTION after the irreversible cutover. Does NOT substitute for P8.acceptance — a twin ceremony runs at the stage origin, not robotmoney.network.",
+    verify: "complete a passkey ceremony against the tunnel-published smoke-twin, then: where.ts --record P5.passkey-smoke-twin",
+    note: "De-risks §9 Check 7, which is otherwise first tested in PRODUCTION after the irreversible cutover. Does NOT substitute for P8.acceptance — a smoke-twin ceremony runs at the stage origin, not robotmoney.network.",
   },
   {
     id: "P6.report",
@@ -280,11 +280,11 @@ export const STEPS: RolloutStep[] = [
     hostRole: "any",
     actor: "operator",
     // P4.postflight-dryrun is here, not on the rehearsal, because this is the
-    // step where the twin's green gets INTERPRETED. Postflight passing on a
-    // migrated twin means nothing on its own unless those same checks are known
+    // step where the smoke-twin's green gets INTERPRETED. Postflight passing on a
+    // migrated smoke-twin means nothing on its own unless those same checks are known
     // to FAIL before the migration — otherwise a check that passes
     // unconditionally is indistinguishable from one that verified something.
-    requires: ["P5.postflight-twin", "P4.postflight-dryrun", "P5.rollback-twin", "P5.passkey-twin"],
+    requires: ["P5.postflight-smoke-twin", "P4.postflight-dryrun", "P5.rollback-smoke-twin", "P5.passkey-smoke-twin"],
     dependsOn: [],
     artifacts: ["stage-rehearsal-report-*.md"],
     verify: "write the report per rollout-procedure.md §6.5, then: where.ts --record P6.report",
@@ -302,7 +302,7 @@ export const STEPS: RolloutStep[] = [
     // exactly the gates §3 calls blocking that nothing used to enforce.
     requires: ["P6.report", "P4.preflight-live", "P1.config-decided"],
     dependsOn: [...APP_CODE],
-    verify: "DEMO_PROJECT=rm_prod bun smoke -- --db external --no-tui   # then: where.ts --record P7.cutover",
+    verify: "SMOKE_PROJECT=rm_prod bun smoke -- --db external --no-tui   # then: where.ts --record P7.cutover",
     note: "The .env from §5 must be in place BEFORE this runs. Seven `migrated:` lines expected, then `migrations up to date`.",
   },
   {

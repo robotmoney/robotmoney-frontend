@@ -111,7 +111,7 @@ test("a seated member that submits nothing is named in `absent`, and the shortfa
   const takeRows = await sql<{ member_id: string }[]>`SELECT member_id FROM swarm_recommendations WHERE session_id = ${sessionId}`;
   expect(takeRows.map((r) => r.member_id)).not.toContain(noShow.id);
 
-  // Same list on the SERVED payload — this is the object the demo driver reads
+  // Same list on the SERVED payload — this is the object the smoke driver reads
   // (scripts/lib/swarm/session.ts absenceReport) and the admin/session views
   // render, so the invariant has to survive the projection too.
   await ic.publishSession(sessionId);
@@ -143,15 +143,15 @@ test("an excused member leaves the roster entirely: not seated, not absent, not 
   expectAttendanceConsistent(rollup);
 });
 
-// ── The demo/e2e (openSession) path — the shape that filed #501 ────────────
+// ── The smoke/e2e (openSession) path — the shape that filed #501 ────────────
 // This path freezes no roster, so the denominator is the live active roster.
 // The invariant must hold there too: that session is the one whose driver
 // logged `absent: []` while reporting a take shortfall.
-test("the demo path (no frozen roster) names its no-show and keeps the counter consistent", async () => {
+test("the smoke path (no frozen roster) names its no-show and keeps the counter consistent", async () => {
   const subjectId = await activeSubject();
-  const present1 = await activeMember("demo-present-1");
-  const present2 = await activeMember("demo-present-2");
-  const noShow = await activeMember("demo-no-show");
+  const present1 = await activeMember("smoke-present-1");
+  const present2 = await activeMember("smoke-present-2");
+  const noShow = await activeMember("smoke-no-show");
 
   const opened = await ic.openSession(subjectId);
   const sessionId = opened.id as string;

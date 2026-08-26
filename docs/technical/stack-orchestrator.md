@@ -422,7 +422,7 @@ With no bind mount, `/srv/frontend` is empty. The api starts happily, logs
 `serving static frontend from /srv/frontend`, and then:
 
 ```
-GET /health -> {"status":"ok","env":"demo","db":"up", ...}
+GET /health -> {"status":"ok","env":"smoke","db":"up", ...}
 GET /       -> HTTP 500
 ```
 
@@ -430,16 +430,16 @@ The assembled `_static` has to be a layer in the api image, not a mount.
 
 ## 16. `RM_ENV` has no `staging` value
 
-`backend/src/config.ts:539` pins `VALID_ENVS = ["ephemeral", "demo", "prod"]` and
+`backend/src/config.ts:539` pins `VALID_ENVS = ["ephemeral", "smoke", "prod"]` and
 throws otherwise:
 
 ```
-error: invalid RM_ENV "staging" — expected one of ephemeral | demo | prod
+error: invalid RM_ENV "staging" — expected one of ephemeral | smoke | prod
 ```
 
 The staging environment must run **`RM_ENV=prod`** semantics, including
 `PROJECTS_SOURCE=live`, which prod fails closed without. The ad-hoc box runs
-`demo` deliberately, to stay off those fail-closed paths.
+`smoke` deliberately, to stay off those fail-closed paths.
 
 ---
 

@@ -263,7 +263,7 @@ export async function discover(
     // Rows are marked inactive, NEVER deleted: their facet/snapshot history is
     // FK-linked and a later run that re-discovers the slug flips it back.
     // Scoped to `resolved_at IS NOT NULL` so only rows a previous discovery run
-    // wrote are eligible — a demo-seeded or manually inserted project is never
+    // wrote are eligible — a smoke-seeded or manually inserted project is never
     // touched by a discovery pass that has no opinion about it.
     const floor = Math.ceil(activeBefore * (1 - DISCOVERY_SHRINK_FLOOR_RATIO));
     if (!allowShrink && activeBefore > 0 && projects.length < floor) {

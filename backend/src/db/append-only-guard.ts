@@ -50,7 +50,7 @@
 // still fires for ordinary clients, so the probe is happy, but it is now absent
 // during exactly the restore/replication apply it exists for), and the
 // row-level trigger's presence, which no client-issued statement can
-// demonstrate (see the next section). Neither half is sufficient. Together they
+// smokenstrate (see the next section). Neither half is sufficient. Together they
 // fail on function replacement, on `DROP TRIGGER`, on `DISABLE TRIGGER`, on
 // `ENABLE REPLICA TRIGGER`, and on a restore that never installed them.
 //
@@ -90,8 +90,8 @@
 //     migrate nor db-preflight.
 //   - backend/scripts/prod-bootstrap.ts — after migrate(), because migrate() is
 //     what installs the thing being verified.
-//   - backend/scripts/db-preflight.ts — a pre-populated demo boot (`--db
-//     external` / `--db twin`).
+//   - backend/scripts/db-preflight.ts — a pre-populated smoke boot (`--db
+//     external` / `--db smoke-twin`).
 import type postgresTypes from "postgres";
 import { sql } from "./client.ts";
 import { createNamespaceGuardClient } from "./handle-namespace.ts";

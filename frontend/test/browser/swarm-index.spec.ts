@@ -7,7 +7,7 @@ import { expect, test } from "@playwright/test";
 // served the field — every row fell back to `s.state` in practice, which is
 // why the swarm index read "PUBLISHED" on every card instead of a regime
 // label. This spec seeds a deterministic sessions response (mocked, since the
-// live demo stack's regime_summary contents aren't a stable thing to assert
+// live smoke stack's regime_summary contents aren't a stable thing to assert
 // text against) and checks the shipped Alpine view (swarm.js's
 // regimeLabel()) actually renders the label instead of the fallback.
 

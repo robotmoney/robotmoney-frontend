@@ -1,11 +1,11 @@
 // Minimal forward-only migration runner. Applies every backend/migrations/*.sql
 // in filename order exactly once, tracked in schema_migrations. Idempotent:
-// safe to run on every boot (ephemeral CI, demo, or prod).
+// safe to run on every boot (ephemeral CI, smoke, or prod).
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql, closeDb } from "./client.ts";
-import { seed, seedDemoJobSchedules } from "./seed.ts";
+import { seed, seedSmokeJobSchedules } from "./seed.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 
@@ -27,7 +27,7 @@ async function waitForDb(timeoutMs = 30_000): Promise<void> {
   }
 }
 
-export async function migrate(options: { seedDemoSchedules?: boolean } = {}): Promise<void> {
+export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): Promise<void> {
   await waitForDb();
   await sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -59,12 +59,12 @@ export async function migrate(options: { seedDemoSchedules?: boolean } = {}): Pr
   // so safe on every boot — gives the worker recurring work without a manual
   // admin trigger. See seed.ts.
   await seed();
-  if (options.seedDemoSchedules) await seedDemoJobSchedules();
+  if (options.seedSmokeSchedules) await seedSmokeJobSchedules();
 }
 
 // Run directly: `bun run src/db/migrate.ts`
 if (import.meta.url === `file://${process.argv[1]}`) {
-  migrate({ seedDemoSchedules: process.argv.includes("--seed-demo-schedules") })
+  migrate({ seedSmokeSchedules: process.argv.includes("--seed-smoke-schedules") })
     .then(closeDb)
     .catch((err) => {
       console.error(err);

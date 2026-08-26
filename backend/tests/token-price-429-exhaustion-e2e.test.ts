@@ -1,5 +1,5 @@
 // Issue #202 (rescoped 2026-07-22): prove the token-price 429-exhaustion path
-// honest-degrades END TO END, and that the demo-readiness gate's only
+// honest-degrades END TO END, and that the smoke-readiness gate's only
 // token-price-dependent boot step survives persistent 429s.
 //
 // What makes this file different from the existing partial coverage:
@@ -17,8 +17,8 @@
 // 'stale' — never rethrow, never fabricate (the same honest-degrade path BNKR
 // uses; original #202 AC3).
 //
-// Demo-readiness gate (AC2): the gate is e2e.yml's "Full-stack demo" step
-// (scripts/demo.ts → scripts/lib/demo-main.ts), which reaches READY when
+// Demo-readiness gate (AC2): the gate is e2e.yml's "Full-stack smoke" step
+// (scripts/smoke.ts → scripts/lib/smoke-main.ts), which reaches READY when
 // postgres + migrations/seed + api/mcp /health + the EDGAR bootstrap complete
 // AND the worker lanes stay up. The ONLY step in that boot sequence that
 // touches the token-price feed is the seed's cold-start
@@ -33,7 +33,7 @@
 // survives, nothing throws — with the degraded 'stale' rows persisted and the
 // request-path wallet endpoint still serving. Stubbing the 429s (rather than
 // hitting real GeckoTerminal) is deliberate: deterministic, and it does not
-// burn the shared per-IP CI/demo quota that caused the symptom.
+// burn the shared per-IP CI/smoke quota that caused the symptom.
 //
 // Postgres is REQUIRED and provisioned by tests/preload.ts, which FAILS LOUDLY
 // when Docker/Postgres is absent — never a silent skip (test-coverage policy).
@@ -189,8 +189,8 @@ test("persistent GeckoTerminal 429s exhaust the REAL bounded retry budget and th
   }
 });
 
-// ── AC2: demo-readiness gate reaches ready under persistent 429s ────────────
-test("demo-readiness gate reaches ready under persistent 429s: the boot's cold-start wallet.sample_balances job settles 'succeeded' on the analytics lane (worker survives) and the request-path wallet endpoint keeps serving", async () => {
+// ── AC2: smoke-readiness gate reaches ready under persistent 429s ────────────
+test("smoke-readiness gate reaches ready under persistent 429s: the boot's cold-start wallet.sample_balances job settles 'succeeded' on the analytics lane (worker survives) and the request-path wallet endpoint keeps serving", async () => {
   await seedYesterdayWethSample();
 
   // The exact cold-start job db/seed.ts enqueues during the gate's
@@ -207,7 +207,7 @@ test("demo-readiness gate reaches ready under persistent 429s: the boot's cold-s
 
   const counters = mockPersistent429Transport();
   try {
-    // The REAL worker machinery, same lane as the demo's worker-analytics
+    // The REAL worker machinery, same lane as the smoke's worker-analytics
     // container. processOneJob resolving (instead of the handler's throw
     // escaping) IS the worker surviving — the original #202 defect mode.
     expect(await processOneJob({ lane: LANES.analytics, workerId: "test-429-analytics" })).toBe(true);

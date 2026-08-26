@@ -7,7 +7,7 @@
 //     calls to the authenticated /api/analytics/* boundary with its scoped
 //     bearer credential.
 //   • analytics/store/direct.ts — the API-owned domain service backed by the
-//     SQL store writers. ONLY the API process (and migration/demo tooling with
+//     SQL store writers. ONLY the API process (and migration/smoke tooling with
 //     its own DB credentials) may use it.
 //
 // Pure types — no I/O, no SQL, no config.

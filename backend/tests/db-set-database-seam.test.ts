@@ -20,7 +20,7 @@ import * as workerClient from "../src/db/worker-client.ts";
 const realEnv = config.env;
 afterEach(() => { config.env = realEnv; });
 
-for (const env of ["demo", "prod"] as const) {
+for (const env of ["smoke", "prod"] as const) {
   test(`db/client.setDatabase() refuses under RM_ENV=${env}`, async () => {
     config.env = env;
     const before = config.databaseUrl;

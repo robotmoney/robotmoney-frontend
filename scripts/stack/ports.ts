@@ -14,8 +14,8 @@
 // a free port, held it, closed it, and handed the NUMBER to compose as
 // `${WEB_PORT:?…}`. That is a TOCTOU race. Between our close and compose's
 // bind there is a window in which any other process on this box can take the
-// port — a second `bun demo`, a concurrent job on the self-hosted CI runner
-// (this host is both the runner and the standing stage demo), or an unrelated
+// port — a second `bun smoke`, a concurrent job on the self-hosted CI runner
+// (this host is both the runner and the standing stage smoke), or an unrelated
 // service. The bring-up then dies on an opaque "address already in use", or —
 // worse — two things believe they own the same number. Randomizing MORE stacks
 // widened that window rather than closing it. Docker's allocator has no such
@@ -26,7 +26,7 @@
 // not deprecated: any surviving "pick a free port" helper is an invitation to
 // re-introduce the race.
 //
-// THE ONE EXCEPTION is the stage web port. `bun run demo -- --stage` appends
+// THE ONE EXCEPTION is the stage web port. `bun run smoke -- --stage` appends
 // docker-compose.stage.yml, which pins api to 48787 with `ports: !override`.
 // That is a CLI ARGUMENT, never an env var (the same hard rule `--pg-data`
 // follows: no per-property env config), because pinning the tunnel-facing port
@@ -36,7 +36,7 @@
 // TOCTOU pattern this module exists to delete.
 import { createServer } from "node:net";
 
-// The single fixed host port in the whole system: cloudflared on the demo host
+// The single fixed host port in the whole system: cloudflared on the smoke host
 // routes stage.robotmoney-labs.dev to localhost:48787 and to nothing else, so
 // a stage boot that "helpfully" fell back to a random port would come up green
 // and serve a 502 to every visitor. That is why a stage pin is REQUIRED, not
@@ -68,7 +68,7 @@ export function stalePortEnvWarnings(env: Record<string, string | undefined>): s
         `now — the compose files publish container ports only, so there is no host side left for this ` +
         `variable to fill. Pinning one from the environment was removed because a pinned :48787 raced ` +
         `the stage tunnel and took the site down. Delete ${name} from your .env / shell. ` +
-        `(The only pin left is \`bun demo --stage\`, which pins the web port to ${STAGE_WEB_PORT} and nothing else.)`,
+        `(The only pin left is \`bun smoke --stage\`, which pins the web port to ${STAGE_WEB_PORT} and nothing else.)`,
     );
   }
   return out;
@@ -184,7 +184,7 @@ function bindProbe(port: number): Promise<boolean> {
 }
 
 /**
- * PRE-FLIGHT for `bun run demo -- --stage`: refuse to start when something
+ * PRE-FLIGHT for `bun run smoke -- --stage`: refuse to start when something
  * already holds 48787.
  *
  * This binds, and that is deliberately NOT the TOCTOU pattern this module's

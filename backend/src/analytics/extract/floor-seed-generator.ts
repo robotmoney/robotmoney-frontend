@@ -2,9 +2,9 @@
 // (raw-indicator-history.csv.gz) with LIVE data for one indicator, merged
 // additively (append-only mergeSeries — fetched wins on any overlap) into the
 // existing committed floor. Pure orchestration + atomic filesystem replace —
-// no SQL, no analytics store writer, no demo/bootstrap wiring. Used ONLY by
+// no SQL, no analytics store writer, no smoke/bootstrap wiring. Used ONLY by
 // the explicit `backend/scripts/floor-seed-regenerate.ts` operator command —
-// never implicitly by migrations, demo boot, or required per-PR CI. Mirrors
+// never implicitly by migrations, smoke boot, or required per-PR CI. Mirrors
 // the edgar-seed-generator.ts convention for the EDGAR/MNA seed (issue #108).
 import { gzipSync, gunzipSync } from "node:zlib";
 import { writeFileSync, readFileSync, renameSync, unlinkSync, mkdirSync } from "node:fs";

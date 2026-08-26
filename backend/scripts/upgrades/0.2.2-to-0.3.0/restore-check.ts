@@ -18,8 +18,8 @@
 // THE RESTORE MECHANICS ARE NOT HERE. Resolving the backup files, starting a
 // throwaway Postgres, loading globals, pg_restore, opening a connection and
 // tearing both down on every path live in scripts/lib/restore-container.ts's
-// withTwinContainer() and backend/scripts/lib/twin-session.ts's
-// withTwinDatabase(). Every release's copy of this script did the identical
+// withSmokeSmokeTwinContainer() and backend/scripts/lib/smoke-twin-session.ts's
+// withSmokeSmokeTwinDatabase(). Every release's copy of this script did the identical
 // five things around its own queries, and the failure-path teardown is the part
 // that must not be re-derived: a checker returning early from the middle of its
 // own try block is how a container holding a copy of production gets left
@@ -49,7 +49,7 @@ import { fileURLToPath } from "node:url";
 import { resolveBackupFiles } from "../../../../scripts/lib/restore-container.ts";
 import { columnExists, createChecker, printVerdict } from "../../lib/checks.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
-import { withTwinDatabase } from "../../lib/twin-session.ts";
+import { withSmokeSmokeTwinDatabase } from "../../lib/smoke-twin-session.ts";
 import { runChecks } from "./preflight.ts";
 import { TAG_GLOB } from "./release.ts";
 
@@ -62,7 +62,7 @@ const log = (msg: string) => console.log(`[${NAME}] ${msg}`);
 const err = (msg: string) => console.error(`[${NAME}] ${msg}`);
 
 async function run(backupDirArg?: string): Promise<number> {
-  const result = await withTwinDatabase({ backupDir: backupDirArg, log }, async (db) => {
+  const result = await withSmokeSmokeTwinDatabase({ backupDir: backupDirArg, log }, async (db) => {
     log("verification queries");
     const counts = (await db`
       SELECT 'swarm_members' t, count(*) FROM swarm_members
@@ -114,7 +114,7 @@ async function run(backupDirArg?: string): Promise<number> {
     return 0;
   });
 
-  // withTwinDatabase hands back the callback's value, or its own could-not-run
+  // withSmokeSmokeTwinDatabase hands back the callback's value, or its own could-not-run
   // error — which is exit 2, never 1: the dump was never graded.
   if (typeof result === "number") return result;
   err(result.error);

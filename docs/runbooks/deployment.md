@@ -112,7 +112,7 @@ read-only at `/srv/frontend`.
 **Operationally:**
 
 - `scripts/stack/stack.ts`'s `up()` runs the assembly before `docker compose up`,
-  so `bun run demo`, `bun run demo -- --stage`, the evals and CI all serve
+  so `bun run smoke`, `bun run smoke -- --stage`, the evals and CI all serve
   prerendered HTML with no extra step. Assembly failure aborts the bring-up.
 - A **hand-run `docker compose -p <project> up -d` must run `bun run
   static:assemble` first.** Docker creates an *empty* directory at a bind path
@@ -179,24 +179,24 @@ therefore does not inherit the project — it falls back to the directory name a
 **can address a different stack, or none**.
 
 That is not a theoretical mismatch here: outside GitHub Actions the project name
-is **random per boot** — `rm_demo_stack_<10 hex>`, where the hex is
+is **random per boot** — `rm_smoke_stack_<10 hex>`, where the hex is
 `shortHash(crypto.randomUUID())` (`scripts/stack/naming.ts:138`, `:149-151`). Two
 boots leave two projects, and a command scoped to the wrong one reports on an
 orphan.
 
 ```bash
-# Authoritative for the LAST boot this checkout made: .agents/demo-state.json,
-# which `bun run demo:status` reads and prints (scripts/demo-status.ts:111).
-RM_PROJECT="$(bun -e 'console.log(JSON.parse(await Bun.file(".agents/demo-state.json").text()).project)')"
-echo "$RM_PROJECT"     # e.g. rm_demo_stack_0114ac93de
+# Authoritative for the LAST boot this checkout made: .agents/smoke-state.json,
+# which `bun run smoke:status` reads and prints (scripts/smoke-status.ts:111).
+RM_PROJECT="$(bun -e 'console.log(JSON.parse(await Bun.file(".agents/smoke-state.json").text()).project)')"
+echo "$RM_PROJECT"     # e.g. rm_smoke_stack_0114ac93de
 
 # Cross-check against what is actually RUNNING — this is what catches an
 # orphaned stack from an earlier boot that the state file no longer names.
 docker compose ls
 ```
 
-If `docker compose ls` shows more than one `rm_demo_stack_*` project, the state
-file names only the most recent one; tear the rest down (`bun run demo:down`
+If `docker compose ls` shows more than one `rm_smoke_stack_*` project, the state
+file names only the most recent one; tear the rest down (`bun run smoke:down`
 after re-pointing, or `docker compose -p <other> down`) before you diagnose
 anything, or you will read the wrong container's logs.
 
@@ -204,7 +204,7 @@ For a hand-run production stack you chose the project yourself — use that name
 Export it once and every command below is safe to paste:
 
 ```bash
-export RM_PROJECT=rm_demo_stack_0114ac93de   # or your own
+export RM_PROJECT=rm_smoke_stack_0114ac93de   # or your own
 ```
 
 **Getting a SQL session to run it in.** The runbook's own two topologies:
@@ -233,7 +233,7 @@ container only because `docker-compose.yml`'s api `environment:` block names
 it**: that block is an allowlist, there is no `env_file:` in any compose file
 here and `backend/Dockerfile` sets no `ENV`, so a variable it does not name is
 simply never delivered and the api's refusal log will still tell you to set the
-variable you just set. (`scripts/tests/integration/demo-compose-config.test.ts`
+variable you just set. (`scripts/tests/integration/smoke-compose-config.test.ts`
 asserts both this variable and `PG_NAMESPACE_GUARD_TIMEOUT_MS` resolve into the
 api service in every composition, from real `docker compose config` output, so
 that block cannot lose them silently.)
@@ -241,13 +241,13 @@ that block cannot lose them silently.)
 > ⛔ **The paragraph above describes the CI/droplet topology only — the one
 > where something runs `docker compose … up -d` directly and the ambient
 > environment is compose's interpolation source. It does NOT hold for a
-> hand-run `bun smoke` / `bun run demo` stack.** There, `stack.up()` spawns
+> hand-run `bun smoke` / `bun run smoke` stack.** There, `stack.up()` spawns
 > compose with a **replacement** env map (`scripts/stack/stack.ts:214-232`);
 > `buildSpawnEnv` (`scripts/stack/config.ts:264-271`) keeps only
 > `DOCKER_CLIENT_ENV_ALLOWLIST` (`:241-259`) and overlays `buildComposeEnv`, and
 > neither `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION` nor
 > `PG_NAMESPACE_GUARD_TIMEOUT_MS` is on that allowlist or in
-> `DEMO_COMPOSE_PASSTHROUGH` (`scripts/lib/demo-main.ts:427-444`). **An
+> `DEMO_COMPOSE_PASSTHROUGH` (`scripts/lib/smoke-main.ts:427-444`). **An
 > `export` in your shell is dropped before `docker` is invoked.** The one place
 > that works on that workflow is the **repo-root `.env`**, which compose
 > auto-loads (the child's cwd is the repo root and nothing passes `--env-file`
@@ -343,7 +343,7 @@ races the time remaining.
 
 Set it where the override is set — the droplet env, passed into the container by
 `docker-compose.yml`'s api `environment:` allowlist (see above; a variable that
-block does not name never arrives, and on a hand-run `bun smoke`/`bun run demo`
+block does not name never arrives, and on a hand-run `bun smoke`/`bun run smoke`
 stack only the repo-root `.env` reaches compose at all). Write that value as
 **milliseconds only** —
 `PG_NAMESPACE_GUARD_TIMEOUT_MS=15000`, never `15s`. A value that is not a positive number is **ignored**: the api logs
@@ -391,7 +391,7 @@ always correct.)
 > runbook, the follow-up verb is `docker compose -p "$RM_PROJECT" up -d`**,
 > never `restart`. Tracked as OPS-610-009 in issue #611.
 >
-> A full `bun run demo` / `bun smoke` re-run also recreates the containers, but
+> A full `bun run smoke` / `bun smoke` re-run also recreates the containers, but
 > it is **not** an equivalent way to apply a changed variable: those two boots
 > filter the environment (see the boxes at the start of this section), so a
 > variable you exported never reaches compose in the first place. Put it in the
@@ -444,7 +444,7 @@ to rediscover:
 
 - **The origin port is `48787` and cannot be anything else** — the single fixed
   host port in the system (`scripts/stack/ports.ts:39`), pinned by
-  `bun run demo:stage`, which fails rather than falls back because the
+  `bun run smoke:stage`, which fails rather than falls back because the
   tunnel routes that port and nothing else.
 - **The tunnel does not close the direct path.** Compose publishes `48787` on
   `0.0.0.0`, so the droplet's public IP answers there too, bypassing Cloudflare.
@@ -452,8 +452,8 @@ to rediscover:
   iptables `DOCKER-USER` rule; `ufw` will not do it, since `docker-proxy`
   publishes past it.
 
-Note also that a pinned-port origin serves a **demo** stack (`RM_ALLOW_INSECURE=1`,
-explicit demo schedules, fixture-backed `/projects`), not a production one — see §5 for
+Note also that a pinned-port origin serves a **smoke** stack (`RM_ALLOW_INSECURE=1`,
+explicit smoke schedules, fixture-backed `/projects`), not a production one — see §5 for
 what a production deployment requires instead.
 
 ### 3.4 Origin CA certificate (for the proxied app subdomains)
@@ -536,7 +536,7 @@ frontend, never committed (`.env` stays gitignored):
   `/projects` directory pipelines fail closed
   (`backend/src/projects/access/select.ts` throws
   `projects pipelines require PROJECTS_SOURCE=live in prod`) rather than serve
-  the vendored fixture directory as production data. Leave unset in demo/dev
+  the vendored fixture directory as production data. Leave unset in smoke/dev
   (offline fixture source); the ephemeral CI env is always hermetic regardless.
 - Any swarm signing secrets as applicable.
 

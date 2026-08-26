@@ -1,6 +1,6 @@
 // One outcome classifier for every member-agent run (docs/architecture.md
 // §11.3 E4/E5, docs/decisions.md D22). Three consumers by design: the retry
-// predicate in runOnboardingEvalWithRetry, the demo's onboarding driver, and
+// predicate in runOnboardingEvalWithRetry, the smoke's onboarding driver, and
 // (when it lands) the layer-4 sampler's scorecard.
 //
 // Env-free: it classifies a STRUCTURAL record plus the container's transcript
@@ -10,11 +10,11 @@
 // here.
 //
 // ── Why `refused` exists, and what evidence it demands ──────────────────────
-// On 2026-07-25 a standing demo run admitted ZERO members: the member agent
+// On 2026-07-25 a standing smoke run admitted ZERO members: the member agent
 // REFUSED the canonical onboarding prompt as a suspicious request, the
 // container exited cleanly (code 0) after ~15 seconds, and all seven observed
-// steps stayed pending. Nothing retried it, and because the demo's newcomer
-// roster is finite (scripts/lib/demo-newcomers.ts) that one refusal permanently
+// steps stayed pending. Nothing retried it, and because the smoke's newcomer
+// roster is finite (scripts/lib/smoke-newcomers.ts) that one refusal permanently
 // forfeited a seat. Every inference-off rail was green throughout — the rails
 // were fine, nobody rode them.
 //
@@ -549,7 +549,7 @@ export function formatOutcomeEvidence(x: OutcomeExplanation): string {
 
 /**
  * The retry DECISION, as a pure function of a CLASSIFIED outcome — no callable,
- * no options, no environment (§11.3 E1/E5). One definition, so the demo's
+ * no options, no environment (§11.3 E1/E5). One definition, so the smoke's
  * wrapper (runOnboardingEvalWithRetry) and the eval's isolated layers cannot
  * drift on what "worth retrying" means, and so the decision stays testable
  * without an injection seam on any eval path.

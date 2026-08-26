@@ -466,7 +466,7 @@ export async function runChecks(db: Db, checker: Checker): Promise<void> {
 export async function main(overrideEnvPath?: string): Promise<number> {
   // --emit-receipt records this run as step P4.preflight-live for where.ts.
   // Opt-in, because runChecks is also called against a restored dump by
-  // restore-check.ts (a DIFFERENT step, Gate C) and against the twin during a
+  // restore-check.ts (a DIFFERENT step, Gate C) and against the smoke-twin during a
   // rehearsal — a receipt claiming "live replica" must only be written by a run
   // that actually was one.
   const emit = process.argv.includes("--emit-receipt");

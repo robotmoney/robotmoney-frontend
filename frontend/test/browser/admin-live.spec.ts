@@ -9,8 +9,8 @@ import { expect, test, type Page } from "@playwright/test";
 // (see backend/src/api/routes/swarm-admin.ts + swarm-overview.js's
 // own header comment: "topics/members list envelopes are keyed `subjects`/
 // `members` (not `items`)"). This spec drives the real admin UI against the
-// LIVE demo backend the required e2e job already boots (scripts/lib/
-// demo-main.ts), with ZERO page.route mocking of any admin endpoint or
+// LIVE smoke backend the required e2e job already boots (scripts/lib/
+// smoke-main.ts), with ZERO page.route mocking of any admin endpoint or
 // executable asset. It lives in its own plain module (not a *.spec.ts file)
 // because Playwright refuses to let one discovered test file import another.
 //
@@ -21,7 +21,7 @@ import { expect, test, type Page } from "@playwright/test";
 // reads matches what the live backend actually sends.
 
 // ── Loud-skip guard (test-coverage-policy.md invariant 1) ──────────────────
-// scripts/lib/demo-main.ts always exports BACKEND_URL + ADMIN_TOKEN into the
+// scripts/lib/smoke-main.ts always exports BACKEND_URL + ADMIN_TOKEN into the
 // spawn env of `bun run test:browser` (the required e2e job's "browser
 // checks" step) — see its `run(["bun","run","test:browser"], …,
 // { ...process.env, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword }, …)`
@@ -35,12 +35,12 @@ if (!BACKEND_URL || !ADMIN_TOKEN) {
     "admin-live.spec.ts requires BACKEND_URL and ADMIN_TOKEN in the environment " +
       "to exercise the live admin backend (test-coverage-policy.md invariant 1: " +
       "loud-skip, never silent-skip) — refusing an all-skip false-green run. " +
-      "Run via `bun run scripts/demo.ts` (or set both env vars manually before " +
+      "Run via `bun run scripts/smoke.ts` (or set both env vars manually before " +
       "`bunx playwright test frontend/test/browser/admin-live.spec.ts`).",
   );
 }
 
-// The demo starts unclaimed so the test itself performs its one-time setup
+// The smoke starts unclaimed so the test itself performs its one-time setup
 // claim. Keep the durable credential distinct from the ephemeral setup token:
 // that is the real lifecycle this spec is meant to exercise, and it means the
 // subsequent live UI requests prove the claimed-password path rather than the
@@ -62,7 +62,7 @@ test.beforeAll(async ({ request }) => {
 
   // `beforeAll` also runs on a Playwright retry. The claim is deliberately
   // idempotent at the test-fixture level: once the first attempt claimed the
-  // demo, retries authenticate with the known durable password instead of
+  // smoke, retries authenticate with the known durable password instead of
   // trying to spend the one-time setup token again.
   const auth = await request.post("/api/admin/auth", {
     headers: { "X-Admin-Token": ADMIN_PASSWORD },
@@ -70,7 +70,7 @@ test.beforeAll(async ({ request }) => {
   expect(auth.ok()).toBe(true);
 });
 
-// The demo harness deliberately uses 127.0.0.1 for its health checks because
+// The smoke harness deliberately uses 127.0.0.1 for its health checks because
 // that avoids a localhost/::1 resolution ambiguity. Chromium's virtual
 // authenticator, however, does not complete ceremonies for an IP-address RP
 // ID. Keep the production harness unchanged and make this browser-only proof
@@ -86,7 +86,7 @@ const WEBAUTHN_LOOPBACK_ORIGIN = (() => {
 async function login(page: Page, origin?: string): Promise<void> {
   await page.goto(origin ? `${origin}/admin` : "/admin");
 
-  // A live demo backend boots unclaimed; the first test to run must claim it,
+  // A live smoke backend boots unclaimed; the first test to run must claim it,
   // and subsequent tests (or a manually claimed backend) just sign in.
   const claimHeading = page.getByRole("heading", { name: "Claim Admin", exact: true });
   const signInHeading = page.getByRole("heading", { name: "Sign in", exact: true });
@@ -260,7 +260,7 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
   } else {
     // Deliberately NOT asserting an exact alert message string here.
     // backend/src/admin/overview.ts derives each alert's level/message from
-    // regime.classify / research.refresh's live run status, and this demo
+    // regime.classify / research.refresh's live run status, and this smoke
     // environment's schedules fire on a ~2min cron — so "regime.classify
     // last run: not_run" can flip to a real timestamp/result mid-test, on a
     // different alert each run. The alert *count* is structurally stable

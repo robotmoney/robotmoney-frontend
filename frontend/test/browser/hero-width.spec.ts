@@ -11,8 +11,8 @@
 // It runs through the SPA router with the same harness as spa.spec.ts (vendor
 // CDN scripts fulfilled from node_modules; the backend serves index.html for
 // any client route, see backend/src/api/index.ts) and is picked up
-// automatically by the required e2e CI job (scripts/lib/demo-main.ts runs the
-// full `bun run test:browser` suite against the demo backend).
+// automatically by the required e2e CI job (scripts/lib/smoke-main.ts runs the
+// full `bun run test:browser` suite against the smoke backend).
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 

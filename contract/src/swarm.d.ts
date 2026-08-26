@@ -10,7 +10,7 @@ export type Stance = "bearish" | "cautious" | "neutral" | "constructive" | "bull
 /** Canonical stance vocabulary, ASCENDING (most bearish → most bullish). */
 export const STANCES: readonly ["bearish", "cautious", "neutral", "constructive", "bullish"];
 
-/** Fixed target size for the standing demo swarm roster. */
+/** Fixed target size for the standing smoke swarm roster. */
 export const SWARM_ROSTER_CAP: number;
 
 /**
@@ -22,11 +22,11 @@ export const SWARM_TAKE_REVISION_CAP: number;
 /** Demo no-show rule: the curated set of habitual no-show member ids. */
 export const DEMO_NO_SHOWS: readonly string[];
 
-/** Whether a demo swarm member attends a session (the demo no-show rule). */
+/** Whether a smoke swarm member attends a session (the smoke no-show rule). */
 export function demoAttends(memberId: string): boolean;
 
 /**
- * Deterministic demo stance derivation from the regime composite plus a
+ * Deterministic smoke stance derivation from the regime composite plus a
  * member's directional bias (the hermetic no-LLM authoring path).
  */
 export function stanceFor(composite: number, bias?: number): { stance: Stance; confidence: number };
@@ -280,7 +280,7 @@ export interface SwarmSession {
   subjectId: string;
   subjectName: string | null;
   // "cancelled" (issue #152) is reachable via the admin surface's guarded
-  // lifecycle transitions (swarm/admin.ts); the pre-#152 demo/worker path
+  // lifecycle transitions (swarm/admin.ts); the pre-#152 smoke/worker path
   // never sets it.
   state: "scheduled" | "collecting" | "window_closed" | "aggregated" | "published" | "cancelled";
   windowClosesAt: string | null;

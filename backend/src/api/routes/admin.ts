@@ -8,7 +8,7 @@
 // PRIVILEGED with the same guard the swarm/projects admin routes use: if
 // ADMIN_TOKEN is set, require it as X-Admin-Token (constant-time compared, works
 // in every env incl. a public box); if unset, allow only outside prod
-// (config.allowInsecure — demo/ephemeral convenience). Fail-closed: prod with no
+// (config.allowInsecure — smoke/ephemeral convenience). Fail-closed: prod with no
 // token → 403, checked BEFORE any DB work or body parsing on every owned route.
 import { randomUUID } from "node:crypto";
 import { config as globalConfig } from "../../config.ts";
@@ -168,8 +168,8 @@ export async function handleAdmin(
   }
 
   // GET /api/admin/is-claimed — public claim-status probe: { claimed: boolean },
-  // booleans only, never the hash (issue #553 / D32). The demo boot
-  // (scripts/lib/demo-main.ts) reads this to decide whether the per-boot token
+  // booleans only, never the hash (issue #553 / D32). The smoke boot
+  // (scripts/lib/smoke-main.ts) reads this to decide whether the per-boot token
   // may still be displayed in the TUI. A DB failure propagates to the router's
   // sanitized 500 — never a fabricated "unclaimed".
   if (m === "GET" && p === "/api/admin/is-claimed") {
@@ -486,7 +486,7 @@ export async function handleAdmin(
           return {
             status: 409,
             body: {
-              error: "legacy/demo swarm schedule — not product scheduling; cannot be toggled",
+              error: "legacy/smoke swarm schedule — not product scheduling; cannot be toggled",
               code: "invalid_transition",
             },
           };

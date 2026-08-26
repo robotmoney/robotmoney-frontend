@@ -6,7 +6,7 @@ test("regime producer uses the caller's explicit stack coordinates", async () =>
     repoRoot: "/worktrees/feature",
     composeProject: "explicit-project",
     composeFiles: ["docker-compose.yml", "feature-overlay.yml"],
-    composeSpawnEnv: { DEMO_PROJECT: "explicit-project", COMPOSE_SENTINEL: "explicit" },
+    composeSpawnEnv: { SMOKE_PROJECT: "explicit-project", COMPOSE_SENTINEL: "explicit" },
     backendUrl: "http://127.0.0.1:49123",
   };
   const calls: Array<{ rail: ProducerComposeRail; asof: string }> = [];

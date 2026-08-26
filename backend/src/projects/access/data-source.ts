@@ -3,7 +3,7 @@
 // interface and hand them to the pure transforms (projects/transforms.ts). Two
 // implementations back it:
 //   - fixtureProjectsDataSource (access/fixture-source.ts): serves vendored,
-//     deterministic, NETWORK-FREE payloads. Selected under CI/tests/demo so the
+//     deterministic, NETWORK-FREE payloads. Selected under CI/tests/smoke so the
 //     per-PR suite is hermetic (no test opens a live socket).
 //   - liveProjectsDataSource (access/live-source.ts): hits the real keyed/keyless
 //     providers (CoinGecko, DexScreener, Base RPC). Selected ONLY when a deployer

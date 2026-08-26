@@ -383,7 +383,7 @@ describe("the admin manual-add request takes no member id (issue #690)", () => {
 
   test("addMemberAdmin mints the id itself, and the shared register parser is a SEPARATE function", () => {
     // `crypto.randomUUID()` inside addMemberAdmin is the whole fix; the split
-    // parser is what stops it being undone by the demo/E2E register route,
+    // parser is what stops it being undone by the smoke/E2E register route,
     // which legitimately still takes a caller-supplied id.
     const addMember = backendSource.slice(backendSource.indexOf("export async function addMemberAdmin("));
     expect(addMember.slice(0, addMember.indexOf("\nexport "))).toContain("crypto.randomUUID()");

@@ -1,13 +1,13 @@
 // WHAT `bun smoke` IS, as data — the pure half of the smoke boot (issue #537).
 //
-// `bun smoke` and `bun demo` use the same stack, cache policy, readiness,
+// `bun smoke` and `bun smoke` use the same stack, cache policy, readiness,
 // session engine, assertions boundary and cleanup. Only scenario initialization
-// differs: demo seeds simulation schedules/projects/subjects/members; smoke
+// differs: smoke seeds simulation schedules/projects/subjects/members; smoke
 // restores the production archive and reconnects its committed IC identities.
 //
 // Every one of those is a DECISION, not I/O, so it lives here and is executed
-// directly by scripts/tests/unit/smoke-mode.test.ts rather than grepped out of
-// scripts/lib/demo-main.ts. demo-main.ts holds only the wiring.
+// directly by  rather than grepped out of
+// scripts/lib/smoke-main.ts. smoke-main.ts holds only the wiring.
 //
 // NOT in scope here (issue #537's "Out of scope"): the archive import pipeline,
 // storage and read paths (#498/#499 own those), the production live-roster
@@ -20,7 +20,7 @@ import { demoAttends } from "@robotmoney/contract";
 /** The one argv flag that selects a smoke boot. */
 export const SMOKE_MODE_FLAG = "--smoke";
 
-/** Is this argv a smoke boot? (`bun smoke` → `bun scripts/demo.ts --smoke`.) */
+/** Is this argv a smoke boot? (`bun smoke` → `bun scripts/smoke.ts --smoke`.) */
 export function isSmokeMode(argv: readonly string[]): boolean {
   return argv.includes(SMOKE_MODE_FLAG);
 }
@@ -31,18 +31,18 @@ export function isSmokeMode(argv: readonly string[]): boolean {
  * A production-shaped boot must not carry the project seed switch. Frozen so
  * a caller cannot smuggle a key back in at runtime.
  *
- * The normal-demo counterpart stays spelled out at the `stack.up` call site in
- * scripts/lib/demo-main.ts (the wiring guard in
- * scripts/tests/integration/demo-compose-config.test.ts pins it there).
+ * The normal-smoke counterpart stays spelled out at the `stack.up` call site in
+ * scripts/lib/smoke-main.ts (the wiring guard in
+ * scripts/tests/integration/smoke-compose-config.test.ts pins it there).
  */
 export const SMOKE_MIGRATE_ENV: Readonly<Record<string, string>> = Object.freeze({});
 
-/** Project seeding is the only normal-demo migration environment setting. */
+/** Project seeding is the only normal-smoke migration environment setting. */
 export const DEMO_MIGRATE_ENV: Readonly<Record<string, string>> =
-  Object.freeze({ DEMO_SEED_PROJECTS: "1" });
+  Object.freeze({ SMOKE_SEED_PROJECTS: "1" });
 
 /** Demo schedules are an explicit migration action, not environment state. */
-export const DEMO_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze(["--seed-demo-schedules"]);
+export const DEMO_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze(["--seed-smoke-schedules"]);
 export const SMOKE_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze([]);
 
 export interface ScenarioSubject { id: string; name: string }
@@ -54,9 +54,9 @@ export interface ScenarioMember {
   present: boolean;
 }
 export type ScenarioInitializer = "simulation" | "archive";
-export type ScenarioAssertion = "demo" | "archive-continuity";
+export type ScenarioAssertion = "smoke" | "archive-continuity";
 export interface ScenarioPlan {
-  kind: "demo" | "smoke";
+  kind: "smoke" | "smoke";
   initializer: ScenarioInitializer;
   migrateEnv: Readonly<Record<string, string>>;
   migrateScriptArgs: readonly string[];
@@ -78,7 +78,7 @@ export const DEMO_MEMBERS: readonly ScenarioMember[] = Object.freeze([
 ]);
 
 /** The boot-step names the TUI/step list carries, per mode. Smoke runs ONE
- *  bootstrap step (the production orchestrator); the demo runs its two. */
+ *  bootstrap step (the production orchestrator); the smoke runs its two. */
 export function bootstrapStepNames(smoke: boolean): readonly string[] {
   return smoke ? ["archive restore"] : ["simulation seed"];
 }
@@ -101,7 +101,7 @@ export const SMOKE_SUBJECTS: readonly { id: string; name: string }[] = Object.fr
  * the ONLY members a smoke session may seat.
  *
  * This is an allowlist, not a cap: a persistent database can carry members from
- * an earlier demo boot or from a real onboarding, and a smoke boot must seat
+ * an earlier smoke boot or from a real onboarding, and a smoke boot must seat
  * NONE of them. Their names are the archive's own (the archive's `woon` is
  * displayed as "Noop analyst" after import), so the list is a fact about the
  * archive rather than a preference.
@@ -136,13 +136,13 @@ export function scenarioPlan(smoke: boolean): ScenarioPlan {
         runsNewcomerOnboarding: false,
       }
     : {
-        kind: "demo",
+        kind: "smoke",
         initializer: "simulation",
         migrateEnv: DEMO_MIGRATE_ENV,
         migrateScriptArgs: DEMO_MIGRATE_SCRIPT_ARGS,
         subjects: DEMO_SUBJECTS,
         members: DEMO_MEMBERS,
-        assertion: "demo",
+        assertion: "smoke",
         runsNewcomerOnboarding: true,
       };
 }
@@ -236,7 +236,7 @@ export async function runScenarioLifecycle<Context, SessionResult>(
  *
  * Never under smoke: the release topology shows the RESTORED committee, and an
  * invented newcomer joining it is the one thing a production-shaped boot must
- * not show. `bun demo` is unchanged.
+ * not show. `bun smoke` is unchanged.
  */
 export function runsNewcomerOnboarding(smoke: boolean): boolean {
   return !smoke;

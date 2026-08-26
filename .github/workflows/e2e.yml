@@ -1,12 +1,12 @@
 # End-to-end tier of the test pyramid: stands up the full stack (api + worker +
-# postgres via docker compose) and drives the demo lifecycle end to end
+# postgres via docker compose) and drives the smoke lifecycle end to end
 # against LIVE external providers (issue #147: DEMO_HERMETIC and the stubbed
-# demo path were removed entirely — this required gate now boots the SAME
-# production-parity LIVE data path `bun run demo` always resolves, and every
+# smoke path were removed entirely — this required gate now boots the SAME
+# production-parity LIVE data path `bun run smoke` always resolves, and every
 # PR's merge gate depends on live upstreams: public Base mainnet RPC,
 # FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR. This is a deliberate,
 # owner-approved architecture decision — issue #163 — that trades required-CI
-# determinism for proving the demo's real, product-parity behavior on every
+# determinism for proving the smoke's real, product-parity behavior on every
 # PR; expect this job to run slower and be occasionally flakier against live
 # upstreams than the old hermetic boot was. A genuinely-unreachable external
 # provider after real retries is a legitimate external blocker, not a bug in
@@ -20,9 +20,9 @@
 #     ready re-triggers the workflow (default PR types would not).
 #   - the job `if:` guard skips the run while the PR is still a draft.
 #   - `paths-ignore: ['**.md','**.txt']` bypasses this code check on docs-only PRs.
-# A NIGHTLY SCHEDULE IS ADDED HERE (issue #373), and demo-live-smoke-nightly.yml
+# A NIGHTLY SCHEDULE IS ADDED HERE (issue #373), and smoke-live-smoke-nightly.yml
 # is retired. That nightly booted the same LIVE stack and ran the same
-# scripts/demo-live-smoke.ts assertions this job does; its own header said its
+# scripts/smoke-live-smoke.ts assertions this job does; its own header said its
 # "only distinguishing input is the schedule". Now that this workflow carries
 # that schedule, keeping it would have been the pure duplication it was written
 # to avoid. Nightly is a MIRROR of the merge-to-main set, not a second set —
@@ -39,7 +39,7 @@
 #     reaches the swarm REST API over the compose network, a signed apply
 #     lands through POST /api/swarm/apply — without spending a model
 #     token. It moved to its own workflow because it brings up its own minimal
-#     stack (postgres + api only) and never needed this job's full LIVE demo
+#     stack (postgres + api only) and never needed this job's full LIVE smoke
 #     boot; nothing about the check ITSELF changed.
 #   - PUSH TO MAIN: the REAL-INFERENCE onboarding eval — one vanilla OpenCode
 #     member-agent container navigating our own onboarding docs end to end via a
@@ -64,7 +64,7 @@
 # OPTING ONE PR IN — add the label `real-eval` to the pull request. That is the
 # whole procedure: `pull_request.types` below includes `labeled`, so adding it
 # re-triggers this workflow immediately (no push, no re-run needed), and
-# ONBOARDING_REAL_EVAL on the "Full-stack demo" step resolves to "1" for that
+# ONBOARDING_REAL_EVAL on the "Full-stack smoke" step resolves to "1" for that
 # run and every later run of the PR while the label is still attached. Remove
 # the label to go back to zero model spend. Two guards keep the opt-in from
 # leaking cost:
@@ -97,7 +97,7 @@
 # it did not, and how to opt this PR in.
 #
 # Two things the NON-PR path accounts for, not ignores:
-#   (a) This self-hosted runner shares its IP with the standing rm_demo_* demo
+#   (a) This self-hosted runner shares its IP with the standing rm_smoke_* smoke
 #       stack, which has caused 429 rate-limit flake on other live-call gates
 #       before, and the free tier is documented as slower/more variable than a
 #       paid one. scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry
@@ -173,7 +173,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() for the real-inference
-      # eval inside "Full-stack demo" below. The infra-rails check that used to
+      # eval inside "Full-stack smoke" below. The infra-rails check that used to
       # share this cache moved to onboarding-eval-rails.yml (issue #275
       # addendum); its "Cache rmpc release binary" step uses the SAME cache key
       # pattern, so GitHub Actions' cross-workflow cache sharing (scoped by key,
@@ -207,8 +207,8 @@ jobs:
       # D21 retired the mcp/ package — no separate MCP install/typecheck/test
       # steps. The swarm surface is the api's REST API; the swarm
       # session driver (scripts/lib/swarm/session.ts) is covered by the
-      # root typecheck + the "Full-stack demo" step below.
-      # Needed BEFORE "Full-stack demo" (issue #108): scripts/lib/demo-main.ts
+      # root typecheck + the "Full-stack smoke" step below.
+      # Needed BEFORE "Full-stack smoke" (issue #108): scripts/lib/smoke-main.ts
       # now spawns backend/scripts/edgar-seed-bootstrap.ts as a host-side
       # subprocess (cwd: backend/) after API health, which needs backend's own
       # node_modules (@robotmoney/contract) resolvable on this runner — the api
@@ -217,10 +217,10 @@ jobs:
       - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
         working-directory: backend
         run: bun install --frozen-lockfile
-      # Needed BEFORE "Full-stack demo" (issue #301): scripts/lib/swarm/
+      # Needed BEFORE "Full-stack smoke" (issue #301): scripts/lib/swarm/
       # inference.ts's runOpencode() Bun.spawn()s the bare `opencode` binary
       # HOST-SIDE (scripts/lib/swarm/session.ts runs as a runner subprocess,
-      # not inside a container) for every swarm session the demo boots —
+      # not inside a container) for every swarm session the smoke boots —
       # there is no template fallback anymore, so a runner without this CLI on
       # PATH fails the required gate loudly instead of degrading. This is a
       # DIFFERENT consumer than scripts/lib/member-agent/Dockerfile's baked-in
@@ -246,9 +246,9 @@ jobs:
       # === Onboarding eval (Stage 7, §11 R8) ===
       # The inference-off infra-rails check (Stage 5's test) that used to run
       # here moved to .github/workflows/onboarding-eval-rails.yml (issue #275
-      # addendum) — it never needed this job's full LIVE demo boot, only its
+      # addendum) — it never needed this job's full LIVE smoke boot, only its
       # own minimal postgres+api stack. The steps below remain because the
-      # REAL-INFERENCE eval further down (inside "Full-stack demo") also needs
+      # REAL-INFERENCE eval further down (inside "Full-stack smoke") also needs
       # the rmpc binary, and reuses THIS already-booted stack rather than
       # standing up a second one.
       - name: Resolve pinned rmpc release version (cache key)
@@ -261,7 +261,7 @@ jobs:
       # scripts/lib/rmpc-fetch.ts): avoids re-downloading a GitHub Releases
       # asset on every PR run for a binary that only changes when RMPC_VERSION
       # is bumped. Consumed by RMPC_CACHE_DIR (job-level env above) inside the
-      # real-inference eval nested in "Full-stack demo" below. The SAME cache
+      # real-inference eval nested in "Full-stack smoke" below. The SAME cache
       # key pattern is used by onboarding-eval-rails.yml's identical step, so
       # the underlying GitHub Actions cache entry is shared across both
       # workflows even though each computes its own local RMPC_CACHE_DIR path.
@@ -282,7 +282,7 @@ jobs:
       # original job: resolve whether the funded key is reachable, and say so.
       #
       # REAL_EVAL_REQUESTED below MUST stay textually identical to
-      # ONBOARDING_REAL_EVAL on the "Full-stack demo" step — one expression, two
+      # ONBOARDING_REAL_EVAL on the "Full-stack smoke" step — one expression, two
       # consumers — so this notice can never claim the eval was skipped on a run
       # that in fact spent one, or vice versa. Asserted by
       # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts.
@@ -296,7 +296,7 @@ jobs:
         run: |
           if [ "$REAL_EVAL_REQUESTED" = "1" ]; then
             if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_ZEN_KEY" = "true" ]; then
-              MSG="§11 R8 real-inference onboarding eval: RUNNING on the funded default model (trusted context, OPENCODE_API_KEY configured) as part of the Full-stack demo step below. Requested by: push to main, the 'real-eval' pull-request label, or workflow_dispatch with real_eval=true — whichever triggered this run."
+              MSG="§11 R8 real-inference onboarding eval: RUNNING on the funded default model (trusted context, OPENCODE_API_KEY configured) as part of the Full-stack smoke step below. Requested by: push to main, the 'real-eval' pull-request label, or workflow_dispatch with real_eval=true — whichever triggered this run."
             else
               MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is funded (D22 as amended), so the eval will fail loudly rather than silently degrade. Configure the OPENCODE_API_KEY secret, or set AGENT_MODEL=free to run keyless."
             fi
@@ -308,19 +308,19 @@ jobs:
           echo "$MSG"
           echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
 
-      # === Demo readiness gate ===
-      # This boot-and-check step block IS the "demo readiness" gate. It boots the
-      # full LIVE demo stack (issue #147: no hermetic mode exists anymore — every
+      # === Smoke readiness gate ===
+      # This boot-and-check step block IS the "smoke readiness" gate. It boots the
+      # full LIVE smoke stack (issue #147: no hermetic mode exists anymore — every
       # boot resolves live external providers) and runs the loud-failure guards
-      # that keep broken demos off main: scripts/demo-frontend-check.ts (core-surface
-      # detector), `test:browser` (Playwright), and scripts/demo-live-smoke.ts
+      # that keep broken smokes off main: scripts/smoke-frontend-check.ts (core-surface
+      # detector), `test:browser` (Playwright), and scripts/smoke-live-smoke.ts
       # (issue #128's LIVE steady-state assertions — reused as-is, not re-authored:
       # >=2 published swarm sessions, fresh regime snapshot, live wallet/vault
       # provenance with only the documented #120 degrades, both research signals
-      # landed). scripts/demo-frontend-check.ts's own loud-failure path is itself
-      # self-tested by scripts/tests/integration/demo-frontend-check.test.ts (run in the required
+      # landed). scripts/smoke-frontend-check.ts's own loud-failure path is itself
+      # self-tested by scripts/tests/integration/smoke-frontend-check.test.ts (run in the required
       # `integration` job), which proves it exits non-zero when a core surface marker
-      # is stripped and 0 against correct content. See docs/architecture.md §"Demo
+      # is stripped and 0 against correct content. See docs/architecture.md §"Smoke
       # readiness gate". The job id below stays `e2e` so branch protection's existing
       # required-status-check mapping is unaffected.
       # Was useblacksmith/setup-docker-builder@v1, which provisions Blacksmith's
@@ -329,23 +329,23 @@ jobs:
       # infrastructure behind it any more.
       - name: Set up Docker builder
         uses: docker/setup-buildx-action@v3
-      - name: Full-stack demo (demo readiness gate)
-        run: bun run scripts/demo.ts
+      - name: Full-stack smoke (smoke readiness gate)
+        run: bun run scripts/smoke.ts
         env:
           CI: "true"
-          # Pin a deterministic, per-run compose project name (issue: demo
+          # Pin a deterministic, per-run compose project name (issue: smoke
           # persistent volumes). Teardown now keeps the postgres volume by default,
           # so this required boot on the SHARED self-hosted runner must reclaim its
           # OWN volume and no one else's. A pinned name makes the volume label
-          # (robotmoney.demo.project=<this>) unique per run+attempt, so both the
-          # in-process cleanup (demo-main.ts cleanCiVolume) and the always() backstop
+          # (robotmoney.smoke.project=<this>) unique per run+attempt, so both the
+          # in-process cleanup (smoke-main.ts cleanCiVolume) and the always() backstop
           # step below can scope the delete to exactly this run — never the co-tenant
-          # standing demo. run_attempt makes reruns collision-free.
+          # standing smoke. run_attempt makes reruns collision-free.
           #
           # The `rm_ci_` prefix is the CI half of the environment-scoped naming
           # scheme (scripts/stack/naming.ts, CI_PROJECT_PREFIX) — the single fact
           # a reaper needs before it touches anything on this shared host: a
-          # `rm_demo_*` container belongs to the standing stage demo or to an
+          # `rm_smoke_*` container belongs to the standing stage smoke or to an
           # operator's shell and must never be swept by CI. Spelled from the
           # GitHub context rather than left to the helper's default because the
           # `always()` teardown step below has to name the same project from
@@ -353,7 +353,7 @@ jobs:
           # here carry the prefix. Every container ALSO carries
           # robotmoney.env=ci + robotmoney.env.hash labels from the helper, which
           # is the channel tooling should select on.
-          DEMO_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
+          SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
           # Swarm takes are always live-authored through opencode. A missing
           # credential, CLI, or model response fails this required gate loudly;
           # there is no deterministic memo fallback.
@@ -362,7 +362,7 @@ jobs:
           # mainnet JSON-RPC (vault-economics eth_call reads), and the keyless
           # analytics/research fetchers (FRED/Coin Metrics/GeckoTerminal/Yahoo/
           # EDGAR). A required credential or provider that is unreachable fails
-          # this job loudly (scripts/lib/demo-env.ts / the api's own startup
+          # this job loudly (scripts/lib/smoke-env.ts / the api's own startup
           # checks) — never a silent fallback to a fixture or stub. Expect this
           # job to run longer and be occasionally flakier against live upstreams
           # than the retired hermetic boot was — an accepted, deliberate
@@ -379,7 +379,7 @@ jobs:
           # nightly `schedule` mirror of THIS workflow (04:37 UTC — issue #373
           # retired swarm-opencode-nightly.yml, which used to hold that
           # slot) owns the trend measurement, one admission a night, recorded to
-          # the job summary and an artifact. demo-main.ts reads ONBOARDING_REAL_EVAL ===
+          # the job summary and an artifact. smoke-main.ts reads ONBOARDING_REAL_EVAL ===
           # "1"; empty is simply "off". When it IS on, it runs the funded
           # default model (D22 as amended). OPENCODE_API_KEY below is injected
           # ONLY into the short-lived member-agent container
@@ -415,26 +415,26 @@ jobs:
         # truncation from the eval to the job, which reports as an infra kill
         # rather than the honest `timed-out` outcome.
         timeout-minutes: 105
-      # Stack-leak backstop (issue: demo persistent volumes; hardened after e2e
-      # run 30406428674). The demo boot above tears its own stack down on both
+      # Stack-leak backstop (issue: smoke persistent volumes; hardened after e2e
+      # run 30406428674). The smoke boot above tears its own stack down on both
       # success and failure. This always() step is the belt-and-suspenders case:
       # if the boot step is KILLED (the timeout above, or a job cancellation) it
       # never reaches its own teardown, so tear down here too.
       #
-      # THE ORDER IS THE FIX. This step used to run demo-clean ALONE, which
+      # THE ORDER IS THE FIX. This step used to run smoke-clean ALONE, which
       # removes VOLUMES only. Run 30406428674 was cancelled mid-boot, its
-      # containers survived, so its volume was in use, so demo-clean loudly
+      # containers survived, so its volume was in use, so smoke-clean loudly
       # skipped it — and exited 0. The step reported SUCCESS over a live leak,
       # and the surviving api container held :48787 (the cloudflared origin for
       # stage.robotmoney-labs.dev) for over an hour. `compose down` must come
-      # FIRST so the volume is unreferenced by the time demo-clean reaches it;
-      # demo-clean now also EXITS NON-ZERO on an in-use skip when --project is
-      # given (scripts/demo-clean.ts's header), so this step can no longer be
+      # FIRST so the volume is unreferenced by the time smoke-clean reaches it;
+      # smoke-clean now also EXITS NON-ZERO on an in-use skip when --project is
+      # given (scripts/smoke-clean.ts's header), so this step can no longer be
       # green while a leak survives.
       #
-      # Strictly scoped to THIS run: `-p "$DEMO_PROJECT"` (byte-identical to the
-      # boot step's DEMO_PROJECT above) and the same project label on the volume.
-      # This runner is shared with the standing stage demo, which must never be
+      # Strictly scoped to THIS run: `-p "$SMOKE_PROJECT"` (byte-identical to the
+      # boot step's SMOKE_PROJECT above) and the same project label on the volume.
+      # This runner is shared with the standing stage smoke, which must never be
       # touched — hence no bare `docker compose down`, no `docker system prune`,
       # no name globbing. `--remove-orphans` is what kills the dynamically
       # spawned member-agent eval containers that the compose model does not
@@ -443,12 +443,12 @@ jobs:
       # WEB_PORT / POSTGRES_PORT are placeholders purely to satisfy compose
       # INTERPOLATION: docker-compose.yml's port lines are `${VAR:?…}` and refuse
       # to resolve without a value (c0d34f4). `down` publishes nothing, so the
-      # numbers only have to exist — same trick scripts/demo-down.ts uses. The
+      # numbers only have to exist — same trick scripts/smoke-down.ts uses. The
       # `|| true` is deliberate: a compose-down failure must not skip the
-      # demo-clean verdict below, which is the step's actual gate.
+      # smoke-clean verdict below, which is the step's actual gate.
       # ── The admission RECORD (issue #373) ─────────────────────────────────
       # Reporting on the admission that ALREADY ran — no new harness, no
-      # sampling loop, no second stack bring-up. scripts/lib/demo-main.ts
+      # sampling loop, no second stack bring-up. scripts/lib/smoke-main.ts
       # classifies the run with the existing scripts/agent/classify-outcome.ts
       # and writes onboarding-admission-record.md (outcome, resolved model id,
       # duration, member id, agent-liveness counts) BEFORE it throws, so a RED
@@ -477,18 +477,18 @@ jobs:
           path: onboarding-admission-record.md
           if-no-files-found: ignore
           retention-days: 90
-      - name: Tear down this run's demo stack (no leaks on the shared runner)
+      - name: Tear down this run's smoke stack (no leaks on the shared runner)
         if: always()
         run: |
           set -u
-          echo "::group::docker compose -p $DEMO_PROJECT down -v --remove-orphans"
-          docker compose -p "$DEMO_PROJECT" \
-            -f docker-compose.yml -f docker-compose.demo.yml \
-            down -v --remove-orphans || echo "compose down exited non-zero — demo-clean below is the gate"
+          echo "::group::docker compose -p $SMOKE_PROJECT down -v --remove-orphans"
+          docker compose -p "$SMOKE_PROJECT" \
+            -f docker-compose.yml -f docker-compose.smoke.yml \
+            down -v --remove-orphans || echo "compose down exited non-zero — smoke-clean below is the gate"
           echo "::endgroup::"
-          bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"
+          bun run scripts/smoke-clean.ts --project "$SMOKE_PROJECT"
         env:
-          DEMO_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
+          SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
           WEB_PORT: "1"
           POSTGRES_PORT: "1"
       # Cross-run orphan reaper (the third gap behind run 30406428674): even a
@@ -496,12 +496,12 @@ jobs:
       # teardown was killed outright leaked forever. This host had accumulated
       # containers up to four days old. Selection is by the robotmoney.env LABEL
       # (c0d34f4), pinned to `ci` — it can therefore never match `robotmoney.env
-      # =local`, i.e. the standing stage demo or an operator's shell — and the
+      # =local`, i.e. the standing stage smoke or an operator's shell — and the
       # 6h threshold is comfortably longer than this job's own 105-minute
       # ceiling, so no live CI run can reap another's stack. The reaper's own G3
       # guard additionally excludes this job's env hash. Full guard rationale in
-      # scripts/lib/demo-reap.ts; assertions in
-      # scripts/tests/unit/demo-reap.test.ts.
+      # scripts/lib/smoke-reap.ts; assertions in
+      # scripts/tests/unit/smoke-reap.test.ts.
       #
       # Non-blocking on purpose: clearing a PRIOR run's orphan is housekeeping,
       # not a defect in THIS PR, so it must not turn someone else's leak into
@@ -510,4 +510,4 @@ jobs:
       - name: Reap CI container leftovers from prior runs
         if: always()
         continue-on-error: true
-        run: bun run scripts/demo-reap.ts --env-class ci --older-than 6h
+        run: bun run scripts/smoke-reap.ts --env-class ci --older-than 6h

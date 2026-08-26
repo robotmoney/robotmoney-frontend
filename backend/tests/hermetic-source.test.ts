@@ -22,7 +22,7 @@ afterEach(() => { globalThis.fetch = realFetch; });
 
 function banNetwork() {
   globalThis.fetch = (() => {
-    throw new Error("network call attempted in hermetic demo/e2e path");
+    throw new Error("network call attempted in hermetic smoke/e2e path");
   }) as unknown as typeof fetch;
 }
 
@@ -56,10 +56,10 @@ test("hermeticDataSource is deterministic (same series across runs)", async () =
   expect(JSON.stringify(a)).toBe(JSON.stringify(b));
 });
 
-// The demo/e2e proof: the FULL orchestrator run (the exact path the demo drives
+// The smoke/e2e proof: the FULL orchestrator run (the exact path the smoke drives
 // via /swarm/admin/regime) completes offline + persists real-shaped rows when
 // fed the hermetic source — with the network hard-banned for the whole run.
-test("runAnalytics(hermetic) persists regime + research OFFLINE (demo/e2e path)", async () => {
+test("runAnalytics(hermetic) persists regime + research OFFLINE (smoke/e2e path)", async () => {
   const ASOF = new Date().toISOString().slice(0, 10);
   await sql`DELETE FROM raw_indicator_history`;
   await sql`DELETE FROM research_signals WHERE date = ${ASOF}`;
@@ -90,13 +90,13 @@ test("runAnalytics(hermetic) persists regime + research OFFLINE (demo/e2e path)"
 }, { timeout: 120_000 });
 
 // The single source knob (issue #13): ANALYTICS_SOURCE is authoritative.
-//   unset/""/"live" → live (prod default + explicit demo opt-in)
-//   "hermetic"      → hermetic (CI + demo default)
+//   unset/""/"live" → live (prod default + explicit smoke opt-in)
+//   "hermetic"      → hermetic (CI + smoke default)
 //   anything else   → REFUSED loudly (fail-closed; no silent live-network fallthrough)
 test("resolveAnalyticsSource: live is default + explicit opt-in, hermetic opt-out, bad value fails closed", () => {
   const prev = process.env.ANALYTICS_SOURCE;
   try {
-    // hermetic opt-out (CI/demo default)
+    // hermetic opt-out (CI/smoke default)
     process.env.ANALYTICS_SOURCE = "hermetic";
     expect(resolveAnalyticsSource()).toBe(hermeticDataSource);
 
@@ -108,7 +108,7 @@ test("resolveAnalyticsSource: live is default + explicit opt-in, hermetic opt-ou
     process.env.ANALYTICS_SOURCE = "";
     expect(resolveAnalyticsSource()).toBe(liveDataSource);
 
-    // explicit live opt-in (the demo showcase switch)
+    // explicit live opt-in (the smoke showcase switch)
     process.env.ANALYTICS_SOURCE = "live";
     expect(resolveAnalyticsSource()).toBe(liveDataSource);
 

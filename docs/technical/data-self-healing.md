@@ -1295,7 +1295,7 @@ C**, which is out of scope here on **cost** grounds and not impossibility (§6.3
 PD6) and is separately gated on PD1; backfilling `source` on the pre-`0024` NULL
 rows; the six persisted series carrying no provenance column at all, and
 `swarm/domain.ts:1285`'s synthetic `regime_snapshots` rows written with no
-`source` in demo and stage *(both inherited from the draft; **unverified** here)*;
+`source` in smoke and stage *(both inherited from the draft; **unverified** here)*;
 unifying the four provenance vocabularies or adding CHECK constraints to them
 (§12); and any change to v0 (`agentjuno/robotmoney`).
 
@@ -2352,7 +2352,7 @@ service's block (`docker-compose.yml:170`) says so in its own comment
 (`:170-177`): there is no `env_file:` in any compose file and `backend/Dockerfile`
 sets no `ENV`, so **a variable not named there never reaches the container.**
 That premise is asserted rather than assumed —
-`scripts/tests/integration/demo-compose-config.test.ts:520-529` greps all three
+`scripts/tests/integration/smoke-compose-config.test.ts:520-529` greps all three
 compose files for `env_file:` and the Dockerfile for `^ENV `, requiring `false`
 for all four. **#641** records that roughly twenty variables read by
 `backend/src/config.ts` sit in that undeliverable bucket, and **#643** proposes
@@ -2707,7 +2707,7 @@ date→block arithmetic (2s blocks, 43200/day, ≤8 calls per date) — all are
 Verified for §10.1 in this checkout on 2026-08-15: the compose allowlist premise
 (no `env_file:` in any of the three compose files, no `ENV` in
 `backend/Dockerfile`) and its guard test at
-`demo-compose-config.test.ts:520-529`; the `BUYBACK_FROM_BLOCK` `NaN` path
+`smoke-compose-config.test.ts:520-529`; the `BUYBACK_FROM_BLOCK` `NaN` path
 through `buyback-logs.ts:215`, `:216`, `:242-245` and `:253`; the five
 `STRATEGY_VAULT_*_ADDRESS` keys and the empty-by-default
 `resolveStrategyVaults()`; and the unconditional `{ ok: true }` for the `config`

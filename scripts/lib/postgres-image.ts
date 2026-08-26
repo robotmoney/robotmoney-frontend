@@ -6,11 +6,11 @@
 //      because they need a genuine pre-migration baseline
 //      (admin-surface-migration, swarm-briefs-session-key-migration,
 //      swarm-member-handle-migration, swarm-member-handle-namespace-migration).
-//   2. The rollout tooling's digital twin — scripts/lib/restore-container.ts,
+//   2. The rollout tooling's digital smoke-twin — scripts/lib/restore-container.ts,
 //      which restores a real production dump for restore-check.ts and
 //      stage-rehearsal.ts.
 //
-// NOT the demo/single-box compose stack (docker-compose.yml's `postgres`
+// NOT the smoke/single-box compose stack (docker-compose.yml's `postgres`
 // service). That one carries a persistent `pgdata` volume and a documented
 // `--pg-data` resume contract, so its major cannot be changed by editing a
 // string — a running data directory is not readable by a different major. It
@@ -47,11 +47,11 @@ export const POSTGRES_MAJOR = 18;
  * text, the order a btree index materialises, and which comparisons a unique
  * index or a pattern index can actually serve. A harness that validates the
  * schema and its migrations under musl collation is validating behaviour the
- * deployed database does not have; restore-container.ts's twin, which loads an
+ * deployed database does not have; restore-container.ts's smoke-twin, which loads an
  * actual production dump, would be comparing against a differently-ordered
  * server. Matching the deployment target beats saving cached bytes.
  *
- * If this is ever flipped back to alpine it flips for the twin at the same
+ * If this is ever flipped back to alpine it flips for the smoke-twin at the same
  * time, which is the point of it being one constant.
  */
 export const POSTGRES_IMAGE = `postgres:${POSTGRES_MAJOR}`;

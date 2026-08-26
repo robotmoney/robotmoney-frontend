@@ -18,7 +18,7 @@
 //   bun run scripts/seed-provenance-verify.ts --clean    # report + delete
 //
 // runSeedProvenanceVerify() below is the callable core (D38, issue #638) —
-// the twin of v0-seed-bootstrap.ts's runV0SeedBootstrap()/main() split, and
+// the smoke-twin of v0-seed-bootstrap.ts's runV0SeedBootstrap()/main() split, and
 // this file's own doc comment above already called it "one-time PRODUCTION-
 // side cleanup" long before anything actually ran it there. main() is the CLI
 // wrapper around it, kept for manual/CI use (tests/seed-provenance-verify.test.ts

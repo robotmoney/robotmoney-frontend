@@ -1,12 +1,12 @@
 // Extract stage: on-disk TTL cache for the heavy source fetches (issue #13).
 // A full live cold boot pulls from ~8 sources — SEC EDGAR alone is ~200 requests,
-// plus the large FRED/Shiller CSVs — so repeated demo boots re-pay that cost every
+// plus the large FRED/Shiller CSVs — so repeated smoke boots re-pay that cost every
 // time. When the TTL > 0 this memoizes each GET response body to a cache dir keyed
 // by (kind,url); a subsequent boot within the TTL reads from disk instead of the
-// network, so a warm demo restarts fast and is polite to upstreams.
+// network, so a warm smoke restarts fast and is polite to upstreams.
 //
 // HTTP_FETCH_CACHE_TTL_MS is capability-specific: production defaults to OFF,
-// while shared demo/smoke orchestration supplies one hour. Per-call ttlMs still
+// while shared smoke/smoke orchestration supplies one hour. Per-call ttlMs still
 // wins for tests and specialized callers. now() and the dir are injectable so
 // the TTL/expiry logic is unit-tested hermetically (no network).
 import { createHash } from "node:crypto";

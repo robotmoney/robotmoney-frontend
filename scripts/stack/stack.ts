@@ -1,12 +1,12 @@
 // The ONE compose bring-up — docs/decisions.md D22 "shared components",
 // docs/architecture.md §11.3 E5.
 //
-// The demo consumes it TODAY (`full` profile, scripts/lib/demo-main.ts): its
+// The smoke consumes it TODAY (`full` profile, scripts/lib/smoke-main.ts): its
 // hand-rolled runCompose/waitForPostgres/waitForHttp are gone, not parallel, so
-// `bun demo` boots through this file and nothing else. The onboarding eval and
+// `bun smoke` boots through this file and nothing else. The onboarding eval and
 // the inference-off rails check (whose forked bringUpInfra() this replaces)
-// adopt the `core` profile next; until they do, the demo is the single runtime
-// judge of this module. The StackHooks event surface below is how the demo
+// adopt the `core` profile next; until they do, the smoke is the single runtime
+// judge of this module. The StackHooks event surface below is how the smoke
 // drives its TUI panes without this module importing a renderer.
 //
 // A thin IMPURE shell over scripts/stack/config.ts's pure builders. Nothing
@@ -49,7 +49,7 @@ export type StackEvent =
   | { phase: "log"; message: string };
 
 // How a consumer renders progress WITHOUT this module importing its renderer:
-// scripts/lib/demo-main.ts maps these events onto its TUI panes; a test passes
+// scripts/lib/smoke-main.ts maps these events onto its TUI panes; a test passes
 // nothing at all.
 export interface StackHooks {
   onEvent?(e: StackEvent): void;
@@ -195,7 +195,7 @@ export function createStack(
   // A full stack runs member sessions after bring-up. `member-agent` is a
   // one-shot, profile-gated service (never part of `services` / `up`), but its
   // image must exist before those concurrent session containers launch. Keep
-  // that prebuild in the shared stack lifecycle used by both demo and smoke.
+  // that prebuild in the shared stack lifecycle used by both smoke and smoke.
   const defaultBuildServices = buildServicesFor(cfg.profile, { externalPostgres });
   const prefix = composeArgs(cfg.project, cfg.composeFiles);
 
@@ -337,9 +337,9 @@ export function createStack(
   }
 
   // Cached per handle: within one process the containers do not move, and
-  // demo-main asks for the api port on several code paths. A stale cache is
+  // smoke-main asks for the api port on several code paths. A stale cache is
   // impossible for the same reason — a `down` invalidates the handle, not the
-  // number. Callers that must not trust a cache (demo:status, whose state file
+  // number. Callers that must not trust a cache (smoke:status, whose state file
   // CAN be stale across processes) query publishedPort() themselves.
   function hostPorts(): StackHostPorts {
     if (discovered) return discovered;

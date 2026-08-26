@@ -52,8 +52,8 @@ backend actually returns:
 
 ```bash
 # Against a local full stack:
-bun run demo                                             # brings up real backend + analytics
-BACKEND_URL=http://127.0.0.1:<demo api port> bun run goldens:update
+bun run smoke                                             # brings up real backend + analytics
+BACKEND_URL=http://127.0.0.1:<smoke api port> bun run goldens:update
 # …or against a deployed test cluster:
 BACKEND_URL=https://<test-cluster> bun run goldens:update
 git add goldens/api-goldens.json && commit
@@ -73,12 +73,12 @@ Preview mode trades data realism for zero setup:
   scheduled recomputes, swarm sessions), run the full stack:
 
   ```bash
-  bun run demo         # see docs/architecture.md — much better data simulations
-  bun run demo:status
-  bun run demo:down
+  bun run smoke         # see docs/architecture.md — much better data simulations
+  bun run smoke:status
+  bun run smoke:down
   ```
 
-- The demo is the right surface for validating anything **data-dependent**;
+- The smoke is the right surface for validating anything **data-dependent**;
   preview is the right surface for iterating quickly on the **marketing surface**
   itself.
 
@@ -244,7 +244,7 @@ owner-review mechanism guarding them; the grant list **is** the guard.
 - Documentation map and canonical-vs-supporting ownership: [`docs/architecture.md`](docs/architecture.md)
 - Preview mode (wrapper, goldens, drift gate, hosted Cloudflare Pages): [`docs/architecture.md`](docs/architecture.md) §4
 - Overall architecture: [`docs/architecture.md`](docs/architecture.md)
-- Full-stack demo: [`docs/architecture.md`](docs/architecture.md)
+- Full-stack smoke: [`docs/architecture.md`](docs/architecture.md)
 - Design decisions (D14: why preview mode replaced the "frozen" bundle; D19/D20: hosted preview URLs via Cloudflare Git integration): [`docs/decisions.md`](docs/decisions.md)
 - Live-data endpoint contract (buybacks / token metrics / sleeves / framework DTOs + provenance rules): [`docs/architecture.md`](docs/architecture.md)
 - Infra/domain map (D13): [`docs/architecture.md`](docs/architecture.md)

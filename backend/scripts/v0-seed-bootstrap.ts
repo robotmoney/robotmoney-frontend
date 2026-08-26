@@ -472,7 +472,7 @@ const V0_IMPORT_NONCE_PREFIX = V0_ARCHIVE_NONCE_PREFIX;
 
 // The archival key is PUBLISHED (v0-archive.ts), not generated per run and not
 // required from the environment. The earlier design demanded an operator key
-// and, when the demo could not supply one, minted a throwaway per boot and
+// and, when the smoke could not supply one, minted a throwaway per boot and
 // discarded it — so the same 216 rows were signed by a different key in every
 // deployment, by a key nobody held, and an import interrupted under one key and
 // resumed under another was undetectable. A published key makes the signature

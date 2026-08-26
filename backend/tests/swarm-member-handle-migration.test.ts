@@ -315,7 +315,7 @@ test("a handle addresses exactly one member: the unique index rejects a duplicat
 });
 
 test("an INSERT that names no handle gets its own id — the six existing writers keep working untouched", async () => {
-  // roster-seed, apply, claim, admin add, the v0 archive backfill and demo/e2e
+  // roster-seed, apply, claim, admin add, the v0 archive backfill and smoke/e2e
   // all INSERT an explicit column list without `handle`. If the default were
   // not here, every one of them would fail the NOT NULL.
   await db`INSERT INTO swarm_members (id, status, name, lens) VALUES ('newcomer', 'inactive', 'Newcomer', 'macro')`;

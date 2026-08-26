@@ -8,7 +8,7 @@
 //   EXCEPT under a hermetic 'stub' source where — mirroring token-prices.ts's
 //   STUB_PRICES — a deterministic fixture supply is served instead of routing to
 //   the shared vault-shaped RPC stub (which answers the same totalSupply word for
-//   every address). This keeps the hermetic demo's marketCap sensible without a
+//   every address). This keeps the hermetic smoke's marketCap sensible without a
 //   live network and without a fabricated live-looking number.
 // - marketCapUsd = priceUsd * totalSupply (null if either leg is null).
 // - feeSplit: a FIXED Clanker-pool config constant (Protocol 57 / Bankr 40 /
@@ -31,7 +31,7 @@ import { ttlCached } from "./ttl-cache.ts";
 const WEI_18 = 1e18;
 
 // Hermetic fixture supply (18dp normalized token count). Recognizable magnitude
-// (55B ROBOTMONEY) so the demo's marketCap is reproducible without a live read.
+// (55B ROBOTMONEY) so the smoke's marketCap is reproducible without a live read.
 const STUB_TOTAL_SUPPLY = 55_000_000_000;
 
 // Fixed Clanker-pool fee split. Static config, NOT a chain read.

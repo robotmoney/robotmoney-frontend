@@ -1,9 +1,9 @@
-// Hermetic tests for scripts/lib/swarm/session.ts's activeMemberCount() — the demo onboarding
-// driver's roster-cap pre-check (scripts/lib/demo-main.ts). Previously a
+// Hermetic tests for scripts/lib/swarm/session.ts's activeMemberCount() — the smoke onboarding
+// driver's roster-cap pre-check (scripts/lib/smoke-main.ts). Previously a
 // failed GET /api/swarm/members silently resolved to `{ members: [] }`,
 // so activeMemberCount() returned 0 on ANY transient read error — the cap
 // check (`active >= SWARM_ROSTER_CAP`) then always passed, letting the
-// demo keep admitting new agents regardless of the TRUE roster size. This
+// smoke keep admitting new agents regardless of the TRUE roster size. This
 // pins the fix: a read failure must report the roster as FULL (Infinity),
 // never empty.
 //

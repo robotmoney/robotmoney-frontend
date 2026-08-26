@@ -3,7 +3,7 @@
 // (scripts/tests/unit/test-path-citations.test.ts): the comment promised this
 // file was "unit-testable hermetically" and named it, yet nothing was ever
 // written, so the polarity it documents — the one thing standing between the
-// demo driver and a mislabelled security posture — had zero executed
+// smoke driver and a mislabelled security posture — had zero executed
 // assertions.
 //
 // What is being pinned: regimeWriteInsecure() must MIRROR the backend's
@@ -15,7 +15,7 @@
 // explicitly opted INTO *and* no analytics credential is configured. Hence
 // `RM_ALLOW_INSECURE === "1" && !ANALYTICS_TOKEN`. SECURE BY DEFAULT: unset means
 // enforced, so a drift toward opt-OUT polarity (the classic inversion bug) is
-// caught here rather than in a demo log line that quietly lies about the posture.
+// caught here rather than in a smoke log line that quietly lies about the posture.
 //
 // Pure: an injected env record, no process.env mutation, no network, no Docker.
 import { describe, expect, test } from "bun:test";

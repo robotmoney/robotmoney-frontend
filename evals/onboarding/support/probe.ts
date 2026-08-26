@@ -215,7 +215,7 @@ export function runExtractedBinary(opts: RunExtractedBinaryOptions): CommandResu
       ...opts.argv,
     ],
     opts.repoRoot,
-    // Same derived DEMO_PROJECT the member-agent spawn uses. `docker compose
+    // Same derived SMOKE_PROJECT the member-agent spawn uses. `docker compose
     // run` re-resolves the WHOLE compose model and hashes every project volume,
     // so a child without it hashes the pgdata label as "" and compose asks to
     // recreate a volume THIS project just created. Layer 2 runs this immediately

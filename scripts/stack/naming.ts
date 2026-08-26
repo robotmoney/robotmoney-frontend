@@ -3,18 +3,18 @@
 // never reads the process environment itself: the caller hands its own env in.
 //
 // Why this exists at all. Four independent families spawn containers on the
-// SAME host — the standing demo (scripts/lib/demo-main.ts), the local
+// SAME host — the standing smoke (scripts/lib/smoke-main.ts), the local
 // onboarding eval (scripts/onboarding-eval-local.ts), the inference-off rails
 // check (scripts/tests/integration/onboarding-eval-infra.test.ts), and the
 // backend test harness's ephemeral postgres (backend/tests/preload.ts) — and
 // that host is simultaneously the self-hosted GitHub Actions runner AND the box
 // serving stage.robotmoney-labs.dev. Each family used to mint its own name
-// shape (`rmdemo_<hex>`, `rmeval_local_<hex>`, `rm_onboarding_infra_<hex>`,
+// shape (`rmsmoke_<hex>`, `rmeval_local_<hex>`, `rm_onboarding_infra_<hex>`,
 // `rmtest_pg_<hex>`), which meant a leaked container could be attributed to a
 // family but NOT to an environment: nothing on a stray container said whether
 // it belonged to CI run 42, CI run 43, or the operator's own shell. Reaping
 // safely was therefore impossible — every candidate filter risked killing the
-// standing demo.
+// standing smoke.
 //
 // The scheme is deliberately TWO-CHANNEL:
 //
@@ -34,44 +34,44 @@
 //     parallel jobs, and other workflows.
 //   - Locally there is no such identity — an operator's shell is not a job — so
 //     it is drawn from a per-boot random seed. That also gives the local case
-//     its collision-freedom for free: two `bun demo` invocations get two
+//     its collision-freedom for free: two `bun smoke` invocations get two
 //     different hashes.
 import { createHash } from "node:crypto";
 
 // ── Environment class ───────────────────────────────────────────────────────
 export type EnvironmentClass = "ci" | "local";
 
-// Name prefixes. `rm_ci` vs `rm_demo` is the FIRST thing a reaper (or a human
+// Name prefixes. `rm_ci` vs `rm_smoke` is the FIRST thing a reaper (or a human
 // staring at `docker ps` at 2am) needs to know, so it leads the name. Both are
 // valid compose project names (`[a-z0-9][a-z0-9_-]*`).
 export const CI_PROJECT_PREFIX = "rm_ci";
-export const LOCAL_PROJECT_PREFIX = "rm_demo";
+export const LOCAL_PROJECT_PREFIX = "rm_smoke";
 
-// The label keys. `robotmoney.demo.project` predates this module
-// (docker-compose.demo.yml has always stamped it on the pgdata volume, which is
-// how `demo:clean` finds volumes by label instead of by name); the two env
+// The label keys. `robotmoney.smoke.project` predates this module
+// (docker-compose.smoke.yml has always stamped it on the pgdata volume, which is
+// how `smoke:clean` finds volumes by label instead of by name); the two env
 // labels are its generalisation to the environment.
-export const PROJECT_LABEL = "robotmoney.demo.project";
+export const PROJECT_LABEL = "robotmoney.smoke.project";
 export const ENV_CLASS_LABEL = "robotmoney.env";
 export const ENV_HASH_LABEL = "robotmoney.env.hash";
 // Applied only to the Compose default network. Unlike Compose's own project
-// label, this is an explicit ownership assertion: the demo reaper may enumerate
+// label, this is an explicit ownership assertion: the smoke reaper may enumerate
 // the network without first finding one of its containers.
-export const MANAGED_NETWORK_LABEL = "robotmoney.demo.network";
+export const MANAGED_NETWORK_LABEL = "robotmoney.smoke.network";
 // What a container DOES inside its project, for the reaper's liveness question.
 // Only set on containers that are part of a project without serving it — today
-// exactly one: the `--db twin` postgres. It publishes a host port (the stack
+// exactly one: the `--db smoke-twin` postgres. It publishes a host port (the stack
 // dials it from sibling containers), and the reaper reads "publishes a host
-// port" as evidence the project is alive and must not be touched. A twin that
+// port" as evidence the project is alive and must not be touched. A smoke-twin that
 // outlived its stack would pin the whole project forever on that reasoning, so
 // it declares that it is not the thing keeping the project up.
-export const ROLE_LABEL = "robotmoney.demo.role";
-export const TWIN_ROLE = "twin";
+export const ROLE_LABEL = "robotmoney.smoke.role";
+export const TWIN_ROLE = "smoke-twin";
 
 // The compose interpolation variable names the two env labels are threaded
 // through (scripts/stack/config.ts's buildComposeEnv sets both;
-// docker-compose.demo.yml reads both). Named RM_STACK_* rather than RM_ENV_* so
-// they can never be confused with `RM_ENV` (ephemeral|demo|prod), which is a
+// docker-compose.smoke.yml reads both). Named RM_STACK_* rather than RM_ENV_* so
+// they can never be confused with `RM_ENV` (ephemeral|smoke|prod), which is a
 // BACKEND runtime mode and an entirely different axis.
 export const ENV_CLASS_COMPOSE_VAR = "RM_STACK_ENV_CLASS";
 export const ENV_HASH_COMPOSE_VAR = "RM_STACK_ENV_HASH";
@@ -94,17 +94,17 @@ export const CI_IDENTITY_VARS = [
 // project names or one's `stack.down()` would tear down the other's containers
 // mid-run.
 //
-//   stack          — the demo / any full or core compose bring-up (demo-main.ts)
+//   stack          — the smoke / any full or core compose bring-up (smoke-main.ts)
 //   eval           — the local real-inference onboarding eval (onboarding-eval-local.ts)
 //   eval-swarm — the local real-inference swarm-authoring eval (swarm-eval-local.ts)
 //   infra          — the inference-off rails check (onboarding-eval-infra.test.ts)
 //   pgtest         — the backend suite's ephemeral postgres (backend/tests/preload.ts)
-//   twin           — a STANDALONE restored production copy (restore-check.ts).
-//                    A twin booted as part of a demo (`--db twin`) carries that
-//                    demo's project instead, so demo:down / demo:clean scope to
+//   smoke-twin           — a STANDALONE restored production copy (restore-check.ts).
+//                    A smoke-twin booted as part of a smoke (`--db smoke-twin`) carries that
+//                    smoke's project instead, so smoke:down / smoke:clean scope to
 //                    it like any other container the boot created; this role is
-//                    only for a twin that belongs to no stack.
-export type StackRole = "stack" | "eval" | "eval-swarm" | "infra" | "pgtest" | "twin";
+//                    only for a smoke-twin that belongs to no stack.
+export type StackRole = "stack" | "eval" | "eval-swarm" | "infra" | "pgtest" | "smoke-twin";
 
 export interface StackEnvironment {
   /** Which kind of environment started this stack. */
@@ -158,7 +158,7 @@ export function projectPrefix(environment: StackEnvironment): string {
 
 /**
  * The compose project name / container-name prefix for one family in one
- * environment, e.g. `rm_ci_stack_9f2a1c4b7d` or `rm_demo_pgtest_0114ac93de`.
+ * environment, e.g. `rm_ci_stack_9f2a1c4b7d` or `rm_smoke_pgtest_0114ac93de`.
  */
 export function stackProjectName(role: StackRole, environment: StackEnvironment): string {
   return `${projectPrefix(environment)}_${role}_${environment.hash}`;
@@ -166,7 +166,7 @@ export function stackProjectName(role: StackRole, environment: StackEnvironment)
 
 /**
  * Every label a container/volume this repo starts must carry. The project label
- * keeps working exactly as before (demo:clean scopes deletes by it); the two
+ * keeps working exactly as before (smoke:clean scopes deletes by it); the two
  * env labels are what lets a reaper say "everything from CI job X" or
  * "everything NOT from this operator's current shell" without touching names.
  */
@@ -181,7 +181,7 @@ export function stackLabels(environment: StackEnvironment, project: string): Rec
 /**
  * The same labels as `docker run --label` argv. Needed because the raw
  * `docker run` spawners — backend/tests/preload.ts and
- * scripts/lib/restore-container.ts's twin — are not compose, so they cannot pick
+ * scripts/lib/restore-container.ts's smoke-twin — are not compose, so they cannot pick
  * labels up from a compose file and must pass them explicitly.
  * Deterministically ordered so an argv assertion is stable.
  */

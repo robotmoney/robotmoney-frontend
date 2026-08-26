@@ -412,8 +412,8 @@ has never ingested v0's data:
   `gen_random_uuid()`-at-insert-time in a from-scratch local Postgres, with
   no shared seed), and none of v1's fabricated coin/wallet/vault addresses
   match any real v0 on-chain identifier.
-- `backend/src/projects/demo-seed.ts:1-21` is a **third**, independent,
-  demo-only synthetic dataset ("concepts... ported from the deprecated
+- `backend/src/projects/smoke-seed.ts:1-21` is a **third**, independent,
+  smoke-only synthetic dataset ("concepts... ported from the deprecated
   Supabase seed-data function... synthesized here with realistic
   market_cap/fdv/24h numbers") — explicitly *not* real data, gated behind
   `DEMO_SEED_PROJECTS`.

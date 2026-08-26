@@ -19,8 +19,8 @@ function directContainerTail(model: string, titleScope = "robotmoney-swarm"): st
     apiKey: "sk-container-only",
   };
   const argv = buildMemberAgentArgv({
-    composeProject: "rm_demo_stack_parity",
-    containerName: "rm_demo_stack_parity-member-agent-eval-test",
+    composeProject: "rm_smoke_stack_parity",
+    containerName: "rm_smoke_stack_parity-member-agent-eval-test",
     opencodeConfigPath: "/tmp/opencode.json",
     title: titleScope,
     prompt: PROMPT,

@@ -1,6 +1,6 @@
 // Direct (SQL-backed) implementation of the AnalyticsPersistence port (issue
 // #106) — the API-owned domain service over the store writers. ONLY the API
-// process (its /api/analytics + swarm regime routes), tests, and demo/e2e
+// process (its /api/analytics + swarm regime routes), tests, and smoke/e2e
 // tooling that already holds DB credentials may use this; updater/worker
 // processes use analytics/api-client.ts instead. Enforced by
 // tests/analytics-api-boundary.test.ts.
@@ -22,7 +22,7 @@ export const directAnalyticsPersistence: AnalyticsPersistence = {
   saveRegimeSnapshots: (rows) => saveRegimeSnapshots(rows),
   saveResearchSignal: (key, asof, payload) => persistResearchSignal(key, asof, payload),
   loadResearchSignalDates: (sinceDate) => loadRecentResearchSignalDates(sinceDate),
-  // Issue #646: bypasses the HTTP route for tests/demo tooling that already
+  // Issue #646: bypasses the HTTP route for tests/smoke tooling that already
   // hold DB credentials, same split as every other method above.
   async loadRawHistoryGapDates(sinceDate) {
     const def = getSeriesDef("raw_indicator_history");

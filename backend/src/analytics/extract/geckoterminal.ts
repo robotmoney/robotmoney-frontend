@@ -81,7 +81,7 @@ export function throttleWaitMs(
 
 // One new_pools page with bounded 429/5xx retries inside the sweep deadline.
 // Non-transient statuses throw immediately (no retry). Wrapped in the opt-in
-// fetch-cache so warm demo boots reuse the cached body (http.ts conventions).
+// fetch-cache so warm smoke boots reuse the cached body (http.ts conventions).
 async function fetchNewPoolsPage(
   page: number,
   deadline: number,

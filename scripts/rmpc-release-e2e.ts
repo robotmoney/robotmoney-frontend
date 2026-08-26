@@ -20,11 +20,11 @@
 //   → canonicalizeSubmission → rmpc sign → POST /api/swarm/submit
 // then reads the result back and independently re-verifies the signature.
 //
-// Run standalone against a locally booted `bun run demo` stack (use the
-// compose project printed by the demo):
-//   BACKEND_URL=http://127.0.0.1:<web-port> DEMO_PROJECT=<project> bun run scripts/rmpc-release-e2e.ts
+// Run standalone against a locally booted `bun run smoke` stack (use the
+// compose project printed by the smoke):
+//   BACKEND_URL=http://127.0.0.1:<web-port> SMOKE_PROJECT=<project> bun run scripts/rmpc-release-e2e.ts
 // (same BACKEND_URL convention as scripts/lib/swarm/session.ts — defaults
-// to the standard demo port when unset.) In CI, scripts/lib/demo-main.ts runs
+// to the standard smoke port when unset.) In CI, scripts/lib/smoke-main.ts runs
 // this script against the SAME stack it just booted when RMPC_RELEASE_E2E=1 is
 // set (see .github/workflows/rmpc-release-e2e-nightly.yml) — no parallel stack.
 //
@@ -52,9 +52,9 @@ const adminHeaders: Record<string, string> = {
 };
 
 // Distinctly namespaced identity + subject (issue #104) so this driver never
-// collides with the demo's own built-in onboarding loop / swarm roster /
+// collides with the smoke's own built-in onboarding loop / swarm roster /
 // sessions (woon, mav, athena, boreas, …) when run against a standing local
-// demo. The server mints the real memberId (§11 R2) — RUN_LABEL only seeds
+// smoke. The server mints the real memberId (§11 R2) — RUN_LABEL only seeds
 // the human-readable name/contact/subject so runs are identifiable, never a
 // requested id.
 const RUN_ID = process.env.GITHUB_RUN_ID?.trim() || crypto.randomUUID().slice(0, 8);
@@ -63,9 +63,9 @@ const SUBJECT_ID = "rmpc-release-e2e";
 const TODAY = new Date().toISOString().slice(0, 10);
 
 function producerRail() {
-  const composeProject = process.env.DEMO_PROJECT?.trim();
+  const composeProject = process.env.SMOKE_PROJECT?.trim();
   if (!composeProject) {
-    throw new Error("DEMO_PROJECT is required to run the analytics producer against the target stack");
+    throw new Error("SMOKE_PROJECT is required to run the analytics producer against the target stack");
   }
   const configuredComposeFiles = process.env.COMPOSE_FILE?.split(":").filter(Boolean) ?? [];
   return {
@@ -191,7 +191,7 @@ async function main(): Promise<void> {
   // nightly swarm sessions drive — instead of a second, unproven
   // direct-admin lifecycle) ──────────────────────────────────────────────────
   // admin()/waitForSessionState() read BACKEND_URL from env at module load;
-  // this script is invoked with BACKEND_URL already set (demo-main.ts or the
+  // this script is invoked with BACKEND_URL already set (smoke-main.ts or the
   // operator), so the import at the top of this file resolves the right base.
   await admin("subject", { id: SUBJECT_ID, name: "RMPC Release E2E Subject" });
   // Idempotent, matches runSession()'s own pre-session regime seed — makes this

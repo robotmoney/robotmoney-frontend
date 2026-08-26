@@ -152,7 +152,7 @@ test("stop() resolving is NOT proof the loops exited — drained() is, and it fa
   await worker.stop(); // memoized — returns instantly, having waited for nothing
   expect(Date.now() - t0).toBeLessThan(100);
 
-  // The drain loop is demonstrably still alive at this point, and drained()
+  // The drain loop is smokenstrably still alive at this point, and drained()
   // refuses to pretend otherwise.
   await expect(worker.drained(300)).rejects.toThrow(/still had loops running/);
 

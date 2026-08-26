@@ -1,12 +1,12 @@
 // Capture / refresh the preview goldens (goldens/api-goldens.json) from a REAL
-// running system — a deployed test cluster or a local `bun run demo` stack.
+// running system — a deployed test cluster or a local `bun run smoke` stack.
 //
-//   BACKEND_URL=http://127.0.0.1:<demo api port> bun run goldens:update
+//   BACKEND_URL=http://127.0.0.1:<smoke api port> bun run goldens:update
 //
-// BACKEND_URL is REQUIRED in practice: `bun run demo` draws its host port free
-// on every run, so the 48787 default below is correct only for a `bun run demo
+// BACKEND_URL is REQUIRED in practice: `bun run smoke` draws its host port free
+// on every run, so the 48787 default below is correct only for a `bun run smoke
 // -- --stage` boot (the one sanctioned pin — the cloudflared tunnel origin).
-// Read the port off the demo's startup line or `bun run demo:status`.
+// Read the port off the smoke's startup line or `bun run smoke:status`.
 //
 // Goldens are mock API responses the client-side preview wrapper replays inside
 // an iframe. Their VALUES may be point-in-time, but their FIELD SHAPES must
@@ -34,7 +34,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(repoRoot, "goldens/api-goldens.json");
 const backend = (process.env.BACKEND_URL ?? "http://127.0.0.1:48787").replace(/\/$/, "");
 
-// Research signal keys + comment threads the site mounts (mirror of the demo).
+// Research signal keys + comment threads the site mounts (mirror of the smoke).
 const RESEARCH_KEYS = ["channel-divergence", "late-cycle-signals"];
 const COMMENT_PAGES = ["home"];
 

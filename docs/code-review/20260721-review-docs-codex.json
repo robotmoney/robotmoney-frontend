@@ -176,8 +176,8 @@
         "backend/src/db/seed.ts:65",
         "https://github.com/robotmoney/robotmoney-frontend/issues/208"
       ],
-      "impact": "A non-demo installation does not autonomously open or advance committee sessions, although architecture presents the queue cron chain as the operating model.",
-      "recommendation": "Until issue #208 lands, document committee scheduling as disabled and demo-driven; afterward document only the resolved environment contract and orchestration invariant.",
+      "impact": "A non-smoke installation does not autonomously open or advance committee sessions, although architecture presents the queue cron chain as the operating model.",
+      "recommendation": "Until issue #208 lands, document committee scheduling as disabled and smoke-driven; afterward document only the resolved environment contract and orchestration invariant.",
       "owner": "code",
       "related_findings": [
         "#208"
@@ -213,11 +213,11 @@
       "evidence": [
         "docs/architecture.md:1469",
         "docs/architecture.md:1594",
-        "scripts/lib/demo-env.ts:1",
+        "scripts/lib/smoke-env.ts:1",
         ".github/workflows/e2e.yml:86"
       ],
-      "impact": "Agents cannot tell whether a deterministic offline demo is supported or whether every demo and per-PR E2E is required to use live external providers.",
-      "recommendation": "State that demo and e2e defaults are live and ANALYTICS_SOURCE=hermetic is a local debugging or backend-test override, not a supported demo mode.",
+      "impact": "Agents cannot tell whether a deterministic offline smoke is supported or whether every smoke and per-PR E2E is required to use live external providers.",
+      "recommendation": "State that smoke and e2e defaults are live and ANALYTICS_SOURCE=hermetic is a local debugging or backend-test override, not a supported smoke mode.",
       "owner": "architecture",
       "related_findings": []
     },
@@ -300,7 +300,7 @@
         "backend/src/committee/admin.ts:566",
         "backend/tests/committee-admin-surface.test.ts:286"
       ],
-      "impact": "Worker and demo lifecycle calls can rewind existing sessions, report zero-row transitions as success, read future data, or perform an incomplete reopen that does not replace deadlines and jobs.",
+      "impact": "Worker and smoke lifecycle calls can rewind existing sessions, report zero-row transitions as success, read future data, or perform an incomplete reopen that does not replace deadlines and jobs.",
       "recommendation": "Resolve whether the listed domain corrections remain requirements; if so, implement them in the shared worker/admin domain path with adversarial state, timestamp and reopen tests, otherwise remove them from canonical docs and Plan.",
       "owner": "code",
       "related_findings": []
@@ -316,9 +316,9 @@
         "docs/architecture.md:3053",
         "backend/src/api/index.ts:79",
         "mcp/src/server.ts:206",
-        "scripts/lib/demo-main.ts:1006"
+        "scripts/lib/smoke-main.ts:1006"
       ],
-      "impact": "Cloudflare and demo readiness can certify API or MCP while required dependencies are unavailable, defeating the documented shared health contract.",
+      "impact": "Cloudflare and smoke readiness can certify API or MCP while required dependencies are unavailable, defeating the documented shared health contract.",
       "recommendation": "Define a shared health DTO, make readiness fail on required dependency loss, have MCP probe API, and execute negative dependency tests in CI.",
       "owner": "code",
       "related_findings": []
@@ -382,7 +382,7 @@
         "docs/architecture.md:3202",
         "docs/prd.md (absent at the reviewed snapshot)",
         "docs/plan-admin-surface.md (deleted in the reviewed snapshot)",
-        "docs/demo-spec.md (deleted in the reviewed snapshot)"
+        "docs/smoke-spec.md (deleted in the reviewed snapshot)"
       ],
       "impact": "Superfield workers cannot resolve promised product authority and may follow deleted canonical documents or assume copied architecture plan text replaced them without an explicit decision.",
       "recommendation": "Update Plan and issue canonical-doc metadata to surviving authorities; create a PRD if it has a distinct owner, otherwise stop requiring and referencing docs/prd.md.",

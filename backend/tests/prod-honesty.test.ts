@@ -34,7 +34,7 @@ const ASOF = "2026-06-29";
 // Transitively walk the import graph from the live data source and assert none of
 // the reachable modules is access/provider.ts or references `seededProvider`. This
 // is intentionally scoped to the LIVE path (data-source.ts) — index.ts itself may
-// legitimately import hermetic-source.ts for the offline demo opt-in, but the REAL
+// legitimately import hermetic-source.ts for the offline smoke opt-in, but the REAL
 // fetch seam must be seed-free.
 function importGraph(entry: string): string[] {
   const seen = new Set<string>();

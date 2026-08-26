@@ -24,7 +24,7 @@ export async function fetchLatestResearchSignal(key: string) {
 // verbatim. Additive: existing `latest`/`history` are unchanged.
 //
 // `date <= today` is enforced here as a read-side boundary (issue #382): a
-// future-dated row — from a demo/seed bug, a manual insert, or clock skew on
+// future-dated row — from a smoke/seed bug, a manual insert, or clock skew on
 // whatever produced it — would otherwise sort first under `ORDER BY date DESC`
 // and be served as `latest`, SHADOWING the real current snapshot and reading
 // as fresh (`stale: false`) when the deployment's actual data may be stale or

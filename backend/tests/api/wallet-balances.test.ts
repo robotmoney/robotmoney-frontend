@@ -198,7 +198,7 @@ function mockChain(fx: ChainFixtures): MockCounter {
     const u = String(url);
     if (u.includes("geckoterminal.com")) {
       // token_price now takes a comma-separated address list (token-prices.ts
-      // micro-batches every same-burst leg into ONE request — the demo/CI
+      // micro-batches every same-burst leg into ONE request — the smoke/CI
       // quota fix). Serve EVERY requested address from the fixture book; a
       // missing fixture still throws LOUDLY (a typo in a test must fail the
       // batch, never silently degrade a leg to 'stale').

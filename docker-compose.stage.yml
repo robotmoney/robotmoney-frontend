@@ -1,9 +1,9 @@
 # THE ONE FIXED HOST PORT IN THE SYSTEM, isolated in its own overlay.
 #
-# Applied ONLY by `bun run demo -- --stage` (scripts/lib/demo-main.ts appends
+# Applied ONLY by `bun run smoke -- --stage` (scripts/lib/demo-main.ts appends
 # this file to the compose file list, the same mechanism the generated
 # `--pg-data` bind overlay already uses). Never applied by CI, never by a plain
-# `bun run demo`, and never selectable from the environment — pinning the
+# `bun run smoke`, and never selectable from the environment — pinning the
 # tunnel-facing port is a property of one deliberate invocation, not of a shell
 # that happens to have something exported (the same hard rule `--pg-data`
 # follows: no per-property env config).

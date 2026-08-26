@@ -10,7 +10,7 @@
 // operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
 import { seedLiveRoster, pruneToLiveRoster, backfillMemberHandles } from "../swarm/roster-seed.ts";
-import { seedDemoProjects } from "../projects/demo-seed.ts";
+import { seedSmokeProjects } from "../projects/smoke-seed.ts";
 import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 import { resolveSwarmSchedules } from "../config.ts";
@@ -37,7 +37,7 @@ interface SeedSchedule {
 // #208): SWARM_SCHEDULES_ENABLED (disabled by default) switches the whole
 // swarm.* cron sequence on/off, SWARM_*_CRON / SWARM_WINDOW_MINUTES
 // tune it, and changed values are applied to EXISTING job_schedules rows on
-// every seed run. The demo pins SWARM_SCHEDULES_ENABLED=0 and instead
+// every seed run. The smoke pins SWARM_SCHEDULES_ENABLED=0 and instead
 // enqueues lifecycle jobs explicitly via the admin enqueue-job endpoint, which
 // lets it control the pace while still exercising the real worker claim loop +
 // handler path.
@@ -79,7 +79,7 @@ export const SCHEDULES: SeedSchedule[] = [
   // the transport now paces from a conservative default
   // (chain/base-rpc-client.ts), this DOES dispatch on an ordinary live
   // deployment — that is the point of the feature — and is a NO-OP only where
-  // an operator has set BASE_RPC_MAX_CALLS_PER_SEC=0. A hermetic demo/CI boot
+  // an operator has set BASE_RPC_MAX_CALLS_PER_SEC=0. A hermetic smoke/CI boot
   // reads BASE_RPC_SOURCE=stub, so its sweep costs no provider budget.
   // Handler: worker/handlers/repair.ts.
   { kind: "ops.repair_gaps", cron: "*/5 * * * *", payload: {}, timezone: "UTC", enabled: true },
@@ -92,7 +92,7 @@ export const SCHEDULES: SeedSchedule[] = [
   // Projects "Agentic Economy Ecosystem" pipelines (issue #87). Ordered so a
   // day's chain is coherent: discover identity → refresh live metrics → snapshot
   // today → roll revenue up → recompute coverage. Daily cadence (not the fast
-  // demo cadence), so a short demo run never races DEMO_SEED_PROJECTS. Each kind
+  // smoke cadence), so a short smoke run never races SMOKE_SEED_PROJECTS. Each kind
   // has a handler in worker/handlers/index.ts and upserts on natural keys, so an
   // extra firing is harmless. In prod the worker needs PROJECTS_SOURCE=live
   // (select.ts fails closed rather than serving fixture data as production).
@@ -102,15 +102,15 @@ export const SCHEDULES: SeedSchedule[] = [
   { kind: "projects.fetch_vaults", cron: "30 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
   { kind: "projects.snapshot_daily", cron: "40 0 * * *", payload: {}, timezone: "UTC", enabled: true },
   { kind: "projects.sync_revenue", cron: "50 1 * * *", payload: {}, timezone: "UTC", enabled: true },
-  // Kept enabled here (byte-for-byte prod/CI shape); the explicit demo schedule
+  // Kept enabled here (byte-for-byte prod/CI shape); the explicit smoke schedule
   // step disables this row (issue #399) so curated scores are not overwritten.
   { kind: "projects.recompute_coverage", cron: "0 3 * * *", payload: {}, timezone: "UTC", enabled: true },
 ];
 
-// Fast demo schedules — added only by seedDemoJobSchedules(), which the demo
+// Fast smoke schedules — added only by seedSmokeJobSchedules(), which the smoke
 // CLI invokes explicitly. Production, smoke, and CI never call that step.
 //
-// Retired demo cadence rows remain as disabled compatibility markers so an
+// Retired smoke cadence rows remain as disabled compatibility markers so an
 // upgraded database cannot resurrect the old consumer producer. The independent
 // producer's own cron configuration replaces both these rows and the superseded
 // ~2-minute rows below.
@@ -119,7 +119,7 @@ const FAST_DEMO_SCHEDULES: SeedSchedule[] = [
   { kind: "research.refresh", cron: "37 * * * *", payload: {}, timezone: "UTC", enabled: false },
 ];
 
-// The pre-#287 demo analytics rows, superseded by FAST_DEMO_SCHEDULES above and
+// The pre-#287 smoke analytics rows, superseded by FAST_DEMO_SCHEDULES above and
 // disabled (never deleted — job_runs history and operator intent stay legible)
 // on any database that already holds them.
 const SUPERSEDED_FAST_DEMO_SCHEDULES: { kind: string; cron: string }[] = [
@@ -127,15 +127,15 @@ const SUPERSEDED_FAST_DEMO_SCHEDULES: { kind: string; cron: string }[] = [
   { kind: "research.refresh", cron: "1-59/2 * * * *" },
 ];
 
-// Slow demo samplers — also owned by the explicit demo schedule step. The standing local demo and
+// Slow smoke samplers — also owned by the explicit smoke schedule step. The standing local smoke and
 // the self-hosted CI runner share ONE host IP, and the every-minute
 // wallet.sample_balances baseline (~3 GeckoTerminal price calls + several Base
 // RPC eth_calls per tick) exhausts both providers' per-IP quotas, starving CI
 // jobs on the same host. Demo decision: token prices refreshing once an hour
-// is fine there, so the demo samples wallet balances HOURLY — staggered to
+// is fine there, so the smoke samples wallet balances HOURLY — staggered to
 // minute 3 so it never fires in the same minute as vault.sample_share_price
 // ("0 * * * *"). The conflict key is (kind, cron), so this row merely COEXISTS
-// with the per-minute baseline; seedDemoJobSchedules() additionally DISABLES
+// with the per-minute baseline; seedSmokeJobSchedules() additionally DISABLES
 // that baseline row — that is what actually switches the cadence.
 const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
   { kind: "wallet.sample_balances", cron: "3 * * * *", payload: {}, timezone: "UTC", enabled: true },
@@ -143,7 +143,7 @@ const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
 ];
 
 // Seeds the canonical job_schedules rows (+ retires the combined analytics.run
-// kind) WITHOUT the heavier wallet-history/allocation-framework/demo-project
+// kind) WITHOUT the heavier wallet-history/allocation-framework/smoke-project
 // seeding below. Extracted so any test that TRUNCATEs the shared job_schedules
 // table (worker-lanes/worker-lease/queue/analytics-job-isolation/
 // worker-shutdown — see their `afterAll`) can cheaply restore the production
@@ -231,8 +231,8 @@ export async function seedJobSchedules(): Promise<void> {
   await sql`DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`;
 }
 
-/** Apply the demo's quota-safe schedule changes explicitly and idempotently. */
-export async function seedDemoJobSchedules(): Promise<void> {
+/** Apply the smoke's quota-safe schedule changes explicitly and idempotently. */
+export async function seedSmokeJobSchedules(): Promise<void> {
   for (const s of [...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]) {
     await sql`
       INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
@@ -245,7 +245,7 @@ export async function seedDemoJobSchedules(): Promise<void> {
     UPDATE job_schedules SET enabled = false
      WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *' AND enabled
   `;
-  console.log("demo schedules: disabled per-minute wallet samplers (hourly cadence owns sampling)");
+  console.log("smoke schedules: disabled per-minute wallet samplers (hourly cadence owns sampling)");
 
   for (const s of SUPERSEDED_FAST_DEMO_SCHEDULES) {
     await sql`
@@ -253,13 +253,13 @@ export async function seedDemoJobSchedules(): Promise<void> {
        WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
     `;
   }
-  console.log("demo schedules: confirmed retired consumer analytics schedules disabled");
+  console.log("smoke schedules: confirmed retired consumer analytics schedules disabled");
 
   await sql`
     UPDATE job_schedules SET enabled = false
      WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *' AND enabled
   `;
-  console.log("demo schedules: disabled projects.recompute_coverage (curated scores are preserved)");
+  console.log("smoke schedules: disabled projects.recompute_coverage (curated scores are preserved)");
 }
 
 export async function seed(): Promise<void> {
@@ -270,7 +270,7 @@ export async function seed(): Promise<void> {
   // waiting up to a minute for the first cron tick. A CONSTANT dedupe_key fires it
   // at most once per database; the every-minute cron owns steady-state sampling,
   // and the (sample_date, symbol) upsert makes any overlap with the first cron
-  // slot idempotent. On the demo's LIVE data path (issue #147) this also
+  // slot idempotent. On the smoke's LIVE data path (issue #147) this also
   // guarantees the sampler issues at least one real aggregate3 eth_call within
   // seconds of boot, rather than waiting on the cron. ON CONFLICT mirrors the
   // scheduler's partial unique index on dedupe_key.
@@ -336,24 +336,24 @@ export async function seed(): Promise<void> {
 
   // Demo-only: populate the "Agentic Economy Ecosystem" projects directory so
   // GET /api/projects returns a full table instead of "No projects yet.". Gated
-  // behind DEMO_SEED_PROJECTS so prod/CI seeds stay byte-for-byte unchanged (the
-  // flag is set ONLY on the demo migrate/seed run in scripts/lib/demo-main.ts).
+  // behind SMOKE_SEED_PROJECTS so prod/CI seeds stay byte-for-byte unchanged (the
+  // flag is set ONLY on the smoke migrate/seed run in scripts/lib/smoke-main.ts).
   // Idempotent (upsert-on-slug + delete/re-insert facets), so safe on every boot.
-  if (process.env.DEMO_SEED_PROJECTS === "1") {
-    await seedDemoProjects();
+  if (process.env.SMOKE_SEED_PROJECTS === "1") {
+    await seedSmokeProjects();
   }
 
   // Public-deployment only: seat the house swarm (Athena, Robot Money) with
   // the profile copy robotmoney.net publishes, from the committed manifests
   // (see ../swarm/roster-seed.ts). Gated behind SWARM_SEED_ROSTER so every
-  // other seed — CI, the demo stack, a local dev database — stays byte-for-byte
-  // what it was; the demo's own roster comes from backend/src/demo/e2e.ts and
+  // other seed — CI, the smoke stack, a local dev database — stays byte-for-byte
+  // what it was; the smoke's own roster comes from backend/src/smoke/e2e.ts and
   // must not gain two extra members.
   //
   // Seating is additive only: it upserts the roster and leaves every other
   // member alone. SWARM_SEED_ROSTER_PRUNE additionally retires (status=
   // 'inactive', never deletes) every other ACTIVE member, which is how a
-  // deployment the demo drivers populated converges to the real roster.
+  // deployment the smoke drivers populated converges to the real roster.
   //
   // The prune is a SECOND flag, and deliberately nested INSIDE the seed gate
   // (issue #530): it is the only half that can sweep away an operator
@@ -409,7 +409,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 // tooling on the migration pool: issue #106 gave the worker its own
 // queue-scoped pool (db/worker-client.ts), and a seed that queried through that
 // second pool would leave `bun run migrate` with open sockets it never closes
-// (the demo's migrate one-shot would hang forever).
+// (the smoke's migrate one-shot would hang forever).
 export async function backfillWalletHistory(): Promise<number> {
   const rows = walletHistorySeedRows();
   for (const r of rows) {

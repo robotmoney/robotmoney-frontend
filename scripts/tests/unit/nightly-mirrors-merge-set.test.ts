@@ -174,7 +174,7 @@ describe("nightly runs the merge set and nothing more", () => {
     // would have run the same assertions twice per merge (docs/decisions.md
     // D26). Their disposition is retirement; this pins that they did not come
     // back on a schedule of their own.
-    for (const gone of ["swarm-opencode-nightly.yml", "demo-live-smoke-nightly.yml"]) {
+    for (const gone of ["swarm-opencode-nightly.yml", "smoke-live-smoke-nightly.yml"]) {
       expect(files, `${gone} was retired by issue #373`).not.toContain(gone);
     }
   });

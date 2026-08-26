@@ -18,8 +18,8 @@ import { join } from "node:path";
 import { POSTGRES_IMAGE } from "./postgres-image.ts";
 // The SHARED naming scheme. This is a raw `docker run`, so — exactly like
 // backend/tests/preload.ts, the other non-compose spawner — it cannot inherit
-// labels from a compose file and must stamp them itself. Unlabelled, a twin is
-// invisible to demo:reap and demo:clean, which is how a container holding a full
+// labels from a compose file and must stamp them itself. Unlabelled, a smoke-twin is
+// invisible to smoke:reap and smoke:clean, which is how a container holding a full
 // copy of production ends up living on a host indefinitely.
 import {
   dockerLabelFlags,
@@ -84,7 +84,7 @@ const LOCAL_USER = "restore_check";
 const LOCAL_DB = "rm_restore_check";
 
 /**
- * Per-run password for the twin's superuser (docs/runbooks/*.md §5.3b.2 T4).
+ * Per-run password for the smoke-twin's superuser (docs/runbooks/*.md §5.3b.2 T4).
  *
  * Generated, never a constant. This container holds a COMPLETE copy of
  * production — admin_credential hashes, session tokens, member access keys and
@@ -139,24 +139,24 @@ export async function restoreBackupIntoContainer(
      */
     bindHost?: string;
     /**
-     * The compose project this twin belongs to, when it belongs to one.
+     * The compose project this smoke-twin belongs to, when it belongs to one.
      *
-     * A `--db twin` boot passes its demo project so demo:down and demo:clean
-     * scope to the twin like any other container that boot created. A standalone
-     * twin (restore-check.ts) passes nothing and gets its own `twin` family name
-     * — the two must not collide, because a standalone twin can legitimately run
-     * beside a demo.
+     * A `--db smoke-twin` boot passes its smoke project so smoke:down and smoke:clean
+     * scope to the smoke-twin like any other container that boot created. A standalone
+     * smoke-twin (restore-check.ts) passes nothing and gets its own `smoke-twin` family name
+     * — the two must not collide, because a standalone smoke-twin can legitimately run
+     * beside a smoke.
      */
     project?: string;
     /**
-     * A NAMED volume to hold the restored cluster, created here with the demo's
-     * labels so `demo:clean` reclaims it by the same label scoping it uses for
+     * A NAMED volume to hold the restored cluster, created here with the smoke's
+     * labels so `smoke:clean` reclaims it by the same label scoping it uses for
      * every other volume a boot creates.
      *
      * Omitted (restore-check.ts) the data lives in the container's writable
      * layer and dies with it, which is right for a check that tears down in a
-     * `finally`. A `--db twin` boot passes one because its contract is the
-     * ephemeral-pgdata contract: teardown keeps the data, demo:clean reclaims it.
+     * `finally`. A `--db smoke-twin` boot passes one because its contract is the
+     * ephemeral-pgdata contract: teardown keeps the data, smoke:clean reclaims it.
      *
      * NOTE the volume must be created BEFORE `docker run`, because a volume
      * auto-created by `-v` carries no labels at all — which is precisely how a
@@ -168,18 +168,18 @@ export async function restoreBackupIntoContainer(
   const bindHost = opts.bindHost ?? "127.0.0.1";
   const container = `rm-restore-${backup.stamp}-${Math.random().toString(36).slice(2, 8)}`;
   const environment = resolveStackEnvironment(process.env);
-  const project = opts.project ?? stackProjectName("twin", environment);
+  const project = opts.project ?? stackProjectName("smoke-twin", environment);
   // ROLE_LABEL last so it cannot be overridden: the reaper's liveness rule
-  // depends on a twin admitting what it is. See naming.ts's ROLE_LABEL.
+  // depends on a smoke-twin admitting what it is. See naming.ts's ROLE_LABEL.
   const labels = { ...stackLabels(environment, project), [ROLE_LABEL]: TWIN_ROLE };
   const labelFlags = dockerLabelFlags(labels);
   const volumeArgs: string[] = [];
   if (opts.volume) {
-    // DEMO_VOLUME_LABEL ("robotmoney.demo=1") is what demo:clean filters on —
-    // docker-compose.demo.yml stamps it on pgdata, and this is the non-compose
+    // SMOKE_VOLUME_LABEL ("robotmoney.smoke=1") is what smoke:clean filters on —
+    // docker-compose.smoke.yml stamps it on pgdata, and this is the non-compose
     // equivalent. Without it the volume is unreclaimable by the documented path.
     const created = await run(
-      ["docker", "volume", "create", "--label", "robotmoney.demo=1", ...dockerLabelFlags(labels), opts.volume],
+      ["docker", "volume", "create", "--label", "robotmoney.smoke=1", ...dockerLabelFlags(labels), opts.volume],
       { log },
     );
     if (created !== 0) return { error: `docker volume create ${opts.volume} failed` };
@@ -199,7 +199,7 @@ export async function restoreBackupIntoContainer(
     // NOT a contradiction of docker-compose.yml's `pgdata:/var/lib/postgresql/data`:
     // that service is pinned to an OLDER major on purpose (see postgres-image.ts's
     // header — a live data directory cannot be re-read by a different major, which
-    // is what the --pg-data resume contract depends on). The twin has no such
+    // is what the --pg-data resume contract depends on). The smoke-twin has no such
     // constraint: it is restored fresh from a dump every boot.
     volumeArgs.push("-v", `${opts.volume}:/var/lib/postgresql`);
   }
@@ -311,7 +311,7 @@ export function teardownContainer(container: string, log: (m: string) => void): 
 }
 
 /**
- * Restore a backup, hand the caller the running twin, and ALWAYS tear it down.
+ * Restore a backup, hand the caller the running smoke-twin, and ALWAYS tear it down.
  *
  * Extracted because restore-check.ts and any future release's equivalent do the
  * identical five things around their own version-specific queries: resolve the
@@ -327,7 +327,7 @@ export function teardownContainer(container: string, log: (m: string) => void): 
  * failed restore), matching the exit-code contract the upgrade scripts use:
  * 2 = could not run, distinct from 1 = ran and found a problem.
  */
-export async function withTwinContainer<T>(
+export async function withSmokeTwinContainer<T>(
   opts: { backupDir?: string; log: (m: string) => void; bindHost?: string; project?: string; volume?: string },
   fn: (restored: RestoredContainer, backup: BackupFiles) => Promise<T>,
 ): Promise<T | { error: string; code: 2 }> {

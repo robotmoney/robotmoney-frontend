@@ -13,7 +13,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockVendorScripts } from "./vendor-scripts.ts";
 import { navigate } from "./navigation.ts";
 
-const ACCESS_KEY = "demo-access-key";
+const ACCESS_KEY = "smoke-access-key";
 
 const ENTRIES = {
   entries: [

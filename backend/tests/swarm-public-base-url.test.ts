@@ -3,9 +3,9 @@
 //
 // `SWARM_PUBLIC_BASE_URL` is inert: it is named by no compose file (not
 // docker-compose.yml's api `environment:` allowlist, not
-// docker-compose.demo.yml's, not the x-worker-env anchor), there is no
+// docker-compose.smoke.yml's, not the x-worker-env anchor), there is no
 // `env_file:` anywhere and backend/Dockerfile sets no ENV, and it is absent
-// from scripts/lib/demo-main.ts's DEMO_COMPOSE_PASSTHROUGH. So the fallback in
+// from scripts/lib/smoke-main.ts's DEMO_COMPOSE_PASSTHROUGH. So the fallback in
 // resolveSwarmPublicBaseUrl IS the value every real deployment computes, and
 // every swarm notification email links to it — the applicant claim link at
 // src/swarm/notifications.ts:26 most of all, which is the ONLY durable copy of

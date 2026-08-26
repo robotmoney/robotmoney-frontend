@@ -175,7 +175,7 @@ describe("receipt step ids are wired to the scripts that emit them", () => {
     ["preflight.ts", "P4.preflight-live"],
     ["restore-check.ts", "P3.gate-c"],
     ["stage-rehearsal.ts", "P5.rehearsal-boot"],
-    ["postflight.ts", "P5.postflight-twin"],
+    ["postflight.ts", "P5.postflight-smoke-twin"],
     ["postflight.ts", "P8.postflight-prod"],
   ];
   test.each(wiring)("%s emits %s", (file, stepId) => {

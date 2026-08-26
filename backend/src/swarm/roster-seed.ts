@@ -11,7 +11,7 @@
 // roster: their copy lives in the committed manifests under
 // frontend/public/data/swarm/manifests/members/, which the OLD site read
 // directly and this stack does not read at all. A deployment therefore seats
-// whatever the demo drivers happened to create — synthetic personas with
+// whatever the smoke drivers happened to create — synthetic personas with
 // generated taglines — instead of the real swarm.
 //
 // RELATIONSHIP TO THE v0 ARCHIVE BACKFILL (#498 / backend/scripts/
@@ -35,9 +35,9 @@
 //     apply → approve → claim → profile flow. Seating it from a seed would
 //     hand it a row it could never claim, and would pre-empt the very flow it
 //     is about to exercise.
-//   - boreas / cygnus / draco and the five demo newcomers (Helios, Selene,
-//     Rhea, Nyx, Eos): demo fixtures from backend/src/demo/e2e.ts and
-//     scripts/lib/demo-newcomers.ts. They belong to `bun run demo`, not to a
+//   - boreas / cygnus / draco and the five smoke newcomers (Helios, Selene,
+//     Rhea, Nyx, Eos): smoke fixtures from backend/src/smoke/e2e.ts and
+//     scripts/lib/smoke-newcomers.ts. They belong to `bun run smoke`, not to a
 //     public deployment. pruneToLiveRoster() retires the ones an existing
 //     deployment already holds.
 //
@@ -211,7 +211,7 @@ export async function seedLiveRoster(): Promise<number> {
 // apply flow — including woon, whom the v0 archive backfill seats as active
 // and whom this deliberately retires (decision #502: deactivate, never delete,
 // so its historical takes keep resolving by member id). Turn it on
-// deliberately, once, when converging a deployment that demo drivers have
+// deliberately, once, when converging a deployment that smoke drivers have
 // populated.
 export async function pruneToLiveRoster(): Promise<string[]> {
   const retired = await sql<{ id: string }[]>`

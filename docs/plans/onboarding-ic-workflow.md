@@ -1,4 +1,4 @@
-# Plan: align tools, tests, and demos to the §11 onboarding workflow
+# Plan: align tools, tests, and smokes to the §11 onboarding workflow
 
 Status: working plan (adhoc branch). Target: `docs/architecture.md` §11 (normative;
 merged in #252, amended on this branch) — sequence `connect → discover →
@@ -23,10 +23,10 @@ Two load-bearing decisions this plan implements:
   therefore precede apply, and a completed application is itself the proof the
   owner's agent works. The server mints the member UUID at completion and exposes
   it (response + status page).
-- **Demo onboarding is an eval, not a script (R8).** Every demo admission
+- **Demo onboarding is an eval, not a script (R8).** Every smoke admission
   launches a vanilla OpenCode agent container, hands it the canonical copy-paste
   prompt with a generated identity, and the agent onboards itself with real
-  inference. The demo observes progress via the public status API; a failed
+  inference. The smoke observes progress via the public status API; a failed
   onboarding is a red eval result about our instructions, never something a
   driver script works around.
 
@@ -99,13 +99,13 @@ another phase; it is dropped, not merged.
 Today `onboardMember()` (`mcp/src/e2e.ts:236-305`) is a scripted driver: JS
 keygen (`mcp/src/crypto.ts`), client-supplied id, sleep, activate, claim — and
 the TUI strip steps are `keypair → apply → review → activate → connect → …`
-(`scripts/lib/demo-main.ts:317`). Replace the driver with an eval harness. Per
-D21, the harness talks to the backend API directly — there is no demo MCP
+(`scripts/lib/smoke-main.ts:317`). Replace the driver with an eval harness. Per
+D21, the harness talks to the backend API directly — there is no smoke MCP
 container to depend on:
 
 - **Member container**: a vanilla OpenCode agent image (no Robot Money tooling
-  preinstalled) added to `docker-compose.demo.yml`, one instance per admission,
-  with egress to the demo **API** container, the `robotmoney-core` `rmpc`
+  preinstalled) added to `docker-compose.smoke.yml`, one instance per admission,
+  with egress to the smoke **API** container, the `robotmoney-core` `rmpc`
   release asset, the repo-owned `swarm-onboarding` skill served by the API
   from `frontend/public/skills/swarm-onboarding/SKILL.md`, and the
   model API. Real inference on a **vanilla OpenCode install** running a funded,
@@ -115,7 +115,7 @@ container to depend on:
   live in versioned source, never in the environment — the environment carries
   only the selector. `AGENT_MODEL=free` remains a genuinely keyless path.
 - **Harness**: for each scheduled admission, `onboardingDriver()`
-  (`scripts/lib/demo-main.ts:1295+`) generates an identity, starts the
+  (`scripts/lib/smoke-main.ts:1295+`) generates an identity, starts the
   container, and injects the canonical copy-paste prompt with only the skill
   URL pointed at that local static file (all other text is sourced from the
   contract, not duplicated). No further interaction: the agent must install the
@@ -127,7 +127,7 @@ container to depend on:
   (`connect → discover → toolchain → apply → approve → claim → session → memo →
   admitted`); §10.1 of architecture.md updates to match (`discover` now means
   "skill installed," not "MCP tool called").
-- **Auto-approve**: demo-side watcher approves each application 10 s after it
+- **Auto-approve**: smoke-side watcher approves each application 10 s after it
   completes, via `POST /api/swarm/admin/activate` (unchanged, R7).
 - **Failure semantics**: an admission that doesn't reach `admitted` within its
   window renders red in the strip and logs the container transcript — the eval
@@ -135,7 +135,7 @@ container to depend on:
 - `mcp/src/e2e.ts` `onboardMember()` and JS-keygen onboarding remain only where
   a non-eval fixture is genuinely needed (unit tests of crypto primitives) —
   and per D21, this file's logic is relocated out of the retired `mcp/`
-  package as part of this phase, not left behind as dead weight; every demo/e2e
+  package as part of this phase, not left behind as dead weight; every smoke/e2e
   onboarding path goes through the eval harness.
 
 ## Phase 5 — Test/CI adaptation
@@ -144,7 +144,7 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
 
 - `integration.yml`: Phases 1–2 test rewrites/additions run here (backend +
   scripts tests). No MCP tests to add or maintain (D21).
-- `e2e.yml` (PR gate) currently runs the demo hermetically with inference off.
+- `e2e.yml` (PR gate) currently runs the smoke hermetically with inference off.
   **Decided: the PR gate runs the real-inference onboarding eval**, not just
   eval infrastructure — most of what this workflow tests is whether a vanilla
   agent can navigate our installation from our instructions alone, which is
@@ -153,7 +153,7 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
   succeeds, a signed apply built with the real `rmpc` binary lands over the
   REST API) as a fast fail-fast step that runs *before* the real-inference
   eval in the same job, not as a substitute for it. The known flake risk
-  (self-hosted runner shares its IP with the standing `rm_demo_*` stack — live
+  (self-hosted runner shares its IP with the standing `rm_smoke_*` stack — live
   quota flake) is handled with retry/backoff around the model call, not by
   dropping inference from the gate. Because the eval is keyless (D22) there is
   no secret to withhold and therefore **no fork/same-repo distinction**: every
@@ -176,15 +176,15 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
 
 ## Phase 6 — Deployment/provisioning
 
-- Demo: no `mcp` container in `docker-compose.demo.yml` (D21) — the member
-  containers need egress to the demo **API** container (which serves the
-  repo-owned skill) and the `robotmoney-core` `rmpc` release asset, not a demo
+- Demo: no `mcp` container in `docker-compose.smoke.yml` (D21) — the member
+  containers need egress to the smoke **API** container (which serves the
+  repo-owned skill) and the `robotmoney-core` `rmpc` release asset, not a smoke
   MCP surface or a remotely published development skill.
 - Staging: nothing to provision for onboarding specifically — the copy-paste
   prompt is exercised against `swarm.<staging-domain>`'s existing REST API,
   the same surface everything else on staging already uses. (D18's `mcp.`
   subdomain provisioning is dropped, not needed.)
-- Model-key secret management for the demo/nightly eval containers (never baked
+- Model-key secret management for the smoke/nightly eval containers (never baked
   into images; env-injected like `SWARM_REAL_INFERENCE` today).
 
 ## Cross-repo dependencies (robotmoney-core)

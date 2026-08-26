@@ -6,7 +6,7 @@
 // the `docker compose run` argv, draining BOTH pipes, killing the CLI, and
 // removing the container. Extracted verbatim from
 // scripts/lib/onboarding-eval.ts's runOnboardingEval so the eval's layers and
-// the demo's single admission launch containers the SAME way.
+// the smoke's single admission launch containers the SAME way.
 //
 // ── Model and credential: RESOLVED BY THE CALLER, never by this module ──────
 // (docs/decisions.md D22 rule 1 AS AMENDED 2026-07-28, docs/architecture.md
@@ -137,8 +137,8 @@ export interface MemberAgentModel {
 export { buildOpenCodeConfig as buildAgentOpencodeConfig } from "./opencode-run.ts";
 
 // ── Secret redaction ────────────────────────────────────────────────────────
-// A failed run's transcript is printed WHOLE into CI logs and the demo's
-// console (scripts/lib/demo-main.ts). This primitive hands the container its
+// A failed run's transcript is printed WHOLE into CI logs and the smoke's
+// console (scripts/lib/smoke-main.ts). This primitive hands the container its
 // secrets by `-e`, and a curious agent runs `env` — observed verbatim in a
 // local run:
 //
@@ -147,7 +147,7 @@ export { buildOpenCodeConfig as buildAgentOpencodeConfig } from "./opencode-run.
 //   OPENCODE_API_KEY=sk-…
 //
 // GitHub masks registered repository secrets, but nothing masks them in a local
-// `bun run demo`, on Stage, or in a transcript pasted into an issue. So redact
+// `bun run smoke`, on Stage, or in a transcript pasted into an issue. So redact
 // AT THE SOURCE — here, where the injection happens and where the exact values
 // are known — never on a pattern guess, which would either miss a rotated key
 // shape or scrub unrelated text out of the evidence.
@@ -182,9 +182,9 @@ export async function drain(stream: ReadableStream<Uint8Array>): Promise<string>
 //
 // The name inherits its environment scope from `project`, which is the compose
 // project (scripts/stack/naming.ts: `rm_ci_stack_<job hash>` /
-// `rm_demo_eval_<random>` / …). So an eval container is attributable to the
+// `rm_smoke_eval_<random>` / …). So an eval container is attributable to the
 // environment that spawned it by NAME, and — since `docker compose run` applies
-// docker-compose.demo.yml's member-agent labels — by robotmoney.env /
+// docker-compose.smoke.yml's member-agent labels — by robotmoney.env /
 // robotmoney.env.hash LABEL as well.
 export function memberAgentContainerName(project: string, runId: string): string {
   return `${project}-member-agent-eval-${runId}`;
@@ -334,9 +334,9 @@ function buildOpencodeRunTail(a: MemberAgentArgvOptions): string[] {
 // stored bearer token, its installed tooling) across container runs, so the
 // key that enrolled/onboarded a member is the key that signs every later take.
 // Created explicitly — never left to `docker run`'s implicit auto-create — so
-// it carries the SAME reap-by-label channel every demo container and the
-// pgdata volume already carry (robotmoney.demo=1 + robotmoney.demo.project):
-// `bun run demo:clean` and CI's teardown can find and reclaim it by LABEL.
+// it carries the SAME reap-by-label channel every smoke container and the
+// pgdata volume already carry (robotmoney.smoke=1 + robotmoney.smoke.project):
+// `bun run smoke:clean` and CI's teardown can find and reclaim it by LABEL.
 export function memberHomeVolumeName(project: string, slug: string): string {
   // Docker volume names must match [a-zA-Z0-9][a-zA-Z0-9_.-]*.
   const safe = slug.replace(/[^a-zA-Z0-9_.-]/g, "-");
@@ -358,8 +358,8 @@ export function ensureMemberVolume(
   const create = Bun.spawnSync(
     [
       "docker", "volume", "create",
-      "--label", "robotmoney.demo=1",
-      "--label", `robotmoney.demo.project=${project}`,
+      "--label", "robotmoney.smoke=1",
+      "--label", `robotmoney.smoke.project=${project}`,
       name,
     ],
     { ...(env ? { env } : {}), stdin: "ignore", stdout: "ignore", stderr: "pipe" },
@@ -377,9 +377,9 @@ export function ensureMemberVolume(
 // ENVIRONMENT. `docker compose run` re-resolves the WHOLE compose model, not
 // just the service named on the command line, and `ensureProjectVolumes` then
 // compares every project volume against the `com.docker.compose.config-hash`
-// label recorded when that volume was created. docker-compose.demo.yml's
-// pgdata volume carries `robotmoney.demo.project: ${DEMO_PROJECT}`, so a child
-// that does not carry DEMO_PROJECT hashes a volume definition whose label is
+// label recorded when that volume was created. docker-compose.smoke.yml's
+// pgdata volume carries `robotmoney.smoke.project: ${SMOKE_PROJECT}`, so a child
+// that does not carry SMOKE_PROJECT hashes a volume definition whose label is
 // the empty string — a DIFFERENT hash from the one `stack.up()` recorded, which
 // makes compose print
 //
@@ -389,8 +389,8 @@ export function ensureMemberVolume(
 // and wait for an answer. Reproduced end-to-end on this repo's own compose
 // files with compose 2.40.3; with a PTY on stdin the invocation BLOCKS
 // indefinitely, and "yes" would delete the running stack's postgres data
-// mid-run. DEMO_PROJECT is by definition the compose project name
-// (scripts/stack/config.ts's buildComposeEnv sets `DEMO_PROJECT: cfg.project`),
+// mid-run. SMOKE_PROJECT is by definition the compose project name
+// (scripts/stack/config.ts's buildComposeEnv sets `SMOKE_PROJECT: cfg.project`),
 // so it is DERIVED here rather than plumbed — a caller cannot forget it.
 //
 // STDIN. Every compose invocation on this path runs with stdin closed
@@ -419,7 +419,7 @@ export function memberAgentSpawnEnv(
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(hostEnv)) if (v !== undefined) out[k] = v;
-  out.DEMO_PROJECT = composeProject;
+  out.SMOKE_PROJECT = composeProject;
   return out;
 }
 
@@ -522,7 +522,7 @@ export interface MemberAgentResult {
   exitCode: number | null;
   // All three are REDACTED of every secret this primitive injected by `-e`
   // (the model credential and each `ownerEnv` value) — see redactSecrets. They
-  // are printed whole into CI logs and the demo console, so there is
+  // are printed whole into CI logs and the smoke console, so there is
   // deliberately no un-redacted variant to reach for.
   stdout: string;
   stderr: string;
@@ -636,7 +636,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
         ownerEnv: opts.ownerEnv,
         keep,
       }),
-      // `stdin: "ignore"` and the derived DEMO_PROJECT are both load-bearing —
+      // `stdin: "ignore"` and the derived SMOKE_PROJECT are both load-bearing —
       // see memberAgentSpawnEnv's comment. Do not "tidy" either away.
       { cwd: opts.repoRoot, env: spawnEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
     );

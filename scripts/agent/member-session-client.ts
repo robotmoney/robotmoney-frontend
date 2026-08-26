@@ -24,7 +24,7 @@
 //
 // TWO KEYSTORE SHAPES, one client:
 //   - "client" — this client's own identity file (a private-key JWK) at
-//     ~/.rm-member/identity.jwk.json, used by the fixed demo roster. Created
+//     ~/.rm-member/identity.jwk.json, used by the fixed smoke roster. Created
 //     in `enroll` mode; the PUBLIC key is printed for the harness (playing the
 //     RM operator) to register; the private key never leaves this container's
 //     volume.
@@ -159,12 +159,12 @@ async function verifyToken(token: string): Promise<string | null> {
   return status === 200 && body?.memberId ? body.memberId : null;
 }
 
-// ── client-native keystore (fixed demo roster) ──────────────────────────────
+// ── client-native keystore (fixed smoke roster) ──────────────────────────────
 async function ensureClientKeyPair(): Promise<{ publicKeyB64: string; privateKey: CryptoKey }> {
   // A COMMITTED persona identity, when the harness supplies one
   // (scripts/lib/swarm/persona-keys.ts). It wins over whatever this
   // container's volume happens to hold, because the volume is per-boot and the
-  // persona is not: adopting the known key is what lets a restarted demo sign as
+  // persona is not: adopting the known key is what lets a restarted smoke sign as
   // a persona its persistent database already knows, instead of inventing a new
   // identity and duplicating the member. Seeded into the keystore so every later
   // run in this container reads it from the normal place.

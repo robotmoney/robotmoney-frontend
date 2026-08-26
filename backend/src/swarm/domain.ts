@@ -46,9 +46,9 @@ async function publicKeyFor(memberId: string): Promise<string | null> {
 
 // Fixed maximum size for the standing swarm. HARD-ENFORCED at every
 // transition-to-active in the domain/admin layer (activateMember, admin manual
-// add, admin reactivate, and the demo registerMember shortcut) via
+// add, admin reactivate, and the smoke registerMember shortcut) via
 // assertRosterCapacity below — an over-cap admission is refused with a 409, not
-// merely warned about. (The onboarding demo driver also self-throttles ahead of
+// merely warned about. (The onboarding smoke driver also self-throttles ahead of
 // the write, but the write path is now the authoritative gate.) The CANONICAL
 // value lives in @robotmoney/contract (contract/src/swarm.js) — the shared
 // channel mcp/scripts can also import, retiring the comment-enforced
@@ -595,7 +595,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   // snapshotted at creation time. When one exists, only a member with a
   // non-excused ('expected') row on it may submit — this is what makes the
   // roster authoritative rather than advisory. Sessions with NO roster rows
-  // are the legacy/demo path (swarm/domain.ts openSession, used by the
+  // are the legacy/smoke path (swarm/domain.ts openSession, used by the
   // worker and the pre-#152 admin dispatcher) and are unaffected: this check
   // is a no-op for them, so existing behavior is preserved exactly.
   const rosterRows = await sql<{ status: string }[]>`
@@ -1184,7 +1184,7 @@ export function isHandleUniqueViolation(e: unknown): boolean {
 // ── Demo onboarding ─────────────────────────────────────────────────────────
 // A member generates its own keypair and registers its PUBLIC key here, getting
 // a bearer token in one shot. This is the PRIVILEGED admin shortcut (apply +
-// activate combined) used by the demo/E2E harness; the public path is
+// activate combined) used by the smoke/E2E harness; the public path is
 // applyMember → activateMember. Private keys never leave the member.
 export async function registerMember(input: { memberId: string; name: string; lens?: string; publicKey: string }) {
   const token = `tok_${input.memberId}_${crypto.randomUUID()}`;
@@ -1212,7 +1212,7 @@ export async function registerMember(input: { memberId: string; name: string; le
       // to derive at. Guarded by the same "nobody has set this" test acceptance
       // uses, which is what makes the idempotent RE-registration this upsert
       // exists for a no-op on the handle: a member an administrator has renamed
-      // keeps that name however many times the demo harness re-runs.
+      // keeps that name however many times the smoke harness re-runs.
       if (handleIsUnset(seated)) {
         const handle = await deriveMemberHandle(tx, { memberId: input.memberId, name: input.name });
         await tx`UPDATE swarm_members SET handle = ${handle} WHERE id = ${input.memberId}`;
@@ -1236,7 +1236,7 @@ export async function registerMember(input: { memberId: string; name: string; le
 // resetSessions() is REMOVED. It was a dev-only
 // `TRUNCATE swarm_recommendations, swarm_briefs, swarm_sessions
 //  RESTART IDENTITY CASCADE`
-// so a demo could re-run today's subject on a throwaway database. Two things
+// so a smoke could re-run today's subject on a throwaway database. Two things
 // made it indefensible once a stack could point at a persistent server: CASCADE
 // took every published memo with it, and RESTART IDENTITY handed the reused ids
 // to different memos, so an external link to /api/swarm/memos/5 silently
@@ -1294,11 +1294,11 @@ function syntheticRegimePoint(date: string, t: number, rng: () => number) {
 // NOTHING preserves any REAL analytics rows — this only fills gaps.
 //
 // DEMO-ONLY synthesis (finding 009): regime_snapshots is owned by the analytics
-// classifier; synthetic rows may be seeded only for demo fixtures, never on a
+// classifier; synthetic rows may be seeded only for smoke fixtures, never on a
 // live/prod deployment. Gated on RM_ENV: a prod backend refuses to write
 // synthetic rows (a sparse prod table stays sparse and visibly so). The live
 // aggregation path (buildRegimeSummary) no longer calls this at all — only the
-// demo fixture seeding path (ensureDemoSubjectFixtures) does.
+// smoke fixture seeding path (ensureSmokeSubjectFixtures) does.
 export async function backfillRegimeHistory(endDate: string, minPoints = 8): Promise<void> {
   if (config.env === "prod") return; // never write synthetic rows on the live deployment
   const existing = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM regime_snapshots`;
@@ -1392,9 +1392,9 @@ function subjectBasket(subjectId: string): Basket {
 // reference-shaped charts: the subject row (with thesis + recommendation type),
 // a subject snapshot (positions/total/notable the portfolio donut reads), and a
 // trailing regime history for the sparkline. Called from an admin action before a
-// demo session opens. `date` defaults to today; the snapshot is dated on-or-before
+// smoke session opens. `date` defaults to today; the snapshot is dated on-or-before
 // the session date so the frontend snapshot picker selects it.
-export async function ensureDemoSubjectFixtures(subjectId: string, name: string, date?: string) {
+export async function ensureSmokeSubjectFixtures(subjectId: string, name: string, date?: string) {
   const snapDate = date ?? new Date().toISOString().slice(0, 10);
   const recommendationType = "position_actions";
   const thesis = `${name}: treasury read through the 95/5/0/0 conservative allocation mandate — Conservative DeFi Yield anchors 95%, the Agent Tokens sleeve caps at 5%.`;
@@ -1422,7 +1422,7 @@ export async function ensureDemoSubjectFixtures(subjectId: string, name: string,
 /**
  * Convene a session for a subject. THE DATABASE decides when it happened: the
  * caller passes no date, `convened_at` defaults to now(), and `date` is derived
- * from it (migration 0022). A client-supplied date is what let the demo invent
+ * from it (migration 0022). A client-supplied date is what let the smoke invent
  * synthetic future days and then TRUNCATE history to reuse them.
  *
  * Idempotent per OPEN session, not per day. An already-scheduled/collecting
@@ -1574,7 +1574,7 @@ export async function closeWindow(sessionId: string) {
       // the unique partial index above makes this safe even if a retried job
       // races another). Only sessions with a FROZEN expected roster
       // (swarm_session_members — the admin-created path, issue #150) have
-      // an authoritative absence denominator; the legacy/demo openSession path
+      // an authoritative absence denominator; the legacy/smoke openSession path
       // (no roster rows) is unaffected, matching submitRecommendation/
       // aggregateSession's existing roster-optional convention.
       const roster = await tx<{ member_id: string }[]>`
@@ -1601,8 +1601,8 @@ export async function closeWindow(sessionId: string) {
 // LIVE-PATH honesty (finding 009): this is the live aggregation path, so it
 // never writes to regime_snapshots — stored labels are READ as-is (the
 // classifier owns them) and classifyRegime is only a fallback for rows whose
-// label is null. Sparse histories are padded in memory, not persisted; demo
-// deployments get their >= 8 persisted points from ensureDemoSubjectFixtures.
+// label is null. Sparse histories are padded in memory, not persisted; smoke
+// deployments get their >= 8 persisted points from ensureSmokeSubjectFixtures.
 export async function buildRegimeSummary(endDate: string, minPoints = 8) {
   const rows = await sql`
     SELECT date, composite, composite_percentile, regime,
@@ -1804,8 +1804,8 @@ export async function aggregateSession(sessionId: string) {
   // (swarm_session_members, non-excused rows) over live swarm_members
   // so a member added/removed AFTER the session was created never rewrites an
   // already-scheduled session's quorum math. Falls back to live active
-  // members when the session has no roster snapshot at all (the legacy/demo
-  // openSession path) — this keeps the pre-#152 demo/worker behavior
+  // members when the session has no roster snapshot at all (the legacy/smoke
+  // openSession path) — this keeps the pre-#152 smoke/worker behavior
   // unchanged.
   const rosterRows = await sql<{ id: string }[]>`
     SELECT member_id AS id FROM swarm_session_members WHERE session_id = ${sessionId} AND status != 'excused'`;
@@ -1920,7 +1920,7 @@ export async function aggregateSession(sessionId: string) {
       subject_snapshot_total_value_usd = ${subjectTotal}
     WHERE id = ${sessionId}`;
   // Named rollup fields (quorum/stances/meanConfidence/absent) are kept explicit
-  // on the return so existing consumers (src/demo/e2e.ts) stay typed; the rich
+  // on the return so existing consumers (src/smoke/e2e.ts) stay typed; the rich
   // fields ride along too.
   return {
     sessionId, state: "aggregated",

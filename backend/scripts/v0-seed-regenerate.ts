@@ -1,6 +1,6 @@
 // Explicit v0 committee seed regeneration command. The ONLY way the committed
 // artifact + manifest pair is ever produced or replaced — NEVER implicit during
-// migrations, bootstrap, demo boot, or CI (no other code path imports this
+// migrations, bootstrap, smoke boot, or CI (no other code path imports this
 // file). Same convention as scripts/edgar-seed-regenerate.ts.
 //
 // WHY THIS EXISTS. The v1 seed artifact was originally extracted once, by hand,
