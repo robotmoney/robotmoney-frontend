@@ -1032,6 +1032,76 @@ test("a member cannot put words in another member's mouth: `view` is the attribu
   expect(after.disagreements[0].topic).toBe("conviction");
 });
 
+test("a positions[] the model can ask for cheaply cannot be persisted expensively (#771)", async () => {
+  // The amplifier: since `view` is filled from the attributed member's own
+  // take body (up to 10,000 chars), a ~30-byte position entry expands by up to
+  // 334x on write — into `swarm_session_judgements.opinion`, which migration
+  // 0040 makes APPEND-ONLY, so a bloated row can never be deleted. Two ways to
+  // pull the lever, and both are refused here: a long array, and one id
+  // repeated. Neither costs the model anything to emit.
+  const { session, members } = await aggregatedSession("judge-positions-bound", 3);
+  const templateRationale = (await recOf(session.id)).rationale;
+  await setJudgeConfig({ mode: "enforce" });
+  // The size a refused response persists, measured on a response refused for a
+  // reason nobody disputes. Every refusal below must cost the same, give or
+  // take its own `fallbackReason` — which boundedReason() caps at 120 chars.
+  await judgeSession(session.id, { transport: fixedTransport("") });
+  const refusedSize = JSON.stringify(await recOf(session.id)).length;
+  const persistedSize = async () => JSON.stringify(await recOf(session.id)).length;
+
+  const answerWith = (positions: { member_id: string; view: string }[]) => JSON.stringify({
+    rationale: "The takes diverge on timing.",
+    disagreements: [{ topic: "timing", positions, what_settles: "Whether the composite crosses." }],
+    release_safety: { release: "safe", concerns: [] },
+  });
+
+  // 1. Over-long array. 21 entries is one past the bound; every id is real, so
+  //    nothing but the LENGTH is wrong with this response.
+  const long = Array.from({ length: 21 }, (_, i) => ({
+    member_id: members[i % members.length]!.id, view: "v",
+  }));
+  const overLong = await judgeSession(session.id, { transport: fixedTransport(answerWith(long)) });
+  expect(overLong.ok, "an over-long positions[] is an outcome, not an error").toBe(true);
+  expect(overLong.outcome!.source).toBe("fallback");
+  expect(overLong.outcome!.fallbackReason).toBe("too_many_positions");
+  expect(overLong.outcome!.fallbackReason!.length).toBeLessThanOrEqual(REASON_MAX_CHARS);
+  // …and the session is back on template prose, at a refusal's size.
+  expect(overLong.outcome!.opinion.rationale).toBe(templateRationale);
+  expect((await recOf(session.id)).rationale).toBe(templateRationale);
+  expect(await persistedSize()).toBeLessThanOrEqual(refusedSize + REASON_MAX_CHARS);
+
+  // 2. One id repeated. A member holds ONE position per topic, so this is the
+  //    same 10,000-char body copied N times under the same name — and the
+  //    renderer keys on `${topic}-${member_id}`, so it was never renderable.
+  const repeated = Array.from({ length: 5 }, () => ({ member_id: members[0]!.id, view: "v" }));
+  const dup = await judgeSession(session.id, { transport: fixedTransport(answerWith(repeated)) });
+  expect(dup.ok).toBe(true);
+  expect(dup.outcome!.source).toBe("fallback");
+  expect(dup.outcome!.fallbackReason).toStartWith("duplicate_position:");
+  expect(dup.outcome!.fallbackReason!.length).toBeLessThanOrEqual(REASON_MAX_CHARS);
+  expect(await persistedSize()).toBeLessThanOrEqual(refusedSize + REASON_MAX_CHARS);
+  // The append-only record carries the bounded reason too.
+  expect(String((await latestJudgement(session.id) as any).fallback_reason).length)
+    .toBeLessThanOrEqual(REASON_MAX_CHARS);
+
+  // 3. The measurement the issue was opened on, driven at the parser with a
+  //    real 10,000-char body: the response is cheap, the opinion would not be.
+  const input = (await buildJudgeInput(session.id, 3))!;
+  const fat = { ...input, takes: input.takes.map((t) => ({ ...t, body: "x".repeat(10_000) })) };
+  const cheap = answerWith(long);
+  expect(cheap.length).toBeLessThan(1_000);
+  expect(() => parseJudgeResponse(cheap, fat)).toThrow("too_many_positions");
+  expect(() => parseJudgeResponse(answerWith(repeated), fat)).toThrow("duplicate_position:");
+
+  // And a legitimate multi-member disagreement — one position per member of a
+  // single-digit roster — is NOT truncated by the bound.
+  const honest = parseJudgeResponse(
+    answerWith(members.map((m) => ({ member_id: m.id, view: "v" }))),
+    input,
+  );
+  expect(honest.disagreements[0]!.positions).toHaveLength(members.length);
+});
+
 test("the no-weights CHECK is a real schema backstop: a NESTED weight is refused by the database", async () => {
   // The first draft was `opinion ?| ARRAY[...]`, which tests TOP-LEVEL keys
   // only — and `opinion` is always {rationale, disagreements, release_safety},

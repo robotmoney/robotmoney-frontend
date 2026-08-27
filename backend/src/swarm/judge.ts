@@ -310,6 +310,22 @@ const MAX_RATIONALE_CHARS = 4000;
 const MAX_DISAGREEMENTS = 10;
 const MAX_CONCERNS = 10;
 const MAX_FIELD_CHARS = 2000;
+/**
+ * A position costs FAR more to persist than it costs to ask for. `view` is
+ * filled from the attributed member's own take body (up to 10,000 chars —
+ * api/validation.ts), so a ~30-byte `{member_id, view}` entry expands by up to
+ * 334x on write, and `swarm_session_judgements.opinion` is append-only from
+ * migration 0040: a bloated row can never be deleted. Every other collection
+ * here is bounded; this one was not (#771).
+ *
+ * WHY 20. A legitimate disagreement names at most one position per member of
+ * the frozen take set, and the roster is single-digit, so 20 leaves better than
+ * 2x headroom and can never truncate a real answer. It is the same order as
+ * MAX_DISAGREEMENTS and MAX_CONCERNS, and it caps the worst case at
+ * 10 x 20 x 10,000 chars instead of unbounded. The de-duplication below is
+ * what makes the REAL bound the roster size rather than this number.
+ */
+const MAX_POSITIONS = 20;
 
 function boundedString(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
@@ -383,7 +399,15 @@ export function parseJudgeResponse(raw: string, input: JudgeInput): JudgeOpinion
     const whatSettles = boundedString(e.what_settles, MAX_FIELD_CHARS);
     if (!topic || !whatSettles) throw new JudgeResponseError("malformed_disagreement");
     if (!Array.isArray(e.positions) || e.positions.length === 0) throw new JudgeResponseError("malformed_disagreement");
+    if (e.positions.length > MAX_POSITIONS) throw new JudgeResponseError("too_many_positions");
     const positions: JudgeDisagreementPosition[] = [];
+    // A member holds ONE position per topic, by definition. A repeat is either
+    // a confused model or a take body driving the write amplifier (#771): the
+    // same 10,000-char body copied N times under the same id. The renderer
+    // already keys on `${topic}-${member_id}` (views/swarm/session.html), so a
+    // duplicate has never meant anything to anyone — refuse it rather than
+    // persist it.
+    const seen = new Set<string>();
     for (const p of e.positions) {
       if (p === null || typeof p !== "object" || Array.isArray(p)) throw new JudgeResponseError("malformed_position");
       const memberId = boundedString((p as Record<string, unknown>).member_id, 200);
@@ -393,6 +417,8 @@ export function parseJudgeResponse(raw: string, input: JudgeInput): JudgeOpinion
       const claimedView = boundedString((p as Record<string, unknown>).view, MAX_FIELD_CHARS);
       if (!memberId || !claimedView) throw new JudgeResponseError("malformed_position");
       if (!memberIds.has(memberId)) throw new JudgeResponseError(`unknown_member:${memberId}`);
+      if (seen.has(memberId)) throw new JudgeResponseError(`duplicate_position:${memberId}`);
+      seen.add(memberId);
       const view = (bodyOf.get(memberId) ?? "").trim();
       // A member with no body of their own has no position to quote, so there
       // is nothing this disagreement could truthfully say about them.
