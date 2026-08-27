@@ -218,6 +218,38 @@ export async function verifyClaimChallengeSignature(
   }
 }
 
+/**
+ * Verify an Ed25519 signature over an EXACT STRING, with no canonicalization in
+ * between (issue #754).
+ *
+ * WHY THIS EXISTS BESIDE verifySubmissionSignature. That one takes a submission
+ * OBJECT and canonicalizes it, which is right when the authority is the stored
+ * jsonb payload. It is wrong for a consensus receipt: the receipt carries
+ * `canonical_submission` as the exact bytes that were signed, and
+ * consensus-receipt.canonicalization.json is explicit that the string is
+ * "carried as an exact string and never re-parsed before signature
+ * verification" — reparsing it would send a member's float weights through a
+ * JSON round trip, and `0.15` surviving as `0.15` is a property of one
+ * serializer rather than of the format. So the receipt's read-time check
+ * verifies the carried string itself, byte for byte.
+ *
+ * Same key/signature encodings and the same fail-closed shape as every other
+ * verifier in this file — no bespoke crypto, and an unparseable key or
+ * signature is `false`, never a throw.
+ */
+export async function verifyDetachedSignature(
+  message: string,
+  signatureB64: string,
+  publicKeyB64: string,
+): Promise<boolean> {
+  try {
+    const pub = await importEd25519PublicKey(publicKeyB64);
+    return await crypto.subtle.verify(ALG, pub, canonicalBase64ToBytes(signatureB64, 64), new TextEncoder().encode(message));
+  } catch {
+    return false;
+  }
+}
+
 export interface StoredSubmissionSignature {
   submission: Parameters<typeof canonicalizeSubmission>[0];
   signatureB64: string;

@@ -1744,6 +1744,90 @@ asserting the digest a **consumer obligation** and says so in `digest_note`:
 must commit the digest of the golden beside its own code and assert it, or the
 on-chain anchor is never checked against this pin in CI.
 
+### 9.7.1 Assembling and publishing the receipt
+
+§9.7 pins the *format*; this is the code that produces one (issue #754).
+`backend/src/swarm/consensus-receipt.ts` turns one judged session into the
+payload, stores it once, and re-verifies it on every read.
+
+| Concern | Where it lives |
+|---|---|
+| The bytes, the schema, the arithmetic | **Imported** from `@robotmoney/contract/consensus-receipt` — `canonicalizeReceipt`, `validateReceipt`, `receiptSemanticErrors`, `participationBps`, `compareCodePoints`. Nothing about the format is restated in the backend. |
+| The assembly | `assembleConsensusReceipt()` — pure: no database, no clock, no configuration |
+| The database seam | `publishConsensusReceipt()` — idempotent, immutable, writes `swarm_consensus_receipts` |
+| The read | `GET /api/swarm/sessions/:id/consensus-receipt` — public, re-verified per request |
+| The trigger | `POST /api/swarm/admin/sessions/:id/consensus-receipt` — privileged, idempotent |
+| The store | `swarm_consensus_receipts` (migration 0042) — append-only **and** UPDATE-refusing |
+
+**The reference canonicalizer is imported, never re-derived.** A cross-repo pin
+whose executable form lives in two places is two pins. Everything the assembler
+adds is a *normalization the producer needs and the format does not describe*:
+`0x`-prefixing the bare sha256 hex `judge.ts` emits, truncating a `timestamptz`
+to whole seconds, zero-filling the sparse stance rollup to its fixed five keys,
+converting the float weight vector to bps, and sorting the signatures by
+`compareCodePoints`. Each is published in
+`consensus-receipt.canonicalization.json#assembler_obligations`, and the order —
+validate, recompute, **then** canonicalize — is normative, because
+`canonicalizeReceipt()` throws on an undefined required field rather than
+emitting bytes with the key missing.
+
+**A refusal, never a quietly incomplete receipt.** `ConsensusReceiptRefusal`
+carries a stable reason code that the admin route returns. The one that matters
+is `weights_not_canonical_four`: `optionalWeights()` accepts any bucket set and
+`meanTakeWeights()` unions whatever appears, so a session where every member
+submitted three buckets has a valid, publicly-served
+`swarm_recommendation.weights` schema 1.0 cannot carry. Omitting `weights` there
+would publish a signed artifact asserting the session produced no allocation
+while `GET /api/swarm/sessions/:id` serves a concrete one for the same session.
+`weights` is omitted **only** when `meanTakeWeights()` returned nothing at all.
+The vector itself is **read**, never re-derived — `meanTakeWeights()` still has
+exactly one caller — so the receipt and the public API cannot disagree.
+
+**Key rotation: the receipt embeds the key that SIGNED, not the roster's current
+one.** Every other read path in this repo resolves a take's key as
+`WHERE k.member_id = … AND k.active`, which is not necessarily the key that
+signed it — issue #697 is that defect at the per-take level and it is still
+open. The aggregate must not inherit it: a receipt is anchored on chain and
+re-verified by strangers who cannot ask what the roster looked like at the time.
+So assembly tries every one of the member's registered keys against that take's
+own signature and embeds the one that verifies; read-time verification then uses
+the embedded key and **never consults the roster**. A member may rotate,
+re-register or leave and the receipt keeps verifying exactly as it did on the
+day it was published. A signing key that is no longer registered at all is a
+refusal, not a receipt carrying an unverifiable signature.
+
+**Read-time verification is three checks, and one failure fails the whole
+receipt.** Mirroring `toVerifiedTake()`, which recomputes rather than trusting a
+stored `verified` column, and extending it to what an aggregate adds: (1) every
+embedded signature verifies against the key embedded beside it, over the
+`canonical_submission` string **as carried** — never re-parsed, because whether
+`0.15` survives a JSON round trip is a property of one serializer rather than of
+the signed bytes; (2) the payload still canonicalizes to the bytes published for
+it — an analyst signature covers only that analyst's own submission, so the
+rationale, the quorum and the weights are outside all of them and signatures
+alone cannot detect a tampered payload; (3) the payload still validates and its
+invariants still recompute. A receipt that fails any of them is served `200`
+with `verified: false` and the reasons stated — never withheld, and never passed
+off as valid.
+
+**Immutable once published, at the database.** `swarm_consensus_receipts` joins
+the append-only set and additionally refuses `UPDATE`
+(`rm_consensus_receipt_immutable()`, migration 0042). For every other protected
+table erasure is the boundary and modification is legitimate; here it is not,
+because the anchored digest commits to those exact bytes — an `UPDATE` does not
+amend the receipt, it orphans the anchor. `publishConsensusReceipt()` re-reads
+before it assembles, so a second call returns the row already on file even if
+the session's prose has since been rewritten by a later judge run.
+
+**The conformance vector.** `consensus-receipt.assembler-input.json` is a
+committed assembler input; feeding it to `assembleConsensusReceipt()` reproduces
+`consensus-receipt.valid.json` and, byte for byte,
+`consensus-receipt.valid.canonical.txt`. So the pinned golden is *regenerated by
+the shipped assembler* rather than transcribed, which is what makes it a fixed
+target for robotmoney-core#1280 rather than a claim about a hand-written file.
+The keccak256 digest over those bytes remains the consumer obligation §9.7
+describes; nothing in this repository can compute it.
+
 ### 9.8 Testing & smoke
 
 Decision [D25](./decisions.md#d25--external-actor-rail-for-simulated-independent-entities)

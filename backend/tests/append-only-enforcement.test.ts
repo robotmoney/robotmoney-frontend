@@ -136,6 +136,18 @@ beforeAll(async () => {
     VALUES (${SESSION}, 'shadow', 'fallback', 'model_unconfigured', 'append-only-prompt-hash',
             'append-only-inputs-digest', 1, 3,
             '{"rationale":"append-only judgement","disagreements":[],"release_safety":{"release":"hold","thinly_supported":true,"take_count":1,"min_takes":3,"concerns":["seeded"]}}'::jsonb)`;
+  // The published consensus receipt for that same session (issue #754,
+  // protected by migration 0042). Seeded through raw SQL rather than the
+  // assembler because what is under test here is the guard, not the assembly —
+  // but it satisfies 0042's own CHECK constraints, so an empty or malformed row
+  // could not stand in for it.
+  const [judgementRow] = (await sql`
+    SELECT id FROM swarm_session_judgements WHERE session_id = ${SESSION} ORDER BY id DESC LIMIT 1`) as unknown as { id: string }[];
+  await sql`
+    INSERT INTO swarm_consensus_receipts (session_id, subject_id, schema_version, judgement_id, receipt, canonical_bytes)
+    VALUES (${SESSION}, ${SUBJECT}, '1.0', ${judgementRow!.id},
+            ${sql.json({ schema_version: "1.0", session_id: SESSION, subject_id: SUBJECT } as never)},
+            ${"robotmoney:consensus-receipt:v1\n{\"schema_version\":\"1.0\"}\n"})`;
   await sql`INSERT INTO swarm_applications (payload) VALUES ('{}'::jsonb)`;
   await sql`INSERT INTO audit_log (actor, action) VALUES ('append-only-test', 'probe')`;
   await sql`INSERT INTO agent_activity_log (action_type, status) VALUES ('probe', 'success')`;

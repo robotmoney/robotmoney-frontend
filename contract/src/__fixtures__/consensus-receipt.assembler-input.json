@@ -1,0 +1,128 @@
+{
+  "$comment": "CONFORMANCE VECTOR INPUT (issue #754). Feed this to assembleConsensusReceipt() (backend/src/swarm/consensus-receipt.ts) and it produces consensus-receipt.valid.json and, byte for byte, consensus-receipt.valid.canonical.txt. Committed so the golden is REPRODUCIBLE rather than transcribed, and so a repo that cannot run this assembler (robotmoney-core#1280) can still see exactly what produced the bytes it anchors.",
+  "session_id": "12440000-0000-4000-8000-000000000001",
+  "subject_id": "treasury-allocation",
+  "created_at": "2026-08-26T16:00:00.487Z",
+  "prompt_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "inputs_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+  "source": "model",
+  "opinion": {
+    "rationale": "The deterministic mean keeps most capital in stable yield while retaining measured exposure to the other three vault themes.",
+    "disagreements": [
+      {
+        "topic": "Size of the stable-yield reserve",
+        "positions": [
+          {
+            "member_id": "analyst-alpha",
+            "view": "Use a 55% stable-yield weight."
+          },
+          {
+            "member_id": "analyst-beta",
+            "view": "Use a 65% stable-yield weight."
+          }
+        ],
+        "what_settles": "The next session's regime and liquidity inputs determine whether the reserve should move."
+      }
+    ],
+    "release_safety": {
+      "release": "safe",
+      "thinly_supported": false,
+      "take_count": 2,
+      "min_takes": 2,
+      "concerns": []
+    }
+  },
+  "active_members": 3,
+  "stances": {
+    "neutral": 1,
+    "constructive": 1
+  },
+  "weights": [
+    {
+      "bucket": "agent_tokens",
+      "weight": 0.125
+    },
+    {
+      "bucket": "conservative_defi_yield",
+      "weight": 0.6
+    },
+    {
+      "bucket": "protocol_tokens",
+      "weight": 0.175
+    },
+    {
+      "bucket": "real_world_assets",
+      "weight": 0.1
+    }
+  ],
+  "analysts": [
+    {
+      "member_id": "analyst-beta",
+      "payload": {
+        "memberId": "analyst-beta",
+        "date": "2026-08-26",
+        "subjectId": "treasury-allocation",
+        "nonce": "fusion-1244-beta-1",
+        "stance": "neutral",
+        "confidence": 74,
+        "body": "Keep a diversified allocation with a larger stable-yield reserve.",
+        "memoUrl": "https://robotmoney.net/swarm/memos/1244-beta",
+        "weights": [
+          {
+            "bucket": "agent_tokens",
+            "weight": 0.1
+          },
+          {
+            "bucket": "conservative_defi_yield",
+            "weight": 0.65
+          },
+          {
+            "bucket": "protocol_tokens",
+            "weight": 0.15
+          },
+          {
+            "bucket": "real_world_assets",
+            "weight": 0.1
+          }
+        ]
+      },
+      "signature": "CwU5/gOXHFa369r/ld1lL6TwA6do7z9Iwh8HvBEtA9COuzfmoZr/LD3Er6PSD7cQcy4iBfHxLOn6ptsC2XjjCQ==",
+      "public_key": "8sm2iDFmMpmit1ULIYa0ULNrPV+ynvmfl7I2+ufUNUA=",
+      "nonce": "fusion-1244-beta-1"
+    },
+    {
+      "member_id": "analyst-alpha",
+      "payload": {
+        "memberId": "analyst-alpha",
+        "date": "2026-08-26",
+        "subjectId": "treasury-allocation",
+        "nonce": "fusion-1244-alpha-1",
+        "stance": "constructive",
+        "confidence": 82,
+        "body": "Prefer stable yield while retaining measured protocol and agent exposure.",
+        "memoUrl": "https://robotmoney.net/swarm/memos/1244-alpha",
+        "weights": [
+          {
+            "bucket": "agent_tokens",
+            "weight": 0.15
+          },
+          {
+            "bucket": "conservative_defi_yield",
+            "weight": 0.55
+          },
+          {
+            "bucket": "protocol_tokens",
+            "weight": 0.2
+          },
+          {
+            "bucket": "real_world_assets",
+            "weight": 0.1
+          }
+        ]
+      },
+      "signature": "TZP4JS/6PCwulIjt/oOpybFYwcjAIivcQFfRcLrEemxN/3USQNaT4k/rnRhL1MY5vun+oZ4JKwFBCTt2BsZrBw==",
+      "public_key": "T5RBDrNc2aEMfLwkqjIGTP/znuEyqJfXEgiDp+tI++E=",
+      "nonce": "fusion-1244-alpha-1"
+    }
+  ]
+}

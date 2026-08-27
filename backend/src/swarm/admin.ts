@@ -26,10 +26,12 @@ import { deriveMemberHandle } from "./handle.ts";
 // an env var, because the swarm is live and an operator must be able to take
 // the judge off published sessions without restarting anything.
 import { getJudgeConfig, judgeSession, latestJudgement, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
+import { ConsensusReceiptRefusal, publishConsensusReceipt } from "./consensus-receipt.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
 // there (issue #572).
+import { ROUTES, path } from "@robotmoney/contract";
 import type { AdminMember } from "@robotmoney/contract";
 
 type Actor = string;
@@ -1366,6 +1368,61 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
     sessionJudge: carried,
     inForce: latest ? toJudgementAdmin(latest as Record<string, unknown>, carried) : null,
     judgements: rows.map((r) => toJudgementAdmin(r, carried)),
+  };
+}
+
+// Publish the consensus receipt for a judged session (issue #754).
+//
+// NOT A STATE TRANSITION, and deliberately not folded into `publishSessionAdmin`.
+// A receipt needs a judgement — it carries the judge's opinion, its prompt_hash
+// and its inputs_digest — and the judge is `off` by default on a live swarm, so
+// wiring assembly into the publish path would make every ordinary publish
+// attempt an assembly that refuses. It is its own idempotent action instead.
+//
+// IDEMPOTENT AND IMMUTABLE: the second call returns the receipt already on
+// file. `publishConsensusReceipt` re-reads before it assembles and migration
+// 0042 refuses the UPDATE regardless, so the bytes an on-chain digest commits
+// to cannot be replaced by a re-run.
+//
+// EVERY REFUSAL REACHES THE OPERATOR with its reason code. The one that matters
+// most is `weights_not_canonical_four`: a session whose members submitted a
+// bucket set schema 1.0 cannot carry is refused here rather than published with
+// the allocation silently dropped, which would have the signed artifact
+// contradict what GET /api/swarm/sessions/:id serves for the same session.
+export async function publishConsensusReceiptAdmin(sessionId: string, actor: Actor = ADMIN_ACTOR) {
+  let stored;
+  try {
+    stored = await publishConsensusReceipt(sessionId);
+  } catch (e) {
+    if (e instanceof ConsensusReceiptRefusal) {
+      await audit(actor, "consensus_receipt_refused", { sessionId, reason: e.reason, details: e.details.slice(0, 10) });
+      return {
+        ok: false as const,
+        status: e.reason === "no_session" ? 404 : 409,
+        error: e.reason,
+        message: e.message,
+        details: e.details,
+        sessionId,
+      };
+    }
+    throw e;
+  }
+  await audit(actor, "consensus_receipt_published", {
+    sessionId, subjectId: stored.subjectId, schemaVersion: stored.schemaVersion,
+    canonicalByteLength: stored.canonicalBytes.length,
+  });
+  return {
+    ok: true as const, status: 200, sessionId,
+    receipt: {
+      subjectId: stored.subjectId,
+      schemaVersion: stored.schemaVersion,
+      publishedAt: stored.publishedAt,
+      // From the contract, never a literal — routes.js is the single source of
+      // truth for URLs (finding 019).
+      url: path(ROUTES.swarm.sessionConsensusReceipt, { id: stored.sessionId }),
+      canonicalBytes: stored.canonicalBytes,
+      receipt: stored.receipt,
+    },
   };
 }
 

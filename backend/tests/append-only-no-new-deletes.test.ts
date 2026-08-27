@@ -53,6 +53,7 @@ const ALLOWED: Record<string, string> = {
   "backend/tests/swarm-admin-regime.test.ts": "asserts a session delete is refused 0A000",
   "backend/tests/analytics-worker-role.test.ts": "asserts the restricted role is denied 42501",
   "backend/tests/api-boot-handle-namespace-guard.test.ts": "rolls schema_migrations back to build a pre-0032 database",
+  "backend/tests/consensus-receipt-publish.test.ts": "asserts DELETE and TRUNCATE of a published receipt are refused",
 
   // The migration that installs the guard names every table it protects.
   "backend/migrations/0032_append_only_history.sql": "installs the guard",

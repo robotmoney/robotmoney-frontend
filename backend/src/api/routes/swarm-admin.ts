@@ -207,6 +207,12 @@ export async function handleSwarmAdmin(
       const fn = { add: admin.rosterAddAdmin, excuse: admin.rosterExcuseAdmin, restore: admin.rosterRestoreAdmin }[segs[3] as "add" | "excuse" | "restore"];
       return fromResult(await fn(sessionId, memberId));
     }
+    // Issue #754. Not a state transition and therefore not versioned: it
+    // publishes an artifact ABOUT a session rather than moving it, and it is
+    // idempotent — the second call returns the receipt already on file.
+    if (sessionId && segs.length === 3 && segs[2] === "consensus-receipt" && m === "POST") {
+      return fromResult(await admin.publishConsensusReceiptAdmin(sessionId));
+    }
     if (sessionId && segs.length === 3 && ["cancel", "close", "reopen", "aggregate", "publish", "judge"].includes(segs[2]!) && m === "POST") {
       const b = (await readJsonObject(req)) ?? {};
       const expectedVersion = parseExpectedVersion(b) ?? undefined;

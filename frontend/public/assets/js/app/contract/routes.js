@@ -125,6 +125,14 @@ export const ROUTES = {
     // One path segment, so it can never be confused with the two-segment
     // date/subject form above.
     sessionById: "/api/swarm/sessions/:id",
+    // The Project Fusion CONSENSUS receipt for one session (issue #754): the
+    // signed aggregate, as opposed to `take` below which is one member's signed
+    // take. A STABLE BACKEND PATH, deliberately not content-addressed — the
+    // anchored digest already addresses the bytes, and a reader holding only a
+    // session id must be able to reach the receipt without first knowing its
+    // digest. The path is derived from the session id alone, so it survives
+    // every redeploy and every rebuild of the frontend.
+    sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, read-time-verified
     take: "/api/swarm/takes/:id", // GET — public read-time-verified receipt
     takePermalink: "/swarm/takes/:id", // rendered public verification receipt
     openSession: "/api/swarm/open-session", // GET → session currently collecting, if any
@@ -215,6 +223,10 @@ export const ROUTES = {
       // judge off published sessions WITHOUT a redeploy.
       sessionJudge: "/api/swarm/admin/sessions/:id/judge", // POST — versioned guarded transition
       judgeConfig: "/api/swarm/admin/judge", // GET | POST { mode: off|shadow|enforce, minTakes }
+      // Assemble, sign-collect and PUBLISH the consensus receipt for a judged
+      // session (issue #754). Immutable once published: a second POST returns
+      // the receipt already on file rather than re-assembling it.
+      sessionConsensusReceipt: "/api/swarm/admin/sessions/:id/consensus-receipt", // POST — publish (idempotent)
 
       audit: "/api/swarm/admin/audit", // GET ?actor=&action=&since=&until=&limit= — redacted audit trail
 

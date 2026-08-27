@@ -233,6 +233,9 @@ export const APPEND_ONLY_TABLES = [
   // file installed the triggers — postflight compares live triggers against
   // this list.
   "swarm_session_judgements",
+  // Opted in by migration 0042 (issue #754's published consensus receipt),
+  // for the same reason and on the same terms as the judgement record above.
+  "swarm_consensus_receipts",
   "swarm_applications",
   "audit_log",
   "agent_activity_log",

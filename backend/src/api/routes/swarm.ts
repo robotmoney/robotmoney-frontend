@@ -43,7 +43,15 @@ const RE_SUBJECT = templateRe(C.subject); // /api/swarm/subjects/:id
 const RE_MEMBER_TAKES = templateRe(C.memberTakes); // /api/swarm/members/:id/takes — checked before the plain member-detail route below, same reason as RE_SUBJECT_SNAPSHOTS vs RE_SUBJECT
 const RE_MEMBER_PROFILE = templateRe(C.memberProfile); // /api/swarm/members/:id/profile — POST only, so no ordering conflict with the GET member-detail dispatcher below
 const RE_MEMBER_AVATAR = templateRe(C.memberAvatar); // /api/swarm/members/:id/avatar (GET) — same ordering reason as RE_MEMBER_TAKES
-const RE_SESSION = templateRe(C.session); // /api/swarm/sessions/:date/:subject
+// /api/swarm/sessions/:date/:subject — `:date` PINNED to a calendar date, not
+// the default one-segment wildcard. Without that this two-segment pattern also
+// matches every two-segment route under /sessions/, and it is tested before the
+// extension handlers at the bottom of this dispatcher: it swallowed
+// /api/swarm/sessions/<uuid>/consensus-receipt (issue #754) and answered
+// "no session on <uuid> for subject consensus-receipt" instead of letting the
+// receipt handler see it. The parameter really is a date in every caller and
+// in the contract's own comment, so the pattern says so.
+const RE_SESSION = templateRe(C.session, { date: "\\d{4}-\\d{2}-\\d{2}" });
 // /api/swarm/sessions/:id — ONE segment, so it cannot overlap the
 // two-segment date/subject form above; the order of the two tests below is
 // therefore incidental rather than load-bearing.

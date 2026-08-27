@@ -120,3 +120,32 @@ export function receiptSemanticErrors(
   receipt: ConsensusReceipt,
   spec?: ConsensusReceiptCanonicalizationSpec,
 ): string[];
+
+/** One embedded signature's read-time verdict. */
+export interface ConsensusReceiptSignatureVerdict {
+  memberId: string;
+  verified: boolean;
+}
+
+/**
+ * The body served by `GET ROUTES.swarm.sessionConsensusReceipt` (issue #754).
+ *
+ * `verified` is RECOMPUTED on every request — it is not a stored column. A
+ * receipt with one bad embedded signature, one failed invariant, or a payload
+ * that no longer canonicalizes to `canonicalBytes` is served with
+ * `verified: false` and the reasons stated, never withheld and never passed off
+ * as valid.
+ */
+export interface SwarmConsensusReceiptResponse {
+  sessionId: string;
+  subjectId: string;
+  schemaVersion: string;
+  publishedAt: string;
+  receipt: ConsensusReceipt;
+  /** The exact canonical bytes an on-chain digest commits to, domain prefix and trailing newline included. */
+  canonicalBytes: string;
+  verified: boolean;
+  signatures: ConsensusReceiptSignatureVerdict[];
+  /** Empty iff `verified`. */
+  unverifiedReasons: string[];
+}
