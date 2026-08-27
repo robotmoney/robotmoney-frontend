@@ -30,7 +30,8 @@
         "Thinly supported: 1 take submitted, below the minimum of 2 for this session.",
         "The session produced no complete four-bucket allocation vector, so it cannot draft a RouterGovernance proposal."
       ]
-    }
+    },
+    "source": "fallback"
   },
   "analyst_signatures": [
     {

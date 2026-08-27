@@ -3,202 +3,61 @@
 // WHAT THIS FILE IS. The receipt is the signed, publicly-anchored artifact
 // robotmoney-core anchors and issue #754 assembles. Its one real property is
 // that anyone holding the payload can recompute the bytes and the digest, so
-// this file is the reference canonicalizer AND the pin: the golden
-// `consensus-receipt.valid.canonical.txt` is the cross-repo target, and every
-// assertion below exists so that changing field order, the domain prefix, or
-// number formatting turns this file red instead of silently reshaping an
-// artifact that has already been signed.
+// this file is the PIN: the golden `consensus-receipt.valid.canonical.txt` is
+// the cross-repo target, and every assertion below exists so that changing
+// field order, the domain prefix, number formatting, string escaping, or the
+// timestamp form turns this file red instead of silently reshaping an artifact
+// that has already been signed.
+//
+// THE REFERENCE ITSELF LIVES IN `contract/src/consensus-receipt.js`, not here.
+// A cross-repo pin whose only executable form is inside a test file cannot be
+// imported by the assembler that has to reproduce it. This file holds the
+// published spec JSON to that module, so the two can never drift apart.
 //
 // ZERO DEPENDENCIES, ON PURPOSE. contract/ has no runtime deps and CI runs it
-// with nothing but a root `bun install`. The JSON Schema validator here is a
+// with nothing but a root `bun install`. The JSON Schema validator is a
 // deliberately small subset covering exactly the keywords the receipt schema
 // uses — pulling ajv in to validate one schema would add a dependency to the
 // package whose whole selling point is not having any.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  canonicalizeReceipt,
+  compareCodePoints,
+  participationBps,
+  receiptSemanticErrors,
+  validateReceipt,
+} from "../../src/consensus-receipt.js";
 
 const FIXTURES = join(import.meta.dir, "../../src/__fixtures__");
 
 function readJson(name: string): any {
   return JSON.parse(readFileSync(join(FIXTURES, name), "utf8"));
 }
-
-// ── The reference canonicalizer ─────────────────────────────────────────────
-// Field order is written out literally rather than derived from the spec file,
-// because THIS is the definition; the field-order test below then holds the
-// spec JSON to it, so the two can never drift apart unnoticed.
-function canonicalizeReceipt(receipt: any, spec: any): string {
-  const ordered: Record<string, unknown> = {
-    schema_version: receipt.schema_version,
-    session_id: receipt.session_id,
-    subject_id: receipt.subject_id,
-    created_at: receipt.created_at,
-    prompt_hash: receipt.prompt_hash,
-    inputs_digest: receipt.inputs_digest,
-    quorum: {
-      active: receipt.quorum.active,
-      submitted: receipt.quorum.submitted,
-      absent: receipt.quorum.absent,
-      participation_bps: receipt.quorum.participation_bps,
-    },
-    stances: {
-      bearish: receipt.stances.bearish,
-      cautious: receipt.stances.cautious,
-      neutral: receipt.stances.neutral,
-      constructive: receipt.stances.constructive,
-      bullish: receipt.stances.bullish,
-    },
-    // Exactly JudgeOpinion (backend/src/swarm/judge.ts): rationale,
-    // disagreements, release_safety. The 1.0 draft's `consensus` is gone — no
-    // judge produces it — and release_safety carries the shipped shape whole
-    // rather than a {safe_to_release, opinion} reduction. See
-    // consensus-receipt.canonicalization.json#judge_block_source.
-    judge: {
-      rationale: receipt.judge.rationale,
-      disagreements: receipt.judge.disagreements.map((item: any) => ({
-        topic: item.topic,
-        positions: item.positions.map((position: any) => ({
-          member_id: position.member_id,
-          view: position.view,
-        })),
-        what_settles: item.what_settles,
-      })),
-      release_safety: {
-        release: receipt.judge.release_safety.release,
-        thinly_supported: receipt.judge.release_safety.thinly_supported,
-        take_count: receipt.judge.release_safety.take_count,
-        min_takes: receipt.judge.release_safety.min_takes,
-        concerns: [...receipt.judge.release_safety.concerns],
-      },
-    },
-    analyst_signatures: receipt.analyst_signatures.map((item: any) => ({
-      member_id: item.member_id,
-      public_key: item.public_key,
-      canonical_submission: item.canonical_submission,
-      signature: item.signature,
-    })),
-  };
-  if (receipt.weights != null) {
-    ordered.weights = receipt.weights.map((item: any) => ({
-      bucket: item.bucket,
-      weight_bps: item.weight_bps,
-    }));
-  }
-  return `${spec.domain_separator}${JSON.stringify(ordered)}${spec.trailing_newline ? "\n" : ""}`;
+function readText(name: string): string {
+  return readFileSync(join(FIXTURES, name), "utf8");
 }
 
-// ── A JSON Schema (draft-07) subset validator ───────────────────────────────
-// Supports precisely the keywords consensus-receipt.schema.json uses. An
-// unrecognised keyword is a hard error rather than a silent pass, so the day
-// someone adds `oneOf` to the schema this validator refuses to pretend.
-const SUPPORTED = new Set([
-  "$schema", "$id", "title", "description", "definitions",
-  "type", "required", "additionalProperties", "properties",
-  "const", "enum", "pattern", "format",
-  "minimum", "maximum", "minLength", "minItems", "maxItems", "items", "$ref",
-]);
-
-const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
-
-function validate(value: unknown, schema: any, root: any, path = "", errors: string[] = []): string[] {
-  for (const keyword of Object.keys(schema)) {
-    if (!SUPPORTED.has(keyword)) throw new Error(`unsupported schema keyword "${keyword}" at ${path || "/"}`);
-  }
-  if (schema.$ref) {
-    const target = schema.$ref.replace(/^#\//, "").split("/").reduce((acc: any, k: string) => acc?.[k], root);
-    if (!target) throw new Error(`unresolvable $ref ${schema.$ref}`);
-    return validate(value, target, root, path, errors);
-  }
-  const fail = (reason: string) => errors.push(`${path || "/"}: ${reason}`);
-
-  if (schema.type) {
-    const ok =
-      schema.type === "object" ? value !== null && typeof value === "object" && !Array.isArray(value)
-      : schema.type === "array" ? Array.isArray(value)
-      : schema.type === "integer" ? Number.isInteger(value)
-      : schema.type === "string" ? typeof value === "string"
-      : schema.type === "boolean" ? typeof value === "boolean"
-      : (() => { throw new Error(`unsupported type "${schema.type}"`); })();
-    if (!ok) { fail(`type must be ${schema.type}`); return errors; }
-  }
-  if (schema.const !== undefined && value !== schema.const) fail(`must equal ${JSON.stringify(schema.const)}`);
-  if (schema.enum && !schema.enum.includes(value as never)) fail(`must be one of ${JSON.stringify(schema.enum)}`);
-  if (typeof value === "string") {
-    if (schema.pattern && !new RegExp(schema.pattern).test(value)) fail("pattern");
-    if (schema.minLength !== undefined && value.length < schema.minLength) fail(`minLength ${schema.minLength}`);
-    if (schema.format === "date-time" && !DATE_TIME.test(value)) fail("format date-time");
-  }
-  if (typeof value === "number") {
-    if (schema.minimum !== undefined && value < schema.minimum) fail(`minimum ${schema.minimum}`);
-    if (schema.maximum !== undefined && value > schema.maximum) fail(`maximum ${schema.maximum}`);
-  }
-  if (Array.isArray(value)) {
-    if (schema.minItems !== undefined && value.length < schema.minItems) fail(`minItems ${schema.minItems}`);
-    if (schema.maxItems !== undefined && value.length > schema.maxItems) fail(`maxItems ${schema.maxItems}`);
-    if (schema.items) value.forEach((item, i) => validate(item, schema.items, root, `${path}/${i}`, errors));
-  }
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    const obj = value as Record<string, unknown>;
-    for (const key of schema.required ?? []) {
-      if (!(key in obj)) fail(`missing required "${key}"`);
-    }
-    if (schema.additionalProperties === false) {
-      for (const key of Object.keys(obj)) {
-        if (!schema.properties?.[key]) fail(`additional property "${key}"`);
-      }
-    }
-    for (const [key, sub] of Object.entries(schema.properties ?? {})) {
-      if (key in obj) validate(obj[key], sub, root, `${path}/${key}`, errors);
-    }
-  }
-  return errors;
+/** Key order of the object at JSON path `pointer` inside `canonicalJson`. */
+function keyOrderAt(canonicalJson: string, pointer: string[]): string[] {
+  let node: any = JSON.parse(canonicalJson);
+  for (const step of pointer) node = Array.isArray(node) ? node[Number(step)] : node[step];
+  return Object.keys(node);
 }
 
-// ── Semantic invariants the schema cannot express ───────────────────────────
-// Everything here is a RECOMPUTATION. A verifier holding the receipt derives
-// each of these itself; none of them is a flag it has to take on trust. That
-// is the reason the reconciled `release_safety` carries take_count and
-// min_takes rather than a boolean: `release: "hold"` is member-steerable (a
-// single model-authored concern forces it — issue #767), so a verifier has to
-// be able to separate the arithmetic half from the steerable half.
-function semanticErrors(receipt: any, spec: any): string[] {
-  const errors: string[] = [];
-  const q = receipt.quorum;
-  if (q.active !== q.submitted + q.absent) errors.push("quorum: active !== submitted + absent");
-  if (q.participation_bps !== Math.floor((q.submitted / q.active) * 10_000 + 0.5)) {
-    errors.push("quorum: participation_bps is not round-half-up(submitted / active)");
+/** Apply a refused-variant `patch` ({json pointer: value}, null = delete). */
+function applyPatch(receipt: any, patch: Record<string, unknown>): any {
+  const next = structuredClone(receipt);
+  for (const [pointer, value] of Object.entries(patch)) {
+    const steps = pointer.split("/").filter(Boolean);
+    const last = steps.pop()!;
+    let node: any = next;
+    for (const step of steps) node = node[step];
+    if (value === null) delete node[last];
+    else node[last] = value;
   }
-  const stanceTotal = Object.values(receipt.stances as Record<string, number>).reduce((a, b) => a + b, 0);
-  if (stanceTotal !== q.submitted) errors.push("stances: counts do not sum to quorum.submitted");
-
-  const memberIds = receipt.analyst_signatures.map((s: any) => s.member_id);
-  if (memberIds.length !== q.submitted) errors.push("analyst_signatures: count !== quorum.submitted");
-  if (new Set(memberIds).size !== memberIds.length) errors.push("analyst_signatures: duplicate member_id");
-  if ([...memberIds].sort().join(" ") !== memberIds.join(" ")) {
-    errors.push("analyst_signatures: not sorted by member_id ascending");
-  }
-
-  const rs = receipt.judge.release_safety;
-  if (rs.take_count !== q.submitted) errors.push("release_safety: take_count !== quorum.submitted");
-  const thin = rs.take_count < rs.min_takes;
-  if (rs.thinly_supported !== thin) errors.push("release_safety: thinly_supported !== (take_count < min_takes)");
-  const release = thin || rs.concerns.length > 0 ? "hold" : "safe";
-  if (rs.release !== release) errors.push("release_safety: release is not recomputable from thin support and concerns");
-
-  for (const d of receipt.judge.disagreements) {
-    for (const p of d.positions) {
-      if (!memberIds.includes(p.member_id)) errors.push(`judge.disagreements: unknown member "${p.member_id}"`);
-    }
-  }
-
-  if (receipt.weights != null) {
-    const buckets = receipt.weights.map((w: any) => w.bucket);
-    if (buckets.join(",") !== spec.canonical_bucket_order.join(",")) errors.push("weights: not in canonical bucket order");
-    const sum = receipt.weights.reduce((acc: number, w: any) => acc + w.weight_bps, 0);
-    if (sum !== 10_000) errors.push(`weights: bps sum is ${sum}, not 10000`);
-  }
-  return errors;
+  return next;
 }
 
 async function verifiesEd25519(signature: any): Promise<boolean> {
@@ -217,27 +76,23 @@ async function verifiesEd25519(signature: any): Promise<boolean> {
   );
 }
 
-/** Key order of the object at JSON path `pointer` inside `canonicalJson`. */
-function keyOrderAt(canonicalJson: string, pointer: string[]): string[] {
-  let node: any = JSON.parse(canonicalJson);
-  for (const step of pointer) node = Array.isArray(node) ? node[Number(step)] : node[step];
-  return Object.keys(node);
-}
-
 describe("Project Fusion consensus-receipt shared fixture", () => {
   const spec = readJson("consensus-receipt.canonicalization.json");
   const valid = readJson("consensus-receipt.valid.json");
   const validNoWeights = readJson("consensus-receipt.valid-no-weights.json");
   const invalid = readJson("consensus-receipt.invalid.json");
+  const escaping = readJson("consensus-receipt.escaping.json");
+  const refused = readJson("consensus-receipt.refused-variants.json");
   const mapping = readJson("consensus-receipt.bucket-vault-map.json");
   const schema = readJson("consensus-receipt.schema.json");
-  const golden = readFileSync(join(FIXTURES, "consensus-receipt.valid.canonical.txt"), "utf8");
+  const golden = readText("consensus-receipt.valid.canonical.txt");
+  const escapingGolden = readText("consensus-receipt.escaping.canonical.txt");
 
   // ── the byte pin ──────────────────────────────────────────────────────────
 
   test("fixed-order JavaScript bytes match the cross-repo golden", () => {
     expect(canonicalizeReceipt(valid, spec)).toBe(golden);
-    expect(canonicalizeReceipt(Object.fromEntries(Object.entries(valid).reverse()), spec)).toBe(golden);
+    expect(canonicalizeReceipt(Object.fromEntries(Object.entries(valid).reverse()) as any, spec)).toBe(golden);
   });
 
   test("the domain prefix is pinned, and it is the first thing hashed", () => {
@@ -263,11 +118,13 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     // produces different bytes for the same receipt. Every v1 number is an
     // integer, so the pin is that no number literal ever carries a decimal
     // point, an exponent, or a leading zero.
-    const body = golden.slice(spec.domain_separator.length);
-    const withoutStrings = body.replace(/"(?:[^"\\]|\\.)*"/g, '""');
-    const numbers = withoutStrings.match(/-?\d[\d.eE+-]*/g) ?? [];
-    expect(numbers.length).toBeGreaterThan(0);
-    for (const literal of numbers) expect(literal).toMatch(/^(0|-?[1-9]\d*)$/);
+    for (const text of [golden, escapingGolden]) {
+      const body = text.slice(spec.domain_separator.length);
+      const withoutStrings = body.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+      const numbers = withoutStrings.match(/-?\d[\d.eE+-]*/g) ?? [];
+      expect(numbers.length).toBeGreaterThan(0);
+      for (const literal of numbers) expect(literal).toMatch(/^(0|-?[1-9]\d*)$/);
+    }
   });
 
   test("weights is the last v1 field and omission preserves the old byte shape", () => {
@@ -278,25 +135,143 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect(withoutWeights.startsWith(spec.domain_separator)).toBe(true);
     // A judged-but-unweighted receipt is legal, and it is still a full receipt.
     expect(validNoWeights.judge.release_safety.release).toBe("hold");
-    expect(validate(validNoWeights, schema, schema)).toEqual([]);
-    expect(semanticErrors(validNoWeights, spec)).toEqual([]);
+    expect(validateReceipt(validNoWeights, schema)).toEqual([]);
+    expect(receiptSemanticErrors(validNoWeights, spec)).toEqual([]);
+  });
+
+  // ── string escaping, exercised rather than asserted ───────────────────────
+
+  test("the escaping golden reproduces byte-for-byte, and it carries every dialect-splitting character", () => {
+    // A GOLDEN OF ALL-ASCII TEXT CANNOT DISCRIMINATE. Go's encoding/json
+    // escapes < > & U+2028 U+2029 by default; Python's json.dumps escapes
+    // every non-ASCII code point by default. Both reproduce an ASCII golden
+    // exactly and then diverge on the first real receipt — and every text
+    // field in this payload is model- or member-authored free text.
+    expect(canonicalizeReceipt(escaping, spec)).toBe(escapingGolden);
+    expect(validateReceipt(escaping, schema)).toEqual([]);
+    expect(receiptSemanticErrors(escaping, spec)).toEqual([]);
+
+    // Raw, never escaped: every one of these is a byte a defaulting
+    // implementation would have written as \uXXXX.
+    for (const raw of ["—", "保守的な運用", "через", "&", "<", ">", " ", "\u{1F680}", " ", "é"]) {
+      expect(escapingGolden).toContain(raw);
+    }
+    // Escaped, and only these: quote, backslash, and the C0 short forms.
+    expect(escapingGolden).toContain('\\"');
+    expect(escapingGolden).toContain("\\\\");
+    expect(escapingGolden).toContain("\\n");
+    expect(escapingGolden).toContain("\\t");
+    // THE WHOLE RULE IN ONE ASSERTION: no \uXXXX form appears anywhere. Every
+    // escaping dialect that reaches for one — for non-ASCII, for the HTML
+    // trio, for the line separators, or for an astral-plane surrogate pair —
+    // fails here rather than in production.
+    expect(escapingGolden).not.toContain("\\u");
+    // The astral-plane character is 4 bytes of UTF-8, not a surrogate pair.
+    expect(Buffer.from(escapingGolden, "utf8").includes(Buffer.from("\u{1F680}", "utf8"))).toBe(true);
+
+    // And the rule is published normatively, not by naming a JS function.
+    expect(spec.string_escaping.escaped).toContain("U+0022");
+    expect(spec.string_escaping.escaped).toContain("U+005C");
+    expect(spec.string_escaping.escaped).toContain("U+0000-U+001F");
+    expect(spec.string_escaping.raw).toContain("raw UTF-8");
+    expect(spec.string_escaping.raw).toContain("U+2028");
+    expect(spec.json_serialization).not.toContain("JSON.stringify");
+  });
+
+  // ── canonical bytes are a function of the session ─────────────────────────
+
+  test("every near-miss representation of the same session is refused, each by a named error", () => {
+    // Loud-skip-never: the case list is data, so it is asserted non-empty and
+    // every case must both fail and fail for the reason it names.
+    expect(refused.base).toBe("consensus-receipt.valid.json");
+    expect(refused.cases.length).toBeGreaterThanOrEqual(9);
+    for (const testCase of refused.cases) {
+      const mutated = applyPatch(valid, testCase.patch);
+      const errors = validateReceipt(mutated, schema);
+      expect({ name: testCase.name, errors }).toEqual({ name: testCase.name, errors: [testCase.expect_schema_error] });
+    }
+  });
+
+  test("the timestamp form is pinned to one spelling, and the spec says which", () => {
+    const pattern = new RegExp(schema.properties.created_at.pattern);
+    expect(pattern.test("2026-08-26T16:00:00Z")).toBe(true);
+    for (const rejected of [
+      "2026-08-26T16:00:00.000Z", "2026-08-26T16:00:00.123456Z",
+      "2026-08-26T18:00:00+02:00", "2026-08-26T16:00:00z",
+      "2026-08-26 16:00:00Z", "2026-08-26T16:00:00",
+    ]) {
+      expect(pattern.test(rejected)).toBe(false);
+    }
+    // `format: date-time` would have accepted all six; it is deliberately gone.
+    expect(schema.properties.created_at.format).toBeUndefined();
+    expect(spec.timestamp_serialization.field).toBe("created_at");
+    expect(spec.timestamp_serialization.form).toContain(schema.properties.created_at.pattern);
+    expect(spec.timestamp_serialization.producer_note).toContain("toISOString");
+    for (const receipt of [valid, validNoWeights, escaping]) {
+      expect(receipt.created_at).toMatch(pattern);
+    }
+  });
+
+  test("hex is lowercase everywhere, so one session has one digest", () => {
+    expect(schema.definitions.hash32.pattern).toBe("^0x[0-9a-f]{64}$");
+    expect(schema.properties.session_id.pattern).not.toContain("A-F");
+    // subject_id was already case-pinned; the document is no longer
+    // inconsistent with itself about it.
+    expect(schema.properties.subject_id.pattern).toBe("^[a-z0-9][a-z0-9_-]{0,127}$");
+    expect(spec.assembler_obligations.case_normalization).toContain("lowercased");
   });
 
   // ── the judge block, reconciled against the shipped judge ─────────────────
 
-  test("the judge block is exactly JudgeOpinion — no invented consensus field", () => {
+  test("the judge block is JudgeOpinion plus source — no invented consensus field", () => {
     // backend/src/swarm/judge.ts: `JudgeOpinion { rationale, disagreements,
     // release_safety }`. The 1.0 draft also carried `judge.consensus`, which no
     // judge produces; its only producer is buildConsensus() in
     // backend/src/swarm/domain.ts, and that restates quorum/stances in English.
-    expect(schema.properties.judge.required).toEqual(["rationale", "disagreements", "release_safety"]);
-    expect(Object.keys(schema.properties.judge.properties)).toEqual(["rationale", "disagreements", "release_safety"]);
+    const order = ["rationale", "disagreements", "release_safety", "source"];
+    expect(schema.properties.judge.required).toEqual(order);
+    expect(Object.keys(schema.properties.judge.properties)).toEqual(order);
     expect(schema.properties.judge.additionalProperties).toBe(false);
-    for (const receipt of [valid, validNoWeights]) {
-      expect(Object.keys(receipt.judge)).toEqual(["rationale", "disagreements", "release_safety"]);
+    for (const receipt of [valid, validNoWeights, escaping]) {
+      expect(Object.keys(receipt.judge)).toEqual(order);
     }
-    expect(spec.nested_field_order.judge).toEqual(["rationale", "disagreements", "release_safety"]);
+    expect(spec.nested_field_order.judge).toEqual(order);
     expect(golden).not.toContain('"consensus"');
+  });
+
+  test("source is carried, so a receipt is attributable to what produced it", () => {
+    // runJudge() spreads one `base` — same promptHash, same inputsDigest — into
+    // both the model return and the template-fallback return, and
+    // templateOpinion() calls the same prose builders the aggregator uses. So
+    // WITHOUT this field nothing in a published receipt separates "a model read
+    // the takes" from "the model timed out". prompt_hash does not: its
+    // description no longer claims otherwise.
+    expect(schema.properties.judge.properties.source.enum).toEqual(["model", "fallback"]);
+    expect(valid.judge.source).toBe("model");
+    expect(validNoWeights.judge.source).toBe("fallback");
+    expect(golden).toContain('"source":"model"');
+    expect(canonicalizeReceipt(validNoWeights, spec)).toContain('"source":"fallback"');
+    expect(schema.properties.prompt_hash.description).toContain("DOES NOT ESTABLISH AUTHORSHIP");
+    expect(schema.properties.prompt_hash.description).not.toContain("WHICH judge wrote");
+    // fallbackReason and model stay out, and the reason is recorded.
+    expect(spec.judge_block_source).toContain("fallbackReason");
+  });
+
+  test("positions matches the producer verbatim: one position is enough", () => {
+    // parseJudgeResponse() refuses only an EMPTY positions array, so a model
+    // answer naming a single member is routine and lands in the append-only
+    // swarm_session_judgements.opinion. A schema demanding two would make that
+    // row un-anchorable forever. The round trip through the real parser is
+    // pinned in backend/tests/consensus-receipt-judge-roundtrip.test.ts.
+    expect(schema.definitions.disagreement.properties.positions.minItems).toBe(1);
+    const onePosition = structuredClone(valid);
+    onePosition.judge.disagreements[0].positions = [valid.judge.disagreements[0].positions[0]];
+    expect(validateReceipt(onePosition, schema)).toEqual([]);
+    expect(receiptSemanticErrors(onePosition, spec)).toEqual([]);
+    // Empty is still refused, exactly as the producer refuses it.
+    const noPositions = structuredClone(valid);
+    noPositions.judge.disagreements[0].positions = [];
+    expect(validateReceipt(noPositions, schema)).toContain("/judge/disagreements/0/positions: minItems 1");
   });
 
   test("release_safety carries the shipped shape whole, so a verifier recomputes rather than trusts", () => {
@@ -307,7 +282,7 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect(rs.properties.take_count.type).toBe("integer");
     expect(rs.properties.min_takes.minimum).toBe(1);
     // And they really are enough: recompute both flags on the good fixtures.
-    for (const receipt of [valid, validNoWeights]) {
+    for (const receipt of [valid, validNoWeights, escaping]) {
       const r = receipt.judge.release_safety;
       expect(r.thinly_supported).toBe(r.take_count < r.min_takes);
       expect(r.release).toBe(r.thinly_supported || r.concerns.length > 0 ? "hold" : "safe");
@@ -315,24 +290,125 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     }
   });
 
+  // ── the canonicalizer refuses rather than emits ───────────────────────────
+
+  test("canonicalizeReceipt throws on a missing required field instead of dropping it", () => {
+    // JSON.stringify omits an undefined key SILENTLY. Combined with a sparse
+    // rollup upstream, an assembler that canonicalized before validating would
+    // anchor a digest over bytes that would have failed validation.
+    for (const pointer of [
+      "/created_at", "/quorum/participation_bps", "/judge/rationale",
+      "/judge/release_safety/concerns", "/judge/source",
+      "/judge/disagreements/0/what_settles", "/analyst_signatures/0/signature",
+    ]) {
+      const broken = applyPatch(valid, { [pointer]: null });
+      expect(() => canonicalizeReceipt(broken, spec)).toThrow(
+        new RegExp(`required field "${pointer.replace(/[/]/g, "\\/")}" is undefined`),
+      );
+    }
+    // A number that is not an integer never becomes bytes either.
+    const floaty = applyPatch(valid, { "/quorum/participation_bps": 6666.667 });
+    expect(() => canonicalizeReceipt(floaty, spec)).toThrow(/safe integer/);
+    expect(spec.assembler_obligations.order).toContain("VALIDATE, THEN CANONICALIZE");
+  });
+
+  test("stances is a fixed five-key set, explicitly zero-filled from the sparse rollup", () => {
+    // aggregateSession() starts from {} and only sets stances that appear, so a
+    // two-neutral session hands the assembler a ONE-key object.
+    const sparse = structuredClone(valid);
+    sparse.stances = { neutral: 1, constructive: 1 };
+    const body = canonicalizeReceipt(sparse, spec).slice(spec.domain_separator.length);
+    expect(keyOrderAt(body, ["stances"])).toEqual(spec.nested_field_order.stances);
+    expect(canonicalizeReceipt(sparse, spec)).toBe(golden);
+    expect(spec.assembler_obligations.stances_zero_fill).toContain("FIXED FIVE-KEY");
+  });
+
+  // ── the two obligations #754 is handed ───────────────────────────────────
+
+  test("participation_bps is round-half-up over the exact ratio, and the rule is published", () => {
+    expect(participationBps(2, 3)).toBe(6667);
+    expect(participationBps(1, 3)).toBe(3333);
+    expect(participationBps(1, 8)).toBe(1250); // an exact .5 boundary at the 4th digit
+    expect(participationBps(1, 16)).toBe(625);
+    expect(participationBps(3, 8)).toBe(3750);
+    expect(participationBps(2, 2)).toBe(10_000);
+    // Half-UP, not half-even: 0.00005 * 10000 boundaries round away from zero.
+    expect(participationBps(1, 20_000)).toBe(1);
+    expect(() => participationBps(1, 0)).toThrow(/active > 0/);
+    expect(spec.assembler_obligations.participation_bps_rounding).toContain("ROUND HALF UP");
+    for (const receipt of [valid, validNoWeights, escaping]) {
+      expect(receipt.quorum.participation_bps).toBe(participationBps(receipt.quorum.submitted, receipt.quorum.active));
+    }
+  });
+
+  test("the weights cardinality obligation is stated, not left to the assembler", () => {
+    expect(schema.required).not.toContain("weights");
+    expect(schema.properties.weights.minItems).toBe(4);
+    expect(schema.properties.weights.maxItems).toBe(4);
+    expect(spec.assembler_obligations.weights_cardinality).toContain("REFUSE TO ASSEMBLE");
+    expect(spec.assembler_obligations.weights_cardinality).toContain("meanTakeWeights() returned undefined");
+  });
+
+  // ── ordering ─────────────────────────────────────────────────────────────
+
+  test("analyst_signature_order is code-point order, and the reference sorts that way", () => {
+    // The stated rule and the reference used to disagree: "UTF-8 byte order" in
+    // the spec, JavaScript's default `.sort()` (UTF-16 code units) in the code.
+    // They differ for every code point above U+FFFF.
+    const astral = "\u{10000}";
+    const fullwidth = "０";
+    expect([fullwidth, astral].sort().join("")).toBe(astral + fullwidth); // UTF-16
+    expect([fullwidth, astral].sort(compareCodePoints).join("")).toBe(fullwidth + astral); // code point
+    expect(compareCodePoints("a", "ab")).toBeLessThan(0);
+    expect(compareCodePoints("ab", "ab")).toBe(0);
+    expect(spec.analyst_signature_order).toContain("UNICODE CODE POINT");
+    expect(spec.analyst_signature_order).toContain("UTF-8 byte order");
+    // ...and member_id is pattern-constrained so the three orders coincide.
+    const pattern = "^[a-z0-9][a-z0-9_-]{0,127}$";
+    expect(schema.definitions.analyst_signature.properties.member_id.pattern).toBe(pattern);
+    expect(schema.definitions.disagreement.properties.positions.items.properties.member_id.pattern).toBe(pattern);
+    // An out-of-order pair is caught rather than quietly canonicalized.
+    const swapped = structuredClone(valid);
+    swapped.analyst_signatures.reverse();
+    expect(receiptSemanticErrors(swapped, spec)).toContain("analyst_signatures: not sorted by member_id ascending");
+
+    // AND THE RECOMPUTATION ITSELF USES CODE-POINT ORDER, not just the exported
+    // comparator. Every real member_id is ASCII, where all three orders agree,
+    // so a reference that quietly reverted to `.sort()` would stay green on the
+    // fixtures forever. These two ids are in ascending CODE POINT order and in
+    // descending UTF-16 code-unit order, so they separate the two.
+    const nonBmp = structuredClone(valid);
+    nonBmp.judge.disagreements = [];
+    nonBmp.analyst_signatures[0].member_id = fullwidth;
+    nonBmp.analyst_signatures[1].member_id = astral;
+    expect([fullwidth, astral]).toEqual([fullwidth, astral].sort(compareCodePoints));
+    expect(receiptSemanticErrors(nonBmp, spec)).not.toContain(
+      "analyst_signatures: not sorted by member_id ascending",
+    );
+    nonBmp.analyst_signatures.reverse();
+    expect(receiptSemanticErrors(nonBmp, spec)).toContain("analyst_signatures: not sorted by member_id ascending");
+  });
+
   // ── validation ────────────────────────────────────────────────────────────
 
   test("the valid fixtures pass schema and semantic validation", () => {
-    expect(validate(valid, schema, schema)).toEqual([]);
-    expect(validate(validNoWeights, schema, schema)).toEqual([]);
-    expect(semanticErrors(valid, spec)).toEqual([]);
+    expect(validateReceipt(valid, schema)).toEqual([]);
+    expect(validateReceipt(validNoWeights, schema)).toEqual([]);
+    expect(validateReceipt(escaping, schema)).toEqual([]);
+    expect(receiptSemanticErrors(valid, spec)).toEqual([]);
   });
 
   test("the invalid fixture is rejected, with each reason named", () => {
-    const schemaErrors = validate(invalid, schema, schema);
+    const schemaErrors = validateReceipt(invalid, schema);
     expect(schemaErrors).toContain("/session_id: pattern");
     expect(schemaErrors).toContain("/prompt_hash: pattern");
     expect(schemaErrors).toContain("/quorum/participation_bps: maximum 10000");
     expect(schemaErrors).toContain("/judge/rationale: minLength 1");
     expect(schemaErrors).toContain('/judge/release_safety/release: must be one of ["safe","hold"]');
+    expect(schemaErrors).toContain('/judge/source: must be one of ["model","fallback"]');
     expect(schemaErrors).toContain("/analyst_signatures: minItems 1");
 
-    const semantic = semanticErrors(invalid, spec);
+    const semantic = receiptSemanticErrors(invalid, spec);
     expect(semantic).toContain("quorum: active !== submitted + absent");
     expect(semantic).toContain("analyst_signatures: count !== quorum.submitted");
     expect(semantic).toContain("release_safety: take_count !== quorum.submitted");
@@ -344,7 +420,12 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
   test("the subset validator refuses a schema keyword it does not implement", () => {
     // Loud-skip-never: a keyword this validator silently ignored would be a
     // hole in the only thing asserting the invalid fixture is invalid.
-    expect(() => validate({}, { oneOf: [] }, {})).toThrow(/unsupported schema keyword "oneOf"/);
+    expect(() => validateReceipt({}, { oneOf: [] })).toThrow(/unsupported schema keyword "oneOf"/);
+    // `format` is one of them now: the draft's `format: date-time` accepted
+    // four spellings of one instant, and it is gone from both sides.
+    expect(() => validateReceipt("x", { type: "string", format: "date-time" })).toThrow(
+      /unsupported schema keyword "format"/,
+    );
   });
 
   // ── the rest of the pinned surface ────────────────────────────────────────
@@ -359,13 +440,12 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
       "rmPROTO",
       "rmRWA",
     ]);
-    expect(schema.required).not.toContain("weights");
-    expect(schema.properties.weights.minItems).toBe(4);
-    expect(schema.properties.weights.maxItems).toBe(4);
   });
 
   test("the golden's embedded analyst signatures verify over exact canonicalSubmission bytes", async () => {
-    for (const signature of [...valid.analyst_signatures, ...validNoWeights.analyst_signatures]) {
+    const all = [...valid.analyst_signatures, ...validNoWeights.analyst_signatures, ...escaping.analyst_signatures];
+    expect(all.length).toBeGreaterThan(0);
+    for (const signature of all) {
       expect(await verifiesEd25519(signature)).toBe(true);
       const parsed = JSON.parse(signature.canonical_submission);
       expect(parsed.memberId).toBe(signature.member_id);
@@ -388,10 +468,12 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect(schema.$id.split("/").at(-1)).toBe(schema.properties.schema_version.const);
     expect(spec.version_policy.schema_id).toBe(schema.$id);
     expect(spec.schema_version).toBe(schema.properties.schema_version.const);
-    for (const receipt of [valid, validNoWeights, invalid]) expect(receipt.schema_version).toBe("1.0");
+    for (const receipt of [valid, validNoWeights, invalid, escaping]) expect(receipt.schema_version).toBe("1.0");
     // The draft shipped an unasserted keccak256 constant that the judge
-    // reconciliation silently invalidated. This repo pins bytes, not digests.
+    // reconciliation silently invalidated. This repo pins bytes, not digests —
+    // and says so, including whose obligation the digest assertion then is.
     expect(spec.valid_fixture_digest).toBeUndefined();
     expect(spec.digest_algorithm).toBe("keccak256");
+    expect(spec.digest_note).toContain("CONSUMER OBLIGATION");
   });
 });

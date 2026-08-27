@@ -27,7 +27,8 @@
       "take_count": 1,
       "min_takes": 3,
       "concerns": []
-    }
+    },
+    "source": "human"
   },
   "analyst_signatures": [],
   "weights": [
