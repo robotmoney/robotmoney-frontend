@@ -4,8 +4,11 @@ export { ROUTES, path } from "./routes.js";
 export { canonicalizeClaimChallenge, canonicalizeSubmission } from "./signing.js";
 export { REGIME_RISK_OFF, REGIME_RISK_ON, classifyRegime } from "./regime.js";
 export {
+  RECEIPT_CANONICAL_BUCKET_ORDER,
   RECEIPT_DOMAIN_SEPARATOR,
+  RECEIPT_SCHEMA_VERSION,
   RECEIPT_STANCE_KEYS,
+  RECEIPT_TRAILING_NEWLINE,
   canonicalizeReceipt,
   compareCodePoints,
   participationBps,

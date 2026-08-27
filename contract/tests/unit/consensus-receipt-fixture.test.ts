@@ -22,7 +22,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
+  RECEIPT_CANONICAL_BUCKET_ORDER,
+  RECEIPT_DOMAIN_SEPARATOR,
+  RECEIPT_SCHEMA_VERSION,
+  RECEIPT_STANCE_KEYS,
+  RECEIPT_TRAILING_NEWLINE,
   canonicalizeReceipt,
   compareCodePoints,
   participationBps,
@@ -137,6 +143,85 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect(validNoWeights.judge.release_safety.release).toBe("hold");
     expect(validateReceipt(validNoWeights, schema)).toEqual([]);
     expect(receiptSemanticErrors(validNoWeights, spec)).toEqual([]);
+  });
+
+  // ── the exported constants are the same pin, not a second authority ───────
+
+  test("every exported constant equals the published spec, and drives the bytes when the spec omits it", () => {
+    // WHY THIS TEST EXISTS. The pin was spelled twice — once as these
+    // constants, exported for #754 and robotmoney-core to import, and once in
+    // consensus-receipt.canonicalization.json, which is what canonicalizeReceipt
+    // actually read. NOTHING read the constants, so changing
+    // RECEIPT_DOMAIN_SEPARATOR to a wrong prefix left every test in this repo
+    // green while a consumer that built its spec from the constant anchored
+    // keccak256 over a differently-prefixed payload. Each assertion below binds
+    // one constant to the published document AND to the golden bytes.
+    expect(RECEIPT_DOMAIN_SEPARATOR).toBe(spec.domain_separator);
+    expect(golden.startsWith(RECEIPT_DOMAIN_SEPARATOR)).toBe(true);
+    expect(escapingGolden.startsWith(RECEIPT_DOMAIN_SEPARATOR)).toBe(true);
+
+    expect(RECEIPT_SCHEMA_VERSION).toBe(spec.schema_version);
+    expect(RECEIPT_SCHEMA_VERSION).toBe(schema.properties.schema_version.const);
+    expect(golden).toContain(`"schema_version":"${RECEIPT_SCHEMA_VERSION}"`);
+
+    expect(RECEIPT_TRAILING_NEWLINE).toBe(spec.trailing_newline);
+    expect(golden.endsWith("\n")).toBe(RECEIPT_TRAILING_NEWLINE);
+
+    // The stance keys: milder — a wrong list is a spurious refusal rather than
+    // a wrong digest — but every fixture carries all five at some count, so
+    // dropping one from the list alone changed nothing before this line.
+    expect([...RECEIPT_STANCE_KEYS]).toEqual(spec.nested_field_order.stances);
+    expect(keyOrderAt(golden.slice(spec.domain_separator.length), ["stances"])).toEqual([...RECEIPT_STANCE_KEYS]);
+
+    expect([...RECEIPT_CANONICAL_BUCKET_ORDER]).toEqual(spec.canonical_bucket_order);
+    expect([...RECEIPT_CANONICAL_BUCKET_ORDER]).toEqual(mapping.canonical_bucket_order);
+
+    // AND THEY ARE ON THE LIVE PATH. A caller that hand-builds a spec object —
+    // rather than importing the published JSON — used to get `"undefined{...}"`
+    // bytes, or bytes with no trailing newline, for every field it forgot. With
+    // NO spec at all the constants alone must reproduce the golden exactly.
+    expect(canonicalizeReceipt(valid)).toBe(golden);
+    expect(canonicalizeReceipt(valid, {})).toBe(golden);
+    expect(canonicalizeReceipt(escaping, {})).toBe(escapingGolden);
+    expect(receiptSemanticErrors(valid, {})).toEqual([]);
+    const misordered = structuredClone(valid);
+    misordered.weights.reverse();
+    expect(receiptSemanticErrors(misordered, {})).toContain("weights: not in canonical bucket order");
+  });
+
+  test("the package's exports map resolves the canonicalizer AND the data it takes", async () => {
+    // THE PROMOTION INTO contract/src IS ONLY HALF A FIX WITHOUT THIS. All three
+    // functions take their data as arguments — canonicalizeReceipt reads
+    // spec.domain_separator and spec.trailing_newline, receiptSemanticErrors
+    // reads spec.canonical_bucket_order, validateReceipt needs the schema
+    // document — so an exports map naming only "." and "./routes" left a
+    // consumer able to import the code and forced to VENDOR the JSON, with
+    // nothing holding the vendored copy to this repo's. Every specifier below
+    // failed with ERR_PACKAGE_PATH_NOT_EXPORTED before the map grew
+    // "./consensus-receipt" and "./fixtures/*".
+    const throughPackage = (specifier: string): string =>
+      readFileSync(fileURLToPath(import.meta.resolve(specifier)), "utf8");
+
+    for (const name of [
+      "consensus-receipt.canonicalization.json",
+      "consensus-receipt.schema.json",
+      "consensus-receipt.valid.json",
+      "consensus-receipt.valid.canonical.txt",
+    ]) {
+      expect(throughPackage(`@robotmoney/contract/fixtures/${name}`)).toBe(readText(name));
+    }
+
+    // The module subpath resolves to the same module, and it canonicalizes the
+    // spec resolved through the package to the golden resolved through the
+    // package — the whole cross-repo round trip, using no path this repo knows.
+    const viaPackage = await import("@robotmoney/contract/consensus-receipt");
+    expect(viaPackage.RECEIPT_DOMAIN_SEPARATOR).toBe(RECEIPT_DOMAIN_SEPARATOR);
+    expect(
+      viaPackage.canonicalizeReceipt(
+        JSON.parse(throughPackage("@robotmoney/contract/fixtures/consensus-receipt.valid.json")),
+        JSON.parse(throughPackage("@robotmoney/contract/fixtures/consensus-receipt.canonicalization.json")),
+      ),
+    ).toBe(throughPackage("@robotmoney/contract/fixtures/consensus-receipt.valid.canonical.txt"));
   });
 
   // ── string escaping, exercised rather than asserted ───────────────────────
@@ -310,6 +395,32 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     const floaty = applyPatch(valid, { "/quorum/participation_bps": 6666.667 });
     expect(() => canonicalizeReceipt(floaty, spec)).toThrow(/safe integer/);
     expect(spec.assembler_obligations.order).toContain("VALIDATE, THEN CANONICALIZE");
+  });
+
+  test("a receipt declaring another schema version is refused, never canonicalized under 1.0 rules", () => {
+    // version_policy#selection: "A verifier picks the schema by the receipt's
+    // own schema_version, never by 'latest'." The canonicalizer used to do the
+    // opposite — it read schema_version through required() and echoed it
+    // verbatim without ever comparing it. A 2.0 receipt therefore produced
+    // well-formed bytes under the v1 prefix that DECLARED "2.0" and silently
+    // dropped every 2.0 field, which is a valid-looking digest over a truncated
+    // payload: exactly the mixed-version case retroactivity anticipates.
+    const future = structuredClone(valid);
+    future.schema_version = "2.0";
+    future.some_2_0_field = "a field only 2.0 names";
+    expect(() => canonicalizeReceipt(future, spec)).toThrow(/schema_version "2\.0"/);
+    expect(() => canonicalizeReceipt(future)).toThrow(/schema_version "2\.0"/);
+    // Not a wrapped-in-try nicety: the bytes must not exist at all.
+    let emitted: string | null = null;
+    try { emitted = canonicalizeReceipt(future, spec); } catch { /* expected */ }
+    expect(emitted).toBeNull();
+    // The rule is the published one, and it is version-agnostic: a spec for a
+    // later version canonicalizes that version's receipt and refuses this one.
+    expect(spec.version_policy.selection).toContain("never by");
+    // And the check is version-agnostic rather than a hardcoded "1.0": the same
+    // function driven by a 2.0 spec refuses the 1.0 fixture. The 2.0 rules
+    // themselves do not exist yet — that is the point of refusing.
+    expect(() => canonicalizeReceipt(valid, { ...spec, schema_version: "2.0" })).toThrow(/schema_version "1\.0"/);
   });
 
   test("stances is a fixed five-key set, explicitly zero-filled from the sparse rollup", () => {

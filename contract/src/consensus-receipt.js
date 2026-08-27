@@ -20,12 +20,34 @@
 //
 // ZERO RUNTIME DEPENDENCIES, like every other module in this package.
 
+// THE SPEC FIELDS THIS MODULE READS, AS IMPORTABLE CONSTANTS. Every one of
+// them is also published in consensus-receipt.canonicalization.json, and the
+// fixture test asserts the two agree field by field — so these are a second
+// SPELLING of the pin, never a second authority. They exist because the four
+// values below are the only spec fields the functions here dereference, and a
+// caller that hand-builds a spec object (rather than importing the published
+// JSON through `@robotmoney/contract/fixtures/...`) silently produces
+// `"undefined{...}"` bytes, or bytes without the trailing newline, for every
+// field it forgets. Each is used as the fallback at its own use site, so a
+// partial spec is completed from the pin instead of quietly changing the bytes.
+
 /** The one domain prefix schema 1.0 hashes under. */
 export const RECEIPT_DOMAIN_SEPARATOR = "robotmoney:consensus-receipt:v1\n";
+
+/** The one schema version these rules implement — see the version check below. */
+export const RECEIPT_SCHEMA_VERSION = "1.0";
+
+/** The canonical bytes end with a newline. */
+export const RECEIPT_TRAILING_NEWLINE = true;
 
 /** The five stance keys `stances` always carries, in canonical order. */
 export const RECEIPT_STANCE_KEYS = Object.freeze([
   "bearish", "cautious", "neutral", "constructive", "bullish",
+]);
+
+/** The four PRD vaults, in the order `weights` must be emitted. */
+export const RECEIPT_CANONICAL_BUCKET_ORDER = Object.freeze([
+  "agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets",
 ]);
 
 /**
@@ -95,9 +117,24 @@ function assertIntegers(node, path) {
  * fixture test then holds `consensus-receipt.canonicalization.json` to it, so
  * the two can never drift apart unnoticed.
  *
- * Throws `ReceiptCanonicalizationError` on any undefined required field.
+ * Throws `ReceiptCanonicalizationError` on any undefined required field, and on
+ * a receipt declaring a schema version these rules do not implement.
  */
-export function canonicalizeReceipt(receipt, spec) {
+export function canonicalizeReceipt(receipt, spec = {}) {
+  // VERSION FIRST, BEFORE ANY BYTE IS SHAPED. The field order, the zero-fill
+  // and the domain prefix below are schema 1.0's rules. `schema_version` is
+  // echoed verbatim into the bytes, so without this check a 2.0 receipt
+  // canonicalizes under the v1 prefix, declares "2.0", and SILENTLY DROPS every
+  // field 1.0 does not name — a well-formed digest over a truncated payload.
+  // version_policy#selection says a verifier picks its schema by the receipt's
+  // own version and never by "latest"; this is that rule, enforced.
+  const schemaVersion = required(receipt, "schema_version", "/schema_version");
+  const pinnedVersion = spec.schema_version ?? RECEIPT_SCHEMA_VERSION;
+  if (schemaVersion !== pinnedVersion) {
+    throw new ReceiptCanonicalizationError(
+      `canonicalizeReceipt: receipt declares schema_version "${schemaVersion}" but these rules implement "${pinnedVersion}" — canonicalize it with the reference for its own version`,
+    );
+  }
   const quorum = required(receipt, "quorum", "/quorum");
   const stances = required(receipt, "stances", "/stances");
   const judge = required(receipt, "judge", "/judge");
@@ -106,7 +143,7 @@ export function canonicalizeReceipt(receipt, spec) {
   const signatures = required(receipt, "analyst_signatures", "/analyst_signatures");
 
   const ordered = {
-    schema_version: required(receipt, "schema_version", "/schema_version"),
+    schema_version: schemaVersion,
     session_id: required(receipt, "session_id", "/session_id"),
     subject_id: required(receipt, "subject_id", "/subject_id"),
     created_at: required(receipt, "created_at", "/created_at"),
@@ -178,7 +215,9 @@ export function canonicalizeReceipt(receipt, spec) {
   // UTF-8. An implementation whose serializer escapes non-ASCII (Python's
   // `ensure_ascii=True`) or the HTML-sensitive trio (Go's `encoding/json`)
   // produces different bytes and a different digest for the same receipt.
-  return `${spec.domain_separator}${JSON.stringify(ordered)}${spec.trailing_newline ? "\n" : ""}`;
+  const domainSeparator = spec.domain_separator ?? RECEIPT_DOMAIN_SEPARATOR;
+  const trailingNewline = spec.trailing_newline ?? RECEIPT_TRAILING_NEWLINE;
+  return `${domainSeparator}${JSON.stringify(ordered)}${trailingNewline ? "\n" : ""}`;
 }
 
 // ── A JSON Schema (draft-07) subset validator ───────────────────────────────
@@ -266,7 +305,7 @@ export function participationBps(submitted, active) {
   return Math.floor((submitted / active) * 10_000 + 0.5);
 }
 
-export function receiptSemanticErrors(receipt, spec) {
+export function receiptSemanticErrors(receipt, spec = {}) {
   const errors = [];
   const q = receipt.quorum;
   if (q.active !== q.submitted + q.absent) errors.push("quorum: active !== submitted + absent");
@@ -298,7 +337,8 @@ export function receiptSemanticErrors(receipt, spec) {
 
   if (receipt.weights != null) {
     const buckets = receipt.weights.map((w) => w.bucket);
-    if (buckets.join(",") !== spec.canonical_bucket_order.join(",")) errors.push("weights: not in canonical bucket order");
+    const bucketOrder = spec.canonical_bucket_order ?? RECEIPT_CANONICAL_BUCKET_ORDER;
+    if (buckets.join(",") !== bucketOrder.join(",")) errors.push("weights: not in canonical bucket order");
     const sum = receipt.weights.reduce((acc, w) => acc + w.weight_bps, 0);
     if (sum !== 10_000) errors.push(`weights: bps sum is ${sum}, not 10000`);
   }

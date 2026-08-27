@@ -62,13 +62,16 @@ export interface ConsensusReceiptCanonicalizationSpec {
 }
 
 export const RECEIPT_DOMAIN_SEPARATOR: string;
+export const RECEIPT_SCHEMA_VERSION: string;
+export const RECEIPT_TRAILING_NEWLINE: boolean;
 export const RECEIPT_STANCE_KEYS: readonly string[];
+export const RECEIPT_CANONICAL_BUCKET_ORDER: readonly string[];
 
 export function compareCodePoints(a: string, b: string): number;
 export function participationBps(submitted: number, active: number): number;
 export function canonicalizeReceipt(
   receipt: ConsensusReceipt,
-  spec: ConsensusReceiptCanonicalizationSpec,
+  spec?: Partial<ConsensusReceiptCanonicalizationSpec>,
 ): string;
 export function validateReceipt(
   value: unknown,
@@ -79,5 +82,5 @@ export function validateReceipt(
 ): string[];
 export function receiptSemanticErrors(
   receipt: ConsensusReceipt,
-  spec: ConsensusReceiptCanonicalizationSpec,
+  spec?: Partial<ConsensusReceiptCanonicalizationSpec>,
 ): string[];
