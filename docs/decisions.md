@@ -2722,8 +2722,9 @@ per symbol and expected-days is bounded by it.
 
 **What this does not remove.** Amounts still need expected-key sets: a sample
 missing a leg still understates a sum, and that is the substitution the
-correctness contract forbids. `deployedAt` likewise stays — it was always an
-amounts concern (the silent-zero rail), never a price one. And the shared-leg
+correctness contract forbids. `deployedAt` likewise stays — since #749 it is what
+makes a per-slot expected-key set answerable at all, and it was always an
+amounts concern, never a price one. And the shared-leg
 attempt accounting (`deferDay`) survives on the amounts side, because block
 resolution and the multicall pass are still shared across a window. What the
 split buys is **one failure source per series**: a vendor problem can no longer

@@ -12,7 +12,9 @@ Class B `research_signals`) and its publication-versioning model moved to
 
 **Baseline.** Written against `main` at `6f9c070`, the squash-merge of #745,
 which shipped the token-addressed price path and the quarantine migrations
-described below. Following the convention of
+described below, and re-checked against `main` at `7fb823c` under #750 — which
+folded in #749's unified GeckoTerminal limiter, its `*/5` repair cadence and its
+per-slot `deployedAt` manifest resolution, and #751's `demo` → `smoke` rename. Following the convention of
 [`20260823-review-data-integrity-aum-correctness.md`](../code-review/20260823-review-data-integrity-aum-correctness.md),
 **uncommitted working-copy edits are not treated as shipped** — where a
 capability exists only as a dirty-tree draft it is named in §8, never described
@@ -171,8 +173,10 @@ unpinned tokens only**.
 pool reports ~$7.68B reserve against `volume.h1 = 0.0` and wins a reserve sort
 outright.
 
-**Resolve once, then cache for the process.** Re-discovering a pool per run is
-what burns the keyless quota.
+**Resolve once, then cache for the process.** The pinned pools seed that cache
+at first use (`chain/historical-prices.ts::seedPoolCache`), so a pinned token
+pays no resolution request even on a cold start. Re-discovering a pool per run
+is what burns the keyless quota.
 
 **A zero or negative close is refused, not stored.** `Number(null)` is `0` and
 `0` is finite, so the check must precede coercion. No token this table prices is
@@ -241,12 +245,22 @@ unpaced.
 - Structural batch cap of **10** calls per POST; an oversized batch is refused
   with HTTP **200** and an error object, not a per-item error array.
 
-**GeckoTerminal** — a separate process-wide serializer in
-`chain/historical-prices.ts` with `DEFAULT_MIN_INTERVAL_MS = 3_000`
-(`GECKO_OHLCV_MIN_INTERVAL_MS`). A keyless 429 was observed on the **sixth call
-in ~15s**. One OHLCV request serves up to ~181 daily candles, so prices are an
+**GeckoTerminal** — one process-wide serializer in `chain/gecko-rate-limit.ts`,
+shared by the spot path (`chain/token-prices.ts`) and the daily-OHLCV path
+(`chain/historical-prices.ts`) because both reach the same host from the same IP
+against the same keyless quota. `DEFAULT_MIN_INTERVAL_MS = 6_000` — at most 10
+requests a minute, which is the keyless per-IP quota — read from
+`GECKO_MIN_INTERVAL_MS`, falling back to the historical path's older
+`GECKO_OHLCV_MIN_INTERVAL_MS`. A keyless 429 was observed on the **sixth call in
+~15s**. One OHLCV request serves up to ~181 daily candles, so prices are an
 O(1)-per-pool-per-window cost and are *not* the rate-limit concern a repair run
 has to engineer around; the RPC bucket is.
+
+> **The same rule applies here as to the RPC bucket: one limiter per metered
+> per-IP quota, never one per module.** Until #749 there were two — the spot path
+> had mutual exclusion and no spacing, the historical path had 3 000 ms — and
+> concurrent sampler and backfill load could exceed 10/min between them without
+> either limiter observing a violation.
 
 **A served price may be stale, but only briefly.**
 `persistedFallbackWalletPriceReader` falls back to a persisted per-symbol price
@@ -288,11 +302,18 @@ diff is computed in JS from explicit UTC methods rather than a SQL
 `generate_series`, so the answer does not depend on the Postgres session's
 `TimeZone`.
 
-> **P0 resolves the manifest from active configuration.** A versioned
-> point-in-time manifest — "which keys were expected *on that day*" — is P1 and
-> does not exist. The consequence is real and is recorded in §8: every day that
-> predates a currently-configured key is now an interior gap, whether or not it
-> was ever repairable.
+> **The manifest is resolved per slot, from active configuration.** Since #749
+> the detector calls `expectedKeys.resolve(slotDate)` for each slot, and
+> `ops/wallet-snapshot-manifest.ts::resolveWalletSnapshotManifest` filters to
+> assets whose `TrackedAsset.deployedAt` falls on or before that day — so a day
+> that predates an asset's addition is complete without it. SP500, added
+> 2026-05-01, is the live case: the March and April days are complete at seven
+> symbols rather than permanently short one.
+>
+> What still does not exist is a **versioned** manifest — one that records what
+> was expected on that day rather than deriving it from today's configuration.
+> An asset removed, re-pointed to a new address, or re-dated leaves no trace, and
+> the derived answer changes underneath every historical day at once. See §8.1.
 
 > **D41 removes this question for prices and leaves it for amounts.** A dense
 > price series is complete or not on its own terms — expected days minus
@@ -336,7 +357,7 @@ as nothing. That is precisely the substitution quarantine exists to stop.
 
 ### 5.1 The dispatcher
 
-`ops.repair_gaps` is an ordinary seeded cron row (`25 * * * *`,
+`ops.repair_gaps` is an ordinary seeded cron row (`*/5 * * * *`,
 `backend/src/db/seed.ts`) claimed by the analytics lane like any other producer.
 It re-derives the work list from the **data** on every run, so a gap that appears
 for any reason — a wedged scheduler, an RPC outage, a fresh database whose
@@ -352,8 +373,11 @@ failed permanently un-retryable.
 **Convergence, not a burst.** One run enqueues at most
 `WALLET_BACKFILL_MAX_DAYS_PER_RUN` days (`DEFAULT_MAX_DAYS_PER_RUN = 10`). A wide
 gap closes over successive runs, and what a run deferred is reported in its
-output rather than silently dropped. Combined with the hourly cron this is a
-ceiling of **10 days/hour**, independent of how fast a window executes — see §8.
+output rather than silently dropped. Against the `*/5` cron that is a nominal
+ceiling of 10 days per five minutes, but the dispatcher enqueues nothing while a
+`wallet.backfill_window` job is still `pending` or `running`, so the real rate is
+**10 days per completed window**: a slow window throttles the next dispatch
+instead of stacking work behind it. See §8.
 
 Classes the dispatcher does not execute are **named, not omitted**, so an
 undispatched class is as visible as an unrepaired day.
@@ -509,8 +533,8 @@ Four properties have to hold for that to be safe, and each is easy to lose:
    from them would re-admit the defect the quarantine contains.
 
 **What the split does not remove.** Amounts still need expected-key sets, and
-`deployedAt` stays — it was always an amounts concern (§6.1's silent-zero rail),
-never a price one. `deferDay` survives on the amounts side too, because block
+`deployedAt` stays — it is what makes a per-slot expected-key set answerable at
+all (§4.2), and it was always an amounts concern, never a price one. `deferDay` survives on the amounts side too, because block
 resolution and the multicall pass are still shared legs across a window (§5.3).
 The win is narrower than "the manifest goes away" and more valuable than it
 sounds: **one failure source per series.** A vendor problem can no longer void a
@@ -783,6 +807,17 @@ defaults, `isEmptyReturnData`, `rpcBatchRequest`, `ethCallBatch` and
 `DEFAULT_MIN_INTERVAL_MS = 3_000`; `APPEND_ONLY_TABLES`; and migrations 0036,
 0037 and 0038 in full.
 
+**Re-checked at `main` `7fb823c` under #750**, by opening the files again after
+#749 and #751 landed: the shared GeckoTerminal serializer and its
+`DEFAULT_MIN_INTERVAL_MS = 6_000` in `chain/gecko-rate-limit.ts`, consumed by
+both `token-prices.ts` and `historical-prices.ts`; `seedPoolCache` in
+`historical-prices.ts`; `TrackedAsset.deployedAt` in `config.ts` and its per-slot
+use through `resolveWalletSnapshotManifest(…, asOf)` and
+`gap-detector.ts::detectGaps`; the `*/5 * * * *` `ops.repair_gaps` row in
+`db/seed.ts` and the matching `NEW_SCHEDULE_CRON` in the 0.2.2→0.3.0 release
+script; and the dispatcher's in-flight-window check in `worker/handlers/repair.ts`.
+The rest of §1–§7 was re-read against the same checkout and needed no change.
+
 **Carried forward from the retired `data-self-healing.md` and not re-verified here**: the
 GeckoTerminal measurements (UTC-midnight alignment, the ~6-month/~181-candle
 server window, the keyless 429 on the sixth call in ~15s, the reserve-sort decoy
@@ -791,6 +826,30 @@ pool), the RPC batching and rate-limit numbers (cap of 10, the ~5-token /
 arithmetic. These are 2026-08-15 and 2026-08-22 investigation results. The
 2026-08-22 re-measurement supersedes the original "meters per sub-call" claim: it
 meters per POST, and batching is worth up to 10x, not more.
+
+**Which of those are worth re-running, and which stay marked unverified.** #750
+deliberately re-ran none of them, and none is upgraded to verified above.
+
+- **The RPC bucket (~5 tokens, ~0.55/s).** Worth re-measuring — but **not from
+  here**. §8.2 already records that the original figure came from a developer IP
+  and that shared NAT could make production strictly worse, so a second
+  developer-IP measurement would reproduce the flaw rather than close it. It
+  stays inherited until someone measures from the production droplet, which is
+  the whole content of that §8.2 item.
+- **The keyless GeckoTerminal 429 (sixth call in ~15s) and the ~181-candle
+  window.** Not worth re-running, and partly superseded already: #749 replaced
+  the 3 000 ms spacing with 6 000 ms derived from the ~10 requests/minute quota
+  the same investigation implies. Both remain vendor-side facts nobody controls,
+  so a fresh reading dates as fast as the old one; the structural claims — one
+  request serves a range, a pool prices one side of its pair — are what the code
+  and the tests are written against.
+- **The batch cap of 10 and the 27:1 Multicall3 leverage.** Structural rather
+  than dated, and already re-runnable on demand through the committed benchmarks
+  in §7. Re-running them needs live provider access, so it is a deliberate
+  operator action, not something a docs pass should quietly assert it did.
+- **The date-to-block arithmetic (2s blocks, 43 200/day).** A chain constant, not
+  a measurement of ours; the code does not depend on the constant being exact,
+  because `resolveDayBlocks` binary-searches and verifies. Left inherited.
 
 **Dated observations are not timeless constants.** Any test written against a
 specific decimal from an investigation capture will be flaky by construction;

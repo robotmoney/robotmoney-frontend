@@ -1523,7 +1523,7 @@ service's block (`docker-compose.yml:170`) says so in its own comment
 (`:170-177`): there is no `env_file:` in any compose file and `backend/Dockerfile`
 sets no `ENV`, so **a variable not named there never reaches the container.**
 That premise is asserted rather than assumed —
-`scripts/tests/integration/demo-compose-config.test.ts:520-529` greps all three
+`scripts/tests/integration/smoke-compose-config.test.ts:520-529` greps all three
 compose files for `env_file:` and the Dockerfile for `^ENV `, requiring `false`
 for all four. **#641** records that roughly twenty variables read by
 `backend/src/config.ts` sit in that undeliverable bucket, and **#643** proposes
@@ -1594,10 +1594,12 @@ wrong number:
 
 **Why this belongs here rather than only in #647.** Each of the three produces a
 value that a source comparison either cannot see — SP500's *size* has no source
-to compare against, which is the same fact that makes it unbackfillable ([markets §8]) —
+to compare against, which is the same fact that makes it unbackfillable
+([`technical/markets-asset-pricing-ingest.md`](./technical/markets-asset-pricing-ingest.md) §8) —
 or would misread as a genuine observation, since `indexed: 0` is a true
 statement about an indexer that never ran. The design consequence is exactly the
-one [regime-engine.md §11.2] draws for `unexplained_absent`: **what a detector consumes must carry
+one [`technical/regime-engine.md`](./technical/regime-engine.md) §11.2 draws for
+`unexplained_absent`: **what a detector consumes must carry
 whether the value was computable, not just what the value was.** An `ok: true`
 that means "we did not even try" is indistinguishable from a real read at every
 layer above it, and no amount of comparing numbers to sources recovers the
