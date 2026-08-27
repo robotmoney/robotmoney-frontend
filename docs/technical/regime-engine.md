@@ -444,6 +444,33 @@ decision register (§11.9) is carried verbatim, including the market-data
 decisions PD1, PD6 and PD7, whose *current* status is tracked in
 [markets §8] rather than here.
 
+**Two inherited constraints the register argues against.** The retired document
+listed its non-negotiable constraints in one place; the market-data ones moved to
+[markets §2], and these two did not, because they are analytics-and-presentation
+constraints rather than ingest ones. They are restated here so §11.9's references
+resolve.
+
+- **The D15/D16 honesty invariant, whose enumeration is closed.**
+  [decisions.md D16](../decisions.md) states it as a **closed list**: *"a value is
+  either a real read, a labelled stub, or the last-persisted sample marked
+  `stale`/`seed` — never presented as live."* Three admitted states, joined by
+  "either/or". A quarantined or reconciled row is a **fourth thing the list does
+  not admit**, so the tension has to be resolved explicitly rather than left
+  implicit. **The resolution offered is that the enumeration governs what is
+  *presented*:** a quarantined row is excluded from every read path, so it is
+  never presented as anything at all — outside the enumeration's scope rather
+  than a violation of it. The invariant constrains the DTO surface, not the
+  storage layer. Adopting that reading is **PD4**; **PD10** strengthens it
+  prospectively, and **PD15** is the one case neither exclusion covers. **The hard
+  consequence:** if a quarantined row ever does reach a DTO — an operator surface
+  listing what was quarantined, a per-point flag that survives into a chart
+  payload — it is being presented, the exclusion argument evaporates, and the
+  enumeration must be extended in a decision entry first, not in the same PR that
+  ships the renderer.
+- **No new operator surface.** Verdicts and freshness alerts land in the existing
+  `GET /api/admin/overview` alerts feed (`backend/src/admin/overview.ts:75`,
+  `AlertLevel`), not a parallel dashboard.
+
 **Status.** This is a design proposal, partially built. Class A gained one
 behavioural consumer in #646 (the producer's `catchUpMissedIndicatorDays`);
 Class B self-heals through its own producer catch-up; the Class A *reconciler*
@@ -656,7 +683,7 @@ C**, which is out of scope here on **cost** grounds and not impossibility ([mark
 PD6) and is separately gated on PD1; backfilling `source` on the pre-`0024` NULL
 rows; the six persisted series carrying no provenance column at all, and
 `swarm/domain.ts:1285`'s synthetic `regime_snapshots` rows written with no
-`source` in demo and stage *(both inherited from the draft; **unverified** here)*;
+`source` in smoke and stage *(both inherited from the draft; **unverified** here)*;
 unifying the four provenance vocabularies or adding CHECK constraints to them
 ([markets §8]); and any change to v0 (`agentjuno/robotmoney`).
 
@@ -899,7 +926,7 @@ cases the system **refuses** to act on: a batch refused by the blast-radius guar
 strictly more urgent than a repair it could. A refusal that is silent is the
 worst outcome available, because it looks identical to a clean run. Route this
 through the existing alerts feed — `GET /api/admin/overview`
-(`backend/src/admin/overview.ts:75`, `AlertLevel`) — per [markets §2]'s no-new-operator-
+(`backend/src/admin/overview.ts:75`, `AlertLevel`) — per §11's no-new-operator-
 surface constraint.
 
 **API consumers need a machine-readable restatement signal.** A cache, a
@@ -1145,8 +1172,9 @@ own model opens. PD14 is settled by the decision's own statement (§11.8.1).
 
 The rest are not equally urgent, and the shape of the dependency matters:
 
-- **PD1 blocks code.** Three of [markets §5]'s four unfiled issues cannot start until it
-  lands; [markets §3.4] is the exception, because it makes no archive read.
+- **PD1 blocks code.** Three of the four work items in the Class C backfill
+  specification cannot start until it lands; [markets §3.4] is the exception,
+  because it makes no archive read.
 - **PD2 and PD3 block nothing today, and surface as a reviewer's objection at
   merge time** — the most expensive moment — if left unresolved. Each is a
   recorded statement that the design contradicts or extends.
@@ -1174,9 +1202,11 @@ The rest are not equally urgent, and the shape of the dependency matters:
 **What must be decided.** Whether the backend may pass a historical block tag on
 RPC reads it already issues, in order to reconstruct chain-derived history.
 
-**Blocked until it is.** The whole of [markets §5] and three of the four work items in
-[markets §5] — block-addressable reads ([markets §5.2]), historical price resolution ([markets §3.2]),
-and the repair driver ([markets §5]). [markets §3.4], the RPC batching and rate limiting, is
+**Blocked until it is.** The whole of the Class C chain-derived treatment
+([markets §5]) and three of the four work items in its backfill specification —
+block-addressable reads ([markets §5.2]), historical price resolution
+([markets §3.2]), and the repair driver ([markets §5.1]). [markets §3.4], the RPC
+batching and rate limiting, is
 **not** blocked: it makes no archive read and independently improves the live
 path. That is the archive-specific backfill workstream, and it is the only work
 this decision blocks: the Class A reconciler (§11.5) makes no chain read and is
@@ -1213,10 +1243,11 @@ code is contradicting the written record in three places at once:
 ingesting and persisting chain history yourself. What [markets §5.2] proposes is a block
 tag on reads the app already makes, against a node that already answers — no
 indexer, no new vendor, no new persisted chain events, and no change whatsoever
-to any caller that keeps reading `latest`. The empirical basis is in [markets §5]:
-`https://mainnet.base.org`, the default `BASE_RPC_URL`, answers archive state
-queries at 40 / 90 / 180 / 365-day depth, and returns a correct `"0x"` rather
-than a `latest` fallback at a pre-deployment block.
+to any caller that keeps reading `latest`. The empirical basis is a 2026-08-15
+measurement carried forward from the retired document and **not restated in the
+markets document**: `https://mainnet.base.org`, the default `BASE_RPC_URL`,
+answers archive state queries at 40 / 90 / 180 / 365-day depth, and returns a
+correct `"0x"` rather than a `latest` fallback at a pre-deployment block.
 
 **Options.**
 
@@ -1231,7 +1262,7 @@ than a `latest` fallback at a pre-deployment block.
 - **Abandon Class C repair and disclose the hole permanently** — coherent, but
   it makes the AUM gap (42 days as of 2026-08-15) permanent *and* growing: the
   hole's width is (DB bootstrap date) − 2026-06-26, so it re-opens wider on
-  every database rebuild (§11).
+  every database rebuild ([markets §5.1]).
 
 **Recommendation: file it.** It is the single unfiled prerequisite in front of
 three issues, its cost is one issue body, and the argument for it is already
@@ -1323,12 +1354,12 @@ whole operator-facing surface — anything that would *show* what was quarantine
 **The tension, and the evidence.** D16 states the honesty invariant as a
 **closed list** of three admitted states, and a quarantined row is a fourth
 thing the list does not admit. The full quotation, the presentation-only
-reading, and its consequences are stated once, in **[markets §2]**'s D15/D16 bullet —
+reading, and its consequences are stated once, in **§11**'s D15/D16 bullet —
 this register entry carries the decision and points there for the argument.
 
 **Options.**
 
-- **Ratify the presentation-only reading** ([markets §2]): the enumeration governs what
+- **Ratify the presentation-only reading** (§11's D15/D16 bullet): the enumeration governs what
   is *presented*; a quarantined row is excluded from every candidate computation
   and read path, so it is not presented as anything; a `revised` row needs no
   accommodation, being a real read. Cost: one sentence of ratification. Risk:
@@ -1427,7 +1458,7 @@ production backfill run. Getting this wrong does not merely slow the backfill: i
 > re-measurement from the droplet still improves the number; it is no longer a
 > precondition for repairing anything.
 
-**The measured constraint** ([markets §5]; measured from a developer IP, **not**
+**The measured constraint** ([markets §3.4]; measured from a developer IP, **not**
 re-measured from the production droplet — see the closing note of this item): a ~**5-token bucket refilling at
 ~0.55 calls/s**, metered **per-IP at the provider** and **per sub-call, not per
 HTTP request**. The live sampler consumes ~0.033 calls/s (~6%), so a backfill run
@@ -1463,7 +1494,7 @@ anchors, in **[markets §3.4]**.
 sampler safe by construction rather than by tuning, it is the one that converts
 Class C from "repairable once" into "continuously verifiable" — and a chain read
 at a pinned immutable block is in principle the most deterministically verifiable
-data in the system ([markets §5]). The other two options are contingency plans if the
+data in the system ([markets §8.2]). The other two options are contingency plans if the
 spend is refused, and of those, the shared priority-aware bucket is preferable to
 the quiet window because it does not require an operator in the loop.
 
@@ -1529,7 +1560,7 @@ as a two-day break; or interpolate from neighbours and label the result `'seed'`
 of a 146-day window render as a hairline break, not a visible defect. An
 interpolated row labelled `'seed'` would be **indistinguishable from the ~99
 genuine v0 observations that carry the same label** — #645 established those are
-real production wallet-balance cron output, not fabrications ([markets §8]), so
+real production wallet-balance cron output, not fabrications ([markets §3.3]), so
 introducing one synthetic `'seed'` row destroys the one property that currently
 makes that label trustworthy. And the composition of that same seeded span is
 itself under review in **#648** (PD7): interpolating across a series whose

@@ -1,8 +1,8 @@
 // MULTI-BLOCK chain reads (readChainAmountsAtBlocks) — N days' worth of
 // valuation in one POST instead of one POST per day.
 //
-// THIS FILE WAS WRITTEN BEFORE THE IMPLEMENTATION, on purpose. markets §7 says this
-// is the one call site in the batching sweep where a mistake produces a
+// THIS FILE WAS WRITTEN BEFORE THE IMPLEMENTATION, on purpose. markets §6.2 names
+// this the one call site in the batching sweep where a mistake produces a
 // plausible wrong NAV rather than a loud failure: round 2 (`convertToAssets`)
 // consumes round 1's share balances, so a batched version that crosses the
 // wires between two blocks would compute a real-looking total out of one day's

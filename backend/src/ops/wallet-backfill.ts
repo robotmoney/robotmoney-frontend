@@ -175,8 +175,8 @@ export interface WalletBackfillPlan {
  * Derive the work list FROM THE DATA, via the same gap detector the operator
  * surface reads.
  *
- * Deliberately not from a cursor and not from job rows: markets §5's unification
- * point is that there must be exactly ONE notion of "which days are missing",
+ * Deliberately not from a cursor and not from job rows: markets §4.1's
+ * unification point is that there must be exactly ONE notion of "which days are missing",
  * or the repair and the report drift apart and the dashboard starts disagreeing
  * with the thing that is supposed to be fixing it.
  */

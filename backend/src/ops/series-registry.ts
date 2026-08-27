@@ -47,8 +47,8 @@ export interface SeriesDef {
    *  cover", and a row nothing is allowed to serve covers nothing. Without
    *  this the detector reads presence off the table while the API reads it off
    *  a filtered view of the same table, and the operator surface starts
-   *  disagreeing with what a chart draws — the exact drift markets §5 unified the
-   *  work list to prevent.
+   *  disagreeing with what a chart draws — the exact drift markets §4.1 unified
+   *  the work list to prevent.
    *
    *  Today this carries one case: the samples migration 0036 quarantined. */
   uncounted?: { column: string; values: readonly string[] };

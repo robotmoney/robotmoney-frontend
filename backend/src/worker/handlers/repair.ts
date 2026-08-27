@@ -65,7 +65,7 @@ function backfillEnabled(): boolean {
  *     dispatcher still dispatches neither.
  *   - Class B (`research_signals`) already self-heals through the independent
  *     producer's own catch-up, which computes its own missing-days set. Unifying
- *     those two notions of "which days are missing" is tracked in markets §5 and is
+ *     those two notions of "which days are missing" is tracked in markets §4.1 and is
  *     deliberately not done here.
  */
 export async function repairGaps(): Promise<unknown> {
