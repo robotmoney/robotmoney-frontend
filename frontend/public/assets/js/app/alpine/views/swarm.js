@@ -46,14 +46,24 @@ const operatorName = (op) => {
 // The sessions list is paginated and the page used to render only the first
 // page while presenting its counts as totals. 209 published sessions arrive in
 // 3 requests at this limit; the cap is a runaway guard, not a business rule.
-// A session past its window but still `collecting` is the known orphan case: the
-// state never advanced. Showing it as open would be the page telling a visitor
-// that takes are being accepted when they are not, so the live strip only claims
-// OPEN while the window is genuinely in the future, then falls back to "closed,
-// publishing" for a grace period, then stops claiming anything at all.
+// THE DEADLINE IS THE TIMESTAMP, NOT THE STATE. That is the backend's own rule
+// (domain.ts:567, issue #570): the submission gate is `window_closes_at < now`
+// and a state gate was REMOVED from there for creating a dead zone. So a
+// `window_closed` row whose timestamp is still in the future is a session the
+// API is still accepting takes for, and a `collecting` row past its timestamp
+// is not. Keying the copy on state would contradict the server in both
+// directions. A null timestamp means no deadline, which the backend treats as
+// open, so this does too — same predicate as the shipped `pendingWindow()`
+// (static-views.js:966).
+//
+// Nothing sweeps state by timestamp, so an orphaned `collecting` row can sit
+// past its deadline indefinitely. The page therefore never claims aggregation
+// is under way on the strength of a `collecting` row: it reports the window
+// closed and says nothing about what happens next.
 const CLOSED_GRACE_MS = 3 * 60 * 60 * 1000;
 const LIVE_TICK_MS = 30 * 1000;
 const OPEN_STATES = new Set(["collecting", "window_closed", "aggregated"]);
+const AGGREGATING_STATES = new Set(["window_closed", "aggregated"]);
 
 const SESSION_PAGE_SIZE = 100;
 const MAX_SESSION_PAGES = 12;
@@ -77,6 +87,7 @@ export function registerSwarmView(Alpine) {
     // apply-status view uses).
     now: Date.now(),
     liveTimer: null,
+    liveTakes: null,
     destroy() {
       if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
     },
@@ -96,6 +107,7 @@ export function registerSwarmView(Alpine) {
         // existed since the port and was never written to, which is why the
         // panel has always shown a raw id where an operator belongs.
         await this.loadSubjects();
+        await this.loadLiveTakes();
         this.loading = false;
       } catch (e) {
         this.error = e.message;
@@ -130,25 +142,53 @@ export function registerSwarmView(Alpine) {
       ids.forEach((id, i) => { if (rows[i]) cache[id] = rows[i]; });
       this.subjectCache = cache;
     },
+    // One extra request, and only when something is live. The sessions LIST
+    // carries no take count and its swarmRecommendation is null until
+    // aggregation writes it, so the count has to come from the detail route.
+    // Failure is silent: the strip drops the count and keeps the countdown.
+    async loadLiveTakes() {
+      const s = this.liveSession();
+      if (!s?.id) { this.liveTakes = null; return; }
+      try {
+        const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
+        this.liveTakes = Array.isArray(d?.takes) ? d.takes.length : null;
+      } catch (_) { this.liveTakes = null; }
+    },
     publishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
 
     // The one session the swarm is working on right now, or null. Newest first,
     // because a subject may convene more than once a day.
     liveSession() {
       const rows = this.sessions
-        .filter((s) => OPEN_STATES.has(s.state) && s.windowClosesAt)
-        .sort((a, b) => String(b.windowClosesAt).localeCompare(String(a.windowClosesAt)));
+        .filter((s) => OPEN_STATES.has(s.state))
+        .sort((a, b) => String(b.windowClosesAt || "").localeCompare(String(a.windowClosesAt || "")));
       const s = rows[0];
       if (!s) return null;
+      if (!s.windowClosesAt) return s;
       const closes = Date.parse(s.windowClosesAt);
       if (!Number.isFinite(closes)) return null;
       // Past the grace window it is an orphan, not news. Say nothing.
       if (this.now - closes > CLOSED_GRACE_MS) return null;
       return s;
     },
+    // Open == the deadline has not passed. Not `state === "collecting"`.
     liveIsOpen() {
       const s = this.liveSession();
-      return !!s && s.state === "collecting" && Date.parse(s.windowClosesAt) > this.now;
+      if (!s) return false;
+      if (!s.windowClosesAt) return true;
+      return Date.parse(s.windowClosesAt) > this.now;
+    },
+    // Only a row that actually reached window_closed/aggregated is aggregating.
+    // A past-deadline `collecting` row gets no claim about what happens next.
+    liveIsAggregating() {
+      const s = this.liveSession();
+      return !!s && !this.liveIsOpen() && AGGREGATING_STATES.has(s.state);
+    },
+    liveTakesLabel() {
+      const n = this.liveTakes;
+      const seats = this.members.length;
+      if (n == null || !seats) return "";
+      return `${n} of ${seats} takes in`;
     },
     liveSubjectName() {
       const s = this.liveSession();
@@ -160,8 +200,10 @@ export function registerSwarmView(Alpine) {
     // would be precision this cadence does not have.
     liveRemaining() {
       const s = this.liveSession();
-      if (!s) return "";
+      // A session with no deadline is open, but there is no countdown to show.
+      if (!s || !s.windowClosesAt) return "";
       const ms = Date.parse(s.windowClosesAt) - this.now;
+      if (!Number.isFinite(ms)) return "";
       if (ms <= 0) return "";
       const mins = Math.floor(ms / 60000);
       if (mins < 1) return "under a minute";
@@ -172,7 +214,7 @@ export function registerSwarmView(Alpine) {
     },
     liveClosesAbsolute() {
       const s = this.liveSession();
-      if (!s) return "";
+      if (!s || !s.windowClosesAt) return "";
       try { return new Date(s.windowClosesAt).toISOString().replace("T", " ").slice(0, 16) + " UTC"; }
       catch (_) { return ""; }
     },
