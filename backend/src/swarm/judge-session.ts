@@ -13,7 +13,7 @@
 // not recomputed anywhere in this file. Judging a session cannot change its
 // vector; that is the property replaySessionJudge() below exists to demonstrate
 // against real history rather than against a fixture.
-import { sql } from "../db/client.ts";
+import { sql, type DbHandle } from "../db/client.ts";
 import { loadFrozenTakeSet } from "./domain.ts";
 import { judge, type JudgeInput, type JudgeOptions, type JudgeOutcome, type JudgeTake } from "./judge.ts";
 
@@ -118,53 +118,153 @@ export interface JudgeSessionResult {
   mode: JudgeMode;
   judgementId?: string;
   applied?: boolean;
+  /** Set iff `enforce` recorded an opinion that did NOT reach the session, and why. */
+  appliedSkippedReason?: string;
   outcome?: JudgeOutcome;
+}
+
+export interface JudgeSessionOptions extends JudgeOptions {
+  /**
+   * The mode/threshold/model, read ONCE by the caller and passed down. Without
+   * this the config is read twice — by the caller's gate and again here — and
+   * an operator flipping the switch between the two reads gets a session
+   * advanced to `judged` and a 409 in the same call.
+   */
+  config?: JudgeConfig;
+  /**
+   * Run inside this function's transaction, after its advisory lock and before
+   * the judgement row is written. `judgeSessionAdmin` uses it to put the
+   * `aggregated -> judged` transition in the SAME transaction as the row that
+   * justifies it. A `{ ok: false }` return rolls the whole transaction back and
+   * becomes this call's result.
+   */
+  beforeRecord?: (tx: DbHandle) => Promise<{ ok: boolean; status: number; error?: string }>;
 }
 
 /**
  * Judge one session. The caller owns the state transition; this owns the
  * opinion, its record, and — in `enforce` only — its effect.
+ *
+ * ONE JUDGE AT A TIME, PER SESSION. Everything after the model call runs inside
+ * a single transaction that first takes `pg_advisory_xact_lock` on the session
+ * id. Concurrent callers are real — the admin POST runs in the api process
+ * while a `swarm.judge` job runs in worker-swarm, and a reaped/retried job
+ * re-enters the same way — and `guardedTransition` does NOT stop the second one
+ * (re-requesting the current state is idempotent by design). Unserialized, the
+ * read-modify-write in applyOpinion() interleaves as insert(A), insert(B),
+ * update(B), update(A): latestJudgement() returns B while the session carries
+ * A's prose, so the append-only record and the session disagree about which
+ * opinion is in force — the exact attribution prompt_hash/inputs_digest exists
+ * to establish.
+ *
+ * THE MODEL CALL IS OUTSIDE THE TRANSACTION, deliberately: it takes up to 60s
+ * and no row lock or pooled connection may be held across it.
  */
-export async function judgeSession(sessionId: string, opts: JudgeOptions = {}): Promise<JudgeSessionResult> {
-  const config = await getJudgeConfig();
+export async function judgeSession(sessionId: string, opts: JudgeSessionOptions = {}): Promise<JudgeSessionResult> {
+  const { config: passedConfig, beforeRecord, ...judgeOpts } = opts;
+  const config = passedConfig ?? (await getJudgeConfig());
   if (config.mode === "off") {
     return { ok: false, status: 409, error: "judge_disabled", sessionId, mode: config.mode };
   }
   const input = await buildJudgeInput(sessionId, config.minTakes);
   if (!input) return { ok: false, status: 404, error: "session not found", sessionId, mode: config.mode };
 
-  const outcome = await judge(input, { model: config.model, ...opts });
-  const inserted = (await sql`
-    INSERT INTO swarm_session_judgements
-      (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, take_count, min_takes, opinion)
-    VALUES (
-      ${sessionId}, ${config.mode}, ${outcome.source}, ${outcome.fallbackReason ?? null}, ${outcome.model},
-      ${outcome.promptHash}, ${outcome.inputsDigest}, ${outcome.takeCount}, ${outcome.minTakes},
-      ${sql.json(outcome.opinion as any)}
-    ) RETURNING id`)[0] as { id: string | number };
+  const outcome = await judge(input, { model: config.model, ...judgeOpts });
 
-  // SHADOW STOPS HERE. The opinion is on file and nothing about the session has
-  // changed — that is the whole point of the mode.
-  let applied = false;
-  if (config.mode === "enforce") {
-    await applyOpinion(sessionId, outcome);
-    applied = true;
+  let refusal: { ok: boolean; status: number; error?: string } | undefined;
+  let recorded: { id: string | number; applied: boolean; skipped?: string } | undefined;
+  const run = async (tx: DbHandle) => {
+    // Serialize on the session id. hashtextextended() is Postgres's own hash of
+    // the uuid text, so the lock key is derived and needs no side table; the
+    // `_xact_` form releases at COMMIT/ROLLBACK, so a crashed judge cannot leave
+    // a session locked.
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))`;
+    if (beforeRecord) {
+      const gate = await beforeRecord(tx);
+      if (!gate.ok) {
+        refusal = gate;
+        // Roll the transaction back — the transition, if it wrote one, must not
+        // survive a judging that is being refused.
+        throw new JudgeRollback();
+      }
+    }
+    const inserted = (await tx`
+      INSERT INTO swarm_session_judgements
+        (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, take_count, min_takes, opinion)
+      VALUES (
+        ${sessionId}, ${config.mode}, ${outcome.source}, ${outcome.fallbackReason ?? null}, ${outcome.model},
+        ${outcome.promptHash}, ${outcome.inputsDigest}, ${outcome.takeCount}, ${outcome.minTakes},
+        ${sql.json(outcome.opinion as any)}
+      ) RETURNING id`)[0] as { id: string | number };
+
+    // SHADOW STOPS HERE. The opinion is on file and nothing about the session
+    // has changed — that is the whole point of the mode.
+    if (config.mode !== "enforce") {
+      recorded = { id: inserted.id, applied: false };
+      return;
+    }
+    const applied = await applyOpinion(tx, sessionId, outcome);
+    recorded = { id: inserted.id, applied, ...(applied ? {} : { skipped: "session_no_longer_writable" }) };
+  };
+
+  try {
+    await sql.begin(run);
+  } catch (e) {
+    if (!(e instanceof JudgeRollback)) throw e;
+    recorded = undefined;
+  }
+
+  if (!recorded) {
+    return {
+      ok: false, status: refusal?.status ?? 409,
+      error: refusal?.error ?? "judge refused", sessionId, mode: config.mode,
+    };
   }
   return {
     ok: true, status: 200, sessionId, mode: config.mode,
-    judgementId: String(inserted.id), applied, outcome,
+    judgementId: String(recorded.id), applied: recorded.applied,
+    ...(recorded.skipped ? { appliedSkippedReason: recorded.skipped } : {}),
+    outcome,
   };
 }
+
+/** Sentinel: rolls the judge's transaction back without becoming a 500. */
+class JudgeRollback extends Error {
+  constructor() {
+    super("judge_rollback");
+    this.name = "JudgeRollback";
+  }
+}
+
+// The states in which an opinion may still reach a session. NOT an equality
+// check on `judged`: judgeSession() is also the direct entry point for an
+// `aggregated` session that was never transitioned (that is what shadow-then-
+// enforce on a live session looks like, and what the tests drive). What it must
+// refuse is writing onto a session that is already TERMINAL.
+const OPINION_WRITABLE_STATES = ["scheduled", "collecting", "window_closed", "aggregated", "judged"];
 
 // Merge the judge's three fields into the recommendation. Read-modify-write in
 // JS rather than a jsonb operator so the merge is one obvious list of keys:
 // rationale, disagreements, release_safety, and NOTHING ELSE. `weights`,
 // `quorum`, `stances`, `meanConfidence`, `absent` and `type` are untouched by
 // construction.
-async function applyOpinion(sessionId: string, outcome: JudgeOutcome): Promise<void> {
-  const row = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { swarm_recommendation: Record<string, unknown> | null }
+//
+// CONDITIONAL, AND THE CONDITION IS LOAD-BEARING. `publishSession` is an
+// unconditional `UPDATE ... SET state='published'` in a different process, and
+// the window between forming an opinion and writing it is a model call. An
+// operator pressing Judge at 09:59:30 against a 10:00 publish job used to have
+// the judge's prose land on an ALREADY-PUBLISHED, terminal session. The row
+// count is the answer: zero means the session moved under us, which is reported
+// as a no-op reason rather than passing silently.
+//
+// Takes a `tx` because the read and the write are a read-modify-write and must
+// be one transaction, under the caller's advisory lock.
+async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutcome): Promise<boolean> {
+  const row = (await tx`
+    SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
+    | { state: string; swarm_recommendation: Record<string, unknown> | null }
     | undefined;
+  if (!row || !OPINION_WRITABLE_STATES.includes(String(row.state))) return false;
   const rec = { ...(row?.swarm_recommendation ?? {}) } as Record<string, unknown>;
   rec.rationale = outcome.opinion.rationale;
   rec.disagreements = outcome.opinion.disagreements;
@@ -176,15 +276,28 @@ async function applyOpinion(sessionId: string, outcome: JudgeOutcome): Promise<v
     inputs_digest: outcome.inputsDigest,
     ...(outcome.fallbackReason ? { fallback_reason: outcome.fallbackReason } : {}),
   };
-  await sql`UPDATE swarm_sessions SET swarm_recommendation = ${sql.json(rec as any)} WHERE id = ${sessionId}`;
+  const upd = await tx`
+    UPDATE swarm_sessions SET swarm_recommendation = ${sql.json(rec as any)}
+    WHERE id = ${sessionId} AND state = ANY(${OPINION_WRITABLE_STATES}::text[])
+    RETURNING id`;
+  return upd.length > 0;
 }
 
+// ORDER BY id, NOT created_at. `created_at` defaults to `now()`, which is the
+// TRANSACTION START time — so of two judges serialized by the advisory lock
+// above, the one that committed second can carry the earlier timestamp (both
+// transactions opened before either got the lock). `id` is a bigserial drawn at
+// INSERT, inside the lock, so it is the only ordering that agrees with the
+// order the session was actually written in. Getting this wrong means
+// latestJudgement() names a different opinion than the one on the session,
+// which is exactly the disagreement prompt_hash/inputs_digest exists to rule
+// out.
 export async function latestJudgement(sessionId: string) {
   return (await sql`
     SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest,
            take_count, min_takes, opinion, created_at
     FROM swarm_session_judgements WHERE session_id = ${sessionId}
-    ORDER BY created_at DESC, id DESC LIMIT 1`)[0] ?? null;
+    ORDER BY id DESC LIMIT 1`)[0] ?? null;
 }
 
 // ── Replay (issue #752, 2.9) ────────────────────────────────────────────────

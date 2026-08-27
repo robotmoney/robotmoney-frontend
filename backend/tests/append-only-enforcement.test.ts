@@ -32,7 +32,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
-import { APPEND_ONLY_TABLES, triggerNames } from "../src/db/append-only-guard.ts";
+import { APPEND_ONLY_MIGRATIONS, APPEND_ONLY_TABLES, triggerNames } from "../src/db/append-only-guard.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 // Own database, cloned from the migrated template. This file SEEDS the
@@ -127,6 +127,15 @@ beforeAll(async () => {
   await sql`
     INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd)
     VALUES (${SUBJECT}, '2031-01-02', 1234.5)`;
+  // One consensus-judge run for that session (issue #752, protected by
+  // migration 0040). Seeded like every other row here so the "it survived"
+  // assertions below are about real data rather than an empty table.
+  await sql`
+    INSERT INTO swarm_session_judgements
+      (session_id, mode, source, fallback_reason, prompt_hash, inputs_digest, take_count, min_takes, opinion)
+    VALUES (${SESSION}, 'shadow', 'fallback', 'model_unconfigured', 'append-only-prompt-hash',
+            'append-only-inputs-digest', 1, 3,
+            '{"rationale":"append-only judgement","disagreements":[],"release_safety":{"release":"hold","thinly_supported":true,"take_count":1,"min_takes":3,"concerns":["seeded"]}}'::jsonb)`;
   await sql`INSERT INTO swarm_applications (payload) VALUES ('{}'::jsonb)`;
   await sql`INSERT INTO audit_log (actor, action) VALUES ('append-only-test', 'probe')`;
   await sql`INSERT INTO agent_activity_log (action_type, status) VALUES ('probe', 'success')`;
@@ -190,17 +199,28 @@ describe("append-only: every protected table holds data that cannot be removed",
     }
   });
 
-  test("the migration's protected array and src/db/append-only-guard.ts's list are the same set", () => {
-    // Migration 0032 cannot import the constant — an applied migration is a
-    // frozen artefact and its SQL has to be self-contained — so the two copies
-    // are kept honest here rather than by a comment asking someone to remember.
-    // A table added to one and not the other is a table nobody protects.
-    const ddl = readFileSync(join(import.meta.dir, "..", "migrations", "0032_append_only_history.sql"), "utf8");
-    const block = ddl.match(/protected text\[\] := ARRAY\[([\s\S]*?)\];/);
-    expect(block, "migration 0032 must still declare its protected array in the shape this test reads").not.toBeNull();
-    const inMigration = [...block![1]!.replace(/--.*$/gm, "").matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
-    expect(inMigration.length, "the array must not have been parsed as empty").toBeGreaterThan(0);
-    expect([...inMigration].sort()).toEqual([...APPEND_ONLY_TABLES].sort());
+  test("the migrations' protected arrays and src/db/append-only-guard.ts's list are the same set", () => {
+    // A migration cannot import the constant — an applied migration is a frozen
+    // artefact and its SQL has to be self-contained — so the copies are kept
+    // honest here rather than by a comment asking someone to remember. A table
+    // added to one and not the other is a table nobody protects.
+    //
+    // The set spans MORE THAN ONE migration since #752: 0032 installs
+    // rm_append_only_guard() and the original set, and a table added later opts
+    // in from its own file (editing 0032 would protect nothing on any database
+    // that already ran it). Every declaring file is listed in
+    // APPEND_ONLY_MIGRATIONS, and the UNION of their arrays is what must match.
+    const inMigrations: string[] = [];
+    for (const file of APPEND_ONLY_MIGRATIONS) {
+      const ddl = readFileSync(join(import.meta.dir, "..", "migrations", file), "utf8");
+      const block = ddl.match(/protected text\[\] := ARRAY\[([\s\S]*?)\];/);
+      expect(block, `${file} must still declare its protected array in the shape this test reads`).not.toBeNull();
+      const names = [...block![1]!.replace(/--.*$/gm, "").matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
+      expect(names.length, `${file}'s array must not have been parsed as empty`).toBeGreaterThan(0);
+      inMigrations.push(...names);
+    }
+    expect(new Set(inMigrations).size, "no table may be declared by two migrations").toBe(inMigrations.length);
+    expect([...inMigrations].sort()).toEqual([...APPEND_ONLY_TABLES].sort());
   });
 
   test("a DELETE through an INHERITANCE PARENT is refused (the row-level trigger's other job)", async () => {

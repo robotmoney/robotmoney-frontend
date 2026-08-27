@@ -1167,15 +1167,19 @@ issue #752) reads that same frozen set plus the session brief and authors three
 things — a rationale, the disagreements it finds in the takes, and a
 release-safety opinion. **It authors no number.** A model response carrying a
 weight-like field at any depth is rejected whole rather than merged, and the
-`swarm_session_judgements.opinion` column carries a CHECK constraint that would
-refuse one even if the code that writes it were wrong. That is what keeps the
-signed vector reproducible by anyone holding the take set.
+`swarm_session_judgements.opinion` column carries a recursive
+`jsonb_path_exists` CHECK constraint that would refuse one — at any depth, not
+merely at the top level — even if the code that writes it were wrong. The
+constraint matches the key names exactly and case-sensitively; the code's scan
+additionally lowercases and folds separators, so the code is the broader of the
+two. That is what keeps the signed vector reproducible by anyone holding the
+take set.
 
 | Concern | Where it lives |
 |---|---|
 | The derivation | `meanTakeWeights()` — the one place a bucket weight may be authored |
 | The opinion | `judge()` — pure, transport injected, never throws |
-| The session seam | `judgeSession()` — reads config, records the judgement, applies it only in `enforce` |
+| The session seam | `judgeSession()` — takes the config the caller read, records the judgement, applies it only in `enforce`; everything after the model call is one transaction under a per-session advisory lock |
 | The switch | `swarm_judge_config` (migration 0039), over `POST /api/swarm/admin/judge` — mode, `min_takes`, and the model |
 | The record | `swarm_session_judgements` — one append-only row per run, shadow runs included |
 

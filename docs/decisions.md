@@ -1945,6 +1945,15 @@ practice. The gate is **amendment-only**: a *first* take is still governed
 solely by the advertised `windowClosesAt`, which is #570's published contract
 and stays exactly as it was.
 
+The gate is expressed as an **allowlist** — `TAKES_AMENDABLE_STATES` in
+`backend/src/swarm/domain.ts`, currently `{scheduled, collecting,
+window_closed}` — not as a list of states to refuse. It was written the other
+way round, and #752's new `judged` state (between `aggregated` and `published`)
+silently fell outside the denylist and reopened the window on an
+already-frozen take set. An allowlist makes a state added to
+`swarm_sessions` frozen by default, so reopening the window for one is a
+deliberate edit rather than an omission.
+
 **Consequences.**
 
 - Three read paths resolve latest-per-member via `DISTINCT ON`: `withTakes`,
@@ -2816,8 +2825,12 @@ things: the rationale, the disagreements, and a release-safety opinion. The
 allocation vector stays on `meanTakeWeights()` in
 `backend/src/swarm/domain.ts` — unchanged by whether the judge runs. A model
 response carrying a weight-like key at ANY depth is rejected whole rather than
-stripped or merged, and `swarm_session_judgements.opinion` carries a CHECK
-constraint refusing one at the schema level. The judge is switched by a database
+stripped or merged, and `swarm_session_judgements.opinion` carries a recursive
+`jsonb_path_exists` CHECK constraint refusing one at the schema level, at any
+depth, over the same key list the code scans. (The first draft used
+`opinion ?| ARRAY[...]`, which is TOP-LEVEL ONLY — and `opinion` is always
+`{rationale, disagreements, release_safety}`, so it could never have fired on a
+real row. Corrected in review before the migration shipped.) The judge is switched by a database
 row (`swarm_judge_config`, migration 0039) with three modes — `off` (shipped
 default), `shadow`, `enforce` — not by an environment variable.
 

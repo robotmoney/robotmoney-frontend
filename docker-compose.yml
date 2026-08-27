@@ -144,14 +144,11 @@ x-worker-env: &worker-env
   # Minimum spacing between GeckoTerminal OHLCV requests (a keyless 429 was
   # observed on the 6th call in ~15s). Unrelated to the Base RPC budget above.
   GECKO_OHLCV_MIN_INTERVAL_MS: ${GECKO_OHLCV_MIN_INTERVAL_MS:-}
-  # Consensus judge (issue #752) — the swarm lane runs `swarm.judge`, so the
-  # same three knobs the api gets must reach the worker too, or an operator who
-  # enables the judge finds it silently falling back to template prose in the
-  # one process that actually runs it on a schedule. On/off AND which model are
-  # database rows, not env vars; see the api block above.
-  OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-  SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-  SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+  # (The consensus judge's three knobs are NOT here. This anchor is shared by
+  # all three worker lanes and only worker-swarm runs `swarm.judge`, so putting
+  # a live inference credential in it hands one to worker-analytics and
+  # worker-research, which never call a model. They are declared on
+  # worker-swarm's own environment block instead — issue #757 review.)
   # Optional per-call inference bound (issue #537), read by
   # scripts/lib/swarm/inference.ts's timeoutMs(). Declared with a NULL value —
   # not `${OPENCODE_TIMEOUT_MS:-}` — deliberately: the `:-` form resolves to the
@@ -349,6 +346,18 @@ services:
     environment:
       <<: *worker-env
       WORKER_LANE: swarm
+      # Consensus judge (issue #752) — THIS LANE ONLY. `swarm.judge` runs here
+      # and nowhere else among the workers, so the shared OpenCode Zen
+      # credential, the endpoint and the per-call bound are declared on this
+      # service rather than in the *worker-env anchor above: worker-analytics
+      # and worker-research would otherwise receive a live inference credential
+      # they never use. Without them HERE the one process that actually runs
+      # the judge on a schedule falls back to template prose silently.
+      # On/off AND which model are database rows, not env vars; see the api
+      # block above.
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
+      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
 
   worker-analytics:
     <<: *worker-base

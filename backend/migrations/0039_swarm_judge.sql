@@ -23,8 +23,14 @@
 --
 -- The `opinion` CHECK is the load-bearing half of "the judge authors no
 -- number": even a future code path that merged a weight-like field out of a
--- model response could not persist it here. The signed allocation vector stays
--- reproducible from the take set by anyone holding it.
+-- model response could not persist it here, AT ANY DEPTH. The first draft of
+-- this constraint used `opinion ?| ARRAY[...]`, which tests TOP-LEVEL keys
+-- only, while `opinion` is always `{rationale, disagreements, release_safety}`
+-- — so it could never have fired on a real row, and three documents described
+-- it as the schema-level backstop it was not. It is a recursive
+-- `jsonb_path_exists` scan now, over the same key list `findWeightLikeKey()`
+-- walks. The signed allocation vector stays reproducible from the take set by
+-- anyone holding it.
 
 ALTER TABLE swarm_sessions DROP CONSTRAINT IF EXISTS swarm_sessions_state_check;
 ALTER TABLE swarm_sessions ADD CONSTRAINT swarm_sessions_state_check
@@ -71,10 +77,28 @@ CREATE TABLE IF NOT EXISTS swarm_session_judgements (
   created_at      timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT swarm_session_judgements_fallback_reason_check
     CHECK ((source = 'fallback') = (fallback_reason IS NOT NULL)),
-  -- The judge authors no number. Enforced in the schema, not only in the code
-  -- that writes it.
+  -- THE JUDGE AUTHORS NO NUMBER. Enforced in the schema, not only in the code
+  -- that writes it, and at EVERY DEPTH — `$.**` is the recursive member
+  -- accessor, the `@.type() == "object"` filter is what stops `.keyvalue()`
+  -- erroring on the scalars and arrays it walks past, and `.keyvalue()` yields
+  -- the {key, value} pairs the second filter tests. Verified both ways: a
+  -- `{"release_safety": {"concerns": [{"weight": 1}]}}` row is refused, and a
+  -- real `{rationale, disagreements, release_safety}` opinion is accepted.
+  --
+  -- EXACTLY the key list src/swarm/judge.ts's WEIGHT_LIKE_KEYS scans, and the
+  -- one difference between the two is stated rather than left to be discovered:
+  -- the CODE additionally lowercases each key and folds spaces/hyphens to
+  -- underscores before comparing, so the code's scan is the broader of the two.
+  -- This constraint matches these names exactly, case-sensitively, anywhere in
+  -- the document.
   CONSTRAINT swarm_session_judgements_no_weights_check
-    CHECK (NOT (opinion ?| ARRAY['weights', 'weight', 'allocation', 'allocations', 'vector', 'bucket_weights']))
+    CHECK (NOT jsonb_path_exists(opinion,
+      '$.**?(@.type() == "object").keyvalue()?(@.key == "weight" || @.key == "weights"
+        || @.key == "bucket_weight" || @.key == "bucket_weights" || @.key == "bucketweights"
+        || @.key == "allocation" || @.key == "allocations"
+        || @.key == "target_weight" || @.key == "target_weights"
+        || @.key == "vector" || @.key == "weighting" || @.key == "weightings"
+        || @.key == "portfolio")'))
 );
 
 CREATE INDEX IF NOT EXISTS swarm_session_judgements_session_idx

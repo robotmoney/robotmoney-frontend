@@ -64,6 +64,34 @@ export { SWARM_ROSTER_CAP };
 // conjunct on the INSERT itself so a race cannot slip past the read.
 export { SWARM_TAKE_REVISION_CAP };
 
+// THE STATES IN WHICH A TAKE MAY STILL BE AMENDED — an ALLOWLIST, and that is
+// the whole point of it (issue #757 review).
+//
+// This was written as a denylist ("refuse when aggregated or published"), which
+// was exhaustive of the post-aggregation states ON THE DAY IT WAS WRITTEN. #752
+// then added `judged` between `aggregated` and `published`, and the denylist
+// silently reopened the amendment window on a session whose weight vector and
+// whose verbatim take prose had ALREADY been frozen by aggregateSession() and
+// were about to be published unchanged (publishSession is an unconditional
+// UPDATE that does not re-aggregate). The result would be a published session
+// whose `weights` are not meanTakeWeights() over its own take set and whose
+// `disagreements[].positions[].view` quotes a body the member has withdrawn —
+// the exact defect the gate exists to prevent.
+//
+// As an allowlist, a state added to swarm_sessions later is FROZEN by default.
+// Reopening the window for a new state is then a deliberate edit here, next to
+// this paragraph, rather than an omission somewhere else.
+//
+// `scheduled` is included for completeness (no take can exist yet, so the
+// amendment branch is unreachable from it); `window_closed` is included because
+// #570 keeps the advertised deadline authoritative right up to its instant even
+// after an early close.
+export const TAKES_AMENDABLE_STATES: ReadonlySet<string> = new Set([
+  "scheduled",
+  "collecting",
+  "window_closed",
+]);
+
 // ── Reads ─────────────────────────────────────────────────────────────────
 export async function getMembers() {
   const rows = await sql`SELECT * FROM swarm_members WHERE status = 'active' ORDER BY id`;
@@ -634,7 +662,8 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   const latestRevision = priorRow?.latest ?? 0;
 
   if (priorCount > 0) {
-    // AMENDMENT-ONLY GATE — deliberately not applied to a first take.
+    // AMENDMENT-ONLY GATE — deliberately not applied to a first take. See
+    // TAKES_AMENDABLE_STATES above for why this is an ALLOWLIST.
     //
     // `aggregateSession` copies take prose VERBATIM into
     // `swarm_recommendation.disagreements[].positions[].view` and is never
@@ -652,7 +681,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // backend/tests/swarm-submission-window.test.ts ("closing the window EARLY
     // no longer rejects takes"). An amendment is the strictly newer ask, so it
     // is the one that yields.
-    if (session.state === "aggregated" || session.state === "published") {
+    if (!TAKES_AMENDABLE_STATES.has(session.state)) {
       return {
         ok: false,
         status: 409,

@@ -27,6 +27,8 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
+import * as admin from "../src/swarm/admin.ts";
+import { setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
@@ -274,6 +276,57 @@ test("amendment OUTSIDE the window is refused — both after the advertised dead
   // And the published snapshot still quotes exactly what is on file.
   const rec = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${b.session.id}`)[0] as any;
   expect(JSON.stringify(rec.swarm_recommendation)).not.toContain("second thoughts");
+});
+
+test("the amendment gate is an ALLOWLIST: `judged` freezes takes exactly as `aggregated` does (#752)", async () => {
+  // THE REGRESSION THIS EXISTS FOR. The gate used to read
+  // `state === "aggregated" || state === "published"` — exhaustive of the
+  // post-aggregation states on the day it was written. #752 inserted `judged`
+  // between them, and the denylist stopped matching: a member could amend a
+  // take on a session whose weight vector and whose verbatim take prose were
+  // already frozen, and `publishSession` is an unconditional UPDATE that does
+  // not re-aggregate. The published session would then carry `weights` that are
+  // NOT meanTakeWeights() over its own take set, and quote a withdrawn body.
+  const { subj, session, date } = await openCollectingSession("judged-amend");
+  const m = await activeMember();
+  expect((await submit(m, date, subj, { body: "the take of record" })).status).toBe(201);
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  await setJudgeConfig({ mode: "shadow" });
+  const judged = await admin.judgeSessionAdmin(session.id, undefined);
+  expect(judged.ok).toBe(true);
+  const row = (await sql`SELECT state, window_closes_at FROM swarm_sessions WHERE id = ${session.id}`)[0] as any;
+  expect(row.state).toBe("judged");
+  // The advertised deadline has NOT passed, so this refusal can only come from
+  // the state gate — the same proof shape the `aggregated` case uses.
+  expect(new Date(row.window_closes_at).getTime()).toBeGreaterThan(Date.now());
+
+  const amend = await submit(m, date, subj, { body: "second thoughts" });
+  expect(amend.status).toBe(409);
+  expect((amend as { error: string }).error).toContain("amendment window closed");
+  expect((amend as { error: string }).error).toContain("judged");
+  expect(await rows(session.id, m.id)).toHaveLength(1);
+
+  const rec = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${session.id}`)[0] as any;
+  expect(JSON.stringify(rec.swarm_recommendation)).not.toContain("second thoughts");
+});
+
+test("every session state is EXPLICITLY either amendable or frozen — a new state cannot be an omission", () => {
+  // The allowlist's whole point: a state added to the lifecycle is frozen by
+  // default. This walks the lifecycle's own table rather than a literal, so
+  // adding a row to TRANSITIONS without deciding about amendment shows up here.
+  expect(admin.SESSION_STATES.length).toBeGreaterThan(0);
+  for (const state of admin.SESSION_STATES) {
+    const amendable = ic.TAKES_AMENDABLE_STATES.has(state);
+    // The post-aggregation states — the ones whose take set is already frozen
+    // into a snapshot nothing recomputes — must every one of them be frozen.
+    if (["aggregated", "judged", "published", "cancelled"].includes(state)) {
+      expect(amendable, `${state} must NOT be amendable`).toBe(false);
+    }
+  }
+  // And the set is exactly what the domain layer declares, so a reader of one
+  // file does not have to trust a comment in another.
+  expect([...ic.TAKES_AMENDABLE_STATES].sort()).toEqual(["collecting", "scheduled", "window_closed"]);
 });
 
 test("the aggregation gate is AMENDMENT-ONLY: a first take is still governed by the advertised deadline alone (#570)", async () => {
