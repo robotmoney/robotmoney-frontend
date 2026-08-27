@@ -1375,7 +1375,16 @@ them is expressible in JSON Schema:
   on any undefined required field instead of emitting bytes with the key
   missing, which a plain `JSON.stringify` would do silently. Without that, an
   assembler that canonicalized first would anchor a digest over bytes that would
-  have failed validation.
+  have failed validation. The same rule applies to the **spec** argument, which
+  is all-or-nothing (issue #784): omit it and the canonicalizer uses this
+  package's pinned constants; supply it and you are the authority for every
+  field. A complete-but-different spec is honoured verbatim — that is how a
+  consumer holding another version's spec discovers the bytes disagree — while a
+  spec missing a field is refused by name rather than completed from the pin,
+  which would otherwise emit bytes under *our* domain separator while judging
+  bucket order by *theirs*. For the same reason the fixtures subpath exports
+  only `./fixtures/consensus-receipt.*`, the conformance corpus, rather than
+  wildcarding the whole test-fixture directory into public API.
 - **`stances` is a fixed five-key set, explicitly zero-filled.**
   `aggregateSession()` builds its rollup **sparsely** — it starts from `{}` and
   only sets a key for a stance that actually appears — so a session with two

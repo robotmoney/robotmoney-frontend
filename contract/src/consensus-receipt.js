@@ -25,12 +25,15 @@
 // agree one by one — so these are a second SPELLING of the pin, never a second
 // authority. Four of the five (domain separator, schema version, trailing
 // newline, canonical bucket order) are exactly the spec fields the functions
-// here dereference, and each is the fallback at its own use site: a caller that
-// hand-builds a spec object rather than importing the published JSON through
-// `@robotmoney/contract/fixtures/...` otherwise gets `"undefined{...}"` bytes,
-// or bytes without the trailing newline, SILENTLY, for every field it forgets.
-// RECEIPT_STANCE_KEYS is not a fallback — it is the fixed key set the stance
-// recomputation reads — and it is pinned to the spec the same way.
+// here dereference; RECEIPT_STANCE_KEYS is the fixed key set the stance
+// recomputation reads, and it is pinned to the spec the same way.
+//
+// THEY ARE THE DEFAULT WHOLE, NEVER A PER-KEY FALLBACK. See PINNED_SPEC below:
+// omitting the spec entirely selects these constants as one object; supplying a
+// spec makes the CALLER the authority for every field. Filling a supplied
+// spec's gaps from these constants would mix the two authorities — bytes from
+// our pin, semantics from theirs — which is exactly the drift the pin exists to
+// catch, so a supplied spec missing a field is refused instead.
 
 /** The one domain prefix schema 1.0 hashes under. */
 export const RECEIPT_DOMAIN_SEPARATOR = "robotmoney:consensus-receipt:v1\n";
@@ -50,6 +53,20 @@ export const RECEIPT_STANCE_KEYS = Object.freeze([
 export const RECEIPT_CANONICAL_BUCKET_ORDER = Object.freeze([
   "agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets",
 ]);
+
+// THE SPEC THIS MODULE USES WHEN THE CALLER SUPPLIES NONE — the five constants
+// above, assembled once, under the same key names consensus-receipt.canonicalization.json
+// uses, so it is a strict subset of the published document rather than a
+// parallel shape. It is deliberately NOT exported: it is a default, not a
+// second authority to vendor. A consumer that wants these values imports the
+// constants, or the published JSON through `@robotmoney/contract/fixtures/…`.
+const PINNED_SPEC = Object.freeze({
+  schema_version: RECEIPT_SCHEMA_VERSION,
+  domain_separator: RECEIPT_DOMAIN_SEPARATOR,
+  trailing_newline: RECEIPT_TRAILING_NEWLINE,
+  canonical_bucket_order: RECEIPT_CANONICAL_BUCKET_ORDER,
+  nested_field_order: Object.freeze({ stances: RECEIPT_STANCE_KEYS }),
+});
 
 /**
  * Ascending by Unicode code point — which is byte-for-byte the order UTF-8
@@ -89,6 +106,45 @@ function required(container, key, path) {
   return value;
 }
 
+// ── THE SPEC IS ALL-OR-NOTHING ──────────────────────────────────────────────
+// assembler_obligations.order says "VALIDATE, THEN CANONICALIZE, ALWAYS…
+// throws on any undefined required field rather than emitting bytes with the
+// key missing". `required()` applies that rule to the RECEIPT; these two apply
+// the same rule to the SPEC, which used to be the one input that was quietly
+// completed instead of refused.
+//
+// WHAT A PER-KEY FALLBACK COST. A caller passing a spec whose
+// `domain_separator` had been renamed by a major bump, alongside a five-bucket
+// `canonical_bucket_order`, got bytes byte-identical to THIS repo's golden
+// while `receiptSemanticErrors` judged bucket order by THEIRS: two authorities
+// in one call, and no signal. A supplied spec can differ from the fallback only
+// when the caller's authority has diverged from ours — precisely the drift the
+// pin exists to catch — so the gap is now a named refusal.
+//
+// A COMPLETE-BUT-WRONG SPEC IS STILL HONOURED VERBATIM, deliberately: the
+// caller has then stated its whole authority, and reproducing what it asked for
+// is how a verifier holding a different version's spec finds out the bytes
+// disagree. Only a HALF-stated authority is refused.
+function resolveSpec(spec, fn) {
+  if (spec === undefined) return PINNED_SPEC;
+  if (spec === null || typeof spec !== "object" || Array.isArray(spec)) {
+    throw new ReceiptCanonicalizationError(
+      `${fn}: spec must be an object — omit it entirely to canonicalize under the pinned spec`,
+    );
+  }
+  return spec;
+}
+
+function requiredSpecField(spec, key, fn) {
+  const value = spec[key];
+  if (value === undefined || value === null) {
+    throw new ReceiptCanonicalizationError(
+      `${fn}: spec is missing "${key}" — pass the complete published canonicalization spec, or omit the spec entirely to use the pin; a partial spec is not completed from it`,
+    );
+  }
+  return value;
+}
+
 // Every number in schema 1.0 is an integer, so the canonical bytes never carry
 // a decimal point or an exponent. A float reaching here (a raw `participation`
 // ratio in place of `participation_bps`, say) would serialize to bytes no other
@@ -118,11 +174,20 @@ function assertIntegers(node, path) {
  * fixture test then holds `consensus-receipt.canonicalization.json` to it, so
  * the two can never drift apart unnoticed.
  *
- * Throws `ReceiptCanonicalizationError` on any undefined required field, and on
- * a receipt declaring a schema version these rules do not implement.
+ * Throws `ReceiptCanonicalizationError` on any undefined required field, on a
+ * receipt declaring a schema version these rules do not implement, and on a
+ * spec that is supplied but incomplete. Omit `spec` to use the pin.
  */
-export function canonicalizeReceipt(receipt, spec = {}) {
-  // VERSION FIRST, BEFORE ANY BYTE IS SHAPED. The field order, the zero-fill
+export function canonicalizeReceipt(receipt, spec) {
+  // SPEC FIRST, BEFORE THE RECEIPT IS EVEN READ. All three fields are pulled
+  // here rather than at their use sites so a partial spec is refused before any
+  // byte is shaped, and named by the first key it is missing.
+  const s = resolveSpec(spec, "canonicalizeReceipt");
+  const pinnedVersion = requiredSpecField(s, "schema_version", "canonicalizeReceipt");
+  const domainSeparator = requiredSpecField(s, "domain_separator", "canonicalizeReceipt");
+  const trailingNewline = requiredSpecField(s, "trailing_newline", "canonicalizeReceipt");
+
+  // THEN THE VERSION, STILL BEFORE ANY BYTE IS SHAPED. The field order, the zero-fill
   // and the domain prefix below are schema 1.0's rules. `schema_version` is
   // echoed verbatim into the bytes, so without this check a 2.0 receipt
   // canonicalizes under the v1 prefix, declares "2.0", and SILENTLY DROPS every
@@ -130,7 +195,6 @@ export function canonicalizeReceipt(receipt, spec = {}) {
   // version_policy#selection says a verifier picks its schema by the receipt's
   // own version and never by "latest"; this is that rule, enforced.
   const schemaVersion = required(receipt, "schema_version", "/schema_version");
-  const pinnedVersion = spec.schema_version ?? RECEIPT_SCHEMA_VERSION;
   if (schemaVersion !== pinnedVersion) {
     throw new ReceiptCanonicalizationError(
       `canonicalizeReceipt: receipt declares schema_version "${schemaVersion}" but these rules implement "${pinnedVersion}" — canonicalize it with the reference for its own version`,
@@ -216,8 +280,6 @@ export function canonicalizeReceipt(receipt, spec = {}) {
   // UTF-8. An implementation whose serializer escapes non-ASCII (Python's
   // `ensure_ascii=True`) or the HTML-sensitive trio (Go's `encoding/json`)
   // produces different bytes and a different digest for the same receipt.
-  const domainSeparator = spec.domain_separator ?? RECEIPT_DOMAIN_SEPARATOR;
-  const trailingNewline = spec.trailing_newline ?? RECEIPT_TRAILING_NEWLINE;
   return `${domainSeparator}${JSON.stringify(ordered)}${trailingNewline ? "\n" : ""}`;
 }
 
@@ -306,7 +368,13 @@ export function participationBps(submitted, active) {
   return Math.floor((submitted / active) * 10_000 + 0.5);
 }
 
-export function receiptSemanticErrors(receipt, spec = {}) {
+export function receiptSemanticErrors(receipt, spec) {
+  // Same all-or-nothing rule as canonicalizeReceipt, and read up front for the
+  // same reason: `canonical_bucket_order` is only consulted for a receipt that
+  // carries `weights`, so reading it at its use site would let a partial spec
+  // pass unnoticed for every receipt that omits them.
+  const s = resolveSpec(spec, "receiptSemanticErrors");
+  const bucketOrder = requiredSpecField(s, "canonical_bucket_order", "receiptSemanticErrors");
   const errors = [];
   const q = receipt.quorum;
   if (q.active !== q.submitted + q.absent) errors.push("quorum: active !== submitted + absent");
@@ -338,7 +406,6 @@ export function receiptSemanticErrors(receipt, spec = {}) {
 
   if (receipt.weights != null) {
     const buckets = receipt.weights.map((w) => w.bucket);
-    const bucketOrder = spec.canonical_bucket_order ?? RECEIPT_CANONICAL_BUCKET_ORDER;
     if (buckets.join(",") !== bucketOrder.join(",")) errors.push("weights: not in canonical bucket order");
     const sum = receipt.weights.reduce((acc, w) => acc + w.weight_bps, 0);
     if (sum !== 10_000) errors.push(`weights: bps sum is ${sum}, not 10000`);
