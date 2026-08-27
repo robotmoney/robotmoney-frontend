@@ -1206,6 +1206,10 @@ test("swarm admin: session create validation, UTC/local timeline, roster, and di
   await expect(page.getByTestId("session-action-publish")).toBeDisabled();
   await expect(page.getByTestId("session-action-aggregate")).toBeDisabled();
   await expect(page.getByTestId("session-action-reopen")).toBeDisabled();
+  // `judge` (issue #752) is only legal from `aggregated`, and the UI offers it
+  // rather than hiding it — whether the judge is switched ON is the backend's
+  // call (409 `judge_disabled`), not the button's.
+  await expect(page.getByTestId("session-action-judge")).toBeDisabled();
 });
 
 // AC: roster/recommendation matrix — one row per roster snapshot, distinct

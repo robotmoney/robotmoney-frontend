@@ -631,6 +631,50 @@ test("judge() never throws, whatever the transport does", async () => {
   expect(empty.fallbackReason).toBe("no_takes");
 });
 
+test("the replay CLI runs against real session rows and reports every vector unchanged", async () => {
+  // EXECUTED, not asserted from the source. A replay tool nobody has run is not
+  // validation; this spawns the actual script against this test's own database,
+  // with sessions that carry an absence and a superseded revision.
+  const full = await aggregatedSession("replay-cli", 3);
+  const messy = await weightedSession("replay-cli-messy");
+  const amender = await activeMember();
+  await activeMember(); // seated and silent — an absence in the roster
+  await submit(amender, messy.date, messy.subj, { body: "v1", weights: W });
+  await submit(amender, messy.date, messy.subj, { stance: "bullish", body: "v2", weights: W });
+  await ic.closeWindow(messy.session.id);
+  await ic.aggregateSession(messy.session.id);
+  await admin.publishSessionAdmin(full.session.id, undefined);
+  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+
+  const proc = Bun.spawnSync(
+    ["bun", "run", "scripts/swarm-judge-replay.ts", "--limit", "5", "--json"],
+    { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, DATABASE_URL: await currentDatabaseUrl() } },
+  );
+  const stdout = proc.stdout.toString();
+  const stderr = proc.stderr.toString();
+  expect(proc.exitCode, `replay CLI failed:\n${stdout}\n${stderr}`).toBe(0);
+  const report = JSON.parse(stdout.slice(stdout.indexOf("{"))) as {
+    moved: number; sessions: { sessionId: string; weightsUnchanged: boolean; source: string; promptHash: string }[];
+  };
+  expect(report.moved).toBe(0);
+  expect(report.sessions.length).toBeGreaterThanOrEqual(2);
+  expect(report.sessions.map((r) => r.sessionId)).toContain(messy.session.id);
+  for (const row of report.sessions) {
+    expect(row.weightsUnchanged, `${row.sessionId} moved its vector`).toBe(true);
+    expect(row.promptHash).toBe(JUDGE_PROMPT_HASH);
+  }
+  // The script wrote nothing: replay is read-only.
+  expect(await latestJudgement(full.session.id)).toBeNull();
+});
+
+/** This test file's own clone, as a URL a child process can connect to. */
+async function currentDatabaseUrl(): Promise<string> {
+  const [row] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
+  const url = new URL(process.env.DATABASE_URL!);
+  url.pathname = `/${row.db}`;
+  return url.toString();
+}
+
 // ── 11. Which model is a ROW, not an environment variable ───────────────────
 
 test("the model is selected by the config row, and unsetting it is what stops model prose", async () => {

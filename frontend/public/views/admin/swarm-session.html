@@ -54,7 +54,7 @@
         <!-- ── Lifecycle actions — only server-legal transitions are enabled ── -->
         <h2 class="adm-h2">Actions</h2>
         <div class="adm-toolbar">
-          <template x-for="action in ['close', 'reopen', 'aggregate', 'publish', 'cancel']" :key="action">
+          <template x-for="action in ['close', 'reopen', 'aggregate', 'judge', 'publish', 'cancel']" :key="action">
             <button type="button" class="adm-btn" :class="!isLegalAction(action) && 'adm-btn--ghost'"
               :disabled="!isLegalAction(action)" @click="openActionConfirm(action)"
               :data-testid="'session-action-' + action">

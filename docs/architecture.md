@@ -1211,7 +1211,9 @@ wrote this) and `inputs_digest` digests the exact brief and take set consumed
 `replaySessionJudge()` runs the judge over an already-published session and
 writes nothing, so real history — absences, thin quorums, superseded revisions,
 rotated keys — can be replayed to demonstrate that judging never moves a weight
-vector.
+vector. `bun run --cwd backend swarm-judge:replay [--limit N] [--session <uuid>]
+[--json]` is that, as a command an operator can point at a production database
+with a read-only role; it exits non-zero if any vector moved.
 
 ### 9.8 Testing & smoke
 
