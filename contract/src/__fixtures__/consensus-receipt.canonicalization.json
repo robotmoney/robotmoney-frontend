@@ -3,7 +3,6 @@
   "domain_separator": "robotmoney:consensus-receipt:v1\n",
   "encoding": "UTF-8",
   "digest_algorithm": "keccak256",
-  "valid_fixture_digest": "0x7adb684199a4d87946388a06b1f37ac252f7daebe6a1daf1fd9c22a69d7ddde6",
   "receipt_id_derivation": {
     "algorithm": "keccak256",
     "bytes": "UTF-8 robotmoney:consensus-receipt-id:v1\\n + session_id + \\n + subject_id",
@@ -24,17 +23,55 @@
     "analyst_signatures",
     "weights"
   ],
-  "optional_append_only_fields": ["weights"],
+  "optional_append_only_fields": [
+    "weights"
+  ],
   "analyst_signature_order": "member_id ascending by UTF-8 byte order",
   "nested_field_order": {
-    "quorum": ["active", "submitted", "absent", "participation_bps"],
-    "stances": ["bearish", "cautious", "neutral", "constructive", "bullish"],
-    "judge": ["rationale", "consensus", "disagreements", "release_safety"],
-    "judge.disagreements[]": ["topic", "positions", "what_settles"],
-    "judge.disagreements[].positions[]": ["member_id", "view"],
-    "judge.release_safety": ["safe_to_release", "opinion"],
-    "analyst_signatures[]": ["member_id", "public_key", "canonical_submission", "signature"],
-    "weights[]": ["bucket", "weight_bps"]
+    "quorum": [
+      "active",
+      "submitted",
+      "absent",
+      "participation_bps"
+    ],
+    "stances": [
+      "bearish",
+      "cautious",
+      "neutral",
+      "constructive",
+      "bullish"
+    ],
+    "judge": [
+      "rationale",
+      "disagreements",
+      "release_safety"
+    ],
+    "judge.disagreements[]": [
+      "topic",
+      "positions",
+      "what_settles"
+    ],
+    "judge.disagreements[].positions[]": [
+      "member_id",
+      "view"
+    ],
+    "judge.release_safety": [
+      "release",
+      "thinly_supported",
+      "take_count",
+      "min_takes",
+      "concerns"
+    ],
+    "analyst_signatures[]": [
+      "member_id",
+      "public_key",
+      "canonical_submission",
+      "signature"
+    ],
+    "weights[]": [
+      "bucket",
+      "weight_bps"
+    ]
   },
   "canonical_bucket_order": [
     "agent_tokens",
@@ -47,5 +84,15 @@
     "prefix_rule": "iterate canonical_bucket_order except the last bucket and round mean_weight * 10000 to the nearest integer, with .5 rounded upward",
     "final_rule": "set the last bucket to 10000 minus the prefix sum; reject if the result falls outside 0..10000"
   },
-  "evolution_rule": "Within a schema version, existing field order is immutable. New optional fields append after every existing field and are omitted when absent; unknown input fields are never serialized."
+  "evolution_rule": "Within a schema version, existing field order is immutable AT EVERY NESTING LEVEL. New optional fields append after every existing field of the object they join, and are omitted from the canonical bytes when absent, so bytes producible under this version stay reproducible forever. Unknown input fields are never serialized.",
+  "digest_note": "This repo pins the canonical BYTES (consensus-receipt.valid.canonical.txt), not a digest constant. keccak256 is not available to a zero-dependency Bun test here (sha3-256 is NIST-padded and different), so a digest checked in beside the bytes could only be an unasserted claim that silently goes stale — which is exactly what happened to the 1.0 draft's. The consumer computes keccak256 over the pinned bytes.",
+  "version_policy": {
+    "schema_id": "https://robotmoney.net/schemas/consensus-receipt/1.0",
+    "schema_version_matches_id": "schema_version always equals the trailing segment of $id.",
+    "selection": "A verifier picks the schema by the receipt's own schema_version, never by \"latest\".",
+    "retroactivity": "None. A bump publishes a new $id and a new document. An already-published receipt keeps its own schema_version, keeps validating under that version's schema, and its canonical bytes and digest never change — the anchored digest commits to those exact bytes, so a receipt \"fixed\" by a bump is a different receipt at a different digest.",
+    "minor_bump": "Appending an optional trailing field, per evolution_rule. Every previously published receipt still validates and still canonicalizes to identical bytes.",
+    "major_bump": "Anything that changes bytes already producible under the current version: reordering, renaming, removing, or retyping a field, or changing a serialization, ordering, or rounding rule."
+  },
+  "judge_block_source": "The judge block is exactly JudgeOpinion from backend/src/swarm/judge.ts. Two deliberate divergences from the 1.0 draft, both reconciled here: `consensus` is DROPPED (no judge produces it; its only producer, buildConsensus() in backend/src/swarm/domain.ts, restates quorum/stances/meanConfidence/regimeSummary in English, and the first two are already signed structurally in this payload), and `release_safety` carries the SHIPPED shape whole rather than a {safe_to_release, opinion} reduction, so a verifier can recompute thinly_supported and release instead of trusting flags a member-authored concern can steer."
 }

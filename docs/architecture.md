@@ -1256,6 +1256,70 @@ vector. `bun run --cwd backend swarm-judge:replay [--limit N] [--session <uuid>]
 [--json]` is that, as a command an operator can point at a production database
 with a read-only role; it exits non-zero if any vector moved.
 
+**The consensus receipt carries the opinion, not a paraphrase of it** (issue
+#775). The receipt is the signed, publicly-anchored artifact — the thing
+`robotmoney-core` anchors and issue #754 assembles — and it is pinned by
+`contract/src/__fixtures__/consensus-receipt.*` plus the reference
+canonicalizer in `contract/tests/unit/consensus-receipt-fixture.test.ts`. Its
+`judge` block is **exactly `JudgeOpinion`**: `{rationale, disagreements,
+release_safety}`, field for field, so "the receipt says what the judge said" is
+checkable rather than asserted. The 1.0 draft was written before #752 shipped
+and disagreed with the judge in two places; both are resolved deliberately.
+
+- **`judge.consensus` is dropped.** No judge produces it. Its only producer is
+  `buildConsensus()` in `swarm/domain.ts`, which restates
+  quorum/stances/mean-confidence/regime in English — and `quorum` and `stances`
+  are already carried structurally, and signed, in the receipt. Keeping it
+  would put a lossy prose copy of already-signed numbers *into* the signed
+  bytes, where it can contradict them, and would make the anchored digest
+  depend on the wording of an aggregator template. `SwarmRecommendation.consensus`
+  is unaffected; it stays on the session API surface, it just does not ride in
+  the receipt.
+- **`release_safety` is carried whole**, in the shipped `JudgeReleaseSafety`
+  shape, rather than reduced to the draft's `{safe_to_release, opinion}`.
+  `release` is member-steerable: `releaseSafety()` returns `"hold"` when
+  support is thin **or** any concern is present, and a model may add concerns
+  drawn from member-written take bodies (#767). Carrying `take_count` and
+  `min_takes` alongside the flags is what lets a verifier **recompute** instead
+  of trust — `thinly_supported` must equal `take_count < min_takes`, and
+  `release` must be `"safe"` exactly when neither thin support nor a concern is
+  present. Both recomputations are asserted on the fixtures. A later-phase
+  signer reads this field, so the receipt has to carry what that signer read,
+  in the shape it read it.
+- **The `JudgeOutcome` envelope is deliberately not mirrored** into the `judge`
+  block: `prompt_hash` and `inputs_digest` ride at the receipt's top level
+  (they pin the whole session, not just the prose), `take_count` / `min_takes`
+  ride inside `release_safety` where a verifier needs them, and
+  `source` / `fallbackReason` / `model` are omitted from 1.0. That omission is
+  reversible without a major bump — the evolution rule below admits them as
+  optional fields appended after `release_safety`.
+
+**Schema `$id` and version policy.** The schema is
+`https://robotmoney.net/schemas/consensus-receipt/1.0`, and `schema_version`
+always equals the trailing segment of that `$id`. A verifier selects the schema
+by the receipt's own `schema_version`, never by "latest". **Within** a version
+the field order is immutable at every nesting level and new fields are optional
+and appended after every existing field of the object they join, so bytes
+producible under that version stay reproducible forever. A **bump is never
+retroactive**: it publishes a new `$id` and a new document, and an
+already-published receipt keeps its own `schema_version`, keeps validating under
+that version's schema, and never changes its canonical bytes or its digest. The
+anchored digest is a commitment to those exact bytes, so a receipt "fixed" by a
+bump is a different receipt at a different digest. A minor bump appends an
+optional trailing field; a major bump is anything that changes bytes already
+producible — reordering, renaming, removing or retyping a field, or changing a
+serialization, ordering, or rounding rule.
+
+**This repo pins bytes, not digests.** The golden
+`consensus-receipt.valid.canonical.txt` is the cross-repo target: the
+`robotmoney:consensus-receipt:v1\n` domain prefix, then RFC 8259 compact JSON in
+the pinned order, then a trailing newline. `keccak256` — the digest the chain
+side takes over those bytes — is not available to a zero-dependency Bun test
+(`sha3-256` is NIST-padded and different), so a digest constant committed beside
+the bytes could only ever be an unverified claim. The draft carried one, no test
+asserted it, and this reconciliation invalidated it silently; it is removed, and
+`digest_algorithm` alone records which function the consumer applies.
+
 ### 9.8 Testing & smoke
 
 Decision [D25](./decisions.md#d25--external-actor-rail-for-simulated-independent-entities)

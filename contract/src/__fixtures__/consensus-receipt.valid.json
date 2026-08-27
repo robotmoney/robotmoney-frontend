@@ -20,9 +20,6 @@
   },
   "judge": {
     "rationale": "The deterministic mean keeps most capital in stable yield while retaining measured exposure to the other three vault themes.",
-    "consensus": [
-      "Both submitted takes keep stable yield as the largest allocation."
-    ],
     "disagreements": [
       {
         "topic": "Size of the stable-yield reserve",
@@ -40,8 +37,11 @@
       }
     ],
     "release_safety": {
-      "safe_to_release": true,
-      "opinion": "The vector covers all four canonical buckets, sums to 10,000 bps, and has two independently signed takes."
+      "release": "safe",
+      "thinly_supported": false,
+      "take_count": 2,
+      "min_takes": 2,
+      "concerns": []
     }
   },
   "analyst_signatures": [

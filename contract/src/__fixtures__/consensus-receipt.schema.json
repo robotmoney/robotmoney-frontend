@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://robotmoney.net/schemas/consensus-receipt/1.0",
   "title": "ConsensusReceipt",
-  "description": "Canonical off-chain payload committed by a Project Fusion consensus receipt. The chain stores only the digest; analyst Ed25519 signatures remain payload data verified off-chain.",
+  "description": "Canonical off-chain payload committed by a Project Fusion consensus receipt. The chain stores only the digest; analyst Ed25519 signatures remain payload data verified off-chain. VERSION POLICY: `schema_version` always equals the trailing segment of `$id`, and a receipt is validated against the schema its own `schema_version` names, never against \"latest\". Within a version the field order is immutable and new fields are optional and appended after every existing field AT THEIR OWN NESTING LEVEL, so bytes producible under that version stay reproducible forever. A bump publishes a NEW `$id` and a NEW document and is never retroactive: an already-published receipt keeps its own `schema_version`, keeps validating under it, and its canonical bytes and digest never change — the anchored digest is a commitment to those exact bytes, so a receipt \"fixed\" by a bump is a different receipt at a different digest. Minor bump = appending an optional trailing field. Major bump = anything that changes bytes already producible: reordering, renaming, removing, retyping, or changing a serialization or rounding rule.",
   "type": "object",
   "required": [
     "schema_version",
@@ -37,10 +37,12 @@
       "format": "date-time"
     },
     "prompt_hash": {
-      "$ref": "#/definitions/hash32"
+      "$ref": "#/definitions/hash32",
+      "description": "JudgeOutcome.promptHash — the digest of the judge instruction template, saying WHICH judge wrote the prose. judge.ts emits it as bare lowercase sha256 hex; the assembler 0x-prefixes it to match the chain-facing convention of every other hash in this payload."
     },
     "inputs_digest": {
-      "$ref": "#/definitions/hash32"
+      "$ref": "#/definitions/hash32",
+      "description": "JudgeOutcome.inputsDigest — the digest of the exact brief and frozen take set the judge read, saying WHAT it read. Same 0x-prefixing note as prompt_hash. Together the two reproduce the rendered prompt byte-for-byte."
     },
     "quorum": {
       "type": "object",
@@ -67,29 +69,50 @@
     },
     "judge": {
       "type": "object",
-      "required": ["rationale", "consensus", "disagreements", "release_safety"],
+      "description": "EXACTLY the shipped JudgeOpinion (backend/src/swarm/judge.ts), field for field: {rationale, disagreements, release_safety}. The receipt is the signed artifact and the judge opinion is what the backend produces; keeping the two identical is what makes 'the receipt says what the judge said' checkable rather than asserted. The JudgeOutcome ENVELOPE around the opinion is deliberately not mirrored here: prompt_hash and inputs_digest ride at the receipt's top level (they pin the whole session, not just the prose), take_count and min_takes ride inside release_safety where a verifier needs them, and source/fallbackReason/model are omitted — see the receipt's evolution rule, which lets them be appended after release_safety in a later minor version without changing any byte already published.",
+      "required": ["rationale", "disagreements", "release_safety"],
       "additionalProperties": false,
       "properties": {
         "rationale": {
           "type": "string",
           "minLength": 1,
-          "description": "Judge-authored explanation. The judge never authors weights."
-        },
-        "consensus": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "description": "Judge-authored explanation. The judge never authors weights; a model response carrying a weight-like key at any depth is rejected whole, so nothing here can have moved the vector."
         },
         "disagreements": {
           "type": "array",
+          "description": "JudgeOpinion.disagreements verbatim. `positions[].view` is filled from the attributed member's own take body by parseJudgeResponse(), never from the model's text, so a receipt cannot attribute a sentence to a member who did not write it.",
           "items": { "$ref": "#/definitions/disagreement" }
         },
         "release_safety": {
           "type": "object",
-          "required": ["safe_to_release", "opinion"],
+          "description": "The shipped JudgeReleaseSafety, carried WHOLE and not reduced to a boolean. `release` is advice, not a lock, and it is member-steerable: releaseSafety() sets \"hold\" when thin support OR any concern is present, and a model may ADD concerns drawn from member-authored take bodies (issue #767). Carrying take_count and min_takes alongside the flags is what lets a verifier RECOMPUTE rather than trust — thinly_supported MUST equal (take_count < min_takes), and release MUST equal \"safe\" iff (!thinly_supported and concerns is empty). A later-phase signer reads this field (judge.ts), so the receipt has to carry what that signer read, in the shape it read it.",
+          "required": ["release", "thinly_supported", "take_count", "min_takes", "concerns"],
           "additionalProperties": false,
           "properties": {
-            "safe_to_release": { "type": "boolean" },
-            "opinion": { "type": "string", "minLength": 1 }
+            "release": {
+              "type": "string",
+              "enum": ["safe", "hold"],
+              "description": "Advice only. Nothing in the session lifecycle refuses to publish on \"hold\"."
+            },
+            "thinly_supported": {
+              "type": "boolean",
+              "description": "Arithmetic, never the model's call: true iff take_count < min_takes. Recomputable from the two fields beside it."
+            },
+            "take_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Size of the frozen latest-revision-per-member take set the judge read. Equals quorum.submitted for the same session."
+            },
+            "min_takes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The swarm_judge_config.min_takes threshold in force when this opinion was formed, recorded so a historical receipt can be read against the threshold that actually applied to it rather than today's."
+            },
+            "concerns": {
+              "type": "array",
+              "description": "Ordered as releaseSafety() emits them: the generated thin-support concern first when thinly_supported, then any model-authored concerns. Model-authored entries are derived from member-written take bodies and are NOT independently verified prose.",
+              "items": { "type": "string", "minLength": 1 }
+            }
           }
         }
       }
