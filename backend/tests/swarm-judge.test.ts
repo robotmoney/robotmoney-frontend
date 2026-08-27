@@ -885,6 +885,154 @@ test("two judges racing one session are SERIALIZED: the record and the session a
   expect(rows[0].opinion.rationale).not.toBe(rows[1].opinion.rationale);
 });
 
+// …BUT THE TEST ABOVE IS A SMOKE TEST, NOT A REGRESSION DETECTOR (issue #772).
+// It passes with `pg_advisory_xact_lock` deleted from judge-session.ts — 8 runs
+// out of 8 under mutation. It observes only the OUTCOME, and the outcome
+// survives without the lock because applyOpinion's own `SELECT … FOR UPDATE`
+// already serializes the read-modify-write, and under `Promise.all` the
+// first-issued call is also the one that issues its INSERT and its row lock
+// first, so the favourable ordering is the likely one. "Likely" is not a gate.
+// The advisory acquire is a BLOCKING one — precisely the line a later
+// performance refactor deletes — and CI would stay green.
+//
+// The two tests below observe the MECHANISM. Each goes red deterministically
+// the moment the acquire is gone: the first asks Postgres who holds the key,
+// the second forces the damaging interleave instead of hoping for it.
+
+/** Poll until `done()`, or until the budget runs out. Returns the instant it is true. */
+async function until(done: () => boolean, budgetMs: number): Promise<void> {
+  const deadline = Date.now() + budgetMs;
+  while (!done() && Date.now() < deadline) await Bun.sleep(15);
+}
+
+test("the judge's transaction HOLDS the session's advisory key: pg_locks names it, and a second connection is refused it", async () => {
+  const { session, members } = await aggregatedSession("judge-advisory-held");
+  await setJudgeConfig({ mode: "enforce" });
+
+  // A plain object, not a `let`: the assignments happen inside a callback, and
+  // the assertions have to read what the callback actually saw.
+  const seen: Record<string, boolean> = {};
+
+  const result = await judgeSession(session.id, {
+    transport: fixedTransport(goodAnswer(members[0].id, members[1].id)),
+    // beforeRecord is the only seam that runs INSIDE the judge's transaction —
+    // after the acquire and before the INSERT — which is the only window in
+    // which an `_xact_` lock exists to be observed at all.
+    beforeRecord: async (tx) => {
+      // pg_locks splits a single-bigint advisory key across (classid, objid) —
+      // the high and low 32 bits — with objsubid = 1 for the one-argument form.
+      // The masks keep the comparison sign-agnostic: hashtextextended() is free
+      // to return a negative bigint.
+      const heldOn = async (key: string) => {
+        const [row] = (await tx`
+          WITH k AS (SELECT hashtextextended(${key}, 0) AS key)
+          SELECT EXISTS (
+            SELECT 1 FROM pg_locks l, k
+            WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
+              AND l.pid = pg_backend_pid()
+              AND l.classid::bigint = ((k.key >> 32) & 4294967295)
+              AND l.objid::bigint = (k.key & 4294967295)
+          ) AS held`) as any[];
+        return row.held as boolean;
+      };
+      // The catalog row only implies exclusion; this is exclusion. `try_` never
+      // blocks, so a regression here fails the test rather than hanging it.
+      const siblingCanTake = async (key: string) => await sql.begin(async (other) => {
+        const [row] = (await other`SELECT pg_try_advisory_xact_lock(hashtextextended(${key}, 0)) AS got`) as any[];
+        return row.got as boolean;
+      });
+      seen.ran = true;
+      seen.held = await heldOn(session.id);
+      seen.siblingTookIt = await siblingCanTake(session.id);
+      // Controls, so neither assertion above can pass for the wrong reason: not
+      // "some advisory lock exists", and not "the sibling is stuck on anything".
+      seen.heldOnAnotherKey = await heldOn(`${session.id}-a-different-session`);
+      seen.siblingTookAnotherKey = await siblingCanTake(`${session.id}-a-different-session`);
+      return { ok: true, status: 200 };
+    },
+  });
+
+  expect(result.ok).toBe(true);
+  expect(seen.ran, "beforeRecord runs inside the transaction — it must have observed something").toBe(true);
+  expect(seen.held, "the judge must hold pg_advisory_xact_lock(hashtextextended(<session id>, 0))").toBe(true);
+  expect(seen.siblingTookIt, "a second connection must be refused that exact key").toBe(false);
+  expect(seen.heldOnAnotherKey, "control: the lock is on THIS session's key, not on any key").toBe(false);
+  expect(seen.siblingTookAnotherKey, "control: the sibling is blocked by the key, not by anything else").toBe(true);
+});
+
+test("a second judge BLOCKS on the first one's advisory lock, so the interleave that splits the record from the session cannot form", async () => {
+  const { session } = await aggregatedSession("judge-race-forced");
+  await setJudgeConfig({ mode: "enforce" });
+
+  const answer = (who: string) => JSON.stringify({
+    rationale: `RATIONALE FROM JUDGE ${who}`,
+    disagreements: [],
+    release_safety: { release: "safe", concerns: [] },
+  });
+  const progress = { modelAnswered: false, enteredTransaction: false };
+  const observed: Record<string, boolean> = {};
+  const sibling: { run?: Promise<Awaited<ReturnType<typeof judgeSession>>> } = {};
+
+  // B's transport flags the last thing judgeSession does BEFORE sql.begin, so
+  // once it is set the only thing between B and its own beforeRecord is the
+  // advisory acquire. That is what makes the wait below a measurement rather
+  // than a guess.
+  const transportB: JudgeTransport = {
+    model: "model/b",
+    complete: async () => {
+      progress.modelAnswered = true;
+      return answer("B");
+    },
+  };
+
+  const first = await judgeSession(session.id, {
+    transport: fixedTransport(answer("A"), "model/a"),
+    beforeRecord: async () => {
+      // Inside A's transaction, holding A's lock, before A's INSERT.
+      sibling.run = judgeSession(session.id, {
+        transport: transportB,
+        beforeRecord: async () => {
+          progress.enteredTransaction = true;
+          return { ok: true, status: 200 };
+        },
+      });
+      await until(() => progress.modelAnswered, 10_000);
+      observed.siblingReachedTheDoor = progress.modelAnswered;
+      // Then give it far longer than walking through an unlocked door costs —
+      // two round trips on a loopback socket. The poll returns the instant it
+      // happens, so an unserialized build fails fast and an honest one pays the
+      // full wait exactly once.
+      await until(() => progress.enteredTransaction, 2_000);
+      observed.siblingGotInsideWhileFirstHeldTheLock = progress.enteredTransaction;
+      return { ok: true, status: 200 };
+    },
+  });
+  expect(first.ok).toBe(true);
+  const second = await sibling.run!;
+  expect(second.ok).toBe(true);
+
+  expect(observed.siblingReachedTheDoor, "the sibling never reached the lock — this run proved nothing").toBe(true);
+  expect(
+    observed.siblingGotInsideWhileFirstHeldTheLock,
+    "a second judge got inside the critical section while the first one was in it",
+  ).toBe(false);
+
+  // And with the interleave forced rather than hoped for, the ORDER is now an
+  // assertion too: B was made to arrive first and still had to record second,
+  // because A's whole transaction — INSERT and apply — completed before B drew
+  // its sequence value. Unserialized, B records first and A's prose lands last.
+  const rows = (await sql`
+    SELECT id, opinion FROM swarm_session_judgements WHERE session_id = ${session.id} ORDER BY id`) as any[];
+  expect(rows.length, "both runs are on the append-only record — nothing is dropped").toBe(2);
+  expect(rows[0].opinion.rationale).toBe("RATIONALE FROM JUDGE A");
+  expect(rows[1].opinion.rationale).toBe("RATIONALE FROM JUDGE B");
+  const latest = await latestJudgement(session.id) as any;
+  const rec = await recOf(session.id);
+  expect(latest.id).toBe(rows[1].id);
+  expect(rec.rationale).toBe("RATIONALE FROM JUDGE B");
+  expect(rec.judge.model).toBe("model/b");
+});
+
 test("an opinion formed while a session was publishing does NOT land on the published session", async () => {
   // applyOpinion used to UPDATE by id with no condition, racing an unguarded
   // publishSession() in another process. Operator presses Judge at 09:59:30,
