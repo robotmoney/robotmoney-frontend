@@ -11,6 +11,7 @@ import { forgetApplication, rememberApplication } from "../lib/application-memor
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberAvatarMarkup } from "../lib/member-mark.js";
 import { memberLogo } from "../lib/member-logos.js";
+import { sessionPhase } from "../lib/session-phase.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -135,6 +136,12 @@ function camelSession(raw) {
     // rewritten, so it still carries the old field name.
     swarmRecommendation: raw.swarmRecommendation || raw.swarm_recommendation || raw.committee_recommendation || null,
     generatedAt: raw.generatedAt || raw.generated_at || null,
+    // The API serves this and this transform used to drop it, so the session
+    // page had no deadline to reason about and printed `state` raw — which is
+    // how the same session read "closed" on /swarm and "collecting" one click
+    // later. sessionPhase() needs it: the deadline is the timestamp, not the
+    // state (backend domain.ts:567).
+    windowClosesAt: raw.windowClosesAt || raw.window_closes_at || null,
   };
 }
 
@@ -379,6 +386,14 @@ export const helpers = {
   memberMark(seed, name, size = 40, avatarPath, handle) {
     const src = memberLogo({ handle }) || avatarPath || null;
     return memberAvatarMarkup(src, seed, name, size, (n) => this.initials(n));
+  },
+  // Same derivation /swarm uses, so a session cannot read "closed" there and
+  // "collecting" here one click later. See lib/session-phase.js.
+  phaseOf(session) { return session ? sessionPhase(session) : null; },
+  phaseLabel(session) { return this.phaseOf(session)?.label || ""; },
+  phaseClass(session) {
+    const k = this.phaseOf(session)?.key;
+    return k ? `rm-sphase rm-sphase--${k}` : "rm-sphase";
   },
   stanceColor(stance) {
     return STANCE_COLORS[stance] || "#7e889e";
