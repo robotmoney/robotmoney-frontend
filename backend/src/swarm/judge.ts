@@ -219,6 +219,11 @@ export function inputsDigest(input: JudgeInput): string {
 // invented dissenter by the member-id check in parseJudgeResponse() — but a
 // judge given no fence at all is a judge whose prose can be dictated by whoever
 // writes the longest take.
+//
+// The third structural defence, added in review: `positions[].view` is filled
+// from the frozen take set rather than from the model's answer, so a take body
+// instructing the model to attribute a fabricated position to another named
+// member cannot produce one. See parseJudgeResponse().
 export const UNTRUSTED_INPUTS_BEGIN = "----- BEGIN UNTRUSTED SESSION INPUTS -----";
 export const UNTRUSTED_INPUTS_END = "----- END UNTRUSTED SESSION INPUTS -----";
 

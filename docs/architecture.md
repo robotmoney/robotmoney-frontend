@@ -1207,11 +1207,38 @@ rationale/disagreements on the session it judged).
 
 **Failure is an outcome, never an error.** Model unavailable, request timed out,
 prose instead of JSON, JSON of the wrong shape, a disagreement attributed to a
-member who did not submit, a weight-like field anywhere in the response — each
-falls back to the SAME template producers the aggregator uses (`buildRationale`,
+member who did not submit, a weight-like field anywhere in the response, **a
+malformed `SWARM_JUDGE_TIMEOUT_MS` in the environment** — each falls back to the
+SAME template producers the aggregator uses (`buildRationale`,
 `buildDisagreements`), records the reason on the judgement row, and lets the
-session carry on. No session is ever blocked on the judge, and no
-partially-trusted model response ever reaches one.
+session carry on. Every recorded reason is capped at 120 characters, the two
+built out of the model's own text included. No session is ever blocked on the
+judge, and no partially-trusted model response ever reaches one.
+
+**A member cannot speak for another member.** `disagreements[].positions[].view`
+is filled VERBATIM from the frozen take set, never authored by the model — the
+model chooses who disagreed and about what, not what either of them said. Take
+bodies are member-authored text of up to 10,000 characters that the model reads,
+so a body instructing it to attribute a fabricated position to a named member
+would otherwise pass every structural defence and reach
+`swarm_sessions.swarm_recommendation`, which `GET /api/swarm/sessions/:id`
+serves unauthenticated.
+
+**One judge at a time, and `judged` never outruns its evidence.** The model call
+happens outside any transaction; everything after it — the state transition, the
+judgement row, and (in `enforce`) the opinion's effect on the session — is a
+single transaction under `pg_advisory_xact_lock` on the session id. The admin
+POST runs in the api process while `swarm.judge` runs in worker-swarm, so
+concurrent judging of one session is a real case, not a theoretical one. The
+write onto the session is conditional on it not being terminal, so an opinion
+formed while a session was publishing is recorded and reported rather than
+landing on a published session.
+
+**The take window is frozen from `aggregated` onward.** `TAKES_AMENDABLE_STATES`
+in `swarm/domain.ts` is an allowlist, so `judged` — and any state added after it
+— freezes amendment by default. The alternative, a list of states to refuse, is
+what let `judged` silently reopen a window over a take set the published weight
+vector had already been derived from.
 
 **Thin support is arithmetic, not opinion.** A session with fewer than
 `swarm_judge_config.min_takes` takes is flagged `thinly_supported` by
