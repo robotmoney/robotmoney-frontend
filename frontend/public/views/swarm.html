@@ -36,9 +36,15 @@
             <!-- Only window_closed/aggregated may claim aggregation. A past
                  deadline on a still-`collecting` row is the orphan case, so it
                  reports the closure and stops there. -->
-            <span class="sv__live-meta" x-show="liveIsAggregating()">window closed &middot; aggregating</span>
-            <span class="sv__live-meta" x-show="!liveIsOpen() && !liveIsAggregating() && liveClosesAbsolute()"
-                  x-text="`window closed ${liveClosesAbsolute()}`"></span>
+            <span class="sv__live-meta" x-show="liveIsAggregating()">
+              aggregating &middot; closed <b class="sv__live-n" x-text="liveClosedAgo()" :title="liveClosesAbsolute()"></b>
+            </span>
+            <!-- Relative, with the exact instant on hover. A bare UTC stamp made
+                 the reader do the arithmetic to answer the only question they
+                 had, which was "how long ago". -->
+            <span class="sv__live-meta" x-show="!liveIsOpen() && !liveIsAggregating() && liveClosedAgo()">
+              window closed <b class="sv__live-n" x-text="liveClosedAgo()" :title="liveClosesAbsolute()"></b>
+            </span>
             <a class="sv__live-lnk" :href="sessionHref(liveSession())">See the session &rarr;</a>
           </div>
         </template>

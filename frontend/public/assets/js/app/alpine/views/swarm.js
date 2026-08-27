@@ -1,6 +1,7 @@
 // @ts-nocheck — buildless browser JS predating the root tsconfig's checkJs
 // coverage; issue #358 is the first thing to import this module from a
 import { sessionPhase, isLiveState } from "../../lib/session-phase.js";
+import { timeAgo, absoluteUtc } from "../../lib/relative-time.js";
 // typechecked .ts file (scripts/tests/unit/swarm-synthesis-preview.test.ts),
 // which pulls the whole file into the root TS program transitively and
 // surfaces a pile of pre-existing implicit-any errors unrelated to this
@@ -208,12 +209,10 @@ export function registerSwarmView(Alpine) {
       const m = mins % 60;
       return m ? `${h}h ${m}m` : `${h}h`;
     },
-    liveClosesAbsolute() {
-      const s = this.liveSession();
-      if (!s || !s.windowClosesAt) return "";
-      try { return new Date(s.windowClosesAt).toISOString().replace("T", " ").slice(0, 16) + " UTC"; }
-      catch (_) { return ""; }
-    },
+    liveClosesAbsolute() { return absoluteUtc(this.liveSession()?.windowClosesAt); },
+    // "3 min ago" for a window that has already shut. Returns "" for one that
+    // has not, so the open branch keeps the countdown and this one stays empty.
+    liveClosedAgo() { return timeAgo(this.liveSession()?.windowClosesAt, this.now); },
     // Link by SESSION ID. Two rows sharing a (date, subject) are two different
     // sessions — a subject may convene more than once a day — and the dated URL
     // resolves to the later of them, so linking by it would leave the earlier
