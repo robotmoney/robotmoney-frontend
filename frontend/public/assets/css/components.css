@@ -344,6 +344,29 @@
    modern-safe form: `display:none` and `visibility:hidden` remove the node from
    the accessibility tree, and a live region that is not in the tree announces
    nothing. */
+/* ─── Session phase chip ───────────────────────────────────────────────────
+   One chip for "what phase is this session in", so /swarm and the session page
+   cannot style the same fact differently. Colours follow the admin's existing
+   scale (.adm-badge--run/--ok) rather than inventing a second one:
+
+     collecting / aggregating  amber   work in progress
+     published                 cyan    finished
+     closed / scheduled        muted   no claim being made
+
+   Amber is also the `cautious` stance on the session cards. Knowing second
+   meaning for one hex, taken because system phase and stance never share a
+   region: revisit if they ever do. Label text comes from lib/session-phase.js,
+   which derives it from the DEADLINE and not from the raw DB state. */
+.rm-sphase { display: inline-flex; align-items: center; font-family: var(--font-mono);
+  font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
+  padding: 0.14rem 0.44rem; border-radius: var(--radius);
+  border: 1px solid var(--color-border); color: var(--color-text-muted); }
+.rm-sphase--open,
+.rm-sphase--aggregating { color: var(--color-warm); border-color: rgba(232, 166, 64, 0.42);
+  background: rgba(232, 166, 64, 0.08); }
+.rm-sphase--published { color: var(--color-accent); border-color: var(--color-accent-line);
+  background: rgba(0, 229, 255, 0.08); }
+
 /* ─── Semantic marks: one data type per channel ────────────────────────────
    Three unrelated things were all rendering as the same small green square: a
    bullish/constructive STANCE, the Robot Money Vault's IDENTITY, and the

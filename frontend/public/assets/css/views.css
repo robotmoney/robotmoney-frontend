@@ -414,22 +414,13 @@
 .sv__sout i { width: 0.4rem; height: 0.4rem; flex: 0 0 auto; background: var(--color-text-dim); }
 .sv__sout--none i { background: var(--color-border-light); }
 
-/* Live session strip, Variation A. Amber, not cyan: `.adm-badge--run` already
-   paints collecting and aggregating #e8a640 across the admin, and cyan is what
-   that same scale uses for PUBLISHED — so cyan here named the one state it does
-   not mean. No left rail: a coloured edge was doing nothing the chip does not
-   already say, and this page had three of them.
-
-   Amber is also the `cautious` stance two sections down. That is a real second
-   meaning for one hex and it is a deliberate call: the strip sits above the
-   fold with no stance dots near it, and system state is a different layer from
-   the data underneath it. Revisit if the two ever share a viewport. */
+/* Live session strip, Variation A. The phase chip is `.rm-sphase` from
+   components.css, shared with the session detail page so the same session
+   cannot wear two labels or two colours one click apart. No left rail: a
+   coloured edge said nothing the chip does not, and this page had three. */
 .sv__live { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
   border: 1px solid var(--color-border); background: var(--color-surface);
   padding: 0.7rem 1rem; margin: 0 0 2rem; }
-.sv__live-chip { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--color-warm); border: 1px solid rgba(232, 166, 64, 0.42);
-  background: rgba(232, 166, 64, 0.08); padding: 0.14rem 0.44rem; border-radius: var(--radius); }
 .sv__live-name { color: var(--color-text); font-weight: 500; }
 .sv__live-meta { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
   color: var(--color-text-muted); }

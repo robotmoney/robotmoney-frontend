@@ -35,8 +35,17 @@
               <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.onchainRegime)}`" aria-hidden="true"></i>
               <b x-text="regimeLabel(session.regimeSummary?.onchainRegime)"></b>
             </span>
-            <span class="sv__fact" x-show="!session.regimeSummary">
-              <em>state</em><b x-text="session.state"></b>
+            <!-- Always shown, and derived rather than printed raw. It used to
+                 render `session.state` verbatim and only when there was no
+                 regime summary, so a session read "collecting" here while
+                 /swarm correctly read "closed" from the same deadline, and for
+                 most sessions the phase was not shown at all. -->
+            <span class="sv__fact">
+              <em>state</em>
+              <!-- span, not <b>: `.sv__fact b` repaints its child --color-text,
+                   which silently overrode the chip's own phase colour and made
+                   the same chip look different here than on /swarm. -->
+              <span :class="phaseClass(session)" x-text="phaseLabel(session)"></span>
             </span>
           </div>
         </header>

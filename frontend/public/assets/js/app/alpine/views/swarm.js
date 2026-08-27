@@ -1,5 +1,6 @@
 // @ts-nocheck — buildless browser JS predating the root tsconfig's checkJs
 // coverage; issue #358 is the first thing to import this module from a
+import { sessionPhase, isLiveState } from "../../lib/session-phase.js";
 // typechecked .ts file (scripts/tests/unit/swarm-synthesis-preview.test.ts),
 // which pulls the whole file into the root TS program transitively and
 // surfaces a pile of pre-existing implicit-any errors unrelated to this
@@ -62,8 +63,7 @@ const operatorName = (op) => {
 // closed and says nothing about what happens next.
 const CLOSED_GRACE_MS = 3 * 60 * 60 * 1000;
 const LIVE_TICK_MS = 30 * 1000;
-const OPEN_STATES = new Set(["collecting", "window_closed", "aggregated"]);
-const AGGREGATING_STATES = new Set(["window_closed", "aggregated"]);
+
 
 const SESSION_PAGE_SIZE = 100;
 const MAX_SESSION_PAGES = 12;
@@ -160,7 +160,7 @@ export function registerSwarmView(Alpine) {
     // because a subject may convene more than once a day.
     liveSession() {
       const rows = this.sessions
-        .filter((s) => OPEN_STATES.has(s.state))
+        .filter((s) => isLiveState(s.state))
         .sort((a, b) => String(b.windowClosesAt || "").localeCompare(String(a.windowClosesAt || "")));
       const s = rows[0];
       if (!s) return null;
@@ -171,19 +171,15 @@ export function registerSwarmView(Alpine) {
       if (this.now - closes > CLOSED_GRACE_MS) return null;
       return s;
     },
-    // Open == the deadline has not passed. Not `state === "collecting"`.
-    liveIsOpen() {
+    // Derivation lives in lib/session-phase.js so this page and the session
+    // detail page cannot answer it differently about the same row.
+    livePhase() {
       const s = this.liveSession();
-      if (!s) return false;
-      if (!s.windowClosesAt) return true;
-      return Date.parse(s.windowClosesAt) > this.now;
+      return s ? sessionPhase(s, this.now) : null;
     },
-    // Only a row that actually reached window_closed/aggregated is aggregating.
-    // A past-deadline `collecting` row gets no claim about what happens next.
-    liveIsAggregating() {
-      const s = this.liveSession();
-      return !!s && !this.liveIsOpen() && AGGREGATING_STATES.has(s.state);
-    },
+    liveIsOpen() { return this.livePhase()?.isOpen === true; },
+    liveIsAggregating() { return this.livePhase()?.key === "aggregating"; },
+    livePhaseLabel() { return this.livePhase()?.label || ""; },
     liveTakesLabel() {
       const n = this.liveTakes;
       const seats = this.members.length;
