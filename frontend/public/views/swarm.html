@@ -22,23 +22,26 @@
              sessions only, so the one state a visitor cannot see is the one the
              swarm is actually in: a window open and takes arriving. Absent when
              nothing is live, so the page is unchanged the rest of the time. -->
-        <div class="sv__live" x-show="liveSession()" x-cloak>
-          <span class="sv__live-mark" aria-hidden="true"></span>
-          <template x-if="liveIsOpen()">
-            <p class="sv__live-t">
-              <b>A session is open.</b>
-              <span x-text="liveSubjectName()"></span> is under review, and the window
-              closes in <b class="sv__live-n" x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>.
-            </p>
-          </template>
-          <template x-if="!liveIsOpen()">
-            <p class="sv__live-t">
-              <b>The window has closed.</b>
-              <span x-text="liveSubjectName()"></span> is being aggregated. Takes publish shortly.
-            </p>
-          </template>
-          <a class="sv__live-lnk" :href="sessionHref(liveSession())">See the session &rarr;</a>
-        </div>
+        <!-- x-if, not x-show: with x-show the element stays in the DOM and its
+             :href binding still evaluates, and sessionHref(null) threw on every
+             load where nothing was live, which is the page's normal state. -->
+        <template x-if="liveSession()">
+          <div class="sv__live">
+            <span class="sv__live-chip" x-text="liveIsOpen() ? 'collecting' : 'closed'"></span>
+            <span class="sv__live-name" x-text="liveSubjectName()"></span>
+            <span class="sv__live-meta" x-show="liveTakesLabel()" x-text="liveTakesLabel()"></span>
+            <span class="sv__live-meta" x-show="liveIsOpen() && liveRemaining()">
+              window closes in <b class="sv__live-n" x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>
+            </span>
+            <!-- Only window_closed/aggregated may claim aggregation. A past
+                 deadline on a still-`collecting` row is the orphan case, so it
+                 reports the closure and stops there. -->
+            <span class="sv__live-meta" x-show="liveIsAggregating()">window closed &middot; aggregating</span>
+            <span class="sv__live-meta" x-show="!liveIsOpen() && !liveIsAggregating() && liveClosesAbsolute()"
+                  x-text="`window closed ${liveClosesAbsolute()}`"></span>
+            <a class="sv__live-lnk" :href="sessionHref(liveSession())">See the session &rarr;</a>
+          </div>
+        </template>
 
         <!-- The mechanism, before anything is listed. Without it the sessions
              feed below reads as noise: a visitor has no idea what a session is

@@ -414,26 +414,33 @@
 .sv__sout i { width: 0.4rem; height: 0.4rem; flex: 0 0 auto; background: var(--color-text-dim); }
 .sv__sout--none i { background: var(--color-border-light); }
 
-/* Live session strip. Cyan is the interface colour and this is system STATE,
-   not a data value, so a Beam hairline is the right spend: it is a line, never a
-   mass, and it is the only thing above the fold that changes on its own. No
-   pulse and no glow — the countdown is already moving, which is the honest
-   liveness signal, and an animated dot would be a second token saying what the
-   figure says. */
-.sv__live { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap;
-  border: 1px solid var(--color-accent-line); background: var(--color-deep);
-  padding: 0.9rem 1.1rem; margin: 0 0 2rem; }
-.sv__live-mark { width: 0.4rem; height: 0.4rem; flex: 0 0 auto; align-self: center;
-  background: var(--color-accent); }
-.sv__live-t { margin: 0; flex: 1 1 22rem; font-size: 0.95rem; color: var(--color-text-soft); }
-.sv__live-t b { color: var(--color-text); font-weight: 500; }
-/* Tabular so the countdown does not reflow the sentence as it ticks down. */
+/* Live session strip, Variation A. Amber, not cyan: `.adm-badge--run` already
+   paints collecting and aggregating #e8a640 across the admin, and cyan is what
+   that same scale uses for PUBLISHED — so cyan here named the one state it does
+   not mean. No left rail: a coloured edge was doing nothing the chip does not
+   already say, and this page had three of them.
+
+   Amber is also the `cautious` stance two sections down. That is a real second
+   meaning for one hex and it is a deliberate call: the strip sits above the
+   fold with no stance dots near it, and system state is a different layer from
+   the data underneath it. Revisit if the two ever share a viewport. */
+.sv__live { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  border: 1px solid var(--color-border); background: var(--color-surface);
+  padding: 0.7rem 1rem; margin: 0 0 2rem; }
+.sv__live-chip { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--color-warm); border: 1px solid rgba(232, 166, 64, 0.42);
+  background: rgba(232, 166, 64, 0.08); padding: 0.14rem 0.44rem; border-radius: var(--radius); }
+.sv__live-name { color: var(--color-text); font-weight: 500; }
+.sv__live-meta { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
+  color: var(--color-text-muted); }
+.sv__live-meta b { color: var(--color-text-soft); font-weight: 500; }
+/* Tabular so the line does not reflow as the figure ticks down. */
 .sv__live-n { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   white-space: nowrap; }
-.sv__live-lnk { flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.7rem;
-  text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-accent);
-  text-decoration: none; border-bottom: 1px solid var(--color-accent-line); }
-.sv__live-lnk:hover { border-bottom-color: var(--color-accent); }
+.sv__live-lnk { margin-left: auto; font-family: var(--font-mono); font-size: 0.66rem;
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted);
+  text-decoration: none; border-bottom: 1px solid var(--color-border-light); }
+.sv__live-lnk:hover, .sv__live-lnk:focus-visible { color: var(--color-text); border-bottom-color: var(--color-text-muted); }
 
 /* Members as a register: the interesting fact is which cells are empty. */
 /* `overflow-x: auto` here CLIPS the role tooltip, because a container that
