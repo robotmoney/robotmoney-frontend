@@ -414,12 +414,10 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     let emitted: string | null = null;
     try { emitted = canonicalizeReceipt(future, spec); } catch { /* expected */ }
     expect(emitted).toBeNull();
-    // The rule is the published one, and it is version-agnostic: a spec for a
-    // later version canonicalizes that version's receipt and refuses this one.
     expect(spec.version_policy.selection).toContain("never by");
-    // And the check is version-agnostic rather than a hardcoded "1.0": the same
-    // function driven by a 2.0 spec refuses the 1.0 fixture. The 2.0 rules
-    // themselves do not exist yet — that is the point of refusing.
+    // And the check is the published rule, not a hardcoded "1.0": the same
+    // function driven by a 2.0 spec refuses the 1.0 fixture. Whatever version a
+    // caller says it implements, a receipt declaring a different one is refused.
     expect(() => canonicalizeReceipt(valid, { ...spec, schema_version: "2.0" })).toThrow(/schema_version "1\.0"/);
   });
 
