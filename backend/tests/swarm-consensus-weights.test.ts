@@ -12,7 +12,7 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { meanTakeWeights, normalizedTakeWeights } from "../src/swarm/domain.ts";
+import { buildRationale, buildSynthesis, meanTakeWeights, normalizedTakeWeights } from "../src/swarm/domain.ts";
 import { findWeightLikeKey, WEIGHT_LIKE_KEYS } from "../src/swarm/judge.ts";
 
 const take = (weights: { bucket: string; weight: number }[] | undefined) => ({ payload: weights ? { weights } : {} });
@@ -171,6 +171,23 @@ test("the judge modules never reach the derivation and never ASSIGN a weights fi
     // compares vectors; AUTHORING one is what is forbidden.
     expect(/\bweights\s*[:=][^=]/.test(src), `${rel} must not author a weights field`).toBe(false);
   }
+});
+
+// ── The template producers are order-independent ────────────────────────────
+// Promoting the derivation to load-bearing means the prose that describes it
+// has to be reproducible too: the judge's fallback re-derives it from a stored
+// `swarm_recommendation.stances`, and postgres does not preserve jsonb key
+// order. A rationale that depended on key order would make "the fallback is
+// exactly today's prose" false on any tie.
+
+test("buildRationale and buildSynthesis do not depend on the key order of the stance counts", () => {
+  const forward = { neutral: 1, bullish: 1, cautious: 1 };
+  const reversed = { cautious: 1, bullish: 1, neutral: 1 };
+  expect(buildRationale("Subj", reversed, 3, 0.5, null)).toBe(buildRationale("Subj", forward, 3, 0.5, null));
+  expect(buildSynthesis("Subj", 3, 3, 1, reversed)).toBe(buildSynthesis("Subj", 3, 3, 1, forward));
+  // The ladder decides a tie, so the named majority is the LOWEST-ranked stance
+  // in play — the same one stanceBreakdown lists first.
+  expect(buildRationale("Subj", forward, 3, null, null)).toContain("Majority stance is cautious");
 });
 
 // ── The rejection itself ────────────────────────────────────────────────────

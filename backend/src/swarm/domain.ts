@@ -1739,10 +1739,28 @@ function stanceBreakdown(byStance: Record<string, number>): string {
     .join(", ");
 }
 
+// TIES BREAK ON THE LADDER, NOT ON KEY ORDER (issue #752). This used to be a
+// plain `reduce` over Object.entries(), which on a tie returned whichever stance
+// happened to come FIRST in the object — i.e. the order takes were received in.
+// That made the rationale a function of arrival order, and worse, of the
+// ROUND TRIP: postgres reorders jsonb keys, so re-deriving prose from a stored
+// `swarm_recommendation.stances` could name a different majority than the
+// aggregation that wrote it. The judge's template fallback re-derives exactly
+// that way, so "the fallback is byte-identical to today's prose" was true only
+// until two stances tied.
+//
+// The tie-break is the same one stanceBreakdown() already sorts on — the
+// canonical ascending STANCES ladder, lowest index first — so the two lines of
+// prose can never disagree about which stance led.
 function majorityStance(byStance: Record<string, number>): { stance: string; count: number } | null {
   const entries = Object.entries(byStance);
   if (!entries.length) return null;
-  const [stance, count] = entries.reduce((best, cur) => (cur[1] > best[1] ? cur : best));
+  const rank = (stance: string) => {
+    const i = (STANCES as readonly string[]).indexOf(stance);
+    return i < 0 ? STANCES.length : i;
+  };
+  const [stance, count] = entries.reduce((best, cur) =>
+    cur[1] > best[1] || (cur[1] === best[1] && rank(cur[0]) < rank(best[0])) ? cur : best);
   return { stance, count };
 }
 

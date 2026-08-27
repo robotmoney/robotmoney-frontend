@@ -2850,6 +2850,24 @@ partially-trusted model content ever reaches a session", not "the session
 stops": a lifecycle that can be halted by a third-party model outage is a worse
 artifact than one whose prose is occasionally templated.
 
+**What promoting the derivation uncovered, and what was NOT done about it.**
+Two things, both reported rather than quietly repaired:
+
+1. *The vector was fine.* The property test asserts the published weights sum to
+   exactly 1 **as 8-decimal values**, summed as scaled integers — because
+   `0.1 + 0.2 + 0.7` is `1.0000000000000002` in binary floating point however
+   correct the aggregator is. Asserting a float sum would have been testing
+   IEEE-754. No published vector is wrong, and none was recomputed.
+2. *`majorityStance()` broke ties on key order.* It reduced over
+   `Object.entries()`, so on a tie it named whichever stance arrived first —
+   and postgres reorders `jsonb` keys, so re-deriving the prose from a stored
+   `swarm_recommendation.stances` could name a different majority than the
+   aggregation that wrote it. Ties now break on the canonical ascending
+   `STANCES` ladder, the same order `stanceBreakdown()` already sorts on.
+   This changes PROSE on tied sessions from here on; it touches no number, and
+   already-published recommendations are left exactly as they were filed.
+   Append-only history is not rewritten to make a later rule look retroactive.
+
 **Why thin support is computed, not asked.** Whether a session has enough takes
 behind it is arithmetic against a recorded threshold
 (`swarm_judge_config.min_takes`), so `releaseSafety()` computes it and merges it
