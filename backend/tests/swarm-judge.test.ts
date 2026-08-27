@@ -648,7 +648,13 @@ test("the replay CLI runs against real session rows and reports every vector unc
 
   const proc = Bun.spawnSync(
     ["bun", "run", "scripts/swarm-judge-replay.ts", "--limit", "5", "--json"],
-    { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, DATABASE_URL: await currentDatabaseUrl() } },
+    {
+      cwd: new URL("..", import.meta.url).pathname,
+      // OPENCODE_API_KEY withheld: with no model on the config row the replay
+      // is template-only anyway, and withholding it makes that structural
+      // rather than incidental — this test can never reach a network.
+      env: { ...process.env, OPENCODE_API_KEY: "", DATABASE_URL: await currentDatabaseUrl() },
+    },
   );
   const stdout = proc.stdout.toString();
   const stderr = proc.stderr.toString();
@@ -685,12 +691,21 @@ test("the model is selected by the config row, and unsetting it is what stops mo
   await setJudgeConfig({ mode: "shadow", model: "vendor/some-judge" });
   expect((await getJudgeConfig()).model).toBe("vendor/some-judge");
 
-  // With no credential in this process's environment the transport cannot be
-  // built even with a model set — and that is a fallback, not a failure.
-  const withModel = await judgeSession(session.id, { transport: undefined });
-  expect(withModel.ok).toBe(true);
-  expect(withModel.outcome!.source).toBe("fallback");
-  expect(withModel.outcome!.fallbackReason).toBe("model_unconfigured");
+  // With no credential the transport cannot be built even with a model set —
+  // and that is a fallback, not a failure. The key is removed EXPLICITLY rather
+  // than assumed absent: this is the one test that lets the real transport
+  // resolver run, and a CI runner that happens to carry OPENCODE_API_KEY would
+  // otherwise turn it into a live model call.
+  const savedKey = process.env.OPENCODE_API_KEY;
+  delete process.env.OPENCODE_API_KEY;
+  try {
+    const withModel = await judgeSession(session.id, { transport: undefined });
+    expect(withModel.ok).toBe(true);
+    expect(withModel.outcome!.source).toBe("fallback");
+    expect(withModel.outcome!.fallbackReason).toBe("model_unconfigured");
+  } finally {
+    if (savedKey !== undefined) process.env.OPENCODE_API_KEY = savedKey;
+  }
 
   // `null` clears it; a partial patch leaves it alone.
   await setJudgeConfig({ minTakes: 2 });
