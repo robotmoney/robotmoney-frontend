@@ -101,17 +101,72 @@ re-read it without re-fetching:
 It manages swarm keygen and every signature. **Always install the
 released binary for this machine — never build from source.** Assets are
 published per OS/arch as `rmpc-<tag>-{linux,macos}-{amd64,arm64}.tar.gz` on
-the [releases page](https://github.com/robotmoney/robotmoney-core/releases):
+the [releases page](https://github.com/robotmoney/robotmoney-core/releases),
+and every archive ships a matching `<archive>.tar.gz.sha256` beside it.
+
+**Verify the checksum before you extract anything.** The next thing this
+binary does is generate the signing key this member's whole public record
+rests on, so it must never be executed unchecked. That also rules out
+piping `curl` straight into `tar`, which is unfixable in place: by the time you
+could compare a checksum, the archive is already unpacked. Download to
+a file, check it, and only then extract — the same order robotmoney-core's own
+`scripts/release/install-rmpc.sh` uses:
+**download → download `.sha256` → verify → extract → install.**
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/macos/')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 TAG=$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/robotmoney/robotmoney-core/releases/download/${TAG}/rmpc-${TAG}-${OS}-${ARCH}.tar.gz" | tar xz
+ARCHIVE="rmpc-${TAG}-${OS}-${ARCH}.tar.gz"
+BASE="https://github.com/robotmoney/robotmoney-core/releases/download/${TAG}"
+
+# sha256sum on Linux, shasum -a 256 on macOS. With neither, STOP — never
+# degrade to installing unverified.
+if command -v sha256sum >/dev/null 2>&1; then SHA_CHECK="sha256sum -c"
+elif command -v shasum >/dev/null 2>&1; then SHA_CHECK="shasum -a 256 -c"
+else echo "no sha256sum or shasum on this machine — refusing to install rmpc unverified; nothing was installed" >&2; exit 1
+fi
+
+WORKDIR="$(mktemp -d)"
+cd "$WORKDIR" || exit 1
+
+# 1. download the archive TO A FILE — never pipe it into tar
+curl -fsSL -o "$ARCHIVE" "${BASE}/${ARCHIVE}" \
+  || { echo "could not download ${ARCHIVE} — nothing was installed" >&2; exit 1; }
+
+# 2. download the checksum published beside it
+curl -fsSL -o "${ARCHIVE}.sha256" "${BASE}/${ARCHIVE}.sha256" \
+  || { echo "no published checksum for ${ARCHIVE} — refusing to install an unverifiable binary; nothing was installed" >&2; exit 1; }
+
+# 3. VERIFY, before anything is unpacked. The .sha256 is data, not an
+#    instruction: `-c` verifies whichever filenames the file happens to list,
+#    so a hostile one naming some other file would otherwise report OK over a
+#    trojan. Require exactly one line, and require that line to name THIS
+#    archive, then let sha256sum -c do the comparison.
+[ "$(awk 'END{print NR}' "${ARCHIVE}.sha256")" = 1 ] \
+  && grep -Eq "^[0-9a-f]{64} [ *]$(printf '%s' "$ARCHIVE" | sed 's/\./\\./g')$" "${ARCHIVE}.sha256" \
+  || { echo "published checksum file does not name ${ARCHIVE} — refusing a checksum for some other file. Nothing was extracted and nothing was installed." >&2; exit 1; }
+$SHA_CHECK "${ARCHIVE}.sha256" \
+  || { echo "ChecksumMismatch: ${ARCHIVE} does not match its published sha256. Nothing was extracted and nothing was installed." >&2; exit 1; }
+
+# 4. only now extract and install
+tar xzf "$ARCHIVE"
 install -m 755 rmpc ~/.local/bin/rmpc   # or any directory on PATH
 ```
 
-Verify with `rmpc --help` — you should see the `committee-identity`
+If the verify step fails, **stop and tell the owner**: the download does not
+match the checksum robotmoney-core published for it, so nothing was extracted
+and nothing was installed. Do not retry with the check removed, do not
+fall back to piping the download into `tar`, and do not build from source. Re-run the block as
+written; if it fails again, surface it and wait.
+
+Be precise about what that check buys: the `.sha256` comes from the same
+release over the same TLS session as the archive, and nothing signs either one,
+so this **detects a corrupted, truncated, or substituted download** — a mirror,
+proxy, or cache serving different bytes than the release holds. It does not
+authenticate the release itself.
+
+Confirm the install with `rmpc --help` — you should see the `committee-identity`
 subcommand. (Yes, "committee" — the pinned rmpc release's own CLI surface
 predates the Robot Money product rename to "Swarm" and is a separate,
 robotmoney-core-owned binary; do not rename or alias this subcommand string
@@ -451,5 +506,9 @@ session is currently collecting; the roster was frozen before you were approved
 - Never hand-roll Ed25519 — every signature goes through
   `rmpc committee-identity sign`.
 - Never build `rmpc` from source — prebuilt release assets only.
+- Never install `rmpc` without verifying the archive against its published
+  `.sha256` first, and never pipe the download into `tar`. On a checksum
+  failure, nothing is extracted and nothing is installed — report it, never
+  work around it.
 - Surface failures loudly; never skip a step or substitute a mock. The same
   steps must work headlessly and interactively alike.
