@@ -20,16 +20,17 @@
 //
 // ZERO RUNTIME DEPENDENCIES, like every other module in this package.
 
-// THE SPEC FIELDS THIS MODULE READS, AS IMPORTABLE CONSTANTS. Every one of
-// them is also published in consensus-receipt.canonicalization.json, and the
-// fixture test asserts the two agree field by field — so these are a second
-// SPELLING of the pin, never a second authority. They exist because the four
-// values below are the only spec fields the functions here dereference, and a
-// caller that hand-builds a spec object (rather than importing the published
-// JSON through `@robotmoney/contract/fixtures/...`) silently produces
-// `"undefined{...}"` bytes, or bytes without the trailing newline, for every
-// field it forgets. Each is used as the fallback at its own use site, so a
-// partial spec is completed from the pin instead of quietly changing the bytes.
+// THE PIN, AS IMPORTABLE CONSTANTS. Every constant below is also published in
+// consensus-receipt.canonicalization.json, and the fixture test asserts the two
+// agree one by one — so these are a second SPELLING of the pin, never a second
+// authority. Four of the five (domain separator, schema version, trailing
+// newline, canonical bucket order) are exactly the spec fields the functions
+// here dereference, and each is the fallback at its own use site: a caller that
+// hand-builds a spec object rather than importing the published JSON through
+// `@robotmoney/contract/fixtures/...` otherwise gets `"undefined{...}"` bytes,
+// or bytes without the trailing newline, SILENTLY, for every field it forgets.
+// RECEIPT_STANCE_KEYS is not a fallback — it is the fixed key set the stance
+// recomputation reads — and it is pinned to the spec the same way.
 
 /** The one domain prefix schema 1.0 hashes under. */
 export const RECEIPT_DOMAIN_SEPARATOR = "robotmoney:consensus-receipt:v1\n";
