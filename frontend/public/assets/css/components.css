@@ -344,6 +344,17 @@
    modern-safe form: `display:none` and `visibility:hidden` remove the node from
    the accessibility tree, and a live region that is not in the tree announces
    nothing. */
+/* BEFORE ADDING A COMPONENT HERE, AND BEFORE WRITING ONE IN A VIEW: reuse the
+   one that exists. CONTRIBUTING.md "Reuse the component before you write a
+   second one" carries the rule and what breaking it has cost — one green square
+   meaning four different things, one session reading "closed" on one page and
+   "collecting" on the next, and a page that shipped eleven private tokens of
+   which three had drifted off the real ones.
+
+   Anything shared belongs here or in assets/js/app/lib/, WITH a comment saying
+   what it means and what it must not be used for. A component without that
+   comment acquires a second meaning within weeks. */
+
 /* ─── Session phase chip ───────────────────────────────────────────────────
    One chip for "what phase is this session in", so /swarm and the session page
    cannot style the same fact differently. Colours follow the admin's existing
