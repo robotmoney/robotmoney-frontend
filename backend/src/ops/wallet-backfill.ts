@@ -1,5 +1,5 @@
 // THE CLASS C REPAIR DRIVER — the thing that makes "self-healing" true for the
-// wallet/AUM series (issue #709; docs/technical/data-self-healing.md §6.5.4).
+// wallet/AUM series (issue #709; docs/technical/markets-asset-pricing-ingest.md §5).
 //
 // WHAT WAS MISSING. #615 shipped detection: a series registry
 // (ops/series-registry.ts), a generic gap detector (ops/gap-detector.ts), a
@@ -30,7 +30,7 @@
 //     the gap report — an unrepaired day must keep LOOKING unrepaired.
 //   * It never silently overwrites a day that already has rows. A complete day
 //     is untouched; an incomplete day is copied to immutable evidence before a
-//     complete replacement snapshot is committed (§7.1's append-only intent).
+//     complete replacement snapshot is committed (markets §6.5's append-only boundary).
 //   * It never treats `success:true` + `returnData:"0x"` as a zero. That is a
 //     contract with no code at that block, and decoding it to 0 does not read a
 //     balance — it invents one.
@@ -175,8 +175,8 @@ export interface WalletBackfillPlan {
  * Derive the work list FROM THE DATA, via the same gap detector the operator
  * surface reads.
  *
- * Deliberately not from a cursor and not from job rows: §6.5.4's unification
- * point is that there must be exactly ONE notion of "which days are missing",
+ * Deliberately not from a cursor and not from job rows: markets §4.1's
+ * unification point is that there must be exactly ONE notion of "which days are missing",
  * or the repair and the report drift apart and the dashboard starts disagreeing
  * with the thing that is supposed to be fixing it.
  */
@@ -364,7 +364,7 @@ const SLV = (walletIndex: number, symbol: string): string => `slv:${walletIndex}
  * The aggregate feed keys by symbol (raw balances summed across every prop
  * wallet); the sleeve feed keys per (wallet, symbol). They overlap, and the
  * overlap is deliberately not deduplicated: Multicall3 charges per eth_call and
- * not per inner read (27 inner reads cost ONE token — §6.5.3), so an extra
+ * not per inner read (27 inner reads cost ONE token — markets §3.4), so an extra
  * balanceOf inside the same batch is free while a second batch is not. One
  * batch per day means ≤2 eth_calls per day for both series, instead of ≤4.
  *
@@ -645,7 +645,7 @@ export async function backfillWalletWindow(
   // 3. Read EVERY day's legs at ITS OWN block, in two requests for the whole
   //    window rather than two per day. The reads are identical across days —
   //    only the block tag differs — so this is the same independent axis the
-  //    resolver batches (§6.5.5). A block the reader could not answer comes back
+  //    resolver batches (markets §7). A block the reader could not answer comes back
   //    all-{ok:false} and fails just that day, below.
   const blockTags = readable.map(({ resolved }) => toBlockTag(resolved.blockNumber));
   let amountsByTag: Map<string, Map<string, ChainAmount>> | null = null;

@@ -2330,7 +2330,7 @@ owner. It was auto-applied at the seven-day timeout and then written into a
 source comment citing #120 — which established no such thing; #120's finding was
 that both addresses revert on `balanceOf`, and its stated deliverable, owner
 confirmation of the correct valuation, never arrived. Every later repetition,
-including `docs/technical/data-self-healing.md` §10.1, traced back to that one
+including `docs/architecture.md` §12, traced back to that one
 sentence. This is worth recording as a failure mode in its own right: an
 auto-applied default acquired the authority of a verified finding purely by
 being written down in code and then cited.
@@ -2420,7 +2420,7 @@ when a silent regression would otherwise ship unnoticed.
   contributed" about thousands of historical rows nobody measured that way.
 - The request path still makes zero RPC calls (issue #118); it echoes what the
   sampler recorded rather than recomputing.
-- `docs/technical/data-self-healing.md` §10.1 is corrected, with the original
+- `docs/architecture.md` §12 (then `data-self-healing.md` §10.1) is corrected, with the original
   text retained so the correction is auditable.
 - Both accounts being effectively empty is an **owner** question — wrong
   addresses, capital moved, or legs wound down — and is explicitly out of scope.
@@ -2503,7 +2503,7 @@ schedule.
 
 **Consequences.**
 
-- `docs/technical/data-self-healing.md`'s §3 pattern-of-unwired-mechanisms
+- `docs/technical/regime-engine.md` §11's pattern-of-unwired-mechanisms
   passage is updated to reflect this one instance closed, while leaving
   `remediationClass` and `forward_fill_expired` — genuinely still unwired —
   as-is.
@@ -2552,11 +2552,11 @@ the data it describes.
 historical Yahoo ^GSPC` for the pre-launch window would not recover history —
 `SP500_SIZE` is a single present-tense constant with no position history (the
 same fact PD7 already turned into "skip, don't approximate" for the forward
-backfill, `docs/technical/data-self-healing.md` PD7). Applying that same logic
+backfill, `docs/technical/regime-engine.md` §11.9 PD7). Applying that same logic
 backwards into the seed would silently swap 99 genuine v0 readings for a
 fabricated one, which is strictly worse than a splice that is at least now
 labelled. **The seed's authority is that it is what v0 actually recorded**
-(`docs/technical/data-self-healing.md` §13's finding that the ~99 seeded
+(`docs/technical/markets-asset-pricing-ingest.md` §3.3's finding that the ~99 seeded
 `'seed'`-labelled rows are real production output, not synthetic) — that
 authority is destroyed by "fixing" it to a single retroactive source, not
 restored.
@@ -2662,3 +2662,148 @@ how many jobs get enqueued.
 - **Make it a global scheduler default instead of per-schedule.** Wrong for
   any schedule whose per-slot work is not day-idempotent (see "why per-schedule"
   above) — silently drops real catch-up work rather than redundant reads.
+
+## D41 — The price series is separate from the holdings series (follows #742/#745; review tracked in #750)
+
+**Decision.** Prices move out of `wallet_balance_samples` and
+`wallet_sleeve_samples` into their own dense per-day table, `asset_prices`,
+keyed `(price_date, symbol)`. A sample row keeps `amount` — per-day chain
+state — and stops carrying the vendor's number for that day. For a **closed**
+day, `value_usd` becomes a read-time join between the amount and that day's
+price. **Today's live point is the one exception** and keeps its fused row,
+because its amount and its spot price were genuinely read at the same instant.
+
+The table is the shared quote record `markets-asset-pricing-ingest.md` §8.1
+asks for, not a four-column minimum: asset identity, UTC day, currency, value,
+provider, pool or ticker, response identity, and config identity. The three
+`usdc`-priced assets are written as real rows with `source = 'pinned'` rather
+than special-cased in the reader, so "no row" uniformly means "gap".
+
+**Why this exists.** The two columns are different kinds of fact on different
+clocks. `amount` is chain state at one block; `price_usd` is a sample of a
+vendor time series that exists whether or not the fund held anything. Fusing
+them into one row has three consequences, and #742 hit all three:
+
+- **A missing price discards chain reads that succeeded.** The window executor
+  refuses the whole day when any symbol is unpriced, so a vendor's bad minute
+  throws away a correct, expensive, block-addressed multicall.
+- **"Is this day complete" depends on what the fund held.** That is where the
+  manifest and `expectedKeys` came from — a per-slot expected-key set, resolved
+  from active configuration, with no point-in-time answer for historical days.
+- **Prices cannot be reconciled.** A dense price series is re-derivable from the
+  vendor and diffable against what is persisted. Welded to holdings it is not,
+  which is why the "present and wrong" defect class
+  (`regime-engine.md` §11.1) has no detector for the one series where a wrong
+  value was actually served.
+
+Gap detection for prices becomes expected days minus distinct persisted days,
+per symbol — no manifest, no per-slot key sets. Repair becomes one OHLCV range
+call per pool/token key, of which there are **three** (WETH and native ETH share
+a pricing address; then ROBOTMONEY and BNKR), so a full year of prices costs
+roughly ten requests.
+
+**Why a read-time join does not float published history.** A join restates
+every historical total whenever `asset_prices` changes, which is what repair
+needs and exactly what the frozen-publication model forbids. Migration 0038
+already separates these: the join is the **candidate**, and
+`wallet_aum_snapshot_runs` is the **freeze point** — its header already hashes
+price evidence alongside the constituent rows. So the split composes with 0038
+rather than competing with it, and a published snapshot stays reproducible from
+its own evidence even after the price series is repaired underneath it.
+
+**Why "dense" needs a per-symbol floor.** ROBOTMONEY and BNKR have inception
+dates and their pools carry no candles before them. If expected days were the
+whole series range for every symbol, the split would manufacture permanent
+unfillable gaps — reintroducing, on the price series, the noisy-report problem
+`expectedKeys` created on the sleeve series. The floor is nearly free:
+`fetchDailyCloses` already folds `oldestSec` and `floorProven` across pages, so
+the first range call for a pool reports its first priceable day. Persist that
+per symbol and expected-days is bounded by it.
+
+**What this does not remove.** Amounts still need expected-key sets: a sample
+missing a leg still understates a sum, and that is the substitution the
+correctness contract forbids. `deployedAt` likewise stays — since #749 it is what
+makes a per-slot expected-key set answerable at all, and it was always an
+amounts concern, never a price one. And the shared-leg
+attempt accounting (`deferDay`) survives on the amounts side, because block
+resolution and the multicall pass are still shared across a window. What the
+split buys is **one failure source per series**: a vendor problem can no longer
+void a chain read, and a chain problem can no longer void a price.
+
+**Cutover.** Five phases, none of which requires a flag day:
+
+1. **Create and seed.** Add `asset_prices` (ordinal `0039`) and seed it from
+   existing rows of `live` and `seed` provenance **only**. Quarantined rows are
+   precisely the ones whose price describes a different asset (migration 0036),
+   and re-admitting them through a backfill would restore the defect the
+   quarantine exists to contain. Seeding must also decide a winner where two
+   rows disagree for one `(date, symbol)` — `SELECT DISTINCT` yields both and
+   the primary key then rejects the insert — so the seed carries an explicit
+   conflict rule rather than discovering one at runtime.
+2. **Dual-write and verify.** `repairResolvedDay`
+   (`ops/wallet-backfill.ts`) writes both the sample row and the price row, and
+   a check reports rows that disagree. The live sampler is **excluded** from
+   this: see the trap below.
+3. **Switch the read path.** Three sites read `price_usd` off a sample row —
+   `chain/wallet-balances.ts`, `chain/wallet-sleeves.ts`, and
+   `recentPersistedPrice` in `chain/wallet-valuation.ts` — plus `value_usd`
+   consumers. API responses must be byte-identical across this step; that is the
+   step's acceptance test, not a hope.
+4. **Stop writing the old column**, leaving it in place and unread until a later
+   migration drops it. Dropping it in the same change removes the ability to
+   compare against it the moment a discrepancy shows up.
+5. **Simplify the price-side driver only** — per-symbol day counting for gap
+   detection, and no attempt accounting for price failures.
+
+**Two traps this cutover must not walk into**, both of which look like natural
+readings of the plan:
+
+- **`source` is the provider, not the provenance.** `'geckoterminal'` and
+  `'pinned'` are sources; `live` / `stale` / `seed` / `backfilled` are
+  provenance, and they describe how a *holding* was read. `'stale'` in
+  particular is meaningless in a settled daily-close series — staleness is a
+  live-path concept about serving an old value now. Putting the provenance
+  vocabulary in this column reintroduces the fusion in a second place.
+- **The live sampler must not dual-write into this table.** It produces a spot
+  price at a wall-clock instant; a date-keyed daily-close table would then hold
+  a value that is not the close for that date, under that date's key. That is
+  the substitution this whole decision exists to refuse. The live sampler is
+  unchanged and keeps its fused row.
+
+**Sequencing.** The natural instinct is to clear the outstanding AUM gap first
+and refactor afterwards, on the general principle that one does not restructure
+under operational pressure. That principle is sound and the conclusion is still
+probably wrong here, because the coupling is *why* the gap clears slowly: the
+planner takes the oldest days first, the oldest days are the least repairable,
+and a shared price refusal defers a whole window without retiring anything. The
+split removes one of the two failure sources from every day in that queue. The
+honest framing is that this is a judgement call about risk appetite, not a
+dependency — the refactor does not need the gap cleared, and clearing the gap
+does not need the refactor. Whichever runs first should not be chosen by
+assuming the other blocks it.
+
+**Rejected alternatives.**
+
+- **Keep the fusion; write the amount with a NULL price when the vendor
+  refuses.** Leaves `value_usd` ambiguous and pushes the decision into every
+  reader, which must still choose what a null leg does to a sum. Completeness
+  still depends on holdings, so the manifest machinery stays. It moves the
+  problem to the read path rather than removing it.
+- **A separate repair pass that fills the price column in place.** Same table,
+  so the same coupling: gap detection is still per-slot-and-per-key, and the
+  pass still cannot run without knowing which symbols were expected that day.
+- **Materialize `value_usd` from `asset_prices` at write time, with no join.**
+  This is what the 0038 snapshot already does at freeze; making it the *only*
+  mechanism re-welds the two series and loses the property that a repaired
+  price improves the candidate for every day at once.
+- **Keep prices per-holding but add a vendor-side cache.** Addresses request
+  cost, which is not the problem — three range calls a year was never
+  expensive. The problem is that one series' failure invalidates another's
+  successful reads.
+- **A minimal `(price_date, symbol, price_usd, source)` table.** Cheaper to
+  write and wrong twice over: with no `time_basis` column the live/close
+  distinction is structurally invisible, so the substitution above becomes a
+  one-line mistake rather than an impossible one; and with no currency, pool,
+  response identity or config identity it is not the quote record §8.1 asks
+  for, so it needs re-migrating almost immediately. The columns are the cheap
+  part of this change.

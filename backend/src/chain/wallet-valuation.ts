@@ -180,7 +180,7 @@ function rpcOpts(blockTag?: string): RpcCallOptions {
   return blockTag === undefined ? { rpcUrl: config.baseRpcUrl } : { rpcUrl: config.baseRpcUrl, blockTag };
 }
 
-// Options for a BLOCK-ADDRESSED read (issue #709, §6.5.1). Both fields are
+// Options for a BLOCK-ADDRESSED read (issue #709, markets §5.2). Both fields are
 // absent on every live call, and both defaults reproduce the pre-#709 behaviour
 // exactly — this is the seam the wallet backfill reads history through, not a
 // change to the live sampler.
@@ -189,7 +189,7 @@ export interface ChainReadOptions {
   blockTag?: string;
   /**
    * Treat a sub-call that succeeded with ZERO RETURN BYTES as a FAILURE of its
-   * key rather than decoding it to 0 (§10's silent-zero rail).
+   * key rather than decoding it to 0 (markets §6.1's silent-zero rail).
    *
    * `success: true` with `returnData: "0x"` means there is no contract at that
    * address AT THAT BLOCK — the normal answer for a day before the target was
@@ -295,7 +295,7 @@ export async function readChainAmountsBatched(
  * still made ten of them. The calls themselves are identical across blocks —
  * targets and calldata depend only on `reads` — so the whole difference between
  * two days is the block tag, and JSON-RPC array batching is what carries N tags
- * in one request (§6.5.5).
+ * in one request (markets §7).
  *
  * ROUND 2 IS THE HAZARD, AND THE REASON THE STATE IS PER BLOCK. NAV is
  * `idleUsdc + convertToAssets(shares)`, and the shares come from round 1. Every

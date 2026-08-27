@@ -1,5 +1,5 @@
 // Per-day historical USD prices for the wallet backfill (issue #709,
-// docs/technical/data-self-healing.md §6.5.2).
+// docs/technical/markets-asset-pricing-ingest.md §3.2).
 //
 // THIS IS THE FILE THAT REVERSES OPEN QUESTION 9. `chain/token-prices.ts` says
 // historical valuation comes from the persisted `wallet_balance_samples` series

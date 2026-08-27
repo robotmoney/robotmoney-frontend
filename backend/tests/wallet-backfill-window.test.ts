@@ -491,7 +491,7 @@ test("a window reads every day's legs in ONE multi-block pass, each at its own b
   // The last of the three per-day fan-outs to be collapsed. The assertion that
   // matters is not the call count but that each day still got ITS OWN block:
   // one batched read serving every day the FIRST day's balances would be the
-  // silent-wrong-number failure §6.5.5 warns about.
+  // silent-wrong-number failure markets §7 warns about.
   const seen: { tags: readonly string[]; calls: number } = { tags: [], calls: 0 };
   const base = countingDeps();
   const deps: WalletBackfillDeps = {

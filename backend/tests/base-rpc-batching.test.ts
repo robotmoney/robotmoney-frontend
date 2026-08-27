@@ -301,7 +301,7 @@ test("PACING: our OWN limiter charges per POST, so a chunk of 10 costs one token
   // the PROVIDER's bucket does — measurement on 2026-08-22 says the provider
   // meters closer to per sub-call, so the real-world saving here is round trips
   // and retry cycles, not throughput. See DEFAULT_MAX_BATCH_SIZE and
-  // docs/technical/data-self-healing.md §6.5.3.
+  // docs/technical/markets-asset-pricing-ingest.md §3.4.
   process.env.BASE_RPC_MAX_CALLS_PER_SEC = "50";
   process.env.BASE_RPC_RATE_BURST = "1"; // no burst to absorb the fan-out
   _resetRpcRateLimiterForTests();

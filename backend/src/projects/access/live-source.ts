@@ -135,7 +135,7 @@ export const liveProjectsDataSource: ProjectsDataSource = {
     const opts = baseRpcOpts();
     // THREE POSTs → TWO. totalAssets() and asset() are independent, so they
     // share one Multicall3 call; decimals() genuinely depends on asset()'s
-    // answer and cannot join them (§6.5.5 — batch the independent axis, never
+    // answer and cannot join them (markets §7 — batch the independent axis, never
     // pretend a dependent one is independent).
     const [taRes, assetRes] = await multicall3Aggregate3(
       [

@@ -1,6 +1,6 @@
 // CONTROL for the batching measurement.
 //
-// docs/technical/data-self-healing.md §6.5.3 records the opposite of what the
+// docs/technical/markets-asset-pricing-ingest.md §3.4 records the opposite of what the
 // 2026-08-22 benchmark found: a structural cap of 10 calls per batch
 // (`-32014 maximum 10 calls in 1 batch`) and a limiter that "meters per
 // sub-call, not per HTTP request". Before amending a documented measurement, the
@@ -53,7 +53,7 @@ async function post(p: unknown): Promise<{ throttled: boolean; status: number; n
 console.log(`head ${head}; cold region from ${cursor}, unique blocks only\n`);
 
 // 1. Does the documented cap of 10 still exist?
-console.log("=== cap check (doc §6.5.3 says: max 10 per batch, -32014 beyond) ===");
+console.log("=== cap check (doc §3.4 says: max 10 per batch, -32014 beyond) ===");
 for (const size of [10, 11, 25, 100]) {
   const r = await post(Array.from({ length: size }, (_, j) => call(nextBlock(), j)));
   console.log(`  size ${String(size).padStart(4)}: HTTP ${r.status}${r.note}${r.throttled ? " THROTTLED" : ""}`);

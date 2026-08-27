@@ -1,5 +1,5 @@
 // THE SILENT-ZERO RAIL, at the level that actually decides it (issue #709,
-// §6.5.1 / §10). Offline: `globalThis.fetch` is stubbed and the real
+// markets §5.2 / §6.1). Offline: `globalThis.fetch` is stubbed and the real
 // Multicall3 encode/decode path executes.
 //
 // The defect this pins is not hypothetical arithmetic. `decodeUint256` maps an

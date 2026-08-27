@@ -1,5 +1,5 @@
 // date → block resolution for block-addressed chain reads (issue #709,
-// docs/technical/data-self-healing.md §6.5.1).
+// docs/technical/markets-asset-pricing-ingest.md §5.2).
 //
 // WHAT IT ANSWERS. "Which block do I read to see the state of UTC day D?" The
 // answer this module gives is THE LAST BLOCK OF DAY D — the block with the

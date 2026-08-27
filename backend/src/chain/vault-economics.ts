@@ -80,8 +80,9 @@ export interface VaultEconomicsReaders {
   samples: VaultSampleReader;
 }
 
-/** A sub-call that reverted, or returned nothing, is NOT a zero. §6.5.5's rule:
- *  batching may never turn a failed read into a plausible number. */
+/** A sub-call that reverted, or returned nothing, is NOT a zero (markets §6.1's
+ *  silent-zero rail). markets §6.3's rule: batching may never turn a failed read
+ *  into a plausible number. */
 function requireWord(r: Aggregate3Result | undefined, what: string): bigint {
   if (!r || !r.success) throw new Error(`vault-economics: ${what} sub-call failed`);
   return decodeUint256(r.returnData);

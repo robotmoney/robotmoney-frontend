@@ -114,7 +114,7 @@ test("T0.2: the wrong numbers are still in the table — quarantine preserves th
 });
 
 test("T0.2: a quarantined day reads as a GAP, so the operator surface and the API agree", async () => {
-  // §6.5.4's unification point: there must be exactly one notion of "which days
+  // markets §4.1's unification point: there must be exactly one notion of "which days
   // are missing". If the detector counted a row the API refuses to serve, the
   // dashboard would show a hole the gap report calls covered — and the repair
   // would never be told to look at it.

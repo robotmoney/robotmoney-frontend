@@ -1,4 +1,4 @@
-// Historical daily prices for the wallet backfill (issue #709, §6.5.2).
+// Historical daily prices for the wallet backfill (issue #709, markets §3.2).
 // Offline: `globalThis.fetch` is stubbed; the real fetcher, pool selector and
 // candle parser execute.
 //
@@ -265,7 +265,7 @@ test("a day-at-a-time driver pays for ONE window, not one request per day", asyn
     expect(table.get("BNKR")!.get(day)).toBe(100 + i);
     if (i === 0) afterFirstDay = ohlcvCalls;
   }
-  // The whole point of §6.5.2's "O(1) per pool per window": the first day reads
+  // The whole point of markets §3.2's "O(1) per pool per window": the first day reads
   // the window and the other four ride on it. Asserted as "the last four are
   // free" rather than as a total, because the total also counts the pages the
   // first read takes to reach the bottom of this pool — a property of the

@@ -10,7 +10,7 @@
 // Prices in THIS file are SPOT only, and that has not changed.
 //
 // OPEN QUESTION 9 IS REVERSED — read this before citing the old text (issue
-// #709 / docs/technical/data-self-healing.md §6.5.2, PD3). This header used to
+// #709 / docs/technical/markets-asset-pricing-ingest.md §3.2, PD3). This header used to
 // say historical valuation comes from the persisted wallet_balance_samples
 // series "NOT from a re-fetched OHLCV series", on the premise that
 // GeckoTerminal OHLCV may not reach back far enough for illiquid
