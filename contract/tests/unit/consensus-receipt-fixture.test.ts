@@ -176,17 +176,88 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect([...RECEIPT_CANONICAL_BUCKET_ORDER]).toEqual(spec.canonical_bucket_order);
     expect([...RECEIPT_CANONICAL_BUCKET_ORDER]).toEqual(mapping.canonical_bucket_order);
 
-    // AND THEY ARE ON THE LIVE PATH. A caller that hand-builds a spec object —
-    // rather than importing the published JSON — used to get `"undefined{...}"`
-    // bytes, or bytes with no trailing newline, for every field it forgot. With
-    // NO spec at all the constants alone must reproduce the golden exactly.
+    // AND THEY ARE ON THE LIVE PATH. With NO spec at all the constants alone
+    // must reproduce both goldens exactly, and drive the recomputations — which
+    // is what makes a wrong constant a red test rather than a wrong digest at a
+    // consumer. (A caller that hand-built a PARTIAL spec is now refused outright
+    // rather than completed from these; see the all-or-nothing test below.)
     expect(canonicalizeReceipt(valid)).toBe(golden);
-    expect(canonicalizeReceipt(valid, {})).toBe(golden);
-    expect(canonicalizeReceipt(escaping, {})).toBe(escapingGolden);
-    expect(receiptSemanticErrors(valid, {})).toEqual([]);
+    expect(canonicalizeReceipt(escaping)).toBe(escapingGolden);
+    expect(receiptSemanticErrors(valid)).toEqual([]);
     const misordered = structuredClone(valid);
     misordered.weights.reverse();
-    expect(receiptSemanticErrors(misordered, {})).toContain("weights: not in canonical bucket order");
+    expect(receiptSemanticErrors(misordered)).toContain("weights: not in canonical bucket order");
+  });
+
+  // ── a supplied spec is all-or-nothing ─────────────────────────────────────
+
+  test("a partial or null spec is refused by name; an omitted one is the pin and a complete one is verbatim", () => {
+    // WHY THIS TEST EXISTS. The spec fields used to be read as
+    // `spec.domain_separator ?? RECEIPT_DOMAIN_SEPARATOR`, one `??` per key, so
+    // any key a caller omitted was filled from THIS repo's pin. That is two
+    // authorities inside one call: a spec that renamed `domain_separator` (as a
+    // major bump would) and carried a five-bucket `canonical_bucket_order`
+    // produced bytes byte-IDENTICAL to the golden below while
+    // receiptSemanticErrors judged bucket order by the caller's list. A supplied
+    // spec can disagree with the fallback only when the caller's authority has
+    // already diverged from ours — exactly the drift the pin exists to catch —
+    // so the gap is a refusal now, and this test is what keeps it one.
+    const named = (fn: () => unknown, key: string) => {
+      let caught: any;
+      try { fn(); } catch (error) { caught = error; }
+      expect(caught).toBeDefined();
+      // The TYPED error, not the bare TypeError a null spec used to produce on
+      // its first property access.
+      expect(caught.name).toBe("ReceiptCanonicalizationError");
+      expect(caught.message).toContain(key);
+      return caught.message as string;
+    };
+
+    // A partial spec — including `{}`, the emptiest partial there is — names the
+    // key it is missing rather than silently borrowing it.
+    named(() => canonicalizeReceipt(valid, {} as any), "schema_version");
+    named(() => canonicalizeReceipt(valid, { schema_version: "1.0" } as any), "domain_separator");
+    named(
+      () => canonicalizeReceipt(valid, { schema_version: "1.0", domain_separator: spec.domain_separator } as any),
+      "trailing_newline",
+    );
+    named(() => receiptSemanticErrors(valid, {} as any), "canonical_bucket_order");
+    // `weights` is optional, and canonical_bucket_order is only consulted for a
+    // receipt that carries them — so it is read up front, or a partial spec
+    // would slip through unnoticed for every no-weights receipt.
+    named(() => receiptSemanticErrors(validNoWeights, {} as any), "canonical_bucket_order");
+    // An explicit null FIELD is a gap too: `??` fired on null as well.
+    named(() => canonicalizeReceipt(valid, { ...spec, domain_separator: null } as any), "domain_separator");
+
+    // A null SPEC used to throw a bare TypeError while `undefined` worked; both
+    // spellings of "no spec" now behave alike — one is the pin, one is refused
+    // with the same typed error.
+    expect(named(() => canonicalizeReceipt(valid, null as any), "spec")).toContain("omit it entirely");
+    named(() => receiptSemanticErrors(valid, null as any), "spec");
+    expect(canonicalizeReceipt(valid, undefined)).toBe(golden);
+    expect(receiptSemanticErrors(valid, undefined)).toEqual([]);
+
+    // A COMPLETE spec is still honoured VERBATIM, wrong or not — that is
+    // deliberate, and it is how a consumer holding another version's spec finds
+    // out that the bytes disagree instead of being handed ours.
+    const renamed = { ...spec, domain_separator: "robotmoney:consensus-receipt:v2\n" };
+    const theirBytes = canonicalizeReceipt(valid, renamed);
+    expect(theirBytes).not.toBe(golden);
+    expect(theirBytes.startsWith("robotmoney:consensus-receipt:v2\n")).toBe(true);
+    expect(canonicalizeReceipt(valid, { ...spec, trailing_newline: false }).endsWith("\n")).toBe(false);
+    expect(
+      receiptSemanticErrors(valid, { ...spec, canonical_bucket_order: [...spec.canonical_bucket_order].reverse() }),
+    ).toContain("weights: not in canonical bucket order");
+
+    // And the whole point: the mixed-authority combination that used to emit
+    // OUR golden bytes now cannot be expressed at all.
+    named(
+      () => canonicalizeReceipt(valid, {
+        domain_separator: "robotmoney:consensus-receipt:v2\n",
+        canonical_bucket_order: [...spec.canonical_bucket_order, "fifth_bucket"],
+      } as any),
+      "schema_version",
+    );
   });
 
   test("the package's exports map resolves the canonicalizer AND the data it takes", async () => {
@@ -198,18 +269,48 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     // consumer able to import the code and forced to VENDOR the JSON, with
     // nothing holding the vendored copy to this repo's. Every specifier below
     // failed with ERR_PACKAGE_PATH_NOT_EXPORTED before the map grew
-    // "./consensus-receipt" and "./fixtures/*".
+    // "./consensus-receipt" and the fixtures subpath.
     const throughPackage = (specifier: string): string =>
       readFileSync(fileURLToPath(import.meta.resolve(specifier)), "utf8");
 
+    // THE WHOLE CONFORMANCE CORPUS, one specifier each — this is the list the
+    // "./fixtures/consensus-receipt.*" pattern is obliged to keep resolving.
     for (const name of [
       "consensus-receipt.canonicalization.json",
       "consensus-receipt.schema.json",
       "consensus-receipt.valid.json",
+      "consensus-receipt.valid-no-weights.json",
+      "consensus-receipt.escaping.json",
+      "consensus-receipt.invalid.json",
+      "consensus-receipt.refused-variants.json",
+      "consensus-receipt.bucket-vault-map.json",
       "consensus-receipt.valid.canonical.txt",
+      "consensus-receipt.escaping.canonical.txt",
     ]) {
       expect(throughPackage(`@robotmoney/contract/fixtures/${name}`)).toBe(readText(name));
     }
+
+    // AND NOTHING ELSE IN THE DIRECTORY. The map used to be
+    // "./fixtures/*": "./src/__fixtures__/*", which published every file in a
+    // directory that is a TEST-FIXTURE directory by name and convention —
+    // including swarm-application.json, an unrelated module's fixture read by
+    // two in-repo tests through relative paths — and committed the package to
+    // keeping the filename of every future file dropped in there stable as
+    // public API. Narrowing was free while nothing depended on it (#754 had not
+    // started, robotmoney-core#1280 was unimplemented) and a breaking change
+    // afterwards, so this negative case is the thing that keeps the boundary at
+    // the corpus rather than at the directory.
+    // The file IS on disk beside the corpus — so the refusal below is the
+    // exports map talking, not a missing file.
+    expect(readText("swarm-application.json").length).toBeGreaterThan(0);
+    let refusal: any;
+    try { throughPackage("@robotmoney/contract/fixtures/swarm-application.json"); }
+    catch (error) { refusal = error; }
+    expect(refusal).toBeDefined();
+    expect(String(refusal.message)).toContain("swarm-application.json");
+    // node reports ERR_PACKAGE_PATH_NOT_EXPORTED, bun ERR_MODULE_NOT_FOUND;
+    // both mean "the package does not publish this subpath".
+    expect(["ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_MODULE_NOT_FOUND"]).toContain(refusal.code);
 
     // The module subpath resolves to the same module, and it canonicalizes the
     // spec resolved through the package to the golden resolved through the

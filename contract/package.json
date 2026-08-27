@@ -15,7 +15,7 @@
       "types": "./src/consensus-receipt.d.ts",
       "import": "./src/consensus-receipt.js"
     },
-    "./fixtures/*": "./src/__fixtures__/*"
+    "./fixtures/consensus-receipt.*": "./src/__fixtures__/consensus-receipt.*"
   },
   "files": ["src"],
   "scripts": {

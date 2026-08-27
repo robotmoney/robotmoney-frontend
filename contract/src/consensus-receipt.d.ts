@@ -53,11 +53,21 @@ export interface ConsensusReceipt {
   weights?: ConsensusReceiptBucketWeight[];
 }
 
-/** The published canonicalization spec (consensus-receipt.canonicalization.json). */
+/**
+ * The published canonicalization spec (consensus-receipt.canonicalization.json).
+ *
+ * ALL-OR-NOTHING. Every field below is required, because supplying a spec makes
+ * the caller the authority for all of them: the runtime refuses a spec missing
+ * any one of them with a `ReceiptCanonicalizationError` rather than completing
+ * it from this repo's pin. The type used to be accepted as
+ * `Partial<…>`, which advertised a half-built spec as supported input.
+ * To canonicalize under the pin, omit the argument entirely.
+ */
 export interface ConsensusReceiptCanonicalizationSpec {
+  schema_version: string;
   domain_separator: string;
   trailing_newline: boolean;
-  canonical_bucket_order: string[];
+  canonical_bucket_order: readonly string[];
   [key: string]: unknown;
 }
 
@@ -69,9 +79,10 @@ export const RECEIPT_CANONICAL_BUCKET_ORDER: readonly string[];
 
 export function compareCodePoints(a: string, b: string): number;
 export function participationBps(submitted: number, active: number): number;
+/** Omit `spec` for the pin; a supplied spec must be complete or it is refused. */
 export function canonicalizeReceipt(
   receipt: ConsensusReceipt,
-  spec?: Partial<ConsensusReceiptCanonicalizationSpec>,
+  spec?: ConsensusReceiptCanonicalizationSpec,
 ): string;
 export function validateReceipt(
   value: unknown,
@@ -80,7 +91,8 @@ export function validateReceipt(
   path?: string,
   errors?: string[],
 ): string[];
+/** Omit `spec` for the pin; a supplied spec must be complete or it is refused. */
 export function receiptSemanticErrors(
   receipt: ConsensusReceipt,
-  spec?: Partial<ConsensusReceiptCanonicalizationSpec>,
+  spec?: ConsensusReceiptCanonicalizationSpec,
 ): string[];
