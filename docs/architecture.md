@@ -1205,10 +1205,20 @@ Three modes: `off` (shipped default — pre-#752 behaviour to the byte, and the
 reaches no session), `enforce` (the opinion replaces the template
 rationale/disagreements on the session it judged).
 
-**Failure is an outcome, never an error.** Model unavailable, request timed out,
-prose instead of JSON, JSON of the wrong shape, a disagreement attributed to a
-member who did not submit, a weight-like field anywhere in the response, **a
-malformed `SWARM_JUDGE_TIMEOUT_MS` in the environment** — each falls back to the
+**Failure is an outcome, never an error.** Model unconfigured
+(`model_unconfigured`), a session with no takes at all (`no_takes`), a session
+where **every** take is stance-only so there is no member-authored sentence to
+quote (`no_take_bodies`), request timed out (`model_timeout`), the transport
+refused (`model_unavailable:…`), an empty answer (`empty_response`), prose
+instead of JSON (`not_json`), JSON of the wrong shape (`malformed_json`,
+`not_an_object`, `missing_rationale`, `missing_disagreements`,
+`too_many_disagreements`, `malformed_disagreement`, `malformed_position`,
+`missing_release_safety`, `malformed_release`, `malformed_concerns`), a
+disagreement attributed to a member who did not submit (`unknown_member:<id>`),
+a weight-like field anywhere in the response (`weight_like_field:<path>`), **a
+malformed `SWARM_JUDGE_TIMEOUT_MS` in the environment**
+(`invalid_timeout_config:…`), and anything else thrown while parsing
+(`unparsable:…`) — each falls back to the
 SAME template producers the aggregator uses (`buildRationale`,
 `buildDisagreements`), records the reason on the judgement row, and lets the
 session carry on. Every recorded reason is capped at 120 characters, the two
@@ -1223,6 +1233,25 @@ so a body instructing it to attribute a fabricated position to a named member
 would otherwise pass every structural defence and reach
 `swarm_sessions.swarm_recommendation`, which `GET /api/swarm/sessions/:id`
 serves unauthenticated.
+
+**A stance-only take degrades one position, not the whole opinion (#773).** A
+take `body` is OPTIONAL at submission (`backend/src/api/validation.ts`) and
+stores as NULL, so a stance-only take is ordinary member behaviour. Because
+`view` is filled from the frozen body and from nowhere else, such a member has
+nothing quotable — so `parseJudgeResponse()` DROPS that `positions[]` entry (and
+the disagreement, if it was that entry's only one) and keeps the rest of the
+response. It used to throw `member_without_take_body:<id>`, which discarded the
+rationale, every other disagreement and the release-safety opinion with it: one
+stance-only take silently reverted an `enforce` swarm to template prose for that
+session, with the only signal a `fallback_reason` on a table with no product
+read path. Dropping is not a weakening of the rule — a bodyless member still
+never appears over model-authored text; the model is simply no longer able to
+disable the judge by citing one. The one whole-response case that remains is a
+session where EVERY take is stance-only, which never reaches the model at all
+and falls back with `no_take_bodies`. Partial degradation is not itself recorded
+on the judgement row — the outcome is still `source='model'` — so a persistently
+thin `disagreements` array is read against the take set, not against a reason
+string.
 
 **One judge at a time, and `judged` never outruns its evidence.** The model call
 happens outside any transaction; everything after it — the state transition, the

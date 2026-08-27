@@ -421,10 +421,26 @@ export function parseJudgeResponse(raw: string, input: JudgeInput): JudgeOpinion
       seen.add(memberId);
       const view = (bodyOf.get(memberId) ?? "").trim();
       // A member with no body of their own has no position to quote, so there
-      // is nothing this disagreement could truthfully say about them.
-      if (!view) throw new JudgeResponseError(`member_without_take_body:${memberId}`);
+      // is nothing this disagreement could truthfully say about them — and
+      // filling `view` from the model's `claimedView` instead is exactly the
+      // misattribution the frozen-body sourcing above exists to prevent.
+      //
+      // SO THE POSITION IS DROPPED, NOT THE RESPONSE (issue #773). A take body
+      // is OPTIONAL at submission (api/validation.ts) and stores as NULL, so a
+      // stance-only take is ordinary member behaviour, not an attack and not a
+      // malformed answer. Throwing here discarded the WHOLE opinion —
+      // rationale, every other disagreement and release_safety with it — so a
+      // single stance-only take silently reverted an `enforce` swarm to
+      // template prose for that session. Dropping the one unquotable position
+      // keeps the strict rule (no member is ever shown words they did not
+      // write) while degrading only what the rule actually touches.
+      if (!view) continue;
       positions.push({ member_id: memberId, view });
     }
+    // …and a disagreement every one of whose positions was dropped has nothing
+    // left to say, so it goes too. `positions: []` is not a shape the rest of
+    // the system should have to reason about.
+    if (positions.length === 0) continue;
     disagreements.push({ topic, positions, what_settles: whatSettles });
   }
 
@@ -551,6 +567,15 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
   // templates already say the right thing about an empty session, and spending
   // a model call to be told so is waste.
   if (input.takes.length === 0) return fallback("no_takes", transport.model);
+  // A session where EVERY take is stance-only has no member-authored sentence
+  // in it, so there is nothing any disagreement could quote and nothing the
+  // model could attribute — `view` comes from the frozen bodies and from
+  // nowhere else. Answering it would burn a model call to produce an opinion
+  // with an empty `disagreements` array. Template prose says the same thing,
+  // and `no_take_bodies` is the operator's signal that this is why.
+  if (!input.takes.some((t) => typeof t.body === "string" && t.body.trim() !== "")) {
+    return fallback("no_take_bodies", transport.model);
+  }
 
   // THE CONFIG READ IS ITSELF A FAILURE PATH. `resolveJudgeTimeoutMs()` throws
   // on a malformed SWARM_JUDGE_TIMEOUT_MS, and docker-compose passes that

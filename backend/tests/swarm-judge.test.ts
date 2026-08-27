@@ -1170,3 +1170,105 @@ test("every fallback reason is BOUNDED, model-controlled text included", async (
   }
   expect(members.length).toBeGreaterThan(0);
 });
+
+// ── Stance-only takes (issue #773) ──────────────────────────────────────────
+
+test("one stance-only take degrades ONE position, not the whole judge response", async () => {
+  // A take `body` is optional at submission (api/validation.ts) and stores as
+  // NULL, so a stance-only take is ordinary member behaviour. `view` is filled
+  // from the frozen body and from nowhere else, so such a member has nothing
+  // quotable — but the model naming one used to throw
+  // `member_without_take_body:<id>` and DISCARD THE ENTIRE RESPONSE: rationale,
+  // every other disagreement and release_safety with it. One stance-only take
+  // silently reverted an `enforce` swarm to templates for that session.
+  const { subj, session, date } = await weightedSession("judge-bodyless-position");
+  const bodied = await activeMember();
+  const alsoBodied = await activeMember();
+  const stanceOnly = await activeMember();
+  await submit(bodied, date, subj, { stance: "bullish", body: "Rotate into agent tokens now.", weights: W });
+  await submit(alsoBodied, date, subj, { stance: "cautious", body: "Wait one cycle for the regime read.", weights: W });
+  await submit(stanceOnly, date, subj, { stance: "bearish", body: "", weights: W });
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  await setJudgeConfig({ mode: "enforce" });
+
+  const MODEL_RATIONALE = "MODEL PROSE: the take set converges on rotation, with one dissent on timing.";
+  const answer = JSON.stringify({
+    rationale: MODEL_RATIONALE,
+    disagreements: [
+      {
+        topic: "timing of the rotation",
+        positions: [
+          { member_id: bodied.id, view: "move now" },
+          // The unquotable one. It goes; the disagreement stays.
+          { member_id: stanceOnly.id, view: "invented for a member who wrote nothing" },
+        ],
+        what_settles: "Whether next week's regime composite crosses the 60th percentile.",
+      },
+      {
+        // EVERY position unquotable, so this disagreement has nothing left to
+        // say and goes whole — `positions: []` is not a shape to hand on.
+        topic: "conviction",
+        positions: [{ member_id: stanceOnly.id, view: "also invented" }],
+        what_settles: "Whether the next composite confirms the bearish read.",
+      },
+    ],
+    release_safety: { release: "safe", concerns: [] },
+  });
+
+  // parseJudgeResponse is where the drop happens, so drive it directly first.
+  const input = (await buildJudgeInput(session.id, 3))!;
+  const parsed = parseJudgeResponse(answer, input);
+  expect(parsed.rationale, "the rationale must survive a bodyless attribution").toBe(MODEL_RATIONALE);
+  expect(parsed.disagreements).toHaveLength(1);
+  expect(parsed.disagreements[0]!.topic).toBe("timing of the rotation");
+  expect(parsed.disagreements[0]!.positions.map((p) => p.member_id)).toEqual([bodied.id]);
+  expect(parsed.disagreements[0]!.positions[0]!.view).toBe("Rotate into agent tokens now.");
+  // The rule it was enforcing is NOT weakened: the bodyless member never
+  // appears, and none of the model's `view` text does either.
+  expect(JSON.stringify(parsed), "no model-authored view may survive").not.toContain("invented");
+  expect(JSON.stringify(parsed)).not.toContain(stanceOnly.id);
+
+  // …and end to end, in the mode that publishes.
+  const result = await judgeSession(session.id, { transport: fixedTransport(answer) });
+  expect(result.ok).toBe(true);
+  expect(result.outcome!.source, `expected model prose, got fallback: ${result.outcome!.fallbackReason}`).toBe("model");
+  expect(result.outcome!.fallbackReason).toBeUndefined();
+  const after = await recOf(session.id);
+  expect(after.rationale).toBe(MODEL_RATIONALE);
+  expect(after.disagreements).toHaveLength(1);
+  expect(after.disagreements[0].positions.map((p: any) => p.member_id)).toEqual([bodied.id]);
+  expect(String((await latestJudgement(session.id) as any).source)).toBe("model");
+  expect(alsoBodied.id).toBeTruthy();
+});
+
+test("a session where EVERY take is stance-only falls back cleanly, with a reason and without a model call", async () => {
+  // Nothing in the frozen set is quotable, so there is no disagreement the
+  // judge could author and no sentence it could attribute. Template prose is
+  // the honest answer and `no_take_bodies` is the operator's signal.
+  const { subj, session, date } = await weightedSession("judge-all-bodyless");
+  for (const stance of ["bullish", "cautious", "bearish"]) {
+    const m = await activeMember();
+    await submit(m, date, subj, { stance, body: "", weights: W });
+  }
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  await setJudgeConfig({ mode: "shadow" });
+
+  let calls = 0;
+  const counting: JudgeTransport = {
+    model: "test/judge",
+    complete: async () => {
+      calls++;
+      return goodAnswer("a", "b");
+    },
+  };
+  const result = await judgeSession(session.id, { transport: counting });
+  expect(result.ok).toBe(true);
+  expect(result.outcome!.source).toBe("fallback");
+  expect(result.outcome!.fallbackReason).toBe("no_take_bodies");
+  expect(calls, "a session with nothing quotable must not spend a model call").toBe(0);
+  const row = (await latestJudgement(session.id)) as any;
+  expect(String(row.source)).toBe("fallback");
+  expect(String(row.fallback_reason)).toBe("no_take_bodies");
+});
