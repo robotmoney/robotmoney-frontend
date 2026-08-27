@@ -104,6 +104,49 @@ mechanism** — the dictionary is the only authorization surface.
 | Workflows | `.github/workflows/` |
 | Root | config only — new root files/dirs are a review flag |
 
+### Reuse the component before you write a second one
+
+**Standing rule, David 2026-08-28.** If a page needs something another page
+already renders — a step list, a status chip, a mark, a table of records — use
+that component. Do not copy it, do not re-style it locally, and do not
+approximate it with fresh CSS in a view's own `<style>` block.
+
+This is not tidiness. Every time it has been broken here it has cost something
+real and taken a long time to notice:
+
+- **One token, four meanings.** The same small green square meant a bullish
+  stance, the Robot Money Vault's identity, the `proposer` role, and "this
+  session produced target weights" — three of them inside a single card. Fixed
+  by `.rm-mark--reading` / `.rm-mark--identity` in `assets/css/components.css`,
+  which states which channel each data type owns.
+- **The same session, two answers.** `/swarm` derived a session's phase from its
+  deadline while `/swarm/sessions/:id` printed `state` raw, so one row read
+  "closed" on one page and "collecting" one click later. Fixed by
+  `assets/js/app/lib/session-phase.js` — one derivation, both surfaces.
+- **A page with its own design system.** `views/swarm/apply.html` declared
+  eleven private `--ap-*` tokens in a 124-line inline `<style>`. Six were exact
+  copies of real tokens; three had silently drifted, so that page's ground,
+  surfaces and body text were each a shade off every other page.
+- **Four copies of one function.** `timeAgo` existed three times over
+  (`views/list2.js`, `views/list3.js`, `views/dash-vaults.js`) before
+  `lib/relative-time.js` gave it one home.
+
+In practice:
+
+1. **Search first.** `grep` the class or the helper name across
+   `frontend/public/assets/` before writing it. Most of these already exist.
+2. **Shared things go in `components.css` or `assets/js/app/lib/`,** with a
+   header comment saying what the component means and what it must not be used
+   for. A component without that comment gets a second meaning within weeks.
+3. **A view's inline `<style>` is for that view's layout only** — never colour,
+   type scale, spacing tokens, or anything another page could want.
+4. **If two pages need it slightly differently, that is a modifier**
+   (`--variant`), not a second implementation.
+5. **Watch specificity.** A host page can silently repaint a shared component:
+   `.sv__fact b` overrode `.rm-sphase`'s own colour, so the same chip rendered
+   differently on two pages. Verify the *rendered* computed style, not the class
+   list.
+
 ### What belongs in this repo
 
 - This repo = **implementation** + docs describing this repo's behavior.
