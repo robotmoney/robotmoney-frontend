@@ -47,19 +47,6 @@
           <a class="btn-primary btn-primary--sm" href="/swarm/apply">Apply for a seat</a>
         </div>
 
-        <!-- Role is what a member does; what it emits is stated once here
-             rather than repeated in every row of the table. -->
-        <dl class="sv__legend">
-          <div>
-            <dt><span class="sv__tag sv__tag--role"><i aria-hidden="true"></i>proposer</span></dt>
-            <dd><span x-text="roleEmits('proposer')"></span>. The lens under each name is how it reads one.</dd>
-          </div>
-          <div>
-            <dt><span class="sv__tag sv__tag--role sv__tag--next"><i aria-hidden="true"></i>validator</span></dt>
-            <dd><span x-text="roleEmits('validator')"></span>. No seat holds one yet.</dd>
-          </div>
-        </dl>
-
         <div class="sv__mwrap">
           <table class="sv__mtable">
             <thead>
@@ -79,10 +66,22 @@
                       </span>
                     </span>
                   </td>
-                  <td><span class="sv__tag sv__tag--role"><i aria-hidden="true"></i><span x-text="memberRole(m)"></span></span></td>
+                  <!-- The role's description rides the role, not a legend above
+                       the table: a legend grows a row per role, and the reader
+                       has to look away from the name to use it. Present in the
+                       a11y tree at all times via aria-describedby; opacity only
+                       gates the visual. -->
+                  <td>
+                    <span class="sv__roletip">
+                      <span class="sv__tag sv__tag--role" tabindex="0" :aria-describedby="`role-tip-${m.id}`">
+                        <span x-text="memberRole(m)"></span>
+                      </span>
+                      <span class="sv__tip" role="tooltip" :id="`role-tip-${m.id}`" x-text="roleEmits(memberRole(m))"></span>
+                    </span>
+                  </td>
                   <td>
                     <template x-if="operatorLabel(m)"><span class="sv__operator" x-text="operatorLabel(m)"></span></template>
-                    <template x-if="!operatorLabel(m)"><span class="sv__unset">not stated</span></template>
+                    <template x-if="!operatorLabel(m)"><span class="sv__unset" aria-label="not stated">&mdash;</span></template>
                   </td>
                 </tr>
               </template>
@@ -111,7 +110,7 @@
           <template x-for="p in portfolios()" :key="p.id">
             <div class="sv__cov-r" :class="{ 'sv__cov-r--ours': p.isVault }">
               <span class="sv__cov-n">
-                <i :style="`background:${subjectDot(p.id)}`" aria-hidden="true"></i>
+                <i class="rm-mark rm-mark--identity" aria-hidden="true"></i>
                 <a class="sv__row-title" :href="`/swarm/subjects/${p.id}`" x-text="p.name"></a>
                 <span class="sv__cov-op" x-show="p.operator">
                   <span x-text="p.operator"></span><template x-if="p.isVault"><span> · <b>our vault</b></span></template>
@@ -121,7 +120,7 @@
               <p class="sv__cov-d" x-show="p.thesisBlurb" x-text="p.thesisBlurb"></p>
               <div class="sv__cov-x" x-show="p.isVault">
                 <p>Here a recommendation is <b>target weights</b>. For the others it is a verdict.</p>
-                <a class="sv__cov-lnk" href="/allocation">See the vault &rarr;</a>
+                <a class="sv__cov-lnk" href="/vault">See the vault &rarr;</a>
               </div>
             </div>
           </template>
@@ -146,7 +145,7 @@
             <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === p.id }"
                     @click="filterBy(p.id)" :aria-pressed="subjectFilter === p.id"
                     :title="subjectFilter === p.id ? `Clear the ${p.name} filter` : `Show only ${p.name}`">
-              <i class="mp-chip__dot" :style="`background:${subjectDot(p.id)}`" aria-hidden="true"></i>
+              <i class="mp-chip__dot rm-mark rm-mark--identity" aria-hidden="true"></i>
               <span x-text="p.name"></span> <span class="mp-chip__n" x-text="p.count"></span>
               <span class="mp-chip__x" x-show="subjectFilter === p.id" aria-hidden="true">×</span>
             </button>
@@ -163,8 +162,7 @@
                is exactly how this list went blank while the chips said "4". -->
           <template x-for="s in visibleSessions()" :key="s.id">
             <a class="sv__session-card mp-take"
-               :href="sessionHref(s)"
-               :style="`--mp-subject:${sessionDot(s)}`">
+               :href="sessionHref(s)">
               <div class="sv__session-top">
                 <div class="sv__session-titleline">
                   <span class="sv__date" x-text="formatDate(s.date, 'short')"></span>
@@ -180,7 +178,7 @@
               </div>
               <div class="sv__stance-line">
                 <template x-for="[stance, n] in stanceEntries(s)" :key="stance">
-                  <span class="sv__stance-dotline"><i :style="`background:${stanceColor(stance)}`"></i><b x-text="n"></b> <span x-text="stance"></span></span>
+                  <span class="sv__stance-dotline"><i class="rm-mark rm-mark--reading" :style="`background:${stanceColor(stance)}`"></i><b x-text="n"></b> <span x-text="stance"></span></span>
                 </template>
               </div>
               <div class="sv__sout" x-show="showsWeights(s)" :class="{ 'sv__sout--none': !sessionWeights(s) }">

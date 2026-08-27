@@ -14,7 +14,6 @@
 import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { memberLogo } from "../../lib/member-logos.js";
-import { subjectDot } from "./shared.js";
 
 // Every seat proposes today. There is no role field on the projection yet, and
 // the second role (validator) ships with its first holder, so this is a named
@@ -213,10 +212,9 @@ export function registerSwarmView(Alpine) {
     // (every portfolio interleaved by date), and the two lists must not teach
     // different conventions for the same data.
     subjectFilter: null,
-    subjectDot(id) { return subjectDot(id); },
+
     // A grouped session wears its portfolio's colour, so one symbol is one
     // colour everywhere rather than the vault showing two.
-    sessionDot(s) { return subjectDot(this.portfolioIdOf(s)); },
     filterBy(id) { this.subjectFilter = this.subjectFilter === id ? null : id; this.shown = SESSIONS_SHOWN_STEP; },
     visibleSessions() {
       const rows = this.publishedSessions();
@@ -257,11 +255,9 @@ export function registerSwarmView(Alpine) {
     // House or external, from the operator. A member with none set gets
     // nothing: three of the seven have not filled their profile in, and an
     // invented chip would be a claim the data does not support.
-    operatorLabel(m) {
-      const name = operatorName(m?.operator);
-      if (!name) return null;
-      return isHouseOperator(m?.operator) ? `${name} · house` : name;
-    },
+    // Just the operator. A "· house" marker used to hang off ours, but it
+    // repeated on three of seven rows to restate what the name already says.
+    operatorLabel(m) { return operatorName(m?.operator); },
     memberTagline(m) { return m.tagline || m.mandate || ""; },
     memberBiases(m) {
       if (Array.isArray(m.biases)) return m.biases.filter(Boolean);

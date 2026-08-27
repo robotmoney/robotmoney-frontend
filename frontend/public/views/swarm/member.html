@@ -83,7 +83,7 @@
                    nothing at all for a duplicate key. -->
               <template x-for="row in inProgressTakes()" :key="`ip-${row.take.id}`">
                 <article class="sv__session-card mp-take mp-card--live"
-                         :style="`--mp-subject:${subjectDot(row.session.subjectId)}`">
+>
                   <div class="sv__session-top">
                     <div class="sv__session-titleline">
                       <span class="sv__date" x-text="formatDate(row.session.date, 'short')"></span>
@@ -146,7 +146,7 @@
             <button type="button" class="mp-chip" :class="{ 'is-on': subject === s.id }"
                     @click="filterBy(s.id)" :aria-pressed="subject === s.id"
                     :title="subject === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
-              <i class="mp-chip__dot" :style="`background:${subjectDot(s.id)}`" aria-hidden="true"></i>
+              <i class="mp-chip__dot rm-mark rm-mark--identity" aria-hidden="true"></i>
               <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
               <span class="mp-chip__x" x-show="subject === s.id" aria-hidden="true">×</span>
             </button>
@@ -173,7 +173,7 @@
         <div class="sv__session-list sv__session-list--compact">
           <!-- Keyed on the TAKE id, for the same reason as the in-progress list above. -->
           <template x-for="row in visibleTakes().slice(0, 20)" :key="row.take.id">
-            <article class="sv__session-card mp-take" :style="`--mp-subject:${subjectDot(row.session.subjectId)}`">
+            <article class="sv__session-card mp-take">
               <div class="sv__session-top">
                 <div class="sv__session-titleline">
                   <span class="sv__date" x-text="formatDate(row.session.date, 'short')"></span>
