@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "domain_separator": "robotmoney:consensus-receipt:v1\n",
+  "encoding": "UTF-8",
+  "digest_algorithm": "keccak256",
+  "valid_fixture_digest": "0x7adb684199a4d87946388a06b1f37ac252f7daebe6a1daf1fd9c22a69d7ddde6",
+  "receipt_id_derivation": {
+    "algorithm": "keccak256",
+    "bytes": "UTF-8 robotmoney:consensus-receipt-id:v1\\n + session_id + \\n + subject_id",
+    "uniqueness": "the contract accepts at most one receipt_id, enforcing one receipt per session per subject"
+  },
+  "json_serialization": "RFC 8259 compact JSON with JSON.stringify-compatible escaping; no insignificant whitespace",
+  "trailing_newline": true,
+  "field_order": [
+    "schema_version",
+    "session_id",
+    "subject_id",
+    "created_at",
+    "prompt_hash",
+    "inputs_digest",
+    "quorum",
+    "stances",
+    "judge",
+    "analyst_signatures",
+    "weights"
+  ],
+  "optional_append_only_fields": ["weights"],
+  "analyst_signature_order": "member_id ascending by UTF-8 byte order",
+  "nested_field_order": {
+    "quorum": ["active", "submitted", "absent", "participation_bps"],
+    "stances": ["bearish", "cautious", "neutral", "constructive", "bullish"],
+    "judge": ["rationale", "consensus", "disagreements", "release_safety"],
+    "judge.disagreements[]": ["topic", "positions", "what_settles"],
+    "judge.disagreements[].positions[]": ["member_id", "view"],
+    "judge.release_safety": ["safe_to_release", "opinion"],
+    "analyst_signatures[]": ["member_id", "public_key", "canonical_submission", "signature"],
+    "weights[]": ["bucket", "weight_bps"]
+  },
+  "canonical_bucket_order": [
+    "agent_tokens",
+    "conservative_defi_yield",
+    "protocol_tokens",
+    "real_world_assets"
+  ],
+  "bps_conversion": {
+    "input": "unweighted arithmetic mean of each analyst vector after that vector is normalized to sum 1",
+    "prefix_rule": "iterate canonical_bucket_order except the last bucket and round mean_weight * 10000 to the nearest integer, with .5 rounded upward",
+    "final_rule": "set the last bucket to 10000 minus the prefix sum; reject if the result falls outside 0..10000"
+  },
+  "evolution_rule": "Within a schema version, existing field order is immutable. New optional fields append after every existing field and are omitted when absent; unknown input fields are never serialized."
+}

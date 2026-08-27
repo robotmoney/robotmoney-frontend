@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "session_id": "not-a-session-id",
+  "subject_id": "treasury-allocation",
+  "created_at": "2026-08-26T16:00:00Z",
+  "prompt_hash": "0x1111",
+  "inputs_digest": "0x2222222222222222222222222222222222222222222222222222222222222222",
+  "quorum": {
+    "active": 3,
+    "submitted": 4,
+    "absent": 0,
+    "participation_bps": 12000
+  },
+  "stances": {
+    "bearish": 0,
+    "cautious": 0,
+    "neutral": 1,
+    "constructive": 1,
+    "bullish": 0
+  },
+  "judge": {
+    "rationale": "",
+    "consensus": [],
+    "disagreements": [],
+    "release_safety": {
+      "safe_to_release": true,
+      "opinion": ""
+    }
+  },
+  "analyst_signatures": [],
+  "weights": [
+    { "bucket": "conservative_defi_yield", "weight_bps": 6000 },
+    { "bucket": "agent_tokens", "weight_bps": 1250 },
+    { "bucket": "protocol_tokens", "weight_bps": 1750 },
+    { "bucket": "real_world_assets", "weight_bps": 999 }
+  ]
+}

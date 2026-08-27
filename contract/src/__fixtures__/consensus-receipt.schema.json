@@ -1,0 +1,173 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://robotmoney.net/schemas/consensus-receipt/1.0",
+  "title": "ConsensusReceipt",
+  "description": "Canonical off-chain payload committed by a Project Fusion consensus receipt. The chain stores only the digest; analyst Ed25519 signatures remain payload data verified off-chain.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "session_id",
+    "subject_id",
+    "created_at",
+    "prompt_hash",
+    "inputs_digest",
+    "quorum",
+    "stances",
+    "judge",
+    "analyst_signatures"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+      "description": "The one frontend swarm session represented by this receipt."
+    },
+    "subject_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$",
+      "description": "The session-scoped subject. Cross-subject aggregation is forbidden in schema 1.0."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "prompt_hash": {
+      "$ref": "#/definitions/hash32"
+    },
+    "inputs_digest": {
+      "$ref": "#/definitions/hash32"
+    },
+    "quorum": {
+      "type": "object",
+      "required": ["active", "submitted", "absent", "participation_bps"],
+      "additionalProperties": false,
+      "properties": {
+        "active": { "type": "integer", "minimum": 1 },
+        "submitted": { "type": "integer", "minimum": 1 },
+        "absent": { "type": "integer", "minimum": 0 },
+        "participation_bps": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "stances": {
+      "type": "object",
+      "required": ["bearish", "cautious", "neutral", "constructive", "bullish"],
+      "additionalProperties": false,
+      "properties": {
+        "bearish": { "type": "integer", "minimum": 0 },
+        "cautious": { "type": "integer", "minimum": 0 },
+        "neutral": { "type": "integer", "minimum": 0 },
+        "constructive": { "type": "integer", "minimum": 0 },
+        "bullish": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "judge": {
+      "type": "object",
+      "required": ["rationale", "consensus", "disagreements", "release_safety"],
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Judge-authored explanation. The judge never authors weights."
+        },
+        "consensus": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "disagreements": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/disagreement" }
+        },
+        "release_safety": {
+          "type": "object",
+          "required": ["safe_to_release", "opinion"],
+          "additionalProperties": false,
+          "properties": {
+            "safe_to_release": { "type": "boolean" },
+            "opinion": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "analyst_signatures": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/analyst_signature" }
+    },
+    "weights": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "Optional bps-native deterministic mean. When present, semantic validation requires canonical bucket order and an exact 10,000 bps sum.",
+      "items": { "$ref": "#/definitions/bucket_weight" }
+    }
+  },
+  "definitions": {
+    "hash32": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{64}$"
+    },
+    "disagreement": {
+      "type": "object",
+      "required": ["topic", "positions", "what_settles"],
+      "additionalProperties": false,
+      "properties": {
+        "topic": { "type": "string", "minLength": 1 },
+        "positions": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["member_id", "view"],
+            "additionalProperties": false,
+            "properties": {
+              "member_id": { "type": "string", "minLength": 1 },
+              "view": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "what_settles": { "type": "string", "minLength": 1 }
+      }
+    },
+    "analyst_signature": {
+      "type": "object",
+      "required": ["member_id", "public_key", "canonical_submission", "signature"],
+      "additionalProperties": false,
+      "properties": {
+        "member_id": { "type": "string", "minLength": 1 },
+        "public_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{43}=$",
+          "description": "Standard padded base64 of a raw 32-byte Ed25519 public key."
+        },
+        "canonical_submission": {
+          "type": "string",
+          "minLength": 2,
+          "description": "Exact UTF-8 JSON bytes produced by robotmoney-frontend canonicalizeSubmission. Carrying the string avoids reparsing float weights before signature verification."
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{86}==$",
+          "description": "Standard padded base64 of the raw 64-byte Ed25519 signature over canonical_submission."
+        }
+      }
+    },
+    "bucket_weight": {
+      "type": "object",
+      "required": ["bucket", "weight_bps"],
+      "additionalProperties": false,
+      "properties": {
+        "bucket": {
+          "type": "string",
+          "enum": ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"]
+        },
+        "weight_bps": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    }
+  }
+}
