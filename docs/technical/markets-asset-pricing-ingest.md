@@ -482,8 +482,9 @@ mechanism.
 
 ### 5.6 Target shape — the price series is separate from the holdings series
 
-**Decided in [D41](../decisions.md), not yet built.** Nothing described in this
-subsection exists in the tree; §5.1–§5.5 above remain the behaviour. It is
+**Decided in [D41](../decisions.md), filed as #762, not yet built.** Nothing
+described in this subsection exists in the tree; §5.1–§5.5 above remain the
+behaviour. It is
 recorded here because the sections above describe machinery whose *reason for
 existing* this supersedes, and a reader needs to know which parts are load-
 bearing and which are consequences of a shape that is going away.
@@ -712,33 +713,64 @@ Stated up front so this document is not read as a promise it cannot keep.
 
 ### 8.1 Specified but not implemented
 
-- **The earliest-valid-block floor (§6.1).** Days preceding a target's
-  deployment should be *skipped*; today they fail and consume the retry budget.
-  With `expectedKeys` resolved from active configuration, the oldest days in the
-  queue are exactly the ones least likely to be repairable, and the planner takes
-  the **oldest first** — so each run can spend its whole budget on a dead prefix.
+Each item below is either a filed issue or an explicit decline. Nothing here is
+left as prose with no owner.
+
+- **The earliest-valid-block floor (§6.1) — filed as #760.** Days preceding a
+  target's deployment should be *skipped*; today they fail and consume the retry
+  budget, and the planner takes the **oldest first**, so each run can spend its
+  whole budget on a dead prefix.
+
+  #749's per-slot `deployedAt` filtering (§4.2) closed the *expected-key*
+  symptom, not this one. `deployedAt` is a configuration fact — the day an asset
+  was first tracked — and the floor is a chain fact — the block at which a
+  contract first had code. Today every on-chain tracked asset carries
+  `deployedAt: "2026-03-18"`, which is also both wallet series' `seriesStart`,
+  so no configured asset currently predates the window and the gap is **latent
+  rather than closed**: adding a token deployed after that date, or repointing an
+  existing `<SYMBOL>_ADDRESS`, reintroduces it at once.
+
   D41 adds a *sibling* on the price side — a per-symbol first-priceable day
-  (§5.6) — which is a different fact about a different series. Neither
-  substitutes for the other: one is "the contract did not exist yet", the other
-  is "the pool had not traded yet".
-- **`deferDay` on a permanent shared leg.** A shared leg that is permanently
-  broken — not transient — never advances the attempt counter, so the same days
-  are re-selected every hour indefinitely. The transient case is right; the
+  (§5.6) — which is a third fact about a third series. None substitutes for
+  another: one is "the contract did not exist yet", one is "we were not tracking
+  it yet", and one is "the pool had not traded yet".
+- **`deferDay` on a permanent shared leg — filed as #761.** A shared leg that is
+  permanently broken — not transient — never advances the attempt counter, so
+  the same days are re-selected indefinitely; at #749's `*/5` cadence that is
+  twelve wasted runs an hour rather than one. The transient case is right; the
   permanent case needs a distinct terminal state. D41 retires the price-side
   third of this — a pool refusal stops being a shared leg of the holdings
   window — but block resolution and the multicall pass remain shared, so the
   gap survives the split.
-- **A point-in-time expected-key manifest (§4.2).** Until it exists, nothing
-  seeds `wallet_sleeve_samples` — only the live sampler and the backfill write
-  it — so every day from the registry's `seriesStart` is an interior gap on that
-  series, including days no repair can close. The operator gap report is
-  correspondingly noisy and `clean` does not return true. D41 narrows this to
-  the **amounts** series: a dense price series is complete on its own terms and
-  needs no manifest, while a sample missing a leg still understates a sum, so
-  the question stays alive for holdings.
-- **One shared quote record (P2) — now decided, not yet built.** Asset identity,
-  observation time / UTC day, currency, value, source, pool or ticker, response
-  identity, and config identity in one interface used by both the live and
+- **A versioned point-in-time expected-key manifest (§4.2) — declined, and here
+  is the reason.** Since #749 the detector resolves `expectedKeys` per slot and
+  filters by `TrackedAsset.deployedAt`, so the operational symptom this item was
+  filed against — historical days permanently short an asset added later — is
+  gone, and #709's retry loop with it. What is left is the *versioned* form: a
+  record of what was expected on that day rather than a derivation from today's
+  configuration, which would additionally survive an asset being removed,
+  re-pointed to a new address, or re-dated.
+
+  It is declined for now on three grounds. The repository has no instance of the
+  configuration change it would protect against, so the design would be written
+  against a hypothesis. D41 removes the question entirely for prices — a dense
+  price series is complete on its own terms — leaving a smaller amounts-only
+  problem whose shape depends on how #762 lands. And migration 0038's
+  `wallet_aum_snapshot_runs` already persists an expected/present/missing key set
+  and a manifest hash *per publication*, which is the same fact recorded at the
+  moment it is true; a versioned manifest built before that header has a live
+  publisher (§5.5) would be a second answer to a question 0038 is already
+  positioned to answer. **Revisit when a tracked asset is first removed or
+  re-pointed, or when 0038 gains a publisher — whichever comes first.**
+
+  One consequence stays live and is not a manifest problem: nothing seeds
+  `wallet_sleeve_samples` — only the live sampler and the backfill write it — so
+  every day from the registry's `seriesStart` to the database's bootstrap is an
+  interior gap on that series until repair reaches it, and the operator gap
+  report stays noisy while it does.
+- **One shared quote record (P2) — decided in D41, filed as #762.** Asset
+  identity, observation time / UTC day, currency, value, source, pool or ticker,
+  response identity, and config identity in one record used by both the live and
   historical callers. Today the live and historical paths implement the same
   policy twice, in two files, and neither persists a replayable source identity.
   **Vetted pool policy must be explicit per asset; the WETH pin is repeatability,
@@ -747,7 +779,23 @@ Stated up front so this document is not read as a promise it cannot keep.
   is the economically intended market for each asset remains an open decision
   (§8.2), and persisting the pool that answered is evidence of what happened,
   not proof that it was the right venue.
-- **A destructive-path guard for the sample tables (§6.5).**
+- **A destructive-path guard for the sample tables (§6.5) — declined, with the
+  reason.** `wallet_balance_samples` and `wallet_sleeve_samples` are outside
+  `APPEND_ONLY_TABLES`, so neither migration 0032's runtime trigger nor the
+  static repo guard (`backend/tests/append-only-no-new-deletes.test.ts`, which
+  imports that same list) covers the two tables AUM is served from. That is not
+  an oversight: §5.4's repair path **must** delete from them — it copies a day's
+  rows to evidence and rebuilds the date — so a blanket refusal would break the
+  mechanism this document is about. Immutability is enforced one layer over, on
+  the evidence tables and `wallet_aum_snapshot_runs`, which is where the record
+  that must survive actually lives.
+
+  What is left is narrower than "these tables are unguarded": a *new* destructive
+  path against them is reviewed by humans or not at all. Filing that as an issue
+  would be filing "write a guard that permits the one caller allowed to delete",
+  which is a review-time judgement wearing a test's clothes. Revisit if a second
+  legitimate deleter ever appears — two callers is the point at which the
+  permitted set is worth writing down.
 
 ### 8.2 Open product decisions
 
@@ -778,8 +826,10 @@ Stated up front so this document is not read as a promise it cannot keep.
 
 ### 8.3 In flight, not shipped
 
-As of this baseline, drafts exist — unmerged — of a per-quote evidence
+As of the original baseline, drafts existed — unmerged — of a per-quote evidence
 envelope, a Yahoo `^GSPC` historical leg, and a historical snapshot publisher.
+None had landed on `main` at `7fb823c`, and the drafts themselves were not
+re-opened under #750, so their state is inherited rather than re-checked.
 **None is described as behaviour anywhere above.** The Yahoo leg in particular
 would amend the vendor constraint in §2, and needs that stated in the same
 change rather than assumed. Update this section, not just the prose above, when
