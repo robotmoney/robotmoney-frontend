@@ -1256,6 +1256,174 @@ vector. `bun run --cwd backend swarm-judge:replay [--limit N] [--session <uuid>]
 [--json]` is that, as a command an operator can point at a production database
 with a read-only role; it exits non-zero if any vector moved.
 
+**The consensus receipt carries the opinion, not a paraphrase of it** (issue
+#775). The receipt is the signed, publicly-anchored artifact — the thing
+`robotmoney-core` anchors and issue #754 assembles — and it is pinned by
+`contract/src/__fixtures__/consensus-receipt.*` plus the reference
+canonicalizer in `contract/src/consensus-receipt.js`, which
+`contract/tests/unit/consensus-receipt-fixture.test.ts` holds the published spec
+JSON to. The canonicalizer is **shipped code, not a test helper**, for one
+reason: a cross-repo pin whose only executable form lives inside a test file
+cannot be imported by the assembler that has to reproduce it. Its `judge` block
+is **`JudgeOpinion` field for field** — `{rationale, disagreements,
+release_safety}` — plus `source`, so "the receipt says what the judge said" is
+checkable rather than asserted. The 1.0 draft was written before #752 shipped
+and disagreed with the judge in three places; all three are resolved
+deliberately.
+
+- **`judge.consensus` is dropped.** No judge produces it. Its only producer is
+  `buildConsensus()` in `swarm/domain.ts`, which restates
+  quorum/stances/mean-confidence/regime in English — and `quorum` and `stances`
+  are already carried structurally, and signed, in the receipt. Keeping it
+  would put a lossy prose copy of already-signed numbers *into* the signed
+  bytes, where it can contradict them, and would make the anchored digest
+  depend on the wording of an aggregator template. `SwarmRecommendation.consensus`
+  is unaffected; it stays on the session API surface, it just does not ride in
+  the receipt.
+- **`release_safety` is carried whole**, in the shipped `JudgeReleaseSafety`
+  shape, rather than reduced to the draft's `{safe_to_release, opinion}`.
+  `release` is member-steerable: `releaseSafety()` returns `"hold"` when
+  support is thin **or** any concern is present, and a model may add concerns
+  drawn from member-written take bodies (#767). Carrying `take_count` and
+  `min_takes` alongside the flags is what lets a verifier **recompute** instead
+  of trust — `thinly_supported` must equal `take_count < min_takes`, and
+  `release` must be `"safe"` exactly when neither thin support nor a concern is
+  present. Both recomputations are asserted on the fixtures. A later-phase
+  signer reads this field, so the receipt has to carry what that signer read,
+  in the shape it read it.
+- **`judge.disagreements[].positions` requires ONE, not two** — verbatim what
+  `parseJudgeResponse()` enforces, which refuses only an *empty* array. The
+  draft required two. A model answer naming a single member under a topic is a
+  routine parseable response: it parses, it is persisted into
+  `swarm_session_judgements.opinion`, and migration 0032 makes that table
+  append-only, so the row can never be removed. Under the draft schema that
+  session became permanently un-anchorable, and the assembler's only alternative
+  was to pad or drop the disagreement and sign bytes that no longer said what
+  the judge said. Reconciled toward the **producer** rather than the other way
+  round: a schema-side bound covers rows already in the append-only table as
+  well as future ones, whereas tightening the parser would not, and refusing a
+  whole model answer over a one-member disagreement would discard a good
+  rationale with it. `backend/tests/consensus-receipt-judge-roundtrip.test.ts`
+  runs a real one-position answer through the real parser and then through the
+  real validator, at both bounds, so the two cannot drift apart again.
+- **`judge.source` IS carried**, and the rest of the `JudgeOutcome` envelope is
+  not. `prompt_hash` and `inputs_digest` ride at the receipt's top level (they
+  pin the whole session, not just the prose) and `take_count` / `min_takes` ride
+  inside `release_safety` where a verifier needs them. `source` was omitted in
+  the draft, and that omission was wrong: `runJudge()` spreads **one** `base`
+  object — same `promptHash`, same `inputsDigest` — into both the model return
+  and the template-fallback return, and `templateOpinion()` calls the same
+  `buildRationale()` / `buildDisagreements()` the aggregator uses, so *nothing
+  else in a published receipt* separates "a model read the takes and wrote this"
+  from "the model timed out and a template produced this". The phase exists so
+  an artifact is attributable to exactly what produced it; a receipt that cannot
+  say which of two producers wrote its prose does not do that. `"fallback"` is
+  not a defect — it is the fail-closed path, and a fallback receipt is a
+  complete, valid, anchorable receipt. `fallbackReason` and `model` stay out:
+  the first interpolates model-controlled text and is operator debugging rather
+  than a public commitment, the second is deployment configuration that would
+  make the anchored bytes depend on a vendor string. Both remain appendable
+  after `source` under the minor-bump rule.
+
+**The canonical bytes are a function of the session, and of nothing else.** A
+receipt whose payload admits two spellings admits two digests, and `receipt_id`
+uniqueness is enforced on `session_id` + `subject_id` rather than on the payload
+— so a second, differently-spelled assembly is rejected while the first digest
+stands, and a verifier re-deriving the receipt from the database cannot
+reproduce the anchored bytes. Four representations that were open in the draft
+are now pinned to exactly one form each, and
+`consensus-receipt.refused-variants.json` proves each near-miss is refused:
+
+- **`created_at` is seconds-precision UTC with a literal trailing `Z`**, pinned
+  by an explicit pattern rather than `format: date-time` — which accepted the
+  millisecond form, the microsecond form and a `+02:00` offset alike. The
+  obvious producer path does *not* emit the pinned form: a pg `timestamptz`
+  read into a JS `Date` and passed through `toISOString()` gives milliseconds,
+  so the assembler must convert to UTC and **truncate** (never round) to whole
+  seconds rather than pass the driver's string through.
+- **Hex is lowercase everywhere.** `hash32` and `session_id` admitted uppercase
+  while `subject_id` was already case-pinned, so the document contradicted
+  itself. The assembler lowercases before validating.
+- **`member_id` carries `subject_id`'s pattern**, which is also what makes the
+  signature ordering unambiguous. The draft said "UTF-8 byte order" while the
+  reference used JavaScript's default `.sort()` (UTF-16 code units); the two
+  disagree for every code point above U+FFFF. The rule is now **ascending by
+  Unicode code point** — identical to UTF-8 byte order — the reference sorts
+  with `compareCodePoints()`, and over the ids the pattern admits all three
+  orders coincide anyway.
+- **String escaping is stated normatively**, not by naming a JavaScript
+  function: only U+0022, U+005C and the C0 control range are escaped; every
+  other code point, including U+2028/U+2029 and every astral-plane character,
+  is raw UTF-8, and no `\uXXXX` form appears otherwise. This matters because
+  the original golden was entirely ASCII, and the two most likely cross-repo
+  implementations diverge **by default** while still reproducing an ASCII golden
+  byte-for-byte — Go's `encoding/json` escapes `<`, `>`, `&`, U+2028 and U+2029
+  unless `SetEscapeHTML(false)` is called, and Python's `json.dumps` escapes
+  every non-ASCII code point unless `ensure_ascii=False` is passed. Every text
+  field in the payload is model- or member-authored free text, so an em-dash or
+  an accented name is near-certain. `consensus-receipt.escaping.json` and its
+  committed bytes carry an em-dash, CJK, Cyrillic, an ampersand, angle brackets,
+  an escaped newline and tab, a backslash, U+2028, and an astral-plane emoji;
+  the test asserts the golden contains **no** `\u` sequence at all, so every
+  escaping dialect fails there rather than in production.
+
+**Three obligations the assembler (#754) carries**, recorded in
+`consensus-receipt.canonicalization.json#assembler_obligations` because none of
+them is expressible in JSON Schema:
+
+- **Validate, then canonicalize — always.** `canonicalizeReceipt()` **throws**
+  on any undefined required field instead of emitting bytes with the key
+  missing, which a plain `JSON.stringify` would do silently. Without that, an
+  assembler that canonicalized first would anchor a digest over bytes that would
+  have failed validation.
+- **`stances` is a fixed five-key set, explicitly zero-filled.**
+  `aggregateSession()` builds its rollup **sparsely** — it starts from `{}` and
+  only sets a key for a stance that actually appears — so a session with two
+  neutral takes hands the assembler a one-key object.
+- **`weights` is exactly the four canonical buckets, or absent.** The producer
+  is looser: `optionalWeights()` accepts any bucket string with no enum and no
+  count, and `meanTakeWeights()` unions whatever appears across the takes, so a
+  three-bucket vector is producible *and publicly served*. The assembler omits
+  `weights` **only** when `meanTakeWeights()` returned `undefined`, and
+  **refuses to assemble** when a vector exists but is not the canonical four —
+  so the mismatch is an operator-visible refusal rather than a signed artifact
+  asserting that a session produced no allocation while
+  `GET /api/swarm/sessions/:id` serves one for the same session.
+- **`participation_bps` is round-half-up** over the exact `submitted / active`
+  ratio — `floor(ratio * 10000 + 0.5)`, from the two integers rather than the
+  stored `participation` float. Half-up and half-even differ at exact `.5`
+  boundaries, and the rule previously existed only inside a test.
+
+**Schema `$id` and version policy.** The schema is
+`https://robotmoney.net/schemas/consensus-receipt/1.0`, and `schema_version`
+always equals the trailing segment of that `$id`. A verifier selects the schema
+by the receipt's own `schema_version`, never by "latest". **Within** a version
+the field order is immutable at every nesting level and new fields are optional
+and appended after every existing field of the object they join, so bytes
+producible under that version stay reproducible forever. A **bump is never
+retroactive**: it publishes a new `$id` and a new document, and an
+already-published receipt keeps its own `schema_version`, keeps validating under
+that version's schema, and never changes its canonical bytes or its digest. The
+anchored digest is a commitment to those exact bytes, so a receipt "fixed" by a
+bump is a different receipt at a different digest. A minor bump appends an
+optional trailing field; a major bump is anything that changes bytes already
+producible — reordering, renaming, removing or retyping a field, or changing a
+serialization, ordering, or rounding rule.
+
+**This repo pins bytes, not digests.** The golden
+`consensus-receipt.valid.canonical.txt` is the cross-repo target: the
+`robotmoney:consensus-receipt:v1\n` domain prefix, then RFC 8259 compact JSON in
+the pinned order, then a trailing newline. `keccak256` — the digest the chain
+side takes over those bytes — is not available to a zero-dependency Bun test
+(`sha3-256` is NIST-padded and different), so a digest constant committed beside
+the bytes could only ever be an unverified claim. The draft carried one, no test
+asserted it, and this reconciliation invalidated it silently; it is removed, and
+`digest_algorithm` alone records which function the consumer applies. That makes
+asserting the digest a **consumer obligation** and says so in `digest_note`:
+`robotmoney-core` (or #754, wherever a keccak256 implementation is available)
+must commit the digest of the golden beside its own code and assert it, or the
+on-chain anchor is never checked against this pin in CI.
+
 ### 9.8 Testing & smoke
 
 Decision [D25](./decisions.md#d25--external-actor-rail-for-simulated-independent-entities)

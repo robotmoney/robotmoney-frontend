@@ -3,6 +3,7 @@ export * from "./regime";
 export * from "./dashboards";
 export * from "./swarm";
 export * from "./swarm-application";
+export * from "./consensus-receipt";
 export * from "./projects";
 export * from "./admin";
 export { ROUTES, path } from "./routes";

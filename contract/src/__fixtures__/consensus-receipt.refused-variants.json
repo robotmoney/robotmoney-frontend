@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.0",
+  "base": "consensus-receipt.valid.json",
+  "purpose": "NEAR-MISS REPRESENTATIONS THAT MUST BE REFUSED. Each case is the valid fixture with one field rewritten into a spelling that denotes the SAME session but serializes to different canonical bytes, or into a shape the producer can emit but the receipt cannot carry. Every one of these was accepted by the 1.0 draft, which is how the anchored digest stopped being a function of the session: two honest assemblers reading the same database could each produce a schema-valid receipt and anchor different digests, and receipt_id uniqueness is enforced on session_id+subject_id rather than on the payload, so the second attempt is rejected while the first digest stands. `patch` maps a JSON pointer to its replacement value; a null value deletes the field.",
+  "cases": [
+    {
+      "name": "session_id in uppercase hex",
+      "why": "The same UUID, different bytes, different digest. Exactly one spelling is admitted.",
+      "patch": {
+        "/session_id": "12440000-0000-4000-8000-00000000000A"
+      },
+      "expect_schema_error": "/session_id: pattern"
+    },
+    {
+      "name": "prompt_hash in uppercase hex",
+      "why": "hash32 admits lowercase only, for the same reason session_id does.",
+      "patch": {
+        "/prompt_hash": "0x111111111111111111111111111111111111111111111111111111111111111A"
+      },
+      "expect_schema_error": "/prompt_hash: pattern"
+    },
+    {
+      "name": "inputs_digest in mixed-case hex",
+      "why": "Mixed case is the shape a hand-assembled or copy-pasted digest actually takes.",
+      "patch": {
+        "/inputs_digest": "0x222222222222222222222222222222222222222222222222222222222222AbCd"
+      },
+      "expect_schema_error": "/inputs_digest: pattern"
+    },
+    {
+      "name": "created_at with millisecond precision",
+      "why": "THE MOST LIKELY PRODUCER OUTPUT: pg timestamptz -> JS Date -> toISOString(). Refused here so the assembler is forced to truncate rather than emit a second byte sequence for one instant.",
+      "patch": {
+        "/created_at": "2026-08-26T16:00:00.000Z"
+      },
+      "expect_schema_error": "/created_at: pattern"
+    },
+    {
+      "name": "created_at with a numeric UTC offset",
+      "why": "RFC 3339 says this is the same instant. The canonical bytes say it is a different receipt.",
+      "patch": {
+        "/created_at": "2026-08-26T18:00:00+02:00"
+      },
+      "expect_schema_error": "/created_at: pattern"
+    },
+    {
+      "name": "created_at with a lowercase z",
+      "why": "RFC 3339 admits either case for the zone designator; schema 1.0 admits one.",
+      "patch": {
+        "/created_at": "2026-08-26T16:00:00z"
+      },
+      "expect_schema_error": "/created_at: pattern"
+    },
+    {
+      "name": "analyst_signature member_id in uppercase",
+      "why": "member_id is case-pinned so that code-point order, UTF-8 byte order and a UTF-16 sort cannot disagree about analyst_signature_order.",
+      "patch": {
+        "/analyst_signatures/0/member_id": "Analyst-Alpha"
+      },
+      "expect_schema_error": "/analyst_signatures/0/member_id: pattern"
+    },
+    {
+      "name": "weights carrying three buckets",
+      "why": "meanTakeWeights() unions whatever buckets the takes carried, so a three-bucket vector is producible and publicly served. The receipt refuses it rather than silently omitting weights and contradicting the session API.",
+      "patch": {
+        "/weights": [
+          {
+            "bucket": "agent_tokens",
+            "weight_bps": 1250
+          },
+          {
+            "bucket": "conservative_defi_yield",
+            "weight_bps": 6000
+          },
+          {
+            "bucket": "protocol_tokens",
+            "weight_bps": 2750
+          }
+        ]
+      },
+      "expect_schema_error": "/weights: minItems 4"
+    },
+    {
+      "name": "judge.source omitted",
+      "why": "A receipt that cannot say whether its prose was model-authored or template-authored is not attributable to what produced it, which is the property this phase exists to establish.",
+      "patch": {
+        "/judge/source": null
+      },
+      "expect_schema_error": "/judge: missing required \"source\""
+    }
+  ]
+}

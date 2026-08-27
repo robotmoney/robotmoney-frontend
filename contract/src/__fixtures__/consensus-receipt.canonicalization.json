@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "domain_separator": "robotmoney:consensus-receipt:v1\n",
+  "encoding": "UTF-8",
+  "digest_algorithm": "keccak256",
+  "receipt_id_derivation": {
+    "algorithm": "keccak256",
+    "bytes": "UTF-8 robotmoney:consensus-receipt-id:v1\\n + session_id + \\n + subject_id",
+    "uniqueness": "the contract accepts at most one receipt_id, enforcing one receipt per session per subject"
+  },
+  "json_serialization": "RFC 8259 compact JSON: no insignificant whitespace anywhere — no space after ':' or ',', no indentation, no newline inside the object. Escaping is normative and stated in string_escaping below, NOT by reference to any one language's serializer.",
+  "string_escaping": {
+    "escaped": "EXACTLY three things, and nothing else: U+0022 QUOTATION MARK as \\\", U+005C REVERSE SOLIDUS as \\\\, and the C0 control range U+0000-U+001F. Within C0, the short forms are used where RFC 8259 defines one — \\b (U+0008), \\t (U+0009), \\n (U+000A), \\f (U+000C), \\r (U+000D) — and every other C0 code point uses the lowercase-hex \\u00XX form.",
+    "raw": "EVERY other code point is emitted as raw UTF-8, with no \\uXXXX form. That includes all non-ASCII (accented Latin, CJK, Cyrillic, an em-dash, a curly quote), U+007F DELETE, U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR, and every astral-plane code point above U+FFFF, which is emitted as its 4-byte UTF-8 sequence and NEVER as an escaped surrogate pair. U+002F SOLIDUS is never escaped.",
+    "well_formed_input": "Strings are well-formed Unicode; a lone surrogate is not a legal input to canonicalization and an assembler must refuse rather than escape one.",
+    "why_it_is_stated_this_way": "The two most likely cross-repo implementations both diverge from this rule by DEFAULT while still reproducing an all-ASCII golden byte-for-byte: Go's encoding/json escapes U+003C, U+003E, U+0026, U+2028 and U+2029 unless SetEscapeHTML(false) is called, and Python's json.dumps escapes every non-ASCII code point unless ensure_ascii=False is passed. The text fields here are model- and member-authored free text, so the first real receipt carrying an accented name or an em-dash would silently anchor a different digest. consensus-receipt.escaping.json and its committed bytes exist to make that failure loud: it carries an em-dash, a non-Latin script, an ampersand, an angle bracket, an escaped newline, U+2028, and an astral-plane emoji.",
+    "reference": "JavaScript's JSON.stringify implements exactly this rule; it is named as an implementation of the rule, not as the rule."
+  },
+  "timestamp_serialization": {
+    "field": "created_at",
+    "form": "EXACTLY ONE: seconds-precision UTC with a literal trailing Z, matching ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$ — for example 2026-08-26T16:00:00Z.",
+    "forbidden": "Fractional seconds (2026-08-26T16:00:00.000Z), a numeric UTC offset (2026-08-26T18:00:00+02:00), a lowercase z, and a space in place of T are all REFUSED, even though RFC 3339 admits them and they may denote the same instant. Three spellings of one instant would be three sets of canonical bytes and three anchored digests for one session.",
+    "producer_note": "THE OBVIOUS IMPLEMENTATION DOES NOT PRODUCE THIS FORM. A Postgres timestamptz read through a JS driver becomes a Date, and Date.prototype.toISOString() emits milliseconds. The assembler MUST normalize — convert to UTC, then TRUNCATE (never round) to whole seconds — rather than pass the driver's string through."
+  },
+  "trailing_newline": true,
+  "field_order": [
+    "schema_version",
+    "session_id",
+    "subject_id",
+    "created_at",
+    "prompt_hash",
+    "inputs_digest",
+    "quorum",
+    "stances",
+    "judge",
+    "analyst_signatures",
+    "weights"
+  ],
+  "optional_append_only_fields": ["weights"],
+  "analyst_signature_order": "member_id ASCENDING BY UNICODE CODE POINT — compare code point by code point, shorter string first on a prefix. This is identical to ascending UTF-8 byte order (UTF-8 preserves code point order) and is NOT JavaScript's default Array.prototype.sort, which compares UTF-16 code units and disagrees with both for every code point above U+FFFF. Schema 1.0 additionally pins member_id to ^[a-z0-9][a-z0-9_-]{0,127}$, so over every id the schema admits all three orders coincide; the code-point rule is stated so an implementation that relaxes the pattern still sorts the way the reference does. compareCodePoints() in contract/src/consensus-receipt.js is the reference comparator.",
+  "nested_field_order": {
+    "quorum": ["active", "submitted", "absent", "participation_bps"],
+    "stances": ["bearish", "cautious", "neutral", "constructive", "bullish"],
+    "judge": ["rationale", "disagreements", "release_safety", "source"],
+    "judge.disagreements[]": ["topic", "positions", "what_settles"],
+    "judge.disagreements[].positions[]": ["member_id", "view"],
+    "judge.release_safety": ["release", "thinly_supported", "take_count", "min_takes", "concerns"],
+    "analyst_signatures[]": ["member_id", "public_key", "canonical_submission", "signature"],
+    "weights[]": ["bucket", "weight_bps"]
+  },
+  "canonical_bucket_order": [
+    "agent_tokens",
+    "conservative_defi_yield",
+    "protocol_tokens",
+    "real_world_assets"
+  ],
+  "bps_conversion": {
+    "input": "unweighted arithmetic mean of each analyst vector after that vector is normalized to sum 1",
+    "prefix_rule": "iterate canonical_bucket_order except the last bucket and round mean_weight * 10000 to the nearest integer, with .5 rounded upward",
+    "final_rule": "set the last bucket to 10000 minus the prefix sum; reject if the result falls outside 0..10000"
+  },
+  "assembler_obligations": {
+    "order": "VALIDATE, THEN CANONICALIZE, ALWAYS. canonicalizeReceipt() throws on any undefined required field rather than emitting bytes with the key missing (a plain JSON.stringify would silently omit it), so an assembler that canonicalizes first gets a refusal instead of a digest over a payload that would have failed validation. Structural validation (validateReceipt) and the arithmetic recomputations (receiptSemanticErrors) both precede it.",
+    "stances_zero_fill": "`stances` is a FIXED FIVE-KEY object — bearish, cautious, neutral, constructive, bullish — every one of them always present. The rollup it comes from is SPARSE: aggregateSession() (swarm/domain.ts) starts from {} and only sets a key for a stance that actually appears, so a session with two neutral takes and nothing else hands the assembler a one-key object. The assembler zero-fills the missing four; it never emits a short stances object and never treats an absent stance as unknown.",
+    "weights_cardinality": "Emit `weights` as EXACTLY the four canonical buckets, in canonical_bucket_order, summing to 10000 bps. OMIT `weights` only when meanTakeWeights() returned undefined — no member submitted a vector at all. When a vector exists but is not the canonical four (optionalWeights() in api/validation.ts accepts any bucket set of any size, and meanTakeWeights() unions whatever appears), REFUSE TO ASSEMBLE and surface the refusal to an operator. Silently omitting `weights` in that case would publish a signed artifact saying the session produced no allocation while GET /api/swarm/sessions/:id serves a concrete one for the same session.",
+    "participation_bps_rounding": "participation_bps = floor((submitted / active) * 10000 + 0.5) over the exact submitted/active ratio — ROUND HALF UP, not half-even, and computed from the two integers rather than from the stored `participation` float. `active` is quorum.active and must be at least 1. Half-up and half-even differ at an exact .5 boundary (1 of 8 members is 1250 either way; 1 of 16 is 625; the boundary cases are real and a receipt that disagrees on one is a receipt that fails to reproduce). participationBps() in contract/src/consensus-receipt.js is the reference.",
+    "created_at_normalization": "See timestamp_serialization: truncate to whole seconds in UTC, never round, never pass a driver's ISO string through.",
+    "case_normalization": "session_id, prompt_hash and inputs_digest are lowercased before validation. Uppercase hex denotes the same value and different bytes, so exactly one spelling is admitted rather than both being accepted and one silently anchored."
+  },
+  "evolution_rule": "Within a schema version, existing field order is immutable AT EVERY NESTING LEVEL. New optional fields append after every existing field of the object they join, and are omitted from the canonical bytes when absent, so bytes producible under this version stay reproducible forever. Unknown input fields are never serialized.",
+  "digest_note": "This repo pins the canonical BYTES (consensus-receipt.valid.canonical.txt), not a digest constant. keccak256 is not available to a zero-dependency Bun test here (sha3-256 is NIST-padded and different), so a digest checked in beside the bytes could only be an unasserted claim that silently goes stale — which is exactly what happened to the 1.0 draft's. The consumer computes keccak256 over the pinned bytes — and that is a CONSUMER OBLIGATION, not a discharged one: no test in this repo checks a keccak256 value, so robotmoney-core (or issue #754, wherever a keccak256 implementation is available) must commit the digest of consensus-receipt.valid.canonical.txt beside its own code and assert it, or the on-chain anchor is never checked against this pin in CI.",
+  "version_policy": {
+    "schema_id": "https://robotmoney.net/schemas/consensus-receipt/1.0",
+    "schema_version_matches_id": "schema_version always equals the trailing segment of $id.",
+    "selection": "A verifier picks the schema by the receipt's own schema_version, never by \"latest\".",
+    "retroactivity": "None. A bump publishes a new $id and a new document. An already-published receipt keeps its own schema_version, keeps validating under that version's schema, and its canonical bytes and digest never change — the anchored digest commits to those exact bytes, so a receipt \"fixed\" by a bump is a different receipt at a different digest.",
+    "minor_bump": "Appending an optional trailing field, per evolution_rule. Every previously published receipt still validates and still canonicalizes to identical bytes.",
+    "major_bump": "Anything that changes bytes already producible under the current version: reordering, renaming, removing, or retyping a field, or changing a serialization, ordering, or rounding rule."
+  },
+  "judge_block_source": "The judge block is JudgeOpinion from backend/src/swarm/judge.ts plus `source` from the JudgeOutcome envelope. Two deliberate divergences from the 1.0 draft, both reconciled here: `consensus` is DROPPED (no judge produces it; its only producer, buildConsensus() in backend/src/swarm/domain.ts, restates quorum/stances/meanConfidence/regimeSummary in English, and the first two are already signed structurally in this payload), and `release_safety` carries the SHIPPED shape whole rather than a {safe_to_release, opinion} reduction, so a verifier can recompute thinly_supported and release instead of trusting flags a member-authored concern can steer. A THIRD, DECIDED HERE RATHER THAN DEFERRED: `source` IS CARRIED. runJudge() spreads one `base` object — same promptHash, same inputsDigest — into both the model return and the template-fallback return, and templateOpinion() calls the same buildRationale()/buildDisagreements() the aggregator uses, so without `source` a published receipt has NO field separating \"a model read the takes and wrote this\" from \"the model timed out and a template produced this\". `fallbackReason` and `model` stay out: the first interpolates model-controlled text and is operator debugging rather than a public commitment, the second is deployment configuration that would make the anchored bytes depend on a vendor string. Both remain appendable after `source` under the minor-bump rule."
+}
