@@ -1213,9 +1213,12 @@ refused (`model_unavailable:…`), an empty answer (`empty_response`), prose
 instead of JSON (`not_json`), JSON of the wrong shape (`malformed_json`,
 `not_an_object`, `missing_rationale`, `missing_disagreements`,
 `too_many_disagreements`, `malformed_disagreement`, `malformed_position`,
-`missing_release_safety`, `malformed_release`, `malformed_concerns`), a
-disagreement attributed to a member who did not submit (`unknown_member:<id>`),
-a weight-like field anywhere in the response (`weight_like_field:<path>`), **a
+`missing_release_safety`, `malformed_release`, `malformed_concerns`), more
+than `MAX_POSITIONS` = 20 positions inside one disagreement
+(`too_many_positions`), the same member named twice inside one disagreement
+(`duplicate_position:<id>`), a disagreement attributed to a member who did not
+submit (`unknown_member:<id>`), a weight-like field anywhere in the response
+(`weight_like_field:<path>`), **a
 malformed `SWARM_JUDGE_TIMEOUT_MS` in the environment**
 (`invalid_timeout_config:…`), and anything else thrown while parsing
 (`unparsable:…`) — each falls back to the
@@ -1224,6 +1227,12 @@ SAME template producers the aggregator uses (`buildRationale`,
 session carry on. Every recorded reason is capped at 120 characters, the two
 built out of the model's own text included. No session is ever blocked on the
 judge, and no partially-trusted model response ever reaches one.
+
+That list above is EXHAUSTIVE, and it is pinned to the source rather than
+maintained by hand: `scripts/tests/unit/judge-fallback-reasons-documented.test.ts`
+extracts every reason `backend/src/swarm/judge.ts` can produce, extracts the
+literals enumerated here, and fails if either side has one the other does not.
+It was written because this list drifted within a day of being authored.
 
 **A member cannot speak for another member.** `disagreements[].positions[].view`
 is filled VERBATIM from the frozen take set, never authored by the model — the
