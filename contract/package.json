@@ -10,7 +10,12 @@
       "types": "./src/index.d.ts",
       "import": "./src/index.js"
     },
-    "./routes": "./src/routes.js"
+    "./routes": "./src/routes.js",
+    "./consensus-receipt": {
+      "types": "./src/consensus-receipt.d.ts",
+      "import": "./src/consensus-receipt.js"
+    },
+    "./fixtures/*": "./src/__fixtures__/*"
   },
   "files": ["src"],
   "scripts": {
