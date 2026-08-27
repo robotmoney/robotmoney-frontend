@@ -46,6 +46,15 @@ const operatorName = (op) => {
 // The sessions list is paginated and the page used to render only the first
 // page while presenting its counts as totals. 209 published sessions arrive in
 // 3 requests at this limit; the cap is a runaway guard, not a business rule.
+// A session past its window but still `collecting` is the known orphan case: the
+// state never advanced. Showing it as open would be the page telling a visitor
+// that takes are being accepted when they are not, so the live strip only claims
+// OPEN while the window is genuinely in the future, then falls back to "closed,
+// publishing" for a grace period, then stops claiming anything at all.
+const CLOSED_GRACE_MS = 3 * 60 * 60 * 1000;
+const LIVE_TICK_MS = 30 * 1000;
+const OPEN_STATES = new Set(["collecting", "window_closed", "aggregated"]);
+
 const SESSION_PAGE_SIZE = 100;
 const MAX_SESSION_PAGES = 12;
 const SESSIONS_SHOWN_STEP = 20;
@@ -62,7 +71,17 @@ export function registerSwarmView(Alpine) {
     seatsAvailable: null,
     sessionsTruncated: false,
     shown: SESSIONS_SHOWN_STEP,
+    // Read by the live strip so the countdown re-renders without a reload. The
+    // SPA swaps views without unloading the document, so the interval has to be
+    // cleared on teardown or it outlives the page (same destroy() contract the
+    // apply-status view uses).
+    now: Date.now(),
+    liveTimer: null,
+    destroy() {
+      if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
+    },
     async load() {
+      this.liveTimer = setInterval(() => { this.now = Date.now(); }, LIVE_TICK_MS);
       try {
         const [memberData, sessionData] = await Promise.all([
           api.get(ROUTES.swarm.members),
@@ -112,6 +131,51 @@ export function registerSwarmView(Alpine) {
       this.subjectCache = cache;
     },
     publishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
+
+    // The one session the swarm is working on right now, or null. Newest first,
+    // because a subject may convene more than once a day.
+    liveSession() {
+      const rows = this.sessions
+        .filter((s) => OPEN_STATES.has(s.state) && s.windowClosesAt)
+        .sort((a, b) => String(b.windowClosesAt).localeCompare(String(a.windowClosesAt)));
+      const s = rows[0];
+      if (!s) return null;
+      const closes = Date.parse(s.windowClosesAt);
+      if (!Number.isFinite(closes)) return null;
+      // Past the grace window it is an orphan, not news. Say nothing.
+      if (this.now - closes > CLOSED_GRACE_MS) return null;
+      return s;
+    },
+    liveIsOpen() {
+      const s = this.liveSession();
+      return !!s && s.state === "collecting" && Date.parse(s.windowClosesAt) > this.now;
+    },
+    liveSubjectName() {
+      const s = this.liveSession();
+      if (!s) return "";
+      const id = this.portfolioIdOf(s);
+      return this.subjectCache[id]?.name || s.subjectName || id;
+    },
+    // Coarse on purpose: the window runs for hours, so a ticking second hand
+    // would be precision this cadence does not have.
+    liveRemaining() {
+      const s = this.liveSession();
+      if (!s) return "";
+      const ms = Date.parse(s.windowClosesAt) - this.now;
+      if (ms <= 0) return "";
+      const mins = Math.floor(ms / 60000);
+      if (mins < 1) return "under a minute";
+      if (mins < 60) return `${mins} min`;
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      return m ? `${h}h ${m}m` : `${h}h`;
+    },
+    liveClosesAbsolute() {
+      const s = this.liveSession();
+      if (!s) return "";
+      try { return new Date(s.windowClosesAt).toISOString().replace("T", " ").slice(0, 16) + " UTC"; }
+      catch (_) { return ""; }
+    },
     // Link by SESSION ID. Two rows sharing a (date, subject) are two different
     // sessions — a subject may convene more than once a day — and the dated URL
     // resolves to the later of them, so linking by it would leave the earlier
