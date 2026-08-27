@@ -144,6 +144,14 @@ x-worker-env: &worker-env
   # Minimum spacing between GeckoTerminal OHLCV requests (a keyless 429 was
   # observed on the 6th call in ~15s). Unrelated to the Base RPC budget above.
   GECKO_OHLCV_MIN_INTERVAL_MS: ${GECKO_OHLCV_MIN_INTERVAL_MS:-}
+  # Consensus judge (issue #752) — the swarm lane runs `swarm.judge`, so the
+  # same three knobs the api gets must reach the worker too, or an operator who
+  # enables the judge finds it silently falling back to template prose in the
+  # one process that actually runs it on a schedule. On/off AND which model are
+  # database rows, not env vars; see the api block above.
+  OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+  SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
+  SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
   # Optional per-call inference bound (issue #537), read by
   # scripts/lib/swarm/inference.ts's timeoutMs(). Declared with a NULL value —
   # not `${OPENCODE_TIMEOUT_MS:-}` — deliberately: the `:-` form resolves to the
@@ -266,6 +274,18 @@ services:
       SWARM_AGGREGATE_CRON: ${SWARM_AGGREGATE_CRON:-0 9 * * *}
       SWARM_PUBLISH_CRON: ${SWARM_PUBLISH_CRON:-0 10 * * *}
       SWARM_WINDOW_MINUTES: ${SWARM_WINDOW_MINUTES:-60}
+      # Consensus judge (issue #752). ITS ON/OFF SWITCH IS NOT HERE, and neither
+      # is WHICH MODEL it uses — both are columns on `swarm_judge_config`, set
+      # over POST /api/swarm/admin/judge without restarting anything. The model
+      # is a row rather than a `SWARM_JUDGE_MODEL` env var because D22 rule 1
+      # keeps model selection to one reviewable signal. What is left here is the
+      # shared OpenCode Zen credential (the member agents' existing key, not a
+      # second one), the endpoint, and the per-call bound. All blank by default:
+      # an unconfigured model means template prose and a recorded reason, never
+      # a failed session.
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
+      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:

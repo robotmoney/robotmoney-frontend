@@ -204,6 +204,12 @@ export const ROUTES = {
       sessionReopen: "/api/swarm/admin/sessions/:id/reopen", // POST — versioned guarded transition
       sessionAggregate: "/api/swarm/admin/sessions/:id/aggregate", // POST — versioned guarded transition
       sessionPublish: "/api/swarm/admin/sessions/:id/publish", // POST — versioned guarded transition
+      // Consensus judge (issue #752). `sessionJudge` moves aggregated -> judged
+      // and records the opinion; `judgeConfig` is the runtime switch (GET reads
+      // it, POST { mode, minTakes } sets it) that lets an operator take the
+      // judge off published sessions WITHOUT a redeploy.
+      sessionJudge: "/api/swarm/admin/sessions/:id/judge", // POST — versioned guarded transition
+      judgeConfig: "/api/swarm/admin/judge", // GET | POST { mode: off|shadow|enforce, minTakes }
 
       audit: "/api/swarm/admin/audit", // GET ?actor=&action=&since=&until=&limit= — redacted audit trail
 

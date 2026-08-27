@@ -56,6 +56,7 @@ export const handlers: Record<string, JobHandler> = {
   "swarm.publish_brief": swarm.publishBrief,
   "swarm.close_window": swarm.closeWindow,
   "swarm.aggregate": swarm.aggregateSession,
+  "swarm.judge": swarm.judgeSession,
   "swarm.publish": swarm.publishSession,
   // Three notification kinds, one delivery body. They stay separate registry
   // entries rather than collapsing into a shared "swarm.send_notification"

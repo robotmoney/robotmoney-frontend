@@ -1513,7 +1513,7 @@ export function registerStaticViews(Alpine) {
     // and the page would read "no sessions yet" right after a verified submit.
     async scanSessions() {
       const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
-      const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated"].includes(s.state));
+      const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated", "judged"].includes(s.state));
       const published = all.filter((s) => s.state === "published").slice(0, 20);
       const details = await Promise.all([...inProgress, ...published].map(async (s) => {
         try {
@@ -1543,7 +1543,7 @@ export function registerStaticViews(Alpine) {
     },
     takePhase(state) {
       if (state === "collecting") return "live";
-      if (state === "window_closed" || state === "aggregated") return "closing";
+      if (state === "window_closed" || state === "aggregated" || state === "judged") return "closing";
       return "published";
     },
     phaseLabel(phase) {

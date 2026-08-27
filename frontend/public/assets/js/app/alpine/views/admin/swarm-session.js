@@ -38,15 +38,19 @@
 import { api, ROUTES, path } from "../../../lib/api.js";
 import { adminAuthState, fmtUtc, fmtLocal } from "./shared.js";
 
-// The only 5 lifecycle actions the admin HTTP surface exposes
+// The only 6 lifecycle actions the admin HTTP surface exposes
 // (backend/src/api/routes/swarm-admin.ts sessions dispatcher).
 // scheduled→collecting ("publish_brief" in the job-kind vocabulary) is
 // worker/job-queue-driven only — there is no manual admin action for it.
+// `judge` (issue #752) answers 409 `judge_disabled` while the judge's runtime
+// mode is off, which is its shipped default — the button is offered from
+// `aggregated` and the backend, not the UI, decides whether the judge is on.
 const ACTION_ROUTE_KEY = {
   cancel: "sessionCancel",
   close: "sessionClose",
   reopen: "sessionReopen",
   aggregate: "sessionAggregate",
+  judge: "sessionJudge",
   publish: "sessionPublish",
 };
 const ACTION_LABEL = {
@@ -54,6 +58,7 @@ const ACTION_LABEL = {
   close: "Close window",
   reopen: "Reopen window",
   aggregate: "Aggregate",
+  judge: "Judge",
   publish: "Publish",
 };
 const REASON_REQUIRED = new Set(["cancel", "close", "reopen"]);
@@ -67,7 +72,8 @@ const LEGAL_ACTIONS_FOR_STATE = {
   scheduled: ["cancel"],
   collecting: ["close", "cancel"],
   window_closed: ["reopen", "aggregate", "cancel"],
-  aggregated: ["close", "publish"],
+  aggregated: ["close", "judge", "publish"],
+  judged: ["close", "publish"],
   published: [],
   cancelled: [],
 };
@@ -283,7 +289,7 @@ export function registerAdminSwarmSession(Alpine) {
       const s = String(state || "");
       if (s === "published") return "adm-badge adm-badge--ok";
       if (s === "cancelled") return "adm-badge adm-badge--err";
-      if (s === "collecting" || s === "window_closed" || s === "aggregated") return "adm-badge adm-badge--run";
+      if (s === "collecting" || s === "window_closed" || s === "aggregated" || s === "judged") return "adm-badge adm-badge--run";
       return "adm-badge adm-badge--idle";
     },
   }));

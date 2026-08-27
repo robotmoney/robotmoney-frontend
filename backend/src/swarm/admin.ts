@@ -21,6 +21,10 @@ import {
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
 import { deriveMemberHandle } from "./handle.ts";
+// Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
+// an env var, because the swarm is live and an operator must be able to take
+// the judge off published sessions without restarting anything.
+import { getJudgeConfig, judgeSession, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
@@ -926,16 +930,24 @@ export async function rosterRestoreAdmin(sessionId: string, memberId: string, ac
 
 // ── Guarded lifecycle transitions ───────────────────────────────────────────
 // Session states: scheduled → collecting → window_closed → aggregated →
-// published, with `cancelled` reachable from any non-terminal state and
-// `window_closed` reopenable back to `collecting`. published/cancelled are
+// [judged] → published, with `cancelled` reachable from any non-terminal state
+// and `window_closed` reopenable back to `collecting`. published/cancelled are
 // terminal — no further transition is ever legal. Action names and the legal
 // matrix match docs/architecture.md §4 US-C4 exactly.
+//
+// `judged` (issue #752) is the JUDGED-BUT-UNSIGNED state, and it is OPTIONAL BY
+// CONSTRUCTION: `aggregated -> published` remains legal, so a deployment with
+// the judge off publishes exactly the sessions it publishes today and the state
+// never appears. It reopens like `aggregated` does, so a session whose judge
+// said "hold" can go back for more takes rather than being stuck one step from
+// terminal.
 const TERMINAL = new Set(["published", "cancelled"]);
 const TRANSITIONS: Record<string, readonly string[]> = {
   scheduled: ["collecting", "cancelled"],
   collecting: ["window_closed", "cancelled"],
   window_closed: ["collecting", "aggregated", "cancelled"],
-  aggregated: ["window_closed", "published"],
+  aggregated: ["window_closed", "judged", "published"],
+  judged: ["window_closed", "published"],
   published: [],
   cancelled: [],
 };
@@ -943,6 +955,7 @@ const ACTION_FOR_TO_STATE: Record<string, string> = {
   collecting: "publish_brief", // scheduled -> collecting; window_closed -> collecting is "reopen" (passed explicitly)
   window_closed: "close_window",
   aggregated: "aggregate",
+  judged: "judge",
   published: "publish",
   cancelled: "cancel",
 };
@@ -1004,6 +1017,62 @@ export async function aggregateSessionAdmin(sessionId: string, expectedVersion: 
   if (!t.ok) return t;
   const rollup = await domainAggregateSession(sessionId);
   return { ...t, ...rollup, status: t.status };
+}
+
+// Judge a session that has already been aggregated. THE ORDER MATTERS: the
+// mode is read and the state guard runs BEFORE any opinion is formed, so a
+// disabled judge or an illegal transition costs no model call and leaves no
+// judgement row behind. A judge that then falls back to template prose is still
+// a successful judging — see swarm/judge.ts on why failure is an outcome here
+// rather than an error.
+export async function judgeSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
+  const config = await getJudgeConfig();
+  if (config.mode === "off") return err(409, "judge_disabled");
+  const t = await guardedTransition(sessionId, "judged", actor, { expectedVersion });
+  if (!t.ok) return t;
+  const result = await judgeSession(sessionId);
+  if (!result.ok) return err(result.status, result.error ?? "judge failed");
+  await audit(actor, "session_judged", {
+    sessionId, mode: result.mode, applied: result.applied === true,
+    source: result.outcome?.source, fallbackReason: result.outcome?.fallbackReason ?? null,
+    promptHash: result.outcome?.promptHash, inputsDigest: result.outcome?.inputsDigest,
+  });
+  return {
+    ...t,
+    status: t.status,
+    judge: {
+      mode: result.mode,
+      applied: result.applied === true,
+      judgementId: result.judgementId,
+      source: result.outcome?.source,
+      fallbackReason: result.outcome?.fallbackReason ?? null,
+      model: result.outcome?.model ?? null,
+      promptHash: result.outcome?.promptHash,
+      inputsDigest: result.outcome?.inputsDigest,
+      releaseSafety: result.outcome?.opinion.release_safety,
+    },
+  };
+}
+
+// The runtime switch itself. Audited like every other admin write, because
+// "who turned the judge on, and when" is the first question asked of any prose
+// that turns out to be wrong.
+export async function getJudgeConfigAdmin(): Promise<AdminResult<{ judge: JudgeConfig }>> {
+  return { ok: true, status: 200, judge: await getJudgeConfig() };
+}
+
+export async function setJudgeConfigAdmin(
+  patch: { mode?: JudgeMode; minTakes?: number; model?: string | null },
+  actor: Actor = ADMIN_ACTOR,
+): Promise<AdminResult> {
+  let judge: JudgeConfig;
+  try {
+    judge = await setJudgeConfig(patch);
+  } catch (e) {
+    return err(400, e instanceof Error ? e.message : "invalid judge config");
+  }
+  await audit(actor, "judge_config", { mode: judge.mode, minTakes: judge.minTakes, model: judge.model });
+  return { ok: true, status: 200, judge };
 }
 
 export async function publishSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
