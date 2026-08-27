@@ -438,14 +438,35 @@ export type SwarmSessionState =
   | "collecting"
   | "window_closed"
   | "aggregated"
+  | "judged"
   | "published"
   | "cancelled";
 
-/** The only 5 lifecycle actions the admin HTTP surface exposes
+/** The only 6 lifecycle actions the admin HTTP surface exposes
  * (swarm-admin.ts sessions dispatcher). scheduled→collecting
  * ("publish_brief" in the job-kind vocabulary) is worker/job-queue-driven
- * only — there is no manual admin action for it. */
-export type SwarmSessionAction = "cancel" | "close" | "reopen" | "aggregate" | "publish";
+ * only — there is no manual admin action for it. `judge` (issue #752) is
+ * refused with 409 `judge_disabled` while the judge's runtime mode is off,
+ * which is its shipped default. */
+export type SwarmSessionAction = "cancel" | "close" | "reopen" | "aggregate" | "publish" | "judge";
+
+/** The consensus judge's runtime switch (issue #752), read and written over
+ * ROUTES.swarm.admin.judgeConfig. `off` is the shipped default and reproduces
+ * pre-#752 behaviour exactly; `shadow` computes and stores an opinion without
+ * it reaching a session; `enforce` lets it through. It lives in the database
+ * rather than the environment so it can be flipped without a redeploy. */
+export type SwarmJudgeMode = "off" | "shadow" | "enforce";
+
+export interface SwarmJudgeConfig {
+  mode: SwarmJudgeMode;
+  /** Take count below which the release-safety opinion flags thin support. */
+  minTakes: number;
+  /** The model the judge reaches, or null. A ROW rather than an env var: D22
+   * rule 1 keeps model selection to one reviewable signal, and null means the
+   * judge records template prose with `model_unconfigured` against it. */
+  model: string | null;
+  updatedAt: string | null;
+}
 
 /** POST .../sessions body (parseSessionCreate — all five fields required). */
 export interface SessionCreateRequest {

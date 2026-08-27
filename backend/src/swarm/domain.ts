@@ -64,6 +64,34 @@ export { SWARM_ROSTER_CAP };
 // conjunct on the INSERT itself so a race cannot slip past the read.
 export { SWARM_TAKE_REVISION_CAP };
 
+// THE STATES IN WHICH A TAKE MAY STILL BE AMENDED — an ALLOWLIST, and that is
+// the whole point of it (issue #757 review).
+//
+// This was written as a denylist ("refuse when aggregated or published"), which
+// was exhaustive of the post-aggregation states ON THE DAY IT WAS WRITTEN. #752
+// then added `judged` between `aggregated` and `published`, and the denylist
+// silently reopened the amendment window on a session whose weight vector and
+// whose verbatim take prose had ALREADY been frozen by aggregateSession() and
+// were about to be published unchanged (publishSession is an unconditional
+// UPDATE that does not re-aggregate). The result would be a published session
+// whose `weights` are not meanTakeWeights() over its own take set and whose
+// `disagreements[].positions[].view` quotes a body the member has withdrawn —
+// the exact defect the gate exists to prevent.
+//
+// As an allowlist, a state added to swarm_sessions later is FROZEN by default.
+// Reopening the window for a new state is then a deliberate edit here, next to
+// this paragraph, rather than an omission somewhere else.
+//
+// `scheduled` is included for completeness (no take can exist yet, so the
+// amendment branch is unreachable from it); `window_closed` is included because
+// #570 keeps the advertised deadline authoritative right up to its instant even
+// after an early close.
+export const TAKES_AMENDABLE_STATES: ReadonlySet<string> = new Set([
+  "scheduled",
+  "collecting",
+  "window_closed",
+]);
+
 // ── Reads ─────────────────────────────────────────────────────────────────
 export async function getMembers() {
   const rows = await sql`SELECT * FROM swarm_members WHERE status = 'active' ORDER BY id`;
@@ -634,7 +662,8 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   const latestRevision = priorRow?.latest ?? 0;
 
   if (priorCount > 0) {
-    // AMENDMENT-ONLY GATE — deliberately not applied to a first take.
+    // AMENDMENT-ONLY GATE — deliberately not applied to a first take. See
+    // TAKES_AMENDABLE_STATES above for why this is an ALLOWLIST.
     //
     // `aggregateSession` copies take prose VERBATIM into
     // `swarm_recommendation.disagreements[].positions[].view` and is never
@@ -652,7 +681,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // backend/tests/swarm-submission-window.test.ts ("closing the window EARLY
     // no longer rejects takes"). An amendment is the strictly newer ask, so it
     // is the one that yields.
-    if (session.state === "aggregated" || session.state === "published") {
+    if (!TAKES_AMENDABLE_STATES.has(session.state)) {
       return {
         ok: false,
         status: 409,
@@ -1669,7 +1698,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
 // reference session shape (regime_summary + rich swarm_recommendation +
 // prose synthesis + subject snapshot total). Members with no take are recorded as
 // absent — never fabricated. All enrichment is templated (NO LLM).
-function normalizedTakeWeights(value: unknown): { bucket: string; weight: number }[] | null {
+export function normalizedTakeWeights(value: unknown): { bucket: string; weight: number }[] | null {
   if (!Array.isArray(value) || value.length === 0) return null;
   const seen = new Set<string>();
   const entries: { bucket: string; weight: number }[] = [];
@@ -1688,7 +1717,20 @@ function normalizedTakeWeights(value: unknown): { bucket: string; weight: number
   return entries.map(({ bucket, weight }) => ({ bucket, weight: weight / total }));
 }
 
-function meanTakeWeights(takes: any[]): { bucket: string; weight: number }[] | undefined {
+// THE derivation (issue #752). Project Fusion's rule is that MATH DECIDES AND
+// THE JUDGE EXPLAINS: this function is the only thing in the system allowed to
+// author a bucket weight. Nothing else may compute one, and no model may
+// suggest one — see swarm/judge.ts, which rejects a model response carrying a
+// weight-like field rather than merging it.
+//
+// That makes the published vector reproducible by anyone holding the frozen
+// take set, which is the strongest property available for an artifact
+// governance acts on. Its properties are pinned by
+// backend/tests/swarm-consensus-weights.test.ts (per-member vectors are
+// normalized before averaging; the result always sums to exactly 1, including
+// single-member and near-tie cases), and its uniqueness by that file's
+// no-reimplementation guard.
+export function meanTakeWeights(takes: any[]): { bucket: string; weight: number }[] | undefined {
   const normalized = takes
     .map((take) => normalizedTakeWeights(take.payload?.weights))
     .filter((weights): weights is { bucket: string; weight: number }[] => weights !== null);
@@ -1726,17 +1768,35 @@ function stanceBreakdown(byStance: Record<string, number>): string {
     .join(", ");
 }
 
+// TIES BREAK ON THE LADDER, NOT ON KEY ORDER (issue #752). This used to be a
+// plain `reduce` over Object.entries(), which on a tie returned whichever stance
+// happened to come FIRST in the object — i.e. the order takes were received in.
+// That made the rationale a function of arrival order, and worse, of the
+// ROUND TRIP: postgres reorders jsonb keys, so re-deriving prose from a stored
+// `swarm_recommendation.stances` could name a different majority than the
+// aggregation that wrote it. The judge's template fallback re-derives exactly
+// that way, so "the fallback is byte-identical to today's prose" was true only
+// until two stances tied.
+//
+// The tie-break is the same one stanceBreakdown() already sorts on — the
+// canonical ascending STANCES ladder, lowest index first — so the two lines of
+// prose can never disagree about which stance led.
 function majorityStance(byStance: Record<string, number>): { stance: string; count: number } | null {
   const entries = Object.entries(byStance);
   if (!entries.length) return null;
-  const [stance, count] = entries.reduce((best, cur) => (cur[1] > best[1] ? cur : best));
+  const rank = (stance: string) => {
+    const i = (STANCES as readonly string[]).indexOf(stance);
+    return i < 0 ? STANCES.length : i;
+  };
+  const [stance, count] = entries.reduce((best, cur) =>
+    cur[1] > best[1] || (cur[1] === best[1] && rank(cur[0]) < rank(best[0])) ? cur : best);
   return { stance, count };
 }
 
 // Discrete, one-line points of agreement: quorum, stance split, mean
 // confidence, and (when available) the regime backdrop. Always true of the
 // data actually submitted; never exceeds a sentence, never a take body.
-function buildConsensus(
+export function buildConsensus(
   active: number, submitted: number, participation: number,
   byStance: Record<string, number>, meanConfidence: number | null,
   regimeSummary: { composite_percentile?: number; regime?: string } | null,
@@ -1755,7 +1815,7 @@ function buildConsensus(
 // Recommendation-voiced "why": leads with the majority stance actually
 // submitted. Deliberately a different shape from buildSynthesis() below so
 // the two can never collide (cheap check: rationale !== synthesis).
-function buildRationale(
+export function buildRationale(
   subjectLabel: string, byStance: Record<string, number>, submitted: number,
   meanConfidence: number | null, regimeSummary: { composite_percentile?: number } | null,
 ): string {
@@ -1770,7 +1830,7 @@ function buildRationale(
 // Session-voiced narrative: participation + stance shape + whether a
 // disagreement was recorded, so it reads as an overview rather than a
 // restatement of buildRationale()'s recommendation-specific reasoning.
-function buildSynthesis(
+export function buildSynthesis(
   subjectLabel: string, active: number, submitted: number, participation: number,
   byStance: Record<string, number>, disagreementTopic?: string,
 ): string {
@@ -1781,8 +1841,51 @@ function buildSynthesis(
   return `${submitted} of ${active} members (${Math.round(participation * 100)}% participation) reviewed ${subjectLabel}. Stance split: ${breakdown}.${tail}`;
 }
 
-export async function aggregateSession(sessionId: string) {
+// Disagreements: synthesize from the stance spread. When at least two distinct
+// stances were submitted, contrast the most- and least-constructive members.
+// The ascending ladder is the canonical contract vocabulary (finding 027).
+// `topic` names the actual stances in conflict (not a generic placeholder)
+// and `what_settles` is an objective, trackable test rather than "" (#323).
+//
+// Exported since #752: this is one of the four template producers the judge
+// falls back to when a model is unavailable or answers badly, and "falls back
+// to the prose the templates produce today" is only checkable if the judge
+// calls the same function the aggregator does.
+export function buildDisagreements(subjectLabel: string, authoredTakes: any[]): any[] {
+  const rank = (st: string) => { const i = (STANCES as readonly string[]).indexOf(st); return i < 0 ? 2 : i; };
+  const sortedTakes = authoredTakes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
+  const disagreements: any[] = [];
+  if (sortedTakes.length >= 2 && new Set(sortedTakes.map((t: any) => t.stance)).size >= 2) {
+    const low = sortedTakes[0], high = sortedTakes[sortedTakes.length - 1];
+    disagreements.push({
+      topic: `${high.stance} vs ${low.stance} stance on ${subjectLabel}`,
+      positions: [
+        { member_id: high.member_id, view: high.body },
+        { member_id: low.member_id, view: low.body },
+      ],
+      what_settles: `Whether the next regime snapshot's composite percentile moves toward the ${high.stance} or the ${low.stance} read for ${subjectLabel}.`,
+    });
+  }
+  return disagreements;
+}
+
+// THE frozen take set (issue #752). Extracted verbatim out of
+// aggregateSession() so the judge and the aggregator cannot read two different
+// sets: `inputsDigest` on a judgement is a claim about "exactly the takes this
+// opinion was formed over", and that claim is only worth anything if the set it
+// digests is the same object the weight vector was derived from. One function,
+// one query, both callers.
+export interface FrozenTakeSet {
+  session: Record<string, any>;
+  takes: any[];
+  activeMembers: { id: string }[];
+  /** true when the session carries a roster snapshot (i.e. not the legacy/smoke path). */
+  rosterFrozen: boolean;
+}
+
+export async function loadFrozenTakeSet(sessionId: string): Promise<FrozenTakeSet | null> {
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  if (!s) return null;
   // LATEST-PER-MEMBER (issue #573), for the same reason as withTakes above and
   // one more that is specific to this function: aggregation copies take prose
   // VERBATIM into `swarm_recommendation.disagreements[].positions[].view`. A
@@ -1811,11 +1914,18 @@ export async function aggregateSession(sessionId: string) {
     SELECT member_id AS id FROM swarm_session_members WHERE session_id = ${sessionId} AND status != 'excused'`;
   const activeMembers = rosterRows.length > 0
     ? rosterRows
-    : await sql`SELECT id FROM swarm_members WHERE status = 'active'`;
+    : (await sql`SELECT id FROM swarm_members WHERE status = 'active'`) as unknown as { id: string }[];
   const frozenRoster = new Set(activeMembers.map((member: any) => member.id));
   const takes = rosterRows.length > 0
     ? takeRows.filter((take: any) => frozenRoster.has(take.member_id))
     : takeRows;
+  return { session: s as Record<string, any>, takes: takes as any[], activeMembers, rosterFrozen: rosterRows.length > 0 };
+}
+
+export async function aggregateSession(sessionId: string) {
+  const frozen = await loadFrozenTakeSet(sessionId);
+  if (!frozen) throw new Error(`aggregateSession: no such session ${sessionId}`);
+  const { session: s, takes, activeMembers } = frozen;
   const submitted = new Set(takes.map((t: any) => t.member_id));
   const absent = activeMembers.map((m: any) => m.id).filter((id: string) => !submitted.has(id));
   // QUORUM COUNTS MEMBERS, NOT ROWS (issue #573). Every figure below that used
@@ -1860,25 +1970,8 @@ export async function aggregateSession(sessionId: string) {
   // regime data — never a take body (issue #323).
   const consensus = buildConsensus(activeMembers.length, submittedCount, participation, byStance, meanConfidence, regimeSummary);
 
-  // Disagreements: synthesize from the stance spread. When at least two distinct
-  // stances were submitted, contrast the most- and least-constructive members.
-  // The ascending ladder is the canonical contract vocabulary (finding 027).
-  // `topic` names the actual stances in conflict (not a generic placeholder)
-  // and `what_settles` is an objective, trackable test rather than "" (#323).
-  const rank = (st: string) => { const i = (STANCES as readonly string[]).indexOf(st); return i < 0 ? 2 : i; };
-  const sortedTakes = authoredTakes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
-  const disagreements: any[] = [];
-  if (sortedTakes.length >= 2 && new Set(sortedTakes.map((t: any) => t.stance)).size >= 2) {
-    const low = sortedTakes[0], high = sortedTakes[sortedTakes.length - 1];
-    disagreements.push({
-      topic: `${high.stance} vs ${low.stance} stance on ${subjectLabel}`,
-      positions: [
-        { member_id: high.member_id, view: high.body },
-        { member_id: low.member_id, view: low.body },
-      ],
-      what_settles: `Whether the next regime snapshot's composite percentile moves toward the ${high.stance} or the ${low.stance} read for ${subjectLabel}.`,
-    });
-  }
+  // Disagreements: synthesize from the stance spread (see buildDisagreements).
+  const disagreements: any[] = buildDisagreements(subjectLabel, authoredTakes);
 
   // rationale (recommendation-voiced "why") and synthesis (session-voiced
   // narrative) are built by two different functions so they can never be
@@ -1888,10 +1981,15 @@ export async function aggregateSession(sessionId: string) {
   const rationale = authoredTakes.length
     ? buildRationale(subjectLabel, byStance, submittedCount, meanConfidence, regimeSummary)
     : undefined;
-  const actions = recType === "position_actions" ? [
-    { token: "USDC", action: "rotate", rationale: "Route the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor." },
-    { token: "rmUSDC", action: "add", rationale: "Vault receipt is the Agent Tokens exposure — top up to the mandated 5% floor." },
-  ] : undefined;
+  // NO HARDCODED ACTIONS (issue #752). Until #745 this branch emitted two
+  // literal USDC/rmUSDC entries — a rotate and an add, with rationales naming a
+  // 5% floor — that were derived from NO member input whatsoever. They rendered
+  // as though the swarm had recommended them, and they were on course to be
+  // signed into a consensus receipt as though the swarm had recommended them.
+  // A `position_actions` session now emits no `actions` array at all rather
+  // than a fabricated one; when real per-token actions exist they will be
+  // derived from the takes, like the weight vector is.
+  // Pinned by backend/tests/swarm-judge.test.ts.
   const weights = recType === "bucket_weights" ? meanTakeWeights(takes) : undefined;
 
   const quorum = { active: activeMembers.length, submitted: submittedCount, absent: absent.length, participation };
@@ -1905,7 +2003,6 @@ export async function aggregateSession(sessionId: string) {
     disagreements,
   };
   if (rationale) rec.rationale = rationale;
-  if (actions) rec.actions = actions;
   if (weights) rec.weights = weights;
 
   const synthesis = authoredTakes.length
@@ -1926,7 +2023,7 @@ export async function aggregateSession(sessionId: string) {
     sessionId, state: "aggregated",
     quorum, stances: byStance, meanConfidence, absent,
     regimeSummary, subjectSnapshotTotalValueUsd: subjectTotal,
-    type: recType, rationale, consensus, disagreements, actions, weights,
+    type: recType, rationale, consensus, disagreements, weights,
   };
 }
 

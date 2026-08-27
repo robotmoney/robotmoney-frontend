@@ -94,6 +94,8 @@ export const ROUTES: {
       sessionReopen: string;
       sessionAggregate: string;
       sessionPublish: string;
+      sessionJudge: string;
+      judgeConfig: string;
       audit: string;
     };
   };

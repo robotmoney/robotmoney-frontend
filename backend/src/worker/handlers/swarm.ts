@@ -1,4 +1,5 @@
 import * as ic from "../../swarm/domain.ts";
+import * as admin from "../../swarm/admin.ts";
 import { deliverSwarmNotification } from "../../swarm/notifications.ts";
 
 export async function openSession(payload: Record<string, unknown>): Promise<unknown> {
@@ -26,6 +27,16 @@ export async function closeWindow(payload: Record<string, unknown>): Promise<unk
 export async function aggregateSession(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
   return await ic.aggregateSession(sessionId);
+}
+
+// Issue #752. Enqueued the same way every other lifecycle step is, so the judge
+// is observable in the swarm lane rather than being an out-of-band script. A
+// disabled judge returns `{ ok: false, error: "judge_disabled" }` — deliberately
+// not a throw: on a live swarm with the judge off, every scheduled tick would
+// otherwise be a failed job.
+export async function judgeSession(payload: Record<string, unknown>): Promise<unknown> {
+  const sessionId = String(payload.sessionId);
+  return await admin.judgeSessionAdmin(sessionId, undefined, "worker");
 }
 
 export async function publishSession(payload: Record<string, unknown>): Promise<unknown> {

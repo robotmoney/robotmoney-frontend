@@ -133,6 +133,14 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *    ABOUT, as of that day. A point-in-time observation of an external system;
  *    re-reading that system now answers a different question, and the memo's
  *    numbers are checked against this row.
+ *  - `swarm_session_judgements` — one row per consensus-judge run (issue #752,
+ *    migration 0039), shadow runs included. Each carries `prompt_hash` and
+ *    `inputs_digest`: "this opinion was formed under these instructions over
+ *    exactly these takes". Attribution that can be deleted is attribution
+ *    nobody has to stand behind — and it is precisely the rows that turned out
+ *    wrong that somebody would want gone. Its triggers are installed by
+ *    migration 0040, not 0032, because an applied migration is frozen; see
+ *    APPEND_ONLY_MIGRATIONS below.
  *  - `swarm_applications` — the inbound application record behind an admission
  *    or a rejection.
  *  - `audit_log`, `agent_activity_log` — the trail of who did what. An audit
@@ -185,6 +193,9 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *    integrity guarantee is the `rm_worker` role's lack of DELETE privilege,
  *    which is a stronger and separate mechanism — a privilege refusal (42501)
  *    beats a trigger the owner can drop.
+ *  - `swarm_judge_config` — a ONE-ROW operator switch (mode, min_takes, model).
+ *    Mutable configuration, not history; the record of who changed it and when
+ *    is `audit_log`, which IS protected.
  *  - `buyback_swaps` — every row is an on-chain event addressed by `tx_hash`
  *    and re-indexable from the chain; this is the one producer in the system
  *    that self-heals. Re-derivable by definition.
@@ -199,6 +210,7 @@ export const APPEND_ONLY_TABLES = [
   "swarm_session_events",
   "swarm_session_members",
   "swarm_subject_snapshots",
+  "swarm_session_judgements",
   "swarm_applications",
   "audit_log",
   "agent_activity_log",
@@ -210,8 +222,21 @@ export type AppendOnlyTable = (typeof APPEND_ONLY_TABLES)[number];
 
 /** The migration filename, as `schema_migrations` records it. Used to tell
  *  "the guard was never installed here" (a legitimate pre-migration boot) from
- *  "it was installed and is now gone" (the thing worth refusing over). */
+ *  "it was installed and is now gone" (the thing worth refusing over).
+ *
+ *  Still 0032 on purpose: it is the migration that installs
+ *  `rm_append_only_guard()` itself, so its absence is what "never installed
+ *  here" means. Later migrations opt individual tables in. */
 export const APPEND_ONLY_MIGRATION = "0032_append_only_history.sql";
+
+/** Every migration that declares a protected-table array, in apply order. The
+ *  union of their arrays must equal APPEND_ONLY_TABLES — pinned by an executed
+ *  test, because a table added to one list and not the other is a table nobody
+ *  protects. */
+export const APPEND_ONLY_MIGRATIONS = [
+  "0032_append_only_history.sql",
+  "0040_swarm_judgements_append_only.sql",
+] as const;
 
 /** The two trigger names migration 0032 installs on each protected table. */
 export function triggerNames(table: string): { statement: string; row: string } {

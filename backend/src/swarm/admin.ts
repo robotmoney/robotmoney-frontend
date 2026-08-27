@@ -21,6 +21,10 @@ import {
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
 import { deriveMemberHandle } from "./handle.ts";
+// Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
+// an env var, because the swarm is live and an operator must be able to take
+// the judge off published sessions without restarting anything.
+import { getJudgeConfig, judgeSession, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
@@ -926,23 +930,42 @@ export async function rosterRestoreAdmin(sessionId: string, memberId: string, ac
 
 // ── Guarded lifecycle transitions ───────────────────────────────────────────
 // Session states: scheduled → collecting → window_closed → aggregated →
-// published, with `cancelled` reachable from any non-terminal state and
-// `window_closed` reopenable back to `collecting`. published/cancelled are
+// [judged] → published, with `cancelled` reachable from any non-terminal state
+// and `window_closed` reopenable back to `collecting`. published/cancelled are
 // terminal — no further transition is ever legal. Action names and the legal
 // matrix match docs/architecture.md §4 US-C4 exactly.
+//
+// `judged` (issue #752) is the JUDGED-BUT-UNSIGNED state, and it is OPTIONAL BY
+// CONSTRUCTION: `aggregated -> published` remains legal, so a deployment with
+// the judge off publishes exactly the sessions it publishes today and the state
+// never appears. It reopens like `aggregated` does, so a session whose judge
+// said "hold" can go back for more takes rather than being stuck one step from
+// terminal.
+//
+// EVERY STATE ADDED HERE IS ALSO A DECISION ABOUT THE AMENDMENT WINDOW. The
+// take-amendment gate in domain.ts is an ALLOWLIST (`TAKES_AMENDABLE_STATES`)
+// precisely so that adding a row to this table cannot silently reopen it — a
+// new state is frozen until someone says otherwise there. `swarm-take-
+// revisions.test.ts` walks SESSION_STATES below and asserts the two agree.
 const TERMINAL = new Set(["published", "cancelled"]);
 const TRANSITIONS: Record<string, readonly string[]> = {
   scheduled: ["collecting", "cancelled"],
   collecting: ["window_closed", "cancelled"],
   window_closed: ["collecting", "aggregated", "cancelled"],
-  aggregated: ["window_closed", "published"],
+  aggregated: ["window_closed", "judged", "published"],
+  judged: ["window_closed", "published"],
   published: [],
   cancelled: [],
 };
+/** Every session state the lifecycle knows about. Exported so a test can walk
+ *  the whole set rather than a hand-copied literal. */
+export const SESSION_STATES: readonly string[] = Object.freeze(Object.keys(TRANSITIONS));
+
 const ACTION_FOR_TO_STATE: Record<string, string> = {
   collecting: "publish_brief", // scheduled -> collecting; window_closed -> collecting is "reopen" (passed explicitly)
   window_closed: "close_window",
   aggregated: "aggregate",
+  judged: "judge",
   published: "publish",
   cancelled: "cancel",
 };
@@ -965,26 +988,60 @@ export async function guardedTransition(
   actor: Actor,
   opts: { expectedVersion?: number; action?: string; reason?: string } = {},
 ): Promise<GuardedTransitionResult> {
+  return sql.begin((tx) => transitionWithin(tx, sessionId, toState, actor, opts));
+}
+
+/**
+ * The same guard, run inside a transaction the CALLER owns. Extracted for
+ * judgeSessionAdmin, which has to put the transition, the judgement row and the
+ * opinion's effect on the session in ONE transaction — a transition that
+ * commits on its own advertises a fact (`judged`) that no row yet supports, and
+ * anything failing afterwards strands the session there.
+ */
+async function transitionWithin(
+  tx: DbHandle,
+  sessionId: string,
+  toState: string,
+  actor: Actor,
+  opts: { expectedVersion?: number; action?: string; reason?: string } = {},
+): Promise<GuardedTransitionResult> {
   const action = opts.action ?? ACTION_FOR_TO_STATE[toState] ?? toState;
-  return sql.begin(async (tx) => {
-    const row = (await tx`SELECT id, state, version FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
-      | { id: string; state: string; version: number }
-      | undefined;
-    if (!row) return err(404, "session not found");
-    if (opts.expectedVersion != null && Number(row.version) !== opts.expectedVersion) return err(409, "stale_version");
-    if (row.state === toState) {
-      return { ok: true, status: 200, idempotent: true, session: { id: row.id, state: row.state, version: Number(row.version) } };
-    }
-    if (TERMINAL.has(row.state)) return err(409, `terminal_state:${row.state}`);
-    const legal = TRANSITIONS[row.state] ?? [];
-    if (!legal.includes(toState)) return err(409, `illegal_transition:${row.state}->${toState}`);
-    const upd = await tx`UPDATE swarm_sessions SET state = ${toState}, version = version + 1 WHERE id = ${sessionId} RETURNING id, state, version`;
-    await tx`
-      INSERT INTO swarm_session_events (session_id, from_state, to_state, action, actor, reason)
-      VALUES (${sessionId}, ${row.state}, ${toState}, ${action}, ${actor}, ${opts.reason ?? null})`;
-    await audit(actor, "session_transition", { sessionId, from: row.state, to: toState, action }, tx);
-    return { ok: true, status: 200, session: { id: upd[0].id, state: upd[0].state, version: Number(upd[0].version) } };
-  });
+  const row = (await tx`SELECT id, state, version FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
+    | { id: string; state: string; version: number }
+    | undefined;
+  if (!row) return err(404, "session not found");
+  if (opts.expectedVersion != null && Number(row.version) !== opts.expectedVersion) return err(409, "stale_version");
+  if (row.state === toState) {
+    return { ok: true, status: 200, idempotent: true, session: { id: row.id, state: row.state, version: Number(row.version) } };
+  }
+  if (TERMINAL.has(row.state)) return err(409, `terminal_state:${row.state}`);
+  const legal = TRANSITIONS[row.state] ?? [];
+  if (!legal.includes(toState)) return err(409, `illegal_transition:${row.state}->${toState}`);
+  const upd = await tx`UPDATE swarm_sessions SET state = ${toState}, version = version + 1 WHERE id = ${sessionId} RETURNING id, state, version`;
+  await tx`
+    INSERT INTO swarm_session_events (session_id, from_state, to_state, action, actor, reason)
+    VALUES (${sessionId}, ${row.state}, ${toState}, ${action}, ${actor}, ${opts.reason ?? null})`;
+  await audit(actor, "session_transition", { sessionId, from: row.state, to: toState, action }, tx);
+  return { ok: true, status: 200, session: { id: upd[0].id, state: upd[0].state, version: Number(upd[0].version) } };
+}
+
+/**
+ * A READ-ONLY dry run of the same guard, so a caller that must do expensive
+ * work BEFORE the transition (judgeSessionAdmin: a model call of up to 60s) can
+ * refuse an illegal one without paying for it. It is not a substitute for the
+ * guard — `transitionWithin` re-checks under `FOR UPDATE` inside the
+ * transaction, and that check is the authority.
+ */
+async function preflightTransition(sessionId: string, toState: string, expectedVersion?: number): Promise<AdminResult> {
+  const row = (await sql`SELECT state, version FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+    | { state: string; version: number }
+    | undefined;
+  if (!row) return err(404, "session not found");
+  if (expectedVersion != null && Number(row.version) !== expectedVersion) return err(409, "stale_version");
+  if (row.state === toState) return { ok: true, status: 200 };
+  if (TERMINAL.has(row.state)) return err(409, `terminal_state:${row.state}`);
+  if (!(TRANSITIONS[row.state] ?? []).includes(toState)) return err(409, `illegal_transition:${row.state}->${toState}`);
+  return { ok: true, status: 200 };
 }
 
 export async function cancelSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
@@ -1004,6 +1061,89 @@ export async function aggregateSessionAdmin(sessionId: string, expectedVersion: 
   if (!t.ok) return t;
   const rollup = await domainAggregateSession(sessionId);
   return { ...t, ...rollup, status: t.status };
+}
+
+// Judge a session that has already been aggregated. THE ORDER MATTERS, and it
+// is not the obvious one:
+//
+//   1. Read the mode ONCE. It is then passed down to judgeSession() rather than
+//      re-read there. Reading it twice meant an operator flipping the switch to
+//      `off` mid-run — precisely what the switch exists for — got a session
+//      advanced to `judged` and then a 409, i.e. a state whose name asserts a
+//      fact no row supports.
+//   2. Dry-run the state guard. A disabled judge or an illegal transition costs
+//      no model call.
+//   3. Form the opinion. OUTSIDE any transaction: this is a network call of up
+//      to 60s and nothing may hold a row lock or a pooled connection across it.
+//   4. Transition, record the judgement, and (in `enforce`) apply it — ALL IN
+//      ONE TRANSACTION, under an advisory lock on the session id. So the
+//      `judged` state and the row that justifies it commit together or not at
+//      all, and two judges racing the same session (the admin POST in the api
+//      process against a `swarm.judge` job in worker-swarm) are serialized
+//      rather than interleaved.
+//
+// A judge that falls back to template prose is still a successful judging — see
+// swarm/judge.ts on why failure is an outcome here rather than an error.
+export async function judgeSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
+  const config = await getJudgeConfig();
+  if (config.mode === "off") return err(409, "judge_disabled");
+  const pre = await preflightTransition(sessionId, "judged", expectedVersion);
+  if (!pre.ok) return pre;
+
+  let t: GuardedTransitionResult | undefined;
+  const result = await judgeSession(sessionId, {
+    config,
+    // Runs inside the judge's transaction, after its advisory lock and before
+    // the judgement row is written. A refusal here rolls the whole thing back.
+    beforeRecord: async (tx) => {
+      t = await transitionWithin(tx, sessionId, "judged", actor, { expectedVersion });
+      return t;
+    },
+  });
+  if (!result.ok) return err(result.status, result.error ?? "judge failed");
+  await audit(actor, "session_judged", {
+    sessionId, mode: result.mode, applied: result.applied === true,
+    appliedSkippedReason: result.appliedSkippedReason ?? null,
+    source: result.outcome?.source, fallbackReason: result.outcome?.fallbackReason ?? null,
+    promptHash: result.outcome?.promptHash, inputsDigest: result.outcome?.inputsDigest,
+  });
+  return {
+    ...(t ?? { ok: true, status: 200 }),
+    status: t?.status ?? 200,
+    judge: {
+      mode: result.mode,
+      applied: result.applied === true,
+      appliedSkippedReason: result.appliedSkippedReason ?? null,
+      judgementId: result.judgementId,
+      source: result.outcome?.source,
+      fallbackReason: result.outcome?.fallbackReason ?? null,
+      model: result.outcome?.model ?? null,
+      promptHash: result.outcome?.promptHash,
+      inputsDigest: result.outcome?.inputsDigest,
+      releaseSafety: result.outcome?.opinion.release_safety,
+    },
+  };
+}
+
+// The runtime switch itself. Audited like every other admin write, because
+// "who turned the judge on, and when" is the first question asked of any prose
+// that turns out to be wrong.
+export async function getJudgeConfigAdmin(): Promise<AdminResult<{ judge: JudgeConfig }>> {
+  return { ok: true, status: 200, judge: await getJudgeConfig() };
+}
+
+export async function setJudgeConfigAdmin(
+  patch: { mode?: JudgeMode; minTakes?: number; model?: string | null },
+  actor: Actor = ADMIN_ACTOR,
+): Promise<AdminResult> {
+  let judge: JudgeConfig;
+  try {
+    judge = await setJudgeConfig(patch);
+  } catch (e) {
+    return err(400, e instanceof Error ? e.message : "invalid judge config");
+  }
+  await audit(actor, "judge_config", { mode: judge.mode, minTakes: judge.minTakes, model: judge.model });
+  return { ok: true, status: 200, judge };
 }
 
 export async function publishSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {

@@ -981,8 +981,8 @@ above, each with an analytical lens — macro risk, on-chain flows, momentum,
 contrarian); it reviews many **subjects** (the portfolios/wallets under review,
 e.g. `woon`/Woon Treasury, `mav`/Mav Holdings); and it runs many **sessions** —
 one per `(date, subject)` pair — each advancing through the lifecycle
-`scheduled → collecting → window_closed → aggregated → published` (plus the
-terminal `cancelled`; §9.4). Each member posts at most one signed **recommendation** (a "take") per
+`scheduled → collecting → window_closed → aggregated → [judged] → published`
+(plus the terminal `cancelled`; §9.4). `judged` is optional — see §9.7. Each member posts at most one signed **recommendation** (a "take") per
 session; a non-submitting member is recorded **absent**, never fabricated. The
 plurals (members / subjects / sessions / takes) are the moving parts — they are
 **not** multiple swarms.
@@ -1054,11 +1054,13 @@ The **task queue (§7) is the orchestrator** — there is no GitHub-Actions cron
 session lifecycle is a chain of idempotent job kinds:
 
 ```
-scheduled → collecting → window_closed → aggregated → published   (+ cancelled)
+scheduled → collecting → window_closed → aggregated → [judged] → published   (+ cancelled)
 ```
 
 (Brief publication is the `scheduled → collecting` transition, not a persisted
-state; `cancelled` is the terminal escape hatch.)
+state; `cancelled` is the terminal escape hatch. `judged` is the
+judged-but-unsigned state and is OPTIONAL: `aggregated → published` stays legal,
+so a deployment with the consensus judge off never enters it — §9.7.)
 
 - `swarm.open_session` (cron) — pick the rotation subject, create the session.
 - `swarm.publish_brief` — assemble the brief (regime + subject snapshot + recent
@@ -1156,7 +1158,105 @@ path can substitute for the producer. Remaining legacy handler/lane code and the
 smoke TUI's queue-based analytics display are compatibility/observability debt,
 not active producer paths.
 
-### 9.7 Testing & smoke
+### 9.7 The consensus judge — math decides, the judge explains
+
+A session's allocation vector is computed by `meanTakeWeights()`
+(`backend/src/swarm/domain.ts`) from the frozen latest-revision-per-member take
+set, and by nothing else. The consensus judge (`backend/src/swarm/judge.ts`,
+issue #752) reads that same frozen set plus the session brief and authors three
+things — a rationale, the disagreements it finds in the takes, and a
+release-safety opinion. **It authors no number.** A model response carrying a
+weight-like field at any depth is rejected whole rather than merged, and the
+`swarm_session_judgements.opinion` column carries a recursive
+`jsonb_path_exists` CHECK constraint that would refuse one — at any depth, not
+merely at the top level — even if the code that writes it were wrong. The
+constraint matches the key names exactly and case-sensitively; the code's scan
+additionally lowercases and folds separators, so the code is the broader of the
+two. That is what keeps the signed vector reproducible by anyone holding the
+take set.
+
+| Concern | Where it lives |
+|---|---|
+| The derivation | `meanTakeWeights()` — the one place a bucket weight may be authored |
+| The opinion | `judge()` — pure, transport injected, never throws |
+| The session seam | `judgeSession()` — takes the config the caller read, records the judgement, applies it only in `enforce`; everything after the model call is one transaction under a per-session advisory lock |
+| The switch | `swarm_judge_config` (migration 0039), over `POST /api/swarm/admin/judge` — mode, `min_takes`, and the model |
+| The record | `swarm_session_judgements` — one append-only row per run, shadow runs included |
+
+**The deleted `position_actions` literals.** Aggregation used to emit two
+hardcoded USDC/rmUSDC entries derived from no member input; #752 deletes them, so
+no session aggregated from now on carries an `actions` array. Sessions PUBLISHED
+BEFORE that still carry them in their stored `swarm_recommendation.actions`, and
+that history is append-only and is not rewritten — recomputing a published
+recommendation is a worse defect than the one being fixed. The consequence is a
+hard constraint on the receipt assembler: **a receipt must never read
+`swarm_recommendation.actions`.** The field is legacy data on old rows and absent
+on new ones.
+
+**The switch is a database row, not an environment variable.** The swarm is live
+and producing real takes on a cadence, so an operator must be able to take the
+judge off published sessions without restarting the api and the swarm lane. So
+is the MODEL: D22 rule 1 keeps model selection to a single reviewable signal, so
+there is deliberately no `SWARM_JUDGE_MODEL` beside `AGENT_MODEL` — only the
+shared OpenCode Zen credential, the endpoint and the per-call bound come from
+the environment.
+Three modes: `off` (shipped default — pre-#752 behaviour to the byte, and the
+`judged` state never appears), `shadow` (the opinion is computed and recorded and
+reaches no session), `enforce` (the opinion replaces the template
+rationale/disagreements on the session it judged).
+
+**Failure is an outcome, never an error.** Model unavailable, request timed out,
+prose instead of JSON, JSON of the wrong shape, a disagreement attributed to a
+member who did not submit, a weight-like field anywhere in the response, **a
+malformed `SWARM_JUDGE_TIMEOUT_MS` in the environment** — each falls back to the
+SAME template producers the aggregator uses (`buildRationale`,
+`buildDisagreements`), records the reason on the judgement row, and lets the
+session carry on. Every recorded reason is capped at 120 characters, the two
+built out of the model's own text included. No session is ever blocked on the
+judge, and no partially-trusted model response ever reaches one.
+
+**A member cannot speak for another member.** `disagreements[].positions[].view`
+is filled VERBATIM from the frozen take set, never authored by the model — the
+model chooses who disagreed and about what, not what either of them said. Take
+bodies are member-authored text of up to 10,000 characters that the model reads,
+so a body instructing it to attribute a fabricated position to a named member
+would otherwise pass every structural defence and reach
+`swarm_sessions.swarm_recommendation`, which `GET /api/swarm/sessions/:id`
+serves unauthenticated.
+
+**One judge at a time, and `judged` never outruns its evidence.** The model call
+happens outside any transaction; everything after it — the state transition, the
+judgement row, and (in `enforce`) the opinion's effect on the session — is a
+single transaction under `pg_advisory_xact_lock` on the session id. The admin
+POST runs in the api process while `swarm.judge` runs in worker-swarm, so
+concurrent judging of one session is a real case, not a theoretical one. The
+write onto the session is conditional on it not being terminal, so an opinion
+formed while a session was publishing is recorded and reported rather than
+landing on a published session.
+
+**The take window is frozen from `aggregated` onward.** `TAKES_AMENDABLE_STATES`
+in `swarm/domain.ts` is an allowlist, so `judged` — and any state added after it
+— freezes amendment by default. The alternative, a list of states to refuse, is
+what let `judged` silently reopen a window over a take set the published weight
+vector had already been derived from.
+
+**Thin support is arithmetic, not opinion.** A session with fewer than
+`swarm_judge_config.min_takes` takes is flagged `thinly_supported` by
+`releaseSafety()` regardless of what the model said, and the threshold in force
+is recorded on the judgement so a historical opinion can be read against it.
+
+**Pinned inputs.** `prompt_hash` digests the instruction template (which judge
+wrote this) and `inputs_digest` digests the exact brief and take set consumed
+(what it read). Together they reproduce the rendered prompt byte-for-byte.
+
+`replaySessionJudge()` runs the judge over an already-published session and
+writes nothing, so real history — absences, thin quorums, superseded revisions,
+rotated keys — can be replayed to demonstrate that judging never moves a weight
+vector. `bun run --cwd backend swarm-judge:replay [--limit N] [--session <uuid>]
+[--json]` is that, as a command an operator can point at a production database
+with a read-only role; it exits non-zero if any vector moved.
+
+### 9.8 Testing & smoke
 
 Decision [D25](./decisions.md#d25--external-actor-rail-for-simulated-independent-entities)
 defines the required topology for every actor the smoke or an eval presents as
@@ -1207,7 +1307,7 @@ The required `e2e` smoke boot therefore executes and asserts live swarm-take
 authorship on every run. The nightly workflow additionally measures
 real-inference **onboarding** (§11.3), a distinct surface.
 
-### 9.8 Phase-5 build order & reconciliation
+### 9.9 Phase-5 build order & reconciliation
 
 Build order: (1) swarm migration (§9.4 tables + key registry); (2) finalize the
 `SwarmSubmission`/`SwarmTake` DTOs; (3) API `swarm.ts` (reads, `apply`,
@@ -2007,7 +2107,8 @@ flowchart TB
 
     subgraph Session["📋 Swarm Session (per subject, cadence profile: ~2min fast / 6h pinned)"]
         direction LR
-        S1["scheduled"] --> S2["collecting"] --> S3["window_closed"] --> S4["aggregated"] --> S5["published"]
+        S1["scheduled"] --> S2["collecting"] --> S3["window_closed"] --> S4["aggregated"] --> S5["judged (optional)"] --> S6["published"]
+        S4 --> S6
     end
 
     subgraph Onboarding["📝 Onboarding Gates"]
@@ -2296,6 +2397,9 @@ Every stage of the session state machine must be exercised with the real domain 
 ```
 scheduled → collecting → window_closed → aggregated → published   (+ cancelled)
 ```
+
+(The smoke does not enter `judged`: the consensus judge ships off, and a session
+that never judges is exactly the session the smoke has always run.)
 
 | Stage | What the smoke must exercise |
 |---|---|
@@ -3127,8 +3231,11 @@ These decisions are not open implementation questions:
 - “Topic” is the UI term; `swarm_subjects` remains the database and API
   domain term.
 - The persisted swarm states are exactly `scheduled`, `collecting`,
-  `window_closed`, `aggregated`, `published`, and the new terminal state
+  `window_closed`, `aggregated`, `judged`, `published`, and the terminal state
   `cancelled`. There is no persisted `brief_published` state in the product.
+  `judged` (issue #752) is the judged-but-unsigned state and is never required:
+  `aggregated → published` remains legal, so it appears only where the consensus
+  judge has been switched on.
 - A swarm session snapshots its expected roster when it is created.
   Later global member changes do not rewrite that roster or historical quorum.
 - Research recovery reruns a complete tool. Individual stages are not retried
@@ -3411,7 +3518,10 @@ The transition matrix is authoritative:
 | `collecting` | close window | `window_closed` | normal schedule or manual early close with reason |
 | `window_closed` | reopen | `collecting` | exceptional reason and new future close time required; aggregate/publish jobs are rescheduled |
 | `window_closed` | aggregate | `aggregated` | roster snapshot exists; aggregate only accepted verified recommendations |
+| `aggregated` | judge | `judged` | consensus-judge mode is `shadow` or `enforce`; 409 `judge_disabled` when it is `off` (the shipped default) |
 | `aggregated` | publish | `published` | aggregate and synthesis are present |
+| `judged` | publish | `published` | as `aggregated → published`; the judge's opinion is advice, never a lock |
+| `judged` | close window | `window_closed` | reopen path, identical to `aggregated → window_closed` |
 
 All other transitions return 409. Repeating an action already reflected in state
 returns 200 with `{ idempotent: true }` only when the target state and associated

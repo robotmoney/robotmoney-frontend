@@ -1945,6 +1945,15 @@ practice. The gate is **amendment-only**: a *first* take is still governed
 solely by the advertised `windowClosesAt`, which is #570's published contract
 and stays exactly as it was.
 
+The gate is expressed as an **allowlist** — `TAKES_AMENDABLE_STATES` in
+`backend/src/swarm/domain.ts`, currently `{scheduled, collecting,
+window_closed}` — not as a list of states to refuse. It was written the other
+way round, and #752's new `judged` state (between `aggregated` and `published`)
+silently fell outside the denylist and reopened the window on an
+already-frozen take set. An allowlist makes a state added to
+`swarm_sessions` frozen by default, so reopening the window for one is a
+deliberate edit rather than an omission.
+
 **Consequences.**
 
 - Three read paths resolve latest-per-member via `DISTINCT ON`: `withTakes`,
@@ -2807,3 +2816,101 @@ assuming the other blocks it.
   response identity or config identity it is not the quote record §8.1 asks
   for, so it needs re-migrating almost immediately. The columns are the cheap
   part of this change.
+
+## D42 — The consensus judge explains; `meanTakeWeights` decides. The judge authors no number (issue #752)
+
+**Decision.** Project Fusion's consensus judge reads a session's frozen
+latest-revision-per-member take set and its brief, and authors exactly three
+things: the rationale, the disagreements, and a release-safety opinion. The
+allocation vector stays on `meanTakeWeights()` in
+`backend/src/swarm/domain.ts` — unchanged by whether the judge runs. A model
+response carrying a weight-like key at ANY depth is rejected whole rather than
+stripped or merged, and `swarm_session_judgements.opinion` carries a recursive
+`jsonb_path_exists` CHECK constraint refusing one at the schema level, at any
+depth, over the same key list the code scans. (The first draft used
+`opinion ?| ARRAY[...]`, which is TOP-LEVEL ONLY — and `opinion` is always
+`{rationale, disagreements, release_safety}`, so it could never have fired on a
+real row. Corrected in review before the migration shipped.) The judge is switched by a database
+row (`swarm_judge_config`, migration 0039) with three modes — `off` (shipped
+default), `shadow`, `enforce` — not by an environment variable.
+
+**Why this exists.** What `aggregateSession` called consensus had no model in it
+anywhere: `meanTakeWeights` is an arithmetic mean, `buildConsensus` /
+`buildRationale` / `buildSynthesis` are string templates, the disagreement
+ladder is a stance-spread heuristic, and the `position_actions` branch emitted
+two hardcoded USDC/rmUSDC entries derived from no member input at all (removed
+by this issue). A real judge is worth having. A judge that authors numbers is
+not: the strongest property available for an artifact governance signs and acts
+on is that ANYONE HOLDING THE TAKE SET CAN RECOMPUTE THE VECTOR THEMSELVES, and
+that property survives exactly as long as no model output feeds it.
+
+**Why the switch is a row and not an env var.** The swarm is LIVE and producing
+real takes on a cadence, so this is a change to running production behaviour,
+not greenfield work. The repo's standing convention is env-var-plus-redeploy
+(D-series precedent throughout `config.ts`), and it is the wrong instrument
+here: an operator watching the judge misbehave on published sessions needs the
+next session to be clean, not the next deploy. `off` reproduces pre-#752
+behaviour to the byte, and `shadow` lets the judge run against real traffic —
+computing and recording an opinion that reaches no session — for as long as it
+takes to trust it.
+
+**Why failure falls back rather than fails.** Every failure path — model
+unavailable, timeout, prose instead of JSON, wrong shape, a disagreement
+attributed to a member who did not submit, a weight-like field — resolves to the
+SAME template producers the aggregator already uses, records the reason on the
+judgement row, and lets the session proceed. Fail-closed here means "no
+partially-trusted model content ever reaches a session", not "the session
+stops": a lifecycle that can be halted by a third-party model outage is a worse
+artifact than one whose prose is occasionally templated.
+
+**What promoting the derivation uncovered, and what was NOT done about it.**
+Two things, both reported rather than quietly repaired:
+
+1. *The vector was fine.* The property test asserts the published weights sum to
+   exactly 1 **as 8-decimal values**, summed as scaled integers — because
+   `0.1 + 0.2 + 0.7` is `1.0000000000000002` in binary floating point however
+   correct the aggregator is. Asserting a float sum would have been testing
+   IEEE-754. No published vector is wrong, and none was recomputed.
+2. *`majorityStance()` broke ties on key order.* It reduced over
+   `Object.entries()`, so on a tie it named whichever stance arrived first —
+   and postgres reorders `jsonb` keys, so re-deriving the prose from a stored
+   `swarm_recommendation.stances` could name a different majority than the
+   aggregation that wrote it. Ties now break on the canonical ascending
+   `STANCES` ladder, the same order `stanceBreakdown()` already sorts on.
+   This changes PROSE on tied sessions from here on; it touches no number, and
+   already-published recommendations are left exactly as they were filed.
+   Append-only history is not rewritten to make a later rule look retroactive.
+
+**Why thin support is computed, not asked.** Whether a session has enough takes
+behind it is arithmetic against a recorded threshold
+(`swarm_judge_config.min_takes`), so `releaseSafety()` computes it and merges it
+OVER whatever the model said. The model may add concerns; it may not talk a
+two-take session into looking well supported.
+
+**Rejected alternatives.**
+
+- **Let the judge author or adjust weights.** Explicitly rejected. It is a v1+
+  conversation and it needs a bounds check standing between the model and the
+  signer before anything signs its output. Until then the vector is reproducible
+  and that is worth more than the flexibility.
+- **Sign the judge output separately.** Rejected. With the judge authoring no
+  numbers there is little for such a signature to attest to; the prose rides
+  inside the receipt like any other field.
+- **An `SWARM_JUDGE_ENABLED` environment variable.** Rejected — see above. It
+  ties the one control that must work immediately to a container restart.
+- **A `SWARM_JUDGE_MODEL` environment variable.** Rejected, and the model is a
+  column on the same config row instead. D22 rule 1 says `resolveAgentModel()`
+  over `AGENT_MODEL` is the SINGLE model-selection signal, and a second
+  MODEL-named env var read by a different process is precisely the ambient,
+  unreviewable selection that rule exists to prevent
+  (`scripts/tests/unit/model-selection-single-signal.test.ts` enforces it). An
+  operator setting a column is audited, reversible, and takes effect on the next
+  session. The credential and the endpoint stay in the environment — they name a
+  vendor already in the repo, not a model.
+- **Delete the template prose producers once the judge lands.** Rejected. They
+  are the fallback, and "disabling the judge returns a session to exactly the
+  prose it produces today" is only checkable because the judge calls the same
+  functions the aggregator does.
+- **Gate the hardcoded `position_actions` literals behind a flag instead of
+  deleting them.** Rejected. They were derived from no member input; there is no
+  configuration under which publishing them is correct.

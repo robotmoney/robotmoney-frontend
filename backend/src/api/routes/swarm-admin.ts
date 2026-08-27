@@ -31,6 +31,7 @@ function ownsPath(p: string): boolean {
     rest === "applications" ||
     rest === "sessions" || rest.startsWith("sessions/") ||
     rest === "audit" ||
+    rest === "judge" ||
     rest === "agent-health"
   );
 }
@@ -188,16 +189,55 @@ export async function handleSwarmAdmin(
       const fn = { add: admin.rosterAddAdmin, excuse: admin.rosterExcuseAdmin, restore: admin.rosterRestoreAdmin }[segs[3] as "add" | "excuse" | "restore"];
       return fromResult(await fn(sessionId, memberId));
     }
-    if (sessionId && segs.length === 3 && ["cancel", "close", "reopen", "aggregate", "publish"].includes(segs[2]!) && m === "POST") {
+    if (sessionId && segs.length === 3 && ["cancel", "close", "reopen", "aggregate", "publish", "judge"].includes(segs[2]!) && m === "POST") {
       const b = (await readJsonObject(req)) ?? {};
       const expectedVersion = parseExpectedVersion(b) ?? undefined;
       const fn = {
         cancel: admin.cancelSessionAdmin, close: admin.closeSessionAdmin, reopen: admin.reopenSessionAdmin,
         aggregate: admin.aggregateSessionAdmin, publish: admin.publishSessionAdmin,
-      }[segs[2] as "cancel" | "close" | "reopen" | "aggregate" | "publish"];
+        // Issue #752. 409 `judge_disabled` while the runtime mode is off, which
+        // is the shipped default — the judge is opt-in on a live swarm.
+        judge: admin.judgeSessionAdmin,
+      }[segs[2] as "cancel" | "close" | "reopen" | "aggregate" | "publish" | "judge"];
       return fromResult(await fn(sessionId, expectedVersion));
     }
     return { status: 404, body: { error: "unknown sessions admin route" } };
+  }
+
+  // ── Consensus judge switch (issue #752) ───────────────────────────────
+  // The one control that must work WITHOUT a redeploy: an operator watching the
+  // judge misbehave on live sessions needs `mode: "off"` to take effect on the
+  // next session, not on the next deploy. Hence a database row behind a POST,
+  // rather than an environment variable behind a container restart.
+  if (segs[0] === "judge" && segs.length === 1) {
+    if (m === "GET") return fromResult(await admin.getJudgeConfigAdmin());
+    if (m === "POST") {
+      const b = (await readJsonObject(req)) ?? {};
+      const patch: { mode?: "off" | "shadow" | "enforce"; minTakes?: number; model?: string | null } = {};
+      if (b.mode !== undefined) {
+        if (b.mode !== "off" && b.mode !== "shadow" && b.mode !== "enforce") {
+          return { status: 400, body: { error: "mode must be off|shadow|enforce" } };
+        }
+        patch.mode = b.mode;
+      }
+      if (b.minTakes !== undefined) {
+        const minTakes = Number(b.minTakes);
+        if (!Number.isInteger(minTakes) || minTakes < 1) return { status: 400, body: { error: "minTakes must be a positive integer" } };
+        patch.minTakes = minTakes;
+      }
+      if (b.model !== undefined) {
+        // `null` unsets the model — that is how an operator stops model prose
+        // without stopping the judge.
+        if (b.model === null) patch.model = null;
+        else if (typeof b.model === "string" && b.model.trim() !== "" && b.model.length <= 200) patch.model = b.model.trim();
+        else return { status: 400, body: { error: "model must be a non-empty string (max 200 chars), or null" } };
+      }
+      if (patch.mode === undefined && patch.minTakes === undefined && patch.model === undefined) {
+        return { status: 400, body: { error: "mode, minTakes or model required" } };
+      }
+      return fromResult(await admin.setJudgeConfigAdmin(patch));
+    }
+    return { status: 404, body: { error: "unknown judge admin route" } };
   }
 
   // ── Audit ─────────────────────────────────────────────────────────────

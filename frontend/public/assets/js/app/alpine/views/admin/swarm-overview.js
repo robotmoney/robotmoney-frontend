@@ -268,7 +268,7 @@ export function registerAdminSwarmOverview(Alpine) {
       const s = String(state || "");
       if (s === "published") return "adm-badge adm-badge--ok";
       if (s === "cancelled") return "adm-badge adm-badge--err";
-      if (s === "collecting" || s === "window_closed" || s === "aggregated") return "adm-badge adm-badge--run";
+      if (s === "collecting" || s === "window_closed" || s === "aggregated" || s === "judged") return "adm-badge adm-badge--run";
       return "adm-badge adm-badge--idle";
     },
 

@@ -22,6 +22,7 @@
     "regime-eq-comparison:regenerate": "bun run scripts/regime-eq-comparison-regenerate.ts",
     "regime-independent-reference:regenerate": "bun run scripts/regime-independent-reference-regenerate.ts",
     "weighting-comparison:regenerate": "bun run scripts/weighting-comparison-regenerate.ts",
+    "swarm-judge:replay": "bun run scripts/swarm-judge-replay.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
