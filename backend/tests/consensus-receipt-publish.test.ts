@@ -118,6 +118,20 @@ test("a judged session publishes a receipt that is fetchable, verified, and byte
   const again = (await get(url)) as { status: number; body: any };
   expect(again.body.canonicalBytes).toBe(res.body.canonicalBytes);
   expect(again.body.verified).toBe(true);
+
+  // ACROSS A REDEPLOY, and this is what that reduces to. A redeploy replaces the
+  // process and keeps the database, so "the URL is stable and serves
+  // byte-identical content across one" is true exactly when (a) the path carries
+  // no process- or build-scoped component and (b) the bytes come out of
+  // Postgres rather than out of this process. Both are asserted rather than
+  // argued: the path is `path(ROUTES…, { id })` over the session id alone —
+  // already checked above — and the served bytes are compared against the
+  // column they were read from. Nothing is memoized in module scope; a restarted
+  // api reads the same row and answers the same bytes.
+  const [row] = (await sql`
+    SELECT canonical_bytes, receipt FROM swarm_consensus_receipts WHERE session_id = ${sessionId}`) as any[];
+  expect(res.body.canonicalBytes).toBe(row.canonical_bytes);
+  expect(res.body.receipt).toEqual(row.receipt);
 });
 
 test("a published receipt is IMMUTABLE: re-publishing returns the same bytes even after the session moves", async () => {
