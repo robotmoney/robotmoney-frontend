@@ -63,7 +63,10 @@ test("public subject profile renders holdings, wallets, NFT contracts, and struc
 
   await page.goto("/swarm/subjects/woon");
 
-  await expect(page.locator(".sv__detail-title")).toHaveText("Woon");
+  // The archive branch takes its name from the subject MANIFEST
+  // (loadArchiveSubject -> /data/swarm/manifests/subjects/woon.json), so this
+  // asserts the portfolio's current name and not the member named Woon.
+  await expect(page.locator(".sv__detail-title")).toHaveText("Woon Treasury");
   await expect(page.locator(".sv__error")).toHaveCount(0);
 
   // Holdings table: the archived 2026-06-25 snapshot's positions (verified
