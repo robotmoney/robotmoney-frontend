@@ -414,6 +414,27 @@
 .sv__sout i { width: 0.4rem; height: 0.4rem; flex: 0 0 auto; background: var(--color-text-dim); }
 .sv__sout--none i { background: var(--color-border-light); }
 
+/* Live session strip. Cyan is the interface colour and this is system STATE,
+   not a data value, so a Beam hairline is the right spend: it is a line, never a
+   mass, and it is the only thing above the fold that changes on its own. No
+   pulse and no glow — the countdown is already moving, which is the honest
+   liveness signal, and an animated dot would be a second token saying what the
+   figure says. */
+.sv__live { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap;
+  border: 1px solid var(--color-accent-line); background: var(--color-deep);
+  padding: 0.9rem 1.1rem; margin: 0 0 2rem; }
+.sv__live-mark { width: 0.4rem; height: 0.4rem; flex: 0 0 auto; align-self: center;
+  background: var(--color-accent); }
+.sv__live-t { margin: 0; flex: 1 1 22rem; font-size: 0.95rem; color: var(--color-text-soft); }
+.sv__live-t b { color: var(--color-text); font-weight: 500; }
+/* Tabular so the countdown does not reflow the sentence as it ticks down. */
+.sv__live-n { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  white-space: nowrap; }
+.sv__live-lnk { flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.7rem;
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-accent);
+  text-decoration: none; border-bottom: 1px solid var(--color-accent-line); }
+.sv__live-lnk:hover { border-bottom-color: var(--color-accent); }
+
 /* Members as a register: the interesting fact is which cells are empty. */
 /* `overflow-x: auto` here CLIPS the role tooltip, because a container that
    scrolls on one axis stops being `visible` on the other. The table only needs
