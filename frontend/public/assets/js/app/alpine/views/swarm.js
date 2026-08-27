@@ -21,10 +21,28 @@ import { subjectDot } from "./shared.js";
 // constant rather than a string sprinkled through the template: when the field
 // lands, this function reads it and nothing else moves. RM-97's roles table.
 const DEFAULT_ROLE = "proposer";
+const ROLE_EMITS = {
+  proposer: "a signed take each session: position, reasoning, sources",
+  validator: "a score per take. Never a market view",
+};
 
 // Operators the house runs itself. Anything else is an external operator, and
 // a member with no operator set gets no chip at all rather than an invented one.
-const HOUSE_OPERATORS = new Set(["robotmoney", "robot money", "rm protocol labs"]);
+// The company is RM Protocol Labs. `operator` is free text that each member and
+// each portfolio sets for itself, so the API serves two spellings of the same
+// outfit: "robotmoney" on two members and on both our portfolios, "RM Protocol
+// Labs" on a third member. Rendered verbatim that puts a slug and a company
+// name in the same column, both marked house, reading as two different
+// operators. Canonicalize on the way to the screen. The records want the same
+// normalization, but that is an admin write and not this file's job.
+const HOUSE_OPERATOR = "RM Protocol Labs";
+const HOUSE_ALIASES = new Set(["robotmoney", "robot money", "rm protocol labs", "rm protocol"]);
+const isHouseOperator = (op) => HOUSE_ALIASES.has(String(op || "").trim().toLowerCase());
+const operatorName = (op) => {
+  const s = String(op || "").trim();
+  if (!s) return null;
+  return isHouseOperator(s) ? HOUSE_OPERATOR : s;
+};
 
 // The sessions list is paginated and the page used to render only the first
 // page while presenting its counts as totals. 209 published sessions arrive in
@@ -41,7 +59,8 @@ export function registerSwarmView(Alpine) {
     members: [],
     sessions: [],
     subjectCache: {},
-    allocation: null,
+    rosterCap: null,
+    seatsAvailable: null,
     sessionsTruncated: false,
     shown: SESSIONS_SHOWN_STEP,
     async load() {
@@ -51,14 +70,14 @@ export function registerSwarmView(Alpine) {
           this.loadAllSessions(),
         ]);
         this.members = memberData.members || [];
+        this.rosterCap = memberData.rosterCap ?? null;
+        this.seatsAvailable = memberData.seatsAvailable ?? null;
         this.sessions = sessionData;
         // Subject records carry the operator, the thesis blurb, and the field
         // this whole regrouping turns on: `source.type`. `subjectCache` has
         // existed since the port and was never written to, which is why the
         // panel has always shown a raw id where an operator belongs.
         await this.loadSubjects();
-        // Current target weights, so the vault can be shown against them.
-        this.allocation = await api.get(ROUTES.dashboards.allocation).catch(() => null);
         this.loading = false;
       } catch (e) {
         this.error = e.message;
@@ -149,7 +168,7 @@ export function registerSwarmView(Alpine) {
         const row = map.get(id) || {
           id,
           name: meta.name || s.subjectName || id,
-          operator: meta.operator || null,
+          operator: operatorName(meta.operator),
           thesisBlurb: meta.thesisBlurb || null,
           isVault: meta.source?.type === "vault_tvl",
           count: 0,
@@ -167,43 +186,26 @@ export function registerSwarmView(Alpine) {
     vaultPortfolio() { return this.portfolios().find((p) => p.isVault) || null; },
     otherPortfolios() { return this.portfolios().filter((p) => !p.isVault); },
 
-    // ── the vault's allocation against the swarm's latest recommendation ──
-    // Target weights only exist when a session publishes `bucket_weights`.
-    // Sessions since the 2026-08-06 cutover carry `position_actions` instead,
-    // so this walks back to the most recent one that has weights and shows its
-    // date. Nothing is invented when none exists: the block simply does not render.
-    latestWeightsSession() {
-      const vault = this.vaultPortfolio();
-      if (!vault) return null;
-      const rows = this.publishedSessions()
-        .filter((s) => this.portfolioIdOf(s) === vault.id)
-        .filter((s) => s.swarmRecommendation?.type === "bucket_weights" && s.swarmRecommendation?.weights)
-        .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-      return rows[0] || null;
-    },
-    // Join the recommendation's weight map onto the current targets. Keys are
-    // normalised because the framework labels them "Conservative DeFi Yield"
-    // and the recommendation keys them `conservative_defi_yield`.
-    allocationRows() {
-      const strategy = this.allocation?.strategy;
-      if (!Array.isArray(strategy) || !strategy.length) return [];
-      const rec = this.latestWeightsSession()?.swarmRecommendation?.weights || null;
+    // A recommendation only carries target weights when the session published
+    // `bucket_weights`. Sessions since the 2026-08-06 cutover carry
+    // `position_actions` instead, so this returns null rather than inventing a
+    // number, and the row says "no weight change" instead.
+    sessionWeights(s) {
+      const rec = s?.swarmRecommendation;
+      if (rec?.type !== "bucket_weights" || !rec.weights) return null;
+      const order = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
       const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const recByKey = {};
-      if (rec) for (const [k, v] of Object.entries(rec)) recByKey[norm(k)] = Number(v) * 100;
-      return strategy.map((b) => {
-        const target = Number(b.targetPct);
-        const recommended = rec ? recByKey[norm(b.label)] : undefined;
-        return {
-          label: b.label,
-          target,
-          recommended: Number.isFinite(recommended) ? recommended : null,
-          delta: Number.isFinite(recommended) ? recommended - target : null,
-        };
-      });
+      const by = {};
+      for (const [k, v] of Object.entries(rec.weights)) by[norm(k)] = Number(v) * 100;
+      const vals = order.map((k) => by[norm(k)]).filter((v) => Number.isFinite(v));
+      return vals.length ? vals.map((v) => Math.round(v)).join(" / ") : null;
     },
-    hasRecommendation() { return this.allocationRows().some((r) => r.recommended != null); },
-    recommendationDate() { return this.latestWeightsSession()?.date || null; },
+    // Only the vault's recommendations are weights; every other portfolio gets
+    // a verdict, so the marker would be meaningless on their rows.
+    showsWeights(s) {
+      const vault = this.vaultPortfolio();
+      return !!vault && this.portfolioIdOf(s) === vault.id;
+    },
 
     // ── sessions ─────────────────────────────────────────────────────────
     // Portfolio encoding + filter, identical in behaviour to the member
@@ -242,13 +244,23 @@ export function registerSwarmView(Alpine) {
 
     // ── members ──────────────────────────────────────────────────────────
     memberRole() { return DEFAULT_ROLE; },
+    roleEmits(role) { return ROLE_EMITS[role || DEFAULT_ROLE] || ""; },
+    seatsLabel() {
+      if (this.rosterCap == null) return `${this.members.length} seats`;
+      return `${this.members.length} of ${this.rosterCap} seats taken`;
+    },
+    openSeatsLabel() {
+      if (this.seatsAvailable == null) return "";
+      if (this.seatsAvailable <= 0) return "No seats open right now";
+      return this.seatsAvailable === 1 ? "One seat open" : `${this.seatsAvailable} seats open`;
+    },
     // House or external, from the operator. A member with none set gets
     // nothing: three of the seven have not filled their profile in, and an
     // invented chip would be a claim the data does not support.
     operatorLabel(m) {
-      const op = String(m?.operator || "").trim();
-      if (!op) return null;
-      return HOUSE_OPERATORS.has(op.toLowerCase()) ? `${op} · house` : op;
+      const name = operatorName(m?.operator);
+      if (!name) return null;
+      return isHouseOperator(m?.operator) ? `${name} · house` : name;
     },
     memberTagline(m) { return m.tagline || m.mandate || ""; },
     memberBiases(m) {
