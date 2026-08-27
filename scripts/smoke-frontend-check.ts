@@ -66,14 +66,16 @@ async function main() {
 
   // Check that the view HTML files are served by the backend.
   // The SPA serves them as raw fragments that the router injects.
-  // Swarm index is the reference-faithful directory (robotmoney-site
-  // src/app/swarm/page.tsx): members + subjects rails and a browsable
-  // sessions list. Signed takes + memo links render on the session DETAIL
-  // page (checked below), mirroring the reference layout.
+  // Swarm index leads with the members and what they review, then the
+  // browsable sessions list. RM-100 retired the side-by-side members/subjects
+  // rails and with them the `subjects()` helper: the coverage list is built by
+  // `portfolios()`, which folds a framework subject into the vault it targets
+  // so the page says 3 portfolios rather than 4 subjects. Signed takes + memo
+  // links render on the session DETAIL page, checked below.
   await checkView("/views/swarm.html", [
     "x-data=\"swarmView()\"",
-    "x-for=\"m in members\"",   // members rail
-    "subjects()",               // subjects rail
+    "x-for=\"m in members\"",   // members table
+    "portfolios()",             // what they review
     "publishedSessions()",      // browsable sessions list
     "sv__session-card",         // per-session card
     "stanceColor(",             // per-take stance dots on each session
