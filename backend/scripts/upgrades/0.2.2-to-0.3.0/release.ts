@@ -179,8 +179,8 @@ export const APPEND_ONLY_MIGRATION = "0032_append_only_history.sql";
  * which demands DATABASE_URL at module load and builds the app's WRITER pool.
  *
  * postflight's `append-only-intact` check needs the roster, not the guard. It
- * used to pass on ANY non-zero trigger count, so losing thirteen of these
- * fourteen tables reported "guard live on 1 table(s)" and read as green — which
+ * used to pass on ANY non-zero trigger count, so losing all but one of these
+ * tables reported "guard live on 1 table(s)" and read as green — which
  * is precisely the silent partial loss the check exists to catch. Comparing
  * against a list is what makes it able to fail.
  *
@@ -196,6 +196,11 @@ export const APPEND_ONLY_TABLES = [
   "swarm_session_events",
   "swarm_session_members",
   "swarm_subject_snapshots",
+  // Opted in by migration 0040, not 0032 (issue #752's judgement record). The
+  // roster is a roster of TABLES, not of migrations, so it does not care which
+  // file installed the triggers — postflight compares live triggers against
+  // this list.
+  "swarm_session_judgements",
   "swarm_applications",
   "audit_log",
   "agent_activity_log",
