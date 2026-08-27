@@ -1179,6 +1179,16 @@ signed vector reproducible by anyone holding the take set.
 | The switch | `swarm_judge_config` (migration 0039), over `POST /api/swarm/admin/judge` — mode, `min_takes`, and the model |
 | The record | `swarm_session_judgements` — one append-only row per run, shadow runs included |
 
+**The deleted `position_actions` literals.** Aggregation used to emit two
+hardcoded USDC/rmUSDC entries derived from no member input; #752 deletes them, so
+no session aggregated from now on carries an `actions` array. Sessions PUBLISHED
+BEFORE that still carry them in their stored `swarm_recommendation.actions`, and
+that history is append-only and is not rewritten — recomputing a published
+recommendation is a worse defect than the one being fixed. The consequence is a
+hard constraint on the receipt assembler: **a receipt must never read
+`swarm_recommendation.actions`.** The field is legacy data on old rows and absent
+on new ones.
+
 **The switch is a database row, not an environment variable.** The swarm is live
 and producing real takes on a cadence, so an operator must be able to take the
 judge off published sessions without restarting the api and the swarm lane. So
