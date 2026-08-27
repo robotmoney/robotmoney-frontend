@@ -23,55 +23,17 @@
     "analyst_signatures",
     "weights"
   ],
-  "optional_append_only_fields": [
-    "weights"
-  ],
+  "optional_append_only_fields": ["weights"],
   "analyst_signature_order": "member_id ascending by UTF-8 byte order",
   "nested_field_order": {
-    "quorum": [
-      "active",
-      "submitted",
-      "absent",
-      "participation_bps"
-    ],
-    "stances": [
-      "bearish",
-      "cautious",
-      "neutral",
-      "constructive",
-      "bullish"
-    ],
-    "judge": [
-      "rationale",
-      "disagreements",
-      "release_safety"
-    ],
-    "judge.disagreements[]": [
-      "topic",
-      "positions",
-      "what_settles"
-    ],
-    "judge.disagreements[].positions[]": [
-      "member_id",
-      "view"
-    ],
-    "judge.release_safety": [
-      "release",
-      "thinly_supported",
-      "take_count",
-      "min_takes",
-      "concerns"
-    ],
-    "analyst_signatures[]": [
-      "member_id",
-      "public_key",
-      "canonical_submission",
-      "signature"
-    ],
-    "weights[]": [
-      "bucket",
-      "weight_bps"
-    ]
+    "quorum": ["active", "submitted", "absent", "participation_bps"],
+    "stances": ["bearish", "cautious", "neutral", "constructive", "bullish"],
+    "judge": ["rationale", "disagreements", "release_safety"],
+    "judge.disagreements[]": ["topic", "positions", "what_settles"],
+    "judge.disagreements[].positions[]": ["member_id", "view"],
+    "judge.release_safety": ["release", "thinly_supported", "take_count", "min_takes", "concerns"],
+    "analyst_signatures[]": ["member_id", "public_key", "canonical_submission", "signature"],
+    "weights[]": ["bucket", "weight_bps"]
   },
   "canonical_bucket_order": [
     "agent_tokens",

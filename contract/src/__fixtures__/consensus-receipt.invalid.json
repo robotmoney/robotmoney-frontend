@@ -31,21 +31,9 @@
   },
   "analyst_signatures": [],
   "weights": [
-    {
-      "bucket": "conservative_defi_yield",
-      "weight_bps": 6000
-    },
-    {
-      "bucket": "agent_tokens",
-      "weight_bps": 1250
-    },
-    {
-      "bucket": "protocol_tokens",
-      "weight_bps": 1750
-    },
-    {
-      "bucket": "real_world_assets",
-      "weight_bps": 999
-    }
+    { "bucket": "conservative_defi_yield", "weight_bps": 6000 },
+    { "bucket": "agent_tokens", "weight_bps": 1250 },
+    { "bucket": "protocol_tokens", "weight_bps": 1750 },
+    { "bucket": "real_world_assets", "weight_bps": 999 }
   ]
 }
