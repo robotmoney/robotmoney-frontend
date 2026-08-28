@@ -361,6 +361,9 @@
 .sv__how-t { display: block; color: var(--color-text); font-weight: 700; font-size: 1rem; margin: 0.75rem 0 0.5rem; }
 .sv__how-d { margin: 0; font-size: 0.875rem; color: var(--color-text-soft); line-height: 1.6; }
 .sv__how-d b { color: var(--color-text); font-weight: 500; }
+/* A step can name a thing the reader has to go look up. Same treatment as any
+   other link inside running prose on these pages. */
+.sv__how-d a { color: var(--color-accent); }
 
 /* Section head: a display headline, a one-line sub, and optionally an action.
    THE RULE IS THE TOP EDGE OF THE CONTENT, not an underline on the headline —
