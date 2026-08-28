@@ -84,7 +84,7 @@
                 <article class="mp-take mp-take--live">
                   <div class="mp-take__top">
                     <div class="mp-take__head">
-                      <span class="mp-take__date" x-text="formatDate(row.session.date, 'short')"></span>
+                      <span class="mp-when" tabindex="0" :aria-label="filedTitle(row)"><time class="mp-take__date" :datetime="filedAt(row)" x-text="filedLabel(row)"></time><span class="mp-when__tip" role="tooltip" x-text="filedTitle(row)"></span></span>
                                             <a class="mp-take__subject" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
                       <span :class="phaseChipClass(row.phase)" x-text="phaseLabel(row.phase)"></span>
                     </div>
@@ -157,7 +157,7 @@
         <div class="sv__sec">
           <div>
             <h2 class="sv__sec-h">Track record</h2>
-            <p class="sv__sec-sub">Every published take, newest first.</p>
+            <p class="sv__sec-sub">Every published take, signed and re-checked. Times are UTC.</p>
           </div>
         </div>
 
@@ -165,19 +165,34 @@
              against more than one subject. Each chip carries the subject's own
              colour, the same hue that seams its cards below. -->
         
-        <div class="mp-filter" x-show="subjects().length > 1" x-cloak>
-          <button type="button" class="mp-chip" :class="{ 'is-on': subject === null }"
-                  @click="subject = null" :aria-pressed="subject === null">
-            All <span class="mp-chip__n" x-text="recentTakes().length"></span>
-          </button>
-          <template x-for="s in subjects()" :key="s.id">
-            <button type="button" class="mp-chip" :class="{ 'is-on': subject === s.id }"
-                    @click="filterBy(s.id)" :aria-pressed="subject === s.id"
-                    :title="subject === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
-              <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
-              <span class="mp-chip__x" x-show="subject === s.id" aria-hidden="true">×</span>
+        <!-- Filter narrows WHAT is listed, sort decides in what order — two
+             different questions, so they read as two groups on one line
+             rather than one undifferentiated row of chips. -->
+        <div class="mp-controls" x-show="recentTakes().length > 1" x-cloak>
+          <div class="mp-filter" x-show="subjects().length > 1">
+            <button type="button" class="mp-chip" :class="{ 'is-on': subject === null }"
+                    @click="subject = null" :aria-pressed="subject === null">
+              All <span class="mp-chip__n" x-text="recentTakes().length"></span>
             </button>
-          </template>
+            <template x-for="s in subjects()" :key="s.id">
+              <button type="button" class="mp-chip" :class="{ 'is-on': subject === s.id }"
+                      @click="filterBy(s.id)" :aria-pressed="subject === s.id"
+                      :title="subject === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
+                <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
+                <span class="mp-chip__x" x-show="subject === s.id" aria-hidden="true">×</span>
+              </button>
+            </template>
+          </div>
+          <div class="mp-sort" role="group" aria-label="Sort the record">
+            <span class="mp-sort__label" aria-hidden="true">Sort</span>
+            <template x-for="o in [
+              { k: 'newest', t: 'Newest', h: 'When it was filed, newest first' },
+              { k: 'oldest', t: 'Oldest', h: 'When it was filed, oldest first' },
+              { k: 'confidence', t: 'Confidence', h: 'Boldest calls first' }]" :key="o.k">
+              <button type="button" class="mp-chip mp-chip--sort" :class="{ 'is-on': sort === o.k }"
+                      @click="setSort(o.k)" :aria-pressed="sort === o.k" :title="o.h" x-text="o.t"></button>
+            </template>
+          </div>
         </div>
         <!-- A brand-new member lands here from onboarding with nothing to show.
              That empty state is their first impression of their own agent, so
@@ -197,14 +212,14 @@
         <p class="sv__empty" x-show="subject && visibleTakes().length === 0" x-cloak>
           No published takes for this portfolio yet.
         </p>
-        <div class="sv__session-list sv__session-list--compact">
+        <div class="sv__session-list">
           <!-- Keyed on the TAKE id, for the same reason as the in-progress list above. -->
           <template x-for="row in visibleTakes().slice(0, 20)" :key="row.take.id">
             <article class="mp-take">
               <div class="mp-take__top">
                 <div class="mp-take__head">
                   <a class="mp-take__subject" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
-                  <span class="mp-take__date" x-text="formatDate(row.session.date, 'short')"></span>
+                  <span class="mp-when" tabindex="0" :aria-label="filedTitle(row)"><time class="mp-take__date" :datetime="filedAt(row)" x-text="filedLabel(row)"></time><span class="mp-when__tip" role="tooltip" x-text="filedTitle(row)"></span></span>
                 </div>
                 <div class="mp-take__meta">
                   <span class="sv__stance-badge" :style="stanceStyle(row.take.stance)">
@@ -298,6 +313,37 @@
                         font-variant-numeric: tabular-nums; color: var(--color-text); }
 
     /* Empty state as a plane, not a shrug. */
+    /* "9h ago" is friendly and imprecise on purpose; the exact instant, and
+       which session it belongs to, arrive on hover or keyboard focus. The
+       bubble itself is .sv__vfy-tip's, from views.css — same surface, same
+       seam, same timing as the verification tip two columns to its right.
+       It hangs from the LEFT edge because the date sits at the start of the
+       row, where the verification tip's right-anchoring would push it off the
+       card. A native `title` was doing this job with the browser's own delay
+       and chrome, which is the one tooltip on the page that looked foreign. */
+    .mp-when { position: relative; display: inline-flex; cursor: default; }
+    .mp-when__tip { right: auto; left: 0; border-top-color: var(--color-text-dim); }
+    .mp-when:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 3px; }
+    /* A 272px bubble cannot hang off an element that starts 232px into a 390px
+       screen. Narrow, it stops measuring from the date and measures from the
+       ROW instead — full width, opening downward so it does not cover the line
+       it is explaining. .mp-when goes static so the row becomes the containing
+       block; nothing else about the bubble changes. */
+    @media (max-width: 699px) {
+      .mp-take__head { position: relative; }
+      .mp-when { position: static; }
+      .mp-when__tip { left: 0; right: 0; width: auto; max-width: none;
+                      bottom: auto; top: calc(100% + 8px); }
+    }
+
+    /* Filters left, sort right, one line until there is no room for one. */
+    .mp-controls { display: flex; align-items: center; justify-content: space-between;
+                   flex-wrap: wrap; gap: 0.6rem 1.5rem; margin: 0 0 1rem; }
+    .mp-controls .mp-filter { margin: 0; }
+    .mp-sort { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
+    .mp-sort__label { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.16em;
+                      text-transform: uppercase; color: var(--color-text-dim); margin-right: 0.15rem; }
+
     /* No cyan rail. Same reason as .rm-stats: a fixed accent line on a fixed
        block reports nothing, and cyan is interface state here. */
     .mp-empty { border: 1px solid var(--color-border);
@@ -319,8 +365,10 @@
        that — display-caps title, the corner-pinned seal, the gutters those
        two need — to say four things it could say in one line. Same primitive
        (bordered plane, 1.25rem of padding), its own row.
-       Stacked at a 1px gap so 20 of them read as one ledger, not 20 objects. */
-    .mp-record .sv__session-list { gap: 1px; }
+       Spacing is /swarm's session feed, exactly: 1.25rem of padding, a 16px
+       rhythm between the blocks inside, 12px between cards. It was stacked at
+       1px on a 12px internal rhythm, which made the one list on the site with
+       the most reading in it the tightest thing on the site. */
     .mp-take { position: relative; border: 1px solid var(--color-border);
                background: var(--color-surface); padding: 1.25rem; }
     /* Facts left, judgement right. The meta group is right-aligned IN FLOW,
@@ -361,7 +409,7 @@
     .mp-body { overflow: hidden; max-height: 6.4rem;
                transition: max-height .42s cubic-bezier(.22, .61, .36, 1); }
     .mp-body--open { max-height: 120rem; }
-    .mp-take__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem; margin-top: 0.75rem; }
+    .mp-take__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-top: 1rem; }
     /* Reads as a link, so it is styled as one — the same underline the rest of
        the site uses. It was the last cyan word on this page. */
     .mp-more { background: transparent; border: 0; padding: 0; min-height: 34px; cursor: pointer;
@@ -376,7 +424,7 @@
        list view only tightens them, since 20 cards need denser copy than a
        single permalink does. The ch cap is the measure — the card is 1080px
        wide now, and a container is not a line length. */
-    .mp-body .sv__take-body { margin: 0.75rem 0 0; font-size: 0.875rem; line-height: 1.7;
+    .mp-body .sv__take-body { margin: 1rem 0 0; font-size: 0.875rem; line-height: 1.7;
                               color: var(--color-text-soft); max-width: 82ch; }
     .mp-body .sv__take-h { margin: 0.85rem 0 0.35rem; }
     .mp-body p { margin: 0 0 0.6rem; }

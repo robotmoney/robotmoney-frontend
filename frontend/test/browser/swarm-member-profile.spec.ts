@@ -321,3 +321,132 @@ test("an unresolvable member ref answers 404 and renders the committee roster in
 
   await expectNoBrowserErrors(errors);
 });
+
+// ── The record's clock, and the order it is read in ─────────────────────────
+//
+// The track record was ordered by the session's date and LABELLED with it too,
+// so a member that files against three portfolios in one day produced three
+// rows reading "Aug 27, 2026" in an order nothing on screen accounted for.
+// Two things fix that and both are asserted here: the row states when the TAKE
+// was filed (down to the minute once "Nh ago" stops being precise enough), and
+// the order is a control the reader can set rather than a fact they must infer.
+//
+// The fixture is deliberately adversarial on the point: three takes filed the
+// SAME session day, hours apart, plus one old enough to leave the relative
+// band — the exact shape that rendered as indistinguishable dates.
+const DAY = 24 * 60 * 60 * 1000;
+function clockFixture(now: number) {
+  const at = (ms: number, stance: string, confidence: number, subject: string, id: string) => ({
+    sessionDate: new Date(now - ms).toISOString().slice(0, 10),
+    subjectId: subject,
+    subjectName: subject === "vault" ? "Robot Money Vault" : "Woon Treasury",
+    sessionState: "published",
+    take: {
+      id, member_id: "athena", stance, confidence,
+      body: "REGIME — a body long enough to be worth listing but short of the expand threshold.",
+      verified: true, revision: 1, received_at: new Date(now - ms).toISOString(),
+    },
+  });
+  return {
+    takes: [
+      at(3 * 60 * 60 * 1000, "constructive", 0.44, "vault", "t-recent"),   // 3h ago, lowest confidence
+      at(2 * DAY + 6 * 60 * 60 * 1000, "neutral", 0.91, "woon", "t-mid"),  // same day as t-mid2, later
+      at(2 * DAY + 18 * 60 * 60 * 1000, "cautious", 0.55, "vault", "t-mid2"),
+      at(40 * DAY, "bearish", 0.70, "woon", "t-old"),                      // oldest
+    ],
+  };
+}
+
+test("the track record states when each take was filed, and its order is a control rather than an inference", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const now = Date.now();
+
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (/\/api\/swarm\/members\/athena\/takes/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(clockFixture(now)) });
+    }
+    if (/\/api\/swarm\/members\/athena$/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RENAMED_ATHENA) });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/swarm/members/athena");
+  await expect(page.locator(".mp-take")).toHaveCount(4);
+
+  const stamps = () => page.locator(".mp-take .mp-take__date").allInnerTexts();
+
+  // Inside a day the label is friendly; past it the MINUTE is on the row, which
+  // is the whole point — the two same-day rows must not read alike.
+  const newest = await stamps();
+  expect(newest[0]).toMatch(/^\d+h ago$/);
+  expect(newest[1]).toMatch(/^[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}$/);
+  expect(new Set(newest).size).toBe(newest.length);
+
+  // Default order is newest-filed first, and the control says so.
+  await expect(page.locator(".mp-chip--sort[aria-pressed='true']")).toHaveText("Newest");
+  // Uppercased by the pill's own text-transform, which is what innerText reports.
+  const stanceOrder = () => page.locator(".mp-take .sv__stance-badge").allInnerTexts();
+  expect(await stanceOrder()).toEqual(["CONSTRUCTIVE", "NEUTRAL", "CAUTIOUS", "BEARISH"]);
+
+  await page.getByRole("button", { name: "Oldest", exact: true }).click();
+  expect(await stanceOrder()).toEqual(["BEARISH", "CAUTIOUS", "NEUTRAL", "CONSTRUCTIVE"]);
+
+  // Confidence is the question the "Avg confidence" figure above raises.
+  await page.getByRole("button", { name: "Confidence", exact: true }).click();
+  expect(await page.locator(".mp-take .mp-conf").allInnerTexts()).toEqual([
+    "confidence 91%", "confidence 70%", "confidence 55%", "confidence 44%",
+  ]);
+  await expect(page.locator(".mp-chip--sort[aria-pressed='true']")).toHaveCount(1);
+
+  // Filter and sort compose: narrowing to one portfolio keeps the chosen order.
+  await page.getByRole("button", { name: /^Woon Treasury/ }).click();
+  expect(await page.locator(".mp-take .mp-conf").allInnerTexts()).toEqual(["confidence 91%", "confidence 70%"]);
+
+  await expectNoBrowserErrors(errors);
+});
+
+test("the exact instant, and which session it belongs to, are one hover away", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const now = Date.now();
+
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (/\/api\/swarm\/members\/athena\/takes/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(clockFixture(now)) });
+    }
+    if (/\/api\/swarm\/members\/athena$/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RENAMED_ATHENA) });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/swarm/members/athena");
+  const when = page.locator(".mp-when").first();
+  const bubble = when.locator(".mp-when__tip");
+
+  // Hidden at rest — and hidden by `visibility`, not by display, because it is
+  // measured while closed (that is what keeps it on screen).
+  await expect(bubble).toBeHidden();
+  await when.hover();
+  await expect(bubble).toBeVisible();
+  // Both clocks, stated: the minute the take was filed, and the session it
+  // belongs to — which is the fact the row's own label no longer carries.
+  await expect(bubble).toHaveText(/^Filed \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC · \w+ \d{1,2}, \d{4} session$/);
+
+  // A native `title` would render a SECOND, differently-styled tooltip over
+  // this one. There must be exactly the one.
+  await expect(page.locator(".mp-take__date[title]")).toHaveCount(0);
+
+  // Reachable without a pointer, and it stays inside the page it opens over.
+  await page.keyboard.press("Escape");
+  await when.focus();
+  await expect(bubble).toBeVisible();
+  const box = await bubble.boundingBox();
+  const width = page.viewportSize()!.width;
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+
+  await expectNoBrowserErrors(errors);
+});

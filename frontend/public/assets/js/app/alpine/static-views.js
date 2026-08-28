@@ -14,6 +14,7 @@ import { memberLogo } from "../lib/member-logos.js";
 import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
+import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -1425,6 +1426,8 @@ export function registerStaticViews(Alpine) {
     member: null,
     rows: [],
     subject: null,   // active session filter; null = every subject
+    sort: "newest",  // see sortedBy(): newest | oldest | confidence
+    now: Date.now(), // stamped once — a track record does not need a ticker
     openTakes: {},   // take id → expanded
     // #687: the ref that failed to resolve, and the full roster to land on
     // instead of a blank profile. Kept distinct from `error` — this is not a
@@ -1631,12 +1634,67 @@ export function registerStaticViews(Alpine) {
       }
       return [...by.values()].sort((a, b) => b.count - a.count);
     },
+    // ── When ─────────────────────────────────────────────────────────────────
+    // TWO CLOCKS reach this page and they are not the same fact: the session's
+    // date (when the room convened, and what every /swarm URL is keyed on) and
+    // the take's `receivedAt` (when THIS member filed). They agree on 46 of a
+    // member's 50 most recent rows; the four that differ are sessions convened
+    // for a past date and filed against later.
+    //
+    // This page is about the member, so it reads the member's clock, and it
+    // both SORTS and LABELS on that one — a list ordered by a stamp it does not
+    // show is the thing that made the old bare date hard to scan: three rows
+    // saying "Aug 27, 2026" in an order nothing on screen accounted for.
+    // The session's date is still one hover away, and one click away.
+    filedAt(row) { return row?.take?.receivedAt || row?.session?.date || null; },
+    // Friendly inside a day, exact past it — and past it the TIME comes with
+    // the date, because a member files against several portfolios a day and a
+    // bare date leaves three rows saying the same thing in an order nothing
+    // accounts for. That is the whole complaint, and "1d ago" repeats it: the
+    // relative scale coarsens to days exactly where the ambiguity starts.
+    // timeAgo is also unbounded by design (it sits beside a countdown
+    // elsewhere), and "217d ago" is a worse answer than a date.
+    // Year only when it is not this one — 20 rows do not each need "2026".
+    filedLabel(row) {
+      const v = this.filedAt(row);
+      if (!v) return "—";
+      const t = Date.parse(String(v));
+      if (!Number.isFinite(t)) return this.formatDate(v, "short");
+      if (this.now - t < 24 * 60 * 60 * 1000) return timeAgo(v, this.now) || this.formatDate(v, "short");
+      const d = new Date(t);
+      const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+      const year = d.getUTCFullYear() === new Date(this.now).getUTCFullYear() ? "" : `, ${d.getUTCFullYear()}`;
+      return `${day}${year} ${d.toISOString().slice(11, 16)}`;
+    },
+    // Both clocks, stated, behind the one that is shown.
+    filedTitle(row) {
+      const abs = absoluteUtc(this.filedAt(row));
+      const session = this.formatDate(row?.session?.date, "long");
+      return abs ? `Filed ${abs} · ${session} session` : `${session} session`;
+    },
+
+    // ── Sort ─────────────────────────────────────────────────────────────────
+    // Newest is the default and the only one the record had. Oldest answers
+    // "what did this member open with"; confidence answers "what has it argued
+    // hardest", which is the question the Avg confidence figure above raises
+    // and could not previously be followed up on.
+    setSort(key) { this.sort = key; },
+    sortedBy(rows) {
+      const at = (r) => Date.parse(String(this.filedAt(r) || "")) || 0;
+      const copy = [...rows];
+      if (this.sort === "oldest") return copy.sort((a, b) => at(a) - at(b));
+      if (this.sort === "confidence") {
+        return copy.sort((a, b) =>
+          (Number(b.take?.confidence) || 0) - (Number(a.take?.confidence) || 0) || at(b) - at(a));
+      }
+      return copy.sort((a, b) => at(b) - at(a));
+    },
     // The rows actually listed. Kept separate from recentTakes() so the empty
     // states stay keyed to the whole record: a filter that matches nothing is a
     // narrowed view, not a member who has never submitted.
     visibleTakes() {
       const rows = this.recentTakes();
-      return this.subject ? rows.filter((r) => r.session.subjectId === this.subject) : rows;
+      return this.sortedBy(this.subject ? rows.filter((r) => r.session.subjectId === this.subject) : rows);
     },
     filterBy(subjectId) { this.subject = this.subject === subjectId ? null : subjectId; },
 
