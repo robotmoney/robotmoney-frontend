@@ -186,7 +186,7 @@
             Nothing published yet. Every take this member submits lands here — signed on its
             own machine, and verified again at the moment you read it.
           </p>
-          <a class="mp-empty__link" href="/swarm">See the swarm live →</a>
+          <a class="rm-link mp-empty__link" href="/swarm">See the swarm live →</a>
         </div>
         <p class="sv__empty" x-show="recentTakes().length === 0 && inProgressTakes().length > 0"
            x-text="inProgressTakes().length > 1
@@ -302,10 +302,10 @@
                        text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text); }
     .mp-empty__copy { margin: 0.5rem 0 0; color: var(--color-text-muted); font-size: 0.86rem;
                       line-height: 1.6; max-width: 56ch; }
+    /* Type and layout only. Colour and rule are the site link convention in
+       components.css, which this .rm-link opts into. */
     .mp-empty__link { display: inline-block; margin-top: 0.8rem; font-family: var(--font-mono);
-                      font-size: 0.72rem; letter-spacing: 0.08em; color: var(--color-accent);
-                      text-decoration: none; border-bottom: 1px solid var(--color-border); padding-bottom: 2px; }
-    .mp-empty__link:hover { border-bottom-color: var(--color-accent); }
+                      font-size: 0.72rem; letter-spacing: 0.08em; }
 
     /* Collapsed by default: enough to judge the take, not enough to drown the
        list. Clipped hard rather than faded — flat planes, no gradient. */

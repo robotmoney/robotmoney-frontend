@@ -604,16 +604,51 @@
 }
 .rm-actions .rm-actions__do:hover { background: var(--color-accent-glow); color: var(--color-text); }
 
-/* A destination. Underscored rather than recoloured, so the words stay legible
-   type and the cyan stays a rule. */
-.rm-actions .rm-actions__link {
-  display: inline-flex; align-items: center; min-height: 44px;
-  color: var(--color-text-soft); text-decoration: underline;
-  text-decoration-color: var(--color-accent-line);
-  text-decoration-thickness: 1px; text-underline-offset: 6px;
+/* ── Links: one convention ────────────────────────────────────────────────
+   Five treatments had grown for the same job, and two links a paragraph apart
+   could look like different kinds of thing:
+
+     .sv__panel-link / .sv__back / .sv__memo-link   cyan words, no rule
+     .sv__take-body a / .sv__synthesis a            cyan words, no rule
+     .sv__cov-lnk                                   cyan words over a cyan rule
+     .rm-actions__link                              soft words under a cyan rule
+     .sv__live-lnk                                  muted words over a grey rule
+
+   THE RULE IS THE LINK; THE ACCENT IS THE INTERACTION. A link keeps the colour
+   of the text around it and carries a 1px rule underneath. The rule is neutral
+   at rest and takes the accent on hover and on keyboard focus — which is what
+   --color-accent is defined for on this site: interface STATE, never a value
+   and never a decoration. Cyan at rest spent the accent on the mere presence
+   of a link, so a page of links was a page of coloured words and touching one
+   changed nothing.
+
+   Type, size, tracking and layout stay with each caller: these are the same
+   KIND of thing, not the same size of thing, and a mono uppercase meta link
+   should not become body prose to get an underline. */
+.rm-link,
+.rm-actions .rm-actions__link,
+.sv__live-lnk, .sv__cov-lnk,
+.sv__panel-link, .sv__back, .sv__memo-link,
+.sv__how-d a, .sv__take-body a, .sv__synthesis a {
+  color: inherit;
+  border-bottom: 0;
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-light);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
 }
-.rm-actions .rm-actions__link:hover {
-  color: var(--color-text); text-decoration-color: var(--color-accent);
+.rm-link:hover, .rm-link:focus-visible,
+.rm-actions .rm-actions__link:hover, .rm-actions .rm-actions__link:focus-visible,
+.sv__live-lnk:hover, .sv__live-lnk:focus-visible,
+.sv__cov-lnk:hover, .sv__cov-lnk:focus-visible,
+.sv__panel-link:hover, .sv__panel-link:focus-visible,
+.sv__back:hover, .sv__back:focus-visible,
+.sv__memo-link:hover, .sv__memo-link:focus-visible,
+.sv__how-d a:hover, .sv__how-d a:focus-visible,
+.sv__take-body a:hover, .sv__take-body a:focus-visible,
+.sv__synthesis a:hover, .sv__synthesis a:focus-visible {
+  color: var(--color-text);
+  text-decoration-color: var(--color-accent);
 }
 
 /* ── Swarm disclaimer ───────────────────────────────────────────────────
