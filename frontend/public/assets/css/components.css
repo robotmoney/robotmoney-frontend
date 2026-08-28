@@ -557,11 +557,16 @@
    only copy, so the application status page could show the same record in the
    same shape instead of growing a second figure treatment beside it.
    Mono and tabular so columns align; no figure is ever cyan or green, because a
-   count is a figure and green is reserved for money as a mass. Cyan seams the
-   strip as a line across the top, and never fills it. */
+   count is a figure and green is reserved for money as a mass.
+   NO CYAN SEAM. It used to draw one across the top, argued as "a line, never a
+   fill" — but a fixed accent rail on a fixed block is a decoration that reports
+   nothing, and it is the one device the brand sheet names outright. Cyan is
+   interface STATE here: it earns a place when something is focused, current or
+   hovered, and a strip of counts is none of those. The 1px grid already
+   separates the cells. */
 .rm-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
             margin: 1.35rem 0 1.6rem; padding: 0; background: var(--color-border);
-            border-top: 1px solid var(--color-accent); }
+            border-top: 1px solid var(--color-border); }
 .rm-stat { background: var(--color-surface); padding: 0.75rem 1rem; position: relative; }
 /* One column on phones so a stat cell is wide enough to hold its explanation. */
 @media (max-width: 639px) { .rm-stats { grid-template-columns: minmax(0, 1fr); } }
