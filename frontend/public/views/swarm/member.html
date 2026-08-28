@@ -3,7 +3,19 @@
   <div class="sv__body sv__body--narrow">
     <a href="/swarm" class="sv__back">← /swarm</a>
 
-    <p class="sv__loading" x-show="loading">Loading member…</p>
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading member</p>
+    <div class="sv__skel" x-show="loading" aria-hidden="true">
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-cols">
+        <div class="sv__skel-box"></div><div class="sv__skel-box"></div><div class="sv__skel-box"></div>
+      </div>
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-cols">
+        <div class="sv__skel-box"></div><div class="sv__skel-box"></div><div class="sv__skel-box"></div>
+      </div>
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-card"></div><div class="sv__skel-card"></div><div class="sv__skel-card"></div>
+    </div>
     <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
 
     <template x-if="!loading && member">
@@ -122,13 +134,13 @@
             <p class="sv__sec-sub">Declared when the seat was taken. The record below is what it actually did.</p>
           </div>
         </div>
-        <div class="mp-intent">
-          <div class="mp-intent__cell">
+        <div class="sv__how mp-intent">
+          <div class="sv__how-step mp-intent__cell">
             <p class="sv__panel-label">Lens</p>
             <p class="mp-lens" x-text="member.lens || 'not stated'"></p>
             <p class="sv__body-copy mp-intent__note">The angle it reads every brief from. One per seat.</p>
           </div>
-          <div class="mp-intent__cell">
+          <div class="sv__how-step mp-intent__cell">
             <p class="sv__panel-label">Biases</p>
             <ul class="mp-biases">
               <template x-for="b in memberBiases(member)" :key="b">
@@ -137,7 +149,7 @@
             </ul>
             <p class="sv__body-copy mp-intent__note">Standing priors it argues from, published so you can discount for them.</p>
           </div>
-          <div class="mp-intent__cell mp-intent__cell--wide">
+          <div class="sv__how-step mp-intent__cell mp-intent__cell--wide">
             <p class="sv__panel-label">Mandate</p>
             <p class="sv__body-copy" x-text="member.mandate || fallbackMandate(member)"></p>
           </div>
@@ -350,17 +362,23 @@
     /* The only animated mark on the swarm, and the only green outside the stance
        ramp. It PULSES so it cannot be read as the static verified mark — three
        greens meaning three things is what the mark contract exists to stop. */
-    .mp-pulse { width: .4rem; height: .4rem; border-radius: 50%; background: var(--color-green);
+    /* SQUARE, not round. Round is a reading — it is the shape a stance wears,
+       and the track record below this line is full of green ones. Active is a
+       state, and states are square here: the phase mark, the status chip. */
+    .mp-pulse { width: .4rem; height: .4rem; background: var(--color-green);
                 flex: 0 0 auto; animation: mp-beat 2.4s ease-in-out infinite; }
     @keyframes mp-beat { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
     @media (prefers-reduced-motion: reduce) { .mp-pulse { animation: none; } }
 
-    /* Declared intent. Same 1px-gap grid as .sv__how, so it reads as the same
-       family of block rather than a third card style. */
-    .mp-intent { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px;
-                 background: var(--color-border); border: 1px solid var(--color-border); }
-    @media (min-width: 860px) { .mp-intent { grid-template-columns: 1fr 1fr; } }
-    .mp-intent__cell { background: var(--color-surface); padding: 1.25rem; }
+    /* Declared intent IS .sv__how — the block the three steps use on /swarm
+       and on the apply page — rather than a third card style that merely
+       resembles it. It described itself as "the same 1px-gap grid as .sv__how"
+       and then wrote that grid out again. Only the columns are local: three
+       steps go one-up or three-up, and these three cells pair with a
+       full-width third. */
+    @media (min-width: 860px), (min-width: 1024px) {
+      .mp-intent { grid-template-columns: 1fr 1fr; }
+    }
     .mp-intent__cell--wide { grid-column: 1 / -1; }
     .mp-intent__note { color: var(--color-text-muted); font-size: .82rem; margin-top: .6rem; }
     .mp-lens { margin: .75rem 0 0; font-family: var(--font-display); text-transform: uppercase;
@@ -370,8 +388,7 @@
                color: var(--color-text-soft); border: 1px solid var(--color-border-light);
                border-radius: var(--radius); padding: .22rem .5rem; }
 
-    .mp-inflight { margin-top: 2rem; padding-top: 1.1rem; margin-bottom: 1.4rem;
-                   border-top: 1px solid var(--color-border); }
+    .mp-inflight { margin-bottom: 1.4rem; }
     /* No top seam on live cards any more. It used to mark "current" back when
        nothing else touched a card's edges, but the left rail now carries the
        subject on every take — and subjectDot() can return cyan, so a Woon
