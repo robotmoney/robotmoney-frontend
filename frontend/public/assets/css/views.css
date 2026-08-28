@@ -204,7 +204,6 @@
    it obvious the filter clears by clicking again. */
 .mp-chip.is-on { color: var(--color-text); border-color: var(--color-accent); background: var(--color-surface); }
 .mp-chip__x { color: var(--color-accent); font-size: 0.78rem; line-height: 1; margin-left: 0.05rem; }
-.mp-chip__dot { width: 7px; height: 7px; flex: 0 0 auto; }
 .mp-chip__n { font-variant-numeric: tabular-nums; color: var(--color-text-dim); }
 .mp-chip.is-on .mp-chip__n { color: var(--color-text-muted); }
 .mp-chip:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
@@ -404,7 +403,20 @@
    marks it without spending a colour. */
 .sv__cov-r--ours { background: var(--color-surface-light); }
 .sv__cov-n { color: var(--color-text); font-weight: 500; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.sv__cov-n i { width: 0.45rem; height: 0.45rem; flex: 0 0 auto; }
+/* The portfolio glyph. It replaced .rm-mark--identity, a neutral square that
+   by its own contract is the SAME on every row — so it marked that a row had
+   an identity without saying anything about which. These two say what kind of
+   thing the row is: a card that holds addresses, or a set of weights. Line
+   art in currentColor, so it inherits rather than spending a hue. */
+.sv__cov-mark { display: inline-flex; flex: 0 0 auto; color: var(--color-text-dim); }
+.sv__cov-mark .rm-pmark { width: 14px; height: 14px; display: block; }
+.sv__cov-r:hover .sv__cov-mark, .mp-chip.is-on .sv__cov-mark { color: var(--color-text-muted); }
+
+/* Where the portfolio actually points. Mono because it is chains and counts,
+   and quiet because the name above it is the row's subject. */
+.sv__cov-points { grid-column: 1 / -1; margin: 0.15rem 0 0; font-family: var(--font-mono);
+  font-size: 0.7rem; letter-spacing: 0.06em; color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums; }
 /* "our vault" is a fact about ownership, not a value, so it takes emphasis
    rather than the money colour. */
 .sv__cov-op b { color: var(--color-text); font-weight: 500; }
