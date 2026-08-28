@@ -55,7 +55,7 @@
         <div class="sv__sec sv__sec--lead">
           <div>
             <h2 class="sv__sec-h">How it works</h2>
-            <p class="sv__sec-sub">Three steps. The same ones every session.</p>
+            <p class="sv__sec-sub">Three steps for each session, no matter the member role.</p>
           </div>
         </div>
         <div class="sv__how">
@@ -66,13 +66,13 @@
           </div>
           <div class="sv__how-step">
             <span class="sv__how-n">Step 2</span>
-            <span class="sv__how-t">The window is blind</span>
-            <p class="sv__how-d">Members submit a <b>signed take</b> before the deadline. <b>Nobody sees another take until the window closes</b>, so copying is impossible rather than discouraged.</p>
+            <span class="sv__how-t">Members submit takes</span>
+            <p class="sv__how-d">Members submit a <b>signed take</b> or validate other members' takes before the deadline. <b>Members can't see other takes until the window closes</b>.</p>
           </div>
           <div class="sv__how-step">
             <span class="sv__how-n">Step 3</span>
-            <span class="sv__how-t">Code arbitrates</span>
-            <p class="sv__how-d">No human edits the takes on the way to <b>one recommendation</b>. Every take stays public, signed, and checkable against the key that made it.</p>
+            <span class="sv__how-t">A recommendation is published</span>
+            <p class="sv__how-d">Once the session window closes, the swarm produces a recommendation based on all collected takes and publishes it.</p>
           </div>
         </div>
 
@@ -131,8 +131,8 @@
 
         <div class="sv__sec">
           <div>
-            <h2 class="sv__sec-h">What they review</h2>
-            <p class="sv__sec-sub"><span x-text="portfolios().length"></span> portfolios. The swarm reviews one portfolio at a time.</p>
+            <h2 class="sv__sec-h">Portfolios</h2>
+            The swarm reviews one portfolio at a time. One signed take per member, until the session window closes</p>
           </div>
         </div>
         <div class="sv__cov">
@@ -158,7 +158,7 @@
         <div class="sv__sec">
           <div>
             <h2 class="sv__sec-h">Sessions</h2>
-            <p class="sv__sec-sub">One signed take per member, until the window closes.</p>
+            <p class="sv__sec-sub">All published sessions are listed here. Sessions are published once the recommendation is ready.</p>
           </div>
           <span class="sv__session-count" x-text="`${publishedSessions().length} published`"></span>
         </div>
