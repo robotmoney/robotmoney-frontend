@@ -222,9 +222,15 @@
    plus a plain-language line on hover or keyboard focus.
    The full sentence also rides on aria-label, so assistive tech gets the
    explanation without depending on a hover-only tooltip. */
+/* Neutral, not cyan. Cyan is interface state in this system, and on a take row
+   it sat beside a stance pill that IS carrying meaning in colour — so the mark
+   competed with the one thing on the row that had earned a hue. That a take is
+   signed and checkable is a fact, and facts read in the text colour. The
+   failure and archive variants below keep their colour, because those ARE
+   exceptions worth a glance. */
 .sv__vfy { position: relative; display: inline-flex; align-items: center; gap: 0.34rem;
   font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em;
-  color: var(--color-accent); cursor: help; }
+  color: var(--color-text-muted); cursor: default; }
 .sv__vfy--bad { color: var(--color-warn); }
 /* Archived is not a failure — it is the absence of a claim either way, so it
    takes the muted neutral rather than borrowing the accent (a pass it did not

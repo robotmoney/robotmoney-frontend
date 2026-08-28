@@ -51,16 +51,16 @@
   <!-- The page asserted "votes every session" and showed nothing. Phase chip and
        copy are the swarm page's, via lib/session-phase.js, so a session cannot
        read one way here and another there. Absent when nothing is live. -->
-  <div class="ap-live" x-show="liveSession()" x-cloak>
+  <div class="sv__live" x-show="liveSession()" x-cloak>
     <span :class="`rm-sphase rm-sphase--${livePhase()?.key || 'closed'}`" x-text="livePhaseLabel()"></span>
-    <span class="ap-live__name" x-text="liveSubjectName()"></span>
-    <span class="ap-live__meta" x-show="liveIsOpen() && liveRemaining()">
+    <span class="sv__live-name" x-text="liveSubjectName()"></span>
+    <span class="sv__live-meta" x-show="liveIsOpen() && liveRemaining()">
       window closes in <b x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>
     </span>
-    <span class="ap-live__meta" x-show="!liveIsOpen() && liveClosedAgo()">
+    <span class="sv__live-meta" x-show="!liveIsOpen() && liveClosedAgo()">
       closed <b x-text="liveClosedAgo()" :title="liveClosesAbsolute()"></b>
     </span>
-    <a class="ap-live__lnk" :href="liveHref()">See the session &rarr;</a>
+    <a class="sv__live-lnk" :href="liveHref()">See the session &rarr;</a>
   </div>
 
   <div class="ap-onb">
@@ -208,17 +208,17 @@
     .ap-seats { display: inline-flex; align-items: baseline; gap: .6rem; margin-top: 1.9rem;
                 border: 1px solid var(--ap-line); background: var(--ap-ink); padding: .55rem .9rem; }
 
-    /* Live strip. Phase chip is .rm-sphase from components.css — shared with
-       /swarm and the session page, never restyled here. */
-    .ap-live { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin-top: 3rem;
-               border: 1px solid var(--ap-line); background: var(--ap-ink); padding: .72rem 1rem; }
-    .ap-live__name { color: var(--ap-text); font-weight: 500; }
-    .ap-live__meta { font-family: var(--font-mono); font-size: .72rem; letter-spacing: .04em; color: var(--ap-muted); }
-    .ap-live__meta b { color: var(--ap-lede); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .ap-live__lnk { margin-left: auto; font-family: var(--font-mono); font-size: .66rem; letter-spacing: .12em;
+    /* Live strip is .sv__live from views.css — the swarm page's own component.
+       This page carried a copy, which is the duplication CONTRIBUTING.md now
+       forbids. Only the top margin is page-specific. */
+    .ap .sv__live { margin: 3rem 0 0; }
+    .sv__live-name { color: var(--ap-text); font-weight: 500; }
+    .sv__live-meta { font-family: var(--font-mono); font-size: .72rem; letter-spacing: .04em; color: var(--ap-muted); }
+    .sv__live-meta b { color: var(--ap-lede); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .sv__live-lnk { margin-left: auto; font-family: var(--font-mono); font-size: .66rem; letter-spacing: .12em;
                     text-transform: uppercase; color: var(--ap-muted); text-decoration: none;
                     border-bottom: 1px solid var(--color-border-light); padding-bottom: 2px; }
-    .ap-live__lnk:hover { color: var(--ap-text); border-bottom-color: var(--ap-muted); }
+    .sv__live-lnk:hover { color: var(--ap-text); border-bottom-color: var(--ap-muted); }
 
     /* Section headings are .sv__sec / .sv__sec-h from views.css — the swarm
        page's own component. This page carried a verbatim copy of it, which is
@@ -243,18 +243,26 @@
                   text-transform: uppercase; color: var(--ap-beamc); }
 
     /* Hero: the statement */
+    /* 12vw drove this to 73.6px on a desktop column — a headline sized for a
+       phone's viewport width, scaled up. 7vw lands it at 65.6px, which is the
+       size the rest of the page's scale is built around. */
     .ap-hero__title { font-family: var(--ap-cond); font-weight: 700; text-transform: uppercase;
-      letter-spacing: .005em; font-size: clamp(2.3rem, 12vw, 4.6rem); line-height: .95;
-      color: var(--ap-text); margin: .5rem 0 1rem; }
+      letter-spacing: .005em; font-size: clamp(2.4rem, 7vw, 4.1rem); line-height: .95;
+      color: var(--ap-text); margin: .75rem 0 0; }
     /* 34ch was a phone measure that never widened: on a 1032px column it held
        the deck to 418px and broke 134 characters over four lines, under a
        two-line title six hundred pixels wider than it. A deck is two lines under
        the statement it decks, so the measure is set where that lands and the
        size steps up to carry the extra width. */
-    .ap-hero__sub { font-size: clamp(1.05rem, 3.6vw, 1.38rem); line-height: 1.45;
-                    color: var(--ap-lede); max-width: 68ch; }
-    .ap-seats { font-family: var(--font-mono, monospace); font-size: 12px; letter-spacing: .1em;
-                text-transform: uppercase; color: var(--ap-muted); margin-top: 1.15rem; }
+    /* A deck, not a second headline. 22px over a 68ch measure competed with the
+       title above it; 17.9px over 46ch reads as the line under a statement. */
+    .ap-hero__sub { font-size: clamp(1rem, 1.6vw, 1.12rem); line-height: 1.6;
+                    color: var(--ap-lede); max-width: 46ch; margin: 1.15rem 0 0;
+                    text-wrap: pretty; }
+    .ap-seats { display: inline-flex; align-items: baseline; gap: .6rem; margin-top: 1.9rem;
+                border: 1px solid var(--ap-line); background: var(--ap-ink); padding: .55rem .9rem;
+                font-family: var(--font-mono); letter-spacing: .1em; text-transform: uppercase;
+                color: var(--ap-muted); }
     .ap-seats__n { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
                    font-size: 1.5rem; line-height: 1; color: var(--ap-text); font-weight: 400; }
     .ap-seats__l { font-family: var(--font-mono); font-size: .62rem; letter-spacing: .16em;
