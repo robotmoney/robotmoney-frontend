@@ -589,7 +589,8 @@ a.sv__session-title:hover, a.sv__session-title:focus-visible { color: var(--colo
 .sv__profile-head { display: flex; align-items: flex-start; gap: 1.25rem; flex-wrap: wrap; margin: 1.5rem 0 2.5rem; }
 .sv__profile-main { flex: 1; min-width: 16rem; }
 .sv__detail-head { margin: 1.5rem 0 2.5rem; }
-.sv__detail-title { margin: 0.35rem 0 0; font-family: var(--font-display); text-transform: uppercase; font-size: clamp(2.2rem, 5vw, 3.6rem); line-height: 1.08; font-weight: 700; letter-spacing: -0.01em; }
+/* Type comes from the site headline rule in components.css. */
+.sv__detail-title { margin: 0.35rem 0 0; }
 .sv__fact-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.15rem; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
 .sv__meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.45rem 1.4rem; margin: 0.9rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; }
 .sv__meta-grid dt { color: var(--color-text-muted); }

@@ -206,7 +206,7 @@
           --ap-beamc:var(--color-accent); --ap-pool:var(--color-green); --ap-beacon:#ff7a29;
           --ap-cond:var(--font-display); }
     /* mono is NOT the body voice — kill the mono lede, keep sans prose */
-    .ap .sv__body-copy, .ap-hero__sub, .ap-cmd__follow, .ap-trust, .ap-noagent, .ap-beat p {
+    .ap .sv__body-copy, .ap-hero__sub, .ap-cmd__follow, .ap-trust, .ap-noagent {
       font-family: var(--font-sans, system-ui, sans-serif); }
     /* Link rules were `.ap a` (every link on the page, cyan and underlined)
        plus .ap-link--primary !important on one of four nav links, so the row
@@ -246,13 +246,10 @@
        tracking, in the accent. The member profile's eyebrow is muted, so this
        one takes the same --quiet modifier and the two pages open the same way. */
 
-    /* Hero: the statement */
-    /* 12vw drove this to 73.6px on a desktop column — a headline sized for a
-       phone's viewport width, scaled up. 7vw lands it at 65.6px, which is the
-       size the rest of the page's scale is built around. */
-    .ap-hero__title { font-family: var(--ap-cond); font-weight: 700; text-transform: uppercase;
-      letter-spacing: .005em; font-size: clamp(2.4rem, 7vw, 4.1rem); line-height: .95;
-      color: var(--ap-text); margin: .75rem 0 0; }
+    /* Hero: the statement. Type comes from the site headline rule in
+       components.css — this page's own clamp opened it at 65.6px where the
+       swarm index opened at 53.8. Margin and colour are all that is local. */
+    .ap-hero__title { color: var(--ap-text); margin: 0.35rem 0 0; }
     /* 34ch was a phone measure that never widened: on a 1032px column it held
        the deck to 418px and broke 134 characters over four lines, under a
        two-line title six hundred pixels wider than it. A deck is two lines under
@@ -362,12 +359,5 @@
     .ap .sv__input { background: var(--ap-ink); border: 1px solid var(--ap-line); border-radius: 2px; color: var(--ap-text); box-shadow: none; }
     .ap .sv__input:focus { border-color: var(--ap-beamc); outline: none; }
 
-    /* Tablet+ */
-    @media (min-width: 720px) {
-      .ap-beam { display: block; }
-      .ap-beats { grid-template-columns: repeat(3, 1fr); column-gap: 34px; border-top: 1px solid var(--ap-beamc); }
-      .ap-beat { border-top: none; padding: 1.4rem 0 0; }
-      .ap-hero__title { margin-top: .6rem; }
-    }
   </style>
 </section>
