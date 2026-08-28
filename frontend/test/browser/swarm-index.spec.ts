@@ -206,8 +206,11 @@ test("a published session's card states its recommendation, its lean and who too
   // replaced grew with the roster and was unreadable well before 20 seats.
   await expect(card.locator(".sv__spread i")).toHaveCount(3);
   await expect(card.locator(".sv__lean")).toHaveText("cautious lean");
-  await expect(card.locator(".sv__verdict")).toContainText("4 of 5 took part");
-  await expect(card.locator(".sv__verdict")).toContainText("57% mean confidence");
+  // .sv__card-verdict, not .sv__verdict: that name already belonged to
+  // session.html's verdict block, and sharing it made the later rule repaint
+  // the session page's container. One name, one component.
+  await expect(card.locator(".sv__card-verdict")).toContainText("4 of 5 took part");
+  await expect(card.locator(".sv__card-verdict")).toContainText("57% mean confidence");
 
   // And the synthesis paragraph is gone from the row entirely.
   await expect(card.locator(".sv__session-copy")).toHaveCount(0);

@@ -360,7 +360,7 @@
 .sv__subject-mark { border-radius: var(--radius); color: var(--color-green); background: rgba(16,185,129,0.08); }
 .sv__row-main { min-width: 0; flex: 1; }
 .sv__row-titleline, .sv__session-titleline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.65rem; min-width: 0; }
-.sv__row-title { color: var(--color-text); font-weight: 700; text-decoration: none; }
+.sv__row-title { color: var(--color-text); font-weight: 700; }
 /* A title that is a link. No rule at rest — a heading underlined all the time
    is heavy — and the accent arrives underneath it on hover, which is the same
    thing every other link on the site does. These were the last four still
@@ -620,7 +620,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__session-list { display: grid; gap: 0.75rem; }
 .sv__session-list--compact { gap: 0.55rem; }
 .sv__session-card { position: relative; display: block; border: 1px solid var(--color-border); padding: 1.25rem; color: inherit; text-decoration: none; transition: border-color 0.16s ease, background 0.16s ease; }
-.sv__session-title { text-decoration: none; }
 .sv__session-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .sv__session-card .sv__session-copy { margin-top: 0.75rem; max-width: 68ch; }
 .sv__session-title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.08rem; color: var(--color-text); }
@@ -647,7 +646,12 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    the pill stays what a single member's stance wears. */
 .sv__spread { display: flex; gap: 1px; height: 4px; width: min(100%, 26rem); margin: 1rem 0 0.6rem; }
 .sv__spread i { display: block; min-width: 2px; }
-.sv__verdict { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; margin: 0;
+/* NOT .sv__verdict. That class already belonged to session.html's verdict
+   BLOCK (line 165) — the big call, its detail line, the bar and the meta grid.
+   Declaring it again here made the later block win, so the session page's
+   verdict container silently became a flex row in 0.72rem mono. One name, one
+   component: this is the card's one-line reading, and it says so. */
+.sv__card-verdict { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; margin: 0;
   font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
 /* The lean takes its stance's colour because it IS the stance — the one word
@@ -688,7 +692,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    the width of the row — a stance badge as wide as a paragraph. */
 .sv__take-row .sv__stance-badge { justify-self: start; }
 .sv__take-row:last-of-type { border-bottom: none; }
-.sv__take-who { color: var(--color-text); font-weight: 500; text-decoration: none; font-size: 0.9rem; }
+.sv__take-who { color: var(--color-text); font-weight: 500; font-size: 0.9rem; }
 .sv__take-conf { font-family: var(--font-mono); font-size: 0.72rem;
   font-variant-numeric: tabular-nums; color: var(--color-text-muted); margin-right: auto; }
 .sv__take-line { grid-column: 1 / -1; margin: 0; font-size: 0.85rem; line-height: 1.6;
@@ -844,7 +848,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__takes--ported { margin-top: 1rem; gap: 1rem; }
 .sv__take--ported { background: transparent; padding: 1.35rem; --vfy-inset: 1.35rem; }
 .sv__take-member { display: flex; align-items: center; gap: 0.8rem; }
-.sv__member-link { color: var(--color-text); text-decoration: none; font-family: var(--font-sans); font-weight: 700; font-size: 1.15rem; }
+.sv__member-link { color: var(--color-text); font-family: var(--font-sans); font-weight: 700; font-size: 1.15rem; }
 .sv__take-lens { margin-top: 0.15rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
 .sv__stance-badge { display: inline-flex; align-items: center; gap: 0.42rem; border: 1px solid; padding: 0.18rem 0.5rem; font-family: var(--font-mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.1em; }
 .sv__take-body { margin: 1rem 0 0; color: var(--color-text); line-height: 1.7; font-size: 0.9rem; max-width: 82ch; }
