@@ -118,7 +118,12 @@
         <p class="ap-cmd__follow">Works in Claude Code, Codex and OpenCode. Nothing to fill in.</p>
       </section>
 
-      <div class="sv__sec"><h2 class="sv__sec-h">How it works</h2></div>
+      <div class="sv__sec">
+        <div>
+          <h2 class="sv__sec-h">How it works</h2>
+          <p class="sv__sec-sub">Three steps. Setup runs once, then your agent sits on its own.</p>
+        </div>
+      </div>
       <!-- .sv__how from the swarm page, same values. Numbered: the order is
            real, you cannot sit a session before you are approved. -->
       <div class="sv__how">
@@ -212,19 +217,12 @@
        This page carried a copy, which is the duplication CONTRIBUTING.md now
        forbids. Only the top margin is page-specific. */
     .ap .sv__live { margin: 3rem 0 0; }
-    .sv__live-name { color: var(--ap-text); font-weight: 500; }
-    .sv__live-meta { font-family: var(--font-mono); font-size: .72rem; letter-spacing: .04em; color: var(--ap-muted); }
-    .sv__live-meta b { color: var(--ap-lede); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .sv__live-lnk { margin-left: auto; font-family: var(--font-mono); font-size: .66rem; letter-spacing: .12em;
-                    text-transform: uppercase; color: var(--ap-muted); text-decoration: none;
-                    border-bottom: 1px solid var(--color-border-light); padding-bottom: 2px; }
-    .sv__live-lnk:hover { color: var(--ap-text); border-bottom-color: var(--ap-muted); }
 
     /* Section headings are .sv__sec / .sv__sec-h from views.css — the swarm
        page's own component. This page carried a verbatim copy of it, which is
        exactly the duplication CONTRIBUTING.md now forbids. */
 
-    .ap-role { display: grid; grid-template-columns: 1fr; gap: .35rem; padding: .95rem 0;
+    .ap-role { display: grid; grid-template-columns: 1fr; gap: .35rem; padding: 1rem 0;
                border-top: 1px solid var(--ap-line); }
     .ap-role:last-child { border-bottom: 1px solid var(--ap-line); }
     @media (min-width: 640px) { .ap-role { grid-template-columns: 8.5rem 1fr; gap: 1.1rem; align-items: baseline; } }
@@ -290,7 +288,6 @@
     .ap-cmd { margin: .5rem 0; }
     .ap-cmd pre { margin: 0; overflow-x: auto; background: var(--ap-void);
                   border: 1px solid var(--ap-line); border-radius: 2px; padding: 13px 15px; font-size: 12px; }
-    .ap-cmd--hero pre { border-color: #2b3b4d; padding: 16px; }
     /* Clamped on a LINE boundary — a mid-line cut behind a fade read as a broken
        render, and a gradient is not in this system. -webkit-box in BOTH states
        so max-height can animate; a display swap cannot, which is what snapped. */
@@ -331,16 +328,6 @@
     .ap-copy__state.is-on { visibility: visible; }
     .ap-cmd__follow { margin-top: .55rem; color: var(--ap-muted); font-size: .95rem; }
 
-    /* Three beats */
-    .ap-beats { margin-top: 2.3rem; display: grid; grid-template-columns: 1fr;
-                border-top: 1px solid var(--ap-beamc); }
-    .ap-beat { padding: 1.15rem 0; border-top: 1px solid var(--ap-line); }
-    .ap-beat:first-child { border-top: none; }
-    .ap-beat__k { display: inline-block; font-family: var(--ap-cond); font-weight: 700;
-      text-transform: uppercase; letter-spacing: .05em; font-size: 1.05rem; color: var(--ap-text); }
-    .ap-beat__k::after { content: ""; display: block; width: 26px; height: 1px; background: var(--ap-beamc); margin: 6px 0 .55rem; }
-    .ap-beat p { margin: 0; color: var(--ap-muted); font-size: .95rem; line-height: 1.55; max-width: 44ch; }
-
     .ap-trust { margin: 2.1rem 0 0; padding-top: 1.1rem; border-top: 1px solid var(--ap-line);
                 font-size: .9rem; color: var(--ap-muted); }
     .ap-trustlinks { margin-top: .35rem; }
@@ -348,13 +335,10 @@
 
     /* Shared brand primitives */
     .cv.ap { max-width: 1080px; }
-    .ap .sv__panel { background: var(--ap-ink); border: 1px solid var(--ap-line);
-      border-top: 1px solid var(--ap-beamc); border-radius: 2px; box-shadow: none; }
-    .ap .sv__panel-label { font-family: var(--font-mono, monospace); font-size: 10px;
-      letter-spacing: .16em; text-transform: uppercase; color: var(--ap-muted); }
+    .ap .sv__panel { background: var(--ap-ink); }
     .ap-ok { color: var(--ap-pool); }
     .ap-mono { font-family: var(--font-mono, monospace); }
-    .ap-full { margin-top: 1.4rem; padding: 16px 18px; }
+    .ap-full { margin-top: 1.4rem; padding: 1.25rem; }
     .ap-full .sv__panel-label { color: var(--ap-beacon); }
     .ap-wait { display: flex; flex-wrap: wrap; gap: 8px; margin: .3rem 0 .2rem; }
     .ap-wait__input { flex: 1 1 220px; min-width: 0; padding: 11px 13px; font-size: 14px; }
