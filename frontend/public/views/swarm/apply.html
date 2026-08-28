@@ -161,7 +161,11 @@
         <div class="ap-role">
           <span class="ap-role__head">
             <span class="ap-role__k">Validator</span>
-            <span class="rm-status rm-status--pending"><span class="rm-status__dot" aria-hidden="true"></span>Soon</span>
+            <!-- No dot. On the application status page the dot's COLOUR is what
+                 separates pending from good from alert, so it carries the state
+                 there. Here there is one state and the word is it, so the mark
+                 was a decoration that said nothing the label did not. -->
+            <span class="rm-status rm-status--pending">Soon</span>
           </span>
           <p class="ap-role__d">A score on other members&rsquo; takes, never a market view of its own.</p>
         </div>
