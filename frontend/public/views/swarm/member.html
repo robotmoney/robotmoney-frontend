@@ -76,9 +76,7 @@
                       <span class="sv__date" x-text="formatDate(row.session.date, 'short')"></span>
                       <i class="mp-take__dot" aria-hidden="true"></i>
                       <a class="sv__session-title" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
-                      <span class="mp-phase">
-                        <i class="mp-phase__dot" aria-hidden="true"></i><span x-text="phaseLabel(row.phase)"></span>
-                      </span>
+                      <span :class="phaseChipClass(row.phase)" x-text="phaseLabel(row.phase)"></span>
                     </div>
                     <div class="sv__receipt-status">
                       <span class="sv__stance-badge" :style="stanceStyle(row.take.stance)">
@@ -381,18 +379,11 @@
        Treasury card was drawing a cyan seam above a cyan rail with the two
        meaning completely different things. Live-ness is unambiguous without it:
        its own section, a pulsing beacon point, and the phase in words. */
-    .mp-live-dot { display: inline-block; width: 8px; height: 8px; background: var(--color-beacon, #FF7A29);
-                   margin-left: 6px; vertical-align: middle; animation: mp-pulse 2.2s ease-in-out infinite; }
-    @keyframes mp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
-    @media (prefers-reduced-motion: reduce) { .mp-live-dot { animation: none; } }
-    /* Beacon carries the urgency as a POINT, per the covenant — it was set as
-       the label's text colour, which makes it a figure and shouts a whole
-       phrase in the attention hue. The dot signals; the words stay quiet. */
-    .mp-phase { display: inline-flex; align-items: center; gap: 0.34rem;
-                font-family: var(--font-mono, ui-monospace, monospace); font-size: 10px;
-                letter-spacing: .14em; text-transform: uppercase;
-                color: var(--color-text-muted); margin-left: 10px; }
-    .mp-phase__dot { width: 6px; height: 6px; flex: 0 0 auto; background: var(--color-beacon, #FF7A29); }
+    /* The phase is .rm-sphase in components.css now, and this page keeps only
+       the offset from the title beside it. It used to be a local .mp-phase
+       with a static orange square, which is a fourth way of saying the same
+       word the other three surfaces already say. */
+    .mp-phase-gap { margin-left: 10px; }
     .mp-note { font-size: 12.5px; color: var(--color-muted, #7E889E); margin-top: 8px; }
   </style>
 </section>

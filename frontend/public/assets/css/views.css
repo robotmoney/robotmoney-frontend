@@ -367,6 +367,9 @@
   padding-bottom: 0.75rem; border-bottom: 1px solid var(--color-border); margin: 3rem 0 0.75rem; }
 .sv__sec-h { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; font-size: 1.75rem; margin: 0; line-height: 1; }
 .sv__sec-sub { margin: 0.5rem 0 0; font-size: 0.875rem; font-variant-numeric: tabular-nums; color: var(--color-text-soft); max-width: 60ch; }
+/* The first head on the page already has the body's own padding above it, and
+   the live strip its own margin below. Its 3rem would be the second of two. */
+.sv__sec--lead { margin-top: 0; }
 
 /* What each role emits, said once. As a column it would print the same
    sentence in every row until a second role exists. */
@@ -482,24 +485,6 @@
 .sv__operator { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
   letter-spacing: 0.1em; color: var(--color-text-muted); }
 
-/* Role tooltip. Same visual spec as .rv__tip on the regime view, kept as its
-   own selector rather than reaching across view prefixes for it. Opens on
-   hover AND focus, so the description is reachable without a mouse. */
-.sv__roletip { position: relative; display: inline-block; }
-.sv__roletip .sv__tag--role { cursor: help; }
-.sv__roletip .sv__tag--role:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
-.sv__tip {
-  pointer-events: none; position: absolute; left: 0; top: 100%; z-index: 20;
-  margin-top: 0.4rem; width: 16rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border); background: var(--color-surface);
-  padding: 0.6rem 0.7rem; font-family: var(--font-mono); font-size: 11px;
-  line-height: 1.6; color: var(--color-text-muted);
-  text-transform: none; letter-spacing: 0; white-space: normal;
-  opacity: 0; transition: opacity 0.15s;
-}
-.sv__roletip:hover .sv__tip, .sv__roletip:focus-within .sv__tip { opacity: 1; }
-@media (prefers-reduced-motion: reduce) { .sv__tip { transition: none; } }
-
 /* Role is function, lens is flavour, so role carries the heavier form. */
 .sv__tag--role { font-size: 0.7rem; color: var(--color-text-soft); border-color: var(--color-border-light);
   background: var(--color-surface-light); white-space: nowrap; }
@@ -534,6 +519,10 @@
    never picked up a size. An invisible dot is worse than none, because the
    colour is the only thing distinguishing two members' positions there. */
 .sv__stance-dotline i, .sv__stance-chip i, .sv__stance-badge i, .sv__dis-stance i { width: 0.42rem; height: 0.42rem; border-radius: 50%; display: inline-block; }
+/* A run of marks reading as one count, so the gap inside the tally is tighter
+   than the badge's gap between the tally and the word it belongs to. */
+.sv__stance-tally { display: inline-flex; align-items: center; gap: 0.2rem; }
+.sv__stance-over { font-weight: 400; font-variant-numeric: tabular-nums; opacity: 0.7; }
 .sv__profile-head { display: flex; align-items: flex-start; gap: 1.25rem; flex-wrap: wrap; margin: 1.5rem 0 2.5rem; }
 .sv__profile-main { flex: 1; min-width: 16rem; }
 .sv__detail-head { margin: 1.5rem 0 2.5rem; }

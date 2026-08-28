@@ -87,10 +87,10 @@ async function renderedProfile(page: Page) {
   return {
     name: await page.locator(".profile-name").innerText(),
     tagline: await page.locator(".profile-role").innerText(),
-    eyebrow: await page.locator(".cv--detail .sv__eyebrow").innerText(),
-    mandate: await page.locator(".sv__panel", { hasText: "Mandate" }).locator(".sv__body-copy").innerText(),
-    biases: await page.locator(".sv__panel", { hasText: "Biases" }).locator("li").allInnerTexts(),
-    meta: await page.locator(".sv__plugin .sv__meta-grid dd").allInnerTexts(),
+    lens: await page.locator(".mp-lens").innerText(),
+    mandate: await page.locator(".mp-intent__cell", { hasText: "Mandate" }).locator(".sv__body-copy").first().innerText(),
+    biases: await page.locator(".mp-bias").allInnerTexts(),
+    facts: await page.locator(".mp-facts").innerText(),
   };
 }
 
@@ -132,7 +132,7 @@ test("a renamed member's legacy-id URL and handle URL both render the LIVE recor
   await expect(page.locator(".cv--detail")).not.toContainText(manifest.name);
   await expect(page.locator(".cv--detail")).not.toContainText(manifest.tagline);
   for (const bias of manifest.biases) {
-    await expect(page.locator(".sv__panel", { hasText: "Biases" })).not.toContainText(bias);
+    await expect(page.locator(".mp-biases")).not.toContainText(bias);
   }
   // The tab name is derived from the record too (route-level SEO otherwise
   // titleizes the raw URL segment). Polled: seo.js and memberProfile.init()
@@ -149,7 +149,7 @@ test("a renamed member's legacy-id URL and handle URL both render the LIVE recor
   expect(legacy.tagline).toBe(RENAMED_ATHENA.tagline);
   expect(legacy.mandate).toBe(RENAMED_ATHENA.mandate);
   expect(legacy.biases).toEqual(RENAMED_ATHENA.biases);
-  expect(legacy.meta).toContain(RENAMED_ATHENA.operator);
+  expect(legacy.facts).toContain(RENAMED_ATHENA.operator);
 
   await expectNoBrowserErrors(errors);
 });
@@ -169,11 +169,11 @@ test("with the swarm API unreachable, all four shipped manifests still render fr
 
     await expect(page.locator(".profile-name"), `${id} name`).toHaveText(manifest.name);
     await expect(page.locator(".profile-role"), `${id} tagline`).toHaveText(manifest.tagline);
-    await expect(page.locator(".cv--detail .sv__eyebrow"), `${id} lens`).toContainText(manifest.lens);
-    const biases = page.locator(".sv__panel", { hasText: "Biases" }).locator("li");
+    await expect(page.locator(".mp-lens"), `${id} lens`).toContainText(manifest.lens);
+    const biases = page.locator(".mp-bias");
     await expect(biases, `${id} biases`).toHaveCount(manifest.biases.length);
     for (const bias of manifest.biases) {
-      await expect(page.locator(".sv__panel", { hasText: "Biases" })).toContainText(bias);
+      await expect(page.locator(".mp-biases"), `${id} biases`).toContainText(bias);
     }
   }
 
