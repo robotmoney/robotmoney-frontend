@@ -31,27 +31,22 @@
           </div>
         </header>
 
-        <!-- Record at a glance. Figures before prose: what this member has
-             actually done, above what it says it intends to do. Mono and
-             tabular, neutral — cyan seams the strip as a line, never fills it. -->
-        <dl class="rm-stats">
+        <!-- Three, not four. "Archived" was an internal fact in a headline slot,
+             and it is the reason verified does not equal takes, so it belongs
+             inside that figure's explanation rather than beside it. Each figure
+             explains itself on demand instead of being guessed at. -->
+        <dl class="rm-stats rm-stats--3">
           <div class="rm-stat">
-            <dt>Takes</dt><dd x-text="recordStats().takes"></dd>
+            <dt>Takes filed<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">Every recommendation this member has submitted, across all portfolios it has been seated for.</span></span></dt>
+            <dd x-text="recordStats().takes"></dd>
           </div>
-          <!-- Verified over VERIFIABLE, not over every take. A bare count read
-               "0" for any member whose record is pre-launch archive, which
-               says "nothing this member filed checks out" about takes that
-               were never member-signed in the first place. Archived takes get
-               their own figure rather than silently vanishing from the strip. -->
           <div class="rm-stat">
-            <dt>Verified</dt>
+            <dt>Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">Takes filed after member signing existed, all checked against this member&rsquo;s public key. Any earlier ones predate signing: public, but nobody signed them, so counting them would overstate what has been proven.</span></span></dt>
             <dd x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></dd>
           </div>
-          <div class="rm-stat" x-show="recordStats().archival">
-            <dt>Archived</dt><dd x-text="recordStats().archival"></dd>
-          </div>
           <div class="rm-stat">
-            <dt>Avg conviction</dt><dd x-text="recordStats().conviction"></dd>
+            <dt>Avg confidence<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">The mean of the confidence this member attaches to its own takes. It describes how boldly it argues, not how often it is right. Outcomes are not scored yet.</span></span></dt>
+            <dd x-text="recordStats().conviction"></dd>
           </div>
         </dl>
 
@@ -161,6 +156,14 @@
         <!-- Session filter. Only earns its place once the member has filed
              against more than one subject. Each chip carries the subject's own
              colour, the same hue that seams its cards below. -->
+        <!-- The four stance words defined once, where they first appear,
+             rather than a tooltip on every pill or a glossary nobody reaches. -->
+        <p class="mp-key">
+          <template x-for="k in ['constructive','neutral','cautious','bearish']" :key="k">
+            <span class="sv__stance-badge" :style="stanceStyle(k)"><i :style="`background:${stanceColor(k)}`"></i><span x-text="k"></span></span>
+          </template>
+          <span class="mp-key__note">confidence is the member's own, 0 to 1</span>
+        </p>
         <div class="mp-filter" x-show="subjects().length > 1" x-cloak>
           <button type="button" class="mp-chip" :class="{ 'is-on': subject === null }"
                   @click="subject = null" :aria-pressed="subject === null">
@@ -338,6 +341,10 @@
        margin and no top one, so its label sat flush against the metadata panel
        above — the identical 0px gap that Track record had. */
     /* Registration facts under the name. Phrases, not label/value pairs. */
+    .mp-key { display: flex; flex-wrap: wrap; gap: .45rem .6rem; align-items: center; margin: 0 0 1rem; }
+    .mp-key__note { font-family: var(--font-mono); font-size: .64rem; color: var(--color-text-muted);
+                    letter-spacing: .04em; margin-left: .4rem; }
+
     .mp-facts { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: 1rem 0 0;
                 font-family: var(--font-mono); font-size: .68rem; letter-spacing: .06em;
                 color: var(--color-text-muted); }

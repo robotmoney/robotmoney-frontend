@@ -360,6 +360,54 @@
    what it means and what it must not be used for. A component without that
    comment acquires a second meaning within weeks. */
 
+/* ─── Tooltip ──────────────────────────────────────────────────────────────
+   One component for "what does this mean", so an explanation never has to be
+   spent as body copy again, and so a fourth surface cannot invent a fourth.
+
+   A <button>, never a bare span: it is focusable, it answers Enter and Space,
+   and it works on touch, where :hover does not exist at all. One is open at a
+   time, Escape closes, and a tap outside closes — the three things a
+   hover-only tooltip gets wrong on a phone.
+
+     icon    13px ring, muted, sized to sit on the line it annotates
+     bubble  surface + 1px border, radius 2. No shadow and no arrow: the
+             covenant is flat planes, and an arrow is a rounded flourish this
+             system does not have anywhere else.
+     motion  140ms opacity plus a 3px rise.
+
+   Below 700px a bubble centred on a 13px icon cannot fit — an icon near the
+   right edge would need one narrower than a sentence — so phones get the
+   standard treatment, a sheet pinned to the page gutters and positioned
+   vertically from its icon by script.
+
+   NOTE: .sv__vfy-tip in views.css predates this and does the same job for the
+   verification mark alone. It should fold into this component; that is a
+   separate pass over every take card. */
+.rm-tip { position: relative; display: inline-flex; vertical-align: middle; margin-left: 0.3rem; }
+.rm-tip__btn { width: 13px; height: 13px; padding: 0; flex: 0 0 auto; display: grid; place-items: center;
+  border: 1px solid var(--color-text-muted); border-radius: 50%; background: none;
+  color: var(--color-text-muted); font-family: var(--font-mono); font-size: 8px; line-height: 1;
+  cursor: default; transition: color 0.14s ease, border-color 0.14s ease; }
+.rm-tip__btn:hover, .rm-tip__btn[aria-expanded="true"] { color: var(--color-text); border-color: var(--color-text); }
+.rm-tip__bub { position: absolute; left: 50%; bottom: calc(100% + 8px);
+  transform: translate(calc(-50% + var(--rm-tip-nudge, 0px)), 3px);
+  width: min(17rem, 72vw); max-width: min(17rem, calc(100vw - 2rem));
+  padding: 0.65rem 0.75rem; z-index: 40;
+  background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  font-family: var(--font-sans); font-size: 0.78rem; line-height: 1.55; color: var(--color-text-soft);
+  text-transform: none; letter-spacing: 0; text-align: left; font-weight: 400;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s; }
+.rm-tip:hover .rm-tip__bub, .rm-tip__btn:focus-visible + .rm-tip__bub, .rm-tip__bub[data-open="1"] {
+  opacity: 1; visibility: visible; transform: translate(calc(-50% + var(--rm-tip-nudge, 0px)), 0); transition-delay: 0s; }
+@media (max-width: 699px) {
+  .rm-tip__bub { position: fixed; left: 12px; right: 12px; bottom: auto; width: auto; max-width: none;
+    transform: translateY(3px); }
+  .rm-tip:hover .rm-tip__bub, .rm-tip__btn:focus-visible + .rm-tip__bub, .rm-tip__bub[data-open="1"] {
+    transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) { .rm-tip__bub { transition: opacity 0.01s; } }
+
 /* ─── Session phase chip ───────────────────────────────────────────────────
    One chip for "what phase is this session in", so /swarm and the session page
    cannot style the same fact differently. Colours follow the admin's existing
@@ -476,7 +524,9 @@
 .rm-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
             margin: 1.35rem 0 1.6rem; padding: 0; background: var(--color-border);
             border-top: 1px solid var(--color-accent); }
-.rm-stat { background: var(--color-surface); padding: 0.7rem 0.85rem; }
+.rm-stat { background: var(--color-surface); padding: 0.7rem 0.85rem; position: relative; }
+/* One column on phones so a stat cell is wide enough to hold its explanation. */
+@media (max-width: 639px) { .rm-stats { grid-template-columns: minmax(0, 1fr); } }
 .rm-stat dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
               letter-spacing: 0.16em; color: var(--color-text-muted); }
 .rm-stat dd { margin: 0.35rem 0 0; font-family: var(--font-mono); font-size: 1.1rem;
