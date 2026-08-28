@@ -310,8 +310,7 @@
 .sv__panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .sv__panel-label { margin: 0; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
 .sv__back { display: inline-block; margin-bottom: 2rem; }
-.sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-accent); text-decoration: none; }
-.sv__panel-link:hover, .sv__back:hover, .sv__memo-link:hover { text-decoration: underline; }
+.sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; }
 .sv__list { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
 .sv__person-row, .sv__subject-row { display: flex; align-items: flex-start; gap: 0.8rem; min-width: 0; }
 /* Identity mark: a square plane, not a disc — the covenant is flat planes and
@@ -363,7 +362,7 @@
 .sv__how-d b { color: var(--color-text); font-weight: 500; }
 /* A step can name a thing the reader has to go look up. Same treatment as any
    other link inside running prose on these pages. */
-.sv__how-d a { color: var(--color-accent); }
+
 
 /* Section head: a display headline, a one-line sub, and optionally an action.
    THE RULE IS THE TOP EDGE OF THE CONTENT, not an underline on the headline —
@@ -417,9 +416,7 @@
 .sv__cov-x { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.9rem;
   margin-top: 0.25rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border); }
 .sv__cov-x p { margin: 0; font-size: 0.875rem; color: var(--color-text-soft); }
-.sv__cov-lnk { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.11em;
-  color: var(--color-accent); text-decoration: none; border-bottom: 1px solid var(--color-accent-line); white-space: nowrap; }
-.sv__cov-lnk:hover { border-bottom-color: var(--color-accent); }
+.sv__cov-lnk { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.11em; white-space: nowrap; }
 
 /* What a vault review produced. Target weights are the recommendation the
    allocation would take; anything else moves nothing. */
@@ -439,9 +436,7 @@
 .sv__live-n { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   white-space: nowrap; }
 .sv__live-lnk { margin-left: auto; font-family: var(--font-mono); font-size: 0.66rem;
-  text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted);
-  text-decoration: none; border-bottom: 1px solid var(--color-border-light); }
-.sv__live-lnk:hover, .sv__live-lnk:focus-visible { color: var(--color-text); border-bottom-color: var(--color-text-muted); }
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); }
 
 /* Members as a register: the interesting fact is which cells are empty. */
 /* `overflow-x: auto` here CLIPS the role tooltip, because a container that
@@ -750,7 +745,7 @@ a.sv__session-title:hover, a.sv__session-title:focus-visible { color: var(--colo
   font-weight: 700; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
 .sv__take-h:first-child { margin-top: 0; }
 .sv__take-body strong { color: var(--color-text); font-weight: 700; }
-.sv__take-body a, .sv__synthesis a { color: var(--color-accent); }
+
 .sv__synthesis { margin-top: 2rem; border-left: 2px solid var(--color-accent); padding-left: 1.4rem; }
 .sv__synthesis div { margin: 0.75rem 0 0; color: var(--color-text); font-family: var(--font-sans); line-height: 1.75; font-size: 1.05rem; }
 .sv__synthesis p { margin: 0 0 0.75rem; }
