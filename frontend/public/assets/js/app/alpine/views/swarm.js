@@ -254,7 +254,32 @@ export function registerSwarmView(Alpine) {
       const d = this.allocationFw?.asOf;
       return d ? this.formatDate(d) : "";
     },
-    publishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
+    // Sessions this page lists.
+    //
+    // A `framework` subject that folds into a vault is NOT listed.
+    // robotmoney-allocation and robotmoney-vault are two subjects convening on
+    // the same vault — 54 published sessions and 53 — so the feed showed
+    // "Robot Money Vault" twice, a row apart, with different numbers and only a
+    // small qualifier to say why. The vault is canonical: it is the subject
+    // whose recommendation is meant to become the target allocation, and both
+    // manifests already declare `bucket_weights`.
+    //
+    // Nothing is deleted. The allocation's sessions keep their permalinks and
+    // their subject page; they stop competing with the vault in the index.
+    // This filter is the whole of the behaviour: remove it and the split
+    // returns, including the "reviewed two ways" copy on the vault's row and
+    // the per-session qualifier, both of which are derived from foldedInto().
+    isListedSubject(id) {
+      const meta = this.subjectCache[id];
+      if (meta?.source?.type !== "framework") return true;
+      return this.parentFor(id) === id; // stands alone: no vault absorbed it
+    },
+    publishedSessions() {
+      return this.sessions.filter((s) => s.state === "published" && this.isListedSubject(s.subjectId));
+    },
+    // Every published session, including the ones the index does not list.
+    // The archive count is a fact about the swarm, not about this page.
+    allPublishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
 
     // The one session the swarm is working on right now, or null. Newest first,
     // because a subject may convene more than once a day.
