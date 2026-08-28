@@ -18,6 +18,7 @@
 // `style` and to SVG fills, where a custom property buys nothing and costs a
 // resolution step.
 
+/** @type {Readonly<Record<string, string>>} */
 export const STANCE_COLORS = Object.freeze({
   bullish: "#10b981",      // --color-green   Pool: the value colour, conviction
   constructive: "#34d399", // lighter green, the common positive
@@ -29,6 +30,7 @@ export const STANCE_COLORS = Object.freeze({
 /** The ramp's neutral, for a stance this system does not know. */
 export const STANCE_FALLBACK = STANCE_COLORS.neutral;
 
+/** @param {unknown} stance */
 export function stanceColor(stance) {
   return STANCE_COLORS[String(stance || "").toLowerCase()] || STANCE_FALLBACK;
 }
@@ -38,12 +40,14 @@ export function stanceColor(stance) {
  * colour. Never a fill — a column of filled pills becomes a column of coloured
  * blocks, which is the thing the mark contract exists to prevent.
  */
+/** @param {unknown} stance */
 export function stanceStyle(stance) {
   const c = stanceColor(stance);
   return `border-color:${c}66;color:${c};`;
 }
 
 /** Class for the shared pill (.sv__stance-badge), with its stance as a modifier. */
+/** @param {unknown} stance */
 export function stanceClass(stance) {
   const key = String(stance || "").toLowerCase();
   return STANCE_COLORS[key] ? `sv__stance-badge sv__stance-badge--${key}` : "sv__stance-badge";

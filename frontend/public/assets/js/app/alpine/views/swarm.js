@@ -23,12 +23,11 @@ import { memberLogo } from "../../lib/member-logos.js";
 // the second role (validator) ships with its first holder, so this is a named
 // constant rather than a string sprinkled through the template: when the field
 // lands, this function reads it and nothing else moves. RM-97's roles table.
-const DEFAULT_ROLE = "proposer";
-const ROLE_EMITS = {
-  proposer: "a signed take each session: position, reasoning, sources",
-  validator: "a score per take. Never a market view",
-};
+// Six marks is where a tally stops being countable at a glance and starts
+// being a bar, and it clears the current roster of seven with room to spare.
+const TALLY_CAP = 6;
 
+const DEFAULT_ROLE = "proposer";
 
 // The sessions list is paginated and the page used to render only the first
 // page while presenting its counts as totals. 209 published sessions arrive in
@@ -170,7 +169,7 @@ export function registerSwarmView(Alpine) {
       const n = this.liveTakes;
       const seats = this.members.length;
       if (n == null || !seats) return "";
-      return `${n} of ${seats} takes in`;
+      return `${n}/${seats} takes in.`;
     },
     liveSubjectName() {
       const s = this.liveSession();
@@ -328,7 +327,6 @@ export function registerSwarmView(Alpine) {
 
     // ── members ──────────────────────────────────────────────────────────
     memberRole() { return DEFAULT_ROLE; },
-    roleEmits(role) { return ROLE_EMITS[role || DEFAULT_ROLE] || ""; },
     seatsLabel() {
       if (this.rosterCap == null) return `${this.members.length} seats`;
       return `${this.members.length} of ${this.rosterCap} seats taken`;
@@ -370,6 +368,14 @@ export function registerSwarmView(Alpine) {
       return memberAvatarMarkup(src, seed, name, size, (n) => this.initials(n));
     },
     stanceEntries(s) { return Object.entries(s.swarmRecommendation?.stances || {}); },
+    // A stance count, drawn as that many marks. Capped so a large roster cannot
+    // push one pill across the card: past the cap the remainder goes back to
+    // being a digit, which is the honest fallback and is rare.
+    tallyDots(n) { return Math.max(1, Math.min(Number(n) || 1, TALLY_CAP)); },
+    tallyRest(n) {
+      const rest = (Number(n) || 0) - TALLY_CAP;
+      return rest > 0 ? `+${rest}` : "";
+    },
     quorumText(s) {
       const q = s.swarmRecommendation?.quorum;
       return q ? `${q.submitted}/${q.active} submitted` : "";

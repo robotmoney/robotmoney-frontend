@@ -20,11 +20,13 @@ const HOUSE_ALIASES = new Set([
   "rm protocol",
 ]);
 
+/** @param {unknown} op */
 export function isHouseOperator(op) {
   return HOUSE_ALIASES.has(String(op || "").trim().toLowerCase());
 }
 
 /** The display name, or null when nothing is set — callers omit rather than invent. */
+/** @param {unknown} op */
 export function operatorName(op) {
   const s = String(op || "").trim();
   if (!s) return null;

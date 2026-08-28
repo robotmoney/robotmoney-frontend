@@ -408,28 +408,56 @@
 }
 @media (prefers-reduced-motion: reduce) { .rm-tip__bub { transition: opacity 0.01s; } }
 
-/* ─── Session phase chip ───────────────────────────────────────────────────
-   One chip for "what phase is this session in", so /swarm and the session page
-   cannot style the same fact differently. Colours follow the admin's existing
-   scale (.adm-badge--run/--ok) rather than inventing a second one:
+/* ─── Session phase ────────────────────────────────────────────────────────
+   One treatment for "what phase is this session in", so /swarm, the apply
+   page, the session page and a member profile cannot say the same fact four
+   different ways. They did: a bordered amber chip on two of them, and on a
+   member profile an orange square beside grey text.
 
-     collecting / aggregating  amber   work in progress
-     published                 cyan    finished
-     closed / scheduled        muted   no claim being made
+   NOT A PILL. The bordered pill is the shape a member's STANCE wears on the
+   take cards, and a phase is not a reading anybody submitted — it is the state
+   of the machine. Mark plus word, no box.
 
-   Amber is also the `cautious` stance on the session cards. Knowing second
-   meaning for one hex, taken because system phase and stance never share a
-   region: revisit if they ever do. Label text comes from lib/session-phase.js,
-   which derives it from the DEADLINE and not from the raw DB state. */
-.rm-sphase { display: inline-flex; align-items: center; font-family: var(--font-mono);
-  font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
-  padding: 0.14rem 0.44rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border); color: var(--color-text-muted); }
-.rm-sphase--open,
-.rm-sphase--aggregating { color: var(--color-warm); border-color: rgba(232, 166, 64, 0.42);
-  background: rgba(232, 166, 64, 0.08); }
-.rm-sphase--published { color: var(--color-accent); border-color: var(--color-accent-line);
-  background: rgba(0, 229, 255, 0.08); }
+     collecting   amber, pulsing   the window is open and takes are arriving
+     aggregating  amber, steady    closed, the protocol is still working
+     everything   muted            published, closed, scheduled: settled, and
+     else                          the state almost every row is in
+
+   Colour marks live work and nothing else. Published used to take cyan, which
+   spent the interface-state hue on the one phase that is true of the entire
+   feed below it. Amber follows the admin's existing .adm-badge--run rather
+   than inventing a second system-state colour; it is also the `cautious`
+   stance on the session cards, a knowing second meaning for one hex, taken
+   because phase and stance never share a region.
+
+   Label text comes from lib/session-phase.js, which derives it from the
+   DEADLINE and not from the raw DB state.
+
+   The mark is a pseudo-element rather than markup, so no surface can render a
+   phase without it, and so `x-text` on the element — which replaces every
+   child node — leaves it standing. */
+.rm-sphase { position: relative; display: inline-flex; align-items: center;
+  font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--color-text-muted);
+  padding-left: calc(6px + 0.5rem); }
+.rm-sphase::before { content: ""; position: absolute; left: 0; top: 50%;
+  width: 6px; height: 6px; margin-top: -3px; background: currentColor; }
+.rm-sphase--open, .rm-sphase--aggregating { color: var(--color-warm); }
+
+/* COLLECTING is the only phase a visitor can still act on, and a static square
+   said exactly what `closed` said. The ring carries it: a square pulse leaving
+   the mark and fading, on a 1.6s heartbeat rather than a spinner's tempo.
+   Transform and opacity only — no glow, no blur, and no layout pass. */
+.rm-sphase--open::after { content: ""; position: absolute; left: 0; top: 50%;
+  width: 6px; height: 6px; margin-top: -3px; border: 1px solid currentColor;
+  animation: rm-collecting 1.6s ease-out infinite; }
+@keyframes rm-collecting {
+  0% { transform: scale(1); opacity: 0.85; }
+  75%, 100% { transform: scale(2.6); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rm-sphase--open::after { animation: none; transform: scale(1.9); opacity: 0.32; }
+}
 
 /* ─── Semantic marks: one data type per channel ────────────────────────────
    Three unrelated things were all rendering as the same small green square: a

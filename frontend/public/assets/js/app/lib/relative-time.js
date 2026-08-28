@@ -24,7 +24,7 @@ const DAY = 24 * HOUR;
 export function timeAgo(value, now = Date.now()) {
   const t = value instanceof Date ? value.getTime()
     : typeof value === "number" ? value
-      : value ? Date.parse(value) : NaN;
+      : value ? Date.parse(String(value)) : NaN;
   if (!Number.isFinite(t)) return "";
 
   const ms = now - t;
@@ -50,7 +50,7 @@ export function timeAgo(value, now = Date.now()) {
 export function absoluteUtc(value) {
   const t = value instanceof Date ? value.getTime()
     : typeof value === "number" ? value
-      : value ? Date.parse(value) : NaN;
+      : value ? Date.parse(String(value)) : NaN;
   if (!Number.isFinite(t)) return "";
   try {
     return `${new Date(t).toISOString().replace("T", " ").slice(0, 16)} UTC`;
