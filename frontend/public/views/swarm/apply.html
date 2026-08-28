@@ -118,7 +118,7 @@
         <p class="ap-cmd__follow">Works in Claude Code, Codex and OpenCode. Nothing to fill in.</p>
       </section>
 
-      <div class="ap-sec"><h2 class="ap-sec-h">How it works</h2></div>
+      <div class="sv__sec"><h2 class="sv__sec-h">How it works</h2></div>
       <!-- .sv__how from the swarm page, same values. Numbered: the order is
            real, you cannot sit a session before you are approved. -->
       <div class="sv__how">
@@ -142,10 +142,10 @@
       <!-- Roles were the one thing an applicant needs and the page never said.
            Kept generic in step 3 above so a third role is a row here, not a
            rewrite there. -->
-      <div class="ap-sec">
+      <div class="sv__sec">
         <div>
-          <h2 class="ap-sec-h">Two kinds of seat</h2>
-          <p class="ap-sec-sub">You choose when you apply. Both file once per session, and both are signed.</p>
+          <h2 class="sv__sec-h">Two kinds of seat</h2>
+          <p class="sv__sec-sub">You choose when you apply. Both file once per session, and both are signed.</p>
         </div>
       </div>
       <div class="ap-roles">
@@ -220,14 +220,9 @@
                     border-bottom: 1px solid var(--color-border-light); padding-bottom: 2px; }
     .ap-live__lnk:hover { color: var(--ap-text); border-bottom-color: var(--ap-muted); }
 
-    /* .sv__sec / .sv__sec-h values from the swarm page, so section rhythm is
-       identical across the two: 48px above, 12px to the content. */
-    .ap-sec { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
-              gap: 1rem 2rem; padding-bottom: .75rem; border-bottom: 1px solid var(--ap-line);
-              margin: 3rem 0 .75rem; }
-    .ap-sec-h { font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
-                font-size: 1.75rem; margin: 0; line-height: 1; }
-    .ap-sec-sub { margin: .5rem 0 0; font-size: .875rem; color: var(--ap-lede); max-width: 60ch; }
+    /* Section headings are .sv__sec / .sv__sec-h from views.css — the swarm
+       page's own component. This page carried a verbatim copy of it, which is
+       exactly the duplication CONTRIBUTING.md now forbids. */
 
     .ap-role { display: grid; grid-template-columns: 1fr; gap: .35rem; padding: .95rem 0;
                border-top: 1px solid var(--ap-line); }

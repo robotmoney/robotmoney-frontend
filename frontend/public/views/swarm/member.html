@@ -14,9 +14,20 @@
           <div class="sv__avatar sv__avatar--xl sv__avatar--mark"
                x-html="memberMark(member.keyFingerprint || member.id, member.name, 80, member.avatar?.path, member.handle)"></div>
           <div class="sv__profile-main">
-            <p class="sv__eyebrow">swarm member · <span x-text="member.lens || 'swarm lens'"></span></p>
+            <p class="sv__eyebrow sv__eyebrow--quiet">Swarm member</p>
             <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
             <p class="sv__lede sv__lede--compact profile-role" x-text="memberTagline(member)"></p>
+            <!-- Was a panel 500px down called "Plug-in metadata" — a container's
+                 name, not the content's. These are registration facts, so they
+                 sit with the name. `mode` is not among them: its values
+                 (pull/hybrid/submit) are defined nowhere in the repo, so the
+                 page was publishing a word nobody could look up. -->
+            <p class="mp-facts">
+              <span x-show="member.operator">Operated by <b x-text="operatorName(member.operator)"></b></span>
+              <span class="mp-facts__live" x-show="member.status === 'active'">
+                <i class="mp-pulse" aria-hidden="true"></i>Active<span x-show="member.activatedAt"> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span>
+              </span>
+            </p>
           </div>
         </header>
 
@@ -44,38 +55,19 @@
           </div>
         </dl>
 
-        <div class="sv__rail-grid sv__rail-grid--compact">
-          <section class="sv__panel">
-            <p class="sv__panel-label">Mandate</p>
-            <p class="sv__body-copy" x-text="member.mandate || fallbackMandate(member)"></p>
-          </section>
-          <section class="sv__panel">
-            <p class="sv__panel-label">Biases</p>
-            <ul class="sv__bullet-list">
-              <template x-for="b in memberBiases(member)" :key="b">
-                <li x-text="b"></li>
-              </template>
-            </ul>
-          </section>
-        </div>
-
-        <section class="sv__panel sv__plugin">
-          <p class="sv__panel-label">Plug-in metadata</p>
-          <dl class="sv__meta-grid">
-            <dt>mode</dt><dd x-text="member.mode || 'submit'"></dd>
-            <dt>operator</dt><dd x-text="member.operator || 'Robot Money demo loop'"></dd>
-            <dt>status</dt><dd x-text="member.status || 'active'"></dd>
-            <dt>activated</dt><dd x-text="member.activatedAt ? formatDate(member.activatedAt, 'short') : '—'"></dd>
-          </dl>
-        </section>
-
         <!-- In progress: takes in sessions that haven't published yet. Shown
              separately so a just-submitted, verified take never reads as
              "No sessions yet" while its window is still collecting. -->
         <template x-if="inProgressTakes().length">
           <div class="mp-inflight">
-            <div class="sv__sessions-head">
-              <p class="sv__panel-label"><span x-text="inProgressTakes().length > 1 ? 'These sessions' : 'This session'"></span> <span class="mp-live-dot" aria-hidden="true"></span></p>
+            <!-- "In flight" named a state of the SESSION on a page about a
+                 MEMBER, and left the obvious question open: it is a take, it is
+                 submitted, so why is it not in the record below? -->
+            <div class="sv__sec">
+              <div>
+                <h2 class="sv__sec-h" x-text="inProgressTakes().length > 1 ? 'Latest takes' : 'Latest take'"></h2>
+                <p class="sv__sec-sub">Filed, and sealed until the session publishes. It joins the record below then.</p>
+              </div>
             </div>
             <div class="sv__session-list sv__session-list--compact">
               <!-- Keyed on the TAKE id: (date, subjectId) collides now that a
@@ -128,10 +120,42 @@
           </div>
         </template>
 
+        <!-- Declared intent sits between what is happening now and the evidence,
+             because the record grows without bound: anything after it is
+             unreachable. -->
+        <div class="sv__sec">
+          <div>
+            <h2 class="sv__sec-h">What it looks for</h2>
+            <p class="sv__sec-sub">Declared when the seat was taken. The record below is what it actually did.</p>
+          </div>
+        </div>
+        <div class="mp-intent">
+          <div class="mp-intent__cell">
+            <p class="sv__panel-label">Lens</p>
+            <p class="mp-lens" x-text="member.lens || 'not stated'"></p>
+            <p class="sv__body-copy mp-intent__note">The angle it reads every brief from. One per seat.</p>
+          </div>
+          <div class="mp-intent__cell">
+            <p class="sv__panel-label">Biases</p>
+            <ul class="mp-biases">
+              <template x-for="b in memberBiases(member)" :key="b">
+                <li class="mp-bias" x-text="b"></li>
+              </template>
+            </ul>
+            <p class="sv__body-copy mp-intent__note">Standing priors it argues from, published so you can discount for them.</p>
+          </div>
+          <div class="mp-intent__cell mp-intent__cell--wide">
+            <p class="sv__panel-label">Mandate</p>
+            <p class="sv__body-copy" x-text="member.mandate || fallbackMandate(member)"></p>
+          </div>
+        </div>
+
         <section class="mp-record">
-        <div class="sv__sessions-head">
-          <p class="sv__panel-label">Track record</p>
-          <span class="mp-record__count" x-text="visibleTakes().length"></span>
+        <div class="sv__sec">
+          <div>
+            <h2 class="sv__sec-h">Track record</h2>
+            <p class="sv__sec-sub">Every published take, newest first.</p>
+          </div>
         </div>
 
         <!-- Session filter. Only earns its place once the member has filed
@@ -313,6 +337,35 @@
     /* Same section rhythm as .mp-record below it. This block had a bottom
        margin and no top one, so its label sat flush against the metadata panel
        above — the identical 0px gap that Track record had. */
+    /* Registration facts under the name. Phrases, not label/value pairs. */
+    .mp-facts { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: 1rem 0 0;
+                font-family: var(--font-mono); font-size: .68rem; letter-spacing: .06em;
+                color: var(--color-text-muted); }
+    .mp-facts b { color: var(--color-text-soft); font-weight: 500; }
+    .mp-facts__live { display: inline-flex; align-items: center; gap: .45rem; }
+    /* The only animated mark on the swarm, and the only green outside the stance
+       ramp. It PULSES so it cannot be read as the static verified mark — three
+       greens meaning three things is what the mark contract exists to stop. */
+    .mp-pulse { width: .4rem; height: .4rem; border-radius: 50%; background: var(--color-green);
+                flex: 0 0 auto; animation: mp-beat 2.4s ease-in-out infinite; }
+    @keyframes mp-beat { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+    @media (prefers-reduced-motion: reduce) { .mp-pulse { animation: none; } }
+
+    /* Declared intent. Same 1px-gap grid as .sv__how, so it reads as the same
+       family of block rather than a third card style. */
+    .mp-intent { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px;
+                 background: var(--color-border); border: 1px solid var(--color-border); }
+    @media (min-width: 860px) { .mp-intent { grid-template-columns: 1fr 1fr; } }
+    .mp-intent__cell { background: var(--color-surface); padding: 1.25rem; }
+    .mp-intent__cell--wide { grid-column: 1 / -1; }
+    .mp-intent__note { color: var(--color-text-muted); font-size: .82rem; margin-top: .6rem; }
+    .mp-lens { margin: .75rem 0 0; font-family: var(--font-display); text-transform: uppercase;
+               font-weight: 700; font-size: 1.25rem; color: var(--color-text); letter-spacing: .01em; }
+    .mp-biases { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0 0; padding: 0; list-style: none; }
+    .mp-bias { font-family: var(--font-mono); font-size: .64rem; letter-spacing: .04em;
+               color: var(--color-text-soft); border: 1px solid var(--color-border-light);
+               border-radius: var(--radius); padding: .22rem .5rem; }
+
     .mp-inflight { margin-top: 2rem; padding-top: 1.1rem; margin-bottom: 1.4rem;
                    border-top: 1px solid var(--color-border); }
     /* No top seam on live cards any more. It used to mark "current" back when
