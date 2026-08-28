@@ -268,3 +268,38 @@ test("expanding a session card loads that session's takes in place", async ({ pa
   await card.locator(".sv__takes-btn").click();
   await expect(card.locator(".sv__take-row")).toHaveCount(0);
 });
+
+
+// The role tooltip hangs off a `.sv__mtable th`, which is `white-space:
+// nowrap` so the column headers never wrap. The bubble INHERITED that and laid
+// its 218 characters out as one 1327px line inside a 272px box: one visible
+// line, the rest off the side of the screen. .rm-tip__bub resets every other
+// text property its host might impose (transform, tracking, weight, align)
+// precisely so it can be anchored anywhere, and white-space was the one it
+// missed — so this asserts the reset, not the one caller.
+test("a tooltip anchored in a nowrap header still wraps its text", async ({ page }) => {
+  await page.route("**/api/swarm/members*", (route) =>
+    route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));
+  await page.route("**/api/swarm/sessions*", (route) => route.fulfill(json({ sessions: [], nextCursor: null })));
+
+  await page.goto("/swarm");
+  const tip = page.locator("th .rm-tip");
+  await expect(tip).toHaveCount(1);
+  await tip.locator(".rm-tip__btn").click();
+
+  const bub = tip.locator(".rm-tip__bub");
+  await expect(bub).toBeVisible();
+
+  const box = await bub.evaluate((el) => ({
+    overflowing: el.scrollWidth > el.clientWidth + 1,
+    lines: Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)),
+    whiteSpace: getComputedStyle(el).whiteSpace,
+    chars: el.textContent!.trim().length,
+  }));
+
+  expect(box.whiteSpace, "the bubble must not inherit the header's nowrap").toBe("normal");
+  expect(box.overflowing, "the bubble's text must fit its own width").toBe(false);
+  // A sentence this long cannot honestly be one or two lines at this measure.
+  expect(box.chars).toBeGreaterThan(120);
+  expect(box.lines).toBeGreaterThan(2);
+});
