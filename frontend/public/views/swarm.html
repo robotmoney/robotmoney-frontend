@@ -139,13 +139,35 @@
           <template x-for="p in portfolios()" :key="p.id">
             <div class="sv__cov-r" :class="{ 'sv__cov-r--ours': p.isVault }">
               <span class="sv__cov-n">
-                <i class="rm-mark rm-mark--identity" aria-hidden="true"></i>
+                <span class="sv__cov-mark" aria-hidden="true" x-html="portfolioMark(p.isFramework ? 'framework' : 'wallets')"></span>
                 <a class="sv__row-title" :href="`/swarm/subjects/${p.id}`" x-text="p.name"></a>
                 <span class="sv__cov-op" x-show="p.operator">
                   <span x-text="p.operator"></span><template x-if="p.isVault"><span> · <b>our vault</b></span></template>
                 </span>
               </span>
               <span class="sv__cov-m"><b x-text="p.count"></b> sessions · latest <span x-text="formatDate(p.latest)"></span></span>
+              <!-- What the swarm is actually looking at. Three of these are
+                   real addresses on real chains and the fourth has none,
+                   because it is the recipe the vault is measured against
+                   rather than a book of holdings. That is the biggest
+                   difference between the rows and it was not on the page. -->
+              <p class="sv__cov-points">
+                <template x-if="!p.isFramework">
+                  <span>
+                    <span x-show="walletsLine(p)" x-text="walletsLine(p)"></span>
+                    <span x-show="nftLine(p)"> &middot; <span x-text="nftLine(p)"></span></span>
+                    <!-- The allocation is not a fourth row: it folds into the
+                         vault it is the recipe for (parentFor). Saying so here
+                         is the difference between a fold and a row that looks
+                         like it is missing something. -->
+                    <span x-show="foldedInto(p.id)"> &middot; <span>plus its target allocation</span></span>
+                    <span class="sv__unset" x-show="!walletsLine(p) && !nftLine(p)">No addresses on record</span>
+                  </span>
+                </template>
+                <template x-if="p.isFramework">
+                  <span>No wallets. This is the target recipe, not a book of holdings.</span>
+                </template>
+              </p>
               <p class="sv__cov-d" x-show="p.thesisBlurb" x-text="p.thesisBlurb"></p>
               <div class="sv__cov-x" x-show="p.isVault">
                 <p>Here a recommendation is <b>target weights</b>. For the others it is a verdict.</p>
@@ -174,7 +196,6 @@
             <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === p.id }"
                     @click="filterBy(p.id)" :aria-pressed="subjectFilter === p.id"
                     :title="subjectFilter === p.id ? `Clear the ${p.name} filter` : `Show only ${p.name}`">
-              <i class="mp-chip__dot rm-mark rm-mark--identity" aria-hidden="true"></i>
               <span x-text="p.name"></span> <span class="mp-chip__n" x-text="p.count"></span>
               <span class="mp-chip__x" x-show="subjectFilter === p.id" aria-hidden="true">×</span>
             </button>
