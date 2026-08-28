@@ -59,7 +59,10 @@ async function fetchJson(url) {
 // cached rejection would let one transient blip disable the target and actual
 // columns for the rest of the session, with no way back short of a reload.
 let allocationFrameworkPromise = null;
-function loadAllocationFramework() {
+// Exported so the swarm index can compute the vault's sleeves from the same
+// token map the session page uses. It belongs in lib/ with the other shared
+// loaders; moving it is a bigger change than the one that needed it.
+export function loadAllocationFramework() {
   if (!allocationFrameworkPromise) {
     allocationFrameworkPromise = fetchJson("/data/swarm/manifests/allocation.json")
       .then((raw) => ({

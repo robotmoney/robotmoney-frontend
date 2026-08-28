@@ -19,6 +19,7 @@ import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
+import { loadAllocationFramework } from "../static-views.js";
 
 // Every seat proposes today. There is no role field on the projection yet, and
 // the second role (validator) ships with its first holder, so this is a named
@@ -79,6 +80,12 @@ export function registerSwarmView(Alpine) {
     // The vault's target allocation, as published. Guarded: the vault row
     // degrades to its wallet line if this route is unreachable.
     allocationFw: null,
+    // The published manifest (token -> bucket) and the vault's latest holdings.
+    // "Current" is derived from the two together and cannot be read off either.
+    allocationManifest: null,
+    vaultSnapshot: null,
+    // Rows whose thesis the reader has opened.
+    openTheses: {},
     destroy() {
       if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
     },
@@ -97,9 +104,13 @@ export function registerSwarmView(Alpine) {
         // this whole regrouping turns on: `source.type`. `subjectCache` has
         // existed since the port and was never written to, which is why the
         // panel has always shown a raw id where an operator belongs.
+        // Subjects first: the portfolio rows need their names and source.type,
+        // and loadAllocation() asks portfolios() which of them is the vault.
         await this.loadSubjects();
-        await this.loadLiveTakes();
-        await this.loadAllocation();
+        // The last two are independent of each other, and were awaited one
+        // after the other for no reason: two round trips of dead time before
+        // the page could paint.
+        await Promise.all([this.loadLiveTakes(), this.loadAllocation()]);
         this.loading = false;
       } catch (e) {
         this.error = e.message;
@@ -147,7 +158,83 @@ export function registerSwarmView(Alpine) {
       } catch (_) { this.liveTakes = null; }
     },
     async loadAllocation() {
-      try { this.allocationFw = await api.get(ROUTES.dashboards.allocation); } catch (_) { this.allocationFw = null; }
+      const vault = this.portfolios().find((p) => p.isVault);
+      const [fw, manifest, snaps] = await Promise.all([
+        api.get(ROUTES.dashboards.allocation).catch(() => null),
+        loadAllocationFramework().catch(() => null),
+        vault ? api.get(path(ROUTES.swarm.subjectSnapshots, { id: vault.id })).catch(() => null) : null,
+      ]);
+      this.allocationFw = fw;
+      this.allocationManifest = manifest;
+      // The list is not date-ordered, so take the newest rather than the last.
+      const list = (snaps?.snapshots || snaps || []).filter(Boolean);
+      this.vaultSnapshot = list.length
+        ? list.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || ""))).pop()
+        : null;
+    },
+
+    // ── the vault's four sleeves ─────────────────────────────────────────
+    // Target comes from the published framework. CURRENT is derived: each
+    // bucket's share of NAV, summed from the positions whose token the
+    // manifest assigns to it — the same computation the session page's bucket
+    // chart runs, from the same manifest.
+    sleeveActuals() {
+      const buckets = this.allocationManifest?.buckets || [];
+      const positions = this.vaultSnapshot?.positions || [];
+      const total = Number(this.vaultSnapshot?.totalValueUsd ?? this.vaultSnapshot?.total_value_usd ?? 0);
+      const out = { byName: new Map(), covered: 0, total };
+      if (!buckets.length || !positions.length || !(total > 0)) return out;
+      for (const b of buckets) {
+        const held = positions
+          .filter((p) => b.tokens.includes(String(p.token || "").toUpperCase()))
+          .reduce((sum, p) => sum + Number(p.value_usd || 0), 0);
+        out.byName.set(this.normBucket(b.name || b.id), held / total);
+        out.covered += held;
+      }
+      return out;
+    },
+    normBucket(v) { return String(v || "").toLowerCase().replace(/[^a-z0-9]/g, ""); },
+
+    // Whether "current" is worth drawing at all. Every token in the book has to
+    // land in a bucket for the four shares to be a picture of the whole vault;
+    // when they do not, the missing value silently reads as a bucket being
+    // UNDERWEIGHT, which is a claim about the swarm rather than about a gap in
+    // the token map. Today ROBOT is 50% of NAV and is in no bucket, so this is
+    // false and the panel shows targets alone.
+    sleeveCoverage() {
+      const a = this.sleeveActuals();
+      return a.total > 0 ? a.covered / a.total : 0;
+    },
+    showsCurrent() { return this.sleeveCoverage() >= 0.995; },
+    sleeveAsOf() {
+      const d = this.vaultSnapshot?.date;
+      return d ? this.formatDate(d) : "";
+    },
+    sleeves() {
+      const targets = this.allocationTargets();
+      if (!targets.length) return [];
+      const actuals = this.sleeveActuals();
+      const show = this.showsCurrent();
+      return targets.map((t) => {
+        const cur = show ? actuals.byName.get(this.normBucket(t.label)) : null;
+        const current = Number.isFinite(cur) ? cur * 100 : null;
+        return {
+          ...t,
+          current,
+          drift: current === null || t.pct === null ? null : Math.round((current - t.pct) * 10) / 10,
+        };
+      });
+    },
+    driftLabel(d) {
+      if (d === null) return "";
+      if (Math.abs(d) < 0.05) return "on target";
+      return `${d > 0 ? "+" : "\u2212"}${Math.abs(d).toFixed(1)}`;
+    },
+
+    thesisOpen(id) { return !!this.openTheses[id]; },
+    toggleThesis(id) {
+      if (this.openTheses[id]) { const { [id]: _d, ...rest } = this.openTheses; this.openTheses = rest; return; }
+      this.openTheses = { ...this.openTheses, [id]: true };
     },
     // The four buckets and the weight each is held to. Two of the four sit at
     // 0% today, which is why this is figures and not a bar: a bar would draw
