@@ -245,6 +245,47 @@ export function registerSwarmView(Alpine) {
       return meta.source?.type === "framework" ? "target allocation" : "holdings";
     },
     portfolioName(id) { return this.subjectCache[id]?.name || id; },
+    // Two glyphs, from a fixed switch and never from data, so x-html here can
+    // never carry anything a subject supplied. A neutral square said "this is
+    // an identity" and nothing else, which is true of every row and therefore
+    // told a reader nothing: the wallet mark says this portfolio is addresses
+    // on a chain, and the bucket mark says it is a set of weights.
+    portfolioMark(kind) {
+      const open = '<svg class="rm-pmark" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">';
+      return kind === "framework"
+        // Unequal columns: a recipe, and at 95/5/0/0 an honest one.
+        ? `${open}<rect x="1.6" y="2.6" width="10.8" height="8.8"/><path d="M9.2 2.6v8.8M11 2.6v8.8"/></svg>`
+        // A card with a flap and a chip: something that holds value.
+        : `${open}<rect x="1.6" y="3.4" width="10.8" height="8"/><path d="M1.6 6.2h10.8"/><rect x="8.4" y="8" width="2.6" height="1.8" fill="currentColor" stroke="none"/></svg>`;
+    },
+    portfolioKindOf(id) {
+      const t = this.subjectCache[id]?.source?.type;
+      return t === "framework" ? "framework" : "wallets";
+    },
+
+    // ── what a portfolio points at ───────────────────────────────────────
+    // The rows said who operates a portfolio and how often it is reviewed,
+    // and never what it actually IS: three of the four are real addresses on
+    // real chains, and the fourth has none because it is the target recipe
+    // the vault is measured against. That is the most load-bearing difference
+    // between them and it was invisible.
+    chainsOf(list) {
+      return [...new Set((list || []).map((w) => String(w?.chain || "").trim()).filter(Boolean))];
+    },
+    walletsLine(p) {
+      const n = p?.wallets?.length || 0;
+      if (!n) return "";
+      const chains = this.chainsOf(p.wallets);
+      const noun = n === 1 ? "wallet" : "wallets";
+      return chains.length ? `${n} ${noun} on ${chains.join(", ")}` : `${n} ${noun}`;
+    },
+    nftLine(p) {
+      const n = p?.nftContracts?.length || 0;
+      if (!n) return "";
+      const chains = this.chainsOf(p.nftContracts);
+      const noun = n === 1 ? "NFT contract" : "NFT contracts";
+      return chains.length ? `${n} ${noun} on ${chains.join(", ")}` : `${n} ${noun}`;
+    },
     portfolios() {
       const map = new Map();
       for (const s of this.publishedSessions()) {
@@ -257,6 +298,12 @@ export function registerSwarmView(Alpine) {
           operator: operatorName(meta.operator),
           thesisBlurb: meta.thesisBlurb || null,
           isVault: meta.source?.type === "vault_tvl",
+          // What KIND of thing this is, and what it points at. `framework` has
+          // no wallets because it IS the recipe rather than a book of
+          // holdings, which is the one distinction the row never drew.
+          isFramework: meta.source?.type === "framework",
+          wallets: Array.isArray(meta.wallets) ? meta.wallets : [],
+          nftContracts: Array.isArray(meta.nftContracts) ? meta.nftContracts : [],
           count: 0,
           latest: null,
         };

@@ -171,7 +171,6 @@
             <button type="button" class="mp-chip" :class="{ 'is-on': subject === s.id }"
                     @click="filterBy(s.id)" :aria-pressed="subject === s.id"
                     :title="subject === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
-              <i class="mp-chip__dot rm-mark rm-mark--identity" aria-hidden="true"></i>
               <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
               <span class="mp-chip__x" x-show="subject === s.id" aria-hidden="true">×</span>
             </button>
