@@ -2,6 +2,8 @@
 // coverage; issue #358 is the first thing to import this module from a
 import { sessionPhase, isLiveState } from "../../lib/session-phase.js";
 import { timeAgo, absoluteUtc } from "../../lib/relative-time.js";
+import { stanceColor, stanceClass, stanceStyle } from "../../lib/stance.js";
+import { operatorName, isHouseOperator } from "../../lib/operator.js";
 // typechecked .ts file (scripts/tests/unit/swarm-synthesis-preview.test.ts),
 // which pulls the whole file into the root TS program transitively and
 // surfaces a pile of pre-existing implicit-any errors unrelated to this
@@ -27,23 +29,6 @@ const ROLE_EMITS = {
   validator: "a score per take. Never a market view",
 };
 
-// Operators the house runs itself. Anything else is an external operator, and
-// a member with no operator set gets no chip at all rather than an invented one.
-// The company is RM Protocol Labs. `operator` is free text that each member and
-// each portfolio sets for itself, so the API serves two spellings of the same
-// outfit: "robotmoney" on two members and on both our portfolios, "RM Protocol
-// Labs" on a third member. Rendered verbatim that puts a slug and a company
-// name in the same column, both marked house, reading as two different
-// operators. Canonicalize on the way to the screen. The records want the same
-// normalization, but that is an admin write and not this file's job.
-const HOUSE_OPERATOR = "RM Protocol Labs";
-const HOUSE_ALIASES = new Set(["robotmoney", "robot money", "rm protocol labs", "rm protocol"]);
-const isHouseOperator = (op) => HOUSE_ALIASES.has(String(op || "").trim().toLowerCase());
-const operatorName = (op) => {
-  const s = String(op || "").trim();
-  if (!s) return null;
-  return isHouseOperator(s) ? HOUSE_OPERATOR : s;
-};
 
 // The sessions list is paginated and the page used to render only the first
 // page while presenting its counts as totals. 209 published sessions arrive in
@@ -390,12 +375,12 @@ export function registerSwarmView(Alpine) {
       return q ? `${q.submitted}/${q.active} submitted` : "";
     },
     regimeLabel(r) { return r ? String(r).replace(/_/g, "-") : "—"; },
-    stanceColor(s) {
-      // Sentiment on the Beam/Pool/Beacon covenant (mirrors STANCE_COLORS in
-      // static-views.js): green mass for conviction, slate neutral, sand → beacon
-      // for the negative/attention end.
-      return ({ bullish: "#10b981", constructive: "#34d399", neutral: "#7e889e", cautious: "#e8a640", bearish: "#ff7a29" }[s] || "#7e889e");
-    },
+    // One ramp, in lib/stance.js. This used to hold a second copy of the five
+    // colours, so the same stance could be painted differently here than on a
+    // member profile.
+    stanceColor(s) { return stanceColor(s); },
+    stanceClass(s) { return stanceClass(s); },
+    stanceStyle(s) { return stanceStyle(s); },
     formatDate(value, style = "short") {
       const date = String(value || "").includes("T") ? new Date(value) : new Date(`${value}T00:00:00Z`);
       const opts = style === "long"

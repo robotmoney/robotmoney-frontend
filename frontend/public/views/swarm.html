@@ -209,7 +209,9 @@
               </div>
               <div class="sv__stance-line">
                 <template x-for="[stance, n] in stanceEntries(s)" :key="stance">
-                  <span class="sv__stance-dotline"><i class="rm-mark rm-mark--reading" :style="`background:${stanceColor(stance)}`"></i><b x-text="n"></b> <span x-text="stance"></span></span>
+                  <span class="sv__stance-badge" :style="stanceStyle(stance)">
+                    <i class="rm-mark rm-mark--reading" :style="`background:${stanceColor(stance)}`"></i><b x-text="n"></b>&nbsp;<span x-text="stance"></span>
+                  </span>
                 </template>
               </div>
               <div class="sv__sout" x-show="showsWeights(s)" :class="{ 'sv__sout--none': !sessionWeights(s) }">
