@@ -13,7 +13,26 @@
   </div>
 
   <div class="sv__body">
-    <p class="sv__loading" x-show="loading">Loading swarm…</p>
+    <!-- A skeleton, not a sentence. "Loading swarm…" is one line tall, so when
+         the real page arrived it pushed the disclaimer and the footer down by
+         a full screen: measured CLS 0.4974, where 0.25 is already "poor". This
+         holds roughly the shape and more than a viewport of the height, so
+         nothing visible moves when the content lands. Its own text is for
+         screen readers; the boxes are decoration and say so. -->
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading the swarm</p>
+    <div class="sv__skel" x-show="loading" aria-hidden="true">
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-cols">
+        <div class="sv__skel-box"></div><div class="sv__skel-box"></div><div class="sv__skel-box"></div>
+      </div>
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-rows">
+        <div class="sv__skel-row"></div><div class="sv__skel-row"></div><div class="sv__skel-row"></div>
+        <div class="sv__skel-row"></div><div class="sv__skel-row"></div>
+      </div>
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-card"></div><div class="sv__skel-card"></div>
+    </div>
     <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
 
     <template x-if="!loading && !error">
@@ -142,7 +161,7 @@
                 <span class="sv__cov-mark" aria-hidden="true" x-html="portfolioMark(p.isFramework ? 'framework' : 'wallets')"></span>
                 <a class="sv__row-title" :href="`/swarm/subjects/${p.id}`" x-text="p.name"></a>
                 <span class="sv__cov-op" x-show="p.operator">
-                  <span x-text="p.operator"></span><template x-if="p.isVault"><span> · <b>our vault</b></span></template>
+                  <span x-text="p.operator"></span><template x-if="p.isVault"><span></span></template>
                 </span>
               </span>
               <span class="sv__cov-m"><b x-text="p.count"></b> sessions · latest <span x-text="formatDate(p.latest)"></span></span>
@@ -160,7 +179,7 @@
                          vault it is the recipe for (parentFor). Saying so here
                          is the difference between a fold and a row that looks
                          like it is missing something. -->
-                    <span x-show="foldedInto(p.id)"> &middot; <span>plus its target allocation</span></span>
+                    <span x-show="foldedInto(p.id)"> &middot; <span>reviewed two ways</span></span>
                     <span class="sv__unset" x-show="!walletsLine(p) && !nftLine(p)">No addresses on record</span>
                   </span>
                 </template>
@@ -168,7 +187,14 @@
                   <span>No wallets. This is the target recipe, not a book of holdings.</span>
                 </template>
               </p>
-              <p class="sv__cov-d" x-show="p.thesisBlurb" x-text="p.thesisBlurb"></p>
+              <template x-if="p.thesisBlurb">
+                <div class="sv__cov-thesis">
+                  <p class="sv__cov-d" :class="{ 'is-open': thesisOpen(p.id) }" x-text="p.thesisBlurb"></p>
+                  <button type="button" class="sv__cov-more" @click="toggleThesis(p.id)"
+                          :aria-expanded="thesisOpen(p.id) ? 'true' : 'false'"
+                          x-text="thesisOpen(p.id) ? 'Less' : 'More'"></button>
+                </div>
+              </template>
               <!-- The vault is not another portfolio the swarm has opinions
                    about. It is the one whose review becomes a real allocation,
                    and the row said so in a sentence a reader had no reason to
@@ -177,21 +203,55 @@
               <template x-if="p.isVault">
               <div class="sv__vault">
                 <p class="sv__vault-h">Our product</p>
-                <p class="sv__vault-d">The swarm reviews this vault, and its recommendation is the
-                  <b>target allocation</b> the vault is held to. Every other portfolio here gets a verdict.</p>
+                <p class="sv__vault-t">Four sleeves. One recommendation that moves them.</p>
+                <p class="sv__vault-d">Every other portfolio on this page gets a verdict and nothing else.
+                  This one gets an <b>allocation</b>. The swarm reads the vault's book each session, and the
+                  target weights it settles on are the weights the vault is held to.</p>
+                <!-- The feed below lists this portfolio twice, because the two
+                     reviews are two subjects in the backend with their own
+                     sessions, takes and quorum. Saying so here is what stops
+                     that reading as the same session listed by mistake. -->
+                <p class="sv__vault-d" x-show="foldedInto(p.id)">It is reviewed <b>two ways</b>: its
+                  <b>holdings</b>, position by position, and the <b>target allocation</b> those holdings
+                  are measured against. Each is its own session in the feed below.</p>
                 <template x-if="allocationTargets().length">
                   <div class="sv__vault-alloc">
                     <p class="sv__vault-label">
                       Target in force<span x-show="allocationAsOf()"> &middot; since <span x-text="allocationAsOf()"></span></span>
                     </p>
-                    <dl class="sv__buckets">
-                      <template x-for="t in allocationTargets()" :key="t.label">
-                        <div class="sv__bucket">
-                          <dt><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></dt>
-                          <dd x-text="t.pct === null ? '—' : `${t.pct}%`"></dd>
+                    <!-- Target always; current and drift only when every token
+                         in the book lands in a bucket. See showsCurrent(). -->
+                    <div class="sv__sleeves" :class="{ 'sv__sleeves--wide': showsCurrent() }">
+                      <div class="sv__sleeve sv__sleeve--head" aria-hidden="true">
+                        <span>Sleeve</span>
+                        <span>Target</span>
+                        <template x-if="showsCurrent()"><span>Current</span></template>
+                        <template x-if="showsCurrent()"><span>Drift</span></template>
+                      </div>
+                      <template x-for="t in sleeves()" :key="t.label">
+                        <div class="sv__sleeve">
+                          <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
+                          <span class="sv__sleeve-v" x-text="t.pct === null ? '—' : `${t.pct}%`"></span>
+                          <template x-if="showsCurrent()">
+                            <span class="sv__sleeve-v" x-text="t.current === null ? '—' : `${t.current.toFixed(1)}%`"></span>
+                          </template>
+                          <template x-if="showsCurrent()">
+                            <span class="sv__sleeve-v sv__sleeve-drift"
+                                  :class="{ 'is-off': t.drift !== null && Math.abs(t.drift) >= 0.05 }"
+                                  x-text="driftLabel(t.drift)"></span>
+                          </template>
                         </div>
                       </template>
-                    </dl>
+                    </div>
+                    <!-- Said once, plainly, rather than drawing a comparison the
+                         data cannot support. -->
+                    <p class="sv__sleeve-note" x-show="!showsCurrent()">
+                      Current weights are not shown: part of the book holds tokens the published
+                      framework does not assign to a sleeve, so the four shares would not add up to it.
+                    </p>
+                    <p class="sv__sleeve-note" x-show="showsCurrent() && sleeveAsOf()">
+                      Current as of <span x-text="sleeveAsOf()"></span>.
+                    </p>
                   </div>
                 </template>
                 <a class="sv__cov-lnk" href="/vault">See the vault &rarr;</a>
