@@ -190,49 +190,91 @@
                silently, while the surrounding counts still read correctly. That
                is exactly how this list went blank while the chips said "4". -->
           <template x-for="s in visibleSessions()" :key="s.id">
-            <a class="sv__session-card mp-take"
-               :href="sessionHref(s)">
+            <!-- An article, not a link around everything: the takes open in
+                 place, and a button inside an anchor is not markup. -->
+            <article class="sv__session-card">
               <div class="sv__session-top">
                 <div class="sv__session-titleline">
                   <span class="sv__date" x-text="formatDate(s.date, 'short')"></span>
                   <i class="mp-take__dot" aria-hidden="true"></i>
-                  <span class="sv__session-title" x-text="portfolioName(portfolioIdOf(s))"></span>
+                  <a class="sv__session-title" :href="sessionHref(s)" x-text="portfolioName(portfolioIdOf(s))"></a>
                   <span class="sv__qualifier" x-show="qualifierOf(s)" x-text="qualifierOf(s)"></span>
                 </div>
-                <div class="sv__session-meta">
-                  <span x-show="s.regimeSummary">regime: <span x-text="regimeLabel(s.regimeSummary?.regime)"></span></span>
-                  <span x-show="!s.regimeSummary && s.state" x-text="s.state"></span>
-                  <span x-text="quorumText(s)"></span>
-                </div>
+                <!-- Was "regime: risk-on" on every card. The regime is a
+                     property of the DAY, identical for every session that
+                     ran on it, so as a per-card fact it distinguished
+                     nothing. It stays on the session page, where the whole
+                     panel that gives it meaning is. -->
+                <span class="sv__session-meta" x-show="closedAgo(s)">
+                  window closed <b class="sv__live-n" x-text="closedAgo(s)" :title="closedAbsolute(s)"></b>
+                </span>
               </div>
-              <div class="sv__stance-line">
-                <!-- One dot per take, not a digit. The count used to sit inside
-                     the pill between the mark and the word, which put a figure
-                     in the middle of a two-word label and made every pill a
-                     different width for no reason a reader could see. A tally
-                     says the same number in the channel the mark already owns:
-                     these are readings, and there are this many of them. The
-                     spoken label still carries the digit. -->
-                <template x-for="[stance, n] in stanceEntries(s)" :key="stance">
-                  <span class="sv__stance-badge" :style="stanceStyle(stance)"
-                        :aria-label="`${n} ${stance}`">
-                    <span class="sv__stance-tally" aria-hidden="true">
-                      <template x-for="i in tallyDots(n)" :key="i">
-                        <i class="rm-mark rm-mark--reading" :style="`background:${stanceColor(stance)}`"></i>
-                      </template>
-                    </span>
-                    <span aria-hidden="true" x-text="stance"></span>
-                    <b class="sv__stance-over" x-show="tallyRest(n)" x-text="tallyRest(n)" aria-hidden="true"></b>
-                  </span>
+
+              <!-- The spread, then the one-line reading of it. -->
+              <div class="sv__spread" role="img" :aria-label="`Stances: ${spreadLabel(s)}`" x-show="stanceSpread(s).length">
+                <template x-for="r in stanceSpread(s)" :key="r.stance">
+                  <i :style="`flex:${r.n};background:${stanceColor(r.stance)}`"></i>
                 </template>
               </div>
-              <div class="sv__sout" x-show="showsWeights(s)" :class="{ 'sv__sout--none': !sessionWeights(s) }">
-                <i aria-hidden="true"></i>
-                <span x-show="sessionWeights(s)">Recommended <b x-text="sessionWeights(s)"></b></span>
-                <span x-show="!sessionWeights(s)">No weight change</span>
+              <p class="sv__verdict">
+                <b class="sv__lean" :style="leanStyle(s)" x-show="lean(s)" x-text="lean(s)?.label"></b>
+                <span x-text="quorumText(s)"></span>
+                <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
+              </p>
+
+              <!-- What it decided, which is what the reader came for. -->
+              <template x-if="recommendation(s)">
+                <dl class="sv__rec">
+                  <dt>Recommendation</dt>
+                  <template x-if="recommendation(s).kind === 'weights'">
+                    <dd>Target weights <b class="sv__rec-n" x-text="recommendation(s).text"></b></dd>
+                  </template>
+                  <template x-if="recommendation(s).kind === 'text'">
+                    <dd x-text="recommendation(s).text"></dd>
+                  </template>
+                  <template x-if="recommendation(s).kind === 'actions'">
+                    <div>
+                      <template x-for="a in recommendation(s).actions" :key="a.token + a.action">
+                        <dd><b x-text="`${a.action} ${a.token}`"></b><span x-show="a.rationale" x-text="` · ${a.rationale}`"></span></dd>
+                      </template>
+                      <dd class="sv__rec-more" x-show="recommendation(s).more"
+                          x-text="`+${recommendation(s).more} more on the session`"></dd>
+                    </div>
+                  </template>
+                </dl>
+              </template>
+              <p class="sv__rec-empty" x-show="!recommendation(s)">No recommendation was published for this session.</p>
+
+              <div class="sv__session-foot">
+                <button type="button" class="sv__takes-btn" @click="toggleTakes(s)"
+                        :aria-expanded="takesState(s) ? 'true' : 'false'"
+                        :disabled="!takesCount(s)">
+                  <span class="sv__takes-caret" :class="{ 'is-open': takesState(s) }" aria-hidden="true">&rsaquo;</span>
+                  <span x-text="takesCount(s) === 1 ? '1 take' : `${takesCount(s)} takes`"></span>
+                </button>
+                <a class="sv__live-lnk" :href="sessionHref(s)">Full session &rarr;</a>
               </div>
-              <p class="sv__session-copy" x-show="synthesisPreview(s)" x-text="synthesisPreview(s)"></p>
-            </a>
+
+              <div class="sv__takes-panel" x-show="takesState(s)" x-cloak>
+                <p class="sv__unset" x-show="takesState(s)?.loading">Loading takes...</p>
+                <p class="sv__unset" x-show="takesState(s)?.error" x-text="takesState(s)?.error"></p>
+                <template x-for="t in (takesState(s)?.takes || [])" :key="t.id">
+                  <div class="sv__take-row">
+                    <a class="sv__take-who" :href="`/swarm/members/${encodeURIComponent(t.memberId)}`" x-text="t.memberName || t.memberId"></a>
+                    <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
+                      <i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="t.stance"></span>
+                    </span>
+                    <span class="sv__take-conf" x-show="Number.isFinite(Number(t.confidence))"
+                          x-text="`${Math.round(Number(t.confidence) * 100)}%`"></span>
+                    <p class="sv__take-line" x-text="takeLine(t)"></p>
+                  </div>
+                </template>
+                <!-- absent[] names who did not file; the row is the reason the
+                     count is 4 of 5 rather than a mystery. -->
+                <p class="sv__take-absent" x-show="s.swarmRecommendation?.absent?.length"
+                   x-text="`Did not file: ${(s.swarmRecommendation?.absent || []).join(', ')}`"></p>
+              </div>
+            </article>
           </template>
         </div>
         <button type="button" class="sv__more" x-show="hasMore()" @click="showMore()" x-cloak

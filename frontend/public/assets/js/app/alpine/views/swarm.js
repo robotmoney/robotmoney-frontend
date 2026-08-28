@@ -23,9 +23,9 @@ import { memberLogo } from "../../lib/member-logos.js";
 // the second role (validator) ships with its first holder, so this is a named
 // constant rather than a string sprinkled through the template: when the field
 // lands, this function reads it and nothing else moves. RM-97's roles table.
-// Six marks is where a tally stops being countable at a glance and starts
-// being a bar, and it clears the current roster of seven with room to spare.
-const TALLY_CAP = 6;
+// Bearish through bullish, so the spread bar always runs the same direction
+// no matter which stances a session actually produced.
+const STANCE_ORDER = ["bullish", "constructive", "neutral", "cautious", "bearish"];
 
 const DEFAULT_ROLE = "proposer";
 
@@ -73,6 +73,8 @@ export function registerSwarmView(Alpine) {
     now: Date.now(),
     liveTimer: null,
     liveTakes: null,
+    // sessionId -> { loading, error, takes } for the cards a reader expanded.
+    openTakes: {},
     destroy() {
       if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
     },
@@ -267,7 +269,6 @@ export function registerSwarmView(Alpine) {
       // a real allocation. The rest fall back to volume.
       return rows.sort((a, b) => (b.isVault - a.isVault) || (b.count - a.count));
     },
-    vaultPortfolio() { return this.portfolios().find((p) => p.isVault) || null; },
     otherPortfolios() { return this.portfolios().filter((p) => !p.isVault); },
 
     // A recommendation only carries target weights when the session published
@@ -283,12 +284,6 @@ export function registerSwarmView(Alpine) {
       for (const [k, v] of Object.entries(rec.weights)) by[norm(k)] = Number(v) * 100;
       const vals = order.map((k) => by[norm(k)]).filter((v) => Number.isFinite(v));
       return vals.length ? vals.map((v) => Math.round(v)).join(" / ") : null;
-    },
-    // Only the vault's recommendations are weights; every other portfolio gets
-    // a verdict, so the marker would be meaningless on their rows.
-    showsWeights(s) {
-      const vault = this.vaultPortfolio();
-      return !!vault && this.portfolioIdOf(s) === vault.id;
     },
 
     // ── sessions ─────────────────────────────────────────────────────────
@@ -319,6 +314,11 @@ export function registerSwarmView(Alpine) {
     // raw markdown that opened with "**REGIME**" on EVERY row — identical text
     // twenty times over, which is worse than no preview at all. Show it only
     // when it is genuinely a summary rather than a dump of the takes.
+    //
+    // NO LONGER RENDERED. The card states the recommendation now, and the
+    // synthesis is the reasoning behind it rather than the result. Kept
+    // because scripts/tests/unit/swarm-synthesis-preview.test.ts covers it and
+    // that tree is not this lane's to edit; the two should go together.
     synthesisPreview(s) {
       const t = String(s?.synthesis || "").trim();
       if (!t || t.includes("**") || t.length > 600) return "";
@@ -368,19 +368,130 @@ export function registerSwarmView(Alpine) {
       return memberAvatarMarkup(src, seed, name, size, (n) => this.initials(n));
     },
     stanceEntries(s) { return Object.entries(s.swarmRecommendation?.stances || {}); },
-    // A stance count, drawn as that many marks. Capped so a large roster cannot
-    // push one pill across the card: past the cap the remainder goes back to
-    // being a digit, which is the honest fallback and is rare.
-    tallyDots(n) { return Math.max(1, Math.min(Number(n) || 1, TALLY_CAP)); },
-    tallyRest(n) {
-      const rest = (Number(n) || 0) - TALLY_CAP;
-      return rest > 0 ? `+${rest}` : "";
+    // ── what a session came out with ─────────────────────────────────────
+    // The spread as proportions, in a fixed direction. Unknown stances keep
+    // their count and sort last rather than being dropped: a stance this
+    // build does not know is still a take somebody signed.
+    stanceSpread(s) {
+      const st = s?.swarmRecommendation?.stances || {};
+      const n = (k) => Number(st[k]) || 0;
+      const keys = [...STANCE_ORDER.filter(n), ...Object.keys(st).filter((k) => !STANCE_ORDER.includes(k) && n(k))];
+      const total = keys.reduce((a, k) => a + n(k), 0);
+      return total ? keys.map((k) => ({ stance: k, n: n(k), pct: n(k) / total })) : [];
+    },
+    spreadLabel(s) {
+      const rows = this.stanceSpread(s);
+      return rows.length ? rows.map((r) => `${r.n} ${r.stance}`).join(", ") : "";
+    },
+    // The one-word answer. A tie is a real outcome, not a rounding problem, so
+    // it is reported rather than resolved into a winner.
+    lean(s) {
+      const rows = this.stanceSpread(s);
+      if (!rows.length) return null;
+      const max = Math.max(...rows.map((r) => r.n));
+      const top = rows.filter((r) => r.n === max);
+      return top.length > 1 ? { stance: null, label: "split" } : { stance: top[0].stance, label: `${top[0].stance} lean` };
+    },
+    leanStyle(s) {
+      const st = this.lean(s)?.stance;
+      return st ? `color:${stanceColor(st)}` : "";
+    },
+    meanConfidenceText(s) {
+      const c = s?.swarmRecommendation?.meanConfidence;
+      return Number.isFinite(c) ? `${Math.round(Number(c) * 100)}% mean confidence` : "";
+    },
+    closedAgo(s) { return timeAgo(s?.windowClosesAt, this.now); },
+    closedAbsolute(s) { return absoluteUtc(s?.windowClosesAt); },
+
+    // What the session DECIDED. The card printed the synthesis paragraph here,
+    // which is the reasoning: five lines of it, identical in shape on every
+    // row, burying the one line a reader came for. Weights where the portfolio
+    // takes weights, the load-bearing actions otherwise, and the aggregator's
+    // own one-line rationale when a session carried neither.
+    recommendation(s) {
+      const rec = s?.swarmRecommendation;
+      if (!rec) return null;
+      if (rec.type === "bucket_weights") {
+        const w = this.sessionWeights(s);
+        return w ? { kind: "weights", text: w } : null;
+      }
+      const acts = (Array.isArray(rec.actions) ? rec.actions : []).filter((a) => a && a.action);
+      if (acts.length) return { kind: "actions", actions: acts.slice(0, 2), more: Math.max(0, acts.length - 2) };
+      return rec.rationale ? { kind: "text", text: rec.rationale } : null;
+    },
+
+    // ── takes, on demand ─────────────────────────────────────────────────
+    // Not preloaded: the list route carries counts but no bodies, and fetching
+    // every session's takes to render a list nobody has asked to see would be
+    // one request per card on every page load.
+    takesState(s) { return this.openTakes[s?.id] || null; },
+    async toggleTakes(s) {
+      const id = s?.id;
+      if (!id) return;
+      if (this.openTakes[id]) {
+        const { [id]: _drop, ...rest } = this.openTakes;
+        this.openTakes = rest;
+        return;
+      }
+      this.openTakes = { ...this.openTakes, [id]: { loading: true, error: "", takes: [] } };
+      try {
+        const d = await this.fetchSessionDetail(s);
+        const takes = (d?.takes || []).slice().sort((a, b) => Number(b?.confidence || 0) - Number(a?.confidence || 0));
+        this.openTakes = { ...this.openTakes, [id]: { loading: false, error: "", takes } };
+      } catch (_) {
+        this.openTakes = { ...this.openTakes, [id]: { loading: false, error: "These takes could not be loaded.", takes: [] } };
+      }
+    },
+    // By id first, because a portfolio may convene twice in a day and the
+    // dated form resolves to the later one. The dated form is the fallback for
+    // a row with no id, and for the static archive.
+    async fetchSessionDetail(s) {
+      if (s?.id) {
+        try {
+          const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
+          if (Array.isArray(d?.takes)) return d;
+        } catch (_) { /* fall through to the dated form */ }
+      }
+      return api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }));
+    },
+    // One line, not the whole memo: the memo is a click away on the session.
+    //
+    // Take bodies are sectioned "**REGIME** / **ALLOCATION** / **SUBJECT**"
+    // bullet lists, and the regime section opens every take with the same
+    // read of the same market — expanding a session would print four rows
+    // that agree about the composite and say nothing about the portfolio.
+    // SUBJECT is the member's read of the thing actually under review, so
+    // that is the bullet the row carries when it exists.
+    takeLine(t) {
+      const raw = String(t?.body || "");
+      if (!raw.trim()) return "";
+      const sections = raw.split(/\n(?=\*\*)/);
+      const pick = sections.find((sec) => /^\*\*\s*SUBJECT/i.test(sec.trim())) || sections[0] || raw;
+      const bullets = pick
+        .replace(/^\*\*[^*]*\*\*/, "")
+        .split("\n")
+        .map((l) => l.replace(/^[-*\u2022]\s*/, "").replace(/[*_`#>]/g, "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      // Skip a bullet that only restates the row it sits in. These sections
+      // open with "<subject> through a <lens> lens: <stance> at <n>
+      // confidence", and the row already prints the stance and the figure —
+      // so the excerpt would spend its one line saying nothing new.
+      const stance = String(t?.stance || "").toLowerCase();
+      const clean = bullets.find((l) => {
+        const low = l.toLowerCase();
+        return !(stance && low.includes(stance) && low.includes("confidence"));
+      }) || bullets[0] || "";
+      return clean.length > 190 ? `${clean.slice(0, 187).trimEnd()}...` : clean;
     },
     quorumText(s) {
       const q = s.swarmRecommendation?.quorum;
-      return q ? `${q.submitted}/${q.active} submitted` : "";
+      return q ? `${q.submitted} of ${q.active} took part` : "";
     },
-    regimeLabel(r) { return r ? String(r).replace(/_/g, "-") : "—"; },
+    takesCount(s) {
+      const q = s?.swarmRecommendation?.quorum;
+      const n = Number(q?.submitted);
+      return Number.isFinite(n) ? n : this.stanceSpread(s).reduce((a, r) => a + r.n, 0);
+    },
     // One ramp, in lib/stance.js. This used to hold a second copy of the five
     // colours, so the same stance could be painted differently here than on a
     // member profile.

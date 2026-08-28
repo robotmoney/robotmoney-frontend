@@ -420,17 +420,6 @@
 
 /* What a vault review produced. Target weights are the recommendation the
    allocation would take; anything else moves nothing. */
-.sv__sout { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.75rem;
-  padding-top: 0.75rem; border-top: 1px solid var(--color-border);
-  font-family: var(--font-mono); font-size: 0.75rem; font-variant-numeric: tabular-nums;
-  color: var(--color-text-soft); }
-.sv__sout b { color: var(--color-text); font-weight: 500; font-variant-numeric: tabular-nums; }
-/* Neutral, not green. This square marks "the session produced target weights",
-   which is a fourth meaning the same green square was carrying, on the same
-   card as the stance dots. The weights themselves are the value, and they are
-   already set in tabular figures beside it. */
-.sv__sout i { width: 0.4rem; height: 0.4rem; flex: 0 0 auto; background: var(--color-text-dim); }
-.sv__sout--none i { background: var(--color-border-light); }
 
 /* Live session strip, Variation A. The phase chip is `.rm-sphase` from
    components.css, shared with the session detail page so the same session
@@ -516,22 +505,87 @@
 .sv__session-list { display: grid; gap: 0.75rem; }
 .sv__session-list--compact { gap: 0.55rem; }
 .sv__session-card { position: relative; display: block; border: 1px solid var(--color-border); padding: 1.25rem; color: inherit; text-decoration: none; transition: border-color 0.16s ease, background 0.16s ease; }
-.sv__session-card:hover { border-color: var(--color-accent); background: rgba(0,229,255,0.035); }
+.sv__session-title { text-decoration: none; }
+a.sv__session-title:hover, a.sv__session-title:focus-visible { color: var(--color-accent); }
 .sv__session-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .sv__session-card .sv__session-copy { margin-top: 0.75rem; max-width: 68ch; }
 .sv__session-title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.08rem; color: var(--color-text); }
 .sv__session-meta { display: flex; flex-wrap: wrap; gap: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
-.sv__stance-line { display: flex; flex-wrap: wrap; gap: 0.55rem 0.8rem; margin: 0.65rem 0 0; }
 .sv__stance-dotline { display: inline-flex; align-items: center; gap: 0.32rem; font-family: var(--font-mono); font-size: 0.66rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
 /* .sv__dis-stance was rendering its dot at 0x0: the stance spread added to the
    Disagreements panel reused the badge markup but not the badge class, so it
    never picked up a size. An invisible dot is worse than none, because the
    colour is the only thing distinguishing two members' positions there. */
 .sv__stance-dotline i, .sv__stance-chip i, .sv__stance-badge i, .sv__dis-stance i { width: 0.42rem; height: 0.42rem; border-radius: 50%; display: inline-block; }
-/* A run of marks reading as one count, so the gap inside the tally is tighter
-   than the badge's gap between the tally and the word it belongs to. */
-.sv__stance-tally { display: inline-flex; align-items: center; gap: 0.2rem; }
-.sv__stance-over { font-weight: 400; font-variant-numeric: tabular-nums; opacity: 0.7; }
+
+/* ── A session's outcome, on the index ────────────────────────────────────
+   The card used to be a date, a row of stance pills, and five lines of the
+   synthesis paragraph — the swarm's REASONING, in identical shape on every
+   row, where the reader was looking for its RESULT. It never printed the
+   recommendation at all, which the sessions API has carried the whole time.
+
+   THE SPREAD IS A BAR, NOT A TALLY. Counting takes as marks fails the moment
+   the roster grows: six is the limit of countable-at-a-glance and twenty is a
+   row of dots wider than the card. A bar carries any N at one width, and it
+   answers "what did the swarm think" rather than making the reader add three
+   numbers to find out. Segment order is fixed bullish -> bearish, so the same
+   shape always means the same lean. 1px gaps, 4px tall: a rule, not a block —
+   the pill stays what a single member's stance wears. */
+.sv__spread { display: flex; gap: 1px; height: 4px; width: min(100%, 26rem); margin: 1rem 0 0.6rem; }
+.sv__spread i { display: block; min-width: 2px; }
+.sv__verdict { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; margin: 0;
+  font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
+/* The lean takes its stance's colour because it IS the stance — the one word
+   the bar above it resolves to. Nothing else on the card spends a hue. */
+.sv__lean { font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; }
+
+.sv__rec { margin: 1rem 0 0; display: grid; gap: 0.3rem; }
+.sv__rec dt { font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
+  letter-spacing: 0.16em; color: var(--color-text-dim); }
+.sv__rec dd { margin: 0; color: var(--color-text-soft); font-size: 0.875rem; line-height: 1.55; max-width: 68ch; }
+.sv__rec dd b { color: var(--color-text); font-weight: 500; text-transform: uppercase;
+  font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; }
+.sv__rec-n { font-variant-numeric: tabular-nums; }
+.sv__rec-more { color: var(--color-text-dim); font-size: 0.8rem; }
+/* Its own class, not a .sv__rec modifier: a selector that matches both the
+   recommendation and the notice that there isn't one cannot be asserted on. */
+.sv__rec-empty { margin: 1rem 0 0; color: var(--color-text-dim); font-size: 0.8rem; }
+
+.sv__session-foot { display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; margin-top: 1rem; }
+.sv__takes-btn { display: inline-flex; align-items: center; gap: 0.45rem; min-height: 34px;
+  padding: 0 0.6rem 0 0.45rem; cursor: pointer; background: none;
+  border: 1px solid var(--color-border); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted); }
+.sv__takes-btn:hover:not([disabled]) { border-color: var(--color-text-dim); color: var(--color-text); }
+.sv__takes-btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+.sv__takes-btn[disabled] { opacity: 0.45; cursor: default; }
+.sv__takes-caret { display: inline-block; transition: transform 0.16s ease; font-size: 0.9rem; line-height: 1; }
+.sv__takes-caret.is-open { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .sv__takes-caret { transition: none; } }
+
+.sv__takes-panel { margin-top: 0.9rem; border-top: 1px solid var(--color-border); }
+.sv__take-row { display: grid; grid-template-columns: minmax(6rem, 10rem) max-content 1fr;
+  gap: 0.4rem 0.75rem; align-items: center; padding: 0.85rem 0;
+  border-bottom: 1px solid var(--color-border); }
+/* A grid item fills its track unless told otherwise, and the pill stretched
+   the width of the row — a stance badge as wide as a paragraph. */
+.sv__take-row .sv__stance-badge { justify-self: start; }
+.sv__take-row:last-of-type { border-bottom: none; }
+.sv__take-who { color: var(--color-text); font-weight: 500; text-decoration: none; font-size: 0.9rem; }
+.sv__take-who:hover { color: var(--color-accent); }
+.sv__take-conf { font-family: var(--font-mono); font-size: 0.72rem;
+  font-variant-numeric: tabular-nums; color: var(--color-text-muted); margin-right: auto; }
+.sv__take-line { grid-column: 1 / -1; margin: 0; font-size: 0.85rem; line-height: 1.6;
+  color: var(--color-text-muted); max-width: 72ch; }
+.sv__take-absent { margin: 0.85rem 0 0; font-family: var(--font-mono); font-size: 0.68rem;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-dim); }
+@media (max-width: 560px) {
+  .sv__take-row { grid-template-columns: 1fr auto; }
+  .sv__take-conf { margin-right: 0; }
+}
 .sv__profile-head { display: flex; align-items: flex-start; gap: 1.25rem; flex-wrap: wrap; margin: 1.5rem 0 2.5rem; }
 .sv__profile-main { flex: 1; min-width: 16rem; }
 .sv__detail-head { margin: 1.5rem 0 2.5rem; }

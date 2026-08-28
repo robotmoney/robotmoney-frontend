@@ -13,6 +13,20 @@ import { expect, test } from "@playwright/test";
 
 const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 
+// A published session as the API serves one: a spread, a quorum, a mean
+// confidence, and the actions that are the actual output.
+const SESSION_REC = {
+  type: "position_actions",
+  quorum: { active: 5, submitted: 4, absent: 1, participation: 0.8 },
+  stances: { bullish: 1, neutral: 1, cautious: 2 },
+  meanConfidence: 0.575,
+  absent: ["draco"],
+  actions: [{ token: "USDC", action: "rotate", rationale: "Route the next stable tranche into rmUSDC." }],
+  consensus: [],
+  disagreements: [],
+  rationale: "Hold the mandate.",
+};
+
 // ── Derived member marks (#560, RM-48) ──────────────────────────────────────
 // Three real-shaped ids: a manifest slug, a funnel UUID, and a second slug.
 const MARK_MEMBERS = [
@@ -124,11 +138,13 @@ test("swarm index: a member with no seed falls back to initials", async ({ page 
   await expect(avatar.locator("svg")).toHaveCount(0);
 });
 
-test("swarm index renders the regime label for a session carrying regimeSummary, not the state fallback", async ({ page }) => {
-  await page.route("**/api/swarm/members*", (route) =>
-    route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));
-
-  const withRegime = {
+// Issue #357's guarantee, RELOCATED. The index card no longer carries a
+// regime: the regime is a property of the DAY, so every session that ran on
+// one printed the same label and the field distinguished nothing between
+// rows. It is still the field's only browser coverage, so it follows the
+// render to the session page rather than being deleted with the card.
+test("a session's regimeSummary reaches the screen on the session page", async ({ page }) => {
+  const session = {
     id: "sess-with-regime",
     date: "2026-07-15",
     subjectId: "woon",
@@ -137,57 +153,118 @@ test("swarm index renders the regime label for a session carrying regimeSummary,
     windowClosesAt: null,
     publishedAt: "2026-07-15T12:00:00Z",
     regimeSummary: { composite: 0.42, composite_percentile: 0.7, regime: "risk_on" },
-    swarmRecommendation: { quorum: { active: 3, submitted: 3, absent: 0, participation: 1 }, stances: {}, meanConfidence: 0.5, absent: [], type: "position_actions", consensus: [], disagreements: [] },
+    swarmRecommendation: SESSION_REC,
     socialDraftId: null,
     generatedAt: "2026-07-15T11:00:00Z",
   };
-  const withoutRegime = {
-    id: "sess-without-regime",
-    date: "2026-07-14",
+  await page.route("**/api/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (pathname === "/api/swarm/members") return route.fulfill(json({ members: [] }));
+    if (/^\/api\/swarm\/sessions\/\d{4}-\d{2}-\d{2}\/[^/]+$/.test(pathname)) {
+      return route.fulfill(json({ session, takes: [] }));
+    }
+    if (pathname.startsWith("/api/")) return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    return route.continue();
+  });
+
+  await page.goto("/swarm/2026-07-15/woon");
+  // regimeLabel("risk_on") -> "risk-on", in the session's fact row.
+  await expect(page.locator(".sv__fact-row")).toContainText("risk-on");
+});
+
+// The card states the session's RESULT. It used to state its reasoning: a
+// five-line excerpt of the synthesis, identical in shape on every row, with
+// the recommendation the API had carried the whole time never rendered at all.
+test("a published session's card states its recommendation, its lean and who took part", async ({ page }) => {
+  await page.route("**/api/swarm/members*", (route) =>
+    route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));
+  await page.route("**/api/swarm/sessions*", (route) =>
+    route.fulfill(json({
+      sessions: [{
+        id: "sess-outcome",
+        date: "2026-07-15",
+        subjectId: "woon",
+        subjectName: "Woon",
+        state: "published",
+        windowClosesAt: "2026-07-15T12:00:00Z",
+        publishedAt: "2026-07-15T12:00:00Z",
+        regimeSummary: null,
+        swarmRecommendation: SESSION_REC,
+        socialDraftId: null,
+        generatedAt: "2026-07-15T11:00:00Z",
+      }],
+      nextCursor: null,
+    })));
+
+  await page.goto("/swarm");
+  const card = page.locator(".sv__session-card").first();
+
+  // The recommendation, which is the thing a reader came for.
+  await expect(card.locator(".sv__rec")).toContainText("rotate USDC", { ignoreCase: true });
+
+  // The spread as a segment per stance, not a mark per take: the tally this
+  // replaced grew with the roster and was unreadable well before 20 seats.
+  await expect(card.locator(".sv__spread i")).toHaveCount(3);
+  await expect(card.locator(".sv__lean")).toHaveText("cautious lean");
+  await expect(card.locator(".sv__verdict")).toContainText("4 of 5 took part");
+  await expect(card.locator(".sv__verdict")).toContainText("57% mean confidence");
+
+  // And the synthesis paragraph is gone from the row entirely.
+  await expect(card.locator(".sv__session-copy")).toHaveCount(0);
+});
+
+// The takes are behind a disclosure because the list route carries counts and
+// no bodies: rendering them eagerly would be one extra request per card on
+// every load of the page.
+test("expanding a session card loads that session's takes in place", async ({ page }) => {
+  const session = {
+    id: "sess-expand",
+    date: "2026-07-15",
     subjectId: "woon",
     subjectName: "Woon",
     state: "published",
-    windowClosesAt: null,
-    publishedAt: "2026-07-14T12:00:00Z",
+    windowClosesAt: "2026-07-15T12:00:00Z",
+    publishedAt: "2026-07-15T12:00:00Z",
     regimeSummary: null,
-    swarmRecommendation: { quorum: { active: 3, submitted: 3, absent: 0, participation: 1 }, stances: {}, meanConfidence: 0.5, absent: [], type: "position_actions", consensus: [], disagreements: [] },
+    swarmRecommendation: SESSION_REC,
     socialDraftId: null,
-    generatedAt: "2026-07-14T11:00:00Z",
+    generatedAt: "2026-07-15T11:00:00Z",
   };
-  await page.route("**/api/swarm/sessions*", (route) =>
-    route.fulfill(json({ sessions: [withRegime, withoutRegime], nextCursor: null })));
+  const takes = [
+    { id: "t1", memberId: "athena", memberName: "Athena", stance: "cautious", confidence: 0.55,
+      body: "**REGIME**\n- boilerplate every take repeats.\n\n**SUBJECT**\n- woon through a macro lens: cautious at 0.55 confidence.\n- Concentration is the whole risk here.",
+      verified: true },
+  ];
+  let detailCalls = 0;
+  await page.route("**/api/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (pathname === "/api/swarm/members") return route.fulfill(json({ members: [] }));
+    if (pathname === "/api/swarm/sessions") return route.fulfill(json({ sessions: [session], nextCursor: null }));
+    if (pathname === "/api/swarm/sessions/sess-expand") {
+      detailCalls += 1;
+      return route.fulfill(json({ session, takes }));
+    }
+    if (pathname.startsWith("/api/")) return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    return route.continue();
+  });
 
   await page.goto("/swarm");
-  // swarm.html's error paragraph is x-show (always in the DOM, toggled by
-  // CSS), unlike the x-if error elements on subject/session/member/take views
-  // — assert hidden, not absent.
-  await expect(page.locator(".sv__error")).toBeHidden();
+  const card = page.locator(".sv__session-card").first();
+  // Nothing fetched until asked.
+  await expect(card.locator(".sv__take-row")).toHaveCount(0);
+  expect(detailCalls).toBe(0);
 
-  const cards = page.locator(".sv__session-card");
-  await expect(cards).toHaveCount(2);
+  await card.locator(".sv__takes-btn").click();
+  await expect(card.locator(".sv__take-row")).toHaveCount(1);
+  await expect(card.locator(".sv__take-who")).toHaveText("Athena");
 
-  // Both the regime span and the state-fallback span are always present in
-  // the DOM (Alpine's x-show toggles CSS display, it does not remove the
-  // node), so assertions here target VISIBILITY, not textContent — a
-  // hasText/toContainText check would false-positive on the hidden sibling.
-  // Cards are targeted by their session-id link (stable across row order)
-  // rather than text, for the same reason.
-  const regimeCard = page.locator('a.sv__session-card[href="/swarm/sessions/sess-with-regime"]');
-  await expect(regimeCard).toHaveCount(1);
-  const regimeSpan = regimeCard.locator(".sv__session-meta > span").first();
-  await expect(regimeSpan).toBeVisible();
-  await expect(regimeSpan).toContainText("regime:");
-  await expect(regimeSpan).toContainText("risk-on"); // regimeLabel("risk_on") → "risk-on"
-  const regimeCardStateFallback = regimeCard.locator(".sv__session-meta > span").nth(1);
-  await expect(regimeCardStateFallback).toBeHidden();
+  // The excerpt skips the bullet that only restates the stance and confidence
+  // the row already prints beside it.
+  await expect(card.locator(".sv__take-line")).toHaveText("Concentration is the whole risk here.");
 
-  // The row backed by a session with no regimeSummary keeps the pre-#357
-  // fallback: the regime span stays hidden, the raw session state renders.
-  const fallbackCard = page.locator('a.sv__session-card[href="/swarm/sessions/sess-without-regime"]');
-  await expect(fallbackCard).toHaveCount(1);
-  const fallbackRegimeSpan = fallbackCard.locator(".sv__session-meta > span").first();
-  await expect(fallbackRegimeSpan).toBeHidden();
-  const fallbackStateSpan = fallbackCard.locator(".sv__session-meta > span").nth(1);
-  await expect(fallbackStateSpan).toBeVisible();
-  await expect(fallbackStateSpan).toHaveText("published");
+  // absent[] is why the count is 4 of 5 rather than a mystery.
+  await expect(card.locator(".sv__take-absent")).toContainText("draco");
+
+  await card.locator(".sv__takes-btn").click();
+  await expect(card.locator(".sv__take-row")).toHaveCount(0);
 });
