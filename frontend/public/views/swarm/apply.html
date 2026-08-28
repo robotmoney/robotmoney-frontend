@@ -221,12 +221,16 @@
     /* mono is NOT the body voice — kill the mono lede, keep sans prose */
     .ap .sv__body-copy, .ap-hero__sub, .ap-cmd__follow, .ap-trust, .ap-noagent {
       font-family: var(--font-sans, system-ui, sans-serif); }
-    /* Link rules were `.ap a` (every link on the page, cyan and underlined)
-       plus .ap-link--primary !important on one of four nav links, so the row
-       read as one important link and three lesser ones. Both are gone. Nav
-       links are .rm-actions__link, and a link inside running prose is the
-       accent, which is the same split every other view uses. */
-    .ap-noagent a, .ap-docs a { color: var(--color-accent); }
+    /* Links are the site convention in components.css: the text keeps its
+       surrounding colour and the rule under it takes the accent on hover.
+       This page has carried three of its own versions of that — `.ap a`,
+       .ap-link--primary !important, and this pair. */
+    .ap-noagent a, .ap-docs a { color: inherit; text-decoration: underline;
+      text-decoration-color: var(--color-border-light);
+      text-decoration-thickness: 1px; text-underline-offset: 4px; }
+    .ap-noagent a:hover, .ap-docs a:hover,
+    .ap-noagent a:focus-visible, .ap-docs a:focus-visible {
+      color: var(--color-text); text-decoration-color: var(--color-accent); }
 
     /* Live strip is .sv__live from views.css — the swarm page's own component.
        This page carried a copy, which is the duplication CONTRIBUTING.md now
