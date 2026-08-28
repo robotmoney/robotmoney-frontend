@@ -45,6 +45,17 @@ export function placeTip(tip) {
   bub.style.top = "";
   bub.style.setProperty("--rm-tip-nudge", "0px");
 
+  // Above by default, below when there is no room above. A bubble's height is
+  // its text's, and the role tip on the swarm roster is seven lines — enough
+  // that scrolling its table header towards the top of the window would put
+  // the bubble off it. Measured while hidden, which is `visibility: hidden`
+  // and therefore still laid out.
+  if (tip.getBoundingClientRect().top < bub.getBoundingClientRect().height + 8) {
+    bub.setAttribute("data-below", "1");
+  } else {
+    bub.removeAttribute("data-below");
+  }
+
   const host = tip.closest(".container, .cv, main, body") || document.body;
   const box = host.getBoundingClientRect();
   const r = bub.getBoundingClientRect();
@@ -89,4 +100,13 @@ export function initTooltips() {
     close();
     document.querySelectorAll(SEL).forEach(placeTip);
   });
+  // A tap-opened bubble is positioned once, from where its icon was standing
+  // at the time. Scroll moves the icon out from under that measurement — far
+  // enough and an upward bubble is off the top of the window — and nothing
+  // re-measures, because placement runs on pointer, focus and resize only.
+  // Closing is the honest answer: the reader has moved on, and the next hover
+  // or tap places it again from where things now are. A hover-opened bubble
+  // needs nothing here; it is CSS, and scrolling takes the icon out from under
+  // the pointer, which closes it.
+  addEventListener("scroll", () => close(), { passive: true });
 }
