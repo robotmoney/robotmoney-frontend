@@ -208,12 +208,12 @@
 .mp-chip.is-on .mp-chip__n { color: var(--color-text-muted); }
 .mp-chip:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 
-/* No left rail. It was 2px of the portfolio's identity hue down the edge of
-   every card, which made a scrolled feed read as stripes and put that hue in
-   the same card as the stance dots it collided with. The card's own border is
-   enough; which portfolio it is, is written across the top of it. */
-.mp-take__dot { width: 7px; height: 7px; flex: 0 0 auto; align-self: center;
-  background: var(--color-text-dim); }
+/* No left rail, and no separator mark either. The rail was 2px of the
+   portfolio's identity hue down every card, which made a scrolled feed read as
+   stripes; the 7px square that replaced it between the date and the title was
+   a mark that meant nothing — square is a STATE in this system, and that one
+   was punctuation. The card's own border is enough, and which portfolio it is
+   is written across the top of it. */
 
 /* Verification badge. "Verified" is the single most load-bearing word on the
    swarm — it is the difference between a signed record and an assertion —
@@ -299,8 +299,24 @@
 .sv__hero-inner { position: relative; z-index: 2; width: min(100%, 80rem); margin: 0 auto; padding: 2.5rem 1.5rem; }
 .sv__hero-field { position: absolute; inset: 0; }
 .sv__hero-field canvas { width: 100% !important; height: 100% !important; }
-.sv__body { width: min(100%, 80rem); margin: 0 auto; padding: 3rem 1.5rem 5rem; }
-.sv__body--narrow { width: min(100%, 54rem); padding-top: 8rem; }
+/* overflow-x: clip, not hidden — hidden would make this a scroll container on
+   the other axis too. A tooltip bubble is laid out while hidden, and one that
+   has never been hovered has never been nudged, so the right-most `i` on a
+   three-up stat strip pushed the document 2px wide at 768. tooltip.js clamps
+   against this same box (placeTip's host list names .sv__body first), so the
+   clamp and the clip agree on where the page ends. */
+.sv__body { width: min(100%, 80rem); margin: 0 auto; padding: 3rem 1.5rem 5rem; overflow-x: clip; }
+/* The swarm's DOCUMENT width, shared by the member profile, a session, a
+   portfolio, a take permalink and the application status page. 54rem was a
+   prose measure inherited from a page that was only prose; these five carry
+   stat strips, two-column grids and take rows, and at 864px they were folding
+   content that had room to sit side by side while /swarm ran at 1280 and
+   /swarm/apply at 1080 — three widths across five sibling pages.
+   67.5rem IS 1080px: the apply page's measure, so the two pages a visitor
+   moves between are built on the same grid. /swarm keeps 80rem because it is
+   an index of everything, not one document. Prose inside still takes its own
+   ch cap; a container is not a measure. */
+.sv__body--narrow { width: min(100%, 67.5rem); padding-top: 8rem; }
 .sv__lede { max-width: 44rem; margin: 0.75rem 0 0; color: var(--color-text-muted); font-size: 1.05rem; line-height: 1.7; }
 .sv__lede--compact { font-size: 0.95rem; max-width: 42rem; }
 .sv__rail-grid { display: grid; gap: 1.5rem; margin-bottom: 4rem; }
@@ -352,7 +368,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   text-decoration: underline; text-decoration-color: var(--color-accent);
   text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .sv__tag { display: inline-flex; align-items: center; border: 1px solid var(--color-border); padding: 0.12rem 0.38rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
-.sv__row-copy, .sv__session-copy, .sv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; }
+.sv__row-copy, .sv__session-copy, .sv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; max-width: 78ch; }
 .sv__mini-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem; }
 .sv__mini-tags span { background: rgba(255,255,255,0.04); color: var(--color-text-dim); font-family: var(--font-mono); font-size: 0.58rem; padding: 0.15rem 0.38rem; }
 
@@ -453,7 +469,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    It used to end in an ellipsis with no way to open it, so the only way to
    read a thesis was to leave the page. */
 .sv__cov-thesis { grid-column: 1 / -1; }
-.sv__cov-d { margin: 0; font-size: 0.875rem; color: var(--color-text-soft); max-width: 70ch;
+.sv__cov-d { margin: 0; font-size: 0.875rem; color: var(--color-text-soft); max-width: 93ch;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 .sv__cov-d.is-open { display: block; overflow: visible; }
 .sv__cov-more { margin-top: 0.3rem; padding: 0; background: none; border: 0; cursor: pointer;
@@ -475,7 +491,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    already stated well. */
 .sv__vault-t { margin: 0.55rem 0 0; font-family: var(--font-display); font-weight: 700;
   text-transform: uppercase; letter-spacing: -0.005em; font-size: 1.35rem;
-  line-height: 1.1; color: var(--color-text); max-width: 22ch; }
+  line-height: 1.1; color: var(--color-text); }
 .sv__vault-d { margin: 0.5rem 0 0; font-size: 0.875rem; line-height: 1.6;
   color: var(--color-text-soft); max-width: 62ch; }
 .sv__vault-d b { color: var(--color-text); font-weight: 500; }
@@ -692,7 +708,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    — a purple :visited link on the receipt, off the palette entirely. */
 .sv__meta-grid dd a { color: var(--color-accent); text-decoration: none; }
 .sv__meta-grid dd a:hover { text-decoration: underline; }
-.sv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; }
+.sv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; max-width: 82ch; }
 .sv__bullet-list li { color: var(--color-text-muted); font-size: 0.88rem; }
 .sv__bullet-list li::before { content: "· "; color: var(--color-text-dim); }
 .sv__discussion { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 1.5rem 0 2rem; }
@@ -827,7 +843,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__member-link { color: var(--color-text); text-decoration: none; font-family: var(--font-sans); font-weight: 700; font-size: 1.15rem; }
 .sv__take-lens { margin-top: 0.15rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
 .sv__stance-badge { display: inline-flex; align-items: center; gap: 0.42rem; border: 1px solid; padding: 0.18rem 0.5rem; font-family: var(--font-mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.1em; }
-.sv__take-body { margin: 1rem 0 0; color: var(--color-text); line-height: 1.7; font-size: 0.9rem; }
+.sv__take-body { margin: 1rem 0 0; color: var(--color-text); line-height: 1.7; font-size: 0.9rem; max-width: 82ch; }
 .sv__take-body p { margin: 0 0 0.9rem; }
 .sv__take-body ul { margin: 0.25rem 0 1rem; padding-left: 1.2rem; }
 .sv__take-body li { margin: 0.25rem 0; }
