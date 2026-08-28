@@ -362,7 +362,16 @@
 .sv__how-d { margin: 0; font-size: 0.875rem; color: var(--color-text-soft); line-height: 1.6; }
 .sv__how-d b { color: var(--color-text); font-weight: 500; }
 
-/* Section head that carries a real call to action rather than a text link. */
+/* Section head: a display headline, a one-line sub, and optionally an action.
+   THE RULE IS THE TOP EDGE OF THE CONTENT, not an underline on the headline —
+   it closes the header block and opens the register, table or card grid below
+   it. That is why it sits under the sub and the button rather than under the
+   words, and why every section head needs the same parts: with the sub
+   missing the same 1px landed 13px under the headline instead of 45px, and
+   read as decoration on two sections and as a separator on the other seven.
+
+   One shape, one place: /swarm, /swarm/apply and a member profile all use it,
+   and neither of the other two may restyle it locally. */
 .sv__sec { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 1rem 2rem;
   padding-bottom: 0.75rem; border-bottom: 1px solid var(--color-border); margin: 3rem 0 0.75rem; }
 .sv__sec-h { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; font-size: 1.75rem; margin: 0; line-height: 1; }
@@ -429,7 +438,7 @@
    coloured edge said nothing the chip does not, and this page had three. */
 .sv__live { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
   border: 1px solid var(--color-border); background: var(--color-surface);
-  padding: 0.7rem 1rem; margin: 0 0 2rem; }
+  padding: 0.7rem 1rem; margin: 0 0 3rem; }
 .sv__live-name { color: var(--color-text); font-weight: 500; }
 .sv__live-meta { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
   color: var(--color-text-muted); }

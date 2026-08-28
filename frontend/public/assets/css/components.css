@@ -552,7 +552,7 @@
 .rm-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
             margin: 1.35rem 0 1.6rem; padding: 0; background: var(--color-border);
             border-top: 1px solid var(--color-accent); }
-.rm-stat { background: var(--color-surface); padding: 0.7rem 0.85rem; position: relative; }
+.rm-stat { background: var(--color-surface); padding: 0.75rem 1rem; position: relative; }
 /* One column on phones so a stat cell is wide enough to hold its explanation. */
 @media (max-width: 639px) { .rm-stats { grid-template-columns: minmax(0, 1fr); } }
 .rm-stat dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
