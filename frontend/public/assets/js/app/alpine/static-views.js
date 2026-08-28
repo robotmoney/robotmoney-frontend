@@ -12,19 +12,15 @@ import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberAvatarMarkup } from "../lib/member-mark.js";
 import { memberLogo } from "../lib/member-logos.js";
 import { sessionPhase } from "../lib/session-phase.js";
+import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
+import { operatorName } from "../lib/operator.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
 // the negative end as sand → beacon (attention/loss). Retires the old
 // lime/red/amber Tailwind trio.
-const STANCE_COLORS = {
-  bullish: "#10b981",
-  constructive: "#34d399",
-  neutral: "#7e889e",
-  cautious: "#e8a640",
-  bearish: "#ff7a29",
-};
+
 
 // The concentration chart's residual band: every position outside the charted
 // top-N, plus any NAV the position list does not account for. It is a leftover
@@ -396,12 +392,15 @@ export const helpers = {
     return k ? `rm-sphase rm-sphase--${k}` : "rm-sphase";
   },
   stanceColor(stance) {
-    return STANCE_COLORS[stance] || "#7e889e";
+    return STANCE_COLORS[stance] || STANCE_COLORS.neutral;
   },
-  stanceStyle(stance) {
-    const c = this.stanceColor(stance);
-    return `border-color:${c}66;color:${c};`;
-  },
+  // The shared pill, so a stance reads the same on the member profile, the
+  // session page and the swarm index. See lib/stance.js.
+  stanceClass(stance) { return stanceClass(stance); },
+  stanceStyle(stance) { return stanceStyle(stance); },
+  // Same canonicalization the swarm index uses (lib/operator.js), so a member
+  // profile cannot show the raw slug where the index shows the company name.
+  operatorName(op) { return operatorName(op); },
   fmtPct(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return "—";

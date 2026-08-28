@@ -290,6 +290,11 @@
   letter-spacing: 0.3em; color: var(--color-accent);
 }
 .rm-eyebrow--accent, .rv__eyebrow--accent { color: var(--color-accent); }
+/* The base above is cyan AND there is an --accent modifier setting the same
+   colour, which is what a base that was once neutral looks like after drift:
+   the modifier became a no-op. --quiet is the opt-out until the base itself is
+   flipped and every page audited for what actually needs the accent. */
+.rm-eyebrow--quiet, .sv__eyebrow--quiet { color: var(--color-text-muted); }
 
 /* loading / error states */
 .rm-loading, .rv__loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
