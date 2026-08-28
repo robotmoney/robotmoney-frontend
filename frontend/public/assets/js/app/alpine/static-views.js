@@ -1591,7 +1591,7 @@ export function registerStaticViews(Alpine) {
     },
     phaseChipClass(phase) {
       const key = phase === "live" ? "open" : phase === "closing" ? "aggregating" : "published";
-      return `rm-sphase rm-sphase--${key} mp-phase-gap`;
+      return `rm-sphase rm-sphase--${key}`;
     },
     allTakes() { return this.member ? this.rows : []; },
     // The record at a glance. Counts every take, published or still collecting,

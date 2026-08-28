@@ -56,7 +56,7 @@ export function placeTip(tip) {
     bub.removeAttribute("data-below");
   }
 
-  const host = tip.closest(".container, .cv, main, body") || document.body;
+  const host = tip.closest(".sv__body, .container, .cv, main, body") || document.body;
   const box = host.getBoundingClientRect();
   const r = bub.getBoundingClientRect();
   const pad = 8;
