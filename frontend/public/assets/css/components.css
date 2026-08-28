@@ -396,10 +396,20 @@
   background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: var(--radius);
   font-family: var(--font-sans); font-size: 0.78rem; line-height: 1.55; color: var(--color-text-soft);
   text-transform: none; letter-spacing: 0; text-align: left; font-weight: 400;
+  /* A bubble is a paragraph wherever it is anchored, so it resets every text
+     property its host might set. white-space was the one it missed: the role
+     tip on the swarm roster hangs off a .sv__mtable th, which is nowrap, and
+     218 characters laid out as 1327px on a single line inside a 272px box —
+     one visible line and the rest off the side of the screen. Any caller in a
+     table header, a chip or a truncated cell would have done the same. */
+  white-space: normal; overflow-wrap: break-word;
   opacity: 0; visibility: hidden; pointer-events: none;
   transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s; }
 .rm-tip:hover .rm-tip__bub, .rm-tip__btn:focus-visible + .rm-tip__bub, .rm-tip__bub[data-open="1"] {
   opacity: 1; visibility: visible; transform: translate(calc(-50% + var(--rm-tip-nudge, 0px)), 0); transition-delay: 0s; }
+/* Flipped below its icon when there is no room above it. Set by placeTip() in
+   lib/tooltip.js, which is where the measuring has to happen. */
+.rm-tip__bub[data-below] { bottom: auto; top: calc(100% + 8px); }
 @media (max-width: 699px) {
   .rm-tip__bub { position: fixed; left: 12px; right: 12px; bottom: auto; width: auto; max-width: none;
     transform: translateY(3px); }
