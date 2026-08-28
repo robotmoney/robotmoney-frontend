@@ -80,28 +80,28 @@
 
     <!-- Shared design system — load order matters: tokens, then design-system,
          then components. No @import; each file linked individually. -->
-    <link rel="stylesheet" href="/assets/css/tokens.css" />
-    <link rel="stylesheet" href="/assets/css/design-system.css" />
-    <link rel="stylesheet" href="/assets/css/components.css" />
+    <link rel="stylesheet" href="/assets/css/tokens.css?v=dcce394c" />
+    <link rel="stylesheet" href="/assets/css/design-system.css?v=4885f7b6" />
+    <link rel="stylesheet" href="/assets/css/components.css?v=8b7093a8" />
 
     <!-- Per-section CSS for the ported marketing fragments (loaded after the
          shared utilities they consume). -->
-    <link rel="stylesheet" href="/assets/css/sections/problem.css" />
-    <link rel="stylesheet" href="/assets/css/sections/architecture.css" />
-    <link rel="stylesheet" href="/assets/css/sections/token.css" />
-    <link rel="stylesheet" href="/assets/css/sections/contract.css" />
-    <link rel="stylesheet" href="/assets/css/sections/governance.css" />
-    <link rel="stylesheet" href="/assets/css/sections/footer.css" />
+    <link rel="stylesheet" href="/assets/css/sections/problem.css?v=b6ade487" />
+    <link rel="stylesheet" href="/assets/css/sections/architecture.css?v=551c9129" />
+    <link rel="stylesheet" href="/assets/css/sections/token.css?v=b4df0592" />
+    <link rel="stylesheet" href="/assets/css/sections/contract.css?v=8b474c35" />
+    <link rel="stylesheet" href="/assets/css/sections/governance.css?v=9271a358" />
+    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=996afb9d" />
 
     <!-- Data-driven view styles (regime + swarm). -->
-    <link rel="stylesheet" href="/assets/css/views.css" />
-    <link rel="stylesheet" href="/assets/css/docs-shell.css" />
+    <link rel="stylesheet" href="/assets/css/views.css?v=419b5cbb" />
+    <link rel="stylesheet" href="/assets/css/docs-shell.css?v=bd6eace3" />
 
     <!-- Analytics dashboard theme scope (issue #379): every rule inside
          dash.css is scoped under `.a3`, so it never affects marketing pages
          (which never carry that class). See docs/bot-analytics-ui-port-plan.md
          §2 for why this is a dedicated file rather than reusing tokens.css. -->
-    <link rel="stylesheet" href="/assets/css/dash.css" />
+    <link rel="stylesheet" href="/assets/css/dash.css?v=fa27cc1c" />
 
     <!-- Per-environment public config (API origin). No secrets. -->
     <script src="/config.js"></script>
