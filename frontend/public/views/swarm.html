@@ -252,7 +252,7 @@
                   <span class="sv__takes-caret" :class="{ 'is-open': takesState(s) }" aria-hidden="true">&rsaquo;</span>
                   <span x-text="takesCount(s) === 1 ? '1 take' : `${takesCount(s)} takes`"></span>
                 </button>
-                <a class="sv__live-lnk" :href="sessionHref(s)">Full session &rarr;</a>
+                <a class="sv__live-lnk" :href="sessionHref(s)">See full session &rarr;</a>
               </div>
 
               <div class="sv__takes-panel" x-show="takesState(s)" x-cloak>
