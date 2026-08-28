@@ -236,7 +236,10 @@
    earn) or the warn colour (a failure that never happened). */
 .sv__vfy--arch { color: var(--color-text-muted); }
 .sv__vfy-mark { width: 13px; height: 13px; flex: 0 0 auto; display: block; }
-.sv__vfy-tip { position: absolute; right: 0; bottom: calc(100% + 9px); z-index: 30;
+/* .mp-when__tip rides these rules rather than becoming a third copy of the
+   same bubble (this one, and .rm-tip__bub in components.css, were already
+   two). It only overrides which edge it hangs from — see member.html. */
+.sv__vfy-tip, .mp-when__tip { position: absolute; right: 0; bottom: calc(100% + 9px); z-index: 30;
   width: max-content; max-width: min(272px, 72vw); padding: 0.55rem 0.65rem;
   background: var(--color-surface); border: 1px solid var(--color-border);
   border-top: 1px solid currentColor; border-radius: var(--radius);
@@ -244,10 +247,11 @@
   letter-spacing: 0; text-transform: none; color: var(--color-text-muted); text-align: left;
   opacity: 0; visibility: hidden; transform: translateY(3px); pointer-events: none;
   transition: opacity .16s ease, transform .16s ease, visibility 0s linear .16s; }
-.sv__vfy:hover .sv__vfy-tip, .sv__vfy:focus-visible .sv__vfy-tip {
+.sv__vfy:hover .sv__vfy-tip, .sv__vfy:focus-visible .sv__vfy-tip,
+.mp-when:hover .mp-when__tip, .mp-when:focus-visible .mp-when__tip {
   opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
 .sv__vfy:focus-visible { outline: 1px solid currentColor; outline-offset: 3px; }
-@media (prefers-reduced-motion: reduce) { .sv__vfy-tip { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .sv__vfy-tip, .mp-when__tip { transition: none; } }
 /* The seal is icon-only and pinned to its card's top-right corner in every
    context. A badge that trails a variable-width stance chip lands at a
    different x on every row, so a reader has to hunt for it; pinned, the marks
