@@ -1571,10 +1571,24 @@ export function registerStaticViews(Alpine) {
       if (state === "window_closed" || state === "aggregated" || state === "judged") return "closing";
       return "published";
     },
+    // The same three words the swarm index, the apply page and the session
+    // page use, from lib/session-phase.js. This page said "Collecting · window
+    // open" where they said "collecting", which is one session reading as two
+    // states depending on which page you were standing on. The pulsing mark on
+    // .rm-sphase--open now carries what the extra words were carrying.
+    //
+    // Still derived from the raw DB state, not from the deadline: the
+    // member-takes route does not serve windowClosesAt, so an overdue
+    // `collecting` row reads as open here and as closed everywhere else. That
+    // is issue #570's shape, and it needs the field before it can be fixed.
     phaseLabel(phase) {
-      return phase === "live" ? "Collecting · window open"
-        : phase === "closing" ? "Closed · awaiting publish"
-        : "Published";
+      return phase === "live" ? "collecting"
+        : phase === "closing" ? "aggregating"
+        : "published";
+    },
+    phaseChipClass(phase) {
+      const key = phase === "live" ? "open" : phase === "closing" ? "aggregating" : "published";
+      return `rm-sphase rm-sphase--${key} mp-phase-gap`;
     },
     allTakes() { return this.member ? this.rows : []; },
     // The record at a glance. Counts every take, published or still collecting,

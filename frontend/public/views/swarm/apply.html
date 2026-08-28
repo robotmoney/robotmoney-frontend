@@ -55,10 +55,10 @@
     <span :class="`rm-sphase rm-sphase--${livePhase()?.key || 'closed'}`" x-text="livePhaseLabel()"></span>
     <span class="sv__live-name" x-text="liveSubjectName()"></span>
     <span class="sv__live-meta" x-show="liveIsOpen() && liveRemaining()">
-      window closes in <b x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>
+      Session window closes in <b class="sv__live-n" x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>
     </span>
     <span class="sv__live-meta" x-show="!liveIsOpen() && liveClosedAgo()">
-      closed <b x-text="liveClosedAgo()" :title="liveClosesAbsolute()"></b>
+      Window closed <b class="sv__live-n" x-text="liveClosedAgo()" :title="liveClosesAbsolute()"></b>
     </span>
     <a class="sv__live-lnk" :href="liveHref()">See the session &rarr;</a>
   </div>
