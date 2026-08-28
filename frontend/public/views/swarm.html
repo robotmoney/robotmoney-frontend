@@ -169,10 +169,34 @@
                 </template>
               </p>
               <p class="sv__cov-d" x-show="p.thesisBlurb" x-text="p.thesisBlurb"></p>
-              <div class="sv__cov-x" x-show="p.isVault">
-                <p>Here a recommendation is <b>target weights</b>. For the others it is a verdict.</p>
+              <!-- The vault is not another portfolio the swarm has opinions
+                   about. It is the one whose review becomes a real allocation,
+                   and the row said so in a sentence a reader had no reason to
+                   believe. Showing the weights actually in force is the
+                   evidence for the claim. -->
+              <template x-if="p.isVault">
+              <div class="sv__vault">
+                <p class="sv__vault-h">Our product</p>
+                <p class="sv__vault-d">The swarm reviews this vault, and its recommendation is the
+                  <b>target allocation</b> the vault is held to. Every other portfolio here gets a verdict.</p>
+                <template x-if="allocationTargets().length">
+                  <div class="sv__vault-alloc">
+                    <p class="sv__vault-label">
+                      Target in force<span x-show="allocationAsOf()"> &middot; since <span x-text="allocationAsOf()"></span></span>
+                    </p>
+                    <dl class="sv__buckets">
+                      <template x-for="t in allocationTargets()" :key="t.label">
+                        <div class="sv__bucket">
+                          <dt><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></dt>
+                          <dd x-text="t.pct === null ? '—' : `${t.pct}%`"></dd>
+                        </div>
+                      </template>
+                    </dl>
+                  </div>
+                </template>
                 <a class="sv__cov-lnk" href="/vault">See the vault &rarr;</a>
               </div>
+              </template>
             </div>
           </template>
         </div>

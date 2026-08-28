@@ -18,6 +18,7 @@ import { operatorName, isHouseOperator } from "../../lib/operator.js";
 import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { memberLogo } from "../../lib/member-logos.js";
+import { CATEGORICAL } from "../../lib/chart-theme.js";
 
 // Every seat proposes today. There is no role field on the projection yet, and
 // the second role (validator) ships with its first holder, so this is a named
@@ -75,6 +76,9 @@ export function registerSwarmView(Alpine) {
     liveTakes: null,
     // sessionId -> { loading, error, takes } for the cards a reader expanded.
     openTakes: {},
+    // The vault's target allocation, as published. Guarded: the vault row
+    // degrades to its wallet line if this route is unreachable.
+    allocationFw: null,
     destroy() {
       if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
     },
@@ -95,6 +99,7 @@ export function registerSwarmView(Alpine) {
         // panel has always shown a raw id where an operator belongs.
         await this.loadSubjects();
         await this.loadLiveTakes();
+        await this.loadAllocation();
         this.loading = false;
       } catch (e) {
         this.error = e.message;
@@ -140,6 +145,27 @@ export function registerSwarmView(Alpine) {
         const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
         this.liveTakes = Array.isArray(d?.takes) ? d.takes.length : null;
       } catch (_) { this.liveTakes = null; }
+    },
+    async loadAllocation() {
+      try { this.allocationFw = await api.get(ROUTES.dashboards.allocation); } catch (_) { this.allocationFw = null; }
+    },
+    // The four buckets and the weight each is held to. Two of the four sit at
+    // 0% today, which is why this is figures and not a bar: a bar would draw
+    // one long block and two segments too thin to see, and call it a chart.
+    // Hues are chart-theme's CATEGORICAL, in order, so a bucket is the same
+    // colour here as in the pies on /allocation.
+    allocationTargets() {
+      const rows = this.allocationFw?.strategy;
+      if (!Array.isArray(rows) || !rows.length) return [];
+      return rows.map((r, i) => ({
+        label: r?.label || `Bucket ${i + 1}`,
+        pct: Number.isFinite(Number(r?.targetPct)) ? Number(r.targetPct) : null,
+        hue: CATEGORICAL[i % CATEGORICAL.length],
+      }));
+    },
+    allocationAsOf() {
+      const d = this.allocationFw?.asOf;
+      return d ? this.formatDate(d) : "";
     },
     publishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
 
