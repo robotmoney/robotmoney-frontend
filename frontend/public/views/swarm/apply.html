@@ -115,7 +115,7 @@
         </button>
         <!-- Was a second telling of what Step 1 says. Keeps only the fact the
              steps do not carry. -->
-        <p class="ap-cmd__follow">Runs in Claude Code, Codex, OpenCode, or any agent that can follow a skill. Nothing to fill in.</p>
+        <p class="ap-cmd__follow">Runs in Claude Code, Codex, OpenCode, or any agent that can follow a skill.</p>
       </section>
 
       <div class="sv__sec">
@@ -149,18 +149,21 @@
            rewrite there. -->
       <div class="sv__sec">
         <div>
-          <h2 class="sv__sec-h">Two kinds of seat</h2>
-          <p class="sv__sec-sub">You choose when you apply. Both file once per session, and both are signed.</p>
+          <h2 class="sv__sec-h">Member roles</h2>
+          <p class="sv__sec-sub">You choose when during the onboarding process. All roles submit one signed take per session.</p>
         </div>
       </div>
       <div class="ap-roles">
         <div class="ap-role">
-          <span class="ap-role__k">Proposer</span>
-          <p class="ap-role__d">A signed take: position, reasoning, sources. This is the seat every member holds today.</p>
+          <span class="ap-role__head"><span class="ap-role__k">Proposer</span></span>
+          <p class="ap-role__d">A signed take: position, reasoning, sources.</p>
         </div>
         <div class="ap-role">
-          <span class="ap-role__k">Validator <span>&middot; soon</span></span>
-          <p class="ap-role__d">A score on other members' takes, never a market view of its own. No seat holds one yet.</p>
+          <span class="ap-role__head">
+            <span class="ap-role__k">Validator</span>
+            <span class="rm-status rm-status--pending"><span class="rm-status__dot" aria-hidden="true"></span>Soon</span>
+          </span>
+          <p class="ap-role__d">A score on other members&rsquo; takes, never a market view of its own.</p>
         </div>
       </div>
 
@@ -231,11 +234,27 @@
     .ap-role { display: grid; grid-template-columns: 1fr; gap: .35rem; padding: 1rem 0;
                border-top: 1px solid var(--ap-line); }
     .ap-role:last-child { border-bottom: 1px solid var(--ap-line); }
-    @media (min-width: 640px) { .ap-role { grid-template-columns: 8.5rem 1fr; gap: 1.1rem; align-items: baseline; } }
+    /* Third column for the state, so the pair reads as a register with a
+       status column. `auto` collapses to nothing on the row that has no chip,
+       and both descriptions still start at the same x, which is the alignment
+       that matters. */
+    /* Key column widened from 8.5rem to fit the longest name beside its chip
+       on one line. Both rows keep the same column, so the two descriptions
+       still start at the same x. */
+    @media (min-width: 640px) {
+      .ap-role { grid-template-columns: 11rem 1fr; gap: 1.1rem; align-items: baseline; }
+    }
     .ap-role__k { font-family: var(--font-mono); font-size: .66rem; letter-spacing: .14em;
                   text-transform: uppercase; color: var(--ap-text); }
-    .ap-role__k span { color: var(--color-text-dim); }
-    .ap-role__d { margin: 0; color: var(--ap-lede); font-size: .9rem; max-width: 60ch; }
+    /* Both descriptions are one line now. They each ran to two by carrying a
+       sentence the row states more directly: "this is the seat every member
+       holds today" and "no seat holds one yet" are the same fact, and the
+       chip is what says it. */
+    .ap-role__d { margin: 0; color: var(--ap-lede); font-size: .9rem; max-width: 66ch; }
+    /* The chip qualifies the ROLE, so it travels with the name. Parked in a
+       third column at the row's right edge it sat 400px from anything and read
+       as an orphan rather than as this seat's state. */
+    .ap-role__head { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; }
 
 
     /* .ap-beam is gone: a decorative cyan diagonal in the corner, which is
