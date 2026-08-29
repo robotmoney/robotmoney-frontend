@@ -5,6 +5,10 @@ import { canonicalizeApplication, canonicalizeSubmission, SWARM_ROSTER_CAP, path
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import {
+  FORGED_SIGNATURE_B64,
+  LOW_ORDER_ED25519_PUBLIC_KEYS_B64,
+} from "./support/low-order-ed25519.ts";
 
 // A session's date is whatever the DATABASE derived from convened_at
 // (migration 0022). postgres returns it as a Date; normalise to the YYYY-MM-DD
@@ -81,11 +85,25 @@ test("POST /api/swarm/apply rejects malformed Ed25519 keys and an invalid signat
     return handleSwarm(req, new URL(req.url));
   };
   const base = { name: "Route Applicant", contact: "route-applicant@example.test" };
+  const keyError =
+    "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key, " +
+    "and must not be a low-order point";
   const bad = await callApply({ ...base, publicKey: Buffer.alloc(31, 1).toString("base64"), signature: "sig" });
   expect(bad?.status).toBe(400);
-  expect((bad?.body as { error: string }).error).toBe(
-    "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key",
-  );
+  expect((bad?.body as { error: string }).error).toBe(keyError);
+
+  // Issue #789 — the API boundary refuses every low-order point encoding, and
+  // records nothing. WebCrypto imports all 14 of them, and for any of them the
+  // public constant `0x01 || 0x00*63` verifies as a signature over any message,
+  // so admitting one would make every later signature check from that member
+  // vacuous. Registration is where it has to stop.
+  expect(LOW_ORDER_ED25519_PUBLIC_KEYS_B64).toHaveLength(14);
+  for (const lowOrderKey of LOW_ORDER_ED25519_PUBLIC_KEYS_B64) {
+    const refused = await callApply({ ...base, publicKey: lowOrderKey, signature: FORGED_SIGNATURE_B64 });
+    expect(refused?.status).toBe(400);
+    expect((refused?.body as { error: string }).error).toBe(keyError);
+    expect(await sql`SELECT id FROM swarm_member_keys WHERE public_key = ${lowOrderKey}`).toHaveLength(0);
+  }
 
   // A well-formed key with a signature over the WRONG bytes (or from the
   // wrong key) is rejected — nothing is recorded.

@@ -251,7 +251,14 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     if (!await isValidEd25519PublicKey(b.publicKey)) {
       return {
         status: 400,
-        body: { error: "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key" },
+        body: {
+          // Also the refusal for the 14 low-order point encodings (issue #789):
+          // WebCrypto imports them, but one public constant then verifies as a
+          // signature over any message, so such a key may never be registered.
+          error:
+            "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key, " +
+            "and must not be a low-order point",
+        },
       };
     }
     const res = await ic.applyMember(b);

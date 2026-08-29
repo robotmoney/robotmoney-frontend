@@ -2986,6 +2986,17 @@ Where any other code differs, this section wins.
 - **R3 — Keygen is never centralized.** The centralized system never generates keys.
   Ed25519 keygen always happens on the agent's machine; Robot Money never sees a private
   key at any point in the lifecycle.
+  Because the key is applicant-chosen, the server must decide what is a key at
+  all: `backend/src/lib/signing.ts` refuses the **14 low-order (torsion-subgroup)
+  Ed25519 point encodings** at decode time, so one can never be registered in
+  `swarm_member_keys` (issue #789). For such a key the public 64-byte constant
+  `0x01 || 0x00*63` satisfies the verification equation over *every* message, so
+  admitting one would make every later signature check from that member vacuous
+  — including the analyst signatures embedded in a consensus receipt. The reject
+  table is libsodium's `ge25519_has_small_order()` blacklist, re-derived from the
+  curve in `backend/tests/support/low-order-ed25519.ts`.
+  `backend/scripts/scan-low-order-keys.ts` is the read-only operator scan for
+  keys registered before that gate existed.
 - **R4 — One-prompt setup.** Onboarding starts with a single copy-paste prompt the
   owner drops into their agent harness (canonical text in the participation
   quickstart). The prompt frames the swarm, states up front the bounds an
