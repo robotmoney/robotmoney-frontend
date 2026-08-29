@@ -2988,15 +2988,30 @@ Where any other code differs, this section wins.
   key at any point in the lifecycle.
   Because the key is applicant-chosen, the server must decide what is a key at
   all: `backend/src/lib/signing.ts` refuses the **14 low-order (torsion-subgroup)
-  Ed25519 point encodings** at decode time, so one can never be registered in
-  `swarm_member_keys` (issue #789). For such a key the public 64-byte constant
-  `0x01 || 0x00*63` satisfies the verification equation over *every* message, so
-  admitting one would make every later signature check from that member vacuous
-  — including the analyst signatures embedded in a consensus receipt. The reject
-  table is libsodium's `ge25519_has_small_order()` blacklist, re-derived from the
-  curve in `backend/tests/support/low-order-ed25519.ts`.
+  Ed25519 point encodings** at decode time (issue #789). For such a key the
+  public 64-byte constant `0x01 || 0x00*63` satisfies the verification equation
+  over *every* message, so admitting one would make every later signature check
+  from that member vacuous — including the analyst signatures embedded in a
+  consensus receipt. The reject table is libsodium's `ge25519_has_small_order()`
+  blacklist, re-derived from the curve in
+  `backend/tests/support/low-order-ed25519.ts`.
+
+  **No API path can register such a key in `swarm_member_keys`.** The decode
+  gate covers every path that *uses* a key; the four that *store* one apply the
+  same predicate (`isRegistrablePublicKey`) before they INSERT, and each answers
+  the one shared refusal sentence (`PUBLIC_KEY_REFUSAL`) rather than failing
+  silently later:
+  `POST /api/swarm/apply`, `POST /api/swarm/admin/members`,
+  `POST /api/swarm/admin/members/:id/rotate-key`, and the privileged
+  `POST /api/swarm/register`. Reactivation and a key-less rotation do not take a
+  key at all — they carry the member's on-file one forward — so both re-screen
+  what they carry and refuse rather than copy a pre-gate row into a new one.
+  Stating it as an operator invariant: pasting a low-order key into the admin
+  form is a `400` naming the reason, never an active member whose every take is
+  refused at submit time and whose `publicKeyFingerprint` renders `null`.
   `backend/scripts/scan-low-order-keys.ts` is the read-only operator scan for
-  keys registered before that gate existed.
+  keys registered before that gate existed; it reports rows it could not decode
+  separately from hits, so a clean result means every row was read.
 - **R4 — One-prompt setup.** Onboarding starts with a single copy-paste prompt the
   owner drops into their agent harness (canonical text in the participation
   quickstart). The prompt frames the swarm, states up front the bounds an

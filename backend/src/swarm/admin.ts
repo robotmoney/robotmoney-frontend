@@ -11,6 +11,7 @@
 // rollup), it composes those functions rather than duplicating them.
 import { sql, type DbHandle } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
+import { isRegistrablePublicKey } from "../lib/signing.ts";
 import {
   activateMember,
   aggregateSession as domainAggregateSession,
@@ -603,6 +604,19 @@ export async function deactivateMemberAdmin(
   });
 }
 
+// Issue #789 — reactivation and a key-less rotation both CARRY FORWARD the
+// member's on-file public key by inserting a new swarm_member_keys row for it.
+// Every path that first stores a key now screens it, so a key on file today
+// passed that screen; the exception is a row registered BEFORE the gate existed
+// (what scripts/scan-low-order-keys.ts is for). Copying such a row forward
+// would register a low-order key AFTER the gate shipped, which is exactly what
+// §11 R3 says can never happen — so both paths re-screen what they carry and
+// refuse rather than duplicate it. The refusal names the remedy, because there
+// is one: rotate to a freshly generated key.
+const CARRIED_KEY_UNREGISTRABLE =
+  "member's on-file public key is not a valid Ed25519 public key (or is a low-order point) " +
+  "and cannot be carried forward; use rotate-key with a freshly generated publicKey";
+
 // Reactivation mints a FRESH credential (the prior key/token is never
 // silently trusted again) — matches the "revoke prior keys, credential only
 // in the response" rule that governs rotation and manual add.
@@ -619,6 +633,7 @@ export async function reactivateMemberAdmin(
       | { public_key: string }
       | undefined;
     if (!lastKey) return err(409, "member has no on-file public key; use rotate-key with a new one");
+    if (!isRegistrablePublicKey(lastKey.public_key)) return err(409, CARRIED_KEY_UNREGISTRABLE);
     // Capacity gate: reactivation raises the active count, so the member (which
     // is currently 'inactive') must fit under SWARM_ROSTER_CAP — no exemption.
     const cap = await assertRosterCapacity(tx);
@@ -654,6 +669,9 @@ export async function rotateMemberKeyAdmin(
       | undefined;
     const publicKey = opts.publicKey ?? priorActive?.public_key;
     if (!publicKey) return err(409, "no on-file public key; supply publicKey to rotate");
+    // The route already screened a SUPPLIED publicKey; this catches the
+    // carried-forward one (and any direct caller of this function).
+    if (!isRegistrablePublicKey(publicKey)) return err(409, CARRIED_KEY_UNREGISTRABLE);
     await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
     const token = `tok_${memberId}_${crypto.randomUUID()}`;
     await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${memberId}, ${publicKey}, true, ${hashKey(token)})`;

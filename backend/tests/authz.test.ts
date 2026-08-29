@@ -1,6 +1,7 @@
 import { test, expect, afterEach } from "bun:test";
 import { config } from "../src/config.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
+import { generateKeyPair } from "../src/lib/signing.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 // privileged() reads config at call time, so we flip config per test (restored after).
@@ -12,12 +13,18 @@ afterEach(() => { config.adminToken = orig.adminToken; config.allowInsecure = or
 useCleanDatabase(import.meta.file);
 
 const REG = "/api/swarm/register"; // privileged + non-destructive
+// A REAL Ed25519 public key, not a 44-character filler string. Since issue #789
+// this route applies the same decode gate as apply/manual-add/rotate-key, so a
+// string that merely looks key-shaped is a 400 and would make every "403 vs
+// 201" assertion below meaningless. These tests are about authorization, so the
+// body has to be one the route would otherwise accept.
+const { publicKeyB64: AUTHZ_PUBLIC_KEY } = await generateKeyPair();
 function regReq(headers: Record<string, string> = {}) {
   const id = `az_${crypto.randomUUID().slice(0, 8)}`;
   return new Request(`http://x${REG}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
-    body: JSON.stringify({ memberId: id, name: id, publicKey: "A".repeat(44) }),
+    body: JSON.stringify({ memberId: id, name: id, publicKey: AUTHZ_PUBLIC_KEY }),
   });
 }
 const call = (req: Request) => handleSwarm(req, new URL(req.url));

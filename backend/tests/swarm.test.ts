@@ -120,6 +120,110 @@ test("POST /api/swarm/apply rejects malformed Ed25519 keys and an invalid signat
   expect((goodRes?.body as { memberId: string }).memberId).toBeString();
 });
 
+// Issue #789, second half. `canonicalPublicKeyBytes()` gates every path that
+// USES a key; the finding on PR #792 was that it did not gate the three paths
+// that STORE one — POST /api/swarm/register (which checked `length >= 16`),
+// POST /api/swarm/admin/members (which checked "a string, at most 1000 chars")
+// and POST /api/swarm/admin/members/:id/rotate-key (which only trimmed for
+// emptiness). None of them is a forgery: all three are privileged. Two things
+// made it worth closing anyway. An operator pasting an applicant-supplied key
+// into the admin form seated a member whose every take is refused at submit and
+// whose publicKeyFingerprint renders null, with NO 400 saying why. And while
+// they stayed open, §11 R3's "can never be registered in swarm_member_keys" was
+// false as written, so a CLEAN result from scripts/scan-low-order-keys.ts could
+// not stay clean — the table could acquire a new low-order row after the gate
+// shipped.
+//
+// ROW COUNT, not just status. A 400 with a row written would be the worst of
+// both: the operator is told no and the forgeable key is registered anyway.
+test("the three key-STORING paths refuse every low-order encoding with an explanatory 400 and write no swarm_member_keys row", async () => {
+  const post = async (path: string, body: Record<string, unknown>) => {
+    const req = new Request(`http://test${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return handleSwarm(req, new URL(req.url));
+  };
+  const keyError =
+    "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key, " +
+    "and must not be a low-order point";
+  // The same sentence the public apply route answers with — an operator hitting
+  // this on the admin form and an agent hitting it on apply are being told the
+  // same thing, and neither is left guessing.
+  const errorOf = (res: { body: unknown } | null | undefined) => (res?.body as { error?: string })?.error;
+
+  // A real member with a real key, so rotate-key has something to rotate.
+  const victim = await activeMember();
+  const rotatePath = routePath(ROUTES.swarm.admin.memberRotateKey, { id: victim.id });
+
+  expect(LOW_ORDER_ED25519_PUBLIC_KEYS_B64).toHaveLength(14);
+  let refusals = 0;
+  for (const lowOrderKey of LOW_ORDER_ED25519_PUBLIC_KEYS_B64) {
+    // 1. POST /api/swarm/register — the privileged apply+activate shortcut.
+    const registered = await post(ROUTES.swarm.register, {
+      memberId: rid("lo"),
+      name: rid("lo"),
+      publicKey: lowOrderKey,
+    });
+    expect(registered?.status).toBe(400);
+    expect(errorOf(registered)).toBe(keyError);
+
+    // 2. POST /api/swarm/admin/members — the admin manual add.
+    const added = await post(ROUTES.swarm.admin.members, { name: rid("Low Order"), publicKey: lowOrderKey });
+    expect(added?.status).toBe(400);
+    expect(errorOf(added)).toBe(keyError);
+
+    // 3. POST /api/swarm/admin/members/:id/rotate-key — rotation with a key.
+    const rotated = await post(rotatePath, { publicKey: lowOrderKey });
+    expect(rotated?.status).toBe(400);
+    expect(errorOf(rotated)).toBe(keyError);
+
+    // The point of the test: nothing was written by any of the three.
+    expect(await sql`SELECT id FROM swarm_member_keys WHERE public_key = ${lowOrderKey}`).toHaveLength(0);
+    refusals += 3;
+  }
+  // Loud-skip guard: 14 encodings x 3 paths. A silently-empty fixture would
+  // otherwise let this test "pass" having asserted nothing.
+  expect(refusals).toBe(42);
+
+  // The whole table, not just the 14 strings: no low-order row exists anywhere
+  // after 42 attempts to create one.
+  const everyKey = await sql<{ public_key: string }[]>`SELECT public_key FROM swarm_member_keys`;
+  expect(everyKey.length).toBeGreaterThan(0);
+  for (const row of everyKey) {
+    expect(LOW_ORDER_ED25519_PUBLIC_KEYS_B64).not.toContain(row.public_key);
+  }
+
+  // AND NOTHING HONEST IS REFUSED. The gate is worthless if it costs a real
+  // key, so all three paths are exercised with freshly generated ones.
+  const honestRegister = (await generateKeyPair()).publicKeyB64;
+  const registeredOk = await post(ROUTES.swarm.register, {
+    memberId: rid("ok"),
+    name: rid("ok"),
+    publicKey: honestRegister,
+  });
+  expect(registeredOk?.status).toBe(201);
+  expect(await sql`SELECT id FROM swarm_member_keys WHERE public_key = ${honestRegister}`).toHaveLength(1);
+
+  const honestAdd = (await generateKeyPair()).publicKeyB64;
+  const addedOk = await post(ROUTES.swarm.admin.members, { name: rid("Honest"), publicKey: honestAdd });
+  expect(addedOk?.status).toBe(201);
+  expect(await sql`SELECT id FROM swarm_member_keys WHERE public_key = ${honestAdd}`).toHaveLength(1);
+
+  const honestRotate = (await generateKeyPair()).publicKeyB64;
+  const rotatedOk = await post(rotatePath, { publicKey: honestRotate });
+  expect(rotatedOk?.status).toBe(200);
+  expect(
+    await sql`SELECT id FROM swarm_member_keys WHERE public_key = ${honestRotate} AND active = true`,
+  ).toHaveLength(1);
+
+  // A key-less rotation still works: it carries the member's on-file key
+  // forward, and that key passed the same gate when it was first stored.
+  const rotatedNoKey = await post(rotatePath, {});
+  expect(rotatedNoKey?.status).toBe(200);
+});
+
 test("apply → activate approves without minting; re-activate finds no pending key", async () => {
   const { body } = await signedApply({ name: "B", contact: `${rid("b")}@example.test` });
   const applied = await ic.applyMember(body as any);

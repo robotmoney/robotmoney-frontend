@@ -9,6 +9,7 @@ import * as admin from "../../swarm/admin.ts";
 import { getAgentHealthEvents } from "../../swarm/domain.ts";
 import { config as globalConfig } from "../../config.ts";
 import { isPrivileged, hasAutomationRole } from "../auth.ts";
+import { isRegistrablePublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import {
   parseExpectedVersion,
   parseManualMember,
@@ -159,6 +160,14 @@ export async function handleSwarmAdmin(
       }
       if (segs[2] === "rotate-key") {
         const publicKey = typeof b.publicKey === "string" && b.publicKey.trim() ? b.publicKey.trim() : undefined;
+        // Issue #789. Rotation with a supplied key INSERTs it into
+        // swarm_member_keys, so it is a registration path and carries the same
+        // gate as apply/manual-add; an omitted publicKey rotates only the
+        // bearer token against the key already on file, which passed this gate
+        // when it was first stored, so there is nothing to re-check.
+        if (publicKey !== undefined && !isRegistrablePublicKey(publicKey)) {
+          return { status: 400, body: { error: PUBLIC_KEY_REFUSAL } };
+        }
         return fromResult(await admin.rotateMemberKeyAdmin(id, { publicKey }));
       }
     }

@@ -100,6 +100,40 @@ function canonicalPublicKeyBytes(publicKeyB64: string): Uint8Array<ArrayBuffer> 
   return bytes;
 }
 
+/**
+ * The ONE sentence every path that would WRITE a key into swarm_member_keys
+ * refuses with (issue #789). Shared rather than repeated because the four
+ * writing paths — POST /api/swarm/apply, POST /api/swarm/admin/members,
+ * POST /api/swarm/admin/members/:id/rotate-key and POST /api/swarm/register —
+ * are refusing the same thing for the same reason, and an operator who pastes
+ * an applicant-supplied key into the admin form deserves to be told WHY rather
+ * than to seat a member whose every take is later refused at submit time.
+ */
+export const PUBLIC_KEY_REFUSAL =
+  "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key, " +
+  "and must not be a low-order point";
+
+/**
+ * True when `publicKeyB64` may be stored as a swarm member's public key.
+ *
+ * The SYNCHRONOUS twin of isValidEd25519PublicKey, and deliberately the same
+ * predicate: both are `canonicalPublicKeyBytes` succeeding, the async one
+ * merely also performing the WebCrypto import that cannot fail for canonical
+ * 32 bytes. It exists because the storing paths screen keys inside synchronous
+ * body parsers (validation.ts), and because §11 R3's claim — a low-order key
+ * "can never be registered in swarm_member_keys" — is only true if the paths
+ * that INSERT are gated, not just the paths that VERIFY.
+ */
+export function isRegistrablePublicKey(publicKeyB64: unknown): boolean {
+  if (typeof publicKeyB64 !== "string") return false;
+  try {
+    canonicalPublicKeyBytes(publicKeyB64);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function verifySubmissionSignature(
   submission: Parameters<typeof canonicalizeSubmission>[0],
   signatureB64: string,

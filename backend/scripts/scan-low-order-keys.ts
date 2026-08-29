@@ -28,6 +28,17 @@
 //   1 — scanned successfully, at least one low-order key FOUND (see stdout)
 //   2 — the scan could not run (connection/query failure)
 //
+// UNREADABLE ROWS ARE REPORTED, NOT SKIPPED. A `public_key` that is not
+// canonical base64 for 32 bytes cannot be screened — the predicate needs bytes.
+// The first cut of this script dropped such a row on the floor while still
+// counting it in `scannedKeys`, so the operator read "CLEAN — N rows scanned"
+// and had no way to know that some of those N were never actually looked at.
+// A clean result has to mean "all N rows were READ and none was low-order", so
+// unreadable rows are counted and listed by key id and must be resolved by hand
+// before the result is recorded on issue #789. The exit code is deliberately
+// unchanged: 0 still means "no low-order key was found", and the report says in
+// plain words when that is not the same as "none exists".
+//
 // USAGE (run against production, from a host with DATABASE_URL for it):
 //
 //   cd backend
@@ -58,9 +69,26 @@ export interface LowOrderKeyHit {
   takeCount: number; // takes filed by this member — all of them now suspect
 }
 
+/**
+ * A row whose stored public_key could not be decoded to 32 bytes, so the
+ * low-order predicate could not be applied to it at all. Not a hit and not a
+ * pass — an unanswered question, which is why it is reported separately.
+ */
+export interface UnreadableKeyRow {
+  keyId: number;
+  memberId: string;
+  memberHandle: string | null;
+  /** Length of the stored string, so an operator can tell truncation from junk. */
+  publicKeyLength: number;
+}
+
 export interface LowOrderKeyScanReport {
+  /** Every row in swarm_member_keys, readable or not. */
   scannedKeys: number;
+  /** Rows the predicate was actually applied to: scannedKeys - unreadable.length. */
+  readKeys: number;
   hits: LowOrderKeyHit[];
+  unreadable: UnreadableKeyRow[];
 }
 
 /** Decode a stored base64 public key to bytes, or null if it is not decodable. */
@@ -97,9 +125,19 @@ export async function runLowOrderKeyScan(): Promise<LowOrderKeyScanReport> {
   `;
 
   const hits: LowOrderKeyHit[] = [];
+  const unreadable: UnreadableKeyRow[] = [];
   for (const row of rows) {
     const bytes = decode(row.public_key);
-    if (bytes === null || !isLowOrderEd25519PublicKey(bytes)) continue;
+    if (bytes === null) {
+      unreadable.push({
+        keyId: Number(row.id),
+        memberId: row.member_id,
+        memberHandle: row.handle,
+        publicKeyLength: typeof row.public_key === "string" ? row.public_key.length : 0,
+      });
+      continue;
+    }
+    if (!isLowOrderEd25519PublicKey(bytes)) continue;
     hits.push({
       keyId: Number(row.id),
       memberId: row.member_id,
@@ -112,7 +150,7 @@ export async function runLowOrderKeyScan(): Promise<LowOrderKeyScanReport> {
       takeCount: Number(row.take_count),
     });
   }
-  return { scannedKeys: rows.length, hits };
+  return { scannedKeys: rows.length, readKeys: rows.length - unreadable.length, hits, unreadable };
 }
 
 /** The read-only SQL equivalent, for an operator who only has psql. */
@@ -168,11 +206,18 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
   if (argv.includes("--json")) {
     console.log(JSON.stringify(report, null, 2));
-  } else if (report.hits.length === 0) {
+  } else if (report.hits.length === 0 && report.unreadable.length === 0) {
     console.log(
-      `[scan-low-order-keys] CLEAN — ${report.scannedKeys} key row(s) scanned (active and rotated), ` +
+      `[scan-low-order-keys] CLEAN — ${report.scannedKeys} key row(s) read (active and rotated), ` +
         "none is a low-order Ed25519 point",
     );
+  } else if (report.hits.length === 0) {
+    // No hit, but the answer is not "clean": some rows were never screened.
+    console.log(
+      `[scan-low-order-keys] INCOMPLETE — ${report.readKeys} of ${report.scannedKeys} key row(s) were read ` +
+        "and none is a low-order Ed25519 point, but the rows below could not be decoded and were NOT screened",
+    );
+    printUnreadable(report);
   } else {
     console.log(
       `[scan-low-order-keys] FOUND ${report.hits.length} low-order key row(s) out of ${report.scannedKeys} scanned:`,
@@ -188,8 +233,26 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       "[scan-low-order-keys] every take filed by these members is cryptographically unauthenticated — " +
         "record this on issue #789, rotate the key, and review the takes",
     );
+    printUnreadable(report);
   }
+  // UNCHANGED exit-code contract: 0 clean / 1 hit / 2 did-not-run. An
+  // unreadable row is not a low-order key, so it cannot become exit 1 without
+  // making "1" mean two different things; the report above is where it is said.
   return report.hits.length === 0 ? 0 : 1;
+}
+
+function printUnreadable(report: LowOrderKeyScanReport): void {
+  if (report.unreadable.length === 0) return;
+  console.log(
+    `[scan-low-order-keys] ${report.unreadable.length} key row(s) could not be decoded to 32 bytes and were ` +
+      "NOT screened — this result is not a clean bill of health until they are resolved:",
+  );
+  for (const row of report.unreadable) {
+    console.log(
+      `  key ${row.keyId}  member ${row.memberId} (${row.memberHandle ?? "no handle"})  ` +
+        `stored public_key is ${row.publicKeyLength} character(s), not canonical base64 for 32 bytes`,
+    );
+  }
 }
 
 if (import.meta.main) {
