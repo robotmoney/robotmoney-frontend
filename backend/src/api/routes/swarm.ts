@@ -4,8 +4,7 @@
 import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
 import * as ic from "../../swarm/domain.ts";
 import { handleSwarmAdmin } from "./swarm-admin.ts";
-import { isPlausibleKey } from "../../lib/keys.ts";
-import { isValidEd25519PublicKey } from "../../lib/signing.ts";
+import { isRegistrablePublicKey, isValidEd25519PublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
 import { parseSnapshots } from "./analytics.ts";
 import { bearer, hasAnalyticsProviderRole, isPrivileged, hasAutomationRole } from "../auth.ts";
@@ -249,10 +248,12 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
       return { status: 400, body: { error: "valid contact email required for activation notification" } };
     }
     if (!await isValidEd25519PublicKey(b.publicKey)) {
-      return {
-        status: 400,
-        body: { error: "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key" },
-      };
+      // Also the refusal for the 14 low-order point encodings (issue #789):
+      // WebCrypto imports them, but one public constant then verifies as a
+      // signature over any message, so such a key may never be registered.
+      // Same sentence as the three admin/privileged writing paths — they are
+      // refusing the same thing.
+      return { status: 400, body: { error: PUBLIC_KEY_REFUSAL } };
     }
     const res = await ic.applyMember(b);
     return { status: res.status, body: res };
@@ -283,7 +284,14 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     if (!(await privileged())) return { status: 403, body: { error: "onboarding requires admin authorization" } };
     const b = parseRegisterMember(await readJsonObject(req));
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
-    if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
+    // Issue #789 — the SAME gate the public apply route applies, not the old
+    // `length >= 16` plausibility check. This route INSERTs into
+    // swarm_member_keys (domain.ts registerMember), so §11 R3's "can never be
+    // registered" has to be enforced here too; being privileged makes a
+    // low-order key an operator/harness accident rather than an attack, and an
+    // accident that silently seats an unverifiable member is exactly the case
+    // worth a named 400.
+    if (!isRegistrablePublicKey(b.publicKey)) return { status: 400, body: { error: PUBLIC_KEY_REFUSAL } };
     // registerMember now enforces SWARM_ROSTER_CAP; a refused over-cap
     // admission returns { ok:false, status, error } (rolled back, member NOT
     // added) — surface that status instead of a misleading 201, mirroring the

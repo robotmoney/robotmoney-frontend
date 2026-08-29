@@ -10,7 +10,7 @@
 // the PUBLIC ROUTES.swarm.sessions list instead (issue #152's admin
 // surface only exposes session CREATE + per-session roster/lifecycle).
 import { api, ROUTES, path } from "../../../lib/api.js";
-import { adminAuthState, fmtUtc, fmtLocal } from "./shared.js";
+import { adminAuthState, apiErrorText, fmtUtc, fmtLocal } from "./shared.js";
 
 const TOPIC_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const REASON_MIN = 10;
@@ -238,7 +238,12 @@ export function registerAdminSwarmOverview(Alpine) {
         await this.loadAll();
       } catch (e) {
         if (e.status === 403) return this._handle403();
-        this.memberErrors.form = e.message;
+        // apiErrorText, not e.message: since issue #789 this form is where an
+        // operator finds out that an applicant-supplied key is not a usable
+        // Ed25519 public key (a low-order point encoding among them), and the
+        // whole value of that 400 is the sentence inside it. `e.message` is
+        // `API 400: {"ok":false,...}` — the envelope, not the answer.
+        this.memberErrors.form = apiErrorText(e);
       } finally {
         this.memberSubmitting = false;
       }

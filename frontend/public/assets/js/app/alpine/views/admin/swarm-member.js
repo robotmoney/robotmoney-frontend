@@ -292,8 +292,22 @@ export function registerAdminSwarmMember(Alpine) {
         await this.load();
       } catch (e) {
         if (e.status === 403) return this._handle403();
-        if (e.status === 409) { this.confirmError = "This member changed since you loaded it (stale version) — reload and try again."; return; }
-        this.confirmError = e.message;
+        const message = apiErrorText(e);
+        if (e.status === 409) {
+          // Same rule the profile edit above applies (issue #567), and now
+          // load-bearing here too: since issue #789 reactivate and rotate-key
+          // answer 409 when the member's ON-FILE key cannot be carried forward
+          // (a low-order row registered before the gate existed). A reload
+          // cannot clear that — the remedy is in the sentence the server sent,
+          // which names it: rotate with a freshly generated publicKey.
+          this.confirmError = message === "stale_version"
+            ? "This member changed since you loaded it (stale version) — reload and try again."
+            : message;
+          return;
+        }
+        // Likewise the 400 rotate-key answers for a supplied key that is not a
+        // usable Ed25519 public key: render the sentence, not the envelope.
+        this.confirmError = message;
       } finally {
         this.submitting = false;
       }

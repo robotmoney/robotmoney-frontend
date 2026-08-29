@@ -3,6 +3,9 @@ import type { ApplyInput, MemberProfilePatch, SubmissionInput } from "../swarm/d
 // the domain module that writes it, the same way MemberProfilePatch is.
 import type { MemberAdminPatch } from "../swarm/admin.ts";
 import { STANCES, type canonicalizeSubmission } from "@robotmoney/contract";
+// Runtime (not type-only) and safe: signing.ts imports nothing from this
+// module — its only import is @robotmoney/contract — so there is no cycle.
+import { isRegistrablePublicKey, PUBLIC_KEY_REFUSAL } from "../lib/signing.ts";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -313,6 +316,15 @@ export function parseExpectedVersion(body: JsonObject | null): number | null {
 export const MANUAL_MEMBER_ID_REJECTED =
   "memberId is not accepted: the member id is generated and returned as member.id";
 export const MANUAL_MEMBER_REQUIRED = "name and publicKey required";
+// Issue #789. The manual add INSERTs straight into swarm_member_keys with an
+// active row and a bearer token, so it is a registration path in the full
+// sense — and the realistic operator action is pasting an applicant-supplied
+// string into the form. Until this check the route validated only "a string,
+// at most 1000 chars", so a low-order point encoding (or any non-key) seated
+// an active member whose every take is refused at submit and whose
+// publicKeyFingerprint renders null, with no 400 saying why. The refusal is
+// the same sentence POST /api/swarm/apply answers with.
+export const MANUAL_MEMBER_KEY_INVALID = PUBLIC_KEY_REFUSAL;
 
 export type ManualMemberParse =
   | { ok: true; data: { name: string; publicKey: string; lens?: string; contact?: string } }
@@ -328,6 +340,7 @@ export function parseManualMember(body: JsonObject | null): ManualMemberParse {
   const name = requiredString(body, "name", 200);
   const publicKey = requiredString(body, "publicKey", 1000);
   if (!name || !publicKey) return { ok: false, error: MANUAL_MEMBER_REQUIRED };
+  if (!isRegistrablePublicKey(publicKey)) return { ok: false, error: MANUAL_MEMBER_KEY_INVALID };
   return {
     ok: true,
     data: { name, publicKey, lens: optionalString(body, "lens", 500), contact: optionalString(body, "contact", 320) },
