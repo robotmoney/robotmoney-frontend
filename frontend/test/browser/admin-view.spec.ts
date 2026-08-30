@@ -584,9 +584,45 @@ function sessionSummary(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// GET .../sessions/:id/judgements — getSessionJudgementsAdmin()'s projection
+// (issue #767). Two rows on purpose: an `enforce` run whose opinion did NOT
+// reach the session (it published while the model was thinking) over a `shadow`
+// run that was partially trimmed. Both facts are invisible from `mode` alone,
+// which is why the panel exists.
+function baseJudgements() {
+  const opinion = (rationale: string) => ({
+    rationale,
+    disagreements: [{ topic: "timing", positions: [{ member_id: "athena", view: "Rotate into WOON." }], what_settles: "Next week's composite." }],
+    release_safety: { release: "hold", concerns: ["one dissent unresolved"], take_count: 3, min_takes: 3 },
+  });
+  return {
+    inForce: {
+      id: "2", mode: "enforce", source: "model", fallbackReason: null,
+      applied: false, appliedSkippedReason: "session_no_longer_writable",
+      model: "test/judge", promptHash: "ph-2", inputsDigest: "id-2", takeCount: 3, minTakes: 3,
+      dropped: { positions: 0, disagreements: 0 }, partiallyDegraded: false,
+      opinion: opinion("The enforce opinion that missed its session."),
+      createdAt: "2026-07-20T19:00:00.000Z",
+    },
+    older: {
+      id: "1", mode: "shadow", source: "model", fallbackReason: null,
+      applied: false, appliedSkippedReason: null,
+      model: "test/judge", promptHash: "ph-1", inputsDigest: "id-1", takeCount: 3, minTakes: 3,
+      dropped: { positions: 2, disagreements: 1 }, partiallyDegraded: true,
+      opinion: opinion("The shadow opinion whose response was trimmed."),
+      createdAt: "2026-07-20T18:00:00.000Z",
+    },
+  };
+}
+
 async function mockSwarmApi(
   page: Page,
-  opts: { session?: ReturnType<typeof sessionSummary>; rosterRows?: ReturnType<typeof baseRosterRows>; takes?: ReturnType<typeof baseTakes> } = {},
+  opts: {
+    session?: ReturnType<typeof sessionSummary>;
+    rosterRows?: ReturnType<typeof baseRosterRows>;
+    takes?: ReturnType<typeof baseTakes>;
+    judgements?: ReturnType<typeof baseJudgements>;
+  } = {},
 ): Promise<void> {
   await mockVendorScripts(page);
   await page.route("**/api/admin/auth", (route) => route.fulfill(jsonReply({ ok: true })));
@@ -594,6 +630,7 @@ async function mockSwarmApi(
   const session = opts.session || sessionSummary();
   const rosterRows = opts.rosterRows || baseRosterRows();
   const takes = opts.takes || baseTakes();
+  const judgements = opts.judgements || baseJudgements();
 
   // ── Topics ──────────────────────────────────────────────────────────────
   await page.route(/\/api\/swarm\/admin\/subjects$/, (route) => {
@@ -651,6 +688,12 @@ async function mockSwarmApi(
   await page.route(/\/api\/swarm\/sessions\/2026-07-20\/woon-vault$/, (route) =>
     route.fulfill(jsonReply({ session, takes })));
   await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/roster$/, (route) => route.fulfill(jsonReply({ roster: rosterRows })));
+  // The shadow soak's read path (issue #767).
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/judgements(\?.*)?$/, (route) =>
+    route.fulfill(jsonReply({
+      ok: true, status: 200, sessionId: "sess-1", state: session.state,
+      inForce: judgements.inForce, judgements: [judgements.inForce, judgements.older],
+    })));
   // Three separate roster-mutation endpoints, never a single PATCH.
   await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/roster\/(add|excuse|restore)$/, (route) => {
     const memberId = route.request().postDataJSON()?.memberId;
@@ -1298,6 +1341,46 @@ test("swarm admin: session create validation, UTC/local timeline, roster, and di
   // rather than hiding it — whether the judge is switched ON is the backend's
   // call (409 `judge_disabled`), not the button's.
   await expect(page.getByTestId("session-action-judge")).toBeDisabled();
+});
+
+// AC (issue #767): the shadow soak is READABLE from the admin session page.
+// Before this panel, `swarm_session_judgements` had no route and no UI —
+// grading a soak meant psql against production. The two facts asserted here are
+// the two the table used to be silent about, and NEITHER is derivable from
+// `mode`: an `enforce` opinion that did not reach its session, and a `model`
+// answer that was partially trimmed.
+test("swarm admin: the consensus-judge panel names what the judge said, whether it applied, and what was dropped", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/sessions/sess-1");
+
+  // Rendered on a `collecting` session, not only a `judged` one: a shadow run
+  // records an opinion and never moves the state, so gating on `judged` would
+  // hide the whole soak.
+  const inForce = page.getByTestId("judgement-in-force");
+  await expect(inForce).toBeVisible();
+  await expect(inForce).toContainText("enforce");
+  await expect(inForce).toContainText("NOT applied");
+  await expect(inForce).toContainText("session_no_longer_writable");
+
+  const rows = page.getByTestId("judgements-table").locator("tbody tr");
+  // 2 judgement rows + 2 (initially hidden) detail rows.
+  await expect(rows).toHaveCount(4);
+  await expect(page.getByTestId("judgements-empty")).toBeHidden();
+
+  // The trimmed shadow run reads as a MODEL answer that lost material — not as
+  // a fallback, and not as a clean one.
+  const trimmed = page.getByTestId("judgement-row-1");
+  await expect(trimmed).toContainText("recorded only (shadow)");
+  await expect(trimmed).toContainText("PARTIAL");
+  await expect(trimmed).toContainText("2 position(s), 1 disagreement(s) dropped");
+
+  await expect(page.getByTestId("judgement-detail-2")).toBeHidden();
+  await page.getByTestId("judgement-toggle-2").click();
+  const detail = page.getByTestId("judgement-detail-2");
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText("The enforce opinion that missed its session.");
+  await expect(detail).toContainText("hold");
+  await expect(detail).toContainText("one dissent unresolved");
 });
 
 // AC: roster/recommendation matrix — one row per roster snapshot, distinct

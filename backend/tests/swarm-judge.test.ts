@@ -1560,3 +1560,210 @@ test("cadence: turning the mode on takes effect on the NEXT drain of an already-
   expect((await sql`SELECT id FROM jobs WHERE dedupe_key = ${`swarm:${b.session.id}:judge`}`).map((r: any) => Number(r.id)))
     .toEqual([jobB]);
 });
+
+// ── The soak's record and its read path (issue #767, folded from #768/#787) ──
+//
+// `shadow` exists to accumulate judge opinions against live traffic until they
+// can be trusted. Three things stopped that from being possible, and all three
+// are SILENCES rather than errors — which is why each test below asserts what
+// the row says, not merely that the call succeeded:
+//
+//   1. Nothing scheduled the judge (above).
+//   2. Nothing could read the judgements — no admin route, no UI, and
+//      `latestJudgement()` had no production caller at all.
+//   3. A partially dropped response looked identical to a clean one: #773 made
+//      a `positions[]` entry naming a bodyless member a DROP rather than a
+//      whole-response fallback, and the row still said `source='model'` with
+//      `fallback_reason` NULL.
+
+/** A session with `bodied` quotable takes and `bodyless` stance-only ones. */
+async function mixedBodySession(prefix: string, bodied = 2, bodyless = 1) {
+  const { subj, session, date } = await weightedSession(prefix);
+  const withBody: Member[] = [];
+  const withoutBody: Member[] = [];
+  for (let i = 0; i < bodied; i++) {
+    const m = await activeMember();
+    withBody.push(m);
+    await submit(m, date, subj, { stance: "bullish", body: `quotable take ${i}`, weights: W });
+  }
+  for (let i = 0; i < bodyless; i++) {
+    const m = await activeMember();
+    withoutBody.push(m);
+    await submit(m, date, subj, { stance: "bearish", body: "", weights: W });
+  }
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  return { subj, session, date, withBody, withoutBody };
+}
+
+/** One disagreement over the given member ids. */
+function answerNaming(ids: string[], topic = "timing of the rotation") {
+  return JSON.stringify({
+    rationale: "The submitted takes converge, with one dissent on timing.",
+    disagreements: [{
+      topic,
+      positions: ids.map((id) => ({ member_id: id, view: "a view the parser will not keep" })),
+      what_settles: "Whether next week's regime composite crosses the 60th percentile.",
+    }],
+    release_safety: { release: "safe", concerns: [] },
+  });
+}
+
+const judgementRow = async (sessionId: string) =>
+  (await sql`
+    SELECT source, fallback_reason, applied, applied_skipped_reason,
+           dropped_positions, dropped_disagreements, mode
+    FROM swarm_session_judgements WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT 1`)[0] as any;
+
+test("a DROPPED position is recorded on the row, and a trimmed response is distinguishable from a genuinely thin one", async () => {
+  const thin = await mixedBodySession("judge-drop-thin");
+  const trimmed = await mixedBodySession("judge-drop-trimmed");
+  await setJudgeConfig({ mode: "shadow" });
+
+  // A. The model names two quotable members. Nothing is dropped; the opinion
+  //    carries exactly one disagreement.
+  const a = await judgeSession(thin.session.id, {
+    transport: fixedTransport(answerNaming([thin.withBody[0]!.id, thin.withBody[1]!.id])),
+  });
+  expect(a.ok).toBe(true);
+  const thinRow = await judgementRow(thin.session.id);
+  expect(String(thinRow.source)).toBe("model");
+  expect(thinRow.fallback_reason).toBeNull();
+  expect(Number(thinRow.dropped_positions)).toBe(0);
+  expect(Number(thinRow.dropped_disagreements)).toBe(0);
+
+  // B. The model names one quotable member and one STANCE-ONLY member, plus a
+  //    second disagreement made entirely of stance-only members. The bodyless
+  //    position is dropped (nothing of theirs is quotable) and the all-bodyless
+  //    disagreement goes with it.
+  const both = JSON.stringify({
+    rationale: "The submitted takes converge, with dissent on timing and on sizing.",
+    disagreements: [
+      {
+        topic: "timing",
+        positions: [
+          { member_id: trimmed.withBody[0]!.id, view: "ignored — filled from the frozen body" },
+          { member_id: trimmed.withoutBody[0]!.id, view: "a sentence this member never wrote" },
+        ],
+        what_settles: "Whether next week's composite crosses the 60th percentile.",
+      },
+      {
+        topic: "sizing",
+        positions: [{ member_id: trimmed.withoutBody[0]!.id, view: "another sentence they never wrote" }],
+        what_settles: "Whether the sleeve clears its floor.",
+      },
+    ],
+    release_safety: { release: "safe", concerns: [] },
+  });
+  const b = await judgeSession(trimmed.session.id, { transport: fixedTransport(both) });
+  expect(b.ok).toBe(true);
+  const trimmedRow = await judgementRow(trimmed.session.id);
+  // STILL a model answer — the drop is not a fallback and must not read as one.
+  expect(String(trimmedRow.source)).toBe("model");
+  expect(trimmedRow.fallback_reason).toBeNull();
+  expect(Number(trimmedRow.dropped_positions)).toBe(2);
+  expect(Number(trimmedRow.dropped_disagreements)).toBe(1);
+
+  // THE POINT: both sessions end with exactly one disagreement on file, so
+  // without the counts these two rows are indistinguishable.
+  expect(b.outcome!.opinion.disagreements.length).toBe(1);
+  expect(a.outcome!.opinion.disagreements.length).toBe(1);
+  expect(b.outcome!.opinion.disagreements[0]!.positions.length).toBe(1);
+});
+
+test("the dedupe slot is claimed AFTER the drop, so two bodyless positions are two drops rather than a discarded response", async () => {
+  const s = await mixedBodySession("judge-dedupe-order", 2, 1);
+  const input = (await buildJudgeInput(s.session.id, 3))!;
+  const bodyless = s.withoutBody[0]!.id;
+  const bodied = s.withBody[0]!.id;
+
+  // The same STANCE-ONLY member twice inside one disagreement. Held before the
+  // drop, the second entry raised `duplicate_position:<id>` and threw the whole
+  // opinion away over two entries that store no bytes at all.
+  const drops = { positions: 0, disagreements: 0 };
+  const parsed = parseJudgeResponse(answerNaming([bodied, bodyless, bodyless]), input, drops);
+  expect(parsed.disagreements.length).toBe(1);
+  expect(parsed.disagreements[0]!.positions.map((p) => p.member_id)).toEqual([bodied]);
+  expect(drops.positions).toBe(2);
+
+  // The rule it protects is untouched: a repeated QUOTABLE member — the write
+  // amplifier #771 bounded — is still refused.
+  expect(() => parseJudgeResponse(answerNaming([bodied, bodied]), input)).toThrow(`duplicate_position:${bodied}`);
+});
+
+test("`applied` is a fact on the row, not an inference from the mode: shadow never applies, and an enforce opinion that missed its session says so", async () => {
+  // shadow: recorded, never applied.
+  const shadow = await aggregatedSession("judge-applied-shadow");
+  await setJudgeConfig({ mode: "shadow" });
+  expect((await judgeSession(shadow.session.id, { transport: fixedTransport(goodAnswer(shadow.members[0]!.id, shadow.members[1]!.id)) })).ok).toBe(true);
+  const shadowRow = await judgementRow(shadow.session.id);
+  expect(shadowRow.applied).toBe(false);
+  expect(shadowRow.applied_skipped_reason).toBeNull();
+
+  // enforce on a writable session: applied.
+  const applied = await aggregatedSession("judge-applied-enforce");
+  await setJudgeConfig({ mode: "enforce" });
+  expect((await judgeSession(applied.session.id, { transport: fixedTransport(goodAnswer(applied.members[0]!.id, applied.members[1]!.id)) })).ok).toBe(true);
+  const appliedRow = await judgementRow(applied.session.id);
+  expect(appliedRow.applied).toBe(true);
+  expect(appliedRow.applied_skipped_reason).toBeNull();
+
+  // enforce whose session PUBLISHED while the model was thinking. Real: the
+  // model call is up to 60s and `swarm.publish` runs in another process. The
+  // opinion is recorded and does NOT reach the published prose — and before
+  // #767 the row said `mode='enforce'` with nothing to distinguish it from the
+  // case above.
+  const raced = await aggregatedSession("judge-applied-raced");
+  const before = JSON.stringify(await recOf(raced.session.id));
+  const publishesMidFlight: JudgeTransport = {
+    model: "test/judge",
+    complete: async () => {
+      await ic.publishSession(raced.session.id);
+      return goodAnswer(raced.members[0]!.id, raced.members[1]!.id);
+    },
+  };
+  const result = await judgeSession(raced.session.id, { transport: publishesMidFlight });
+  expect(result.ok, "a session that moved under the judge is reported, not an error").toBe(true);
+  expect(result.applied).toBe(false);
+  expect(result.appliedSkippedReason).toBe("session_no_longer_writable");
+  const racedRow = await judgementRow(raced.session.id);
+  expect(racedRow.applied).toBe(false);
+  expect(String(racedRow.applied_skipped_reason)).toBe("session_no_longer_writable");
+  expect(JSON.stringify(await recOf(raced.session.id)), "the published session is untouched").toBe(before);
+});
+
+test("the admin read path returns a session's judgement history and names which opinion is in force", async () => {
+  const { session, members } = await aggregatedSession("judge-read-path");
+  await setJudgeConfig({ mode: "shadow" });
+  await judgeSession(session.id, { transport: fixedTransport(goodAnswer(members[0]!.id, members[1]!.id, "hold")) });
+  await judgeSession(session.id, { transport: fixedTransport(goodAnswer(members[0]!.id, members[1]!.id)) });
+
+  const res = await admin.getSessionJudgementsAdmin(session.id);
+  expect(res.ok).toBe(true);
+  const judgements = (res as any).judgements as any[];
+  expect(judgements.length, "both shadow runs are on the append-only record").toBe(2);
+  // Newest first, and `inForce` is the same row — decided by latestJudgement()
+  // (ORDER BY id), which now has a production caller.
+  expect((res as any).inForce.id).toBe(judgements[0].id);
+  expect(Number(judgements[0].id)).toBeGreaterThan(Number(judgements[1].id));
+
+  const j = judgements[0];
+  // Everything an operator needs to grade a soak without opening psql.
+  expect(j.mode).toBe("shadow");
+  expect(j.source).toBe("model");
+  expect(j.fallbackReason).toBeNull();
+  expect(j.applied).toBe(false);
+  expect(j.partiallyDegraded).toBe(false);
+  expect(j.dropped).toEqual({ positions: 0, disagreements: 0 });
+  expect(j.takeCount).toBe(3);
+  expect(j.minTakes).toBe(3);
+  expect(typeof j.promptHash).toBe("string");
+  expect(typeof j.inputsDigest).toBe("string");
+  expect(typeof j.opinion.rationale).toBe("string");
+  // The two runs really are distinct opinions, so "newest first" could fail.
+  expect(judgements[0].opinion.release_safety.release).not.toBe(judgements[1].opinion.release_safety.release);
+
+  const missing = await admin.getSessionJudgementsAdmin(crypto.randomUUID());
+  expect(missing.ok).toBe(false);
+  expect(missing.status).toBe(404);
+});

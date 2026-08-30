@@ -1228,6 +1228,32 @@ single clean `succeeded` run naming the reason. `off` is an operator's answer, n
 a transient blip a retry can fix. The HTTP path keeps its 409: there a caller
 asked for a judging and must be told it cannot have one.
 
+**The soak has a read path** (issue #767, folded from #768).
+`GET /api/swarm/admin/sessions/:id/judgements` returns every judge run for one
+session, newest first, plus `inForce` — the opinion currently on the session,
+decided by `latestJudgement()` and its `ORDER BY id` and by nothing else. Each
+row carries mode, source, `fallback_reason`, model, `prompt_hash`,
+`inputs_digest`, `take_count`/`min_takes`, the drop counts, the opinion, and
+`applied`. The admin session page renders it for EVERY session, not only
+`judged` ones: a `shadow` run records an opinion and deliberately never moves
+the state, so gating the panel on `judged` would hide the entire soak. The route
+is privileged like the rest of `/api/swarm/admin/*` — a shadow opinion is
+model-authored prose about named members that the mode exists to keep OFF the
+public session page, and serving it unauthenticated would publish through the
+read path exactly what the mode withholds.
+
+**`applied` is a fact on the row, not an inference from the mode.** In `enforce`
+the write onto the session is conditional (see above), so an opinion formed
+while a session was publishing is recorded and does not land. That refusal used
+to be reported on the HTTP response and then lost, which made `mode = 'enforce'`
+no evidence that the session carries the judge's prose. `applyOpinion()` now
+runs BEFORE the INSERT — same transaction, same advisory lock, so atomicity is
+unchanged — and the row records `applied` and, when false,
+`applied_skipped_reason` (one literal today: `session_no_longer_writable`).
+Migration 0041's CHECK refuses a `shadow` row that claims either.
+`applied_skipped_reason` is NOT a `fallback_reason`: the opinion is intact and
+was formed from the model, it simply arrived after the door closed.
+
 **Turning it on needs no redeploy and no re-scheduling — for sessions scheduled
 after #767.** The mode is a database row, and the job is already in the queue for
 every session created since, so flipping `off` → `shadow` changes the next
@@ -1289,10 +1315,20 @@ read path. Dropping is not a weakening of the rule — a bodyless member still
 never appears over model-authored text; the model is simply no longer able to
 disable the judge by citing one. The one whole-response case that remains is a
 session where EVERY take is stance-only, which never reaches the model at all
-and falls back with `no_take_bodies`. Partial degradation is not itself recorded
-on the judgement row — the outcome is still `source='model'` — so a persistently
-thin `disagreements` array is read against the take set, not against a reason
-string.
+and falls back with `no_take_bodies`.
+
+**And the drop is COUNTED** (issue #767). `swarm_session_judgements` carries
+`dropped_positions` and `dropped_disagreements` (migration 0041), filled by
+`parseJudgeResponse()` through an out-parameter. They are counts and NOT a
+reason: `source` stays `'model'` and `fallback_reason` stays NULL, because the
+response was used. Without them a model that named few disagreements and a model
+whose output was trimmed produce identical rows, and an operator grading a
+shadow soak has to re-read the take set by hand to tell them apart. The dedupe
+slot that refuses `duplicate_position:<id>` is claimed AFTER the drop, not
+before: it exists to bound the write amplifier (#771), a dropped position stores
+no bytes, and claiming it first made the two rules order-dependent on each other
+while making `duplicate_position` unreachable for exactly the ids that cost
+nothing.
 
 **One judge at a time, and `judged` never outruns its evidence.** The model call
 happens outside any transaction; everything after it — the state transition, the

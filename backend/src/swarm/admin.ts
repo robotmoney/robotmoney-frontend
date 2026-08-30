@@ -25,7 +25,7 @@ import { deriveMemberHandle } from "./handle.ts";
 // Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
 // an env var, because the swarm is live and an operator must be able to take
 // the judge off published sessions without restarting anything.
-import { getJudgeConfig, judgeSession, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
+import { getJudgeConfig, judgeSession, latestJudgement, listJudgements, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
@@ -1183,6 +1183,69 @@ export async function setJudgeConfigAdmin(
   }
   await audit(actor, "judge_config", { mode: judge.mode, minTakes: judge.minTakes, model: judge.model });
   return { ok: true, status: 200, judge };
+}
+
+// ── The soak's read path (issue #767, folded from #768) ────────────────────
+//
+// `shadow` exists to accumulate judge opinions against live traffic until they
+// can be trusted. Until this route existed there was nothing to accumulate them
+// INTO that anyone could read: `swarm_session_judgements` had no admin route, no
+// UI, and `latestJudgement()` had no production caller at all — inspecting a
+// soak meant `psql` against production. A soak nobody can read is not a soak.
+//
+// PRIVILEGED like everything else under /api/swarm/admin/*. The opinions include
+// model-authored prose about named members that `shadow` deliberately keeps off
+// the public session page; serving it unauthenticated would publish, through the
+// read path, exactly what the mode exists to withhold.
+
+/** One judgement row, camelCased and with the operator-facing facts up front. */
+function toJudgementAdmin(r: Record<string, unknown>) {
+  const dropped = { positions: Number(r.dropped_positions ?? 0), disagreements: Number(r.dropped_disagreements ?? 0) };
+  return {
+    id: String(r.id),
+    mode: String(r.mode),
+    source: String(r.source),
+    fallbackReason: (r.fallback_reason as string | null) ?? null,
+    // enforce-only, and the reason a recorded opinion did NOT reach the session
+    // (it published while the model was thinking). `mode: 'enforce'` alone was
+    // never evidence that the prose landed.
+    applied: r.applied === true,
+    appliedSkippedReason: (r.applied_skipped_reason as string | null) ?? null,
+    model: (r.model as string | null) ?? null,
+    promptHash: String(r.prompt_hash),
+    inputsDigest: String(r.inputs_digest),
+    takeCount: Number(r.take_count),
+    minTakes: Number(r.min_takes),
+    // A partial drop is NOT a fallback: `source` stays 'model' and
+    // `fallbackReason` stays null, because the response was used. This is the
+    // only way to tell a model that named few disagreements from one whose
+    // output was trimmed for want of a quotable take body (#773).
+    dropped,
+    partiallyDegraded: dropped.positions > 0 || dropped.disagreements > 0,
+    opinion: r.opinion ?? null,
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+  };
+}
+
+export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): Promise<AdminResult> {
+  const session = (await sql`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+    | { id: string; state: string }
+    | undefined;
+  if (!session) return err(404, "session not found");
+  const rows = await listJudgements(sessionId, limit);
+  // `latestJudgement()` and nothing else decides which opinion is IN FORCE —
+  // its ORDER BY id (not created_at) is the only ordering that agrees with the
+  // order the session was actually written in, and re-deriving that here would
+  // be a second copy of a rule that has already been got wrong once.
+  const latest = await latestJudgement(sessionId);
+  return {
+    ok: true,
+    status: 200,
+    sessionId,
+    state: session.state,
+    inForce: latest ? toJudgementAdmin(latest as Record<string, unknown>) : null,
+    judgements: rows.map(toJudgementAdmin),
+  };
 }
 
 export async function publishSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {

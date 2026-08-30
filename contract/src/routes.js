@@ -194,8 +194,13 @@ export const ROUTES = {
       // (issue #625) needs to prefer it over the derived mark.
       memberAvatar: "/api/swarm/admin/members/:id/avatar",
 
-      sessionCreate: "/api/swarm/admin/sessions", // POST — UTC-validated, snapshots the roster, enqueues 4 scoped jobs
+      sessionCreate: "/api/swarm/admin/sessions", // POST — UTC-validated, snapshots the roster, enqueues 5 scoped jobs
       sessionRoster: "/api/swarm/admin/sessions/:id/roster", // GET — the frozen expected roster
+      // GET ?limit= — the shadow soak's read path (issue #767). Every judge run
+      // for one session, newest first, plus which one is in force: mode,
+      // source, fallback reason, whether an `enforce` opinion actually reached
+      // the session, and what the parser dropped out of the model's response.
+      sessionJudgements: "/api/swarm/admin/sessions/:id/judgements",
       rosterAdd: "/api/swarm/admin/sessions/:id/roster/add", // POST { memberId } — before collecting only
       rosterExcuse: "/api/swarm/admin/sessions/:id/roster/excuse", // POST { memberId } — before collecting only
       rosterRestore: "/api/swarm/admin/sessions/:id/roster/restore", // POST { memberId } — before collecting only
