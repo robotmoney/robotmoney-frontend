@@ -368,6 +368,119 @@ export function participationBps(submitted, active) {
   return Math.floor((submitted / active) * 10_000 + 0.5);
 }
 
+// ── bps_conversion: shares in 0..1 to integer bps ───────────────────────────
+
+/** A whole allocation is exactly this many basis points. */
+export const BPS_DENOMINATOR = 10_000;
+
+// How far the shares may sum from 1 and still be a share vector. 1e-6 is a
+// hundredth of a basis point — far wider than the float dust a mean over eight
+// analysts leaves behind (~1e-16), far narrower than any real mis-normalization.
+const SHARE_SUM_TOLERANCE = 1e-6;
+
+/**
+ * bps_conversion, AND THE ONLY IMPLEMENTATION OF IT: LARGEST REMAINDER
+ * (Hare quota). Floor every bucket's `share * BPS_DENOMINATOR`, then hand the
+ * leftover bps out one at a time to the largest fractional remainders, TIES
+ * BROKEN BY CANONICAL BUCKET ORDER.
+ *
+ * WHY IT IS EXPORTED. Three places need this rule — the producer (`toBps()` in
+ * backend/src/swarm/consensus-receipt.ts), a verifier's weights recomputation,
+ * and the published spec's `bps_conversion` prose — and a rule spelled three
+ * times is three rules.
+ *
+ * WHAT REPLACED WHAT, AND WHY (issue #798, robotmoney-core#1290). The rule used
+ * to round the first three canonical buckets to the nearest bps and SETTLE THE
+ * POSITIONALLY LAST one to `10000 - prefix`, refusing when that fell outside
+ * 0..10000. When the last canonical bucket (`real_world_assets`) is exactly
+ * zero the three prefix buckets carry the whole distribution, three independent
+ * nearest-integer roundings overshoot by +1 bps about ONE TIME IN EIGHT, the
+ * settled entry becomes -1, and the vector had no representation at all — no
+ * receipt could be assembled for that session. A zero `real_world_assets` is
+ * four of the six real archived allocations, so this was the committee's own
+ * commonest shape. Largest remainder sums to exactly BPS_DENOMINATOR by
+ * construction, for every share vector, whatever sits in the last bucket.
+ *
+ * THE OTHER CANDIDATE core#1290 OFFERED — settle onto the largest-weight bucket
+ * rather than the last — IS REJECTED THERE, in its own words: it "only moves
+ * the failure: it still refuses when the largest bucket is itself near zero."
+ *
+ * THE TIE-BREAK IS PART OF THE RULE, NOT AN ARTEFACT OF `Array.prototype.sort`.
+ * Two buckets can hold the identical share and therefore the identical
+ * remainder (a three-way mean of thirds does it), and which of them takes the
+ * leftover bps CHANGES THE CANONICAL BYTES and so the anchored digest. It is
+ * therefore stated: canonical bucket order — the earlier bucket in
+ * `canonical_bucket_order` wins — and the comparator below is total, so no
+ * implementation has to know whether its sort is stable.
+ *
+ * `shares` is a Map (or a plain object) from bucket to a share in 0..1, read in
+ * `bucketOrder`. THIS AUTHORS NO WEIGHT: it neither re-averages nor
+ * re-normalizes. A vector that is not a share vector — a missing bucket, a
+ * share outside 0..1, or a total more than 1e-6 away from 1 — is REFUSED by
+ * name rather than converted into a plausible-looking wrong answer. That
+ * refusal is about the INPUT, and no longer about where a bucket sits: the
+ * positional refusal this function used to carry is gone.
+ *
+ * @throws {ReceiptCanonicalizationError}
+ */
+export function bucketSharesToBps(shares, bucketOrder) {
+  if (!Array.isArray(bucketOrder) || bucketOrder.length === 0) {
+    throw new ReceiptCanonicalizationError(
+      "bucketSharesToBps: bucketOrder must be a non-empty array of bucket names",
+    );
+  }
+  const read = (bucket) =>
+    shares instanceof Map
+      ? shares.get(bucket)
+      : shares !== null && typeof shares === "object" ? shares[bucket] : undefined;
+
+  let total = 0;
+  const entries = bucketOrder.map((bucket, index) => {
+    const share = read(bucket);
+    if (typeof share !== "number" || !Number.isFinite(share) || share < 0 || share > 1) {
+      throw new ReceiptCanonicalizationError(
+        `bucketSharesToBps: bucket "${bucket}" holds ${JSON.stringify(share) ?? "undefined"} — every bucket in canonical_bucket_order must hold a finite share in 0..1`,
+      );
+    }
+    total += share;
+    const raw = share * BPS_DENOMINATOR;
+    const floored = Math.floor(raw);
+    return { bucket, index, weight_bps: floored, remainder: raw - floored };
+  });
+  if (Math.abs(total - 1) > SHARE_SUM_TOLERANCE) {
+    throw new ReceiptCanonicalizationError(
+      `bucketSharesToBps: the shares sum to ${total}, not 1 — normalize the vector before converting it; this function changes representation and never authors a weight`,
+    );
+  }
+
+  // The leftover is what flooring threw away, and it is at most one bp per
+  // bucket: every remainder is < 1, so their sum is < bucketOrder.length, and
+  // the floors are integers no greater than BPS_DENOMINATOR once the total is
+  // within tolerance of 1. Handing it out one at a time is therefore always
+  // possible, and the result sums to exactly BPS_DENOMINATOR by construction.
+  let leftover = BPS_DENOMINATOR - entries.reduce((sum, entry) => sum + entry.weight_bps, 0);
+  const byRemainder = [...entries].sort(
+    (a, b) => (b.remainder - a.remainder) || (a.index - b.index),
+  );
+  for (const entry of byRemainder) {
+    if (leftover <= 0) break;
+    entry.weight_bps += 1;
+    leftover -= 1;
+  }
+  // THE HEADLINE INVARIANT, ASSERTED RATHER THAN ARGUED. The paragraph above is
+  // a proof, and a proof is exactly the kind of thing that stops holding when
+  // someone widens SHARE_SUM_TOLERANCE. A vector that does not close on
+  // BPS_DENOMINATOR must never leave this function: a receipt carrying one
+  // would be signed and anchored, and `receiptSemanticErrors` would only find
+  // it after the fact.
+  if (leftover !== 0) {
+    throw new ReceiptCanonicalizationError(
+      `bucketSharesToBps: ${leftover} basis point(s) could not be apportioned across ${bucketOrder.length} buckets — the shares summed to ${total}, which is not a share vector`,
+    );
+  }
+  return entries.map(({ bucket, weight_bps }) => ({ bucket, weight_bps }));
+}
+
 export function receiptSemanticErrors(receipt, spec) {
   // Same all-or-nothing rule as canonicalizeReceipt, and read up front for the
   // same reason: `canonical_bucket_order` is only consulted for a receipt that

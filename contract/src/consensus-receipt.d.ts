@@ -76,9 +76,25 @@ export const RECEIPT_SCHEMA_VERSION: string;
 export const RECEIPT_TRAILING_NEWLINE: boolean;
 export const RECEIPT_STANCE_KEYS: readonly string[];
 export const RECEIPT_CANONICAL_BUCKET_ORDER: readonly string[];
+/** A whole allocation is exactly this many basis points. */
+export const BPS_DENOMINATOR: number;
 
 export function compareCodePoints(a: string, b: string): number;
 export function participationBps(submitted: number, active: number): number;
+/**
+ * consensus-receipt.canonicalization.json#bps_conversion, and the only
+ * implementation of it: LARGEST REMAINDER (Hare quota), ties broken by
+ * canonical bucket order. Returns one entry per bucket, in `bucketOrder`,
+ * summing to exactly `BPS_DENOMINATOR`.
+ *
+ * Refuses (`ReceiptCanonicalizationError`) a vector that is not a share
+ * vector — a missing bucket, a share outside 0..1, or a total more than 1e-6
+ * from 1. It never refuses because of where a bucket sits in the order.
+ */
+export function bucketSharesToBps(
+  shares: ReadonlyMap<string, number> | Readonly<Record<string, number>>,
+  bucketOrder: readonly string[],
+): ConsensusReceiptBucketWeight[];
 /** Omit `spec` for the pin; a supplied spec must be complete or it is refused. */
 export function canonicalizeReceipt(
   receipt: ConsensusReceipt,
