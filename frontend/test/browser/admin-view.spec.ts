@@ -624,6 +624,11 @@ async function mockSwarmApi(
     route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_INACTIVE, status: "active" }, token: "reactivated-bearer-token-def456" })));
   await page.route(/\/api\/swarm\/admin\/members\/athena\/rotate-key$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, memberId: "athena", token: "rotated-bearer-token-ghi789" })));
+  // Issue #794 — rotate-key is offered for an INACTIVE member too (it is the
+  // remedy CARRIED_KEY_UNREGISTRABLE names, and the member it strands is
+  // inactive by construction), so cleo needs the route as well as athena.
+  await page.route(/\/api\/swarm\/admin\/members\/cleo\/rotate-key$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, memberId: "cleo", token: "cleo-rotated-bearer-token-jkl012" })));
   // #567's versioned profile edit.
   await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_ACTIVE, version: 3 } })));
@@ -1163,6 +1168,59 @@ test("swarm admin: inactive filter, manual-add credential reveal, and reactivate
   await expect(rotateToken).toBeVisible();
   await expect(rotateToken).toHaveText("rotated-bearer-token-ghi789");
   await expect(rotateToken).not.toHaveText("reactivated-bearer-token-def456");
+});
+
+// AC (issue #794): the remedy a refusal names has to be ON THE PAGE for the
+// member the refusal strands.
+//
+// Since issue #789, reactivate answers 409 CARRIED_KEY_UNREGISTRABLE when the
+// member's on-file public key is a low-order point registered before that gate
+// shipped (what backend/scripts/scan-low-order-keys.ts looks for). The sentence
+// names one way out — "use rotate-key with a freshly generated publicKey" — and
+// the member reading it is INACTIVE by construction, because reactivate is the
+// path that refused. `canRotateKey()` used to be active-only, so the button
+// that sentence names was not rendered on the one page that showed the
+// sentence: an operator dead-end with no in-product exit. This drives the whole
+// loop — refusal, then remedy — on an inactive member.
+test("swarm admin: an inactive member refused reactivation can take the rotate-key remedy the 409 names", async ({ page }) => {
+  await mockSwarmApi(page);
+  // Registered AFTER mockSwarmApi so it wins — Playwright matches routes
+  // last-registered-first. Cleo stands in for the pre-gate member of #793.
+  const carriedKeyRefusal =
+    "member's on-file public key is not a valid Ed25519 public key (or is a low-order point) " +
+    "and cannot be carried forward; use rotate-key with a freshly generated publicKey";
+  await page.route(/\/api\/swarm\/admin\/members\/cleo\/reactivate$/, (route) =>
+    route.fulfill(jsonReply({ ok: false, status: 409, error: carriedKeyRefusal }, 409)));
+
+  await signIn(page, "/admin/swarm");
+  await page.goto("/admin/swarm/members/cleo");
+  await expect(page.getByRole("heading", { name: /Member cleo/ })).toBeVisible();
+
+  // THE FIX. Rotate key renders for an inactive member, alongside Reactivate.
+  // Asserted before the refusal is even provoked: the affordance must exist
+  // whenever the member could need it, not only after an error puts it there.
+  await expect(page.getByTestId("member-rotate-key")).toBeVisible();
+  await expect(page.getByTestId("member-reactivate")).toBeVisible();
+
+  // The refusal, rendered as the sentence the server sent.
+  await page.getByTestId("member-reactivate").click();
+  await page.getByTestId("member-action-reason").fill("Reactivating after the pre-gate key scan.");
+  await page.getByTestId("member-action-submit").click();
+  const confirmModal = page.getByTestId("member-action-confirm");
+  await expect(confirmModal.getByText(carriedKeyRefusal)).toBeVisible();
+  // NOT the stale-version advice (#567's rule): a reload cannot clear this 409,
+  // so telling the operator to reload would be an endless loop past the one
+  // sentence that names the way out.
+  await expect(page.getByText(/stale version/)).toHaveCount(0);
+
+  // And the way out is reachable from here, with no curl and no other page.
+  await confirmModal.getByRole("button", { name: "Cancel" }).click();
+  await page.getByTestId("member-rotate-key").click();
+  await page.getByTestId("member-action-public-key").fill("freshly-generated-pubkey");
+  await page.getByTestId("member-action-reason").fill("Rotating to a freshly generated key, per the refusal.");
+  await page.getByTestId("member-action-submit").click();
+
+  await expect(page.getByTestId("credential-token")).toHaveText("cleo-rotated-bearer-token-jkl012");
 });
 
 // AC: session scheduling reason/ISO-ordering validation + UTC/local rendering
