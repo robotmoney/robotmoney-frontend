@@ -1,6 +1,10 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
-export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
+// /vault (RM-105) — the depositor-capital factsheet that /allocation and
+// /performance were split across. It reads vault-economics and allocation
+// ONLY; the three prop wallets (the house book) move to the token page under
+// RM-103, which is also what keeps /performance on its own view below.
+export const VAULT_VIEW = `${VIEW_DIR}/vault.html`;
 export const PERFORMANCE_VIEW = `${VIEW_DIR}/performance.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
 export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
@@ -148,9 +152,17 @@ const ROUTES = {
   // /blog already lists both research pieces as cards, so a second listing would
   // just be /blog again under another address. Falling through to the catch-all
   // (→ views/research.html, absent → not-found) is the honest answer.
-  "/allocation": ALLOCATION_VIEW,
+  "/vault": VAULT_VIEW,
+  // Both legacy addresses resolve to the page that now owns the content, the
+  // same treatment /allocation2 already had. seo.js's LEGACY_ALIASES names
+  // /vault as the canonical for both, so neither is a duplicate URL.
+  "/allocation": VAULT_VIEW,
+  "/allocation2": VAULT_VIEW,
+  // NOT redirected, and not until RM-103 lands. /performance is the only
+  // maintained historical series for the house book (the three prop wallets);
+  // pointing it at /vault before the token page absorbs that book takes it
+  // offline rather than moving it.
   "/performance": PERFORMANCE_VIEW,
-  "/allocation2": PERFORMANCE_VIEW, // legacy redirect
   "/projects": PROJECTS_VIEW,
   // Legacy article URL, still live on robotmoney.network and still linked from the
   // synthesis prose of twenty archived swarm sessions (they cite

@@ -38,9 +38,13 @@ const META = {
     title: "$ROBOTMONEY Tokenomics & Governance — Robot Money",
     description: "$ROBOTMONEY directs allocation of the Robot Money USDC vault on Base. Holders vote which agent tokens it holds; protocol revenue funds buybacks and burns.",
   },
-  "/allocation": {
-    title: "Allocation — Live Vault & Wallet AUM | Robot Money",
-    description: "Track Robot Money's live allocation: vault strategy breakdown, per-adapter TVL, 7-day APY, agent wallet holdings, and $ROBOTMONEY buyback history on Base.",
+  // /vault (RM-105) replaces /allocation. Both /allocation and /allocation2
+  // now render this page and declare it canonical (LEGACY_ALIASES below), so
+  // neither keeps a META entry of its own — a second entry would be a second
+  // description for one page.
+  "/vault": {
+    title: "Vault — Yield, Allocation & Holdings | Robot Money",
+    description: "Robot Money's USDC vault on Base: what it pays against Aave, where each sleeve is allocated, what it holds per venue, and the daily series behind both.",
   },
   "/performance": {
     title: "Wallet Performance & AUM History — Robot Money",
@@ -282,7 +286,13 @@ const LEGACY_ALIASES = [
   // treasury-allocation blog post served under "Page Not Found" and
   // `noindex, follow`, on a URL that is still live on robotmoney.network and
   // cited inline by the archived swarm sessions (routes.js:152,161).
-  ["/allocation2", "/performance"],
+  // RM-105 repointed both of these at /vault: routes.js resolves /allocation,
+  // /allocation2 and /vault to the same fragment, so all three would be
+  // duplicate URLs unless one of them is named canonical. /allocation2 used to
+  // alias /performance, which is unchanged as a ROUTE but is no longer the
+  // page either address renders.
+  ["/allocation", "/vault"],
+  ["/allocation2", "/vault"],
   ["/articles/treasury-allocation", "/blog/treasury-allocation"],
 ];
 
