@@ -135,7 +135,25 @@ export function registerAdminSwarmMember(Alpine) {
     canActivate() { return this.member?.status === "applied" && !!this.pendingApplication; },
     canDeactivate() { return this.member?.status === "active"; },
     canReactivate() { return this.member?.status === "inactive"; },
-    canRotateKey() { return this.member?.status === "active"; },
+    // Issue #794. NOT active-only. `CARRIED_KEY_UNREGISTRABLE` — the 409 that
+    // reactivate answers when the member's on-file key is a low-order point
+    // registered before issue #789's gate shipped — names exactly one remedy:
+    // "use rotate-key with a freshly generated publicKey". The member who reads
+    // that sentence is INACTIVE by construction, because reactivate is the path
+    // that refused. Active-only meant the refusal pointed at a button that was
+    // not on the page, and the only way out was a hand-rolled curl.
+    //
+    // Widening it is safe rather than a new grant: rotateMemberKeyAdmin()
+    // (swarm/admin.ts) has never had a member-status check, so this POST was
+    // always available to an authenticated admin — the button was the only
+    // thing hiding it. And rotating an inactive member's key is exactly what
+    // reactivation needs to succeed afterwards: reactivate reads the newest key
+    // by created_at, which is the freshly rotated one.
+    //
+    // `applied` and `rejected` stay out on purpose. An applicant's key arrives
+    // with the application and is the thing under review; rotating it before a
+    // decision would change what was reviewed, and rejection is terminal.
+    canRotateKey() { return this.member?.status === "active" || this.member?.status === "inactive"; },
     canReject() { return this.member?.status === "applied" && !!this.pendingApplication; },
 
     // ── Profile edit ────────────────────────────────────────────────────────

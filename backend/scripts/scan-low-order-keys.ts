@@ -233,6 +233,19 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       "[scan-low-order-keys] every take filed by these members is cryptographically unauthenticated — " +
         "record this on issue #789, rotate the key, and review the takes",
     );
+    // Name the remedy, not just the verb (issue #794). "Rotate the key" is the
+    // right instruction and was not an actionable one: an affected member is
+    // refused reactivation with 409 CARRIED_KEY_UNREGISTRABLE until a fresh key
+    // is on file, and this line is where the operator running the scan learns
+    // exactly where to do that.
+    console.log(
+      "[scan-low-order-keys] REMEDY, per member: rotate to a FRESHLY GENERATED keypair — the " +
+        "admin member page's \"Rotate key\" button (offered for inactive members too since issue #794), " +
+        "or POST /api/swarm/admin/members/<memberId>/rotate-key with " +
+        '{"publicKey":"<fresh base64>"}. Carrying the on-file key forward is refused ' +
+        "(409 CARRIED_KEY_UNREGISTRABLE) by both reactivate and a key-less rotate, so the fresh key " +
+        "must be supplied; reactivation then reads it as the newest key on file.",
+    );
     printUnreadable(report);
   }
   // UNCHANGED exit-code contract: 0 clean / 1 hit / 2 did-not-run. An
