@@ -49,7 +49,8 @@ afterAll(() => {
 describe("frontend route resolution", () => {
   test("resolves static routes to matching fragments", () => {
     expect(viewFor("/")).toBe("/views/home.html");
-    expect(viewFor("/allocation")).toBe("/views/allocation.html");
+    expect(viewFor("/vault")).toBe("/views/vault.html");
+    expect(viewFor("/allocation")).toBe("/views/vault.html");
     expect(viewFor("/research/channel-divergence")).toBe("/views/research/channel-divergence.html");
   });
 
