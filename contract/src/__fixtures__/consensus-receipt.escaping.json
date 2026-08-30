@@ -13,8 +13,8 @@
   },
   "stances": {
     "bearish": 0,
-    "cautious": 1,
-    "neutral": 0,
+    "cautious": 0,
+    "neutral": 1,
     "constructive": 1,
     "bullish": 0
   },
@@ -46,20 +46,23 @@
         "Tab\there, backslash\\here, quote\"here 🚀."
       ]
     },
-    "source": "model"
+    "source": "model",
+    "mode": "enforce"
   },
   "analyst_signatures": [
     {
       "member_id": "analyst-alpha",
       "public_key": "T5RBDrNc2aEMfLwkqjIGTP/znuEyqJfXEgiDp+tI++E=",
       "canonical_submission": "{\"memberId\":\"analyst-alpha\",\"date\":\"2026-08-26\",\"subjectId\":\"treasury-allocation\",\"nonce\":\"fusion-1244-alpha-1\",\"stance\":\"constructive\",\"confidence\":82,\"body\":\"Prefer stable yield while retaining measured protocol and agent exposure.\",\"memoUrl\":\"https://robotmoney.net/swarm/memos/1244-alpha\",\"weights\":[{\"bucket\":\"agent_tokens\",\"weight\":0.15},{\"bucket\":\"conservative_defi_yield\",\"weight\":0.55},{\"bucket\":\"protocol_tokens\",\"weight\":0.2},{\"bucket\":\"real_world_assets\",\"weight\":0.1}]}",
-      "signature": "TZP4JS/6PCwulIjt/oOpybFYwcjAIivcQFfRcLrEemxN/3USQNaT4k/rnRhL1MY5vun+oZ4JKwFBCTt2BsZrBw=="
+      "signature": "TZP4JS/6PCwulIjt/oOpybFYwcjAIivcQFfRcLrEemxN/3USQNaT4k/rnRhL1MY5vun+oZ4JKwFBCTt2BsZrBw==",
+      "revision": 1
     },
     {
       "member_id": "analyst-beta",
       "public_key": "8sm2iDFmMpmit1ULIYa0ULNrPV+ynvmfl7I2+ufUNUA=",
       "canonical_submission": "{\"memberId\":\"analyst-beta\",\"date\":\"2026-08-26\",\"subjectId\":\"treasury-allocation\",\"nonce\":\"fusion-1244-beta-1\",\"stance\":\"neutral\",\"confidence\":74,\"body\":\"Keep a diversified allocation with a larger stable-yield reserve.\",\"memoUrl\":\"https://robotmoney.net/swarm/memos/1244-beta\",\"weights\":[{\"bucket\":\"agent_tokens\",\"weight\":0.1},{\"bucket\":\"conservative_defi_yield\",\"weight\":0.65},{\"bucket\":\"protocol_tokens\",\"weight\":0.15},{\"bucket\":\"real_world_assets\",\"weight\":0.1}]}",
-      "signature": "CwU5/gOXHFa369r/ld1lL6TwA6do7z9Iwh8HvBEtA9COuzfmoZr/LD3Er6PSD7cQcy4iBfHxLOn6ptsC2XjjCQ=="
+      "signature": "CwU5/gOXHFa369r/ld1lL6TwA6do7z9Iwh8HvBEtA9COuzfmoZr/LD3Er6PSD7cQcy4iBfHxLOn6ptsC2XjjCQ==",
+      "revision": 1
     }
   ]
 }

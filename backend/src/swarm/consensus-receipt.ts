@@ -29,6 +29,7 @@ import {
   RECEIPT_CANONICAL_BUCKET_ORDER,
   RECEIPT_SCHEMA_VERSION,
   RECEIPT_STANCE_KEYS,
+  bucketSharesToBps,
   canonicalizeReceipt,
   canonicalizeSubmission,
   compareCodePoints,
@@ -45,7 +46,8 @@ import schema from "@robotmoney/contract/fixtures/consensus-receipt.schema.json"
 import { sql } from "../db/client.ts";
 import { verifyDetachedSignature } from "../lib/signing.ts";
 import { loadFrozenTakeSet } from "./domain.ts";
-import type { JudgeOpinion } from "./judge.ts";
+import { inputsDigest, type JudgeOpinion } from "./judge.ts";
+import { judgeInputFromFrozen } from "./judge-session.ts";
 
 /** One contributing analyst, as the assembler needs them. */
 export interface ConsensusReceiptAnalystInput {
@@ -61,6 +63,12 @@ export interface ConsensusReceiptAnalystInput {
   public_key: string;
   /** The take row's `nonce` column, cross-checked against the signed payload's. */
   nonce: string;
+  /**
+   * The take row's `revision`. Takes are amendable (migration 0028), so
+   * "member X's take" is not a unique object; the receipt states WHICH
+   * revision it carries, inside the signed bytes.
+   */
+  revision: number;
 }
 
 /**
@@ -78,6 +86,13 @@ export interface ConsensusReceiptAssemblyInput {
   prompt_hash: string;
   inputs_digest: string;
   source: "model" | "fallback";
+  /**
+   * `swarm_session_judgements.mode` — the mode the opinion was FORMED under,
+   * carried into the signed bytes. Only `enforce` is publishable, and
+   * `loadAssemblyInput` refuses anything the session did not adopt; the type
+   * admits `shadow` so the refusal is expressible rather than unrepresentable.
+   */
+  judge_mode: "shadow" | "enforce";
   opinion: JudgeOpinion;
   /** Size of the session's frozen roster — quorum.active. */
   active_members: number;
@@ -95,13 +110,18 @@ export interface AssembledConsensusReceipt {
 
 export type ConsensusReceiptRefusalReason =
   | "no_session"
+  | "session_not_published"
+  | "session_not_reaggregated"
   | "not_judged"
+  | "judgement_not_adopted"
+  | "judgement_stale"
   | "no_takes"
   | "created_at_unparseable"
   | "digest_malformed"
   | "signing_key_unresolved"
   | "take_not_bound_to_session"
   | "nonce_replayed"
+  | "weights_malformed"
   | "weights_not_canonical_four"
   | "weights_bps_out_of_range"
   | "schema_invalid"
@@ -167,6 +187,31 @@ function hash32(value: string, field: string): string {
  * Nothing here re-averages, re-normalizes or re-orders anything.
  */
 function toBps(weights: { bucket: string; weight: number }[]): { bucket: string; weight_bps: number }[] {
+  // SHAPE FIRST, AND IT IS A NAMED REFUSAL. `swarm_recommendation.weights` is
+  // jsonb: nothing in the database constrains it to an array of
+  // {bucket, weight}, and a hand-written or half-migrated row carrying an
+  // object (or a string, or a number) used to reach `.map()` here and escape as
+  // a TypeError — a 500 with no reason code, which the file header's "every
+  // refusal is operator-visible" rule forbids.
+  if (!Array.isArray(weights)) {
+    throw new ConsensusReceiptRefusal(
+      "weights_malformed",
+      `the session's weights are ${weights === null ? "null" : typeof weights}, not an array of {bucket, weight} — the receipt is refused rather than failing with an unnamed error`,
+    );
+  }
+  const malformed = weights.filter(
+    (w) => w === null || typeof w !== "object" || Array.isArray(w) ||
+      typeof (w as { bucket?: unknown }).bucket !== "string" ||
+      typeof (w as { weight?: unknown }).weight !== "number" ||
+      !Number.isFinite((w as { weight: number }).weight),
+  );
+  if (malformed.length > 0) {
+    throw new ConsensusReceiptRefusal(
+      "weights_malformed",
+      "the session's weight vector has an entry that is not {bucket: string, weight: finite number}",
+      malformed.slice(0, 4).map((w) => `bad entry ${JSON.stringify(w)}`),
+    );
+  }
   const byBucket = new Map(weights.map((w) => [String(w.bucket), Number(w.weight)]));
   const canonical = RECEIPT_CANONICAL_BUCKET_ORDER;
   const missing = canonical.filter((bucket) => !byBucket.has(bucket));
@@ -190,22 +235,24 @@ function toBps(weights: { bucket: string; weight: number }[]): { bucket: string;
       ],
     );
   }
-  const out: { bucket: string; weight_bps: number }[] = [];
-  let prefix = 0;
-  for (let i = 0; i < canonical.length - 1; i++) {
-    const bucket = canonical[i]!;
-    const bps = Math.floor(byBucket.get(bucket)! * 10_000 + 0.5);
-    prefix += bps;
-    out.push({ bucket, weight_bps: bps });
-  }
-  const final = 10_000 - prefix;
+  // THE RULE ITSELF IS IMPORTED, not restated. `bucketSharesToBps` is the one
+  // implementation of consensus-receipt.canonicalization.json#bps_conversion,
+  // shared with the verifier's weights recomputation in
+  // `receiptSemanticErrors` — so the two can never disagree about the vector,
+  // and ISSUE #798 (which changes this rule; robotmoney-core#1290 found
+  // settle-the-last refuses ~1 in 8 vectors whose last canonical bucket is
+  // exactly zero) has ONE site to land in rather than three.
+  //
+  // RANGE-CHECKING THE FINAL BUCKET IS THIS CALLER'S OBLIGATION, and here it is
+  // an operator-visible refusal rather than an exception out of shared code.
+  const out = bucketSharesToBps(byBucket as Map<string, number>, canonical as readonly string[]);
+  const final = out[out.length - 1]!.weight_bps;
   if (!Number.isSafeInteger(final) || final < 0 || final > 10_000) {
     throw new ConsensusReceiptRefusal(
       "weights_bps_out_of_range",
       `bps conversion left the final bucket at ${final}, outside 0..10000 — the vector did not sum to 1`,
     );
   }
-  out.push({ bucket: canonical[canonical.length - 1]!, weight_bps: final });
   return out;
 }
 
@@ -294,6 +341,15 @@ export function assembleConsensusReceipt(input: ConsensusReceiptAssemblyInput): 
       disagreements: input.opinion.disagreements,
       release_safety: input.opinion.release_safety,
       source: input.source,
+      // THE MODE, INSIDE THE SIGNED BYTES. `shadow` records an opinion and
+      // leaves the session alone, and shadow is the documented rollout mode —
+      // so a receipt that carried whatever judgement existed would, BY THE
+      // DESIGN OF THE ROLLOUT, have made the first receipts ever published
+      // carry prose the session never showed. `receiptSemanticErrors` refuses
+      // anything but "enforce", so the refusal is one a stranger holding only
+      // the receipt reproduces; `loadAssemblyInput` refuses independently, by
+      // binding to the judgement the session's own record names.
+      mode: input.judge_mode,
     },
     // 3.5 — ANALYST IDENTITY IS A FIRST-CLASS FIELD. member_id, the ed25519
     // public key that signed, the exact signed bytes, and the signature: four
@@ -313,6 +369,10 @@ export function assembleConsensusReceipt(input: ConsensusReceiptAssemblyInput): 
         // verification below.
         canonical_submission: canonicalizeSubmission(analyst.payload as Parameters<typeof canonicalizeSubmission>[0]),
         signature: analyst.signature,
+        // WHICH revision this is. Without it the receipt names a member and a
+        // signature but not the object they belong to, and "member X's take"
+        // has been ambiguous since migration 0028 made takes amendable.
+        revision: analyst.revision,
       })),
   };
   // OMITTED ENTIRELY when absent — a judged-but-unweighted receipt is legal and
@@ -375,8 +435,42 @@ async function resolveSigningKey(memberId: string, canonicalSubmission: string, 
   return null;
 }
 
-/** Build the assembly input for one session out of stored state. */
-async function loadAssemblyInput(sessionId: string, createdAt: Date): Promise<ConsensusReceiptAssemblyInput & { judgementId: string }> {
+/**
+ * Order-insensitive JSON, for comparing two jsonb documents that came out of
+ * Postgres by different routes. Used for exactly one thing: "the opinion this
+ * judgement row holds IS the opinion the session carries".
+ */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * Build the assembly input for one session out of stored state.
+ *
+ * THIS FUNCTION IS THE PINNING, and everything it refuses was reachable through
+ * DOCUMENTED ADMIN OPERATIONS before it existed. The pure assembler below is
+ * only as truthful as the three independently-timed sources this function
+ * hands it — the frozen take set, the judgement row, and the aggregation-time
+ * `swarm_recommendation` — so the gates in order are:
+ *
+ *   1. The session is TERMINAL (`published`). Nothing can move it afterwards.
+ *   2. Its rollup describes the take set that exists NOW (no late first take).
+ *   3. The judgement is the one the session ADOPTED, not merely the newest.
+ *   4. That judgement was formed over THIS take set (`inputs_digest` rebuild).
+ *
+ * Each is a named refusal that reaches the operator, never a silent best guess.
+ */
+async function loadAssemblyInput(
+  sessionId: string,
+  createdAt: Date,
+): Promise<ConsensusReceiptAssemblyInput & { judgementId: string; sessionVersion: number }> {
   const frozen = await loadFrozenTakeSet(sessionId);
   if (!frozen) throw new ConsensusReceiptRefusal("no_session", `no such session ${sessionId}`);
   // THE SAME FROZEN SET THE JUDGE READ. `loadFrozenTakeSet()` is the one query
@@ -385,19 +479,144 @@ async function loadAssemblyInput(sessionId: string, createdAt: Date): Promise<Co
   // claim about exactly the takes this receipt attests to. Re-querying here
   // would make the receipt attest to a take set nobody judged.
   const session = frozen.session;
-  const judgement = (await sql`
-    SELECT id, source, prompt_hash, inputs_digest, opinion
-    FROM swarm_session_judgements WHERE session_id = ${sessionId}
-    ORDER BY id DESC LIMIT 1`)[0] as
-    | { id: string | number; source: string; prompt_hash: string; inputs_digest: string; opinion: JudgeOpinion }
-    | undefined;
-  if (!judgement) {
+  const rec = (session.swarm_recommendation ?? {}) as Record<string, unknown>;
+
+  // ── 1. TERMINAL SESSIONS ONLY ─────────────────────────────────────────────
+  // There used to be NO state predicate here at all, and that is the whole of
+  // the first blocker. `published` and `cancelled` are the only terminal states
+  // (swarm/admin.ts TRANSITIONS), and `cancelled` has no rollup to sign, so
+  // `published` is the one state from which a receipt can be assembled.
+  //
+  // WHY TERMINAL AND NOT "JUDGED". Every non-terminal state can still be moved,
+  // through transitions the admin surface documents and offers: aggregated ->
+  // window_closed -> collecting reopens the take window, a member amends,
+  // aggregation re-runs, and `swarm_recommendation` — which is what
+  // GET /api/swarm/sessions/:id serves — now says something else. The receipt
+  // cannot follow, because migration 0041 makes the row immutable and
+  // robotmoney-core anchors keccak256 over its bytes. So the signed artifact
+  // and the public API disagreed about the same session, permanently, with
+  // `verified: true` on both surfaces. Refusing until the session can no longer
+  // move is what makes that unreachable rather than merely unlikely.
+  //
+  // THE OPERATOR ORDER IS THEREFORE: publish the session, then publish its
+  // receipt. A session anyone may still want to reopen must be reopened BEFORE
+  // the receipt exists.
+  const state = String(session.state ?? "");
+  if (state !== "published") {
+    throw new ConsensusReceiptRefusal(
+      "session_not_published",
+      `session ${sessionId} is in state "${state}", and a receipt is assembled only from a PUBLISHED session — publish the session first. ` +
+        "Until it is published the lifecycle still allows it to be reopened and re-aggregated, and the receipt's bytes are immutable and anchored, " +
+        "so a receipt published earlier would go on asserting an allocation the session no longer serves.",
+    );
+  }
+
+  // ── 2. THE ROLLUP DESCRIBES THE TAKES THAT EXIST NOW ──────────────────────
+  // A member filing their FIRST take after aggregation is deliberate, supported
+  // behaviour: the timing contract is the advertised `window_closes_at`
+  // TIMESTAMP and not the state (domain.ts submitRecommendation), so only
+  // AMENDMENTS are confined to TAKES_AMENDABLE_STATES. The rollup written at
+  // aggregation then describes one member fewer than the take set does.
+  //
+  // Assembly was already refused in that case — but as `semantics_invalid` with
+  // "stances: counts do not sum to quorum.submitted" and "release_safety:
+  // take_count !== quorum.submitted", which read as a corrupted rollup and name
+  // no remedy. It is a named condition with a named fix instead.
+  const rolledUp = (rec.quorum as { submitted?: unknown } | undefined)?.submitted;
+  if (typeof rolledUp === "number" && rolledUp !== frozen.takes.length) {
+    throw new ConsensusReceiptRefusal(
+      "session_not_reaggregated",
+      `session ${sessionId} now has ${frozen.takes.length} take(s) but its rollup was computed over ${rolledUp} — re-aggregate and re-judge the session, then publish the receipt. ` +
+        "A member may file a FIRST take up to the advertised window_closes_at whatever state the session is in, so this is ordinary product behaviour rather than corruption.",
+    );
+  }
+
+  // ── 3. THE JUDGEMENT THE SESSION ADOPTED, BY EQUALITY ─────────────────────
+  // This used to be `ORDER BY id DESC LIMIT 1` with no filter on mode and no
+  // check that the opinion ever reached the session, and that is the whole of
+  // the second blocker. In `shadow` — the DOCUMENTED ROLLOUT MODE, the one
+  // operators are told to sit in "for as long as it takes to trust it" —
+  // applyOpinion() is never called and the session keeps its aggregator-
+  // authored prose, yet the judgement row exists and was copied verbatim into
+  // the signed bytes. So by the design of the rollout, the FIRST receipts ever
+  // published would have carried model prose the session never showed.
+  //
+  // A `mode = 'enforce'` filter alone does not close it: an enforce run whose
+  // applyOpinion() returned false (`session_no_longer_writable`) leaves an
+  // enforce row the session never adopted, and two enforce runs over the same
+  // inputs leave two rows carrying identical digests. So the selection is an
+  // EQUALITY in three parts — the digests the session's own record names, the
+  // mode that can write, and finally the opinion the session actually carries.
+  // NEVER JUDGED AT ALL is its own, older, still-correct reason — checked first
+  // so an operator who simply has not judged the session is not told about
+  // adoption.
+  const onFile = (await sql`
+    SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = ${sessionId}`)[0] as { n: number };
+  if (Number(onFile.n) === 0) {
     throw new ConsensusReceiptRefusal(
       "not_judged",
       `session ${sessionId} has no judgement on file — a receipt carries the judge's opinion, its prompt_hash and its inputs_digest, so there is nothing to assemble until the session has been judged`,
     );
   }
-  const rec = (session.swarm_recommendation ?? {}) as Record<string, unknown>;
+  const adopted = (rec.judge ?? null) as { prompt_hash?: unknown; inputs_digest?: unknown } | null;
+  if (!adopted || typeof adopted.prompt_hash !== "string" || typeof adopted.inputs_digest !== "string") {
+    throw new ConsensusReceiptRefusal(
+      "judgement_not_adopted",
+      `session ${sessionId} has ${onFile.n} judgement(s) on file but carries no judge block on its own record, so no opinion has ever reached it. ` +
+        "A judgement recorded in `shadow` is deliberately withheld from the session — that is the whole point of the mode — and the receipt carries " +
+        "only an opinion the session adopted, so judge the session in `enforce` mode before publishing its receipt.",
+    );
+  }
+  const candidates = (await sql`
+    SELECT id, mode, source, prompt_hash, inputs_digest, opinion
+    FROM swarm_session_judgements
+    WHERE session_id = ${sessionId} AND mode = 'enforce'
+      AND prompt_hash = ${adopted.prompt_hash} AND inputs_digest = ${adopted.inputs_digest}
+    ORDER BY id DESC`) as unknown as {
+      id: string | number; mode: string; source: string; prompt_hash: string; inputs_digest: string; opinion: JudgeOpinion;
+    }[];
+  // The three fields applyOpinion() copies onto the session, and nothing else:
+  // `judge`, `weights`, `quorum` and the rest of the recommendation are not
+  // part of any opinion.
+  const sessionOpinion = stableJson({
+    rationale: rec.rationale ?? null,
+    disagreements: rec.disagreements ?? null,
+    release_safety: rec.release_safety ?? null,
+  });
+  const judgement = candidates.find((row) => stableJson({
+    rationale: row.opinion?.rationale ?? null,
+    disagreements: row.opinion?.disagreements ?? null,
+    release_safety: row.opinion?.release_safety ?? null,
+  }) === sessionOpinion);
+  if (!judgement) {
+    throw new ConsensusReceiptRefusal(
+      "judgement_not_adopted",
+      `session ${sessionId} has ${onFile.n} judgement(s) on file but none of them is the one the session adopted — no enforce-mode row matches the session's own judge prompt_hash/inputs_digest AND carries the rationale, disagreements and release_safety the session serves. ` +
+        "The receipt embeds the session's judge block or it embeds nothing; re-judge the session in `enforce` mode.",
+      [`session judge prompt_hash ${adopted.prompt_hash}`, `session judge inputs_digest ${adopted.inputs_digest}`],
+    );
+  }
+
+  // ── 4. THAT OPINION WAS FORMED OVER THIS TAKE SET ─────────────────────────
+  // `inputs_digest` is the judge's own claim about what it read, and until now
+  // nothing checked it against what the receipt embeds. Rebuilding it over the
+  // frozen set just loaded closes stances, weights, the judge's prose, its
+  // VERBATIM QUOTATION of a named analyst in disagreements[].positions[].view,
+  // and prompt_hash divergence in one comparison — canonicalizeJudgeInputs()
+  // already covers member_id, revision, stance, confidence and body. Without
+  // it, an amendment made between judging and publishing embedded the member's
+  // NEW signed submission beside the judge's quotation of their OLD one, and a
+  // stranger could not detect it: inputs_digest covers member_name and the
+  // brief, neither of which the receipt carries.
+  const rebuilt = await judgeInputFromFrozen(frozen, Number(judgement.opinion?.release_safety?.min_takes ?? 1));
+  const rebuiltDigest = inputsDigest(rebuilt);
+  if (rebuiltDigest !== String(judgement.inputs_digest)) {
+    throw new ConsensusReceiptRefusal(
+      "judgement_stale",
+      `the adopted judgement of session ${sessionId} was formed over a different set of inputs than the one this receipt would embed — re-judge the session in \`enforce\` mode, then publish the receipt`,
+      [`judgement inputs_digest ${judgement.inputs_digest}`, `rebuilt inputs_digest ${rebuiltDigest}`],
+    );
+  }
 
   const analysts: ConsensusReceiptAnalystInput[] = [];
   for (const take of frozen.takes) {
@@ -417,6 +636,7 @@ async function loadAssemblyInput(sessionId: string, createdAt: Date): Promise<Co
       signature,
       public_key: publicKey,
       nonce: String(take.nonce ?? (payload as { nonce?: unknown }).nonce ?? ""),
+      revision: Number(take.revision ?? 1),
     });
   }
 
@@ -443,12 +663,18 @@ async function loadAssemblyInput(sessionId: string, createdAt: Date): Promise<Co
 
   return {
     judgementId: String(judgement.id),
+    sessionVersion: Number(session.version ?? 0),
     session_id: sessionId,
     subject_id: String(session.subject_id),
     created_at: createdAt.toISOString(),
     prompt_hash: String(judgement.prompt_hash),
     inputs_digest: String(judgement.inputs_digest),
     source: judgement.source === "model" ? "model" : "fallback",
+    // Always "enforce" — the selection above admits no other row. Read off the
+    // judgement rather than written as a literal, so the disclosure in the
+    // signed bytes stays a RECORDED FACT about that row instead of a constant
+    // this function asserts about it.
+    judge_mode: judgement.mode === "enforce" ? "enforce" : "shadow",
     opinion: judgement.opinion,
     active_members: frozen.activeMembers.length,
     stances: (rec.stances as Record<string, number>) ?? {},
@@ -457,6 +683,24 @@ async function loadAssemblyInput(sessionId: string, createdAt: Date): Promise<Co
     // this is the vector it already produced and `GET /api/swarm/sessions/:id`
     // already serves, so the receipt and the public API can never disagree
     // about the same session. Absent here means absent there.
+    //
+    // READ, AND THEN CHECKED. `receiptSemanticErrors` recomputes the vector
+    // from the embedded submissions and refuses on a mismatch, so "read rather
+    // than re-derived" no longer means "taken on trust": the aggregator stays
+    // the sole author, and the receipt still has to be arithmetic a stranger
+    // can reproduce from the takes it carries.
+    //
+    // NULL IS FOUR DIFFERENT STATES and only one of them is the specified one:
+    // meanTakeWeights() returned undefined (nobody submitted a vector — the
+    // case the obligation names), the subject is `position_actions` so it was
+    // never called at all, the session was never aggregated, or the column was
+    // written without weights. OMISSION IS THEREFORE NOT VERIFIABLE from the
+    // receipt — a reader cannot tell those apart, because the receipt does not
+    // carry the subject's recommendation type — and the published spec says so
+    // rather than implying a check that does not exist. The other three states
+    // are unreachable here: an unaggregated or unjudged session is refused
+    // above, and a hand-written column of the wrong SHAPE is refused by
+    // toBps()'s `weights_malformed`.
     weights: (rec.weights as { bucket: string; weight: number }[] | undefined) ?? null,
     analysts,
   };
@@ -486,9 +730,9 @@ export async function publishConsensusReceipt(sessionId: string, now: Date = new
   const { receipt, canonicalBytes } = assembleConsensusReceipt(input);
   await sql`
     INSERT INTO swarm_consensus_receipts
-      (session_id, subject_id, schema_version, judgement_id, receipt, canonical_bytes)
+      (session_id, subject_id, schema_version, judgement_id, session_version, receipt, canonical_bytes)
     VALUES (${sessionId}, ${input.subject_id}, ${RECEIPT_SCHEMA_VERSION}, ${input.judgementId},
-            ${sql.json(receipt as never)}, ${canonicalBytes})
+            ${input.sessionVersion}, ${sql.json(receipt as never)}, ${canonicalBytes})
     ON CONFLICT (session_id) DO NOTHING`;
   const stored = await readStoredReceipt(sessionId);
   if (!stored) throw new ConsensusReceiptRefusal("no_session", `receipt for ${sessionId} vanished immediately after being written`);

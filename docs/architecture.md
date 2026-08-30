@@ -1819,6 +1819,73 @@ amend the receipt, it orphans the anchor. `publishConsensusReceipt()` re-reads
 before it assembles, so a second call returns the row already on file even if
 the session's prose has since been rewritten by a later judge run.
 
+**Four gates before anything is assembled, and every one of them was reachable
+through documented admin operations.** `loadAssemblyInput()` reads three
+independently-timed sources — the frozen take set, the judgement row, and the
+aggregation-time `swarm_recommendation` — and nothing used to hold them
+together, so two supported operator paths produced a signed, immutable,
+chain-anchored artifact that contradicted the session it was about, served as
+`verified: true`.
+
+1. **The session must be terminal (`published`).** There was no state predicate
+   at all. Every non-terminal state can still be moved: `aggregated ->
+   window_closed -> collecting` reopens the window, a member amends, aggregation
+   re-runs, and `GET /api/swarm/sessions/:id` now serves a different allocation
+   — while the receipt's bytes are immutable and anchored. Refusing until the
+   session can no longer move makes that unreachable rather than unlikely. **The
+   operator order is therefore: publish the session, then publish its receipt.**
+   A session anyone may still want to reopen must be reopened *before* the
+   receipt exists. Refusal: `session_not_published`.
+2. **The rollup must describe the takes that exist now.** A member may file a
+   *first* take right up to the advertised `window_closes_at` whatever state the
+   session is in — the timestamp is the timing contract, not the state — so the
+   rollup can legitimately be one member short. Refusal:
+   `session_not_reaggregated`, whose message names the remedy (re-aggregate and
+   re-judge) rather than surfacing as two arithmetic errors that read like
+   corruption.
+3. **The judgement must be the one the session adopted.** The judge block used
+   to be copied from the newest `swarm_session_judgements` row with no filter on
+   mode and no check that the opinion ever reached the session. In `shadow` —
+   *the documented rollout mode* — `applyOpinion()` is never called and the
+   session keeps its aggregator-authored prose, so by the design of the rollout
+   the first receipts ever published would have carried model prose the session
+   never showed. A `mode = 'enforce'` filter alone is insufficient (an enforce
+   run whose `applyOpinion()` returned false leaves an unadopted enforce row),
+   so the selection is an equality in three parts: the digests the session's own
+   `swarm_recommendation.judge` names, `mode = 'enforce'`, and finally the
+   `{rationale, disagreements, release_safety}` the session actually carries.
+   Refusal: `judgement_not_adopted`.
+4. **That judgement must have been formed over this take set.** The judge input
+   is rebuilt from the frozen set just loaded and `inputsDigest()` compared
+   against the row. One comparison closes stances, weights, the judge's prose,
+   its *verbatim quotation of a named analyst* in
+   `disagreements[].positions[].view`, and `prompt_hash` divergence at once.
+   Refusal: `judgement_stale`.
+
+**Disclosed in the signed bytes, not only enforced by the producer.** `judge`
+carries `mode`, so a verifier holding nothing but the receipt can tell an
+adopted opinion from a withheld one, and `receiptSemanticErrors` refuses
+anything but `enforce`. Each `analyst_signatures[]` entry carries `revision`,
+because takes have been amendable since migration 0028 and "member X's take"
+does not otherwise name a unique object. `swarm_consensus_receipts` records the
+session's `version` beside the row so a later divergence would be a detectable
+fact; the per-member revisions live *inside* the payload, which is stronger,
+because the anchor covers them.
+
+**The shipped verifier recomputes rather than counts.** `receiptSemanticErrors`
+— the function robotmoney-core and any third party runs — used to check only
+cardinality, so any change preserving the member count while changing content
+passed silently. It now parses each carried `canonical_submission` and requires
+its `memberId` to equal the entry's `member_id` and its `subjectId` the
+receipt's (otherwise member B's genuinely-signed submission filed under member
+A's entry verifies clean), recomputes `stances` as the histogram of those
+submissions, and recomputes `weights` as their deterministic mean in bps.
+**The signature is still verified over the raw carried string, never over a
+re-serialization** — whether `0.15` survives a JSON round trip is a property of
+one serializer rather than of the signed bytes. Every one of these is published
+in `consensus-receipt.canonicalization.json#verifier_invariants`, so a
+cross-repo verifier inherits them rather than reimplementing a weaker check.
+
 **The conformance vector.** `consensus-receipt.assembler-input.json` is a
 committed assembler input; feeding it to `assembleConsensusReceipt()` reproduces
 `consensus-receipt.valid.json` and, byte for byte,

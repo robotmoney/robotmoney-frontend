@@ -144,8 +144,8 @@ beforeAll(async () => {
   const [judgementRow] = (await sql`
     SELECT id FROM swarm_session_judgements WHERE session_id = ${SESSION} ORDER BY id DESC LIMIT 1`) as unknown as { id: string }[];
   await sql`
-    INSERT INTO swarm_consensus_receipts (session_id, subject_id, schema_version, judgement_id, receipt, canonical_bytes)
-    VALUES (${SESSION}, ${SUBJECT}, '1.0', ${judgementRow!.id},
+    INSERT INTO swarm_consensus_receipts (session_id, subject_id, schema_version, judgement_id, session_version, receipt, canonical_bytes)
+    VALUES (${SESSION}, ${SUBJECT}, '1.0', ${judgementRow!.id}, 1,
             ${sql.json({ schema_version: "1.0", session_id: SESSION, subject_id: SUBJECT } as never)},
             ${"robotmoney:consensus-receipt:v1\n{\"schema_version\":\"1.0\"}\n"})`;
   await sql`INSERT INTO swarm_applications (payload) VALUES ('{}'::jsonb)`;

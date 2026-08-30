@@ -1384,11 +1384,25 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
 // 0042 refuses the UPDATE regardless, so the bytes an on-chain digest commits
 // to cannot be replaced by a re-run.
 //
-// EVERY REFUSAL REACHES THE OPERATOR with its reason code. The one that matters
-// most is `weights_not_canonical_four`: a session whose members submitted a
-// bucket set schema 1.0 cannot carry is refused here rather than published with
-// the allocation silently dropped, which would have the signed artifact
-// contradict what GET /api/swarm/sessions/:id serves for the same session.
+// PUBLISH THE SESSION FIRST. Assembly refuses any session that is not already
+// `published` (`session_not_published`), because `published` is terminal and a
+// non-terminal session can still be reopened, amended and re-aggregated while
+// the receipt's bytes stay immutable and anchored. A session an operator may
+// still want to reopen must be reopened BEFORE its receipt exists.
+//
+// AND JUDGE IT IN `enforce`. A `shadow` judgement is deliberately withheld from
+// the session, so there is nothing for a receipt to attest to
+// (`judgement_not_adopted`): the receipt embeds the session's own judge block
+// or it embeds nothing.
+//
+// EVERY REFUSAL REACHES THE OPERATOR with its reason code. Besides the two
+// above: `session_not_reaggregated` (a late FIRST take arrived after the rollup
+// was computed — re-aggregate and re-judge), `judgement_stale` (the adopted
+// opinion was formed over a different take set), and
+// `weights_not_canonical_four` — a session whose members submitted a bucket set
+// schema 1.0 cannot carry is refused here rather than published with the
+// allocation silently dropped, which would have the signed artifact contradict
+// what GET /api/swarm/sessions/:id serves for the same session.
 export async function publishConsensusReceiptAdmin(sessionId: string, actor: Actor = ADMIN_ACTOR) {
   let stored;
   try {

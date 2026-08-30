@@ -28,7 +28,8 @@
       "min_takes": 3,
       "concerns": []
     },
-    "source": "human"
+    "source": "human",
+    "mode": "off"
   },
   "analyst_signatures": [],
   "weights": [

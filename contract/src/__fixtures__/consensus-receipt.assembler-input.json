@@ -6,6 +6,7 @@
   "prompt_hash": "1111111111111111111111111111111111111111111111111111111111111111",
   "inputs_digest": "2222222222222222222222222222222222222222222222222222222222222222",
   "source": "model",
+  "judge_mode": "enforce",
   "opinion": {
     "rationale": "The deterministic mean keeps most capital in stable yield while retaining measured exposure to the other three vault themes.",
     "disagreements": [
@@ -88,7 +89,8 @@
       },
       "signature": "CwU5/gOXHFa369r/ld1lL6TwA6do7z9Iwh8HvBEtA9COuzfmoZr/LD3Er6PSD7cQcy4iBfHxLOn6ptsC2XjjCQ==",
       "public_key": "8sm2iDFmMpmit1ULIYa0ULNrPV+ynvmfl7I2+ufUNUA=",
-      "nonce": "fusion-1244-beta-1"
+      "nonce": "fusion-1244-beta-1",
+      "revision": 1
     },
     {
       "member_id": "analyst-alpha",
@@ -122,7 +124,8 @@
       },
       "signature": "TZP4JS/6PCwulIjt/oOpybFYwcjAIivcQFfRcLrEemxN/3USQNaT4k/rnRhL1MY5vun+oZ4JKwFBCTt2BsZrBw==",
       "public_key": "T5RBDrNc2aEMfLwkqjIGTP/znuEyqJfXEgiDp+tI++E=",
-      "nonce": "fusion-1244-alpha-1"
+      "nonce": "fusion-1244-alpha-1",
+      "revision": 1
     }
   ]
 }

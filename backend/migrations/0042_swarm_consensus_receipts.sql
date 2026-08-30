@@ -37,6 +37,19 @@ CREATE TABLE IF NOT EXISTS swarm_consensus_receipts (
   -- receipt says what that judge said over exactly those takes" is a join, not
   -- a claim.
   judgement_id    bigint NOT NULL REFERENCES swarm_session_judgements(id),
+  -- THE SESSION REVISION THIS RECEIPT ATTESTS TO. `swarm_sessions.version` is
+  -- bumped by every guarded state transition, so recording it makes a later
+  -- divergence a DETECTABLE FACT rather than an invisible one: a receipt whose
+  -- session has since moved is a row whose session_version no longer matches.
+  -- Assembly refuses a session that is not already terminal (`published`), so
+  -- today no such move is legal — this column is what keeps that checkable
+  -- afterwards rather than merely argued about now.
+  --
+  -- THE PER-MEMBER TAKE REVISIONS ARE NOT HERE ON PURPOSE. They ride inside the
+  -- signed payload, at receipt->'analyst_signatures'->N->>'revision', which is
+  -- strictly stronger than a side column: the anchored digest covers them, and
+  -- a stranger holding only the receipt can read them.
+  session_version integer NOT NULL,
   receipt         jsonb NOT NULL,
   -- The canonical bytes, verbatim, INCLUDING the domain prefix and the trailing
   -- newline. `text` and not `bytea` because the canonicalization is UTF-8 by

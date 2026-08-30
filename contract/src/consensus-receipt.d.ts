@@ -30,6 +30,13 @@ export interface ConsensusReceiptJudge {
   release_safety: ConsensusReceiptReleaseSafety;
   /** JudgeOutcome.source: whether a model wrote this prose or a template did. */
   source: "model" | "fallback";
+  /**
+   * swarm_session_judgements.mode: whether the session ADOPTED this opinion
+   * (`enforce`) or merely recorded it (`shadow`). Only `enforce` is
+   * publishable — `receiptSemanticErrors` refuses anything else — and the
+   * union admits `shadow` so that refusal is expressible.
+   */
+  mode: "shadow" | "enforce";
 }
 
 export interface ConsensusReceiptAnalystSignature {
@@ -37,6 +44,8 @@ export interface ConsensusReceiptAnalystSignature {
   public_key: string;
   canonical_submission: string;
   signature: string;
+  /** swarm_recommendations.revision of the take this entry carries. */
+  revision: number;
 }
 
 export interface ConsensusReceipt {

@@ -90,6 +90,9 @@ test("the four normalizations the producer really needs are all exercised by the
   expect(receipt.prompt_hash).toBe(`0x${raw.prompt_hash}`);
   expect(receipt.stances).toEqual({ bearish: 0, cautious: 0, neutral: 1, constructive: 1, bullish: 0 });
   expect((receipt.analyst_signatures as any[]).map((s) => s.member_id)).toEqual(["analyst-alpha", "analyst-beta"]);
+  // 5. Each entry states WHICH revision it carries — takes are amendable, so
+  //    "member X's take" does not name a unique object without it.
+  expect((receipt.analyst_signatures as any[]).map((s) => s.revision)).toEqual([1, 1]);
   // Round-half-up over the two integers, not the stored participation float.
   expect(receipt.quorum).toEqual({ active: 3, submitted: 2, absent: 1, participation_bps: 6667 });
 });
@@ -98,12 +101,19 @@ test("bps conversion closes on exactly 10000, with the residue on the last canon
   const raw = input();
   // A vector that does NOT divide evenly: 1/3, 1/3, 1/3, 0 rounds to
   // 3333 + 3333 + 3333 = 9999 on the prefix, and the final bucket takes 1.
-  raw.weights = [
+  //
+  // THE TAKES MOVE WITH IT, and they have to: `weights` is now recomputed from
+  // the embedded submissions by the shipped verifier, so a session-level vector
+  // rewritten on its own is a refusal (see the test below). Both members
+  // submitting this vector is what makes it the session's mean.
+  const thirds = [
     { bucket: "agent_tokens", weight: 1 / 3 },
     { bucket: "conservative_defi_yield", weight: 1 / 3 },
     { bucket: "protocol_tokens", weight: 1 / 3 },
     { bucket: "real_world_assets", weight: 0 },
   ];
+  for (const analyst of raw.analysts) analyst.payload.weights = structuredClone(thirds);
+  raw.weights = structuredClone(thirds);
   const { receipt } = assembleConsensusReceipt(raw);
   expect(receipt.weights).toEqual([
     { bucket: "agent_tokens", weight_bps: 3333 },
@@ -111,6 +121,78 @@ test("bps conversion closes on exactly 10000, with the residue on the last canon
     { bucket: "protocol_tokens", weight_bps: 3333 },
     { bucket: "real_world_assets", weight_bps: 1 },
   ]);
+});
+
+test("the aggregate is BOUND to the takes: a vector the submissions do not mean to is refused", () => {
+  // THE FINDING. `stances` and `weights` are written at AGGREGATION time while
+  // the signature set is derived at PUBLISH time, and the only cross-check was
+  // cardinality — so an amended take (same member count, different content)
+  // produced a receipt asserting an allocation the session no longer served,
+  // served as `verified: true`. The recomputation lives in the shipped verifier
+  // (@robotmoney/contract receiptSemanticErrors), so the assembler inherits it
+  // and a stranger runs exactly the same check.
+  const reweighted = input();
+  reweighted.weights = [
+    { bucket: "agent_tokens", weight: 0.9 },
+    { bucket: "conservative_defi_yield", weight: 0.04 },
+    { bucket: "protocol_tokens", weight: 0.04 },
+    { bucket: "real_world_assets", weight: 0.02 },
+  ];
+  let raised: ConsensusReceiptRefusal | null = null;
+  try { assembleConsensusReceipt(reweighted); } catch (e) { raised = e as ConsensusReceiptRefusal; }
+  expect(raised).toBeInstanceOf(ConsensusReceiptRefusal);
+  expect(raised!.reason).toBe("semantics_invalid");
+  expect(raised!.details.join(" ")).toContain('"weight_bps":1250');
+
+  // Same for the stance rollup, with the member COUNT left intact so the old
+  // cardinality check stays satisfied.
+  const restanced = input();
+  restanced.stances = { bearish: 1, bullish: 1 };
+  let stanceRefusal: ConsensusReceiptRefusal | null = null;
+  try { assembleConsensusReceipt(restanced); } catch (e) { stanceRefusal = e as ConsensusReceiptRefusal; }
+  expect(stanceRefusal!.reason).toBe("semantics_invalid");
+  expect(stanceRefusal!.details).not.toContain("stances: counts do not sum to quorum.submitted");
+  expect(stanceRefusal!.details.join(" ")).toContain("but the embedded submissions carry");
+});
+
+test("a shadow-mode judgement cannot be assembled into a receipt AT ALL", () => {
+  // Even reaching the pure assembler with one — which loadAssemblyInput no
+  // longer allows — the bytes are refused, because the invariant lives in the
+  // shipped verifier rather than in a database query.
+  const shadow = input();
+  shadow.judge_mode = "shadow";
+  let raised: ConsensusReceiptRefusal | null = null;
+  try { assembleConsensusReceipt(shadow); } catch (e) { raised = e as ConsensusReceiptRefusal; }
+  expect(raised).toBeInstanceOf(ConsensusReceiptRefusal);
+  expect(raised!.reason).toBe("semantics_invalid");
+  expect(raised!.details.join(" ")).toContain("never adopted by the session");
+
+  // And the adopted case is disclosed in the bytes rather than merely implied.
+  const { receipt, canonicalBytes } = assembleConsensusReceipt(input());
+  expect((receipt.judge as any).mode).toBe("enforce");
+  expect(canonicalBytes).toContain('"source":"model","mode":"enforce"');
+});
+
+test("a weights column that is not an array is a NAMED refusal, never a TypeError escaping as a 500", () => {
+  // `swarm_recommendation.weights` is jsonb and nothing constrains its shape.
+  // A non-array value used to reach `.map()` inside toBps() and escape as an
+  // unnamed 500, which the module's own "every refusal is operator-visible"
+  // rule forbids.
+  for (const bad of [{ agent_tokens: 0.25 } as never, "0.25" as never, 42 as never]) {
+    const raw = input();
+    raw.weights = bad;
+    let raised: ConsensusReceiptRefusal | null = null;
+    try { assembleConsensusReceipt(raw); } catch (e) { raised = e as ConsensusReceiptRefusal; }
+    expect(raised).toBeInstanceOf(ConsensusReceiptRefusal);
+    expect(raised!.reason).toBe("weights_malformed");
+  }
+  // An array whose ENTRIES are the wrong shape is the same named refusal.
+  const entries = input();
+  entries.weights = [{ bucket: "agent_tokens", weight: "lots" } as never];
+  let raised: ConsensusReceiptRefusal | null = null;
+  try { assembleConsensusReceipt(entries); } catch (e) { raised = e as ConsensusReceiptRefusal; }
+  expect(raised!.reason).toBe("weights_malformed");
+  expect(raised!.details.join(" ")).toContain("bad entry");
 });
 
 test("no vector at all OMITS weights; a non-canonical vector REFUSES rather than omitting", () => {
