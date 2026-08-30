@@ -103,7 +103,7 @@ async function render(pathname) {
     host.innerHTML = html;
   }
 
-  window.scrollTo(0, 0);
+  scrollForRoute();
   syncNav(pathname);
   // Rewrite <title>/description/canonical/OG per route so each view is distinct
   // to JS-rendering crawlers (Googlebot) and to history/bookmarks.
@@ -122,6 +122,40 @@ async function render(pathname) {
   // (the robots directive in projects.spec.ts) went red as soon as CI moved to
   // ephemeral runners with cold asset caches.
   window.dispatchEvent(new CustomEvent("rm:view-changed", { detail: { pathname } }));
+}
+
+// A fragment breathes rather than sitting flush against the viewport edge.
+const ANCHOR_OFFSET = 16;
+
+// Where a freshly rendered route should be scrolled to.
+//
+// CROSS-PAGE ANCHORS WERE INERT, and had been for every link that used one.
+// Two independent causes, either of which was enough on its own:
+//
+//   * onClick pushed `pathname + search` and dropped the fragment, so
+//     /docs/investment-swarm/participation#activation arrived as
+//     /docs/investment-swarm/participation with no hash at all.
+//   * this function's predecessor was an unconditional scrollTo(0, 0), so
+//     even a DIRECT load carrying a fragment was scrolled back to the top
+//     immediately after the view was injected.
+//
+// The browser's own anchor handling cannot cover for either: at load the view
+// has not been fetched yet, so the target element does not exist to scroll to.
+// Five docs cross-links, plus the swarm apply page's link to what `rmpc` is,
+// all landed the reader at the top of a long page to hunt for the section.
+//
+// getElementById on the decoded fragment, never querySelector: a fragment is
+// arbitrary text from the URL bar and must not be parsed as a selector.
+function scrollForRoute() {
+  const id = location.hash ? decodeURIComponent(location.hash.slice(1)) : "";
+  const target = id ? document.getElementById(id) : null;
+  if (!target) { window.scrollTo(0, 0); return; }
+  // A frame later: the view is in the DOM but not yet laid out, and Alpine has
+  // not had its pass, so anything above the target can still change height.
+  requestAnimationFrame(() => {
+    const top = target.getBoundingClientRect().top + window.scrollY - ANCHOR_OFFSET;
+    window.scrollTo(0, Math.max(0, Math.round(top)));
+  });
 }
 
 // Intercept same-origin, plain left-clicks on anchors and route them in-app.
@@ -144,7 +178,7 @@ function onClick(e) {
 
   e.preventDefault();
   if (url.pathname !== location.pathname || url.search !== location.search) {
-    history.pushState({}, "", url.pathname + url.search);
+    history.pushState({}, "", url.pathname + url.search + url.hash);
   }
   render(url.pathname);
 }

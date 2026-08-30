@@ -12,19 +12,16 @@ import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberAvatarMarkup } from "../lib/member-mark.js";
 import { memberLogo } from "../lib/member-logos.js";
 import { sessionPhase } from "../lib/session-phase.js";
+import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
+import { operatorName } from "../lib/operator.js";
+import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
 // the negative end as sand → beacon (attention/loss). Retires the old
 // lime/red/amber Tailwind trio.
-const STANCE_COLORS = {
-  bullish: "#10b981",
-  constructive: "#34d399",
-  neutral: "#7e889e",
-  cautious: "#e8a640",
-  bearish: "#ff7a29",
-};
+
 
 // The concentration chart's residual band: every position outside the charted
 // top-N, plus any NAV the position list does not account for. It is a leftover
@@ -63,7 +60,10 @@ async function fetchJson(url) {
 // cached rejection would let one transient blip disable the target and actual
 // columns for the rest of the session, with no way back short of a reload.
 let allocationFrameworkPromise = null;
-function loadAllocationFramework() {
+// Exported so the swarm index can compute the vault's sleeves from the same
+// token map the session page uses. It belongs in lib/ with the other shared
+// loaders; moving it is a bigger change than the one that needed it.
+export function loadAllocationFramework() {
   if (!allocationFrameworkPromise) {
     allocationFrameworkPromise = fetchJson("/data/swarm/manifests/allocation.json")
       .then((raw) => ({
@@ -396,12 +396,15 @@ export const helpers = {
     return k ? `rm-sphase rm-sphase--${k}` : "rm-sphase";
   },
   stanceColor(stance) {
-    return STANCE_COLORS[stance] || "#7e889e";
+    return STANCE_COLORS[stance] || STANCE_COLORS.neutral;
   },
-  stanceStyle(stance) {
-    const c = this.stanceColor(stance);
-    return `border-color:${c}66;color:${c};`;
-  },
+  // The shared pill, so a stance reads the same on the member profile, the
+  // session page and the swarm index. See lib/stance.js.
+  stanceClass(stance) { return stanceClass(stance); },
+  stanceStyle(stance) { return stanceStyle(stance); },
+  // Same canonicalization the swarm index uses (lib/operator.js), so a member
+  // profile cannot show the raw slug where the index shows the company name.
+  operatorName(op) { return operatorName(op); },
   fmtPct(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return "—";
@@ -1423,6 +1426,8 @@ export function registerStaticViews(Alpine) {
     member: null,
     rows: [],
     subject: null,   // active session filter; null = every subject
+    sort: "newest",  // see sortedBy(): newest | oldest | confidence
+    now: Date.now(), // stamped once — a track record does not need a ticker
     openTakes: {},   // take id → expanded
     // #687: the ref that failed to resolve, and the full roster to land on
     // instead of a blank profile. Kept distinct from `error` — this is not a
@@ -1572,10 +1577,24 @@ export function registerStaticViews(Alpine) {
       if (state === "window_closed" || state === "aggregated" || state === "judged") return "closing";
       return "published";
     },
+    // The same three words the swarm index, the apply page and the session
+    // page use, from lib/session-phase.js. This page said "Collecting · window
+    // open" where they said "collecting", which is one session reading as two
+    // states depending on which page you were standing on. The pulsing mark on
+    // .rm-sphase--open now carries what the extra words were carrying.
+    //
+    // Still derived from the raw DB state, not from the deadline: the
+    // member-takes route does not serve windowClosesAt, so an overdue
+    // `collecting` row reads as open here and as closed everywhere else. That
+    // is issue #570's shape, and it needs the field before it can be fixed.
     phaseLabel(phase) {
-      return phase === "live" ? "Collecting · window open"
-        : phase === "closing" ? "Closed · awaiting publish"
-        : "Published";
+      return phase === "live" ? "collecting"
+        : phase === "closing" ? "aggregating"
+        : "published";
+    },
+    phaseChipClass(phase) {
+      const key = phase === "live" ? "open" : phase === "closing" ? "aggregating" : "published";
+      return `rm-sphase rm-sphase--${key}`;
     },
     allTakes() { return this.member ? this.rows : []; },
     // The record at a glance. Counts every take, published or still collecting,
@@ -1615,12 +1634,67 @@ export function registerStaticViews(Alpine) {
       }
       return [...by.values()].sort((a, b) => b.count - a.count);
     },
+    // ── When ─────────────────────────────────────────────────────────────────
+    // TWO CLOCKS reach this page and they are not the same fact: the session's
+    // date (when the room convened, and what every /swarm URL is keyed on) and
+    // the take's `receivedAt` (when THIS member filed). They agree on 46 of a
+    // member's 50 most recent rows; the four that differ are sessions convened
+    // for a past date and filed against later.
+    //
+    // This page is about the member, so it reads the member's clock, and it
+    // both SORTS and LABELS on that one — a list ordered by a stamp it does not
+    // show is the thing that made the old bare date hard to scan: three rows
+    // saying "Aug 27, 2026" in an order nothing on screen accounted for.
+    // The session's date is still one hover away, and one click away.
+    filedAt(row) { return row?.take?.receivedAt || row?.session?.date || null; },
+    // Friendly inside a day, exact past it — and past it the TIME comes with
+    // the date, because a member files against several portfolios a day and a
+    // bare date leaves three rows saying the same thing in an order nothing
+    // accounts for. That is the whole complaint, and "1d ago" repeats it: the
+    // relative scale coarsens to days exactly where the ambiguity starts.
+    // timeAgo is also unbounded by design (it sits beside a countdown
+    // elsewhere), and "217d ago" is a worse answer than a date.
+    // Year only when it is not this one — 20 rows do not each need "2026".
+    filedLabel(row) {
+      const v = this.filedAt(row);
+      if (!v) return "—";
+      const t = Date.parse(String(v));
+      if (!Number.isFinite(t)) return this.formatDate(v, "short");
+      if (this.now - t < 24 * 60 * 60 * 1000) return timeAgo(v, this.now) || this.formatDate(v, "short");
+      const d = new Date(t);
+      const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+      const year = d.getUTCFullYear() === new Date(this.now).getUTCFullYear() ? "" : `, ${d.getUTCFullYear()}`;
+      return `${day}${year} ${d.toISOString().slice(11, 16)}`;
+    },
+    // Both clocks, stated, behind the one that is shown.
+    filedTitle(row) {
+      const abs = absoluteUtc(this.filedAt(row));
+      const session = this.formatDate(row?.session?.date, "long");
+      return abs ? `Filed ${abs} · ${session} session` : `${session} session`;
+    },
+
+    // ── Sort ─────────────────────────────────────────────────────────────────
+    // Newest is the default and the only one the record had. Oldest answers
+    // "what did this member open with"; confidence answers "what has it argued
+    // hardest", which is the question the Avg confidence figure above raises
+    // and could not previously be followed up on.
+    setSort(key) { this.sort = key; },
+    sortedBy(rows) {
+      const at = (r) => Date.parse(String(this.filedAt(r) || "")) || 0;
+      const copy = [...rows];
+      if (this.sort === "oldest") return copy.sort((a, b) => at(a) - at(b));
+      if (this.sort === "confidence") {
+        return copy.sort((a, b) =>
+          (Number(b.take?.confidence) || 0) - (Number(a.take?.confidence) || 0) || at(b) - at(a));
+      }
+      return copy.sort((a, b) => at(b) - at(a));
+    },
     // The rows actually listed. Kept separate from recentTakes() so the empty
     // states stay keyed to the whole record: a filter that matches nothing is a
     // narrowed view, not a member who has never submitted.
     visibleTakes() {
       const rows = this.recentTakes();
-      return this.subject ? rows.filter((r) => r.session.subjectId === this.subject) : rows;
+      return this.sortedBy(this.subject ? rows.filter((r) => r.session.subjectId === this.subject) : rows);
     },
     filterBy(subjectId) { this.subject = this.subject === subjectId ? null : subjectId; },
 

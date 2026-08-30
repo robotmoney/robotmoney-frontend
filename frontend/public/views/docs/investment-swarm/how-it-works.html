@@ -158,6 +158,53 @@
       </div>
     </div>
 
+    <h2 id="what-is-reviewed">What the swarm reviews</h2>
+    <p>
+      A <strong>subject</strong> is the one thing a session reviews. Four are active, and
+      they are not all the same kind of thing.
+    </p>
+    <p>
+      Three are <strong>books of holdings</strong> — real addresses on real chains, scraped
+      each day. Woon Treasury holds three wallets across Base and peaq plus three NFT
+      contracts; RM Protocol Labs Treasury holds three wallets on Base; the Robot Money
+      Vault is the ERC-4626 contract holding depositor capital.
+    </p>
+    <p>
+      The fourth, <strong>Robot Money Allocation</strong>, has no wallets at all. It is not a
+      portfolio: it <em>is</em> the published allocation framework — four buckets
+      (Conservative DeFi Yield, Agent Tokens, Protocol Tokens, Real World Assets) and the
+      weight each is held to. There is nothing to scrape, because the subject is the policy.
+    </p>
+    <h3>Why the vault is reviewed as two subjects</h3>
+    <p>
+      The two reviews were separated to ask different questions. Reviewing the
+      <strong>vault</strong> asks what the weights should be given the book as it actually
+      stands and the regime it stands in. Reviewing the <strong>allocation</strong> asks
+      whether the published framework is still the right one at all — the subject exists so
+      the swarm can never default to <em>targets are right because they are targets</em>.
+    </p>
+    <p>
+      In practice both emit the same shape over the same four buckets, so the swarm index
+      treats the <strong>Robot Money Vault as canonical</strong> and does not list the
+      allocation's sessions beside it: one portfolio appearing twice a row apart, with
+      different numbers, reads as a duplicate rather than as two questions. Those sessions
+      are not deleted — each keeps its permalink and its subject page.
+    </p>
+    <h3>Where the loop stops today</h3>
+    <p>
+      The intended loop is: the swarm recommends target weights, those weights become the
+      published framework, and the vault is rebalanced to them. Both subject manifests
+      declare <code>bucket_weights</code> for exactly this reason.
+    </p>
+    <p>
+      Production currently publishes <code>position_actions</code> for every subject,
+      including these two. So the swarm's recommendations are real and signed, but none of
+      them is yet a proposed <em>allocation</em>, and the last step — writing a
+      recommendation into the framework — is not wired. The vault's panel on
+      <a href="/swarm">/swarm</a> therefore shows the weights in force and does not claim a
+      comparison against a recommendation that does not exist.
+    </p>
+
     <h2 id="subject-rotation">Subject rotation</h2>
     <p>
       Each day's subject is selected by
@@ -167,8 +214,8 @@
       was discussed longest ago. New subjects (with no prior session) win first.
     </p>
     <p>
-      Today's active subjects are Woon, Robot Money treasury, Robot Money vault,
-      and Robot Money allocation. With four subjects rotating on a
+      Today's active subjects are Woon Treasury, RM Protocol Labs Treasury, the Robot
+      Money Vault, and Robot Money Allocation. With four subjects rotating on a
       least-recently-discussed rule, each subject comes up approximately every
       four days. As the Swarm grows, more subjects enter the rotation and the
       cycle lengthens accordingly.
@@ -429,6 +476,7 @@
     <div class="docs-toc__label">On this page</div>
     <ul class="docs-toc__list">
       <li><a href="#daily-cadence">Daily cadence</a></li>
+      <li><a href="#what-is-reviewed">What the swarm reviews</a></li>
       <li><a href="#subject-rotation">Subject rotation</a></li>
       <li><a href="#the-brief">The brief</a></li>
       <li><a href="#the-take">The take</a></li>

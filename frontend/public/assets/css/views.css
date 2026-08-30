@@ -204,17 +204,16 @@
    it obvious the filter clears by clicking again. */
 .mp-chip.is-on { color: var(--color-text); border-color: var(--color-accent); background: var(--color-surface); }
 .mp-chip__x { color: var(--color-accent); font-size: 0.78rem; line-height: 1; margin-left: 0.05rem; }
-.mp-chip__dot { width: 7px; height: 7px; flex: 0 0 auto; }
 .mp-chip__n { font-variant-numeric: tabular-nums; color: var(--color-text-dim); }
 .mp-chip.is-on .mp-chip__n { color: var(--color-text-muted); }
 .mp-chip:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 
-/* No left rail. It was 2px of the portfolio's identity hue down the edge of
-   every card, which made a scrolled feed read as stripes and put that hue in
-   the same card as the stance dots it collided with. The card's own border is
-   enough; which portfolio it is, is written across the top of it. */
-.mp-take__dot { width: 7px; height: 7px; flex: 0 0 auto; align-self: center;
-  background: var(--color-text-dim); }
+/* No left rail, and no separator mark either. The rail was 2px of the
+   portfolio's identity hue down every card, which made a scrolled feed read as
+   stripes; the 7px square that replaced it between the date and the title was
+   a mark that meant nothing — square is a STATE in this system, and that one
+   was punctuation. The card's own border is enough, and which portfolio it is
+   is written across the top of it. */
 
 /* Verification badge. "Verified" is the single most load-bearing word on the
    swarm — it is the difference between a signed record and an assertion —
@@ -222,16 +221,25 @@
    plus a plain-language line on hover or keyboard focus.
    The full sentence also rides on aria-label, so assistive tech gets the
    explanation without depending on a hover-only tooltip. */
+/* Neutral, not cyan. Cyan is interface state in this system, and on a take row
+   it sat beside a stance pill that IS carrying meaning in colour — so the mark
+   competed with the one thing on the row that had earned a hue. That a take is
+   signed and checkable is a fact, and facts read in the text colour. The
+   failure and archive variants below keep their colour, because those ARE
+   exceptions worth a glance. */
 .sv__vfy { position: relative; display: inline-flex; align-items: center; gap: 0.34rem;
   font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em;
-  color: var(--color-accent); cursor: help; }
+  color: var(--color-text-muted); cursor: default; }
 .sv__vfy--bad { color: var(--color-warn); }
 /* Archived is not a failure — it is the absence of a claim either way, so it
    takes the muted neutral rather than borrowing the accent (a pass it did not
    earn) or the warn colour (a failure that never happened). */
 .sv__vfy--arch { color: var(--color-text-muted); }
 .sv__vfy-mark { width: 13px; height: 13px; flex: 0 0 auto; display: block; }
-.sv__vfy-tip { position: absolute; right: 0; bottom: calc(100% + 9px); z-index: 30;
+/* .mp-when__tip rides these rules rather than becoming a third copy of the
+   same bubble (this one, and .rm-tip__bub in components.css, were already
+   two). It only overrides which edge it hangs from — see member.html. */
+.sv__vfy-tip, .mp-when__tip { position: absolute; right: 0; bottom: calc(100% + 9px); z-index: 30;
   width: max-content; max-width: min(272px, 72vw); padding: 0.55rem 0.65rem;
   background: var(--color-surface); border: 1px solid var(--color-border);
   border-top: 1px solid currentColor; border-radius: var(--radius);
@@ -239,10 +247,11 @@
   letter-spacing: 0; text-transform: none; color: var(--color-text-muted); text-align: left;
   opacity: 0; visibility: hidden; transform: translateY(3px); pointer-events: none;
   transition: opacity .16s ease, transform .16s ease, visibility 0s linear .16s; }
-.sv__vfy:hover .sv__vfy-tip, .sv__vfy:focus-visible .sv__vfy-tip {
+.sv__vfy:hover .sv__vfy-tip, .sv__vfy:focus-visible .sv__vfy-tip,
+.mp-when:hover .mp-when__tip, .mp-when:focus-visible .mp-when__tip {
   opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
 .sv__vfy:focus-visible { outline: 1px solid currentColor; outline-offset: 3px; }
-@media (prefers-reduced-motion: reduce) { .sv__vfy-tip { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .sv__vfy-tip, .mp-when__tip { transition: none; } }
 /* The seal is icon-only and pinned to its card's top-right corner in every
    context. A badge that trails a variable-width stance chip lands at a
    different x on every row, so a reader has to hunt for it; pinned, the marks
@@ -294,8 +303,24 @@
 .sv__hero-inner { position: relative; z-index: 2; width: min(100%, 80rem); margin: 0 auto; padding: 2.5rem 1.5rem; }
 .sv__hero-field { position: absolute; inset: 0; }
 .sv__hero-field canvas { width: 100% !important; height: 100% !important; }
-.sv__body { width: min(100%, 80rem); margin: 0 auto; padding: 3rem 1.5rem 5rem; }
-.sv__body--narrow { width: min(100%, 54rem); padding-top: 8rem; }
+/* overflow-x: clip, not hidden — hidden would make this a scroll container on
+   the other axis too. A tooltip bubble is laid out while hidden, and one that
+   has never been hovered has never been nudged, so the right-most `i` on a
+   three-up stat strip pushed the document 2px wide at 768. tooltip.js clamps
+   against this same box (placeTip's host list names .sv__body first), so the
+   clamp and the clip agree on where the page ends. */
+.sv__body { width: min(100%, 80rem); margin: 0 auto; padding: 3rem 1.5rem 5rem; overflow-x: clip; }
+/* The swarm's DOCUMENT width, shared by the member profile, a session, a
+   portfolio, a take permalink and the application status page. 54rem was a
+   prose measure inherited from a page that was only prose; these five carry
+   stat strips, two-column grids and take rows, and at 864px they were folding
+   content that had room to sit side by side while /swarm ran at 1280 and
+   /swarm/apply at 1080 — three widths across five sibling pages.
+   67.5rem IS 1080px: the apply page's measure, so the two pages a visitor
+   moves between are built on the same grid. /swarm keeps 80rem because it is
+   an index of everything, not one document. Prose inside still takes its own
+   ch cap; a container is not a measure. */
+.sv__body--narrow { width: min(100%, 67.5rem); padding-top: 8rem; }
 .sv__lede { max-width: 44rem; margin: 0.75rem 0 0; color: var(--color-text-muted); font-size: 1.05rem; line-height: 1.7; }
 .sv__lede--compact { font-size: 0.95rem; max-width: 42rem; }
 .sv__rail-grid { display: grid; gap: 1.5rem; margin-bottom: 4rem; }
@@ -304,8 +329,7 @@
 .sv__panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .sv__panel-label { margin: 0; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
 .sv__back { display: inline-block; margin-bottom: 2rem; }
-.sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-accent); text-decoration: none; }
-.sv__panel-link:hover, .sv__back:hover, .sv__memo-link:hover { text-decoration: underline; }
+.sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; }
 .sv__list { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
 .sv__person-row, .sv__subject-row { display: flex; align-items: flex-start; gap: 0.8rem; min-width: 0; }
 /* Identity mark: a square plane, not a disc — the covenant is flat planes and
@@ -336,12 +360,41 @@
 .sv__subject-mark { border-radius: var(--radius); color: var(--color-green); background: rgba(16,185,129,0.08); }
 .sv__row-main { min-width: 0; flex: 1; }
 .sv__row-titleline, .sv__session-titleline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.65rem; min-width: 0; }
-.sv__row-title { color: var(--color-text); font-weight: 700; text-decoration: none; }
-.sv__row-title:hover, .sv__member-link:hover { color: var(--color-accent); }
+.sv__row-title { color: var(--color-text); font-weight: 700; }
+/* A title that is a link. No rule at rest — a heading underlined all the time
+   is heavy — and the accent arrives underneath it on hover, which is the same
+   thing every other link on the site does. These were the last four still
+   turning cyan instead. */
+.sv__row-title, .sv__member-link, a.sv__session-title, .sv__take-who { text-decoration: none; }
+.sv__row-title:hover, .sv__member-link:hover, a.sv__session-title:hover, .sv__take-who:hover,
+.sv__row-title:focus-visible, .sv__member-link:focus-visible,
+a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
+  text-decoration: underline; text-decoration-color: var(--color-accent);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .sv__tag { display: inline-flex; align-items: center; border: 1px solid var(--color-border); padding: 0.12rem 0.38rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
-.sv__row-copy, .sv__session-copy, .sv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; }
+.sv__row-copy, .sv__session-copy, .sv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; max-width: 78ch; }
 .sv__mini-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem; }
 .sv__mini-tags span { background: rgba(255,255,255,0.04); color: var(--color-text-dim); font-family: var(--font-mono); font-size: 0.58rem; padding: 0.15rem 0.38rem; }
+
+/* Loading skeleton. Its only job is to occupy the height the content will,
+   so the page below it does not jump — see the note in swarm.html. Flat
+   surfaces, square corners, and a slow opacity breath rather than the sweeping
+   highlight every skeleton library ships, which is a moving gradient and this
+   system does not have gradients. */
+.sv__skel { display: grid; gap: 0.75rem; }
+.sv__skel > * , .sv__skel-box, .sv__skel-row, .sv__skel-card {
+  background: var(--color-surface); animation: sv-skel 1.8s ease-in-out infinite; }
+.sv__skel-h { height: 2.25rem; width: min(18rem, 60%); margin-top: 1.5rem; background: var(--color-surface-light); }
+.sv__skel-cols { display: grid; gap: 1px; grid-template-columns: minmax(0, 1fr); background: none; animation: none; }
+@media (min-width: 1024px) { .sv__skel-cols { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.sv__skel-box { height: 9rem; }
+.sv__skel-rows { display: grid; gap: 1px; background: none; animation: none; }
+.sv__skel-row { height: 3.4rem; }
+.sv__skel-card { height: 11rem; }
+@keyframes sv-skel { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  .sv__skel > *, .sv__skel-box, .sv__skel-row, .sv__skel-card { animation: none; }
+}
 
 /* ── RM-100: the swarm explains itself before it lists anything ────────── */
 .sv__how { display: grid; gap: 1px; grid-template-columns: minmax(0, 1fr);
@@ -355,12 +408,27 @@
 .sv__how-t { display: block; color: var(--color-text); font-weight: 700; font-size: 1rem; margin: 0.75rem 0 0.5rem; }
 .sv__how-d { margin: 0; font-size: 0.875rem; color: var(--color-text-soft); line-height: 1.6; }
 .sv__how-d b { color: var(--color-text); font-weight: 500; }
+/* A step can name a thing the reader has to go look up. Same treatment as any
+   other link inside running prose on these pages. */
 
-/* Section head that carries a real call to action rather than a text link. */
+
+/* Section head: a display headline, a one-line sub, and optionally an action.
+   THE RULE IS THE TOP EDGE OF THE CONTENT, not an underline on the headline —
+   it closes the header block and opens the register, table or card grid below
+   it. That is why it sits under the sub and the button rather than under the
+   words, and why every section head needs the same parts: with the sub
+   missing the same 1px landed 13px under the headline instead of 45px, and
+   read as decoration on two sections and as a separator on the other seven.
+
+   One shape, one place: /swarm, /swarm/apply and a member profile all use it,
+   and neither of the other two may restyle it locally. */
 .sv__sec { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 1rem 2rem;
   padding-bottom: 0.75rem; border-bottom: 1px solid var(--color-border); margin: 3rem 0 0.75rem; }
 .sv__sec-h { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; font-size: 1.75rem; margin: 0; line-height: 1; }
 .sv__sec-sub { margin: 0.5rem 0 0; font-size: 0.875rem; font-variant-numeric: tabular-nums; color: var(--color-text-soft); max-width: 60ch; }
+/* The first head on the page already has the body's own padding above it, and
+   the live strip its own margin below. Its 3rem would be the second of two. */
+.sv__sec--lead { margin-top: 0; }
 
 /* What each role emits, said once. As a column it would print the same
    sentence in every row until a second role exists. */
@@ -384,35 +452,86 @@
    marks it without spending a colour. */
 .sv__cov-r--ours { background: var(--color-surface-light); }
 .sv__cov-n { color: var(--color-text); font-weight: 500; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.sv__cov-n i { width: 0.45rem; height: 0.45rem; flex: 0 0 auto; }
+/* The portfolio glyph. It replaced .rm-mark--identity, a neutral square that
+   by its own contract is the SAME on every row — so it marked that a row had
+   an identity without saying anything about which. These two say what kind of
+   thing the row is: a card that holds addresses, or a set of weights. Line
+   art in currentColor, so it inherits rather than spending a hue. */
+.sv__cov-mark { display: inline-flex; flex: 0 0 auto; color: var(--color-text-dim); }
+.sv__cov-mark .rm-pmark { width: 14px; height: 14px; display: block; }
+
+/* Where the portfolio actually points. Mono because it is chains and counts,
+   and quiet because the name above it is the row's subject. */
+.sv__cov-points { grid-column: 1 / -1; margin: 0.15rem 0 0; font-family: var(--font-mono);
+  font-size: 0.7rem; letter-spacing: 0.06em; color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums; }
 /* "our vault" is a fact about ownership, not a value, so it takes emphasis
    rather than the money colour. */
 .sv__cov-op b { color: var(--color-text); font-weight: 500; }
 .sv__cov-op { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); }
-.sv__cov-d { grid-column: 1 / -1; margin: 0; font-size: 0.875rem; color: var(--color-text-soft); max-width: 70ch;
+/* Clamped to two lines, which is enough to decide whether you want the rest.
+   It used to end in an ellipsis with no way to open it, so the only way to
+   read a thesis was to leave the page. */
+.sv__cov-thesis { grid-column: 1 / -1; }
+.sv__cov-d { margin: 0; font-size: 0.875rem; color: var(--color-text-soft); max-width: 93ch;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.sv__cov-d.is-open { display: block; overflow: visible; }
+.sv__cov-more { margin-top: 0.3rem; padding: 0; background: none; border: 0; cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted);
+  text-decoration: underline; text-decoration-color: var(--color-border-light);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.sv__cov-more:hover, .sv__cov-more:focus-visible { color: var(--color-text); text-decoration-color: var(--color-accent); }
 .sv__cov-m { font-family: var(--font-mono); font-size: 0.75rem; font-variant-numeric: tabular-nums; color: var(--color-text-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sv__cov-m b { color: var(--color-text); font-weight: 500; }
-.sv__cov-x { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.9rem;
-  margin-top: 0.25rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border); }
-.sv__cov-x p { margin: 0; font-size: 0.875rem; color: var(--color-text-soft); }
-.sv__cov-lnk { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.11em;
-  color: var(--color-accent); text-decoration: none; border-bottom: 1px solid var(--color-accent-line); white-space: nowrap; }
-.sv__cov-lnk:hover { border-bottom-color: var(--color-accent); }
+/* The vault's block. Raised off the row it sits in, because the claim it
+   makes — this one is the product — has to be visible before it is read. */
+.sv__vault { grid-column: 1 / -1; margin-top: 0.9rem; padding: 1rem 1.1rem;
+  background: var(--color-void); border: 1px solid var(--color-accent-line); }
+.sv__vault-h { margin: 0; font-family: var(--font-mono); font-size: 0.62rem;
+  text-transform: uppercase; letter-spacing: 0.18em; color: var(--color-text); }
+/* A claim first, in the display face, then the mechanism under it. Same shape
+   as the homepage's Solution callout, which is where this section's job is
+   already stated well. */
+.sv__vault-t { margin: 0.55rem 0 0; font-family: var(--font-display); font-weight: 700;
+  text-transform: uppercase; letter-spacing: -0.005em; font-size: 1.35rem;
+  line-height: 1.1; color: var(--color-text); }
+.sv__vault-d { margin: 0.5rem 0 0; font-size: 0.875rem; line-height: 1.6;
+  color: var(--color-text-soft); max-width: 62ch; }
+.sv__vault-d b { color: var(--color-text); font-weight: 500; }
+.sv__vault-alloc { margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--color-border); }
+.sv__vault-label { margin: 0 0 0.6rem; font-family: var(--font-mono); font-size: 0.62rem;
+  text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-dim); }
+/* The four sleeves as a register: a column per fact, so target and current sit
+   under each other and drift is read rather than computed. Figures, not bars —
+   two sleeves are at 0% and a bar would draw one long block beside two
+   segments too thin to see. */
+.sv__sleeves { display: grid; gap: 0; grid-template-columns: minmax(0, 1fr) 4.5rem; }
+.sv__sleeves--wide { grid-template-columns: minmax(0, 1fr) 4.5rem 5rem 4.5rem; }
+.sv__sleeve { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1;
+  align-items: baseline; padding: 0.38rem 0; border-bottom: 1px solid var(--color-border); }
+.sv__sleeve:last-child { border-bottom: 0; }
+.sv__sleeve--head { font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
+  letter-spacing: 0.16em; color: var(--color-text-dim); padding-bottom: 0.45rem; }
+.sv__sleeve--head > :not(:first-child), .sv__sleeve-v { text-align: right; }
+.sv__sleeve-n { display: flex; align-items: center; gap: 0.5rem; min-width: 0;
+  font-size: 0.82rem; color: var(--color-text-soft); }
+.sv__sleeve-v { font-family: var(--font-mono); font-size: 0.82rem;
+  font-variant-numeric: tabular-nums; color: var(--color-text); }
+/* Drift is the only figure here that is a judgement, so it is the only one
+   that changes colour, and only when it is off. */
+.sv__sleeve-drift { color: var(--color-text-dim); }
+.sv__sleeve-drift.is-off { color: var(--color-warm); }
+.sv__sleeve-note { margin: 0.75rem 0 0; font-size: 0.78rem; line-height: 1.55;
+  color: var(--color-text-muted); max-width: 62ch; }
+/* The bucket's hue, as a point. It matches the slice for the same bucket in
+   the pies on /allocation, which is the only reason it is coloured at all. */
+.sv__bucket-dot { width: 7px; height: 7px; flex: 0 0 auto; }
+.sv__vault .sv__cov-lnk { display: inline-block; margin-top: 0.9rem; }
+.sv__cov-lnk { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.11em; white-space: nowrap; }
 
 /* What a vault review produced. Target weights are the recommendation the
    allocation would take; anything else moves nothing. */
-.sv__sout { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.75rem;
-  padding-top: 0.75rem; border-top: 1px solid var(--color-border);
-  font-family: var(--font-mono); font-size: 0.75rem; font-variant-numeric: tabular-nums;
-  color: var(--color-text-soft); }
-.sv__sout b { color: var(--color-text); font-weight: 500; font-variant-numeric: tabular-nums; }
-/* Neutral, not green. This square marks "the session produced target weights",
-   which is a fourth meaning the same green square was carrying, on the same
-   card as the stance dots. The weights themselves are the value, and they are
-   already set in tabular figures beside it. */
-.sv__sout i { width: 0.4rem; height: 0.4rem; flex: 0 0 auto; background: var(--color-text-dim); }
-.sv__sout--none i { background: var(--color-border-light); }
 
 /* Live session strip, Variation A. The phase chip is `.rm-sphase` from
    components.css, shared with the session detail page so the same session
@@ -420,7 +539,7 @@
    coloured edge said nothing the chip does not, and this page had three. */
 .sv__live { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
   border: 1px solid var(--color-border); background: var(--color-surface);
-  padding: 0.7rem 1rem; margin: 0 0 2rem; }
+  padding: 0.7rem 1rem; margin: 0 0 3rem; }
 .sv__live-name { color: var(--color-text); font-weight: 500; }
 .sv__live-meta { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
   color: var(--color-text-muted); }
@@ -429,9 +548,7 @@
 .sv__live-n { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   white-space: nowrap; }
 .sv__live-lnk { margin-left: auto; font-family: var(--font-mono); font-size: 0.66rem;
-  text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted);
-  text-decoration: none; border-bottom: 1px solid var(--color-border-light); }
-.sv__live-lnk:hover, .sv__live-lnk:focus-visible { color: var(--color-text); border-bottom-color: var(--color-text-muted); }
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); }
 
 /* Members as a register: the interesting fact is which cells are empty. */
 /* `overflow-x: auto` here CLIPS the role tooltip, because a container that
@@ -476,34 +593,21 @@
 .sv__operator { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
   letter-spacing: 0.1em; color: var(--color-text-muted); }
 
-/* Role tooltip. Same visual spec as .rv__tip on the regime view, kept as its
-   own selector rather than reaching across view prefixes for it. Opens on
-   hover AND focus, so the description is reachable without a mouse. */
-.sv__roletip { position: relative; display: inline-block; }
-.sv__roletip .sv__tag--role { cursor: help; }
-.sv__roletip .sv__tag--role:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
-.sv__tip {
-  pointer-events: none; position: absolute; left: 0; top: 100%; z-index: 20;
-  margin-top: 0.4rem; width: 16rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border); background: var(--color-surface);
-  padding: 0.6rem 0.7rem; font-family: var(--font-mono); font-size: 11px;
-  line-height: 1.6; color: var(--color-text-muted);
-  text-transform: none; letter-spacing: 0; white-space: normal;
-  opacity: 0; transition: opacity 0.15s;
-}
-.sv__roletip:hover .sv__tip, .sv__roletip:focus-within .sv__tip { opacity: 1; }
-@media (prefers-reduced-motion: reduce) { .sv__tip { transition: none; } }
-
 /* Role is function, lens is flavour, so role carries the heavier form. */
 .sv__tag--role { font-size: 0.7rem; color: var(--color-text-soft); border-color: var(--color-border-light);
   background: var(--color-surface-light); white-space: nowrap; }
 
-/* Once allocation sessions retitle to the vault, this is what separates a
-   target-allocation review from a holdings review. It carries the distinction,
-   so it cannot be the dimmest thing on the row. */
-.sv__qualifier { font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted); font-size: 0.7rem;
-  border-bottom: 1px solid var(--color-border-light); padding-bottom: 0.05rem; }
+/* WHICH REVIEW this session was. The vault is one portfolio that the swarm
+   reviews two ways — its holdings, and the target allocation it is held to —
+   and those are two subjects in the backend with their own sessions, takes and
+   quorum. Without this, the feed shows "Robot Money Vault" twice with
+   different numbers and no way to tell why.
+   It reads as part of the title line, separated by a middot rather than
+   underlined: an underline on something that is not a link is the one thing
+   the link convention cannot afford to be ambiguous about. */
+.sv__qualifier { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted); white-space: nowrap; }
+.sv__qualifier::before { content: "·"; margin-right: 0.5rem; color: var(--color-text-dim); }
 
 .sv__more { display: block; width: 100%; margin-top: 0.75rem; padding: 0.75rem; cursor: pointer;
   background: none; border: 1px solid var(--color-border); border-radius: var(--radius);
@@ -516,22 +620,94 @@
 .sv__session-list { display: grid; gap: 0.75rem; }
 .sv__session-list--compact { gap: 0.55rem; }
 .sv__session-card { position: relative; display: block; border: 1px solid var(--color-border); padding: 1.25rem; color: inherit; text-decoration: none; transition: border-color 0.16s ease, background 0.16s ease; }
-.sv__session-card:hover { border-color: var(--color-accent); background: rgba(0,229,255,0.035); }
 .sv__session-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .sv__session-card .sv__session-copy { margin-top: 0.75rem; max-width: 68ch; }
 .sv__session-title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.08rem; color: var(--color-text); }
 .sv__session-meta { display: flex; flex-wrap: wrap; gap: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
-.sv__stance-line { display: flex; flex-wrap: wrap; gap: 0.55rem 0.8rem; margin: 0.65rem 0 0; }
 .sv__stance-dotline { display: inline-flex; align-items: center; gap: 0.32rem; font-family: var(--font-mono); font-size: 0.66rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
 /* .sv__dis-stance was rendering its dot at 0x0: the stance spread added to the
    Disagreements panel reused the badge markup but not the badge class, so it
    never picked up a size. An invisible dot is worse than none, because the
    colour is the only thing distinguishing two members' positions there. */
 .sv__stance-dotline i, .sv__stance-chip i, .sv__stance-badge i, .sv__dis-stance i { width: 0.42rem; height: 0.42rem; border-radius: 50%; display: inline-block; }
+
+/* ── A session's outcome, on the index ────────────────────────────────────
+   The card used to be a date, a row of stance pills, and five lines of the
+   synthesis paragraph — the swarm's REASONING, in identical shape on every
+   row, where the reader was looking for its RESULT. It never printed the
+   recommendation at all, which the sessions API has carried the whole time.
+
+   THE SPREAD IS A BAR, NOT A TALLY. Counting takes as marks fails the moment
+   the roster grows: six is the limit of countable-at-a-glance and twenty is a
+   row of dots wider than the card. A bar carries any N at one width, and it
+   answers "what did the swarm think" rather than making the reader add three
+   numbers to find out. Segment order is fixed bullish -> bearish, so the same
+   shape always means the same lean. 1px gaps, 4px tall: a rule, not a block —
+   the pill stays what a single member's stance wears. */
+.sv__spread { display: flex; gap: 1px; height: 4px; width: min(100%, 26rem); margin: 1rem 0 0.6rem; }
+.sv__spread i { display: block; min-width: 2px; }
+/* NOT .sv__verdict. That class already belonged to session.html's verdict
+   BLOCK (line 165) — the big call, its detail line, the bar and the meta grid.
+   Declaring it again here made the later block win, so the session page's
+   verdict container silently became a flex row in 0.72rem mono. One name, one
+   component: this is the card's one-line reading, and it says so. */
+.sv__card-verdict { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; margin: 0;
+  font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
+/* The lean takes its stance's colour because it IS the stance — the one word
+   the bar above it resolves to. Nothing else on the card spends a hue. */
+.sv__lean { font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; }
+
+.sv__rec { margin: 1rem 0 0; display: grid; gap: 0.3rem; }
+.sv__rec dt { font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
+  letter-spacing: 0.16em; color: var(--color-text-dim); }
+.sv__rec dd { margin: 0; color: var(--color-text-soft); font-size: 0.875rem; line-height: 1.55; max-width: 68ch; }
+.sv__rec dd b { color: var(--color-text); font-weight: 500; text-transform: uppercase;
+  font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; }
+.sv__rec-n { font-variant-numeric: tabular-nums; }
+.sv__rec-more { color: var(--color-text-dim); font-size: 0.8rem; }
+/* Its own class, not a .sv__rec modifier: a selector that matches both the
+   recommendation and the notice that there isn't one cannot be asserted on. */
+.sv__rec-empty { margin: 1rem 0 0; color: var(--color-text-dim); font-size: 0.8rem; }
+
+.sv__session-foot { display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; margin-top: 1rem; }
+.sv__takes-btn { display: inline-flex; align-items: center; gap: 0.45rem; min-height: 34px;
+  padding: 0 0.6rem 0 0.45rem; cursor: pointer; background: none;
+  border: 1px solid var(--color-border); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted); }
+.sv__takes-btn:hover:not([disabled]) { border-color: var(--color-text-dim); color: var(--color-text); }
+.sv__takes-btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+.sv__takes-btn[disabled] { opacity: 0.45; cursor: default; }
+.sv__takes-caret { display: inline-block; transition: transform 0.16s ease; font-size: 0.9rem; line-height: 1; }
+.sv__takes-caret.is-open { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .sv__takes-caret { transition: none; } }
+
+.sv__takes-panel { margin-top: 0.9rem; border-top: 1px solid var(--color-border); }
+.sv__take-row { display: grid; grid-template-columns: minmax(6rem, 10rem) max-content 1fr;
+  gap: 0.4rem 0.75rem; align-items: center; padding: 0.85rem 0;
+  border-bottom: 1px solid var(--color-border); }
+/* A grid item fills its track unless told otherwise, and the pill stretched
+   the width of the row — a stance badge as wide as a paragraph. */
+.sv__take-row .sv__stance-badge { justify-self: start; }
+.sv__take-row:last-of-type { border-bottom: none; }
+.sv__take-who { color: var(--color-text); font-weight: 500; font-size: 0.9rem; }
+.sv__take-conf { font-family: var(--font-mono); font-size: 0.72rem;
+  font-variant-numeric: tabular-nums; color: var(--color-text-muted); margin-right: auto; }
+.sv__take-line { grid-column: 1 / -1; margin: 0; font-size: 0.85rem; line-height: 1.6;
+  color: var(--color-text-muted); max-width: 72ch; }
+.sv__take-absent { margin: 0.85rem 0 0; font-family: var(--font-mono); font-size: 0.68rem;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-dim); }
+@media (max-width: 560px) {
+  .sv__take-row { grid-template-columns: 1fr auto; }
+  .sv__take-conf { margin-right: 0; }
+}
 .sv__profile-head { display: flex; align-items: flex-start; gap: 1.25rem; flex-wrap: wrap; margin: 1.5rem 0 2.5rem; }
 .sv__profile-main { flex: 1; min-width: 16rem; }
 .sv__detail-head { margin: 1.5rem 0 2.5rem; }
-.sv__detail-title { margin: 0.35rem 0 0; font-family: var(--font-display); text-transform: uppercase; font-size: clamp(2.2rem, 5vw, 3.6rem); line-height: 1.08; font-weight: 700; letter-spacing: -0.01em; }
+/* Type comes from the site headline rule in components.css. */
+.sv__detail-title { margin: 0.35rem 0 0; }
 .sv__fact-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.15rem; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
 .sv__meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.45rem 1.4rem; margin: 0.9rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; }
 .sv__meta-grid dt { color: var(--color-text-muted); }
@@ -540,7 +716,7 @@
    — a purple :visited link on the receipt, off the palette entirely. */
 .sv__meta-grid dd a { color: var(--color-accent); text-decoration: none; }
 .sv__meta-grid dd a:hover { text-decoration: underline; }
-.sv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; }
+.sv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; max-width: 82ch; }
 .sv__bullet-list li { color: var(--color-text-muted); font-size: 0.88rem; }
 .sv__bullet-list li::before { content: "· "; color: var(--color-text-dim); }
 .sv__discussion { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 1.5rem 0 2rem; }
@@ -672,10 +848,10 @@
 .sv__takes--ported { margin-top: 1rem; gap: 1rem; }
 .sv__take--ported { background: transparent; padding: 1.35rem; --vfy-inset: 1.35rem; }
 .sv__take-member { display: flex; align-items: center; gap: 0.8rem; }
-.sv__member-link { color: var(--color-text); text-decoration: none; font-family: var(--font-sans); font-weight: 700; font-size: 1.15rem; }
+.sv__member-link { color: var(--color-text); font-family: var(--font-sans); font-weight: 700; font-size: 1.15rem; }
 .sv__take-lens { margin-top: 0.15rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
 .sv__stance-badge { display: inline-flex; align-items: center; gap: 0.42rem; border: 1px solid; padding: 0.18rem 0.5rem; font-family: var(--font-mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.1em; }
-.sv__take-body { margin: 1rem 0 0; color: var(--color-text); line-height: 1.7; font-size: 0.9rem; }
+.sv__take-body { margin: 1rem 0 0; color: var(--color-text); line-height: 1.7; font-size: 0.9rem; max-width: 82ch; }
 .sv__take-body p { margin: 0 0 0.9rem; }
 .sv__take-body ul { margin: 0.25rem 0 1rem; padding-left: 1.2rem; }
 .sv__take-body li { margin: 0.25rem 0; }
@@ -688,7 +864,7 @@
   font-weight: 700; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
 .sv__take-h:first-child { margin-top: 0; }
 .sv__take-body strong { color: var(--color-text); font-weight: 700; }
-.sv__take-body a, .sv__synthesis a { color: var(--color-accent); }
+
 .sv__synthesis { margin-top: 2rem; border-left: 2px solid var(--color-accent); padding-left: 1.4rem; }
 .sv__synthesis div { margin: 0.75rem 0 0; color: var(--color-text); font-family: var(--font-sans); line-height: 1.75; font-size: 1.05rem; }
 .sv__synthesis p { margin: 0 0 0.75rem; }
@@ -784,24 +960,10 @@
 .rs__series-canvas { height: 120px; }
 @media (min-width: 768px) { .rs__gauges { grid-template-columns: repeat(2, 1fr); } .rs__series-grid { grid-template-columns: repeat(2, 1fr); } }
 
-/* allocation (/allocation) residue — the page is built almost entirely from the
-   shared .rm-* components (see components.css) + the regime hero shell; these
-   few page-local rules cover content shapes the shared library doesn't: the
-   two-up chart grid, standalone category-legend spacing, section/chart ledes,
-   the stacked value-over-quantity numeric cell, the accent total column, table
-   header swatches, and the footer link/margin. */
-.alloc-charts { display: grid; grid-template-columns: 1fr; gap: 1.5rem; margin-bottom: 2.5rem; }
-.alloc-legend { flex-wrap: wrap; gap: 0.75rem 1.25rem; margin-bottom: 1.5rem; }
-.alloc-lede { font-size: 0.875rem; color: var(--color-text-muted); margin: 0.75rem 0 0; max-width: 42rem; }
-.alloc-chart-sub { font-size: 0.75rem; color: var(--color-text-muted); margin: 0.25rem 0 0; }
-.alloc-num span { display: block; }
-.alloc-num i { display: block; font-style: normal; font-size: 0.6rem; color: var(--color-text-dim); margin-top: 1px; }
-.alloc-total { color: var(--color-green); font-weight: 700; }
-.alloc-table th .rm-legend-swatch { margin-right: 0.4rem; }
-.alloc-foot { margin-top: 2.5rem; }
-.alloc-foot a { color: var(--color-accent); text-decoration: none; }
-.alloc-foot a:hover { text-decoration: underline; }
-@media (min-width: 768px) { .alloc-charts { grid-template-columns: 1fr 1fr; } }
+/* The /allocation .alloc-* residue is gone with the page (RM-105): /allocation
+   now resolves to /vault, whose styles are page-local to views/vault.html. The
+   .alloc-* rules that survive do so inside views/allocation.html's own <style>
+   block, which the shared sheet never owned. */
 
 /* ── Admin task-queue dashboard (/admin) ─────────────────────────────────────
    A password-gated operator view over the Postgres task queue. Reuses the shared

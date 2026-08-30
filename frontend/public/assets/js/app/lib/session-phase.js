@@ -37,9 +37,7 @@ const AGGREGATING_STATES = new Set(["window_closed", "aggregated"]);
 // The states worth announcing at all. `scheduled` exists but has no window yet.
 const LIVE_STATES = new Set(["collecting", "window_closed", "aggregated"]);
 
-/**
- * @param {any} state
- */
+/** @param {unknown} state */
 export function isLiveState(state) {
   return LIVE_STATES.has(String(state || ""));
 }

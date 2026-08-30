@@ -290,6 +290,11 @@
   letter-spacing: 0.3em; color: var(--color-accent);
 }
 .rm-eyebrow--accent, .rv__eyebrow--accent { color: var(--color-accent); }
+/* The base above is cyan AND there is an --accent modifier setting the same
+   colour, which is what a base that was once neutral looks like after drift:
+   the modifier became a no-op. --quiet is the opt-out until the base itself is
+   flipped and every page audited for what actually needs the accent. */
+.rm-eyebrow--quiet, .sv__eyebrow--quiet { color: var(--color-text-muted); }
 
 /* loading / error states */
 .rm-loading, .rv__loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
@@ -344,28 +349,125 @@
    modern-safe form: `display:none` and `visibility:hidden` remove the node from
    the accessibility tree, and a live region that is not in the tree announces
    nothing. */
-/* ─── Session phase chip ───────────────────────────────────────────────────
-   One chip for "what phase is this session in", so /swarm and the session page
-   cannot style the same fact differently. Colours follow the admin's existing
-   scale (.adm-badge--run/--ok) rather than inventing a second one:
+/* BEFORE ADDING A COMPONENT HERE, AND BEFORE WRITING ONE IN A VIEW: reuse the
+   one that exists. CONTRIBUTING.md "Reuse the component before you write a
+   second one" carries the rule and what breaking it has cost — one green square
+   meaning four different things, one session reading "closed" on one page and
+   "collecting" on the next, and a page that shipped eleven private tokens of
+   which three had drifted off the real ones.
 
-     collecting / aggregating  amber   work in progress
-     published                 cyan    finished
-     closed / scheduled        muted   no claim being made
+   Anything shared belongs here or in assets/js/app/lib/, WITH a comment saying
+   what it means and what it must not be used for. A component without that
+   comment acquires a second meaning within weeks. */
 
-   Amber is also the `cautious` stance on the session cards. Knowing second
-   meaning for one hex, taken because system phase and stance never share a
-   region: revisit if they ever do. Label text comes from lib/session-phase.js,
-   which derives it from the DEADLINE and not from the raw DB state. */
-.rm-sphase { display: inline-flex; align-items: center; font-family: var(--font-mono);
-  font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
-  padding: 0.14rem 0.44rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border); color: var(--color-text-muted); }
-.rm-sphase--open,
-.rm-sphase--aggregating { color: var(--color-warm); border-color: rgba(232, 166, 64, 0.42);
-  background: rgba(232, 166, 64, 0.08); }
-.rm-sphase--published { color: var(--color-accent); border-color: var(--color-accent-line);
-  background: rgba(0, 229, 255, 0.08); }
+/* ─── Tooltip ──────────────────────────────────────────────────────────────
+   One component for "what does this mean", so an explanation never has to be
+   spent as body copy again, and so a fourth surface cannot invent a fourth.
+
+   A <button>, never a bare span: it is focusable, it answers Enter and Space,
+   and it works on touch, where :hover does not exist at all. One is open at a
+   time, Escape closes, and a tap outside closes — the three things a
+   hover-only tooltip gets wrong on a phone.
+
+     icon    13px ring, muted, sized to sit on the line it annotates
+     bubble  surface + 1px border, radius 2. No shadow and no arrow: the
+             covenant is flat planes, and an arrow is a rounded flourish this
+             system does not have anywhere else.
+     motion  140ms opacity plus a 3px rise.
+
+   Below 700px a bubble centred on a 13px icon cannot fit — an icon near the
+   right edge would need one narrower than a sentence — so phones get the
+   standard treatment, a sheet pinned to the page gutters and positioned
+   vertically from its icon by script.
+
+   NOTE: .sv__vfy-tip in views.css predates this and does the same job for the
+   verification mark alone. It should fold into this component; that is a
+   separate pass over every take card. */
+.rm-tip { position: relative; display: inline-flex; vertical-align: middle; margin-left: 0.3rem; }
+.rm-tip__btn { width: 13px; height: 13px; padding: 0; flex: 0 0 auto; display: grid; place-items: center;
+  border: 1px solid var(--color-text-muted); border-radius: 50%; background: none;
+  color: var(--color-text-muted); font-family: var(--font-mono); font-size: 8px; line-height: 1;
+  cursor: default; transition: color 0.14s ease, border-color 0.14s ease; }
+.rm-tip__btn:hover, .rm-tip__btn[aria-expanded="true"] { color: var(--color-text); border-color: var(--color-text); }
+.rm-tip__bub { position: absolute; left: 50%; bottom: calc(100% + 8px);
+  transform: translate(calc(-50% + var(--rm-tip-nudge, 0px)), 3px);
+  width: min(17rem, 72vw); max-width: min(17rem, calc(100vw - 2rem));
+  padding: 0.65rem 0.75rem; z-index: 40;
+  background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  font-family: var(--font-sans); font-size: 0.78rem; line-height: 1.55; color: var(--color-text-soft);
+  text-transform: none; letter-spacing: 0; text-align: left; font-weight: 400;
+  /* A bubble is a paragraph wherever it is anchored, so it resets every text
+     property its host might set. white-space was the one it missed: the role
+     tip on the swarm roster hangs off a .sv__mtable th, which is nowrap, and
+     218 characters laid out as 1327px on a single line inside a 272px box —
+     one visible line and the rest off the side of the screen. Any caller in a
+     table header, a chip or a truncated cell would have done the same. */
+  white-space: normal; overflow-wrap: break-word;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s; }
+.rm-tip:hover .rm-tip__bub, .rm-tip__btn:focus-visible + .rm-tip__bub, .rm-tip__bub[data-open="1"] {
+  opacity: 1; visibility: visible; transform: translate(calc(-50% + var(--rm-tip-nudge, 0px)), 0); transition-delay: 0s; }
+/* Flipped below its icon when there is no room above it. Set by placeTip() in
+   lib/tooltip.js, which is where the measuring has to happen. */
+.rm-tip__bub[data-below] { bottom: auto; top: calc(100% + 8px); }
+@media (max-width: 699px) {
+  .rm-tip__bub { position: fixed; left: 12px; right: 12px; bottom: auto; width: auto; max-width: none;
+    transform: translateY(3px); }
+  .rm-tip:hover .rm-tip__bub, .rm-tip__btn:focus-visible + .rm-tip__bub, .rm-tip__bub[data-open="1"] {
+    transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) { .rm-tip__bub { transition: opacity 0.01s; } }
+
+/* ─── Session phase ────────────────────────────────────────────────────────
+   One treatment for "what phase is this session in", so /swarm, the apply
+   page, the session page and a member profile cannot say the same fact four
+   different ways. They did: a bordered amber chip on two of them, and on a
+   member profile an orange square beside grey text.
+
+   NOT A PILL. The bordered pill is the shape a member's STANCE wears on the
+   take cards, and a phase is not a reading anybody submitted — it is the state
+   of the machine. Mark plus word, no box.
+
+     collecting   amber, pulsing   the window is open and takes are arriving
+     aggregating  amber, steady    closed, the protocol is still working
+     everything   muted            published, closed, scheduled: settled, and
+     else                          the state almost every row is in
+
+   Colour marks live work and nothing else. Published used to take cyan, which
+   spent the interface-state hue on the one phase that is true of the entire
+   feed below it. Amber follows the admin's existing .adm-badge--run rather
+   than inventing a second system-state colour; it is also the `cautious`
+   stance on the session cards, a knowing second meaning for one hex, taken
+   because phase and stance never share a region.
+
+   Label text comes from lib/session-phase.js, which derives it from the
+   DEADLINE and not from the raw DB state.
+
+   The mark is a pseudo-element rather than markup, so no surface can render a
+   phase without it, and so `x-text` on the element — which replaces every
+   child node — leaves it standing. */
+.rm-sphase { position: relative; display: inline-flex; align-items: center;
+  font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--color-text-muted);
+  padding-left: calc(6px + 0.5rem); }
+.rm-sphase::before { content: ""; position: absolute; left: 0; top: 50%;
+  width: 6px; height: 6px; margin-top: -3px; background: currentColor; }
+.rm-sphase--open, .rm-sphase--aggregating { color: var(--color-warm); }
+
+/* COLLECTING is the only phase a visitor can still act on, and a static square
+   said exactly what `closed` said. The ring carries it: a square pulse leaving
+   the mark and fading, on a 1.6s heartbeat rather than a spinner's tempo.
+   Transform and opacity only — no glow, no blur, and no layout pass. */
+.rm-sphase--open::after { content: ""; position: absolute; left: 0; top: 50%;
+  width: 6px; height: 6px; margin-top: -3px; border: 1px solid currentColor;
+  animation: rm-collecting 1.6s ease-out infinite; }
+@keyframes rm-collecting {
+  0% { transform: scale(1); opacity: 0.85; }
+  75%, 100% { transform: scale(2.6); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rm-sphase--open::after { animation: none; transform: scale(1.9); opacity: 0.32; }
+}
 
 /* ─── Semantic marks: one data type per channel ────────────────────────────
    Three unrelated things were all rendering as the same small green square: a
@@ -455,12 +557,19 @@
    only copy, so the application status page could show the same record in the
    same shape instead of growing a second figure treatment beside it.
    Mono and tabular so columns align; no figure is ever cyan or green, because a
-   count is a figure and green is reserved for money as a mass. Cyan seams the
-   strip as a line across the top, and never fills it. */
+   count is a figure and green is reserved for money as a mass.
+   NO CYAN SEAM. It used to draw one across the top, argued as "a line, never a
+   fill" — but a fixed accent rail on a fixed block is a decoration that reports
+   nothing, and it is the one device the brand sheet names outright. Cyan is
+   interface STATE here: it earns a place when something is focused, current or
+   hovered, and a strip of counts is none of those. The 1px grid already
+   separates the cells. */
 .rm-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
             margin: 1.35rem 0 1.6rem; padding: 0; background: var(--color-border);
-            border-top: 1px solid var(--color-accent); }
-.rm-stat { background: var(--color-surface); padding: 0.7rem 0.85rem; }
+            border-top: 1px solid var(--color-border); }
+.rm-stat { background: var(--color-surface); padding: 0.75rem 1rem; position: relative; }
+/* One column on phones so a stat cell is wide enough to hold its explanation. */
+@media (max-width: 639px) { .rm-stats { grid-template-columns: minmax(0, 1fr); } }
 .rm-stat dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
               letter-spacing: 0.16em; color: var(--color-text-muted); }
 .rm-stat dd { margin: 0.35rem 0 0; font-family: var(--font-mono); font-size: 1.1rem;
@@ -510,16 +619,51 @@
 }
 .rm-actions .rm-actions__do:hover { background: var(--color-accent-glow); color: var(--color-text); }
 
-/* A destination. Underscored rather than recoloured, so the words stay legible
-   type and the cyan stays a rule. */
-.rm-actions .rm-actions__link {
-  display: inline-flex; align-items: center; min-height: 44px;
-  color: var(--color-text-soft); text-decoration: underline;
-  text-decoration-color: var(--color-accent-line);
-  text-decoration-thickness: 1px; text-underline-offset: 6px;
+/* ── Links: one convention ────────────────────────────────────────────────
+   Five treatments had grown for the same job, and two links a paragraph apart
+   could look like different kinds of thing:
+
+     .sv__panel-link / .sv__back / .sv__memo-link   cyan words, no rule
+     .sv__take-body a / .sv__synthesis a            cyan words, no rule
+     .sv__cov-lnk                                   cyan words over a cyan rule
+     .rm-actions__link                              soft words under a cyan rule
+     .sv__live-lnk                                  muted words over a grey rule
+
+   THE RULE IS THE LINK; THE ACCENT IS THE INTERACTION. A link keeps the colour
+   of the text around it and carries a 1px rule underneath. The rule is neutral
+   at rest and takes the accent on hover and on keyboard focus — which is what
+   --color-accent is defined for on this site: interface STATE, never a value
+   and never a decoration. Cyan at rest spent the accent on the mere presence
+   of a link, so a page of links was a page of coloured words and touching one
+   changed nothing.
+
+   Type, size, tracking and layout stay with each caller: these are the same
+   KIND of thing, not the same size of thing, and a mono uppercase meta link
+   should not become body prose to get an underline. */
+.rm-link,
+.rm-actions .rm-actions__link,
+.sv__live-lnk, .sv__cov-lnk,
+.sv__panel-link, .sv__back, .sv__memo-link,
+.sv__how-d a, .sv__take-body a, .sv__synthesis a {
+  color: inherit;
+  border-bottom: 0;
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-light);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
 }
-.rm-actions .rm-actions__link:hover {
-  color: var(--color-text); text-decoration-color: var(--color-accent);
+.rm-link:hover, .rm-link:focus-visible,
+.rm-actions .rm-actions__link:hover, .rm-actions .rm-actions__link:focus-visible,
+.sv__live-lnk:hover, .sv__live-lnk:focus-visible,
+.sv__cov-lnk:hover, .sv__cov-lnk:focus-visible,
+.sv__panel-link:hover, .sv__panel-link:focus-visible,
+.sv__back:hover, .sv__back:focus-visible,
+.sv__memo-link:hover, .sv__memo-link:focus-visible,
+.sv__how-d a:hover, .sv__how-d a:focus-visible,
+.sv__take-body a:hover, .sv__take-body a:focus-visible,
+.sv__synthesis a:hover, .sv__synthesis a:focus-visible {
+  color: var(--color-text);
+  text-decoration-color: var(--color-accent);
 }
 
 /* ── Swarm disclaimer ───────────────────────────────────────────────────
@@ -597,14 +741,27 @@
    made the headline change size and typeface. !important for the same reason
    the rules above use it: each page's inline <style> is injected after this
    sheet and would otherwise win. */
+/* The swarm's own titles joined this list late. /swarm was already here, but
+   .sv__detail-title (member, session, portfolio, take, application status) and
+   the apply hero each carried their own clamp, so three swarm pages opened at
+   three sizes — 53.8 / 57.6 / 65.6px on the same 1280px column — and the
+   headline resized as you moved between them, which is the exact drift this
+   rule exists to stop. Their local declarations are gone rather than left to
+   lose to the !important above; only their margins are page-specific. */
 .sk__title, .rv__title, .tok__h1, .a2-hero__title,
-.md-hero__title, .cl__h1, .sv__title {
+.md-hero__title, .cl__h1, .sv__title,
+.sv__detail-title, .ap-hero__title {
   font-family: var(--font-display) !important;
   font-weight: 700 !important;
   font-size: clamp(2.5rem, 4.2vw, 3.75rem) !important;
   line-height: 1.05 !important;
   letter-spacing: -0.01em !important;
   text-transform: uppercase !important;
+}
+/* Kept off the swarm's detail titles: those sit under a 10px mono eyebrow that
+   needs its own small gap, where these heroes pin to the top of their block. */
+.sk__title, .rv__title, .tok__h1, .a2-hero__title,
+.md-hero__title, .cl__h1, .sv__title {
   /* /regime and /swarm carried an 8px top margin, which is enough to read
      as a jump when the headline is otherwise pinned to the same offset. */
   margin-top: 0 !important;

@@ -18,6 +18,8 @@
 import { api, ROUTES, path } from "../../lib/api.js";
 import { SWARM_ROSTER_CAP, ONBOARDING_PROMPT, SWARM_ONBOARDING_SKILL_URL } from "../../contract/index.js";
 import { forgetApplication, recallApplication } from "../../lib/application-memory.js";
+import { sessionPhase, isLiveState } from "../../lib/session-phase.js";
+import { timeAgo, absoluteUtc } from "../../lib/relative-time.js";
 
 // The canonical production home. The onboarding skill defaults to this host
 // ("production by default"), so the prompt carries no base URL there — and must
@@ -79,13 +81,65 @@ export function registerApplyForm(Alpine) {
     waitlisted: false,
     seats: null,
     copied: {},
+    promptOpen: false,
     resume: null,   // an application this browser has opened before, if it still exists
+    // The page asserted "votes every session" and showed nothing. One request,
+    // best-effort like the seat count: an applicant deciding whether to take a
+    // seat should be able to see the swarm working while they read.
+    liveSessions: [],
+    now: Date.now(),
+    liveTimer: null,
+    destroy() {
+      if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
+    },
     async init() {
       try {
         const res = await api.get(ROUTES.swarm.members);
         this.seats = { filled: (res.members || []).length, cap: SWARM_ROSTER_CAP };
       } catch { /* seat info is best-effort; never block the page on it */ }
+      this.loadLiveSession();
+      this.liveTimer = setInterval(() => { this.now = Date.now(); }, 30000);
       await this.recoverApplication();
+    },
+    async loadLiveSession() {
+      try {
+        const d = await api.get(`${ROUTES.swarm.sessions}?limit=20`);
+        this.liveSessions = d?.sessions || [];
+      } catch { this.liveSessions = []; }
+    },
+    // Derivation is shared with /swarm and the session page (lib/session-phase.js)
+    // so the same row cannot read one phase here and another there.
+    liveSession() {
+      const rows = this.liveSessions
+        .filter((s) => isLiveState(s.state))
+        .sort((a, b) => String(b.windowClosesAt || "").localeCompare(String(a.windowClosesAt || "")));
+      const s = rows[0];
+      if (!s) return null;
+      if (!s.windowClosesAt) return s;
+      const closes = Date.parse(s.windowClosesAt);
+      if (!Number.isFinite(closes)) return null;
+      return (this.now - closes > 3 * 60 * 60 * 1000) ? null : s;
+    },
+    livePhase() { const s = this.liveSession(); return s ? sessionPhase(s, this.now) : null; },
+    liveIsOpen() { return this.livePhase()?.isOpen === true; },
+    livePhaseLabel() { return this.livePhase()?.label || ""; },
+    liveSubjectName() { const s = this.liveSession(); return s?.subjectName || s?.subjectId || ""; },
+    liveRemaining() {
+      const s = this.liveSession();
+      if (!s?.windowClosesAt) return "";
+      const ms = Date.parse(s.windowClosesAt) - this.now;
+      if (!Number.isFinite(ms) || ms <= 0) return "";
+      const mins = Math.floor(ms / 60000);
+      if (mins < 1) return "under a minute";
+      if (mins < 60) return `${mins} min`;
+      const h = Math.floor(mins / 60), m = mins % 60;
+      return m ? `${h}h ${m}m` : `${h}h`;
+    },
+    liveClosedAgo() { return timeAgo(this.liveSession()?.windowClosesAt, this.now); },
+    liveClosesAbsolute() { return absoluteUtc(this.liveSession()?.windowClosesAt); },
+    liveHref() {
+      const s = this.liveSession();
+      return s?.id ? `/swarm/sessions/${encodeURIComponent(s.id)}` : "/swarm";
     },
     // The status page is handed to the operator once, as a line in their agent's
     // chat, and nothing on this site links to it. If they ever opened it, the

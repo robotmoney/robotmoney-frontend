@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { navigate } from "./navigation.ts";
 import { renderMeta } from "../../public/assets/js/app/seo.js";
@@ -393,3 +394,49 @@ declare global {
     };
   }
 }
+
+
+// Every stylesheet is requested with `?v=<first 8 of its sha256>`, and this
+// asserts the stamp still matches the file.
+//
+// WHY THE STAMP EXISTS. Cloudflare fronts the site with
+// `cache-control: public, max-age=14400` on static assets, so a CSS deploy is
+// invisible for up to four hours: on 2026-08-28 staging served the new markup
+// against the previous stylesheet, with the session spread bar, the status
+// chip and the link convention all styled by rules that were not there yet.
+// The edge ignores a request-side `Cache-Control: no-cache`, and only a
+// dashboard purge or a changed URL gets through. A changed URL is the half the
+// frontend owns; RM-112 asks for the dashboard half, which is the only thing
+// that can fix module JS (main.js imports ~30 files by relative path, so
+// stamping the entry point does not stamp the graph).
+//
+// WHY THIS TEST EXISTS. A hand-maintained version token rots the first time
+// somebody edits CSS without bumping it, and it rots SILENTLY into exactly the
+// bug it was added to prevent. Deriving it from the content means the only way
+// to be wrong is to be caught here.
+//
+// Regenerate every stamp after changing any stylesheet:
+//
+//   python3 - <<'PY'
+//   import hashlib, pathlib, re
+//   root = pathlib.Path("frontend/public"); idx = root / "index.html"
+//   def stamp(m):
+//       href = m.group(1)
+//       h = hashlib.sha256((root / href.lstrip("/")).read_bytes()).hexdigest()[:8]
+//       return f'href="{href}?v={h}"'
+//   idx.write_text(re.sub(r'href="(/assets/css/[^"?]+\.css)(?:\?v=[0-9a-f]+)?"', stamp, idx.read_text()))
+//   PY
+test("every stylesheet is cache-busted by its own content hash", () => {
+  const root = join(process.cwd(), "frontend/public");
+  const html = readFileSync(join(root, "index.html"), "utf8");
+  const links = [...html.matchAll(/href="(\/assets\/css\/[^"?]+\.css)(\?v=([0-9a-f]+))?"/g)];
+
+  expect(links.length, "index.html should still be linking stylesheets").toBeGreaterThan(0);
+
+  const stale: string[] = [];
+  for (const [, href, , stamped] of links) {
+    const actual = createHash("sha256").update(readFileSync(join(root, href.slice(1)))).digest("hex").slice(0, 8);
+    if (stamped !== actual) stale.push(`${href} is stamped ?v=${stamped ?? "(none)"} but hashes to ${actual}`);
+  }
+  expect(stale, "regenerate the stamps: see the snippet above this test").toEqual([]);
+});
