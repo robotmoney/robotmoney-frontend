@@ -44,6 +44,7 @@ export function timeAgo(value, now = Date.now()) {
  * Minute precision and always UTC, matching how the swarm states times
  * everywhere else.
  *
+ * @param {string|number|Date|null|undefined} value
  * @returns {string} e.g. "2026-08-27 15:25 UTC", or "" when unparseable.
  */
 export function absoluteUtc(value) {

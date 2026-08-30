@@ -37,11 +37,16 @@ const AGGREGATING_STATES = new Set(["window_closed", "aggregated"]);
 // The states worth announcing at all. `scheduled` exists but has no window yet.
 const LIVE_STATES = new Set(["collecting", "window_closed", "aggregated"]);
 
+/**
+ * @param {any} state
+ */
 export function isLiveState(state) {
   return LIVE_STATES.has(String(state || ""));
 }
 
 /**
+ * @param {any} session
+ * @param {number} [now]
  * @returns {{key: string, label: string, isOpen: boolean, closesAt: number|null}}
  */
 export function sessionPhase(session, now = Date.now()) {
@@ -61,7 +66,7 @@ export function sessionPhase(session, now = Date.now()) {
   if (!hasDeadline) {
     return { key: PHASE.open, label: "collecting", isOpen: true, closesAt: null };
   }
-  if (closesAt > now) {
+  if (closesAt !== null && closesAt > now) {
     return { key: PHASE.open, label: "collecting", isOpen: true, closesAt };
   }
   if (AGGREGATING_STATES.has(state)) {
