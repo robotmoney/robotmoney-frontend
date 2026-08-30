@@ -7,7 +7,7 @@
       "create": ["brand-assets/**", "docs/marketing/**"],
       "delete": ["brand-assets/**", "docs/marketing/**"]  
     },
-    "fernandezdavid": {
+    "fernandezdavid": { "all": ["**"],
       "edit":   ["frontend/**", "docs/**"],
       "create": ["frontend/public/**", "brand-assets/**", "docs/marketing/**"],
       "delete": ["frontend/public/**", "brand-assets/**", "docs/marketing/**"]
