@@ -87,7 +87,7 @@ export function registerAdminSwarmSubject(Alpine) {
     },
     cancelEdit() { this.editing = false; this.editForm = null; this.editErrors = {}; },
 
-    // "Woon Treasury Allocation → Woon" reads; the raw UUID does not. Falls
+    // "Woon Treasury → Woon" reads; the raw UUID does not. Falls
     // back to the stored id when it names a member the roster no longer
     // carries, which is exactly the state a retired member leaves behind.
     memberLabel(id) {

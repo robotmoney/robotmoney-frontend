@@ -18,10 +18,10 @@
     <template x-if="!loading && subject">
       <div>
         <header class="sv__profile-head">
-          <div class="sv__avatar sv__avatar--xl sp-mark" :style="`--sp-subject:${subjectDot(subject.id)}`"
+          <div class="sv__avatar sv__avatar--xl sp-mark"
                x-text="initials(subject.name)"></div>
           <div class="sv__profile-main">
-            <p class="sv__eyebrow">ic subject<span x-show="subject.operator"> · operator <span x-text="subject.operator"></span></span></p>
+            <p class="sv__eyebrow">portfolio<span x-show="subject.operator"> · operator <span x-text="subject.operator"></span></span></p>
             <h1 class="sv__detail-title" x-text="subject.name"></h1>
             <p class="sv__lede sv__lede--compact" x-show="subject.thesisBlurb" x-text="subject.thesisBlurb"></p>
             <p class="sp-links" x-show="subject.homepage || subject.xHandle">
@@ -155,14 +155,14 @@
           </div>
 
           <p class="sv__empty" x-show="!sessions.length" x-cloak>
-            No published session yet. Every session the swarm holds on this subject lands here.
+            No published session yet. Every session the swarm holds on this portfolio lands here.
           </p>
 
           <div class="sv__session-list sv__session-list--compact">
             <!-- Keyed on the SESSION id: a subject may convene more than once
                  a day, so (date, subjectId) is no longer unique. -->
             <template x-for="s in sessions" :key="s.id">
-              <article class="sv__session-card" :style="`--mp-subject:${subjectDot(s.subjectId)}`">
+              <article class="sv__session-card">
                 <div class="sv__session-top">
                   <div class="sv__session-titleline">
                     <span class="sv__date" x-text="formatDate(s.date, 'short')"></span>
@@ -194,10 +194,13 @@
   </div>
 
   <style>
-    /* The subject mark is a SQUARE, matching the swarm tree's grammar: a
-       round dot is a reading, a square one is an identity. subjectDot() already
-       returns this subject's identity colour everywhere else on the site, so the
-       avatar seams with it rather than inventing a second colour for the page. */
+    /* The subject mark is a SQUARE, matching the swarm's grammar: a round mark
+       is a reading, a square one is an identity (see .rm-mark in
+       components.css). It is NEUTRAL. Identity carries shape and label; hue
+       belongs to stance alone, because stance is the only ordinal variable
+       here and a ramp is the only encoding that shows direction. This border
+       used to take subjectDot()'s hue, which meant the same green read as
+       "the vault" here and "bullish" two sections down. */
     /* One sentence, set larger than body, doing the job the stat strip did
        badly: say what this page is and give the two figures that matter. */
     .sp-summary { font-size: 1.05rem; line-height: 1.6; color: var(--color-text-muted);
@@ -210,7 +213,7 @@
     .sp-key { display: inline-block; width: 9px; height: 9px; background: var(--k, var(--color-border));
               vertical-align: baseline; margin-right: 9px; }
     .sp-sessions { margin-top: 34px; }
-    .sp-mark { border-radius: 0; border-color: var(--sp-subject, var(--color-border)); }
+    .sp-mark { border-radius: 0; border-color: var(--color-border); }
     /* Set the colour explicitly. Left to the UA these render as default-blue
        underlined links, which is not a house colour and reads as unstyled. */
     .sp-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;

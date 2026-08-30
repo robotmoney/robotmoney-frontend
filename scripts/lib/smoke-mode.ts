@@ -91,9 +91,9 @@ export function bootstrapStepNames(smoke: boolean): readonly string[] {
  */
 export const SMOKE_SUBJECTS: readonly { id: string; name: string }[] = Object.freeze([
   Object.freeze({ id: "robotmoney-allocation", name: "Robot Money Allocation" }),
-  Object.freeze({ id: "robotmoney-treasury", name: "RM Protocol Treasury" }),
+  Object.freeze({ id: "robotmoney-treasury", name: "RM Protocol Labs Treasury" }),
   Object.freeze({ id: "robotmoney-vault", name: "Robot Money Vault" }),
-  Object.freeze({ id: "woon", name: "Woon Treasury Allocation" }),
+  Object.freeze({ id: "woon", name: "Woon Treasury" }),
 ]);
 
 /**

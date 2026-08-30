@@ -12,9 +12,9 @@
           <!-- No aria-label: the h1 alongside carries the name, so the mark is
                decorative here rather than the only label. -->
           <div class="sv__avatar sv__avatar--xl sv__avatar--mark"
-               x-html="memberMark(member.keyFingerprint || member.id, member.name, 80, member.avatar?.path)"></div>
+               x-html="memberMark(member.keyFingerprint || member.id, member.name, 80, member.avatar?.path, member.handle)"></div>
           <div class="sv__profile-main">
-            <p class="sv__eyebrow">ic member · <span x-text="member.lens || 'swarm lens'"></span></p>
+            <p class="sv__eyebrow">swarm member · <span x-text="member.lens || 'swarm lens'"></span></p>
             <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
             <p class="sv__lede sv__lede--compact profile-role" x-text="memberTagline(member)"></p>
           </div>
@@ -83,7 +83,7 @@
                    nothing at all for a duplicate key. -->
               <template x-for="row in inProgressTakes()" :key="`ip-${row.take.id}`">
                 <article class="sv__session-card mp-take mp-card--live"
-                         :style="`--mp-subject:${subjectDot(row.session.subjectId)}`">
+>
                   <div class="sv__session-top">
                     <div class="sv__session-titleline">
                       <span class="sv__date" x-text="formatDate(row.session.date, 'short')"></span>
@@ -146,7 +146,7 @@
             <button type="button" class="mp-chip" :class="{ 'is-on': subject === s.id }"
                     @click="filterBy(s.id)" :aria-pressed="subject === s.id"
                     :title="subject === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
-              <i class="mp-chip__dot" :style="`background:${subjectDot(s.id)}`" aria-hidden="true"></i>
+              <i class="mp-chip__dot rm-mark rm-mark--identity" aria-hidden="true"></i>
               <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
               <span class="mp-chip__x" x-show="subject === s.id" aria-hidden="true">×</span>
             </button>
@@ -168,12 +168,12 @@
              ? 'No published sessions yet. The takes above are the first, and land here once their sessions publish.'
              : 'No published sessions yet. The take above is the first, and lands here once its session publishes.'"></p>
         <p class="sv__empty" x-show="subject && visibleTakes().length === 0" x-cloak>
-          No published takes for this subject yet.
+          No published takes for this portfolio yet.
         </p>
         <div class="sv__session-list sv__session-list--compact">
           <!-- Keyed on the TAKE id, for the same reason as the in-progress list above. -->
           <template x-for="row in visibleTakes().slice(0, 20)" :key="row.take.id">
-            <article class="sv__session-card mp-take" :style="`--mp-subject:${subjectDot(row.session.subjectId)}`">
+            <article class="sv__session-card mp-take">
               <div class="sv__session-top">
                 <div class="sv__session-titleline">
                   <span class="sv__date" x-text="formatDate(row.session.date, 'short')"></span>
@@ -235,7 +235,7 @@
             <template x-for="m in members" :key="m.id">
               <li class="sv__person-row">
                 <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" :aria-label="m.name"
-                   x-html="memberMark(m.keyFingerprint || m.id, m.name, 40)"></a>
+                   x-html="memberMark(m.keyFingerprint || m.id, m.name, 40, m.avatar?.path, m.handle)"></a>
                 <div class="sv__row-main">
                   <div class="sv__row-titleline">
                     <a class="sv__row-title" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" x-text="m.name"></a>

@@ -314,10 +314,18 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
 }
 
 async function processSubject(s: V0Subject, drifts: Drift[]): Promise<RowOutcome> {
+  // RELEASE NAMES. The v0 archive published "Woon" and "Robot Money Treasury";
+  // these are what the portfolios are called now. The archive artifact stays a
+  // faithful v0 snapshot and the current name is applied on the way in, which is
+  // why the static archive under frontend/public/data/swarm/ still carries the
+  // v0 spellings and should not be swept to match.
+  //
+  // Keep in step with SMOKE_SUBJECTS (scripts/lib/smoke-mode.ts): smoke-e2e-assert
+  // compares published sessions against those literals by exact string.
   if (s.id === "woon") {
-    s.name = "Woon Treasury Allocation";
+    s.name = "Woon Treasury";
   } else if (s.id === "robotmoney-treasury") {
-    s.name = "RM Protocol Treasury";
+    s.name = "RM Protocol Labs Treasury";
   }
 
   const existing = (
@@ -379,10 +387,13 @@ async function processSession(sess: V0Session, drifts: Drift[]): Promise<RowOutc
   const convenedAt = convenedAtFromDate(sess.date);
   const publishedAt = sess.generated_at;
 
+  // swarm_sessions.subject_name is denormalized (migration 0001) and is never
+  // backfilled by an admin rename, so the release name has to be stamped here or
+  // every restored session keeps the v0 spelling on member track records.
   if (sess.subject_id === "woon") {
-    sess.subject_name = "Woon Treasury Allocation";
+    sess.subject_name = "Woon Treasury";
   } else if (sess.subject_id === "robotmoney-treasury") {
-    sess.subject_name = "RM Protocol Treasury";
+    sess.subject_name = "RM Protocol Labs Treasury";
   }
 
   if (sess.takes) {

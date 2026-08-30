@@ -27,12 +27,18 @@ const MARK_MEMBERS = [
 // already withholds it. Neither may appear in a member's figure.
 const FORBIDDEN_FILLS = ["#00e5ff", "#ff7a29"];
 
+// RM-100: members render as a register. The mark is decorative (aria-hidden)
+// and the accessible name lives on the link beside it, so a member's mark is
+// addressed through its row rather than through an aria-label on the mark.
+const markFor = (page: import("@playwright/test").Page, name: string) =>
+  page.locator(".sv__mtable tbody tr", { hasText: name }).locator(".sv__mmark");
+
 test("swarm index: every member renders a distinct derived mark, none of it cyan or beacon", async ({ page }) => {
   await page.route("**/api/swarm/members*", (route) => route.fulfill(json({ members: MARK_MEMBERS })));
   await page.route("**/api/swarm/sessions*", (route) => route.fulfill(json({ sessions: [], nextCursor: null })));
 
   await page.goto("/swarm");
-  const marks = page.locator(".sv__person-row .sv__avatar--mark svg");
+  const marks = page.locator(".sv__mtable .sv__mmark svg");
   await expect(marks).toHaveCount(3);
 
   // Distinct: three members, three different marks. Compared as markup, since
@@ -45,9 +51,10 @@ test("swarm index: every member renders a distinct derived mark, none of it cyan
   expect(fills.length).toBeGreaterThan(0);
   for (const forbidden of FORBIDDEN_FILLS) expect(fills).not.toContain(forbidden);
 
-  // The mark is decorative SVG, so the row link would otherwise have no
-  // accessible name at all once the initials it replaced are gone.
-  await expect(page.locator('.sv__person-row .sv__avatar--mark[aria-label="Woon"]')).toHaveCount(1);
+  // The mark is decorative, so the accessible name has to come from the link
+  // in the same cell. Assert both: exactly one Woon mark, and a named link.
+  await expect(markFor(page, "Woon")).toHaveCount(1);
+  await expect(page.locator('.sv__mwho a', { hasText: "Woon" })).toHaveCount(1);
 });
 
 test("swarm index: a member's mark is the same on every load", async ({ page }) => {
@@ -56,7 +63,7 @@ test("swarm index: a member's mark is the same on every load", async ({ page }) 
 
   const read = async () => {
     await page.goto("/swarm");
-    const mark = page.locator('.sv__person-row .sv__avatar--mark[aria-label="Woon"] svg');
+    const mark = markFor(page, "Woon").locator("svg");
     await expect(mark).toBeVisible();
     return mark.innerHTML();
   };
@@ -79,7 +86,7 @@ test("swarm index: a member's avatar.path that 404s falls back to the derived ma
   await page.route("**/avatars/swarm/athena.jpg", (route) => route.fulfill({ status: 404, body: "not found" }));
 
   await page.goto("/swarm");
-  const avatar = page.locator('.sv__person-row .sv__avatar--mark[aria-label="Athena"]');
+  const avatar = markFor(page, "Athena");
   await expect(avatar.locator("img")).toHaveCount(0);
   await expect(avatar.locator("svg")).toHaveCount(1);
 });
@@ -98,7 +105,7 @@ test("swarm index: a member with a loadable avatar.path renders it instead of th
   await page.route("**/avatars/swarm/athena.jpg", (route) => route.fulfill({ status: 200, contentType: "image/gif", body: PIXEL_GIF }));
 
   await page.goto("/swarm");
-  const avatar = page.locator('.sv__person-row .sv__avatar--mark[aria-label="Athena"]');
+  const avatar = markFor(page, "Athena");
   await expect(avatar.locator("img")).toHaveCount(1);
   await expect(avatar.locator("svg")).toHaveCount(0);
 });
@@ -112,7 +119,7 @@ test("swarm index: a member with no seed falls back to initials", async ({ page 
   await page.route("**/api/swarm/sessions*", (route) => route.fulfill(json({ sessions: [], nextCursor: null })));
 
   await page.goto("/swarm");
-  const avatar = page.locator(".sv__person-row .sv__avatar--mark").first();
+  const avatar = page.locator(".sv__mtable .sv__mmark").first();
   await expect(avatar).toHaveText("NA");
   await expect(avatar.locator("svg")).toHaveCount(0);
 });
