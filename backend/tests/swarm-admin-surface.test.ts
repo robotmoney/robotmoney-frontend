@@ -193,8 +193,8 @@ test("members: application review approve/reject", async () => {
   expect((await admin.deactivateMemberAdmin(memberId, 2)).status).toBe(200);
 });
 
-// ── AC4 (session creation): UTC validation, roster snapshot, 4 dedup jobs ──
-test("session creation: rejects bad date, timestamp ordering, date/briefOpensAt mismatch, inactive topic; snapshots the active roster; enqueues exactly 4 deduped jobs", async () => {
+// ── AC4 (session creation): UTC validation, roster snapshot, 5 dedup jobs ──
+test("session creation: rejects bad date, timestamp ordering, date/briefOpensAt mismatch, inactive topic; snapshots the active roster; enqueues exactly 5 deduped jobs", async () => {
   const subjectId = await activeSubject();
   const m1 = await activeMember("m1");
   const m2 = await activeMember("m2");
@@ -221,26 +221,72 @@ test("session creation: rejects bad date, timestamp ordering, date/briefOpensAt 
   // them, so the roster snapshot legitimately includes more than JUST m1/m2
   // when the full suite runs together — assert containment, not exact size.
   expect((created as any).rosterSize).toBeGreaterThanOrEqual(2);
-  expect((created as any).jobIds.length).toBe(4);
+  expect((created as any).jobIds.length).toBe(5);
   const sessionId = (created as any).session.id as string;
 
   const roster = await admin.getSessionRoster(sessionId);
   const rosterIds = roster.map((r: any) => r.member_id);
   expect(rosterIds).toEqual(expect.arrayContaining([m1.id, m2.id]));
 
-  const jobs = await sql<{ kind: string; dedupe_key: string }[]>`
-    SELECT kind, dedupe_key FROM jobs WHERE payload->>'sessionId' = ${sessionId} ORDER BY kind`;
+  const jobs = await sql<{ kind: string; dedupe_key: string; run_after: Date }[]>`
+    SELECT kind, dedupe_key, run_after FROM jobs WHERE payload->>'sessionId' = ${sessionId} ORDER BY kind`;
+  // `swarm.judge` is on this list because of issue #767, and its presence here
+  // is the ONLY thing that makes `swarm_judge_config.mode` mean anything on the
+  // cadence: #752 shipped the handler and the admin button, but nothing
+  // scheduled a judging, so flipping the mode to `shadow` changed nothing about
+  // what a session did on its own.
   expect(jobs.map((j) => j.kind).sort()).toEqual(
-    ["swarm.aggregate", "swarm.close_window", "swarm.publish", "swarm.publish_brief"].sort(),
+    ["swarm.aggregate", "swarm.close_window", "swarm.judge", "swarm.publish", "swarm.publish_brief"].sort(),
   );
   // Canonical scoped dedupe key shape (docs §6.3): swarm:<session-id>:<action>.
   expect(jobs.every((j) => j.dedupe_key.startsWith(`swarm:${sessionId}:`))).toBe(true);
+  expect(jobs.find((j) => j.kind === "swarm.judge")!.dedupe_key).toBe(`swarm:${sessionId}:judge`);
+
+  // ORDER, not spacing: the queue claims `ORDER BY priority DESC, run_after`
+  // (worker/loop.ts), so the judge reaching an AGGREGATED take set and landing
+  // before the session publishes is entirely a property of these instants.
+  const at = (kind: string) => new Date(jobs.find((j) => j.kind === kind)!.run_after).getTime();
+  expect(at("swarm.publish_brief")).toBeLessThan(at("swarm.close_window"));
+  expect(at("swarm.close_window")).toBeLessThan(at("swarm.aggregate"));
+  expect(at("swarm.aggregate")).toBeLessThan(at("swarm.judge"));
+  expect(at("swarm.judge")).toBeLessThan(at("swarm.publish"));
 
   // Recreating the still-scheduled session is idempotent on jobs (dedupe_key).
   const again = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
   expect(again.status).toBe(200);
   const jobsAgain = await sql`SELECT id FROM jobs WHERE payload->>'sessionId' = ${sessionId}`;
-  expect(jobsAgain.length).toBe(4);
+  expect(jobsAgain.length).toBe(5);
+});
+
+// A session scheduled BEFORE #767 carries only the original four jobs and would
+// never be judged on its own. There is no migration for that — the remedy is the
+// idempotent one that already exists, and this pins that it actually works:
+// re-creating a still-`scheduled` session inserts the MISSING judge row and
+// nothing else, so an operator repairing a pre-#767 session does not
+// double-enqueue the four steps that are already queued.
+test("a session missing its swarm.judge job is repaired by re-creating it, and only that job is added", async () => {
+  const subjectId = await activeSubject();
+  const date = "2026-08-21";
+  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
+  expect(created.status).toBe(201);
+  const sessionId = (created as any).session.id as string;
+
+  // Reproduce the pre-#767 shape: four jobs, no judge.
+  await sql`DELETE FROM jobs WHERE dedupe_key = ${`swarm:${sessionId}:judge`}`;
+  const before = await sql<{ id: number; kind: string }[]>`
+    SELECT id, kind FROM jobs WHERE payload->>'sessionId' = ${sessionId} ORDER BY id`;
+  expect(before.length).toBe(4);
+
+  const repaired = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
+  expect(repaired.status).toBe(200);
+  expect((repaired as any).jobIds.length, "only the missing job is inserted").toBe(1);
+
+  const after = await sql<{ id: number; kind: string }[]>`
+    SELECT id, kind FROM jobs WHERE payload->>'sessionId' = ${sessionId} ORDER BY id`;
+  expect(after.length).toBe(5);
+  expect(after.map((j) => j.kind)).toContain("swarm.judge");
+  // The four that were already queued are the SAME rows, not re-enqueued ones.
+  expect(after.slice(0, 4).map((j) => j.id)).toEqual(before.map((j) => j.id));
 });
 
 // ── AC5: roster add/excuse/restore blocked once collection begins ──────────

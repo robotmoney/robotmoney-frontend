@@ -32,6 +32,8 @@ import * as admin from "../src/swarm/admin.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { processOneJob } from "../src/worker/loop.ts";
+import { LANES } from "../src/worker/lanes.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
   inputsDigest, JUDGE_PROMPT_HASH, judge, parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
@@ -1419,4 +1421,142 @@ test("a session where EVERY take is stance-only falls back cleanly, with a reaso
   const row = (await latestJudgement(session.id)) as any;
   expect(String(row.source)).toBe("fallback");
   expect(String(row.fallback_reason)).toBe("no_take_bodies");
+});
+
+// ── The judge on the SESSION CADENCE (issue #767) ───────────────────────────
+//
+// Everything above drives the judge by calling it. That is not how it runs in
+// production, and until #767 nothing ran it in production at all: #752 shipped
+// the handler, the per-session enqueue endpoint and the admin button, but
+// `swarm.judge` was absent from `createSessionAdmin`'s job set, so moving
+// `swarm_judge_config.mode` off `off` changed nothing about what a session did
+// on its own. The three tests below exercise the path a real session now takes
+// — a queued `swarm.judge` row, claimed out of the swarm lane by
+// `processOneJob`, through `worker/handlers/swarm.ts` — because the defect they
+// guard is invisible from the function-call side:
+//
+//   `judgeSessionAdmin` answers `{ ok:false, error:"judge_disabled" }` when the
+//   mode is `off`, and that is EXACTLY the shape `worker/loop.ts`'s
+//   `isDegradedResult()` matches. Scheduling the judge without fixing that
+//   means the SHIPPED DEFAULT writes a `degraded` job_run and retries with
+//   exponential backoff on every session — red for a switch working as
+//   designed, burying the degraded rows that mean something.
+//
+// The scheduling half (the job exists, in the right order) is pinned in
+// tests/swarm-admin-surface.test.ts, which owns `createSessionAdmin`; this file
+// owns what happens when that job is drained.
+//
+// NO NETWORK, and not by luck: `swarm_judge_config.model` ships NULL, so
+// `resolveJudgeTransport()` returns null and the judge falls back to template
+// prose with `model_unconfigured`. The tests assert that model is null, so a
+// future default that pointed CI at a live endpoint would fail here rather than
+// start billing.
+
+/** The exact row `createSessionAdmin` enqueues for the judge step (#767). */
+async function enqueueJudgeJob(sessionId: string): Promise<number> {
+  const r = await sql`
+    INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by)
+    VALUES ('swarm.judge', ${sql.json({ sessionId } as any)}, now(), ${`swarm:${sessionId}:judge`},
+            'swarm_session', ${sessionId}, 'admin')
+    RETURNING id`;
+  return Number(r[0].id);
+}
+
+/** Drain the swarm lane until `jobId` has recorded a run (or the lane is dry). */
+async function drainUntilRun(jobId: number): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    const runs = await sql`SELECT id FROM job_runs WHERE job_id = ${jobId}`;
+    if (runs.length > 0) return;
+    if (!(await processOneJob({ lane: LANES.swarm, workerId: `test-judge-${jobId}` }))) return;
+  }
+}
+
+const runsOf = async (jobId: number) =>
+  (await sql`SELECT status, error, output FROM job_runs WHERE job_id = ${jobId} ORDER BY id`) as any[];
+
+const jobRow = async (jobId: number) =>
+  (await sql`SELECT status, attempts, last_error FROM jobs WHERE id = ${jobId}`)[0] as any;
+
+test("cadence, mode `off`: the scheduled judging is ONE clean success — no degraded row, no retry, nothing judged", async () => {
+  expect((await getJudgeConfig()).mode, "off is the shipped default").toBe("off");
+  const { session } = await aggregatedSession("judge-cadence-off");
+  const before = await recOf(session.id);
+
+  const jobId = await enqueueJudgeJob(session.id);
+  await drainUntilRun(jobId);
+
+  // THE REGRESSION: before #767 this settled 'pending' with a backoff and a
+  // `degraded` run, then did it again, and again.
+  const job = await jobRow(jobId);
+  expect(job.status).toBe("succeeded");
+  expect(Number(job.attempts), "a disabled judge is not retried").toBe(1);
+  expect(job.last_error).toBeNull();
+
+  const runs = await runsOf(jobId);
+  expect(runs.length).toBe(1);
+  expect(runs.filter((r) => r.status === "degraded").length).toBe(0);
+  expect(runs[0].status).toBe("succeeded");
+  // The reason is on the record, so "nothing happened" is still legible to an
+  // operator reading job_runs — a skip, not a silence.
+  expect(runs[0].output).toEqual({ skipped: "judge_disabled", sessionId: session.id });
+
+  // …and `off` still means off, all the way down.
+  expect(await stateOf(session.id)).toBe("aggregated");
+  expect(await latestJudgement(session.id)).toBeNull();
+  expect(await recOf(session.id)).toEqual(before);
+});
+
+test("cadence, mode `shadow`: the scheduled judging records a judgement and the session's prose is byte-identical", async () => {
+  const { session } = await aggregatedSession("judge-cadence-shadow");
+  const config = await setJudgeConfig({ mode: "shadow" });
+  expect(config.mode).toBe("shadow");
+  expect(config.model, "no model configured — this test never reaches a network").toBeNull();
+  // Byte comparison, not a deep equal: `shadow` must not reserialize the
+  // recommendation either.
+  const before = JSON.stringify(await recOf(session.id));
+
+  const jobId = await enqueueJudgeJob(session.id);
+  await drainUntilRun(jobId);
+
+  const job = await jobRow(jobId);
+  expect(job.status).toBe("succeeded");
+  expect(Number(job.attempts)).toBe(1);
+  const runs = await runsOf(jobId);
+  expect(runs.length).toBe(1);
+  expect(runs[0].status).toBe("succeeded");
+
+  const judgement = (await latestJudgement(session.id)) as any;
+  expect(judgement, "shadow RECORDS — that is the whole point of the mode").not.toBeNull();
+  expect(String(judgement.mode)).toBe("shadow");
+  expect(String(judgement.source)).toBe("fallback");
+  expect(String(judgement.fallback_reason)).toBe("model_unconfigured");
+  expect(await stateOf(session.id)).toBe("judged");
+
+  // THE INVARIANT: shadow reaches the record and nothing else.
+  expect(JSON.stringify(await recOf(session.id))).toBe(before);
+});
+
+test("cadence: turning the mode on takes effect on the NEXT drain of an already-queued job — no redeploy, no re-scheduling", async () => {
+  // The operator-facing promise in docs/architecture.md §9.7: the switch is a
+  // database row and the job is already in the queue, so enabling the judge is
+  // one UPDATE. Proven by flipping the row BETWEEN two drains of two sessions
+  // whose jobs were both enqueued while the judge was off.
+  const a = await aggregatedSession("judge-flip-a");
+  const b = await aggregatedSession("judge-flip-b");
+  const jobA = await enqueueJudgeJob(a.session.id);
+  const jobB = await enqueueJudgeJob(b.session.id);
+
+  await drainUntilRun(jobA);
+  expect((await runsOf(jobA))[0].output).toEqual({ skipped: "judge_disabled", sessionId: a.session.id });
+  expect(await latestJudgement(a.session.id)).toBeNull();
+
+  await setJudgeConfig({ mode: "shadow" });
+
+  await drainUntilRun(jobB);
+  expect((await runsOf(jobB))[0].status).toBe("succeeded");
+  expect(await latestJudgement(b.session.id), "the same queued kind now judges").not.toBeNull();
+  expect(await stateOf(b.session.id)).toBe("judged");
+  // Nothing re-enqueued anything: B's job is the row created before the flip.
+  expect((await sql`SELECT id FROM jobs WHERE dedupe_key = ${`swarm:${b.session.id}:judge`}`).map((r: any) => Number(r.id)))
+    .toEqual([jobB]);
 });

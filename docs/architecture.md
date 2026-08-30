@@ -1205,6 +1205,38 @@ Three modes: `off` (shipped default — pre-#752 behaviour to the byte, and the
 reaches no session), `enforce` (the opinion replaces the template
 rationale/disagreements on the session it judged).
 
+**The switch needs something to switch: `swarm.judge` is on the session cadence**
+(issue #767). #752 shipped the handler, the per-session enqueue endpoint and the
+admin button, but nothing SCHEDULED a judging — so a session was judged only when
+a human asked for one, and moving the mode row to `shadow` changed nothing about
+what the swarm did on its own. `createSessionAdmin` now enqueues FIVE
+session-scoped jobs, not four: `swarm.judge` sits between `swarm.aggregate` and
+`swarm.publish`, dedupe key `swarm:<session-id>:judge` like every other. Ordering
+is carried by `run_after` and the queue's `ORDER BY priority DESC, run_after`, not
+by a guess at how long aggregation takes; the judge instant is clamped strictly
+below `publish_at` so a degenerate one-second window cannot push a judging past
+its own publish.
+
+**With the mode `off`, the scheduled judging is a SKIP, not a degradation.**
+`judgeSessionAdmin` answers `{ ok:false, error:"judge_disabled" }`, and that is
+exactly the shape `worker/loop.ts`'s `isDegradedResult()` matches — so putting the
+judge on every session's cadence would, at the SHIPPED DEFAULT, have written a
+`degraded` job_run and retried with exponential backoff on every session before
+settling. `backend/src/worker/handlers/swarm.ts` therefore translates that one
+error into a truthy `{ skipped: "judge_disabled" }`, which the loop records as a
+single clean `succeeded` run naming the reason. `off` is an operator's answer, not
+a transient blip a retry can fix. The HTTP path keeps its 409: there a caller
+asked for a judging and must be told it cannot have one.
+
+**Turning it on needs no redeploy and no re-scheduling — for sessions scheduled
+after #767.** The mode is a database row, and the job is already in the queue for
+every session created since, so flipping `off` → `shadow` changes the next
+session's behaviour with nothing restarted. Sessions created BEFORE #767 shipped
+carry only the original four jobs and will never be judged on their own; the
+remedy is the existing idempotent one — re-run session creation while the session
+is still `scheduled`, which inserts the missing `swarm.judge` row and no others
+(`ON CONFLICT (dedupe_key) DO NOTHING`) — or judge them over the admin POST.
+
 **Failure is an outcome, never an error.** Model unconfigured
 (`model_unconfigured`), a session with no takes at all (`no_takes`), a session
 where **every** take is stance-only so there is no member-authored sentence to
@@ -3733,9 +3765,14 @@ Acceptance:
   of `briefOpensAt`.
 - `(date, subject_id)` remains unique.
 - Creation inserts the session in `scheduled`, snapshots all currently active
-  members into `swarm_session_members`, and enqueues four one-off jobs:
+  members into `swarm_session_members`, and enqueues five one-off jobs:
   `publish_brief` at brief open, `close_window` at window close, `aggregate` one
-  second after close, and `publish` at publish time.
+  second after close, `judge` one second after that (clamped strictly below
+  publish time), and `publish` at publish time. `judge` is what puts the
+  consensus judge on the cadence at all (issue #767, §9.7); with
+  `swarm_judge_config.mode = off` — the shipped default — it drains as a single
+  clean success recording `{ skipped: "judge_disabled" }`, never a `degraded`
+  run.
 - Each job has `scope_type = 'swarm_session'`, `scope_id = session UUID`, and
   dedupe key `swarm:<session-id>:<action>`. Repeated creation or enqueue does
   not duplicate jobs.
@@ -4274,7 +4311,8 @@ Add tests proving:
 - topic validation, uniqueness, optimistic concurrency, and deactivation;
 - member activate/manual-add/deactivate/reactivate/rotate/reject transactions,
   including one-time token behavior and key revocation;
-- session creation snapshots the roster and creates exactly four deduped jobs;
+- session creation snapshots the roster and creates exactly five deduped jobs
+  (`publish_brief`, `close_window`, `aggregate`, `judge`, `publish` — #767);
 - each legal state transition, every illegal transition, idempotent repeats,
   cancel, and reopen;
 - member changes after session creation do not alter historical quorum;

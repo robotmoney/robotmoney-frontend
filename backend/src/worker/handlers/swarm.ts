@@ -30,13 +30,30 @@ export async function aggregateSession(payload: Record<string, unknown>): Promis
 }
 
 // Issue #752. Enqueued the same way every other lifecycle step is, so the judge
-// is observable in the swarm lane rather than being an out-of-band script. A
-// disabled judge returns `{ ok: false, error: "judge_disabled" }` — deliberately
-// not a throw: on a live swarm with the judge off, every scheduled tick would
-// otherwise be a failed job.
+// is observable in the swarm lane rather than being an out-of-band script.
+//
+// A DISABLED JUDGE IS A SKIP, NOT A DEGRADATION (issue #767). judgeSessionAdmin
+// answers `{ ok:false, error:"judge_disabled" }` and worker/loop.ts's
+// isDegradedResult() matches exactly that shape — so once #767 put
+// `swarm.judge` on every session's cadence, the SHIPPED DEFAULT (`mode: off`)
+// would have written a `degraded` job_run and retried with exponential backoff
+// on every session before settling. That is a queue full of red for a switch
+// working exactly as designed, and it buries the degraded rows that mean
+// something. `off` is not a transient blip that a retry can fix; it is an
+// operator's answer, and re-asking it four times does not change it.
+//
+// So this seam — the CADENCE, where nobody asked for a judging and the schedule
+// simply fired — translates it into a truthy skip, which loop.ts records as one
+// clean `succeeded` run naming the reason. The HTTP path keeps the 409: there a
+// caller DID ask, and must be told it cannot have one rather than reading a 200
+// as "judged".
 export async function judgeSession(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
-  return await admin.judgeSessionAdmin(sessionId, undefined, "worker");
+  const result = await admin.judgeSessionAdmin(sessionId, undefined, "worker");
+  if (result.ok === false && result.error === "judge_disabled") {
+    return { skipped: "judge_disabled", sessionId };
+  }
+  return result;
 }
 
 export async function publishSession(payload: Record<string, unknown>): Promise<unknown> {

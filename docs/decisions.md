@@ -2881,6 +2881,32 @@ Two things, both reported rather than quietly repaired:
    already-published recommendations are left exactly as they were filed.
    Append-only history is not rewritten to make a later rule look retroactive.
 
+**The switch had nothing to switch until #767, and turning it on must not be
+loud.** #752 shipped the handler, the per-session enqueue endpoint and the admin
+button, but `swarm.judge` was never added to `createSessionAdmin`'s job set — so
+a session was judged only when a human asked for one, and moving the config row
+to `shadow` changed nothing about what the swarm did on its own. The "single
+in-house background worker" the rollout describes did not exist. #767 puts
+`swarm.judge` on the session cadence between `aggregate` and `publish`, which is
+what makes the mode row operable at all.
+
+That exposed a second decision that had to be made at the same time. With the
+judge on every session, the SHIPPED DEFAULT (`off`) would have been the loudest
+thing in the queue: `judgeSessionAdmin` answers `{ ok:false,
+error:"judge_disabled" }`, which is exactly the shape `worker/loop.ts`'s
+`isDegradedResult()` matches, so each tick would have written a `degraded`
+job_run and retried with exponential backoff before settling. `off` is an
+operator's answer, not a transient blip a retry can fix, and a queue of red for
+a control working as designed buries the degraded rows that mean something. So
+the CADENCE seam — `worker/handlers/swarm.ts`, where nobody asked and the
+schedule simply fired — translates that one error into a truthy `{ skipped:
+"judge_disabled" }` and records one clean `succeeded` run naming the reason. The
+HTTP path keeps its 409: there a caller DID ask for a judging and must be told
+it cannot have one rather than reading a 200 as "judged". Sessions scheduled
+before #767 carry only the original four jobs; the remedy is the existing
+idempotent one (re-create the still-`scheduled` session, which inserts the
+missing job and no others), not a migration that rewrites queued work.
+
 **Why thin support is computed, not asked.** Whether a session has enough takes
 behind it is arithmetic against a recorded threshold
 (`swarm_judge_config.min_takes`), so `releaseSafety()` computes it and merges it

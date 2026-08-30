@@ -789,11 +789,20 @@ function isValidUtcDate(date: string): boolean {
 
 // Job kinds + their canonical scoped dedupe key, per docs §4 US-C3/§6.3:
 // `swarm:<session-id>:<action>`.
-const SESSION_JOB_KINDS = ["swarm.publish_brief", "swarm.close_window", "swarm.aggregate", "swarm.publish"] as const;
+//
+// `swarm.judge` is ON THIS LIST (issue #767) and that is the ONLY thing that
+// makes `swarm_judge_config.mode` mean anything on the cadence. The handler,
+// the per-session enqueue endpoint and the admin button all shipped with #752,
+// but nothing SCHEDULED a judging — so a session was judged only when a human
+// asked for one, and flipping the mode to `shadow` changed nothing about what
+// the swarm actually did. The mode switch stays the on/off control; this list
+// is what gives it something to switch.
+const SESSION_JOB_KINDS = ["swarm.publish_brief", "swarm.close_window", "swarm.aggregate", "swarm.judge", "swarm.publish"] as const;
 const JOB_ACTION: Record<(typeof SESSION_JOB_KINDS)[number], string> = {
   "swarm.publish_brief": "publish_brief",
   "swarm.close_window": "close_window",
   "swarm.aggregate": "aggregate",
+  "swarm.judge": "judge",
   "swarm.publish": "publish",
 };
 
@@ -859,13 +868,25 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
         ON CONFLICT (session_id, member_id) DO NOTHING`;
     }
 
-    // Exactly four deduplicated, session-scoped jobs (docs §4 US-C3): dedupe
-    // key `swarm:<session-id>:<action>` so re-creating a still-scheduled
+    // One deduplicated, session-scoped job per lifecycle step (docs §4 US-C3):
+    // dedupe key `swarm:<session-id>:<action>` so re-creating a still-scheduled
     // session never double-enqueues.
+    //
+    // ORDERING, not spacing, is what these instants buy. The queue claims
+    // `ORDER BY priority DESC, run_after` (worker/loop.ts), so a lane draining
+    // serially runs aggregate before judge before publish purely because their
+    // run_after values are ordered — the seconds between them are not a bet on
+    // how long a step takes. The judge reads the AGGREGATED take set and must
+    // land before the session publishes, so it sits one second behind aggregate
+    // and is clamped strictly below publishAt (only `windowClosesAt <
+    // publishAt` is validated above, so a degenerate one-second window must not
+    // push the judge past its own publish).
+    const aggregateAt = new Date(windowClosesAt.getTime() + 1_000);
     const jobTimes: Record<(typeof SESSION_JOB_KINDS)[number], Date> = {
       "swarm.publish_brief": briefOpensAt,
       "swarm.close_window": windowClosesAt,
-      "swarm.aggregate": new Date(windowClosesAt.getTime() + 1_000),
+      "swarm.aggregate": aggregateAt,
+      "swarm.judge": new Date(Math.min(aggregateAt.getTime() + 1_000, publishAt.getTime() - 1)),
       "swarm.publish": publishAt,
     };
     const jobIds: number[] = [];
