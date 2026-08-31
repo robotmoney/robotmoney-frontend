@@ -1270,14 +1270,23 @@ public session page, and serving it unauthenticated would publish through the
 read path exactly what the mode withholds.
 
 **`applied` is a fact on the row, not an inference from the mode.** In `enforce`
-the write onto the session is conditional (see above), so an opinion formed
-while a session was publishing is recorded and does not land. That refusal used
-to be reported on the HTTP response and then lost, which made `mode = 'enforce'`
-no evidence that the session carries the judge's prose. `applyOpinion()` now
-runs BEFORE the INSERT — same transaction, same advisory lock, so atomicity is
+the write onto the session is conditional (see above). `applyOpinion()` runs
+BEFORE the INSERT — same transaction, same advisory lock, so atomicity is
 unchanged — and the row records `applied` and, when false,
-`applied_skipped_reason` (one literal today: `session_no_longer_writable`).
-Migration 0041's CHECK refuses a `shadow` row that claims either.
+`applied_skipped_reason`. Migration 0041's CHECK refuses a `shadow` row that
+claims either.
+
+**A REFUSED ENFORCE JUDGING LEAVES NO ROW AT ALL** (issue #806, correcting the
+#767 text that stood here). It is a rollback, not a row saying so.
+`judgeSessionAdmin` — `judgeSession()`'s only production caller — always passes
+`beforeRecord = transitionWithin(…, "judged", …)`, which runs first inside the
+judge's transaction, under its advisory lock, holding the session row `FOR
+UPDATE`. Its admitted set `{aggregated, judged}` is a strict SUBSET of
+`OPINION_WRITABLE_STATES`, so a session that published mid-flight is refused by
+the GATE; the refusal throws `JudgeRollback`, the transition does not survive,
+no judgement row is inserted, and the soak records nothing. Left there, `applied`
+would restate `mode` for every producible row. It does not, because it is READ
+BACK rather than counted: see below.
 `applied_skipped_reason` is NOT a `fallback_reason`: the opinion is intact and
 was formed from the model, it simply arrived after the door closed.
 

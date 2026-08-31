@@ -191,13 +191,19 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     // APPLY FIRST, THEN RECORD (issue #767). Both are in this one transaction
     // under this one advisory lock, so the pair still commits together or not
     // at all — the ordering changes nothing about atomicity and everything
-    // about what the row can say. `applyOpinion` is CONDITIONAL: it refuses to
-    // write onto a session that published while the model was thinking, and
-    // that refusal used to be reported on the HTTP response and then lost, so a
-    // `mode = 'enforce'` row was not evidence that the session carries the
-    // judge's prose. Recording after the attempt lets `applied` be a fact about
-    // this row rather than an inference from the mode — and keeps the table
-    // strictly append-only, which an UPDATE-after-INSERT would not.
+    // about what the row can say. Recording after the attempt lets `applied` be
+    // a fact about this row rather than an inference from the mode — and keeps
+    // the table strictly append-only, which an UPDATE-after-INSERT would not.
+    //
+    // A REFUSED ENFORCE JUDGING LEAVES NO ROW AT ALL (issue #806). It is worth
+    // being exact about this, because docs/decisions.md said the opposite until
+    // #806 corrected it. `beforeRecord` above IS the refusal for a session that
+    // moved: `judgeSessionAdmin` passes `transitionWithin(…, "judged", …)`,
+    // whose admitted set `{aggregated, judged}` is a strict SUBSET of
+    // OPINION_WRITABLE_STATES, and it holds the row `FOR UPDATE` from there to
+    // COMMIT. So a session that published while the model was thinking is
+    // refused by the GATE — rollback, no transition, no judgement row, nothing
+    // recorded — and `applyOpinion` never sees a state it would refuse.
     //
     // SHADOW NEVER APPLIES. That is the whole point of the mode, and migration
     // 0041's CHECK refuses a shadow row that claims otherwise.

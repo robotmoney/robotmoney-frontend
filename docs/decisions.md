@@ -2920,12 +2920,44 @@ off the public session page.
 Two facts the record was missing, both silences rather than errors:
 
 - **Whether the opinion landed.** In `enforce`, `applyOpinion()` refuses to
-  write onto a session that published while the model was thinking, and that
+  write onto a session that published while the model was thinking, so the
+  judgement is written AFTER the apply attempt — same transaction, same advisory
+  lock, so atomicity is unchanged — and the row records `applied`. Recording
+  after, rather than an UPDATE-after-INSERT, is what keeps the table strictly
+  append-only.
+
+  **A CORRECTION OF RECORD (issue #806).** This entry used to read *"that
   refusal was reported on the HTTP response and then lost — so `mode='enforce'`
-  was never evidence that the session carries the judge's prose. The judgement
-  is now written AFTER the apply attempt (same transaction, same advisory lock),
-  so `applied` is a fact on the row. Recording after, rather than an
-  UPDATE-after-INSERT, is what keeps the table strictly append-only.
+  was never evidence that the session carries the judge's prose"*. That sentence
+  described a row that was never producible, and being wrong in a canonical
+  document is worse than being silent in one: it gets quoted later as a settled
+  finding. What actually happens on the production entry point is a ROLLBACK,
+  not a row.
+
+  `judgeSession()`'s only production caller is `judgeSessionAdmin`, which always
+  supplies `beforeRecord = transitionWithin(…, "judged", …)`. That gate runs
+  FIRST, inside the judge's transaction, under the judge's advisory lock, and it
+  holds the session row `FOR UPDATE` from then until commit. Its admitted set is
+  exactly `{aggregated, judged}` — a strict SUBSET of
+  `OPINION_WRITABLE_STATES`. So a session that published while the model was
+  thinking is refused by the GATE, and a refused gate throws `JudgeRollback`:
+  the transition does not survive, no judgement row is inserted, and the soak
+  records nothing at all. `applyOpinion()` cannot then return false for a
+  state reason, because no state the gate admits is one it refuses.
+
+  The correct account was already written down in the same PR, on
+  `runJudgeStep`'s header in `scripts/lib/swarm/session.ts` — *"the transition is
+  refused, the whole judging transaction rolls back, and the soak records
+  NOTHING"*. Two documents in one change described the same race with opposite
+  outcomes and the wrong one was the canonical doc. Migration 0041's header
+  carries the same #767-era framing; it is applied history and is not rewritten,
+  and this entry is the correction that governs.
+
+  Left as it stood, `applied` would have been redundant with `mode` for every
+  producible row — `applied ≡ mode === 'enforce'`, `applied_skipped_reason`
+  never non-null, and the admin panel's `"recorded, NOT applied (…)"` branch
+  unreachable. #806 makes the column load-bearing instead of documenting the
+  redundancy; see **`applied` is read back, not counted** below.
 - **Whether the response was trimmed.** #773's drop of a `positions[]` entry
   naming a member with no take body left no trace: `source='model'`,
   `fallback_reason` NULL. Counts (`dropped_positions`,
