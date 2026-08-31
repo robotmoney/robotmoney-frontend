@@ -183,7 +183,7 @@
         "public_key": {
           "type": "string",
           "pattern": "^[A-Za-z0-9+/]{43}=$",
-          "description": "Standard padded base64 of a raw 32-byte Ed25519 public key."
+          "description": "Standard padded base64 of a raw 32-byte Ed25519 public key. IT MUST NOT BE ONE OF THE FOURTEEN LOW-ORDER Ed25519 POINT ENCODINGS: for those the single constant signature `0x01 || 0x00*63` verifies over ANY message, so the entry would satisfy every other rule in this schema and the canonicalization spec while proving nothing about its member. A stock ed25519 verify does NOT screen for this — use a library that rejects small-order points (libsodium `ge25519_has_small_order`). The pattern above cannot express it, so it is a SEMANTIC rule: see verifier_invariants in consensus-receipt.canonicalization.json, the published LOW_ORDER_ED25519_POINT_ENCODINGS table, and receiptSemanticErrors(), which applies it."
         },
         "canonical_submission": {
           "type": "string",

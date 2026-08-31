@@ -1796,6 +1796,50 @@ re-register or leave and the receipt keeps verifying exactly as it did on the
 day it was published. A signing key that is no longer registered at all is a
 refusal, not a receipt carrying an unverifiable signature.
 
+**What `verified: true` therefore means, and what it does not.** It means *each
+carried `canonical_submission` was signed by the key carried beside it* — not
+"member X endorses this". That is the deliberate consequence of never consulting
+the roster: the receipt attests to a **key**, and binding that key to a person
+was the roster's job at signing time rather than the receipt's forever after.
+
+**And it is why a key compromise has to be handled BEFORE publication.** There
+is no post-publication remedy in this design and that is worth stating plainly:
+revoking a key changes nothing a reader can see, because verification reads the
+embedded key; the row is append-only and UPDATE-refusing; and the anchored
+digest commits to those exact bytes, so a receipt cannot even be annotated.
+**If a member key is believed compromised, receipts for the affected sessions
+must not be published at all.** Adding a revocation list later would change what
+`verified` MEANS for receipts already anchored under schema 1.0, which is a
+major bump rather than an amendment. Published as
+`assembler_obligations.key_compromise_has_no_remedy`.
+
+**The embedded key must not be a low-order Ed25519 point, and that rule is in
+the PUBLISHED pin rather than only in this repo.** For the fourteen low-order
+encodings the single constant `0x01 || 0x00*63` verifies over any message, so an
+entry carrying one satisfies every structural, binding and arithmetic rule in
+the receipt while proving nothing about its member. This repo has refused such
+keys at decode time since issue #789 — but that gate is
+`backend/src/lib/signing.ts`, which `robotmoney-core` cannot import and does not
+run, so a verifier written to the pin with a stock ed25519 library would have
+accepted one. The blacklist therefore **lives in the contract**
+(`LOW_ORDER_ED25519_POINT_ENCODINGS`, seven masked encodings standing for the
+fourteen), `signing.ts` reads it from there so the two can never drift, and
+`receiptSemanticErrors()` — the one verifier function a cross-repo consumer
+imports — applies it. Stated in `verifier_invariants` and in the schema's
+`public_key` description, both naming libsodium's `ge25519_has_small_order` as
+the check a consumer needs.
+
+**These invariants only mean anything against the anchored digest.**
+`canonicalizeSubmission` covers a submission's own fields — not `session_id`,
+`created_at`, `prompt_hash`, `inputs_digest`, or the judge block — so **no
+analyst signature cryptographically binds the receipt it sits in**. A document
+that reuses published signatures under a fabricated session passes every
+invariant the pin lists. Only the keccak256 digest `robotmoney-core` anchors
+distinguishes the real receipt from that forgery, which makes checking it a
+consumer obligation rather than a nicety. Published as the two `SCOPE, NOT AN
+INVARIANT` entries in `verifier_invariants` so a cross-repo implementer cannot
+read the list as a self-contained procedure.
+
 **Read-time verification is three checks, and one failure fails the whole
 receipt.** Mirroring `toVerifiedTake()`, which recomputes rather than trusting a
 stored `verified` column, and extending it to what an aggregate adds: (1) every

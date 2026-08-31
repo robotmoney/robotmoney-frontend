@@ -88,6 +88,24 @@ export const RECEIPT_CANONICAL_BUCKET_ORDER: readonly string[];
 /** A whole allocation is exactly this many basis points. */
 export const BPS_DENOMINATOR: number;
 
+/**
+ * The seven masked encodings of the fourteen low-order Ed25519 points, as
+ * lowercase 32-byte hex with byte 31's sign bit cleared. Part of the published
+ * pin: a consensus receipt embeds analyst public keys, and for one of these the
+ * constant signature `0x01 || 0x00*63` verifies over any message.
+ */
+export const LOW_ORDER_ED25519_POINT_ENCODINGS: readonly string[];
+
+/**
+ * True when `bytes` is one of the fourteen low-order Ed25519 point encodings.
+ * A non-32-byte input is `false` — "not one of the fourteen", NOT "usable";
+ * validate the shape first.
+ */
+export function isLowOrderEd25519PublicKeyBytes(bytes: Uint8Array): boolean;
+
+/** The same predicate over standard padded base64, as a receipt carries it. */
+export function isLowOrderEd25519PublicKey(publicKeyB64: string): boolean;
+
 export function compareCodePoints(a: string, b: string): number;
 export function participationBps(submitted: number, active: number): number;
 /**

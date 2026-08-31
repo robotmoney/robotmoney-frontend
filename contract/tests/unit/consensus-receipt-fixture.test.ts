@@ -29,9 +29,12 @@ import {
   RECEIPT_SCHEMA_VERSION,
   RECEIPT_STANCE_KEYS,
   RECEIPT_TRAILING_NEWLINE,
+  LOW_ORDER_ED25519_POINT_ENCODINGS,
   bucketSharesToBps,
   canonicalizeReceipt,
   compareCodePoints,
+  isLowOrderEd25519PublicKey,
+  isLowOrderEd25519PublicKeyBytes,
   participationBps,
   receiptSemanticErrors,
   validateReceipt,
@@ -866,5 +869,68 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect(spec.valid_fixture_digest).toBeUndefined();
     expect(spec.digest_algorithm).toBe("keccak256");
     expect(spec.digest_note).toContain("CONSUMER OBLIGATION");
+  });
+
+  // ── the low-order key rule, which is the pin's only crypto obligation ─────
+
+  test("a LOW-ORDER embedded public_key is refused by the shipped verifier, and the rule is published", () => {
+    // THE VULNERABILITY THIS CLOSES. For the fourteen low-order Ed25519 point
+    // encodings the single constant signature `0x01 || 0x00*63` verifies over
+    // ANY message. The producing repo has refused such keys at decode time
+    // since issue #789 — but that gate is backend-only, and
+    // `receiptSemanticErrors` is the one verifier function robotmoney-core
+    // imports. Without the rule HERE, a verifier written to the published pin
+    // with a stock ed25519 library accepts an entry that proves nothing about
+    // its member, and every other invariant passes over it.
+    expect(LOW_ORDER_ED25519_POINT_ENCODINGS).toHaveLength(7);
+
+    const encode = (hex: string, signBit: number) => {
+      const bytes = Uint8Array.from(hex.match(/../g)!.map((h) => parseInt(h, 16)));
+      bytes[31] = ((bytes[31] as number) & 0x7f) | signBit;
+      return { bytes, b64: btoa(String.fromCharCode(...bytes)) };
+    };
+
+    // Seven y-values x two settings of byte 31's sign bit = the fourteen
+    // encodings, every one of them detected through BOTH entry points.
+    let checked = 0;
+    for (const hex of LOW_ORDER_ED25519_POINT_ENCODINGS) {
+      for (const signBit of [0x00, 0x80]) {
+        const { bytes, b64 } = encode(hex, signBit);
+        expect(isLowOrderEd25519PublicKeyBytes(bytes)).toBe(true);
+        expect(isLowOrderEd25519PublicKey(b64)).toBe(true);
+        // Each one satisfies the SCHEMA's base64 pattern — which is exactly why
+        // this has to be a semantic rule: the shape cannot express it.
+        expect(new RegExp(schema.definitions.analyst_signature.properties.public_key.pattern).test(b64)).toBe(true);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(14);
+
+    // AND THE VERIFIER ACTUALLY APPLIES IT, over the committed fixture — the
+    // exact substitution that used to come back clean.
+    expect(receiptSemanticErrors(valid, spec)).toEqual([]);
+    const attacked = structuredClone(valid);
+    attacked.analyst_signatures[0].public_key = encode(LOW_ORDER_ED25519_POINT_ENCODINGS[1]!, 0x00).b64;
+    // Still schema-valid: the shape is untouched, only the point is bad.
+    expect(validateReceipt(attacked, schema)).toEqual([]);
+    expect(receiptSemanticErrors(attacked, spec).join(" ")).toContain("LOW-ORDER");
+
+    // An honest key is NOT refused — the rule must not over-reject.
+    expect(isLowOrderEd25519PublicKey(valid.analyst_signatures[0].public_key)).toBe(false);
+    // Malformed input answers "not one of the fourteen", never "usable".
+    expect(isLowOrderEd25519PublicKey("not base64!!")).toBe(false);
+    expect(isLowOrderEd25519PublicKeyBytes(new Uint8Array(31))).toBe(false);
+
+    // PUBLISHED, not merely implemented: core reads these two documents.
+    const invariants = spec.verifier_invariants.join(" ");
+    expect(invariants).toContain("LOW-ORDER");
+    expect(invariants).toContain("ge25519_has_small_order");
+    expect(schema.definitions.analyst_signature.properties.public_key.description).toContain("LOW-ORDER");
+
+    // The two scope statements, so the list cannot be read as a self-contained
+    // procedure: nothing binds the receipt to its signatures except the anchor.
+    expect(invariants).toContain("SCOPE, NOT AN INVARIANT");
+    expect(invariants).toContain("anchored");
+    expect(spec.assembler_obligations.key_compromise_has_no_remedy).toContain("must not be published");
   });
 });

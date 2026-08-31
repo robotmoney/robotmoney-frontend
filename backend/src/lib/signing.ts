@@ -3,6 +3,10 @@
 // server only ever verifies — it never holds a private key. Web Crypto Ed25519
 // (supported by Bun). Keys/signatures are exchanged as base64 of raw bytes.
 import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmission } from "@robotmoney/contract";
+// The low-order Ed25519 blacklist (issue #789) lives in the contract because a
+// consensus receipt embeds analyst public keys and a cross-repo verifier has to
+// apply the same rule — see the comment above isLowOrderEd25519PublicKey below.
+import { isLowOrderEd25519PublicKeyBytes } from "@robotmoney/contract";
 
 const ALG = { name: "Ed25519" } as const;
 
@@ -60,15 +64,14 @@ function bytesToB64(bytes: ArrayBuffer | Uint8Array): string {
  * is [k]B in the prime-order subgroup, so reaching one of these would mean
  * hitting a set of 8 points out of ~2^252. The honest-key tests assert it.
  */
-const LOW_ORDER_ED25519_POINTS: readonly string[] = [
-  "0000000000000000000000000000000000000000000000000000000000000000",
-  "0100000000000000000000000000000000000000000000000000000000000000",
-  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
-  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
-  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
-  "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
-  "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
-].map((hex) => hex.toLowerCase());
+// THE TABLE ITSELF NOW LIVES IN THE CONTRACT, and this file reads it from
+// there (issue #754). It moved because a consensus receipt EMBEDS an analyst's
+// public key and is verified by robotmoney-core, which cannot import this file
+// — so `receiptSemanticErrors` has to apply the same rule, and a security
+// blacklist spelled in two places is two blacklists that drift. The derivation
+// and the reasoning above are unchanged and stay here, where the gate is;
+// `contract/src/consensus-receipt.js` carries the seven masked encodings and
+// the masked comparison, and is the copy the published pin points at.
 
 /**
  * True when `bytes` is one of the 14 low-order Ed25519 point encodings.
@@ -78,11 +81,7 @@ const LOW_ORDER_ED25519_POINTS: readonly string[] = [
  * screens stored rows against the same table this rejects new keys with.
  */
 export function isLowOrderEd25519PublicKey(bytes: Uint8Array): boolean {
-  if (bytes.length !== 32) return false;
-  const masked = Uint8Array.from(bytes);
-  masked[31] = (masked[31] as number) & 0x7f;
-  const hex = Buffer.from(masked).toString("hex");
-  return LOW_ORDER_ED25519_POINTS.includes(hex);
+  return isLowOrderEd25519PublicKeyBytes(bytes);
 }
 
 /**

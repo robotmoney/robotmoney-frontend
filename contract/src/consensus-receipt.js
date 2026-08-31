@@ -567,6 +567,100 @@ export function bucketSharesToBps(shares, bucketOrder) {
 // therefore it belongs here in the shipped verifier rather than in the
 // assembler's private write-time assertions.
 
+// ── The embedded analyst key must not be a low-order point ──────────────────
+// THIS IS PART OF THE PUBLISHED PIN, NOT A BACKEND DETAIL, and it is here
+// because `receiptSemanticErrors` is the one verifier function a cross-repo
+// consumer imports. The producing repo has rejected low-order keys at decode
+// time since issue #789 — but that gate lives in
+// backend/src/lib/signing.ts, which robotmoney-core cannot import and does not
+// run. A verifier written to the published `verifier_invariants` with a stock
+// ed25519 library would therefore accept an entry whose `public_key` is one of
+// these encodings, and for those the single constant signature
+// `0x01 || 0x00*63` verifies over ANY message — so every other invariant in
+// this file could pass over a submission nobody signed. That is issue #789
+// re-opened at the repository boundary, which is exactly the boundary this
+// receipt exists to cross.
+//
+// SEVEN Y-VALUES, FOURTEEN ENCODINGS. Byte 31's high bit is the x-sign, and
+// both settings of it decode to a low-order point for every entry, so the bit
+// is masked before comparing and each row below stands for two accepted
+// encodings. The list is the small-order subgroup plus the three non-canonical
+// y >= p spellings; it is the same set libsodium's
+// `crypto_core_ed25519_is_valid_point` / `ge25519_has_small_order` screen.
+//
+// NO HONEST KEY CAN COLLIDE. A keypair's public half is [k]B in the
+// prime-order subgroup, so reaching one of these would mean hitting 8 points
+// out of ~2^252.
+export const LOW_ORDER_ED25519_POINT_ENCODINGS = Object.freeze([
+  "0000000000000000000000000000000000000000000000000000000000000000",
+  "0100000000000000000000000000000000000000000000000000000000000000",
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+]);
+
+const B64_STANDARD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/**
+ * Standard padded base64 to bytes, or null. Hand-rolled rather than `atob` so
+ * this module keeps its zero-dependency, zero-ambient-API discipline and so
+ * malformed input is a null rather than a throw inside a verifier.
+ */
+function standardBase64ToBytes(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length % 4 !== 0) return null;
+  let pad = 0;
+  while (pad < 2 && value[value.length - 1 - pad] === "=") pad += 1;
+  let acc = 0;
+  let bits = 0;
+  let written = 0;
+  const out = new Uint8Array((value.length / 4) * 3 - pad);
+  for (let i = 0; i < value.length - pad; i++) {
+    const digit = B64_STANDARD.indexOf(value[i]);
+    if (digit < 0) return null;
+    acc = (acc << 6) | digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[written] = (acc >> bits) & 0xff;
+      written += 1;
+    }
+  }
+  return written === out.length ? out : null;
+}
+
+/**
+ * True when `bytes` is one of the fourteen low-order Ed25519 point encodings.
+ *
+ * ANSWERS ONLY THAT ONE QUESTION. A non-32-byte input is `false` — "not one of
+ * the fourteen" — and NOT a statement that the key is usable. Shape validation
+ * is the caller's separate obligation, and both callers do it first:
+ * `receiptSemanticErrors` below checks the schema's base64 shape before asking,
+ * and the producer's `canonicalPublicKeyBytes` (backend/src/lib/signing.ts)
+ * decodes to exactly 32 bytes before asking. Ordering it the other way would
+ * let a malformed key answer "not low order" and be waved through.
+ */
+export function isLowOrderEd25519PublicKeyBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length !== 32) return false;
+  let hex = "";
+  for (let i = 0; i < 32; i++) {
+    const byte = i === 31 ? bytes[31] & 0x7f : bytes[i];
+    hex += byte.toString(16).padStart(2, "0");
+  }
+  return LOW_ORDER_ED25519_POINT_ENCODINGS.includes(hex);
+}
+
+/**
+ * The same predicate over a receipt's `public_key` as carried: standard padded
+ * base64 of a raw 32-byte key. Malformed base64 is `false` for the reason given
+ * above — it is not low-order, it is not a key at all, and that is a different
+ * error the caller reports separately.
+ */
+export function isLowOrderEd25519PublicKey(publicKeyB64) {
+  return isLowOrderEd25519PublicKeyBytes(standardBase64ToBytes(publicKeyB64));
+}
+
 const round8 = (value) => Math.round(value * 1e8) / 1e8;
 
 /**
@@ -671,6 +765,35 @@ export function receiptSemanticErrors(receipt, spec) {
   if (receipt.judge.mode !== "enforce") {
     errors.push(`judge: mode is "${receipt.judge.mode}", not "enforce" — the opinion was recorded but never adopted by the session`);
   }
+
+  // ── The embedded key is a usable Ed25519 key, not a low-order point ───────
+  // WITHOUT THIS, EVERY OTHER INVARIANT IN THIS FUNCTION IS BYPASSABLE. For any
+  // of the fourteen encodings the single constant signature `0x01 || 0x00*63`
+  // verifies over ANY message, so an entry carrying one has a signature that
+  // "verifies" over a `canonical_submission` its named member never wrote —
+  // and the submission-binding, stance and weight recomputations below all pass
+  // over it, because they read the carried string rather than asking who signed
+  // it. The producing repo has refused these keys at decode time since #789,
+  // but that gate is backend-only; this is the same rule stated where a
+  // cross-repo verifier actually runs. See verifier_invariants in
+  // consensus-receipt.canonicalization.json.
+  //
+  // SHAPE FIRST, THEN THE POINT. `isLowOrderEd25519PublicKey` answers only "is
+  // it one of the fourteen", so a malformed key would otherwise come back
+  // "false" and be waved through as fine.
+  receipt.analyst_signatures.forEach((entry, i) => {
+    if (typeof entry.public_key !== "string" || !/^[A-Za-z0-9+\/]{43}=$/.test(entry.public_key)) {
+      errors.push(
+        `analyst_signatures/${i}: public_key is not standard padded base64 of a raw 32-byte Ed25519 key`,
+      );
+      return;
+    }
+    if (isLowOrderEd25519PublicKey(entry.public_key)) {
+      errors.push(
+        `analyst_signatures/${i}: public_key is a LOW-ORDER Ed25519 point — one constant signature verifies over any message for these, so this entry proves nothing about its member`,
+      );
+    }
+  });
 
   // ── Each carried submission belongs to the entry it sits in ───────────────
   // assembleConsensusReceipt asserts this at WRITE time; nothing asserted it on

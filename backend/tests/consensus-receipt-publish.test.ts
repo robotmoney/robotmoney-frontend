@@ -300,6 +300,54 @@ test("KEY ROTATION: the receipt embeds the key that SIGNED, and keeps verifying 
   expect(verdict!.signatures.every((s) => s.verified)).toBe(true);
 });
 
+test("a receipt carrying a LOW-ORDER embedded key is served UNVERIFIED, with the reason named", async () => {
+  // SEC-788-001, at the boundary an anchored artifact is actually read through.
+  // For the fourteen low-order Ed25519 encodings the single constant signature
+  // `0x01 || 0x00*63` verifies over ANY message, so an entry carrying one would
+  // otherwise satisfy every structural and arithmetic rule in the receipt while
+  // proving nothing about its member.
+  //
+  // ASSEMBLY CANNOT PRODUCE ONE — the producer has refused these keys at decode
+  // time since #789 — so the row is INSERTed directly, which is the only way to
+  // reach the read path with such a receipt and therefore the only way to prove
+  // the read path itself refuses it rather than inheriting the write-time gate.
+  const { sessionId } = await judgedSession("reclowkey", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
+  const honest = await publishConsensusReceipt(sessionId);
+
+  const other = await judgedSession("reclowkey2", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
+  const swapped = JSON.parse(JSON.stringify(honest.receipt));
+  swapped.session_id = other.sessionId;
+  swapped.subject_id = other.subjectId;
+  // The neutral element, y = 1 — the encoding the forgery constant works against.
+  const neutral = new Uint8Array(32);
+  neutral[0] = 1;
+  const neutralB64 = btoa(String.fromCharCode(...neutral));
+  expect(neutralB64).toBe("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+  // It still satisfies the SCHEMA's base64 pattern — which is the whole point:
+  // the shape cannot express this rule, so it has to be a semantic one.
+  expect(/^[A-Za-z0-9+/]{43}=$/.test(neutralB64)).toBe(true);
+  swapped.analyst_signatures[0].public_key = neutralB64;
+
+  const [judgement] = (await sql`
+    SELECT id FROM swarm_session_judgements WHERE session_id = ${other.sessionId} ORDER BY id DESC LIMIT 1`) as any[];
+  const [version] = (await sql`SELECT version FROM swarm_sessions WHERE id = ${other.sessionId}`) as any[];
+  await sql`
+    INSERT INTO swarm_consensus_receipts (session_id, subject_id, schema_version, judgement_id, session_version, receipt, canonical_bytes)
+    VALUES (${other.sessionId}, ${other.subjectId}, '1.0', ${judgement.id}, ${Number(version.version)},
+            ${sql.json(swapped)}, ${honest.canonicalBytes})`;
+
+  const res = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: other.sessionId }))) as { status: number; body: any };
+  expect(res.status).toBe(200);
+  expect(res.body.verified).toBe(false);
+  // TWO independent refusals, and both are load-bearing. The shipped verifier
+  // `receiptSemanticErrors` — the one function robotmoney-core imports — names
+  // the point directly, which is the half a cross-repo consumer inherits...
+  expect(res.body.unverifiedReasons.join(" ")).toContain("LOW-ORDER");
+  // ...and the signature check refuses independently, because
+  // verifyDetachedSignature decodes through the same #789 gate.
+  expect(res.body.signatures.find((x: any) => x.verified === false)).toBeDefined();
+});
+
 test("a receipt whose payload no longer matches its published bytes is SERVED as unverified, not as valid", async () => {
   // Built by INSERTING a receipt whose stored payload disagrees with its stored
   // bytes, because the honest path cannot produce one: migration 0042 refuses
