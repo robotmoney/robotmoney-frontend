@@ -33,7 +33,7 @@
 // and Sharpe render as "not yet published" instead of borrowing the single
 // spot sharePrice: one number is not a series.
 import { api, ROUTES } from "../../lib/api.js";
-import { PALETTE, SERIES } from "../../lib/chart-theme.js";
+import { PALETTE, SERIES, CATEGORICAL } from "../../lib/chart-theme.js";
 
 // ── the reference dataset ───────────────────────────────────────────────────
 // Daily USDC supply APY at the three venues the fixed-income sleeve lends
@@ -375,13 +375,69 @@ export function registerVaultView(Alpine) {
         };
       });
     },
-    // The four fan/legend rows, phrased the way the page talks about them.
+    // The legend rows, phrased the way the page talks about them.
     sleeveState(s) {
       if (s.held == null) return "—";
       return s.holding ? "holding" : "held at zero";
     },
-    sleeveFanLine(s) {
-      return `${this.fmtPctTrim(s.target)} allocation · ${this.sleeveState(s)}`;
+
+    // ── the allocation rail ─────────────────────────────────────────────────
+    // One hue per sleeve, taken from the shared chart palette so a sleeve keeps
+    // its colour wherever it appears. Falls through to the categorical order for
+    // a sleeve the framework adds later, rather than repeating a hue.
+    sleeveHue(key) {
+      const fixed = {
+        [FIXED_INCOME_KEY]: SERIES.emerald,
+        "protocol-tokens": SERIES.sand,
+        rwa: SERIES.slate,
+        "agent-tokens": PALETTE.accent,
+      };
+      if (fixed[key]) return fixed[key];
+      let h = 0;
+      for (const ch of String(key)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      return CATEGORICAL[h % CATEGORICAL.length];
+    },
+    // Cumulative target boundaries, so a tick sits where each sleeve's target
+    // ends. The last one is omitted: a tick at 100% is the end of the bar.
+    targetTicks() {
+      const out = [];
+      let cum = 0;
+      const rows = this.sleeves();
+      rows.forEach((s, i) => {
+        cum += Number(s.target) || 0;
+        if (i < rows.length - 1 && cum > 0 && cum < 100) out.push(Number(cum.toFixed(2)));
+      });
+      return out;
+    },
+    // Funded sleeves get a row each. Everything held at zero collapses into one
+    // muted row — four separate "0%" rows made the empty sleeves the loudest
+    // thing in the hero, which is the opposite of what they are.
+    railRows() {
+      const rows = this.sleeves();
+      const funded = rows.filter((s) => s.holding);
+      const empty = rows.filter((s) => !s.holding);
+      const out = funded.map((s) => ({
+        key: s.key,
+        name: s.name,
+        muted: false,
+        line: `${this.fmtPct1(s.held)} held · ${this.fmtPctTrim(s.target)} allocation`,
+      }));
+      if (empty.length) {
+        out.push({
+          key: "held-at-zero",
+          name: empty.map((s) => s.name).join(", "),
+          muted: true,
+          line: "held at zero",
+        });
+      }
+      return out;
+    },
+    railLabel() {
+      const rows = this.sleeves();
+      if (!rows.length) return "Allocation unavailable";
+      return rows
+        .map((s) => `${s.name} ${this.fmtPct1(s.held)} held against a ${this.fmtPctTrim(s.target)} allocation`)
+        .join("; ");
     },
     // A target weight, at one decimal but with a trailing ".0" trimmed: 25%,
     // 14.3%, 50%. Held weights keep the decimal (100.0%, 0.0%) because a
@@ -462,6 +518,19 @@ export function registerVaultView(Alpine) {
     },
     tvlUsd() { return this.economics?.tvlUsd; },
 
+    // NAV per share is a POINT-IN-TIME value and vault-economics already
+    // returns it, so it publishes now. Only drawdown and Sharpe wait on the
+    // vault_share_price_history route, because those need the series this one
+    // number cannot stand in for.
+    navPerShare() {
+      const p = this.economics?.sharePrice;
+      return p == null ? null : Number(p);
+    },
+    navPerShareLabel() {
+      const p = this.navPerShare();
+      return p == null ? "not yet published" : "$" + p.toFixed(4);
+    },
+
     // ── risk ────────────────────────────────────────────────────────────────
     // Concentration, computed from the live balances: what one venue failing
     // would cost. Not a drawdown percentage — a venue failing is the risk the
@@ -502,73 +571,10 @@ export function registerVaultView(Alpine) {
 
     // ── charts (hand-authored inline SVG; no chart dependency) ──────────────
     draw() {
-      this.drawFan();
       this.drawYield();
       this.drawValue();
     },
 
-    // The mandate fan: one deposit splitting into four sleeves. Drawn as
-    // MECHANISM, not as weight — a donut of today's 95/5/0/0 is one slice and
-    // an 18-degree sliver, which would undercut the four-sleeve story on sight
-    // and break again every time the mandate moves. Under 640px the labels
-    // would render at ~6px, so the CSS hides this and shows the same four rows
-    // as a list instead.
-    drawFan() {
-      const host = this.$refs.fan;
-      if (!host) return;
-      host.replaceChildren();
-      const rows = this.sleeves();
-      if (!rows.length) return;
-
-      const X0 = 196, X1 = 404, CY = 150;
-      const step = 72;
-      const top = CY - ((rows.length - 1) * step) / 2;
-
-      host.appendChild(svg("rect", {
-        x: 18, y: CY - 33, width: 178, height: 66,
-        fill: PALETTE.surface, stroke: PALETTE.borderLight, "stroke-width": 1,
-      }));
-      host.appendChild(svg("rect", { x: 18, y: CY - 33, width: 3, height: 66, fill: SERIES.emerald }));
-      host.appendChild(label(svg("text", {
-        x: 40, y: CY - 6, fill: PALETTE.text,
-        "font-family": "'JetBrains Mono',monospace", "font-size": 15, "font-weight": 700,
-      }), "1 USDC"));
-      host.appendChild(label(svg("text", {
-        x: 40, y: CY + 16, fill: PALETTE.textMuted,
-        "font-family": "'JetBrains Mono',monospace", "font-size": 11, "letter-spacing": "0.1em",
-      }), "DEPOSIT"));
-
-      rows.forEach((s, i) => {
-        const y = top + i * step;
-        const dimmed = s.target === 0;
-        const stroke = s.holding ? SERIES.emerald : (dimmed ? PALETTE.borderLight : PALETTE.textMuted);
-        const path = svg("path", {
-          d: `M${X0},${CY} C${X0 + 104},${CY} ${X1 - 104},${y} ${X1},${y}`,
-          fill: "none", stroke, "stroke-width": 2,
-        });
-        if (dimmed) path.setAttribute("stroke-dasharray", "5 4");
-        host.appendChild(path);
-        host.appendChild(svg("rect", { x: X1, y: y - 5, width: 10, height: 10, fill: stroke }));
-        host.appendChild(label(svg("text", {
-          x: X1 + 24, y: y - 1, fill: dimmed ? PALETTE.textMuted : PALETTE.text,
-          "font-family": "'Space Grotesk',sans-serif", "font-size": 16, "font-weight": 700,
-        }), s.name));
-        host.appendChild(label(svg("text", {
-          x: X1 + 24, y: y + 18, fill: PALETTE.textMuted,
-          "font-family": "'JetBrains Mono',monospace", "font-size": 11.5,
-        }), this.sleeveFanLine(s)));
-      });
-      host.setAttribute("viewBox", `0 0 728 ${top * 2 + (rows.length - 1) * step}`);
-      host.setAttribute("aria-label", "One USDC deposit allocated across "
-        + rows.map((s) => `${s.name} at a ${this.fmtPctTrim(s.target)} allocation, ${this.sleeveState(s)}`).join("; ")
-        + ".");
-    },
-
-    // What it pays: the blend drawn INSIDE the range of its own three venues,
-    // with Aave as the named benchmark. Four overlapping rate lines is
-    // spaghetti and two of the four are indistinguishable to normal vision;
-    // the band says the honest thing instead, which is that an average is
-    // always inside its inputs.
     drawYield() {
       const host = this.$refs.yield;
       const tip = this.$refs.yieldTip;

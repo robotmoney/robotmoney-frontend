@@ -11,7 +11,7 @@
 
      Sections, in the order RM-105 fixes them: What it pays · Risk · Value over
      time · Allocation · Inside each sleeve · Holdings · Daily series, under a
-     hero carrying the mandate fan and the stat rail.
+     hero carrying the allocation rail and the stat rail.
 
      id="allocation" on the Allocation section is load-bearing:
      /vault#allocation is linked from the skill, the home page and the swarm's
@@ -26,7 +26,7 @@
 
   <!-- ── HERO: the product story first ─────────────────────────────────── -->
   <div class="vp__head">
-    <p class="vp__eyebrow">Robot Money · ERC-4626 · Base</p>
+    <p class="vp__eyebrow">Robot Money Vaults · Core · <span class="vp__ticker">rmUSDC</span> · Base</p>
     <h1 class="vp__title">One deposit,<br />four sleeves</h1>
     <p class="vp__lede">
       One USDC deposit, allocated across four sleeves and withdrawable at NAV.
@@ -34,30 +34,32 @@
       the token page.
     </p>
 
-    <!-- The mandate fan. Drawn as mechanism, not as weight: a donut of today's
-         95/5/0/0 is one slice and an 18-degree sliver. Under 640px the SVG is
-         hidden and the same four rows render as a list. -->
-    <div class="vp__fan">
-      <svg x-ref="fan" viewBox="0 0 728 292" role="img" aria-label="One USDC deposit allocated across four sleeves"></svg>
-      <p class="vp__fan-dep">One deposit, allocated across</p>
-      <ul class="vp__fan-list">
-        <template x-for="s in sleeves()" :key="s.key">
-          <li :class="s.target === 0 ? 'dim' : ''">
-            <i :class="s.holding ? 'vp__mark--held' : (s.target === 0 ? 'vp__mark--none' : 'vp__mark--zero')"></i>
-            <div>
-              <b x-text="s.name"></b>
-              <span x-text="sleeveFanLine(s)"></span>
-            </div>
+    <!-- The allocation rail: composition, the form a factsheet reader expects.
+         It carries HELD as the fill with the target as a tick, the same grammar
+         the Allocation section uses further down — an earlier draft filled it to
+         the target, so the first thing a reader saw disagreed with the rest of
+         the page. Scales to any number of funded sleeves without redrawing. -->
+    <div class="vp__rail">
+      <div class="vp__rail-bar" role="img" :aria-label="railLabel()">
+        <template x-for="s in sleeves().filter((x) => x.held > 0)" :key="s.key">
+          <i class="vp__rail-seg" :style="`width:${s.held}%;background:${sleeveHue(s.key)}`"></i>
+        </template>
+        <template x-for="t in targetTicks()" :key="t">
+          <i class="vp__rail-tick" :style="`left:${t}%`"></i>
+        </template>
+      </div>
+      <ul class="vp__rail-key">
+        <template x-for="s in railRows()" :key="s.key">
+          <li :class="s.muted ? 'dim' : ''">
+            <i :style="s.muted ? '' : `background:${sleeveHue(s.key)}`" :class="s.muted ? 'hatch' : ''"></i>
+            <b x-text="s.name"></b>
+            <span x-text="s.line"></span>
           </li>
         </template>
       </ul>
-      <p class="vp__fan-empty" x-show="!loading && !sleeves().length" x-cloak>
+      <p class="vp__rail-empty" x-show="!loading && !sleeves().length" x-cloak>
         Allocation weights are unavailable right now.
       </p>
-      <div class="vp__fan-key">
-        <span><i class="vp__mark--held"></i>Holding</span>
-        <span><i class="vp__mark--zero"></i>Held at zero</span>
-      </div>
     </div>
 
     <!-- Stat rail. Yield and vault TVL are live; net-vs-Aave is drawn from the
@@ -69,7 +71,7 @@
         <span class="vp__stat-sub">before fees <sup>1</sup><span x-show="economics?.apy7d == null" x-cloak> · reference series</span></span>
       </div>
       <div class="vp__stat">
-        <dt>Net vs Aave · 1yr</dt>
+        <dt>Net vs Aave · 1-year hold</dt>
         <dd class="pos" x-text="fmtPp(netVsAave())">—</dd>
         <span class="vp__stat-sub">after the withdrawal fee <sup>2</sup></span>
       </div>
@@ -80,8 +82,8 @@
       </div>
       <div class="vp__stat">
         <dt>NAV / share</dt>
-        <dd class="pend">not yet published</dd>
-        <span class="vp__stat-sub">see note 6</span>
+        <dd :class="navPerShare() == null ? 'pend' : ''" x-text="navPerShareLabel()">—</dd>
+        <span class="vp__stat-sub" x-text="navPerShare() == null ? 'see note 6' : 'live · what one share redeems for'">—</span>
       </div>
     </dl>
 
@@ -120,18 +122,19 @@
     </div>
     <p class="vp__sub">
       Fixed income is spread equally across three lending venues, so the vault pays
-      their blend. The shaded band is <b>what each venue paid on its own</b>. The
-      vault sits inside it, never above it.
+      their blend. The shaded band is <b>what each venue paid on its own</b>, and an
+      equal-weight blend always falls inside that range. <b>These are the venues'
+      published rates, not this vault's realized return.</b><sup>4</sup>
     </p>
 
     <div class="vp__answer">
       <div class="vp__answer-fig"><small>The vault · before fees</small><span x-text="fmtPct(blendNow())"></span></div>
-      <div class="vp__answer-fig net"><small>After the withdrawal fee</small><span x-text="fmtPct(blendNetNow())"></span></div>
+      <div class="vp__answer-fig"><small>After the withdrawal fee</small><span x-text="fmtPct(blendNetNow())"></span></div>
       <div class="vp__answer-fig ref"><small>Aave V3 USDC on its own</small><span x-text="fmtPct(aaveNow())"></span></div>
       <p class="vp__answer-copy">
         Ahead of Aave on <strong><span x-text="daysAheadOfAave()"></span> of <span x-text="trackRecordDays"></span> days</strong>,
-        behind Morpho on <span x-text="daysBehindMorpho()"></span> of them. The vault does not try to pick the venue that
-        will pay most. It holds all three so that no single one can take everything.<sup>3</sup>
+        and behind Morpho on <span x-text="daysBehindMorpho()"></span> of them. The vault does not try to pick the venue
+        that will pay most. It holds all three so that no single one can take everything.<sup>3</sup>
       </p>
     </div>
 
@@ -143,7 +146,6 @@
       <span><i class="vp__rule--vault"></i>Vault · equal-weight blend</span>
       <span><i class="vp__rule--aave"></i>Aave V3 USDC · benchmark</span>
       <span><i class="band"></i>Range of the three venues</span>
-      <span>7-day trailing mean <sup>4</sup></span>
     </div>
 
     <div class="vp__tblwrap vp__tblwrap--spaced">
@@ -184,9 +186,9 @@
         <dt>Largest single venue</dt>
         <dd x-text="fmtPct1(largestVenuePct())">—</dd>
         <p>
-          One venue failing costs
+          One venue failing puts up to
           <span x-text="largestVenuePct() != null ? fmtPct1(largestVenuePct()) : 'its share'"></span>
-          of principal. Holding one venue on its own would cost all of it.
+          of principal at risk. Holding one venue on its own would put all of it there.
         </p>
       </div>
       <div class="vp__risk-cell">
@@ -205,12 +207,41 @@
       </div>
     </dl>
     <p class="vp__sub vp__sub--after">
-      <b>Track record is <span x-text="trackRecordDays"></span> days.</b> Every figure here is
-      drawn from under six months. None of it is a forecast.
+      <b>Track record is <span x-text="trackRecordDays"></span> days.</b> Nothing here is
+      a forecast.
     </p>
   </section>
 
   <!-- ── § VALUE OVER TIME ─────────────────────────────────────────────── -->
+  <!-- ── § ACROSS REGIMES ──────────────────────────────────────────────── -->
+  <!-- Dormant on purpose. The eight-year regime study on the blog tests a
+       strategy this vault does not yet run: at 95% stablecoin lending the line
+       it resembles is that study's cash line, its worst performer, so
+       reproducing its headline numbers here would borrow credibility the
+       product has not earned. The section becomes a chart when the vault's own
+       designed allocation has been through the same engine. -->
+  <section class="vp__sec" id="across-regimes">
+    <div class="vp__sec-head">
+      <h2 class="vp__h2">Across regimes</h2>
+    </div>
+    <p class="vp__sub">
+      We publish an eight-year study of how regime switching performs against
+      holding ETH, holding the S&amp;P 500, or holding cash. <b>It does not include
+      this vault</b>, and it tests a strategy this vault does not yet run, so its
+      numbers are not reproduced here.
+      <a class="vp__inline-lnk" href="/blog/treasury-allocation">Read the study &rarr;</a>
+    </p>
+    <div class="vp__seam" role="note">
+      <i class="vp__seam-ico" aria-hidden="true">&#9670;</i>
+      <span>
+        This section becomes a chart once the vault's designed allocation has been
+        run through the same engine. Today the vault is mostly stablecoin lending,
+        so the honest expectation is a result near the study's cash line, and
+        publishing that is the point.
+      </span>
+    </div>
+  </section>
+
   <section class="vp__sec" id="value-over-time">
     <div class="vp__sec-head">
       <h2 class="vp__h2">Value over time</h2>
@@ -442,8 +473,9 @@
         nothing here is projected forward.
       </li>
       <li>
-        NAV per share, drawdown and Sharpe are not published yet. Share price has
-        been recorded hourly since March, and these figures follow once it is served.
+        Drawdown and Sharpe are not published yet. Both need the full history of
+        NAV per share, which has been recorded hourly since March but is not yet
+        served; the current NAV per share above is live.
       </li>
       <li>
         Allocation weights are currently seeded and cannot yet be changed through the
@@ -493,30 +525,43 @@
 }
 .vp__lede { max-width: 58ch; margin: 0.9rem 0 0; color: var(--color-text-soft); font-size: 1rem; line-height: 1.65; }
 
-/* the mandate fan — the product story, drawn as mechanism not weight */
-.vp__fan { margin: 1.9rem 0 0; border: 1px solid var(--color-border); background: var(--color-deep); padding: 1rem 0.9rem; }
-.vp__fan svg { display: block; width: 100%; height: auto; }
-.vp__fan-key {
-  display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; margin-top: 0.7rem; padding-top: 0.7rem;
-  border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 0.6rem;
-  text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted);
+/* the allocation rail */
+.vp__rail { margin: 1.7rem 0 0; }
+.vp__rail-bar {
+  position: relative; display: flex; height: 1.6rem; margin-top: 1.15rem;
+  border: 1px solid var(--color-border); background: var(--color-surface-light);
 }
-.vp__fan-key i { display: inline-block; width: 0.55rem; height: 0.55rem; margin-right: 0.4rem; vertical-align: middle; }
-.vp__fan-empty { margin: 0; font-size: 0.85rem; color: var(--color-text-muted); }
-/* Under 640px the fan's 16px labels render at ~6px, so the diagram is replaced
-   by the same four rows as a list rather than shrunk past legibility. */
-.vp__fan-dep {
-  margin: 0 0 0.9rem; font-family: var(--font-mono); font-size: 0.66rem;
-  text-transform: uppercase; letter-spacing: 0.13em; color: var(--color-text-muted);
+.vp__rail-seg { display: block; height: 100%; }
+.vp__rail-tick { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--color-text-soft); }
+.vp__rail-key {
+  display: flex; flex-wrap: wrap; gap: 0.55rem 1.9rem; margin: 0.8rem 0 0; padding: 0;
+  list-style: none; font-size: 0.82rem; color: var(--color-text-soft);
 }
-.vp__fan-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.8rem; }
-.vp__fan-list li { display: grid; grid-template-columns: 0.6rem 1fr; gap: 0.75rem; align-items: start; }
-.vp__fan-list li > i { width: 0.6rem; height: 0.6rem; margin-top: 0.42rem; }
-.vp__fan-list b { display: block; font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
-.vp__fan-list span { font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted); }
-.vp__fan-list li.dim b { color: var(--color-text-muted); }
-@media (min-width: 641px) { .vp__fan-dep, .vp__fan-list { display: none; } }
-@media (max-width: 640px) { .vp__fan > svg { display: none; } }
+.vp__rail-key li { display: flex; align-items: baseline; gap: 0.45rem; min-width: 0; }
+.vp__rail-key i {
+  width: 0.55rem; height: 0.55rem; flex: 0 0 auto; align-self: center;
+  background: var(--color-border-light);
+}
+.vp__rail-key i.hatch {
+  background: repeating-linear-gradient(135deg, var(--color-border-light) 0 2px, transparent 2px 4px);
+}
+.vp__rail-key b { color: var(--color-text); font-weight: 500; }
+.vp__rail-key span {
+  font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.vp__rail-key li.dim b { color: var(--color-text-muted); font-weight: 400; }
+.vp__rail-empty { margin: 0.8rem 0 0; font-size: 0.85rem; color: var(--color-text-muted); }
+.vp__ticker { text-transform: none; }
+.vp__inline-lnk {
+  color: var(--color-accent); text-decoration: none; white-space: nowrap;
+  border-bottom: 1px solid rgba(0, 229, 255, 0.42);
+  display: inline-block; padding: 0.35rem 0; min-height: 24px;
+  transition: border-color 0.15s ease-out;
+}
+.vp__inline-lnk:hover { border-bottom-color: var(--color-accent); }
+.vp__inline-lnk:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+
 
 /* the three sleeve marks. Colour carries state, and only state:
    green = money actually held, slate = an allocation holding nothing,
@@ -545,9 +590,13 @@
 .vp__stat dd.pend::before {
   content: ""; width: 0.4rem; height: 0.4rem; border-radius: 50%; background: var(--color-beacon);
 }
+/* --color-text-dim measures 2.37:1 on the page ground, which fails AA by half.
+   Every sub-label here qualifies a number (before fees, deposits held, what one
+   share redeems for), so none of them is decorative. --color-text-muted is
+   5.43:1 and reads as the same rung visually. */
 .vp__stat-sub {
-  display: block; margin-top: 0.45rem; font-family: var(--font-mono); font-size: 0.62rem;
-  color: var(--color-text-dim);
+  display: block; margin-top: 0.45rem; font-family: var(--font-mono); font-size: 0.66rem;
+  color: var(--color-text-muted);
 }
 
 /* provenance badges */
@@ -607,7 +656,7 @@
 .vp__chart { position: relative; border: 1px solid var(--color-border); background: var(--color-deep); padding: 0.9rem; }
 .vp__chart svg { display: block; width: 100%; height: auto; }
 .vp__chart .grid { stroke: rgba(34, 42, 56, 0.75); stroke-width: 1; }
-.vp__chart .axtxt { font-family: var(--font-mono); font-size: 10px; fill: var(--color-text-dim); }
+.vp__chart .axtxt { font-family: var(--font-mono); font-size: 10px; fill: var(--color-text-muted); }
 .vp__chart .endlbl { font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
 .vp__legend {
   display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem; margin-top: 0.8rem;
@@ -643,7 +692,7 @@
 .vp__seam-ico { color: var(--color-beacon); flex: 0 0 auto; font-style: normal; }
 
 /* bullet bars: held against target, with the drift on one track */
-.vp__bullets { display: grid; gap: 1.05rem; }
+.vp__bullets { display: grid; overflow: hidden; gap: 1.05rem; }
 .vp__bullet-top {
   display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
   flex-wrap: wrap; margin-bottom: 0.4rem;
@@ -660,13 +709,10 @@
   border: 1px solid var(--color-border);
 }
 .vp__fill { position: absolute; inset: 0 auto 0 0; background: var(--color-green); }
-.vp__fill.zero {
-  background: repeating-linear-gradient(135deg, var(--color-border-light) 0 3px, transparent 3px 7px);
-  inset: 0;
-}
+.vp__fill.zero { width: 0; }
 .vp__target { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--color-text-soft); }
 .vp__target::after {
-  content: attr(data-t); position: absolute; top: -1.05rem; left: 50%; transform: translateX(-50%);
+  content: attr(data-t); position: absolute; top: calc(100% + 3px); left: 50%; transform: translateX(-50%);
   font-family: var(--font-mono); font-size: 0.55rem; color: var(--color-text-soft);
 }
 
@@ -696,7 +742,7 @@
 .vp__const-bar i { position: absolute; inset: 0 auto 0 0; background: var(--color-green); }
 .vp__const-bar i.tgt { background: var(--color-border-light); }
 .vp__const-val { text-align: right; color: var(--color-text); }
-.vp__const-val.dim { color: var(--color-text-dim); }
+.vp__const-val.dim { color: var(--color-text-muted); }
 
 /* risk cells */
 .vp__risk {
@@ -741,12 +787,49 @@ table.vp__tbl .idle { color: var(--color-text-muted); }
 table.vp__tbl td.vp__gain, table.vp__tbl tr.tot td.vp__gain { color: var(--color-green); }
 .vp__dot { display: inline-block; width: 0.45rem; height: 0.45rem; margin-right: 0.45rem; }
 
+/* A table that scrolls with no affordance hides its rightmost column, and on
+   this page that column is the one carrying risk. The fade says there is more,
+   and it is masked out once the scroll reaches the end. */
+.vp__tblwrap {
+  position: relative;
+  background:
+    linear-gradient(to right, var(--color-deep) 30%, rgba(11, 14, 20, 0)) left / 2.5rem 100% no-repeat,
+    linear-gradient(to left, var(--color-deep) 30%, rgba(11, 14, 20, 0)) right / 2.5rem 100% no-repeat,
+    radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.45), transparent) left / 1rem 100% no-repeat,
+    radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.45), transparent) right / 1rem 100% no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+
 .vp__toggle {
-  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em;
+  font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em;
   color: var(--color-text-soft); background: transparent; border: 1px solid var(--color-border-light);
-  border-radius: var(--radius); padding: 0.3rem 0.6rem; cursor: pointer;
+  border-radius: var(--radius); padding: 0.55rem 0.85rem; cursor: pointer;
+  min-height: 44px; transition: color 0.15s ease-out, border-color 0.15s ease-out;
 }
 .vp__toggle:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.vp__toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .vp__toggle, .vp__inline-lnk, .vp__tip { transition: none; }
+}
+
+/* Below 640px the mono label rungs land at 9.3-9.9px, which is too small to
+   read on a phone even uppercase with letter-spacing. Raise the three label
+   sizes only; the figures they label are already large enough. */
+@media (max-width: 640px) {
+  .vp__eyebrow,
+  .vp__stat dt,
+  .vp__risk-cell dt,
+  .vp__sleeve-name,
+  .vp__ref-badge,
+  .vp__badge,
+  .vp__cell-badge { font-size: 0.72rem; }
+  .vp__stat-sub, .vp__legend, .vp__rail-key span, .vp__answer-fig small { font-size: 0.74rem; }
+  table.vp__tbl th { font-size: 0.68rem; }
+  table.vp__tbl td { font-size: 0.78rem; }
+  .vp__toggle { font-size: 0.7rem; }
+  .vp__notes sup, .vp__sub sup, .vp__answer-copy sup { font-size: 0.7em; }
+}
 
 /* notes */
 .vp__foot { margin-top: 2.5rem; padding-top: 1.2rem; border-top: 1px solid var(--color-border); }

@@ -229,7 +229,9 @@ test("the value chart discloses the seam between the recorded series and the liv
   await stubEnvironment(page, economics);
   await openVault(page);
 
-  const seam = page.locator(".vp__seam");
+  // Scoped: Across regimes carries a seam banner of its own, so an unscoped
+  // .vp__seam now matches two and trips strict mode.
+  const seam = page.locator("#value-over-time .vp__seam");
   await expect(seam).toBeVisible();
   // issue #614 AC5's wording: an in-progress retrieval, not a loss.
   await expect(seam).toContainText("in process of being retrieved from the blockchain");
@@ -263,33 +265,52 @@ test("/performance is NOT redirected — RM-103 has to land before the house boo
   await expect(page.locator("section.vp")).toHaveCount(0);
 });
 
-test("the page renders at 390px with no horizontal overflow, and swaps the fan for a list", async ({ page }) => {
+test("the allocation rail carries HELD as the fill, with the target as a tick", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openVault(page);
+
+  // The rail is the first thing a reader sees, so it must agree with the
+  // Allocation section further down. An earlier draft filled it to the TARGET
+  // (95%), which disagreed with "held 100.0%" on the same page. One segment per
+  // funded sleeve; a tick marks where each target boundary falls.
+  const segs = page.locator(".vp__rail-seg");
+  await expect(segs).toHaveCount(1);
+  await expect(segs.first()).toHaveAttribute("style", /width:\s*100/);
+  await expect(page.locator(".vp__rail-tick")).toHaveCount(1);
+
+  // Funded sleeves get a row each; everything held at zero collapses into one
+  // muted row rather than four competing "0%" lines in the hero.
+  await expect(page.locator(".vp__rail-key li")).toHaveCount(2);
+  await expect(page.locator(".vp__rail-key li").first()).toContainText("100.0% held");
+  await expect(page.locator(".vp__rail-key li").last()).toContainText("held at zero");
+});
+
+test("the page renders at 390px with no horizontal overflow", async ({ page }) => {
   await stubEnvironment(page);
   await page.setViewportSize({ width: 390, height: 900 });
   await openVault(page);
 
-  // The fan's 16px labels render at ~6px below 640px, so the diagram is
-  // replaced by the same four rows as a list rather than shrunk past
-  // legibility. Both are in the DOM at every width; only one is ever visible.
-  await expect(page.locator(".vp__fan-list li").first()).toBeVisible();
-  await expect(page.locator(".vp__fan > svg")).toBeHidden();
+  await expect(page.locator(".vp__rail-bar")).toBeVisible();
   const overflow = await page.evaluate(() =>
     document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
-test("the fan diagram, not the list, is what renders at desktop width", async ({ page }) => {
+test("Across regimes is dormant: a pointer to the study, never its numbers", async ({ page }) => {
   await stubEnvironment(page);
-  await page.setViewportSize({ width: 1280, height: 900 });
   await openVault(page);
 
-  await expect(page.locator(".vp__fan > svg")).toBeVisible();
-  await expect(page.locator(".vp__fan-list")).toBeHidden();
-  // Four sleeve labels, drawn from the live allocation feed.
-  await expect(page.locator(".vp__fan > svg text")).toContainText(["1 USDC", "DEPOSIT", "Fixed income"]);
-  const overflow = await page.evaluate(() =>
-    document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow).toBeLessThanOrEqual(1);
+  // The eight-year regime study tests a strategy this vault does not run. At
+  // ~95% stablecoin lending the line it resembles is that study's CASH line,
+  // its worst performer, so reproducing its headline figures here would borrow
+  // credibility the product has not earned.
+  const sec = page.locator("#across-regimes");
+  await expect(sec).toContainText("It does not include this vault");
+  await expect(sec.locator("a")).toHaveAttribute("href", "/blog/treasury-allocation");
+  await expect(sec.locator("svg")).toHaveCount(0);
+  await expect(sec).not.toContainText("6.22");
+  await expect(sec).not.toContainText("24.96");
 });
 
 // ── Migrated from allocation-view.spec.ts (issue #800, Cluster A) ────────────
