@@ -54,6 +54,15 @@ const ALLOWED: Record<string, string> = {
   "backend/tests/analytics-worker-role.test.ts": "asserts the restricted role is denied 42501",
   "backend/tests/api-boot-handle-namespace-guard.test.ts": "rolls schema_migrations back to build a pre-0032 database",
   "backend/tests/consensus-receipt-publish.test.ts": "asserts DELETE and TRUNCATE of a published receipt are refused",
+  // The statements here are DATA, not code: fixture migration bodies handed to
+  // preflight's scanner as strings so it can be proved to turn red on them. The
+  // file opens no writeable connection to a protected table at all — its only
+  // database work is SELECTs against the trigger catalog and a throwaway
+  // database of its own. Written out longhand rather than assembled from
+  // fragments on purpose: a fixture this guard cannot see is a fixture nobody
+  // reviews.
+  "backend/tests/preflight-0-3-0-append-only-safety.test.ts":
+    "fixture SQL asserted to FAIL preflight's destructive-statement scan; never executed",
 
   // The migration that installs the guard names every table it protects.
   "backend/migrations/0032_append_only_history.sql": "installs the guard",
