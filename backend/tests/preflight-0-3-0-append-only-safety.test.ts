@@ -142,10 +142,52 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     expect(r.detail.join("\n")).toContain("GUARD FUNCTION");
   });
 
-  test("GREEN: disabling a trigger that is NOT the guard passes", async () => {
+  test("RED: disabling a TABLE-SPECIFIC immutability guard fails too", async () => {
+    // Not every guard is 0032's. 0037/0038 install per-table `<t>_immutable`
+    // pairs driven by their own guard functions, on tables the append-only
+    // roster does not contain, and a migration adding a newly protected table
+    // follows that same shape. A check that only knew `_append_only` would
+    // watch one of the three and call it coverage.
     const r = await check({
-      file: "9008_disable_unrelated_trigger.sql",
-      sql: "ALTER TABLE wallet_balance_samples DISABLE TRIGGER wallet_balance_samples_snapshot_final_guard;",
+      file: "9008_disable_table_specific_guard.sql",
+      sql: "ALTER TABLE wallet_balance_sample_evidence DISABLE TRIGGER wallet_balance_sample_evidence_immutable_row;",
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("DISABLE TRIGGER");
+  });
+
+  test("RED: replacing a table-specific guard FUNCTION fails", async () => {
+    const r = await check({
+      file: "9008b_replace_table_guard_fn.sql",
+      sql: "CREATE OR REPLACE FUNCTION rm_aum_evidence_guard() RETURNS trigger LANGUAGE plpgsql AS $b$ BEGIN RETURN NEW; END; $b$;",
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("GUARD FUNCTION rm_aum_evidence_guard");
+  });
+
+  test("GREEN: disabling an ordinary trigger on an unprotected table passes", async () => {
+    // The near-miss for the two RED cases above: neither the name nor the table
+    // says "immutability guard", so this is ordinary DDL and must stay green.
+    const r = await check({
+      file: "9008c_disable_unrelated_trigger.sql",
+      sql: "ALTER TABLE wallet_balance_samples DISABLE TRIGGER wallet_balance_samples_touch_recorded_at;",
+    });
+    expect(r.status).toBe("PASS");
+  });
+
+  test("RED: DISABLE TRIGGER ALL on a protected table fails, whatever the guard is called", async () => {
+    const r = await check({
+      file: "9008d_disable_all.sql",
+      sql: "ALTER TABLE swarm_recommendations DISABLE TRIGGER ALL;",
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("swarm_recommendations.ALL");
+  });
+
+  test("GREEN: a trigger whose NAME starts with the word ALL is not the ALL keyword", async () => {
+    const r = await check({
+      file: "9008e_all_prefixed_name.sql",
+      sql: "ALTER TABLE wallet_balance_samples DISABLE TRIGGER all_events_notify;",
     });
     expect(r.status).toBe("PASS");
   });
@@ -333,6 +375,19 @@ describe("v0.3.0 preflight, end to end on a v0.2.2 baseline database", () => {
         await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
       });
     }
+
+    // The two schedules `seed()` maintains on every boot (src/db/seed.ts:67-68).
+    // They are rows, not DDL, so replaying the migrations alone would leave
+    // job_schedules empty — and `catchup-baseline` would WARN that the two kinds
+    // 0034 rewrites are absent, which is true of this database and false of the
+    // production one it stands in for. Seeded here so the run below produces the
+    // exact warning set the runbook §6.2 tells the operator to expect: one, on
+    // schema-migrations.
+    await baselineDb`
+      INSERT INTO job_schedules (kind, cron, payload, timezone, enabled, next_run_at)
+      VALUES ('wallet.sample_balances', '* * * * *', '{}'::jsonb, 'UTC', true, now() + interval '1 minute'),
+             ('wallet.sample_sleeves',  '* * * * *', '{}'::jsonb, 'UTC', true, now() + interval '1 minute')
+    `;
   }, 120_000);
 
   afterAll(async () => {
@@ -369,6 +424,10 @@ describe("v0.3.0 preflight, end to end on a v0.2.2 baseline database", () => {
 
     // No check may FAIL: that, and only that, is what makes the exit code 0.
     expect(checker.results.filter((r) => r.status === "FAIL").map((r) => `${r.name}: ${r.detail[0]}`)).toEqual([]);
+
+    // And EXACTLY the one warning §6.2 documents — a second one would mean the
+    // baseline is not the shape v0.2.2 leaves behind.
+    expect(checker.results.filter((r) => r.status === "WARN").map((r) => r.name)).toEqual(["schema-migrations"]);
 
     const exit = printVerdict(checker.results, {
       logPrefix: "",

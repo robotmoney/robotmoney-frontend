@@ -379,12 +379,33 @@ writes:
   adding a constraint removes no row — so again a lock, briefly, and never a
   guard trip.
 
-All of them appear in `MIGRATION_TOUCHED_TABLES`, because that constant means
-"creates, alters, locks, or writes". **`append-only-safety` therefore reports
-them as collisions and FAILs**: the check compares touched-vs-protected and does not
-distinguish a lock from a write. That is a defect in the check, not a hazard in
-the migrations — do not read a green there as the thing that clears §2.2.1, and
-do not clear it by deleting rows from the roster. See the lock profile above.
+Both appear in `MIGRATION_TOUCHED_TABLES`, because that constant means "creates,
+alters, locks, or writes" — it is the roster of the release's SCOPE, and it stays
+complete. **`append-only-safety` does not read it to decide risk.** The check
+scans each migration's own SQL for the statements the guard actually refuses —
+`DELETE FROM`, `TRUNCATE`, `DROP TABLE` against a protected table — plus any
+statement that disables, drops or replaces an immutability guard, which is the
+one destructive change the row trigger structurally cannot see happen to itself.
+A lock is therefore not a collision, and **`append-only-safety` PASSes for 0035
+and 0039** (issue #815). It names both tables in its PASS detail, as locked and
+not written, so the distinction stays visible rather than silent.
+
+> **Read the PASS, do not skim it.** The check reports what it FOUND: this
+> release does issue three row removals (0036 on `wallet_backfill_state`, 0037
+> on the two sample tables), and none targets a protected table. A PASS that
+> lists zero statements on a release that clearly deletes something is a signal
+> that the scan is not seeing the file, not a clean bill of health.
+
+**What the check cannot see, and you therefore still read here.** It matches text
+in the migration files, so a removal built with dynamic SQL
+(`EXECUTE format('DELETE FROM %I', t)`) is invisible to it — 0040 legitimately
+rebuilds its append-only triggers that way. Its other limits (indirect removals
+via view/rule/cascade, bare-name table matching, statement splitting) all err
+towards flagging a safe release rather than passing an unsafe one, and every one
+of them is enumerated in the header block above `scanMigrationSql()` in
+`backend/scripts/upgrades/0.2.2-to-0.3.0/preflight.ts`. So: §2.2's migration
+table is still the thing you read; the check is what stops that reading from
+going stale.
 
 **This pattern has already shipped.** v0.2.2 itself carried two `0029_*` files
 (`0029_admin_auth_recovery.sql`, `0029_admin_passkey.sql`) and applied both in
@@ -771,7 +792,7 @@ pass. The harness, receipt format and verdict wording are
 | `server-version` | PG 11+ | 0034's `NOT NULL DEFAULT` is instant on 11+ and a full table REWRITE before it (§2.2) |
 | `schema-migrations` | pending set is **exactly** this release's ten; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
 | `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `.env.readonly` points somewhere else |
-| `append-only-safety` | guard installed, and **no** table this release touches is protected | §2.2.1 — this is what makes the out-of-order warning harmless |
+| `append-only-safety` | guard installed, and **no statement** in this release removes a row from a protected table or disables a guard | §2.2.1 — this is what makes the out-of-order warning harmless |
 | `clean-targets` | the 8 tables and 26 columns do not exist yet | A target that already exists means an out-of-band change |
 | `catchup-baseline` | records `job_schedules` as it stands now | §4.3 — 0034 OVERWRITES these rows; §9 check 3 grades against this |
 | `wallet-samples-size` | row count + table size | Informational, for §7's wall-clock measurement |
@@ -805,14 +826,14 @@ for this release:
 apply it "out of order" relative to a fresh database. **`append-only-safety` is
 the check that makes that harmless** — on a fresh database the DDL it would have
 run after is the append-only guard, the guard is already installed here, and no
-migration in this set writes to a protected table.
+migration in this set removes a row from a protected table.
 
 > **So: a WARN on `schema-migrations` is the expected shape of a clean v0.3.0
-> preflight.** `append-only-safety` cannot be read as the confirmation until the
-> lock-vs-write defect recorded in §2.2.1 is fixed: it FAILs on `swarm_members`
-> and `swarm_sessions`, both of which this release LOCKS and neither of which it
-> deletes from. Confirm §2.2.1's reasoning by hand until that check can tell the
-> two apart.
+> preflight — and it is the ONLY warning you should see.** Every other check
+> must be PASS, `append-only-safety` included. If `append-only-safety` FAILs,
+> stop: it now names the exact file and statement it objects to, and that line
+> is a migration removing protected history or turning a guard off. There is no
+> known-benign failure of this check to read past.
 
 ## 7. Digital-smoke-twin rehearsal (release-runbooks.md §4.4)
 

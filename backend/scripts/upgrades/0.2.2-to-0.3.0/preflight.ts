@@ -250,6 +250,12 @@ async function checkPendingMigrations(db: Db, { record }: Checker): Promise<Set<
 //      literal can end early and shift what is scanned.
 //   5. Statement splitting is on a bare `;`, so a semicolon inside a
 //      double-quoted identifier splits one statement into two.
+//   6. REMOVAL, not mutation. This check grades what the append-only guard
+//      enforces: DELETE and TRUNCATE. A table whose own guard also refuses
+//      UPDATE (the per-table `<t>_immutable` pairs 0037/0038 install) is
+//      protected here against having that guard turned OFF, but an UPDATE
+//      statement against it is not graded — postflight's guard-catalog checks
+//      and the trigger itself are what cover that.
 // Apart from (1), every limit above errs towards flagging a release that is
 // fine rather than passing one that is not.
 // ───────────────────────────────────────────────────────────────────────────
@@ -365,10 +371,28 @@ function tableList(clause: string): string[] {
     .filter((t): t is string => t !== null);
 }
 
-/** A trigger name this release must not be quietly turning off. Matches both
- *  the statement trigger (`<t>_append_only`) and the row one
- *  (`<t>_append_only_row`) that 0032/0040 install as a pair. */
-const isAppendOnlyTrigger = (name: string): boolean => /_append_only/i.test(name);
+/**
+ * The repo's IMMUTABILITY-GUARD NAMING VOCABULARY.
+ *
+ * Guards are recognised by name rather than by assuming every one is 0032's,
+ * because they are not: 0032/0040 install the shared `<t>_append_only` /
+ * `<t>_append_only_row` pair, while 0037/0038 install table-SPECIFIC pairs
+ * (`<t>_immutable`, `<t>_immutable_row`) driven by their own guard functions,
+ * and a migration adding a new protected table follows that second shape. A
+ * check that only knew the first name would watch one of the three and call it
+ * coverage.
+ *
+ * It is a heuristic, and the limit is real: a guard named outside this
+ * vocabulary (`wallet_aum_snapshot_runs_finalize`, for one) is not recognised
+ * BY NAME. Such a trigger is still caught whenever it sits on an append-only
+ * table, because scanMigrationSql() blocks any trigger change on one of those
+ * regardless of the trigger's name.
+ */
+const isGuardTriggerName = (name: string): boolean => /_append_only|_immutable|_guard/i.test(name);
+
+/** Guard FUNCTIONS follow the same two shapes: `rm_append_only_guard()` and the
+ *  per-table `rm_<subject>_immutable()` / `rm_<subject>_guard()`. */
+const GUARD_FUNCTION = /\brm_[a-z0-9_]*(?:guard|immutable)[a-z0-9_]*\b/i;
 
 /**
  * Read one migration's SQL and report every statement that removes rows, or
@@ -384,6 +408,13 @@ export function scanMigrationSql(
   const push = (kind: DestructiveFinding["kind"], target: string, blocking: boolean): void => {
     findings.push({ file, kind, target, blocking });
   };
+  // A trigger change counts when EITHER the trigger's name is guard-shaped
+  // (isGuardTriggerName, which reaches table-specific guards on tables the
+  // append-only roster does not contain) OR it sits on an append-only table
+  // (which reaches a guard whose name this file has never heard of). The two
+  // rules cover each other's gap.
+  const guardChange = (table: string, trigger: string): boolean =>
+    isGuardTriggerName(trigger) || protectedTables.has(table);
 
   for (const raw of stripSqlNoise(sql).split(";")) {
     const stmt = raw.replace(/\s+/g, " ").trim();
@@ -411,35 +442,42 @@ export function scanMigrationSql(
       for (const t of tableList(dropTable[1]!)) push("DROP TABLE", t, protectedTables.has(t));
     }
 
-    // ── Guard tampering. A migration runs as the table's owner, so it CAN turn
-    // the guard off; `rm_append_only_guard()` cannot see that happen to itself.
-    const disable = /^ALTER\s+TABLE\s+(?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?\s+(?:DISABLE|ENABLE\s+REPLICA)\s+TRIGGER\s+(?:"?([A-Za-z_][\w$]*)"?|(ALL|USER))/i.exec(
+    // ── Guard tampering. A migration runs as the table's OWNER, so it can turn
+    // the guard off — and `rm_append_only_guard()` cannot see that happen to
+    // itself. This is the half of the risk the row trigger structurally cannot
+    // cover, which is why it is checked here rather than left to the database.
+    const disable = /^ALTER\s+TABLE\s+(?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?\s+(?:DISABLE|ENABLE\s+REPLICA)\s+TRIGGER\s+(?:(ALL|USER)\b|"?([A-Za-z_][\w$]*)"?)/i.exec(
       stmt,
     );
     if (disable) {
       const table = disable[1]!;
-      const named = disable[2];
-      // `ENABLE REPLICA` is here with `DISABLE` on purpose: 0032 installs the
-      // guard as ENABLE ALWAYS precisely so a `session_replication_role =
-      // replica` apply cannot bypass it, and demoting it to REPLICA re-opens
-      // that door without ever saying DISABLE.
-      if (named && isAppendOnlyTrigger(named)) push("DISABLE TRIGGER", `${table}.${named}`, true);
-      else if (!named && protectedTables.has(table)) push("DISABLE TRIGGER", `${table}.ALL`, true);
+      // `ENABLE REPLICA` is here beside `DISABLE` on purpose: the guards are
+      // installed ENABLE ALWAYS precisely so a `session_replication_role =
+      // replica` apply cannot bypass them, and demoting one to REPLICA re-opens
+      // that door without the word DISABLE ever appearing.
+      const named = disable[2] ? disable[2].toUpperCase() : disable[3]!;
+      if (disable[2] ? protectedTables.has(table) : guardChange(table, named)) {
+        push("DISABLE TRIGGER", `${table}.${named}`, true);
+      }
     }
     const dropTrigger = /^DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?"?([A-Za-z_][\w$]*)"?\s+ON\s+(?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?/i.exec(
       stmt,
     );
-    if (dropTrigger && isAppendOnlyTrigger(dropTrigger[1]!)) {
+    if (dropTrigger && guardChange(dropTrigger[2]!, dropTrigger[1]!)) {
       push("DROP TRIGGER", `${dropTrigger[2]!}.${dropTrigger[1]!}`, true);
     }
-    const replaceTrigger = /^CREATE\s+OR\s+REPLACE\s+TRIGGER\s+"?([A-Za-z_][\w$]*)"?/i.exec(stmt);
-    if (replaceTrigger && isAppendOnlyTrigger(replaceTrigger[1]!)) {
-      push("REPLACE TRIGGER", replaceTrigger[1]!, true);
+    const replaceTrigger = /^CREATE\s+OR\s+REPLACE\s+TRIGGER\s+"?([A-Za-z_][\w$]*)"?[^]*?\bON\s+(?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?/i.exec(
+      stmt,
+    );
+    if (replaceTrigger && guardChange(replaceTrigger[2]!, replaceTrigger[1]!)) {
+      push("REPLACE TRIGGER", `${replaceTrigger[2]!}.${replaceTrigger[1]!}`, true);
     }
     // Replacing or dropping the FUNCTION is the same capability change one
-    // level down: every append-only trigger executes this one function.
-    const guardFn = /^(?:CREATE\s+OR\s+REPLACE|DROP)\s+FUNCTION\b[^]*?\brm_append_only_guard\b/i.exec(stmt);
-    if (guardFn) push("GUARD FUNCTION", "rm_append_only_guard", true);
+    // level down: a guard trigger is only as good as the function it executes,
+    // and swapping that body silently defangs every trigger pointing at it.
+    const guardFn = /^(?:CREATE\s+OR\s+REPLACE|DROP)\s+FUNCTION\b([^]*)$/i.exec(stmt);
+    const fnName = guardFn ? GUARD_FUNCTION.exec(guardFn[1]!) : null;
+    if (fnName) push("GUARD FUNCTION", fnName[0], true);
   }
   return findings;
 }
