@@ -25,10 +25,15 @@
 // partially-trusted model response reaches a session.
 //
 // PINNED INPUTS. `promptHash` is the digest of the instruction template, so a
-// stored opinion says which judge wrote it. `inputsDigest` is the digest of the
-// exact brief and take set it read. The two together reproduce the rendered
-// prompt byte-for-byte, which is what makes the prose attributable rather than
-// merely plausible.
+// stored opinion says which judge wrote it. `inputsDigest` is the digest of
+// EVERYTHING THE RECORDED OPINION WAS DERIVED FROM (issue #765) — the brief and
+// the take set the model read, and additionally the rollup facts and the
+// threshold the TEMPLATE path reads, because the template path is the shipped
+// default and a digest that covers nothing it derived from is not worth
+// computing. The prompt payload is a subset of the digested set, embedded
+// verbatim, so the two hashes still reproduce the rendered prompt byte-for-byte
+// — which is what makes the prose attributable rather than merely plausible.
+// See canonicalizeDigestInputs() for the decision and its reasoning.
 import { createHash } from "node:crypto";
 import { buildDisagreements, buildRationale } from "./domain.ts";
 
@@ -214,12 +219,21 @@ function sha256(value: string): string {
 }
 
 /**
- * Canonical bytes of exactly what the judge is allowed to read. Fixed key order
- * by construction (never Object.keys order), so the digest is stable across
- * processes and postgres drivers.
+ * Canonical bytes of exactly what the MODEL is shown — the brief and the frozen
+ * take set, and nothing else. Fixed key order by construction (never
+ * Object.keys order), so it is stable across processes and postgres drivers.
+ *
+ * This is the PROMPT PAYLOAD, not the digest. `inputsDigest()` covers this
+ * verbatim plus the rollup facts only the template path reads; see
+ * canonicalizeDigestInputs() below for why the two are not the same set.
  */
 export function canonicalizeJudgeInputs(input: JudgeInput): string {
-  return JSON.stringify({
+  return JSON.stringify(promptPayload(input));
+}
+
+/** The one place the prompt's field list is written down. */
+function promptPayload(input: JudgeInput) {
+  return {
     sessionId: input.sessionId,
     date: input.date,
     subjectId: input.subjectId,
@@ -232,11 +246,61 @@ export function canonicalizeJudgeInputs(input: JudgeInput): string {
       confidence: t.confidence,
       body: t.body,
     })),
+  };
+}
+
+/**
+ * WHAT `inputs_digest` IS A CLAIM ABOUT (issue #765). It is a claim about
+ * EVERYTHING THE RECORDED OPINION WAS DERIVED FROM — not about the model
+ * prompt's bytes.
+ *
+ * The two readings were genuinely open, and the prompt-bytes one is what this
+ * function used to implement: it digested the brief and the take set, which is
+ * exactly the model path's input set and nothing more. The reason that reading
+ * loses is the SHIPPED DEFAULT. `swarm_judge_config.model` defaults NULL
+ * (migration 0039), `resolveJudgeTransport()` returns null without a model, so
+ * every judgement written by a default deployment is `source='fallback'` and
+ * its opinion comes from templateOpinion() below — which reads `subjectLabel`,
+ * `byStance`, `meanConfidence`, `regimeSummary` and `minTakes`, none of which
+ * the old digest covered. Two rows could carry an identical `prompt_hash` and
+ * an identical `inputs_digest` and still, legitimately, carry different
+ * `opinion` text. A digest whose default-path meaning is "nothing" is not worth
+ * computing. The digest exists so an auditor can say "given exactly these
+ * inputs, this recorded opinion follows"; that sentence is only true if the
+ * digest covers the derivation, so it does.
+ *
+ * SO THE PROMPT PAYLOAD IS A SUBSET, EMBEDDED VERBATIM. Widening the digest is
+ * not a licence to widen the PROMPT: the model is still shown the brief and the
+ * takes and nothing else, because feeding it `minTakes` invites it to reason
+ * about a threshold that "thin support is arithmetic, not opinion" deliberately
+ * keeps out of its hands, and feeding it the rollups hands it numbers to quote
+ * in prose nothing checks. Both forms are built from promptPayload(), so the
+ * prompt's field list exists once and the two cannot drift.
+ *
+ * WHAT IS DELIBERATELY NOT IN HERE. `regimeSummary` is digested as the single
+ * `composite_percentile` the templates actually read, not whole: digesting the
+ * rest would move the digest of an unchanged opinion whenever an unread field
+ * of the regime snapshot moved, which is the same "binds too much" defect as
+ * the live member name #765 also names.
+ *
+ * `byStance` is digested as key-SORTED pairs. It arrives out of the
+ * `swarm_recommendation` jsonb, and postgres does not preserve the key order it
+ * was written in — an unsorted object would make the digest a function of
+ * postgres's internal jsonb ordering rather than of the stance counts.
+ */
+export function canonicalizeDigestInputs(input: JudgeInput): string {
+  return JSON.stringify({
+    ...promptPayload(input),
+    subjectLabel: input.subjectLabel,
+    minTakes: input.minTakes,
+    byStance: Object.keys(input.byStance ?? {}).sort().map((stance) => [stance, input.byStance[stance]]),
+    meanConfidence: input.meanConfidence ?? null,
+    regimeComposite: input.regimeSummary?.composite_percentile ?? null,
   });
 }
 
 export function inputsDigest(input: JudgeInput): string {
-  return sha256(canonicalizeJudgeInputs(input));
+  return sha256(canonicalizeDigestInputs(input));
 }
 
 // The fence around member-authored content. Same idea as
@@ -596,6 +660,15 @@ export interface JudgeOptions {
  */
 export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise<JudgeOutcome> {
   const transport = opts.transport === undefined ? resolveJudgeTransport(opts.model ?? null) : opts.transport;
+  // ONE `input`, DIGESTED AND DERIVED FROM. Three of the values the digest now
+  // covers (`byStance`, `meanConfidence`, and `regimeSummary`'s composite) are
+  // read out of the mutable `swarm_recommendation` / `regime_summary` jsonb,
+  // which applyOpinion() read-modify-writes after this returns. They are read
+  // ONCE, by buildJudgeInput(), into this frozen argument — and both
+  // inputsDigest() below and templateOpinion() on the fallback path read that
+  // same object, never the database. Re-reading either here would rebuild
+  // #765's defect one layer out: a digest over values that had moved since the
+  // opinion was derived from them.
   const base = {
     promptHash: JUDGE_PROMPT_HASH,
     inputsDigest: inputsDigest(input),

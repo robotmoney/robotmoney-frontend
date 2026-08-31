@@ -1871,10 +1871,10 @@ export function buildDisagreements(subjectLabel: string, authoredTakes: any[]): 
 
 // THE frozen take set (issue #752). Extracted verbatim out of
 // aggregateSession() so the judge and the aggregator cannot read two different
-// sets: `inputsDigest` on a judgement is a claim about "exactly the takes this
-// opinion was formed over", and that claim is only worth anything if the set it
-// digests is the same object the weight vector was derived from. One function,
-// one query, both callers.
+// sets: `inputsDigest` on a judgement is a claim about "exactly what this
+// opinion was derived from" (issue #765), and that claim is only worth anything
+// if the take set it digests is the same object the weight vector was derived
+// from. One function, one query, both callers.
 export interface FrozenTakeSet {
   session: Record<string, any>;
   takes: any[];
@@ -1894,12 +1894,25 @@ export async function loadFrozenTakeSet(sessionId: string): Promise<FrozenTakeSe
   // The outer `ORDER BY received_at` is the ordering this query has always had
   // and the tie-break the disagreement ladder below sorts on top of; only the
   // row SET changes here.
+  // THE NAME IS THE FROZEN ONE, NOT THE LIVE ONE (issue #765). `member_name`
+  // rides into the judge's `inputs_digest`, and migration 0032's header names a
+  // handle/name correction as normal permitted operation — so reading
+  // `swarm_members.name` live meant a rename MOVED the digest of an unchanged
+  // take set, which is a digest binding a fact the opinion was not derived
+  // from. `swarm_session_members.member_name` is the snapshot
+  // createSessionAdmin/rosterAddAdmin froze at seating time and is `NOT NULL`,
+  // so the COALESCE falls through only for a session with NO roster snapshot at
+  // all — the legacy/smoke `openSession` path, whose behaviour is unchanged,
+  // exactly as the `rosterRows.length > 0` fallback below leaves it.
   const takeRows = await sql`
     SELECT * FROM (
       SELECT DISTINCT ON (r.member_id)
              r.member_id, r.stance, r.confidence, r.body, r.payload, r.revision,
-             r.received_at, m.name AS member_name
-      FROM swarm_recommendations r JOIN swarm_members m ON m.id = r.member_id
+             r.received_at, COALESCE(sm.member_name, m.name) AS member_name
+      FROM swarm_recommendations r
+      JOIN swarm_members m ON m.id = r.member_id
+      LEFT JOIN swarm_session_members sm
+        ON sm.session_id = r.session_id AND sm.member_id = r.member_id
       WHERE r.session_id = ${sessionId}
       ORDER BY r.member_id, r.revision DESC
     ) latest ORDER BY latest.received_at`;
