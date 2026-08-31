@@ -8,6 +8,7 @@ import { registerHeroes } from "./alpine/heroes.js";
 import { registerStaticViews } from "./alpine/static-views.js";
 import { registerDashUi } from "./alpine/dash-ui.js";
 import { applyChartDefaults } from "./lib/chart-theme.js";
+import { initTooltips } from "./lib/tooltip.js";
 import { start } from "./router.js";
 import { startAnalytics } from "./analytics.js";
 import { api, ROUTES } from "./lib/api.js";
@@ -49,6 +50,9 @@ function buildTerminalLines(bucketLines) {
 }
 
 // Register every Alpine.data factory the views need, before Alpine starts.
+// .rm-tip behaviour, bound once by delegation (see lib/tooltip.js).
+initTooltips();
+
 document.addEventListener("alpine:init", () => {
   const Alpine = window.Alpine;
 
