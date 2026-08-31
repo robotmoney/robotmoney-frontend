@@ -2881,6 +2881,59 @@ Two things, both reported rather than quietly repaired:
    already-published recommendations are left exactly as they were filed.
    Append-only history is not rewritten to make a later rule look retroactive.
 
+**The switch had nothing to switch until #767, and turning it on must not be
+loud.** #752 shipped the handler, the per-session enqueue endpoint and the admin
+button, but `swarm.judge` was never added to `createSessionAdmin`'s job set — so
+a session was judged only when a human asked for one, and moving the config row
+to `shadow` changed nothing about what the swarm did on its own. The "single
+in-house background worker" the rollout describes did not exist. #767 puts
+`swarm.judge` on the session cadence between `aggregate` and `publish`, which is
+what makes the mode row operable at all.
+
+That exposed a second decision that had to be made at the same time. With the
+judge on every session, the SHIPPED DEFAULT (`off`) would have been the loudest
+thing in the queue: `judgeSessionAdmin` answers `{ ok:false,
+error:"judge_disabled" }`, which is exactly the shape `worker/loop.ts`'s
+`isDegradedResult()` matches, so each tick would have written a `degraded`
+job_run and retried with exponential backoff before settling. `off` is an
+operator's answer, not a transient blip a retry can fix, and a queue of red for
+a control working as designed buries the degraded rows that mean something. So
+the CADENCE seam — `worker/handlers/swarm.ts`, where nobody asked and the
+schedule simply fired — translates that one error into a truthy `{ skipped:
+"judge_disabled" }` and records one clean `succeeded` run naming the reason. The
+HTTP path keeps its 409: there a caller DID ask for a judging and must be told
+it cannot have one rather than reading a 200 as "judged". Sessions scheduled
+before #767 carry only the original four jobs; the remedy is the existing
+idempotent one (re-create the still-`scheduled` session, which inserts the
+missing job and no others), not a migration that rewrites queued work.
+
+**A soak nobody can read is not a soak** (issue #767, folded from #768/#787).
+`shadow` exists to accumulate opinions against live traffic until they can be
+trusted, and until #767 there was nothing to accumulate them into that anyone
+could read: `swarm_session_judgements` had no admin route, no UI, and
+`latestJudgement()` had no production caller at all — inspecting a soak meant
+`psql` against production. `GET /api/swarm/admin/sessions/:id/judgements` is
+that read path, privileged like the rest of the admin surface because a shadow
+opinion is model-authored prose about named members that the mode exists to keep
+off the public session page.
+
+Two facts the record was missing, both silences rather than errors:
+
+- **Whether the opinion landed.** In `enforce`, `applyOpinion()` refuses to
+  write onto a session that published while the model was thinking, and that
+  refusal was reported on the HTTP response and then lost — so `mode='enforce'`
+  was never evidence that the session carries the judge's prose. The judgement
+  is now written AFTER the apply attempt (same transaction, same advisory lock),
+  so `applied` is a fact on the row. Recording after, rather than an
+  UPDATE-after-INSERT, is what keeps the table strictly append-only.
+- **Whether the response was trimmed.** #773's drop of a `positions[]` entry
+  naming a member with no take body left no trace: `source='model'`,
+  `fallback_reason` NULL. Counts (`dropped_positions`,
+  `dropped_disagreements`), deliberately NOT a reason string — `fallback_reason`
+  means the model's answer was not used at all, and a partial drop is not that.
+  Rejected: reusing `fallback_reason`, which would have made `source='model'`
+  stop meaning what it says.
+
 **Why thin support is computed, not asked.** Whether a session has enough takes
 behind it is arithmetic against a recorded threshold
 (`swarm_judge_config.min_takes`), so `releaseSafety()` computes it and merges it

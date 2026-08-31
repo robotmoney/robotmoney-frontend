@@ -155,6 +155,58 @@
           </table>
         </div>
 
+        <!-- ── Consensus judge record (issue #767) — the shadow soak's read
+             path. Every judge run for this session, newest first. Rendered for
+             every session, not only `judged` ones: a `shadow` run records an
+             opinion and deliberately never moves the state, so gating on
+             `judged` would hide the whole soak. ────────────────────────────── -->
+        <h2 class="adm-h2">Consensus judge</h2>
+        <p x-show="judgementsError" x-text="judgementsError" class="rm-error" data-testid="judgements-error"></p>
+        <p x-show="!judgementsError && judgements.length === 0" class="adm-dim" data-testid="judgements-empty">
+          No judge runs recorded for this session.
+        </p>
+        <template x-if="inForce">
+          <dl class="adm-meta-grid" data-testid="judgement-in-force">
+            <dt>In force</dt><dd><span x-text="inForce.mode"></span> · <span x-text="judgementEffect(inForce)"></span></dd>
+            <dt>Prose</dt><dd x-text="judgementIntegrity(inForce)"></dd>
+            <dt>Model</dt><dd x-text="inForce.model || '—'"></dd>
+            <dt>Takes</dt><dd><span x-text="inForce.takeCount"></span> (min <span x-text="inForce.minTakes"></span>)</dd>
+          </dl>
+        </template>
+        <div class="rm-table-scroll" x-show="judgements.length > 0" data-testid="judgements-table">
+          <table class="rm-table adm-table">
+            <thead><tr><th>Recorded</th><th>Mode</th><th>Effect</th><th>Prose</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="j in judgements" :key="j.id">
+                <tr :data-testid="'judgement-row-' + j.id">
+                  <td x-text="fmtUtc(j.createdAt)"></td>
+                  <td x-text="j.mode"></td>
+                  <td x-text="judgementEffect(j)"></td>
+                  <td x-text="judgementIntegrity(j)"></td>
+                  <td>
+                    <button type="button" class="adm-btn adm-btn--ghost" @click="toggleJudgement(j.id)" :data-testid="'judgement-toggle-' + j.id">
+                      <span x-text="expandedJudgement === j.id ? 'Hide' : 'Detail'"></span>
+                    </button>
+                  </td>
+                </tr>
+              </template>
+              <template x-for="j in judgements" :key="j.id + '-detail'">
+                <tr x-show="expandedJudgement === j.id" :data-testid="'judgement-detail-' + j.id">
+                  <td colspan="5">
+                    <p><strong>Rationale:</strong> <span x-text="j.opinion?.rationale || '—'"></span></p>
+                    <p><strong>Release safety:</strong> <span x-text="j.opinion?.release_safety?.release || '—'"></span></p>
+                    <ul class="adm-bullet-list">
+                      <template x-for="c in (j.opinion?.release_safety?.concerns || [])" :key="c"><li x-text="c"></li></template>
+                    </ul>
+                    <p><strong>Disagreements:</strong> <span x-text="(j.opinion?.disagreements || []).length"></span></p>
+                    <p class="adm-dim"><strong>prompt_hash</strong> <span x-text="j.promptHash"></span> · <strong>inputs_digest</strong> <span x-text="j.inputsDigest"></span></p>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
         <!-- ── Aggregate (read-only; persisted onto the session row by the
              `aggregate` action — no edit/delete control exists) ──────────── -->
         <template x-if="aggregate()">

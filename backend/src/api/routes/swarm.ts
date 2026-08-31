@@ -386,10 +386,11 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
           publish_brief: "swarm.publish_brief",
           close_window: "swarm.close_window",
           aggregate: "swarm.aggregate",
-          // Issue #752 — reachable but never SCHEDULED: the judge is not in
-          // SESSION_JOB_KINDS (swarm/admin.ts), so creating a session does not
-          // enqueue one. A live swarm opts in, per session or by turning the
-          // mode on and enqueuing this kind.
+          // Issue #752, scheduled since #767: `swarm.judge` is now in
+          // SESSION_JOB_KINDS (swarm/admin.ts), so every session created
+          // through the admin path already has one queued. This stays the
+          // manual lever — re-judging, and repairing a session scheduled
+          // before #767 shipped, which carries only the original four jobs.
           judge: "swarm.judge",
           publish: "swarm.publish",
         };

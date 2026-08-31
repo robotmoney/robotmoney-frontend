@@ -88,6 +88,32 @@ export interface JudgeOpinion {
   release_safety: JudgeReleaseSafety;
 }
 
+/**
+ * What a MODEL-SOURCED opinion lost on the way through the parser (issue #767,
+ * folded from #787). Not a failure and not a reason: `source` stays `"model"`
+ * and `fallbackReason` stays absent, because the response WAS used — a
+ * `positions[]` entry naming a member with no take body simply has nothing
+ * truthful to say (see parseJudgeResponse), so it is dropped rather than
+ * discarding the whole opinion (#773).
+ *
+ * It is recorded because the drop is otherwise INVISIBLE. An operator running a
+ * shadow soak to decide whether to move `swarm_judge_config.mode` to `enforce`
+ * could not tell a model that named few disagreements from one whose output was
+ * trimmed, without re-reading the take set by hand. Always present, and zero on
+ * every fallback (a fallback's opinion is template prose, which drops nothing).
+ */
+export interface JudgeDrops {
+  /** `positions[]` entries dropped for having no member-authored body to quote. */
+  positions: number;
+  /** Whole disagreements dropped because every one of their positions was. */
+  disagreements: number;
+}
+
+/** A fresh zeroed counter. Fresh, not shared: parseJudgeResponse mutates it. */
+export function noDrops(): JudgeDrops {
+  return { positions: 0, disagreements: 0 };
+}
+
 export interface JudgeOutcome {
   opinion: JudgeOpinion;
   source: "model" | "fallback";
@@ -98,6 +124,8 @@ export interface JudgeOutcome {
   inputsDigest: string;
   takeCount: number;
   minTakes: number;
+  /** What the parser dropped out of a model response. Zeroed on every fallback. */
+  drops: JudgeDrops;
 }
 
 // ── Weight-like rejection ───────────────────────────────────────────────────
@@ -338,8 +366,15 @@ function boundedString(value: unknown, max: number): string | null {
  * Turn raw model text into an opinion, or throw JudgeResponseError with a
  * machine-readable reason. Every rejection path here ends in template prose, so
  * being strict is free.
+ *
+ * `drops` is an OUT-PARAMETER, filled with what the parser silently discarded
+ * out of an otherwise-usable response (issue #767/#787). It is a parameter
+ * rather than part of the return value because the opinion is the thing that
+ * gets published and stored under a CHECK constraint, and the counts are
+ * neither — they belong beside the row, not inside it. Callers that do not care
+ * pass nothing.
  */
-export function parseJudgeResponse(raw: string, input: JudgeInput): JudgeOpinion {
+export function parseJudgeResponse(raw: string, input: JudgeInput, drops: JudgeDrops = noDrops()): JudgeOpinion {
   const text = raw.trim();
   if (!text) throw new JudgeResponseError("empty_response");
   // A model that wraps its JSON in a fence or in chatter is still answering;
@@ -418,7 +453,6 @@ export function parseJudgeResponse(raw: string, input: JudgeInput): JudgeOpinion
       if (!memberId || !claimedView) throw new JudgeResponseError("malformed_position");
       if (!memberIds.has(memberId)) throw new JudgeResponseError(`unknown_member:${memberId}`);
       if (seen.has(memberId)) throw new JudgeResponseError(`duplicate_position:${memberId}`);
-      seen.add(memberId);
       const view = (bodyOf.get(memberId) ?? "").trim();
       // A member with no body of their own has no position to quote, so there
       // is nothing this disagreement could truthfully say about them — and
@@ -434,13 +468,27 @@ export function parseJudgeResponse(raw: string, input: JudgeInput): JudgeOpinion
       // template prose for that session. Dropping the one unquotable position
       // keeps the strict rule (no member is ever shown words they did not
       // write) while degrading only what the rule actually touches.
-      if (!view) continue;
+      if (!view) {
+        drops.positions++;
+        continue;
+      }
+      // CLAIMED AFTER THE DROP, NOT BEFORE (issue #767). The dedupe slot exists
+      // to stop the write amplifier (#771) — the same 10,000-char body copied N
+      // times under one id — and a dropped position stores no bytes at all. Held
+      // before the drop, a bodyless entry consumed its member's slot for this
+      // topic, which made `duplicate_position:<id>` unreachable for exactly the
+      // ids that cost nothing and made the two rules order-dependent on each
+      // other. Now the slot is spent by the positions that are actually kept.
+      seen.add(memberId);
       positions.push({ member_id: memberId, view });
     }
     // …and a disagreement every one of whose positions was dropped has nothing
     // left to say, so it goes too. `positions: []` is not a shape the rest of
     // the system should have to reason about.
-    if (positions.length === 0) continue;
+    if (positions.length === 0) {
+      drops.disagreements++;
+      continue;
+    }
     disagreements.push({ topic, positions, what_settles: whatSettles });
   }
 
@@ -558,8 +606,12 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
   // on the way out — including the two that interpolate model-controlled text
   // (`weight_like_field:<path>`, `unknown_member:<id>`). One choke point, so
   // "nothing unbounded reaches fallback_reason" is not a per-call promise.
+  // A fallback's opinion is template prose built from the frozen take set, so it
+  // drops nothing by construction — its counters are zero, and each fallback
+  // gets its OWN object so a later mutation can never reach across calls.
   const fallback = (reason: string, model: string | null): JudgeOutcome => ({
     ...base, opinion: templateOpinion(input), source: "fallback", fallbackReason: boundedReason(reason), model,
+    drops: noDrops(),
   });
 
   if (!transport) return fallback("model_unconfigured", null);
@@ -604,7 +656,12 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
   }
 
   try {
-    return { ...base, opinion: parseJudgeResponse(raw, input), source: "model", model: transport.model };
+    // `drops` is filled BY the parse. It survives onto the outcome so the
+    // judgement row can record a partial degradation the response is otherwise
+    // silent about (issue #767/#787).
+    const drops = noDrops();
+    const opinion = parseJudgeResponse(raw, input, drops);
+    return { ...base, opinion, source: "model", model: transport.model, drops };
   } catch (err) {
     const reason = err instanceof JudgeResponseError ? err.reason : `unparsable:${errorLabel(err)}`;
     return fallback(reason, transport.model);

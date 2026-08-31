@@ -101,6 +101,16 @@ export function registerAdminSwarmSession(Alpine) {
     actionResult: null, // last transition's { state, idempotent }
     actionSubmitting: false,
 
+    // Consensus-judge record (issue #767). Every judge run for this session,
+    // newest first, plus which opinion is IN FORCE. Loaded for every session,
+    // not only `judged` ones: a `shadow` run records a judgement and NEVER
+    // moves the session's state, so gating this on state === 'judged' would
+    // hide the entire shadow soak — the exact reading this panel exists for.
+    judgements: [],
+    inForce: null,
+    judgementsError: null,
+    expandedJudgement: null,
+
     fmtUtc, fmtLocal,
 
     async init() {
@@ -157,6 +167,7 @@ export function registerAdminSwarmSession(Alpine) {
         });
 
         this.session = { ...summary, roster };
+        await this.loadJudgements();
       } catch (e) {
         if (e.status === 403) this._handle403();
         else this.error = e.message;
@@ -164,6 +175,49 @@ export function registerAdminSwarmSession(Alpine) {
       } finally {
         this.loading = false;
       }
+    },
+
+    // ── Consensus judge record (issue #767) ──────────────────────────────
+    // Best-effort like the public take fetch above: a failure here must not
+    // blank a page whose roster and aggregate loaded fine. It is reported in
+    // place instead, because "no judgements" and "could not read judgements"
+    // are different answers and an operator deciding whether to move the mode
+    // to `enforce` must not confuse them.
+    async loadJudgements() {
+      this.judgementsError = null;
+      try {
+        const res = await api.adminGet(
+          path(ROUTES.swarm.admin.sessionJudgements, { id: this.sessionId }),
+          this._token(),
+        );
+        this.judgements = Array.isArray(res?.judgements) ? res.judgements : [];
+        this.inForce = res?.inForce ?? null;
+      } catch (e) {
+        if (e.status === 403) throw e; // the page-level 403 handler owns this
+        this.judgements = [];
+        this.inForce = null;
+        this.judgementsError = e.message;
+      }
+    },
+    toggleJudgement(id) {
+      this.expandedJudgement = this.expandedJudgement === id ? null : id;
+    },
+    // What actually happened to the session, in one phrase. `mode` alone does
+    // not answer it: an `enforce` opinion formed while the session was
+    // publishing is recorded and does NOT reach the prose.
+    judgementEffect(j) {
+      if (!j) return "—";
+      if (j.mode !== "enforce") return "recorded only (shadow)";
+      return j.applied ? "applied to the session" : `recorded, NOT applied (${j.appliedSkippedReason || "unknown reason"})`;
+    },
+    // A partial drop is not a fallback — `source` stays "model" — so it needs
+    // its own line or it reads as a clean model answer.
+    judgementIntegrity(j) {
+      if (!j) return "—";
+      if (j.source === "fallback") return `template prose (${j.fallbackReason || "unknown reason"})`;
+      if (!j.partiallyDegraded) return "model prose, complete";
+      const d = j.dropped || {};
+      return `model prose, PARTIAL — ${d.positions || 0} position(s), ${d.disagreements || 0} disagreement(s) dropped`;
     },
 
     // ── Roster matrix ────────────────────────────────────────────────────

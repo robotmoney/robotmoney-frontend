@@ -188,23 +188,35 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
         throw new JudgeRollback();
       }
     }
+    // APPLY FIRST, THEN RECORD (issue #767). Both are in this one transaction
+    // under this one advisory lock, so the pair still commits together or not
+    // at all — the ordering changes nothing about atomicity and everything
+    // about what the row can say. `applyOpinion` is CONDITIONAL: it refuses to
+    // write onto a session that published while the model was thinking, and
+    // that refusal used to be reported on the HTTP response and then lost, so a
+    // `mode = 'enforce'` row was not evidence that the session carries the
+    // judge's prose. Recording after the attempt lets `applied` be a fact about
+    // this row rather than an inference from the mode — and keeps the table
+    // strictly append-only, which an UPDATE-after-INSERT would not.
+    //
+    // SHADOW NEVER APPLIES. That is the whole point of the mode, and migration
+    // 0041's CHECK refuses a shadow row that claims otherwise.
+    const applied = config.mode === "enforce" ? await applyOpinion(tx, sessionId, outcome) : false;
+    const appliedSkippedReason = config.mode === "enforce" && !applied ? "session_no_longer_writable" : null;
+
     const inserted = (await tx`
       INSERT INTO swarm_session_judgements
-        (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, take_count, min_takes, opinion)
+        (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, take_count, min_takes,
+         applied, applied_skipped_reason, dropped_positions, dropped_disagreements, opinion)
       VALUES (
         ${sessionId}, ${config.mode}, ${outcome.source}, ${outcome.fallbackReason ?? null}, ${outcome.model},
         ${outcome.promptHash}, ${outcome.inputsDigest}, ${outcome.takeCount}, ${outcome.minTakes},
+        ${applied}, ${appliedSkippedReason},
+        ${outcome.drops?.positions ?? 0}, ${outcome.drops?.disagreements ?? 0},
         ${sql.json(outcome.opinion as any)}
       ) RETURNING id`)[0] as { id: string | number };
 
-    // SHADOW STOPS HERE. The opinion is on file and nothing about the session
-    // has changed — that is the whole point of the mode.
-    if (config.mode !== "enforce") {
-      recorded = { id: inserted.id, applied: false };
-      return;
-    }
-    const applied = await applyOpinion(tx, sessionId, outcome);
-    recorded = { id: inserted.id, applied, ...(applied ? {} : { skipped: "session_no_longer_writable" }) };
+    recorded = { id: inserted.id, applied, ...(appliedSkippedReason ? { skipped: appliedSkippedReason } : {}) };
   };
 
   try {
@@ -292,12 +304,19 @@ async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutco
 // latestJudgement() names a different opinion than the one on the session,
 // which is exactly the disagreement prompt_hash/inputs_digest exists to rule
 // out.
-export async function latestJudgement(sessionId: string) {
+export async function listJudgements(sessionId: string, limit = 50) {
+  const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 50;
   return (await sql`
     SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest,
-           take_count, min_takes, opinion, created_at
+           take_count, min_takes, applied, applied_skipped_reason,
+           dropped_positions, dropped_disagreements, opinion, created_at
     FROM swarm_session_judgements WHERE session_id = ${sessionId}
-    ORDER BY id DESC LIMIT 1`)[0] ?? null;
+    ORDER BY id DESC LIMIT ${bounded}`) as Record<string, unknown>[];
+}
+
+/** The opinion IN FORCE — the newest row, by the ordering argued above. */
+export async function latestJudgement(sessionId: string) {
+  return (await listJudgements(sessionId, 1))[0] ?? null;
 }
 
 // ── Replay (issue #752, 2.9) ────────────────────────────────────────────────

@@ -25,7 +25,7 @@ import { deriveMemberHandle } from "./handle.ts";
 // Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
 // an env var, because the swarm is live and an operator must be able to take
 // the judge off published sessions without restarting anything.
-import { getJudgeConfig, judgeSession, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
+import { getJudgeConfig, judgeSession, latestJudgement, listJudgements, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
@@ -789,11 +789,20 @@ function isValidUtcDate(date: string): boolean {
 
 // Job kinds + their canonical scoped dedupe key, per docs §4 US-C3/§6.3:
 // `swarm:<session-id>:<action>`.
-const SESSION_JOB_KINDS = ["swarm.publish_brief", "swarm.close_window", "swarm.aggregate", "swarm.publish"] as const;
+//
+// `swarm.judge` is ON THIS LIST (issue #767) and that is the ONLY thing that
+// makes `swarm_judge_config.mode` mean anything on the cadence. The handler,
+// the per-session enqueue endpoint and the admin button all shipped with #752,
+// but nothing SCHEDULED a judging — so a session was judged only when a human
+// asked for one, and flipping the mode to `shadow` changed nothing about what
+// the swarm actually did. The mode switch stays the on/off control; this list
+// is what gives it something to switch.
+const SESSION_JOB_KINDS = ["swarm.publish_brief", "swarm.close_window", "swarm.aggregate", "swarm.judge", "swarm.publish"] as const;
 const JOB_ACTION: Record<(typeof SESSION_JOB_KINDS)[number], string> = {
   "swarm.publish_brief": "publish_brief",
   "swarm.close_window": "close_window",
   "swarm.aggregate": "aggregate",
+  "swarm.judge": "judge",
   "swarm.publish": "publish",
 };
 
@@ -859,13 +868,35 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
         ON CONFLICT (session_id, member_id) DO NOTHING`;
     }
 
-    // Exactly four deduplicated, session-scoped jobs (docs §4 US-C3): dedupe
-    // key `swarm:<session-id>:<action>` so re-creating a still-scheduled
+    // One deduplicated, session-scoped job per lifecycle step (docs §4 US-C3):
+    // dedupe key `swarm:<session-id>:<action>` so re-creating a still-scheduled
     // session never double-enqueues.
+    //
+    // ORDERING, not spacing, is what these instants buy. The queue claims
+    // `ORDER BY priority DESC, run_after` (worker/loop.ts), so a lane draining
+    // serially runs aggregate before judge before publish purely because their
+    // run_after values are ordered — the seconds between them are not a bet on
+    // how long a step takes. The judge reads the AGGREGATED take set and must
+    // land before the session publishes, so it sits one second behind aggregate
+    // and is clamped strictly below publishAt.
+    //
+    // BOTH intermediate instants are clamped, not just the judge's. Validation
+    // guarantees only `windowClosesAt < publishAt` — a gap that may be a single
+    // millisecond — so `windowClosesAt + 1s` can itself land at or beyond
+    // publish. Clamping the judge alone then pulled it BELOW the aggregate and
+    // inverted the one pair whose order is the whole point. Clamping downward
+    // from publish keeps the sequence monotonic for any legal input; on a gap
+    // too narrow to hold three distinct instants they collapse onto each other
+    // rather than crossing, which a two-second window is already wide enough to
+    // avoid.
+    const lastBeforePublish = publishAt.getTime() - 1;
+    const judgeMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 2_000, lastBeforePublish));
+    const aggregateMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 1_000, judgeMs));
     const jobTimes: Record<(typeof SESSION_JOB_KINDS)[number], Date> = {
       "swarm.publish_brief": briefOpensAt,
       "swarm.close_window": windowClosesAt,
-      "swarm.aggregate": new Date(windowClosesAt.getTime() + 1_000),
+      "swarm.aggregate": new Date(aggregateMs),
+      "swarm.judge": new Date(judgeMs),
       "swarm.publish": publishAt,
     };
     const jobIds: number[] = [];
@@ -1162,6 +1193,69 @@ export async function setJudgeConfigAdmin(
   }
   await audit(actor, "judge_config", { mode: judge.mode, minTakes: judge.minTakes, model: judge.model });
   return { ok: true, status: 200, judge };
+}
+
+// ── The soak's read path (issue #767, folded from #768) ────────────────────
+//
+// `shadow` exists to accumulate judge opinions against live traffic until they
+// can be trusted. Until this route existed there was nothing to accumulate them
+// INTO that anyone could read: `swarm_session_judgements` had no admin route, no
+// UI, and `latestJudgement()` had no production caller at all — inspecting a
+// soak meant `psql` against production. A soak nobody can read is not a soak.
+//
+// PRIVILEGED like everything else under /api/swarm/admin/*. The opinions include
+// model-authored prose about named members that `shadow` deliberately keeps off
+// the public session page; serving it unauthenticated would publish, through the
+// read path, exactly what the mode exists to withhold.
+
+/** One judgement row, camelCased and with the operator-facing facts up front. */
+function toJudgementAdmin(r: Record<string, unknown>) {
+  const dropped = { positions: Number(r.dropped_positions ?? 0), disagreements: Number(r.dropped_disagreements ?? 0) };
+  return {
+    id: String(r.id),
+    mode: String(r.mode),
+    source: String(r.source),
+    fallbackReason: (r.fallback_reason as string | null) ?? null,
+    // enforce-only, and the reason a recorded opinion did NOT reach the session
+    // (it published while the model was thinking). `mode: 'enforce'` alone was
+    // never evidence that the prose landed.
+    applied: r.applied === true,
+    appliedSkippedReason: (r.applied_skipped_reason as string | null) ?? null,
+    model: (r.model as string | null) ?? null,
+    promptHash: String(r.prompt_hash),
+    inputsDigest: String(r.inputs_digest),
+    takeCount: Number(r.take_count),
+    minTakes: Number(r.min_takes),
+    // A partial drop is NOT a fallback: `source` stays 'model' and
+    // `fallbackReason` stays null, because the response was used. This is the
+    // only way to tell a model that named few disagreements from one whose
+    // output was trimmed for want of a quotable take body (#773).
+    dropped,
+    partiallyDegraded: dropped.positions > 0 || dropped.disagreements > 0,
+    opinion: r.opinion ?? null,
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+  };
+}
+
+export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): Promise<AdminResult> {
+  const session = (await sql`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+    | { id: string; state: string }
+    | undefined;
+  if (!session) return err(404, "session not found");
+  const rows = await listJudgements(sessionId, limit);
+  // `latestJudgement()` and nothing else decides which opinion is IN FORCE —
+  // its ORDER BY id (not created_at) is the only ordering that agrees with the
+  // order the session was actually written in, and re-deriving that here would
+  // be a second copy of a rule that has already been got wrong once.
+  const latest = await latestJudgement(sessionId);
+  return {
+    ok: true,
+    status: 200,
+    sessionId,
+    state: session.state,
+    inForce: latest ? toJudgementAdmin(latest as Record<string, unknown>) : null,
+    judgements: rows.map(toJudgementAdmin),
+  };
 }
 
 export async function publishSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {

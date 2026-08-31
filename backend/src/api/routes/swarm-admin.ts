@@ -188,6 +188,15 @@ export async function handleSwarmAdmin(
       return fromResult(await admin.createSessionAdmin(parsed));
     }
     const sessionId = segs[1] ? decodeURIComponent(segs[1]) : undefined;
+    // The shadow soak's read path (issue #767, folded from #768). Privileged
+    // like every other route here — a `shadow` opinion is model-authored prose
+    // about named members that the mode deliberately keeps off the public
+    // session page, so serving it unauthenticated would publish exactly what
+    // shadow exists to withhold.
+    if (sessionId && segs.length === 3 && segs[2] === "judgements" && m === "GET") {
+      const limitRaw = Number(url.searchParams.get("limit") ?? NaN);
+      return fromResult(await admin.getSessionJudgementsAdmin(sessionId, Number.isFinite(limitRaw) ? limitRaw : 50));
+    }
     if (sessionId && segs.length === 3 && segs[2] === "roster" && m === "GET") {
       return { status: 200, body: { roster: await admin.getSessionRoster(sessionId) } };
     }

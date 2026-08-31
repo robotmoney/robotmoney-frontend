@@ -1205,6 +1205,99 @@ Three modes: `off` (shipped default — pre-#752 behaviour to the byte, and the
 reaches no session), `enforce` (the opinion replaces the template
 rationale/disagreements on the session it judged).
 
+**The switch needs something to switch: `swarm.judge` is on the session cadence**
+(issue #767). #752 shipped the handler, the per-session enqueue endpoint and the
+admin button, but nothing SCHEDULED a judging — so a session was judged only when
+a human asked for one, and moving the mode row to `shadow` changed nothing about
+what the swarm did on its own.
+
+**BOTH session-creation paths schedule it, because they are genuinely different
+schedulers.** This is the trap the first attempt fell into: fixing one of them
+looks complete and leaves production untouched.
+
+| Path | Who takes it | How the judging gets queued |
+|---|---|---|
+| `createSessionAdmin` (`POST /api/swarm/admin/sessions`) | the admin form | all five jobs enqueued up front, at `run_after` instants derived from the session's own timestamps |
+| `scripts/lib/swarm/session.ts` — the HOST DRIVER | production, whenever `SWARM_SCHEDULES_ENABLED = "0"` (see `scripts/lib/smoke-schedule.ts`) | `runJudgeStep()` enqueues `judge` over `POST /api/swarm/admin/enqueue-job`, between the `aggregate` it just watched land and the `publish` it is about to queue |
+
+On the admin path, `createSessionAdmin` now enqueues FIVE session-scoped jobs,
+not four: `swarm.judge` sits between `swarm.aggregate` and `swarm.publish`,
+dedupe key `swarm:<session-id>:judge` like every other. Ordering is carried by
+`run_after` and the queue's `ORDER BY priority DESC, run_after`, not by a guess
+at how long aggregation takes. BOTH intermediate instants are clamped downward
+from `publish_at`, not just the judge's: validation guarantees only
+`windowClosesAt < publishAt`, so on a window narrower than the one-second offsets
+assume, clamping the judge alone pulled it BELOW the aggregate and inverted the
+one pair whose order is the point.
+
+The host driver has no such instants to order — it opens a session with
+`open_session` (and `domain.openSession` enqueues NO jobs at all; it only INSERTs
+the row) and then enqueues each step by hand as the previous one lands. So
+`runJudgeStep()` orders the judging the way that driver orders everything else:
+by WAITING. In `shadow`/`enforce` it blocks on the session reaching `judged`
+before the publish is queued, because `publishSession` is an unconditional
+`UPDATE ... SET state='published'` while the judge needs `aggregated -> judged`
+to still be legal when its model call returns up to a minute later — queue both
+back to back and the publish wins, the transition is refused, the whole judging
+transaction rolls back, and the soak records nothing. At the shipped `off` it
+waits for nothing (a disabled judge never produces `judged`), and an expired wait
+publishes anyway and says so: publishing is that driver's job, and a slow judge
+must not wedge the cadence behind it.
+
+**With the mode `off`, the scheduled judging is a SKIP, not a degradation.**
+`judgeSessionAdmin` answers `{ ok:false, error:"judge_disabled" }`, and that is
+exactly the shape `worker/loop.ts`'s `isDegradedResult()` matches — so putting the
+judge on every session's cadence would, at the SHIPPED DEFAULT, have written a
+`degraded` job_run and retried with exponential backoff on every session before
+settling. `backend/src/worker/handlers/swarm.ts` therefore translates that one
+error into a truthy `{ skipped: "judge_disabled" }`, which the loop records as a
+single clean `succeeded` run naming the reason. `off` is an operator's answer, not
+a transient blip a retry can fix. The HTTP path keeps its 409: there a caller
+asked for a judging and must be told it cannot have one.
+
+**The soak has a read path** (issue #767, folded from #768).
+`GET /api/swarm/admin/sessions/:id/judgements` returns every judge run for one
+session, newest first, plus `inForce` — the opinion currently on the session,
+decided by `latestJudgement()` and its `ORDER BY id` and by nothing else. Each
+row carries mode, source, `fallback_reason`, model, `prompt_hash`,
+`inputs_digest`, `take_count`/`min_takes`, the drop counts, the opinion, and
+`applied`. The admin session page renders it for EVERY session, not only
+`judged` ones: a `shadow` run records an opinion and deliberately never moves
+the state, so gating the panel on `judged` would hide the entire soak. The route
+is privileged like the rest of `/api/swarm/admin/*` — a shadow opinion is
+model-authored prose about named members that the mode exists to keep OFF the
+public session page, and serving it unauthenticated would publish through the
+read path exactly what the mode withholds.
+
+**`applied` is a fact on the row, not an inference from the mode.** In `enforce`
+the write onto the session is conditional (see above), so an opinion formed
+while a session was publishing is recorded and does not land. That refusal used
+to be reported on the HTTP response and then lost, which made `mode = 'enforce'`
+no evidence that the session carries the judge's prose. `applyOpinion()` now
+runs BEFORE the INSERT — same transaction, same advisory lock, so atomicity is
+unchanged — and the row records `applied` and, when false,
+`applied_skipped_reason` (one literal today: `session_no_longer_writable`).
+Migration 0041's CHECK refuses a `shadow` row that claims either.
+`applied_skipped_reason` is NOT a `fallback_reason`: the opinion is intact and
+was formed from the model, it simply arrived after the door closed.
+
+**Turning it on needs no redeploy and no re-scheduling.** The mode is a database
+row and the judging is queued unconditionally on both paths above — the admin
+path puts the job in the queue at creation, and the host driver enqueues it on
+every session it runs regardless of the mode — so flipping `off` → `shadow` is
+one UPDATE and changes the next session's behaviour with nothing restarted and
+the driver not even reloaded.
+
+**What #767 left behind is a PATH gap, not a temporal one.** Sessions the admin
+form created BEFORE #767 shipped carry only the original four jobs; that set is
+frozen, so those specific sessions will never be judged on their own. The remedy
+is the existing idempotent one — re-run session creation while the session is
+still `scheduled`, which inserts the missing `swarm.judge` row and no others
+(`ON CONFLICT (dedupe_key) DO NOTHING`) — or judge them over the admin POST.
+Driver-created sessions have no such backlog: the driver enqueues the judging
+inside the run, so every session it starts from now on has one, and no session it
+started before has one no matter how long anyone waits.
+
 **Failure is an outcome, never an error.** Model unconfigured
 (`model_unconfigured`), a session with no takes at all (`no_takes`), a session
 where **every** take is stance-only so there is no member-authored sentence to
@@ -1257,10 +1350,20 @@ read path. Dropping is not a weakening of the rule — a bodyless member still
 never appears over model-authored text; the model is simply no longer able to
 disable the judge by citing one. The one whole-response case that remains is a
 session where EVERY take is stance-only, which never reaches the model at all
-and falls back with `no_take_bodies`. Partial degradation is not itself recorded
-on the judgement row — the outcome is still `source='model'` — so a persistently
-thin `disagreements` array is read against the take set, not against a reason
-string.
+and falls back with `no_take_bodies`.
+
+**And the drop is COUNTED** (issue #767). `swarm_session_judgements` carries
+`dropped_positions` and `dropped_disagreements` (migration 0041), filled by
+`parseJudgeResponse()` through an out-parameter. They are counts and NOT a
+reason: `source` stays `'model'` and `fallback_reason` stays NULL, because the
+response was used. Without them a model that named few disagreements and a model
+whose output was trimmed produce identical rows, and an operator grading a
+shadow soak has to re-read the take set by hand to tell them apart. The dedupe
+slot that refuses `duplicate_position:<id>` is claimed AFTER the drop, not
+before: it exists to bound the write amplifier (#771), a dropped position stores
+no bytes, and claiming it first made the two rules order-dependent on each other
+while making `duplicate_position` unreachable for exactly the ids that cost
+nothing.
 
 **One judge at a time, and `judged` never outruns its evidence.** The model call
 happens outside any transaction; everything after it — the state transition, the
@@ -2614,7 +2717,11 @@ scheduled → collecting → window_closed → aggregated → published   (+ can
 ```
 
 (The smoke does not enter `judged`: the consensus judge ships off, and a session
-that never judges is exactly the session the smoke has always run.)
+that never judges is exactly the session the smoke has always run. Since #767 the
+driver does ENQUEUE the judging on every session — see §9.7 — but at `mode = off`
+that job drains as one clean `{ skipped: "judge_disabled" }` and the state never
+moves. The step is on the cadence; the switch is what decides whether it does
+anything.)
 
 | Stage | What the smoke must exercise |
 |---|---|
@@ -2633,7 +2740,8 @@ Transitions must go through the **worker job pipeline**, not direct domain calls
 
 - Each lifecycle transition is a job kind (`swarm.open_session`,
   `swarm.publish_brief`, `swarm.close_window`, `swarm.aggregate`,
-  `swarm.publish`) enqueued via the scheduler or explicitly for the smoke.
+  `swarm.judge`, `swarm.publish`) enqueued via the scheduler or explicitly by
+  the host driver.
 - Jobs are claimed and executed through the real `FOR UPDATE SKIP LOCKED` claim loop.
 - Job schedules are seeded so a no-intervention run would also progress through the
   lifecycle (even if the smoke also triggers them explicitly for determinism).
@@ -3733,9 +3841,20 @@ Acceptance:
   of `briefOpensAt`.
 - `(date, subject_id)` remains unique.
 - Creation inserts the session in `scheduled`, snapshots all currently active
-  members into `swarm_session_members`, and enqueues four one-off jobs:
+  members into `swarm_session_members`, and enqueues five one-off jobs:
   `publish_brief` at brief open, `close_window` at window close, `aggregate` one
-  second after close, and `publish` at publish time.
+  second after close, `judge` one second after that, and `publish` at publish
+  time. The two intermediate instants are clamped downward from publish time, so
+  a window too narrow to hold them stays monotonic instead of inverting. `judge` is what puts the
+  consensus judge on this path's cadence (issue #767, §9.7); with
+  `swarm_judge_config.mode = off` — the shipped default — it drains as a single
+  clean success recording `{ skipped: "judge_disabled" }`, never a `degraded`
+  run.
+- This is the ADMIN path. Production's sessions are opened by the host driver
+  (`scripts/lib/swarm/session.ts`), which takes none of it: it enqueues each step
+  by hand, including the judging, and orders the judging against the publish by
+  waiting rather than by `run_after` (§9.7). Both paths schedule a judge; neither
+  covers the other.
 - Each job has `scope_type = 'swarm_session'`, `scope_id = session UUID`, and
   dedupe key `swarm:<session-id>:<action>`. Repeated creation or enqueue does
   not duplicate jobs.
@@ -4274,7 +4393,8 @@ Add tests proving:
 - topic validation, uniqueness, optimistic concurrency, and deactivation;
 - member activate/manual-add/deactivate/reactivate/rotate/reject transactions,
   including one-time token behavior and key revocation;
-- session creation snapshots the roster and creates exactly four deduped jobs;
+- session creation snapshots the roster and creates exactly five deduped jobs
+  (`publish_brief`, `close_window`, `aggregate`, `judge`, `publish` — #767);
 - each legal state transition, every illegal transition, idempotent repeats,
   cancel, and reopen;
 - member changes after session creation do not alter historical quorum;

@@ -49,6 +49,10 @@ test("prod-mode with no token → 403 on every owned route, before body parsing"
     ["POST", "/api/swarm/admin/members/x/rotate-key"],
     ["POST", "/api/swarm/admin/sessions"],
     ["GET", "/api/swarm/admin/sessions/x/roster"],
+    // Issue #767: a `shadow` judgement is model-authored prose about named
+    // members that the mode deliberately keeps OFF the public session page, so
+    // its read path must be as fail-closed as everything else here.
+    ["GET", "/api/swarm/admin/sessions/x/judgements"],
     ["POST", "/api/swarm/admin/sessions/x/roster/add"],
     ["POST", "/api/swarm/admin/sessions/x/roster/excuse"],
     ["POST", "/api/swarm/admin/sessions/x/roster/restore"],
@@ -324,6 +328,40 @@ test("sessions: create (201) with bad payload → 400; unknown subject/session �
     PROD,
   );
   expect(notFoundCancel?.status).toBe(404);
+});
+
+// The shadow soak's read path (issue #767). Content is pinned in
+// tests/swarm-judge.test.ts, which can actually run a judge; what this file
+// owns is the TRANSPORT — that the route exists on the admin dispatcher, is
+// addressed by the contract's template, and answers 404 rather than 200-with-
+// nothing for a session that does not exist.
+test("sessions: the judgements read path is a real admin route — 200 with an empty history, 404 for an unknown session", async () => {
+  const subjectId = rid("judgeread");
+  await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${subjectId}, 'active', 'Judge read path')`;
+  const created = await call(
+    req("POST", "/api/swarm/admin/sessions", {
+      token: PROD.adminToken,
+      body: { date: "2026-08-11", subjectId, briefOpensAt: "2026-08-11T09:00:00Z", windowClosesAt: "2026-08-11T10:00:00Z", publishAt: "2026-08-11T10:05:00Z" },
+    }),
+    PROD,
+  );
+  expect(created?.status).toBe(201);
+  const sessionId = (created!.body as any).session.id as string;
+
+  const path = ROUTES.swarm.admin.sessionJudgements.replace(":id", sessionId);
+  const res = await call(req("GET", path, { token: PROD.adminToken }), PROD);
+  expect(res?.status).toBe(200);
+  const body = res!.body as any;
+  expect(body.sessionId).toBe(sessionId);
+  expect(body.state).toBe("scheduled");
+  expect(body.judgements).toEqual([]);
+  expect(body.inForce).toBeNull();
+
+  const missing = await call(
+    req("GET", ROUTES.swarm.admin.sessionJudgements.replace(":id", crypto.randomUUID()), { token: PROD.adminToken }),
+    PROD,
+  );
+  expect(missing?.status).toBe(404);
 });
 
 test("audit: GET returns entries (200) and honors ?limit=", async () => {

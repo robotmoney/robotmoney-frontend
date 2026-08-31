@@ -86,6 +86,7 @@ export const ROUTES: {
       memberAvatar: string;
       sessionCreate: string;
       sessionRoster: string;
+      sessionJudgements: string;
       rosterAdd: string;
       rosterExcuse: string;
       rosterRestore: string;
