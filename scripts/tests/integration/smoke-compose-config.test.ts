@@ -225,19 +225,33 @@ const PREWARM: readonly RenderArgs[] = [
 
 // The whole file's Docker cost, paid once, outside any case's budget.
 //
-// SIZED AGAINST A DEGRADED SHARED RUNNER, NOT THIS WORKSTATION. The local loop
-// takes ~3.5 s, but that number is the wrong one to multiply: the degradation
-// this budget exists to survive — a cold, contended `ubuntu-latest` paying the
-// Docker CLI's own start-up and running several times slower thereafter — was
-// measured at 44-92 s for these 18 renders. 300 s is ~3.3-6.8x THAT, which is
-// the margin that matters; against the local figure it looks like ~85x, and
-// quoting that would be self-deception.
+// SIZED AGAINST A DEGRADED SHARED RUNNER, NOT THIS WORKSTATION — and against a
+// real measurement of one, not an extrapolation. The local loop takes ~3.5 s,
+// but that is the wrong number to multiply.
+//
+// THE DATUM: the very run this issue is about. GitHub Actions run 33355162238
+// attempt 1 (PR #801, `unit` job) is still retrievable —
+//   gh api repos/robotmoney/robotmoney-frontend/actions/runs/33355162238/attempts/1/logs
+// — and its group for this file spans 03:52:19.465 to 03:52:29.953, i.e. 10.49 s
+// for what were then 43 renders. The shape is NOT "uniformly slow": the 5186.99 ms
+// case was the FIRST in the file, and all 42 cases after it ran at a mean of
+// 126 ms, none above 260 ms. So the degradation is ONE cold Docker CLI start-up
+// of ~5.2 s plus ~0.13 s per render, which puts these 18 renders at about 7.4 s
+// on that runner. 300 s is ~40x that.
+//
+// Say "extrapolated" if you ever have to extrapolate. An earlier revision of
+// this comment inherited a bound of 44-92 s — 1.7-5.2 s per render, obtained by
+// multiplying the single 5187 ms datapoint by 18 — and wrote it down as
+// "measured". It was 6-12x too high, and the next reader who checks would have
+// been right to stop trusting the rest of this comment.
 //
 // The bound must stay explicit and must stay generous. On the pinned bun 1.3.5
 // a `beforeAll` with NO timeout argument expires at 5000.16 ms, so dropping
 // this argument would silently put the prewarm back under the same default
-// that reddened PR #801 and make the whole hoist a no-op on CI. Equally, a
-// budget only ~1.3x the degraded cost would just move the flake into the hook.
+// that reddened PR #801 and make the whole hoist a no-op on CI. A budget only a
+// small multiple of the real cost would just move the flake into the hook, and
+// 300 s costs nothing unless a render actually exceeds it — which the profile
+// above says will not happen.
 //
 // It is still bounded, so a genuinely wedged Docker fails loudly in five
 // minutes instead of running out the job. (The enclosing bound is GitHub's

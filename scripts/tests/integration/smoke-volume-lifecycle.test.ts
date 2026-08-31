@@ -140,11 +140,18 @@ function configJson(extraFiles: string[], env: Record<string, string>): Cfg {
 // does not name is caught by the regression guard at the end of the file, not
 // left to be rediscovered as a flake.
 //
-// SIZED AGAINST A DEGRADED SHARED RUNNER, NOT THIS WORKSTATION. The two renders
-// cost ~0.8 s locally, but the degradation this budget exists to survive — a
-// cold, contended `ubuntu-latest`, where the first render also pays the Docker
-// CLI's own start-up — puts them at roughly 10-20 s. 120 s is ~6-12x THAT.
-// Multiplying the local figure would read as ~150x and would be self-deception.
+// SIZED AGAINST A DEGRADED SHARED RUNNER, NOT THIS WORKSTATION, and against a
+// real measurement of one. The two renders cost ~0.8 s locally, which is the
+// wrong number to multiply.
+//
+// THE DATUM: GitHub Actions run 33355162238 attempt 1 (PR #801, `unit` job) —
+//   gh api repos/robotmoney/robotmoney-frontend/actions/runs/33355162238/attempts/1/logs
+// — ran THIS file's four offline cases at 124 / 119 / 129 / 129 ms on a degraded
+// runner. They were that cheap because the Docker CLI was already warm by then;
+// the same log shows the first render in the whole job costing 5186.99 ms. So
+// the case this budget must survive is being the first file to touch Docker:
+// ~5.2 s of cold start plus ~0.13 s for the second render, about 5.3 s. 120 s
+// is ~23x that, and ~480x the warm figure.
 //
 // The argument must stay explicit: on the pinned bun 1.3.5 a `beforeAll` with
 // no timeout expires at 5000.16 ms, which would put this prewarm right back
