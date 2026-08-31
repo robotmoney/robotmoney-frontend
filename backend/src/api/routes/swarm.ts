@@ -408,9 +408,9 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
         const kind = queueAction ? actionMap[queueAction] : undefined;
         if (!kind) return { status: 400, body: { error: `unknown action: ${b.action}` } };
         const { action: _, force: _force, ...payload } = b;
-        // THE SAME SESSION-SCOPED DEDUPE KEY THE ADMIN PATH USES (issue #806).
-        // `createSessionAdmin` enqueues `swarm:<session-id>:<action>` and
-        // ON CONFLICT DO NOTHING; this endpoint INSERTed with no key at all.
+        // THE JUDGE, AND ONLY THE JUDGE, IS DEDUPLICATED HERE (issue #806).
+        //
+        // WHY IT IS DEDUPLICATED. This endpoint INSERTed with no key at all.
         // Executed: two `judge` enqueues for one session both succeeded and
         // produced TWO judgement rows — in `enforce` both said `applied: true`
         // and the recommendation was rewritten twice, second write winning. The
@@ -418,6 +418,24 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
         // `transitionWithin` treats `judged -> judged` as idempotent success. A
         // driver restart that re-adopts an in-flight session (the case
         // `waitForSubjectSession` exists for) is enough to trigger it.
+        //
+        // WHY ONLY THE JUDGE. `jobs_dedupe_key_idx` is
+        // `UNIQUE (dedupe_key) WHERE dedupe_key IS NOT NULL` across the WHOLE
+        // table INCLUDING TERMINAL ROWS, so a key makes a job that once died
+        // permanently un-re-enqueueable. `worker/handlers/repair.ts` documents
+        // the same hazard and deliberately carries no key for it. Applied to
+        // `close_window`, that is fatal to the driver rather than merely lossy:
+        // the job goes `dead`, `openSession` keeps returning the same still-
+        // `collecting` session, every later re-enqueue is suppressed, and
+        // `waitForSessionState` times out — a wedged subject, not a degraded one.
+        // The judge is the one action that can carry the key safely, because it
+        // is the one step whose absence the driver tolerates by design
+        // (`runJudgeStep` publishes anyway and says so).
+        //
+        // THE KEY IS STICKY ACROSS TERMINAL STATES, and that is the point rather
+        // than an oversight: treating a `succeeded` judge job as re-enqueueable
+        // would hand a re-adopting driver a second judging of a session that has
+        // already been judged, which is precisely the defect above.
         //
         // MANUAL RE-JUDGING STAYS AVAILABLE, EXPLICITLY. It is a real lever —
         // re-running a judging after fixing a model, repairing a pre-#767
@@ -428,7 +446,9 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
           ? String(rawSessionId).slice(0, 100)
           : "";
         const force = b.force === true;
-        const dedupeKey = sessionId && !force ? `swarm:${sessionId}:${queueAction}` : null;
+        const dedupeKey = sessionId && !force && queueAction === "judge"
+          ? `swarm:${sessionId}:judge`
+          : null;
         const rows = await sql`
           INSERT INTO jobs (kind, payload, dedupe_key)
           VALUES (${kind}, ${sql.json(jsonValue(payload))}, ${dedupeKey})

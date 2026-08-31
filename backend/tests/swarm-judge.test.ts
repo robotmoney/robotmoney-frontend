@@ -2249,19 +2249,64 @@ test("#806 terminal_state:published — a judging that lost its race writes ZERO
   expect((await runsOf(jobId))[0].output).toEqual({ skipped: "terminal_state:published", sessionId: session.id });
 });
 
-test("#806 illegal_transition:window_closed->judged — a reopened session writes ZERO degraded runs", async () => {
-  const { session, members } = await aggregatedSession("judge-806-illegal");
+// A RECOVERABLE MISORDERING MUST KEEP RETRYING (issue #806, amended AC).
+//
+// The first cut of this file asserted the opposite — that
+// `illegal_transition:window_closed->judged` settled as a clean skip — and that
+// assertion encoded a defect rather than a fix. THE OBSERVABLE STATE IS
+// IDENTICAL to the bug's; only the cause differs, and the seam cannot tell them
+// apart, which is exactly why the old test did not catch it.
+//
+// The sequence needs no race and no misconfiguration: `aggregate` is due one
+// second before `judge`, fails ONCE (the rollup is ~6 statements — a transient
+// error is ordinary), and backs off past the judge's instant. Translated, the
+// judging is lost permanently and silently: `succeeded` on attempt 1, and
+// nothing re-enqueues it because `dedupe_key` is unique across all time.
+// Untranslated, the backoff carries it past the aggregate and it lands.
+test("#806 a judging that arrives before its rollup RETRIES rather than settling — and lands once the aggregate commits", async () => {
+  const { session } = await aggregatedSession("judge-806-early");
   await setJudgeConfig({ mode: "shadow" });
-  expect((await admin.closeSessionAdmin(session.id, undefined, "admin", "reopening")).ok).toBe(true);
+  // Put the session back where the failed-aggregate sequence leaves it.
+  expect((await admin.closeSessionAdmin(session.id, undefined, "admin", "rollup not in yet")).ok).toBe(true);
   expect(await stateOf(session.id)).toBe("window_closed");
 
   const jobId = await judgeJobFor(session.id);
+  // ONE claim, the way the real loop would make it.
+  expect(await processOneJob({ lane: LANES.swarm, workerId: "test-806-early" })).toBe(true);
+
+  // THE REGRESSION THIS CATCHES. A `succeeded` here is the silent permanent
+  // loss: the job is terminal, its dedupe key is spent, and the session will
+  // publish unjudged with nothing on the record to say so.
+  const afterFirst = await jobRow(jobId);
+  expect(afterFirst.status, "a recoverable misordering must NOT settle").toBe("pending");
+  expect(Number(afterFirst.attempts)).toBe(1);
+  expect(await degradedCount(jobId), "and it stays VISIBLE while it waits").toBe(1);
+  expect(await judgementRows(session.id)).toEqual([]);
+
+  // The aggregate commits — the retry that was always coming.
+  expect((await admin.aggregateSessionAdmin(session.id, undefined)).ok).toBe(true);
   await drainToSettled(jobId);
 
+  // SELF-HEALED. This is what the translation threw away.
   expect((await jobRow(jobId)).status).toBe("succeeded");
-  expect(await degradedCount(jobId)).toBe(0);
-  expect((await runsOf(jobId))[0].output)
-    .toEqual({ skipped: "illegal_transition:window_closed->judged", sessionId: session.id });
+  expect(await stateOf(session.id)).toBe("judged");
+  expect((await judgementRows(session.id)).length, "the soak collects the judging it was owed").toBe(1);
+});
+
+test("#806 the judge seam translates NO illegal_transition at all — only an operator's answer and a terminal session", async () => {
+  // The rule, asserted directly rather than inferred from one scenario:
+  // `published` and `cancelled` can never become judgeable; every other refusal
+  // is a judging that has not happened YET.
+  await setJudgeConfig({ mode: "shadow" });
+  for (const from of ["window_closed", "collecting", "scheduled"]) {
+    const { session } = await aggregatedSession(`judge-806-nt-${from.slice(0, 6)}`);
+    await sql`UPDATE swarm_sessions SET state = ${from} WHERE id = ${session.id}`;
+    const jobId = await judgeJobFor(session.id);
+    expect(await processOneJob({ lane: LANES.swarm, workerId: `test-806-nt-${from}` })).toBe(true);
+    expect((await jobRow(jobId)).status, `from ${from}`).toBe("pending");
+    expect(await degradedCount(jobId), `from ${from}`).toBe(1);
+    expect(await judgementRows(session.id), `from ${from}`).toEqual([]);
+  }
 });
 
 test("#806 the translation is NOT a blanket amnesty — a failure a retry could fix stays degraded", async () => {
@@ -2296,6 +2341,36 @@ test("#806 two judge enqueues for one session produce ONE job and ONE judgement 
   // them; it does not deduplicate them, and `judged -> judged` is idempotent
   // success rather than a refusal.
   expect((await judgementRows(session.id)).length).toBe(1);
+});
+
+test("#806 a DEAD lifecycle job does not wedge its subject — only the judge carries a key", async () => {
+  // R-2. `jobs_dedupe_key_idx` is UNIQUE across the WHOLE table INCLUDING
+  // terminal rows, so a key on `close_window` makes a job that once died
+  // permanently un-re-enqueueable — and unlike a lost judging, that WEDGES the
+  // subject: `openSession` keeps returning the same still-`collecting` session,
+  // every re-enqueue is suppressed, and `waitForSessionState` times out on every
+  // pass forever. `worker/handlers/repair.ts` documents the same hazard and
+  // deliberately carries no key.
+  const { subj } = await weightedSession("judge-806-dead-block");
+  const s2 = await ic.openSession(subj);
+
+  for (const action of ["publish_brief", "close_window", "aggregate", "publish"]) {
+    const first = await enqueueOverAdmin(action, s2.id);
+    expect(
+      (await sql`SELECT dedupe_key FROM jobs WHERE id = ${first.jobId}`)[0].dedupe_key,
+      `${action} must carry NO key — AC 8 asked for the judge alone`,
+    ).toBeNull();
+    // Kill it the way max_attempts does, then ask again.
+    await sql`UPDATE jobs SET status = 'dead' WHERE id = ${first.jobId}`;
+    const second = await enqueueOverAdmin(action, s2.id);
+    expect(second.jobId, `${action} must be re-enqueueable after dying`).not.toBe(first.jobId);
+  }
+
+  // …and the judge, which DOES carry one, is the single step whose absence the
+  // driver tolerates by design — runJudgeStep publishes anyway and says so.
+  const judge = await enqueueOverAdmin("judge", s2.id);
+  expect((await sql`SELECT dedupe_key FROM jobs WHERE id = ${judge.jobId}`)[0].dedupe_key)
+    .toBe(`swarm:${s2.id}:judge`);
 });
 
 test("#806 re-judging is still available, but you have to ASK for it — `force: true`", async () => {
