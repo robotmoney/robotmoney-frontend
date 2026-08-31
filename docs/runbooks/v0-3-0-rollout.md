@@ -829,11 +829,15 @@ run after is the append-only guard, the guard is already installed here, and no
 migration in this set removes a row from a protected table.
 
 > **So: a WARN on `schema-migrations` is the expected shape of a clean v0.3.0
-> preflight — and it is the ONLY warning you should see.** Every other check
-> must be PASS, `append-only-safety` included. If `append-only-safety` FAILs,
-> stop: it now names the exact file and statement it objects to, and that line
-> is a migration removing protected history or turning a guard off. There is no
-> known-benign failure of this check to read past.
+> preflight.** It is the only warning THIS RELEASE'S MIGRATION SET produces by
+> design; `blocking-xacts`, `wedged-schedules` and `catchup-baseline` may also
+> WARN, but each of those is a statement about the database you are pointed at
+> right now, not about the release, and each says what to do about it.
+>
+> **`append-only-safety` must be PASS.** If it FAILs, stop — it names the exact
+> file and statement it objects to, and that line is a migration removing
+> protected history or turning a guard off. There is no known-benign failure of
+> this check to read past.
 
 ## 7. Digital-smoke-twin rehearsal (release-runbooks.md §4.4)
 
