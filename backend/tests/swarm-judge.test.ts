@@ -39,7 +39,7 @@ import { LANES } from "../src/worker/lanes.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
   inputsDigest, JUDGE_PROMPT_HASH, judge, parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
-  resolveJudgeTransport, UNTRUSTED_INPUTS_BEGIN, UNTRUSTED_INPUTS_END,
+  resolveJudgeTransport, templateOpinion, UNTRUSTED_INPUTS_BEGIN, UNTRUSTED_INPUTS_END,
   type JudgeInput, type JudgeTransport,
 } from "../src/swarm/judge.ts";
 import {
@@ -133,6 +133,42 @@ async function aggregatedSession(prefix: string, count = 3) {
     const m = await activeMember();
     members.push(m);
     await submit(m, date, subj, { stance: stances[i % stances.length], confidence: 0.5 + i * 0.1, body: `take ${i} on ${subj}`, weights: W });
+  }
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  return { subj, session, date, members };
+}
+
+/**
+ * aggregatedSession(), but with the session's roster SNAPSHOTTED into
+ * swarm_session_members through the admin path that writes it — which is what
+ * freezes `member_name` at seating time. openSession(), which every other
+ * fixture here uses, is the legacy/smoke path and writes NO roster rows, so a
+ * rename test built on it would be exercising loadFrozenTakeSet's COALESCE
+ * fallback to the live name rather than the snapshot.
+ */
+async function rosteredAggregatedSession(prefix: string, count = 3) {
+  const subj = rid(prefix);
+  await ic.ensureSubject(subj, `${prefix} subject`);
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subj}`;
+  const session = await ic.openSession(subj);
+  const date = sessionDate(session);
+  const members: Member[] = [];
+  const stances = ["bullish", "cautious", "neutral", "constructive", "bearish"];
+  // Seating happens while the session is still `scheduled` — the only window in
+  // which the roster is editable, and the same constraint the real admin has.
+  for (let i = 0; i < count; i++) {
+    const m = await activeMember();
+    members.push(m);
+    const seated = await admin.rosterAddAdmin(session.id, m.id);
+    if (!seated.ok) throw new Error(`rosterAddAdmin failed: ${JSON.stringify(seated)}`);
+  }
+  await ic.publishBrief(session.id, 60);
+  for (let i = 0; i < count; i++) {
+    await submit(members[i]!, date, subj, {
+      stance: stances[i % stances.length], confidence: 0.5 + i * 0.1,
+      body: `take ${i} on ${subj}`, weights: W,
+    });
   }
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
@@ -459,9 +495,13 @@ test("promptHash pins the instructions and inputsDigest pins exactly the takes a
   expect(inputsDigest(input)).toBe(inputsDigest((await buildJudgeInput(session.id, 3))!));
   const perturbed: JudgeInput = { ...input, takes: [...input.takes.slice(1)] };
   expect(inputsDigest(perturbed)).not.toBe(inputsDigest(input));
-  // minTakes is a policy knob, not an input the model reads — it must not move
-  // the digest, or two opinions over identical evidence would look different.
-  expect(inputsDigest({ ...input, minTakes: 99 })).toBe(inputsDigest(input));
+  // minTakes MOVES the digest (issue #765), reversing the assertion that stood
+  // here. That one read "a policy knob, not an input the model reads" — which
+  // is the prompt-bytes reading of what a digest is a claim about, and #765
+  // settles it the other way: the digest claims what the OPINION was derived
+  // from, and `release`, `thinly_supported` and `concerns[0]` are all computed
+  // from minTakes on both the model and the template path.
+  expect(inputsDigest({ ...input, minTakes: 99 })).not.toBe(inputsDigest(input));
   expect(date.length).toBe(10);
 });
 
@@ -502,6 +542,72 @@ test("a key rotated AFTER the take was filed does not change what the judge read
   await sql`UPDATE swarm_members SET public_key = ${publicKeyB64} WHERE id = ${m.id}`;
   // The take set is what was FILED; whose key is current is a different fact.
   expect(inputsDigest((await buildJudgeInput(session.id, 3))!)).toBe(before);
+});
+
+// BOTH DIRECTIONS OF THE #765 GAP. The test above this pair claims the digest
+// "MOVES when the inputs move and only then", but exercised only take removal
+// and minTakes — neither of which is the gap. These two are: a fact the opinion
+// was NOT derived from must not move it, and every fact it WAS derived from
+// must.
+
+test("a member RENAME does not move the digest of an unchanged take set (#765)", async () => {
+  const { session, members } = await rosteredAggregatedSession("judge-rename", 3);
+  const input = (await buildJudgeInput(session.id, 3))!;
+  const before = inputsDigest(input);
+
+  // The snapshot the digest must read really exists and really carries names —
+  // otherwise this test would pass on a COALESCE fallback to the live name.
+  const roster = (await admin.getSessionRoster(session.id)) as unknown as { member_id: string; member_name: string }[];
+  expect(roster.length).toBe(3);
+  expect(input.takes.every((t) => typeof t.member_name === "string" && t.member_name.length > 0)).toBe(true);
+
+  // Migration 0032's header names a handle/name correction as NORMAL PERMITTED
+  // OPERATION. Nothing about the take set moves when one happens, so nothing
+  // about the digest may either.
+  const renamed = `renamed_${crypto.randomUUID().slice(0, 8)}`;
+  await sql`UPDATE swarm_members SET name = ${renamed} WHERE id = ${members[0]!.id}`;
+  expect(
+    ((await sql`SELECT name FROM swarm_members WHERE id = ${members[0]!.id}`)[0] as { name: string }).name,
+  ).toBe(renamed);
+
+  const after = (await buildJudgeInput(session.id, 3))!;
+  expect(after.takes.map((t) => t.body)).toEqual(input.takes.map((t) => t.body));
+  expect(after.takes.map((t) => t.member_name)).toEqual(input.takes.map((t) => t.member_name));
+  expect(after.takes.find((t) => t.member_id === members[0]!.id)!.member_name).not.toBe(renamed);
+  expect(inputsDigest(after)).toBe(before);
+});
+
+test("a changed FALLBACK input moves the digest, under an unchanged take set (#765)", async () => {
+  const { session } = await aggregatedSession("judge-fallback-digest", 3);
+  const input = (await buildJudgeInput(session.id, 3))!;
+  const base = inputsDigest(input);
+  const baseOpinion = JSON.stringify(templateOpinion(input));
+
+  // Every value templateOpinion() derives from that is NOT a take. Before #765
+  // none of them moved the digest, so `swarm_judge_config.model` being NULL —
+  // the shipped default, and therefore every judgement a default deployment
+  // writes — produced rows whose digest proved nothing about their `opinion`.
+  const variants: [string, JudgeInput][] = [
+    ["subjectLabel", { ...input, subjectLabel: `${input.subjectLabel} (relabelled)` }],
+    ["byStance", { ...input, byStance: { ...input.byStance, bullish: (input.byStance.bullish ?? 0) + 7 } }],
+    ["meanConfidence", { ...input, meanConfidence: (input.meanConfidence ?? 0) + 0.25 }],
+    ["regimeSummary", { ...input, regimeSummary: { composite_percentile: 0.91 } }],
+    ["minTakes", { ...input, minTakes: 99 }],
+  ];
+  for (const [label, variant] of variants) {
+    // The OPINION really moves — without this the digest assertion below would
+    // be pinning a field nothing derives from, which is the other half of #765.
+    expect(`${label} opinion: ${JSON.stringify(templateOpinion(variant))}`)
+      .not.toBe(`${label} opinion: ${baseOpinion}`);
+    expect(`${label} digest: ${inputsDigest(variant)}`).not.toBe(`${label} digest: ${base}`);
+    // The take set is untouched by construction, so the model's own prompt
+    // payload is byte-identical across every one of these.
+    expect(renderJudgePrompt(variant)).toBe(renderJudgePrompt(input));
+  }
+
+  // …and re-reading the session yields the same digest: the fixture moved
+  // nothing in the database.
+  expect(inputsDigest((await buildJudgeInput(session.id, 3))!)).toBe(base);
 });
 
 // ── 7. The hardcoded actions are gone ───────────────────────────────────────

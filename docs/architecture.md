@@ -1387,8 +1387,47 @@ vector had already been derived from.
 is recorded on the judgement so a historical opinion can be read against it.
 
 **Pinned inputs.** `prompt_hash` digests the instruction template (which judge
-wrote this) and `inputs_digest` digests the exact brief and take set consumed
-(what it read). Together they reproduce the rendered prompt byte-for-byte.
+wrote this) and `inputs_digest` digests what the recorded opinion was derived
+from (what it read). Together they reproduce the rendered prompt byte-for-byte.
+
+**`inputs_digest` is a claim about everything the recorded opinion was derived
+from — not about the model prompt's bytes** (issue #765). The two readings give
+different digests and the choice is recorded here because it is a design
+decision, not an implementation detail. The prompt-bytes reading is what
+`canonicalizeJudgeInputs()` implemented through #757: the brief and the frozen
+take set, which is the model path's input set exactly. It loses on the **shipped
+default**. `swarm_judge_config.model` defaults NULL (migration 0039) and
+`resolveJudgeTransport()` returns null without a model, so every judgement a
+default deployment writes is `source='fallback'`, and `templateOpinion()` derives
+that opinion from `subjectLabel`, `byStance`, `meanConfidence`, the regime
+composite and `min_takes` — none of which the prompt-bytes digest covered. Two
+rows could carry an identical `prompt_hash` and an identical `inputs_digest` and
+still legitimately carry different `opinion` prose. The digest exists so an
+auditor can say "given exactly these inputs, this recorded opinion follows"; a
+digest whose meaning on the default path is "nothing" does not let anyone say
+that, so `canonicalizeDigestInputs()` covers the derivation on **both** paths and
+`canonicalizeJudgeInputs()` is now only the prompt payload — a subset, embedded
+verbatim, built from the same function, so the prompt's field list exists once
+and the two forms cannot drift.
+
+Three consequences, each deliberate. **The prompt did not widen with the
+digest**: the model is still shown the brief and the takes and nothing else,
+because handing it `min_takes` invites it to reason about a threshold "thin
+support is arithmetic, not opinion" keeps out of its hands. **`min_takes` now
+moves the digest**, reversing the pre-#765 assertion that it must not — that
+assertion was the prompt-bytes reading in miniature ("not an input the model
+reads"), and under the derivation reading it plainly is one, since `release`,
+`thinly_supported` and `concerns[0]` are computed from it. **The digest still
+binds no more than the derivation**: `regime_summary` is digested as the single
+`composite_percentile` the templates read rather than whole, and `member_name`
+is read from the frozen `swarm_session_members` snapshot rather than live from
+`swarm_members.name`, so a member rename — which migration 0032's header names
+as normal permitted operation — no longer moves the digest of an unchanged take
+set. `swarm_session_judgements` is append-only (migration 0032/0040) and nothing
+rewrites rows: a judgement written under the old canonical form is verifiable
+only under the rule in force when it was made. Because `mode` ships `off` and
+`judgeSession()` refuses with `judge_disabled` in that mode, no such row exists
+on a deployment that has not deliberately turned the judge on.
 
 `replaySessionJudge()` runs the judge over an already-published session and
 writes nothing, so real history — absences, thin quorums, superseded revisions,
