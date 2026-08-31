@@ -22,8 +22,12 @@
  * (`0033_swarm_member_uuid_ids.sql`), so preflight's `schema-migrations` check
  * reports it as out-of-order and returns WARN. See the runbook §6 for why that
  * warning is the correct output here and what makes it safe — in short, the
- * append-only guard is already installed by then, and none of the seven touches
- * a protected table.
+ * append-only guard is already installed by then, and none of the ten REMOVES
+ * a row from a protected table. Two of them LOCK one (0035's foreign key on
+ * `swarm_members`, 0039's constraint swap on `swarm_sessions`); the guard fires
+ * BEFORE DELETE OR TRUNCATE only, so neither can trip it. preflight's
+ * append-only-safety check does not yet draw that distinction — see
+ * MIGRATION_TOUCHED_TABLES below and runbook §2.2.1.
  */
 export const THIS_RELEASE_MIGRATIONS = [
   "0032_wallet_balance_samples_strategy_nav_idle_only.sql",
@@ -33,6 +37,9 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0036_quarantine_backfilled_samples.sql",
   "0037_aum_repairable_quarantine.sql",
   "0038_wallet_aum_snapshot_foundation.sql",
+  "0039_swarm_judge.sql",
+  "0040_swarm_judgements_append_only.sql",
+  "0041_swarm_judgement_soak_record.sql",
 ] as const;
 
 /**
@@ -62,6 +69,14 @@ export const NEW_TABLES = [
   "wallet_balance_sample_evidence",
   "wallet_sleeve_sample_evidence",
   "wallet_aum_snapshot_runs",
+  // 0039. `swarm_judge_config` is NOT EMPTY after the migration — 0039 seeds
+  // its single operator-switch row (`INSERT … VALUES (1) ON CONFLICT DO
+  // NOTHING`), so postflight's `new-tables` check reports it as present-but-not-
+  // empty by design. It is listed here anyway because preflight's clean-targets
+  // check is the half that matters: a `swarm_judge_config` that already exists
+  // on a database claiming to be at v0.2.2 is an out-of-band change.
+  "swarm_judge_config",
+  "swarm_session_judgements",
 ] as const;
 export const NEW_COLUMNS = [
   { table: "wallet_balance_samples", column: "strategy_nav_idle_only" },
@@ -86,6 +101,14 @@ export const NEW_COLUMNS = [
   { table: "chain_day_blocks", column: "boundary_next_block_number" },
   { table: "chain_day_blocks", column: "boundary_next_block_hash" },
   { table: "chain_day_blocks", column: "boundary_next_block_timestamp" },
+  // 0041, on the table 0039 creates earlier in this release — the same
+  // create-then-alter-within-one-release shape as the chain_day_blocks rows
+  // above, which checkCleanTargets already handles by skipping a NEW_TABLES
+  // target that does not exist yet.
+  { table: "swarm_session_judgements", column: "applied" },
+  { table: "swarm_session_judgements", column: "applied_skipped_reason" },
+  { table: "swarm_session_judgements", column: "dropped_positions" },
+  { table: "swarm_session_judgements", column: "dropped_disagreements" },
 ] as const;
 
 /** Every table this release creates, alters, locks, or writes. Preflight checks
@@ -96,6 +119,15 @@ export const MIGRATION_TOUCHED_TABLES = [
   "wallet_sleeve_samples",
   "job_schedules",
   "swarm_members",
+  // 0039 swaps swarm_sessions' state CHECK constraint to admit 'judged'. Like
+  // `swarm_members` above this is a LOCK, not a write — an ALTER TABLE ADD
+  // CONSTRAINT removes no row, so rm_append_only_guard() (BEFORE DELETE OR
+  // TRUNCATE) cannot fire on it. Both tables ARE append-only protected, and
+  // preflight's append-only-safety check does not currently distinguish
+  // "locks" from "writes", so it reports them as collisions; that over-broad
+  // rule is a defect in the check, not a reason to under-declare the roster
+  // this constant exists to keep honest. See the PR for issue #807.
+  "swarm_sessions",
 ] as const;
 
 /**
