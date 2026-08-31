@@ -1208,12 +1208,20 @@ export async function getJudgeConfigAdmin(): Promise<AdminResult<{ judge: JudgeC
  * DELIBERATELY SHORT, AND IT SHRANK. #806 closed nine of the ten things an
  * operator would otherwise have had to be warned about — the unverifiable
  * `applied`, the stale `inForce`, the silent `aggregate` overwrite, the five
- * degraded runs per benign terminal, the swallowed enqueue, the untied claim
- * order, the degenerate window, the un-deduped judge enqueue, the skipped
+ * degraded runs per TERMINAL-STATE refusal, the swallowed enqueue, the untied
+ * claim order, the degenerate window, the un-deduped judge enqueue, the skipped
  * production assertion. A warning listing fixed problems trains an operator to
  * skip warnings, so this names ONLY what remains, and both entries are design
  * trade-offs rather than defects. If a later change closes one, DELETE the line
  * — do not leave it standing as decoration.
+ *
+ * NOT LISTED, on purpose: a judging can still be lost when its rollup takes
+ * longer to land than the judge job's five backed-off attempts (~30s), because
+ * the dedupe key is sticky across terminal states and nothing re-enqueues a
+ * `dead` job. That is a real cost of the sticky key — but it is LOUD, not
+ * silent: five degraded runs, a `dead` job, and a driver log line naming that
+ * no judgement row exists. This list is for what the surface cannot tell you,
+ * and that one it tells you plainly.
  */
 export function judgeModeWarnings(mode: JudgeMode): string[] {
   if (mode === "off") return [];

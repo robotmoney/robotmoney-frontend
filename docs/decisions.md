@@ -3038,16 +3038,39 @@ lock. The DELIBERATE two-step re-aggregation still drops the judge's prose, by
 design — the aggregator owns the recommendation — and that is the loss the read
 path reports rather than prevents.
 
-**Benign terminals are skips, on the same argument `judge_disabled` won.**
-Measured against a real Postgres driving the real claim loop,
-`terminal_state:cancelled`, `terminal_state:published` and
-`illegal_transition:window_closed->judged` each wrote five `degraded` runs before
-`max_attempts` settled the job. Cancelling a session during a soak needed no race
-to produce them. The test applied is "can a retry change the answer", which is
-why the rollup seam translates only `illegal_transition:judged->aggregated` and
-not the not-yet-aggregated states, where a retry genuinely might. Rejected:
-changing `isDegradedResult()`, which would have made every lane's `{ok:false}`
-mean something new to fix one seam's problem.
+**Benign terminals are skips, on the same argument `judge_disabled` won — and
+ONLY the terminal ones.** Measured against a real Postgres driving the real claim
+loop, `terminal_state:cancelled` and `terminal_state:published` each wrote five
+`degraded` runs before `max_attempts` settled the job; cancelling a session
+during a soak needed no race to produce them. The test applied is **"can a retry
+change the answer"**. Rejected: changing `isDegradedResult()`, which would have
+made every lane's `{ok:false}` mean something new to fix one seam's problem.
+
+**The first cut of that list failed its own test, and an independent review
+caught it.** It also translated `illegal_transition:*->judged`. That wildcard is
+wrong for `window_closed`, `collecting` and `scheduled` alike, and the sequence
+it lost needs no race: `aggregate` is due one second before `judge`, fails once
+(the rollup is ~6 statements), and backs off past the judge's instant; the judge
+finds the session still `window_closed` and settles `succeeded` on attempt one
+with zero degraded runs. The aggregate then retries and succeeds, the session
+publishes, and there is no judgement row and nothing to re-enqueue —
+`dedupe_key` is unique across all time and that job is terminal. Untranslated the
+sequence self-heals and is visible while it does.
+
+So the fix had reintroduced this issue's own headline — *swallowing the failure
+that makes the soak collect nothing* — while closing nine other instances of it,
+and it did so on the issue that gates flipping the mode off `off`. The clause is
+dropped entirely; `terminal_state:*` already covers the two states where the
+operator-noise argument bites. **Retrying a recoverable misordering is not queue
+noise. It is the mechanism that makes the lifecycle self-heal, and translating it
+away converts a loud, temporary failure into a silent, permanent one.**
+
+The test that covered it asserted the defect, and could not have caught it: the
+observable state is IDENTICAL to the bug's — `succeeded`, one attempt, zero
+degraded rows — and only the cause differs, which the seam cannot see. A test
+written from the same wrong premise as the code confirms the premise. The
+replacement drives one claim, requires `pending` with a visible degraded run,
+then commits the aggregate and requires the judging to land.
 
 **A failed enqueue fails the run.** `admin()` returned the parsed body and never
 the status, so a 403 after a token rotation printed
@@ -3068,12 +3091,25 @@ states **exactly one `swarm`-lane worker** as a requirement, because everything
 `run_after` buys is a CLAIM-order property that `FOR UPDATE SKIP LOCKED` gives
 away the moment a second worker exists.
 
-**The manual re-judging lever is explicit rather than implicit.** `enqueue-job`
-INSERTed with no dedupe key, so two `judge` enqueues for one session produced two
-judgement rows and, in `enforce`, two rewrites of the recommendation — the
-advisory lock serializes, it does not deduplicate, and `judged -> judged` is
-idempotent success. It now carries `swarm:<session-id>:<action>` like the admin
-path, and re-judging is `force: true`, which enqueues with no key.
+**The manual re-judging lever is explicit rather than implicit — on the judge
+alone.** `enqueue-job` INSERTed with no dedupe key, so two `judge` enqueues for
+one session produced two judgement rows and, in `enforce`, two rewrites of the
+recommendation — the advisory lock serializes, it does not deduplicate, and
+`judged -> judged` is idempotent success. It now carries `swarm:<session-id>:judge`,
+and re-judging is `force: true`, which enqueues with no key.
+
+The first cut applied the key to all five lifecycle actions, which the same
+review caught as a second defect of the same family. `jobs_dedupe_key_idx` is
+unique across the whole table **including terminal rows**, so a key makes a job
+that once died permanently un-re-enqueueable — the hazard
+`worker/handlers/repair.ts` already documents and deliberately avoids. On
+`close_window` it wedges the subject outright: the job dies, `openSession` keeps
+returning the same still-`collecting` session, and every later enqueue is
+suppressed. The judge is the one action that can carry a key safely, because it
+is the one step whose absence the driver tolerates by design. The key stays
+sticky across terminal states on purpose: treating a `succeeded` judge job as
+re-enqueueable would hand a re-adopting driver a second judging of a session
+already judged, which is the defect this closed.
 
 **`SWARM_SCHEDULES_ENABLED` unset is now a failure.** The production assertion
 skipped when the variable was absent, on the reading that "nobody exported one"

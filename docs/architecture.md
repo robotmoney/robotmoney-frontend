@@ -1277,19 +1277,36 @@ single clean `succeeded` run naming the reason. `off` is an operator's answer, n
 a transient blip a retry can fix. The HTTP path keeps its 409: there a caller
 asked for a judging and must be told it cannot have one.
 
-**And so is every other benign terminal** (issue #806). #767 translated exactly
-one error; measured against a real Postgres driving the real claim loop, each of
-the others wrote FIVE `degraded` runs before `max_attempts` settled the job.
-`terminal_state:cancelled` needs no race at all — `cancelSessionAdmin` is a bare
-`guardedTransition` and nothing dequeues a session's remaining lifecycle jobs, so
-cancelling a session during a soak reliably produced five red rows for a control
-working as designed. The seam now translates `terminal_state:*` and
-`illegal_transition:*->judged` for the judge, and `terminal_state:*` plus
-`illegal_transition:judged->aggregated` for the rollup. The test is **"can a
-retry change the answer"**, not "is it an error": a session that has not yet
-been aggregated MIGHT become aggregatable, which is why the rollup's list names
-only `judged`. `isDegradedResult()` itself is untouched — the translation lives
-at the seam that knows nobody asked.
+**And so is every other benign terminal — but ONLY the terminal ones** (issue
+#806). #767 translated exactly one error; measured against a real Postgres
+driving the real claim loop, `terminal_state:cancelled` and
+`terminal_state:published` each wrote FIVE `degraded` runs before `max_attempts`
+settled the job. Cancelling needs no race at all — `cancelSessionAdmin` is a
+bare `guardedTransition` and nothing dequeues a session's remaining lifecycle
+jobs, so cancelling during a soak reliably produced five red rows for a control
+working as designed.
+
+The test is **"can a retry change the answer"**, not "is it an error", and it is
+the only test applied. So the judge's seam translates `judge_disabled` and
+`terminal_state:*` and **no `illegal_transition` at all**, while the rollup's
+translates `terminal_state:*` plus `illegal_transition:judged->aggregated` — the
+one source state from which a re-delivered aggregation is a step already taken.
+
+**A non-terminal source state must keep retrying, and this was got wrong once.**
+An earlier cut translated `illegal_transition:*->judged`, which is wrong for
+`window_closed`, `collecting` and `scheduled` alike. The sequence it lost needs
+no race: `aggregate` is due one second before `judge`, fails ONCE (the rollup is
+~6 statements), and backs off past the judge's instant; the judge then finds the
+session still `window_closed` and settles `succeeded` on attempt 1 with zero
+degraded runs. The aggregate retries and succeeds, the session publishes, and
+there is no judgement row and nothing to re-enqueue — `dedupe_key` is unique
+across all time and that job is terminal. Untranslated it self-heals and stays
+visible while it does. Retrying a recoverable misordering is not queue noise; it
+is the mechanism that makes the lifecycle self-heal, and translating it away
+converts a loud, temporary failure into a silent, permanent one.
+
+`isDegradedResult()` itself is untouched — the translation lives at the seam
+that knows nobody asked.
 
 **Flipping the mode off `off` returns the residual hazards, and only those**
 (issue #806). `POST /api/swarm/admin/judge` answers with a `warnings` array,
@@ -1302,15 +1319,28 @@ else #806 found is fixed, and a warning that lists fixed problems trains an
 operator to skip warnings. A later change that closes one of the two deletes the
 line rather than leaving it standing.
 
-**The driver's enqueue is deduplicated, and re-judging is explicit** (issue
-#806). `POST /api/swarm/admin/enqueue-job` now inserts with the same
-`swarm:<session-id>:<action>` key `createSessionAdmin` uses, answering a
-suppressed insert with the job that already exists (`deduped: true`) rather than
-with `undefined`. Two `judge` enqueues for one session — what a driver restart
-that re-adopts an in-flight session produces — therefore leave one job and one
-judgement row; the advisory lock serializes concurrent judgings but does not
-deduplicate them, and `judged -> judged` is idempotent success. Manual
-re-judging is `force: true`, which enqueues with no key.
+**The driver's JUDGE enqueue is deduplicated — and only that one** (issue #806).
+`POST /api/swarm/admin/enqueue-job` inserts `swarm:<session-id>:judge`,
+answering a suppressed insert with the job that already exists (`deduped: true`)
+rather than with `undefined`. Two `judge` enqueues for one session — what a
+driver restart that re-adopts an in-flight session produces — therefore leave one
+job and one judgement row; the advisory lock serializes concurrent judgings but
+does not deduplicate them, and `judged -> judged` is idempotent success. Manual
+re-judging is `force: true`, which enqueues with no key, and the key is
+deliberately STICKY across terminal states: treating a `succeeded` judge job as
+re-enqueueable would hand a re-adopting driver a second judging of a session
+already judged.
+
+The other four lifecycle actions carry **no** key from this endpoint, and must
+not. `jobs_dedupe_key_idx` is `UNIQUE (dedupe_key) WHERE dedupe_key IS NOT NULL`
+across the whole table **including terminal rows**, so a key makes a job that
+once died permanently un-re-enqueueable — `worker/handlers/repair.ts` documents
+the same hazard and carries no key for the same reason. On `close_window` that
+wedges the subject rather than merely losing a step: the job goes `dead`,
+`openSession` keeps returning the same still-`collecting` session, every later
+re-enqueue is suppressed, and `waitForSessionState` times out on every pass. The
+judge is the one action that can carry a key safely, because it is the one step
+whose absence the driver tolerates by design.
 
 **The soak has a read path** (issue #767, folded from #768).
 `GET /api/swarm/admin/sessions/:id/judgements` returns every judge run for one
