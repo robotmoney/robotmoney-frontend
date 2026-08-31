@@ -599,6 +599,10 @@ function baseJudgements() {
     inForce: {
       id: "2", mode: "enforce", source: "model", fallbackReason: null,
       applied: false, appliedSkippedReason: "session_no_longer_writable",
+      // Reconciliation against the session as it stands now (issue #806): a
+      // row that never applied is not "superseded" — there was nothing on the
+      // session to lose — so the panel keeps saying NOT applied.
+      carriedBySession: false, supersededReason: null,
       model: "test/judge", promptHash: "ph-2", inputsDigest: "id-2", takeCount: 3, minTakes: 3,
       dropped: { positions: 0, disagreements: 0 }, partiallyDegraded: false,
       opinion: opinion("The enforce opinion that missed its session."),
@@ -607,6 +611,7 @@ function baseJudgements() {
     older: {
       id: "1", mode: "shadow", source: "model", fallbackReason: null,
       applied: false, appliedSkippedReason: null,
+      carriedBySession: false, supersededReason: null,
       model: "test/judge", promptHash: "ph-1", inputsDigest: "id-1", takeCount: 3, minTakes: 3,
       dropped: { positions: 2, disagreements: 1 }, partiallyDegraded: true,
       opinion: opinion("The shadow opinion whose response was trimmed."),

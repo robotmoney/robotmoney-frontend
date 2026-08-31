@@ -425,10 +425,10 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
   const realistic = resolveSmokeCadence({ stage: true });
   const fast = resolveSmokeCadence({ stage: false });
 
-  test("a real production boot passes", () => {
-    expect(productionConstantMismatches(realistic, {}, { production: true })).toEqual([]);
-    expect(productionConstantMismatches(realistic, { SWARM_SCHEDULES_ENABLED: "0" }, { production: true })).toEqual([]);
-    expect(() => assertProductionConstants(realistic, {}, { production: true })).not.toThrow();
+  test("a real production boot passes — and it must EXPORT the switch to do so", () => {
+    const env = { SWARM_SCHEDULES_ENABLED: "0" };
+    expect(productionConstantMismatches(realistic, env, { production: true })).toEqual([]);
+    expect(() => assertProductionConstants(realistic, env, { production: true })).not.toThrow();
   });
 
   test("a CI/accelerated-clock boot CANNOT satisfy the production branch", () => {
@@ -459,6 +459,44 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
       .toThrow(/REFUSING TO BOOT/);
   });
 
+  // UNSET IS NOT SAFE (issue #806). This check used to SKIP when the variable
+  // was absent or empty, on the reading that "nobody exported one" means no
+  // crons. docker-compose.yml declares `SWARM_SCHEDULES_ENABLED:
+  // ${SWARM_SCHEDULES_ENABLED:-1}`, so unset is the CRON CADENCE — five
+  // subject-blind schedules seeded by resolveSwarmSchedules, none of them
+  // `swarm.judge`. A boot that merely failed to export the variable therefore
+  // ran a third cadence whose sessions can never be judged, and this assertion
+  // reported nothing wrong. The skip was the defect; the check now demands the
+  // literal "0".
+  test("SWARM_SCHEDULES_ENABLED UNSET in a production boot is fatal, not skipped", () => {
+    for (const env of [{}, { SWARM_SCHEDULES_ENABLED: "" }, { SWARM_SCHEDULES_ENABLED: undefined }]) {
+      const problems = productionConstantMismatches(realistic, env, { production: true });
+      expect(problems.join(" "), JSON.stringify(env)).toContain("SWARM_SCHEDULES_ENABLED");
+      expect(() => assertProductionConstants(realistic, env, { production: true }))
+        .toThrow(/REFUSING TO BOOT/);
+    }
+    // The message says WHY unset is not the same as "no crons", so the operator
+    // reading it does not conclude the check is being pedantic.
+    expect(productionConstantMismatches(realistic, {}, { production: true }).join(" "))
+      .toContain("(unset)");
+    expect(productionConstantMismatches(realistic, {}, { production: true }).join(" "))
+      .toContain("compose defaults this variable to '1'");
+  });
+
+  // The red control: the ONLY value that satisfies it is the intended one, so
+  // the check above cannot be green for the wrong reason.
+  test("exactly one value passes the schedules check", () => {
+    const failing = ["", "1", "true", "false", "0 ", "no", "off"];
+    for (const v of failing) {
+      expect(
+        productionConstantMismatches(realistic, { SWARM_SCHEDULES_ENABLED: v }, { production: true }).join(" "),
+        `value ${JSON.stringify(v)}`,
+      ).toContain("SWARM_SCHEDULES_ENABLED");
+    }
+    expect(productionConstantMismatches(realistic, { SWARM_SCHEDULES_ENABLED: "0" }, { production: true }))
+      .toEqual([]);
+  });
+
   test("a window that is no longer one full interval is fatal in EITHER branch", () => {
     const drifted = { ...realistic, swarmWindowMs: 60 * 60_000 }; // the old flat hour
     for (const production of [true, false]) {
@@ -481,9 +519,13 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
   });
 
   test("resolveSmokeCadenceForBoot resolves AND proves, in one step nobody can half-perform", () => {
-    expect(resolveSmokeCadenceForBoot({ stage: true, env: {} })).toEqual(realistic);
+    // A production boot must carry the switch explicitly since #806 — see the
+    // unset test above for why absent is not the same as "no crons".
+    expect(resolveSmokeCadenceForBoot({ stage: true, env: { SWARM_SCHEDULES_ENABLED: "0" } })).toEqual(realistic);
     expect(resolveSmokeCadenceForBoot({ stage: false, env: {} })).toEqual(fast);
     expect(() => resolveSmokeCadenceForBoot({ stage: true, env: { SWARM_SCHEDULES_ENABLED: "1" } }))
+      .toThrow(/REFUSING TO BOOT/);
+    expect(() => resolveSmokeCadenceForBoot({ stage: true, env: {} }))
       .toThrow(/REFUSING TO BOOT/);
   });
 

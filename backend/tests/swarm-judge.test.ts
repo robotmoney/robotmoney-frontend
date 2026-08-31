@@ -1689,7 +1689,11 @@ test("cadence: turning the mode on takes effect on the NEXT drain of an already-
 // publish — is pinned by scripts/tests/unit/swarm-session-judge-step.test.ts.
 
 /** Exactly what `enqueueLifecycleJob(action, { sessionId })` does, over HTTP. */
-async function enqueueOverAdmin(action: string, sessionId: string): Promise<{ jobId: number; kind: string }> {
+async function enqueueOverAdmin(
+  action: string,
+  sessionId: string,
+  opts: { force?: boolean } = {},
+): Promise<{ jobId: number; kind: string }> {
   const adminToken = config.adminToken;
   const allowInsecure = config.allowInsecure;
   config.adminToken = null;
@@ -1698,7 +1702,7 @@ async function enqueueOverAdmin(action: string, sessionId: string): Promise<{ jo
     const req = new Request("http://x/api/swarm/admin/enqueue-job", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, sessionId }),
+      body: JSON.stringify({ action, sessionId, ...(opts.force ? { force: true } : {}) }),
     });
     const res = await handleSwarm(req, new URL(req.url));
     expect(res?.status, `enqueue-job ${action} -> ${JSON.stringify(res?.body)}`).toBe(200);
@@ -2034,4 +2038,324 @@ test("the admin read path returns a session's judgement history and names which 
   const missing = await admin.getSessionJudgementsAdmin(crypto.randomUUID());
   expect(missing.ok).toBe(false);
   expect(missing.status).toBe(404);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issue #806 — the soak must not report success it cannot verify.
+//
+// Everything below drives an ENTRY POINT, never a layer. That distinction is
+// the issue's first finding: the test that appeared to prove `applied = false`
+// called `judgeSession()` directly, which bypasses `beforeRecord` — and
+// `beforeRecord` is the whole reason the production path behaves differently
+// from the layer. A test one level down from the gate cannot see the gate.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The judgement rows for a session, oldest first, as the record holds them. */
+const judgementRows = async (sessionId: string) =>
+  (await sql`
+    SELECT id, mode, applied, applied_skipped_reason, prompt_hash, inputs_digest
+    FROM swarm_session_judgements WHERE session_id = ${sessionId} ORDER BY id`) as any[];
+
+/** What the SESSION says the judge left on it — the other store. */
+const sessionJudgeOf = async (sessionId: string) =>
+  ((await sql`
+    SELECT swarm_recommendation->'judge' AS judge FROM swarm_sessions WHERE id = ${sessionId}`)[0] as any).judge;
+
+// ── AC1/AC2: `applied` is read back, and the test drives judgeSessionAdmin ───
+
+test("#806 `applied` is READ BACK from the session, and the test drives judgeSessionAdmin — the production entry point", async () => {
+  const { session, members } = await aggregatedSession("judge-806-applied");
+  await setJudgeConfig({ mode: "enforce" });
+
+  const res = await admin.judgeSessionAdmin(session.id, undefined) as any;
+  expect(res.ok).toBe(true);
+  expect(res.judge.applied).toBe(true);
+  expect(res.judge.appliedSkippedReason).toBeNull();
+
+  // THE INVARIANT `applied` NOW CARRIES. Not "an UPDATE matched a row" — the
+  // session row demonstrably carries THIS judgement's fingerprint. The panel
+  // renders `applied` as "applied to the session"; this is that sentence being
+  // true rather than inferred.
+  const [row] = await judgementRows(session.id);
+  const carried = await sessionJudgeOf(session.id);
+  expect(row.applied).toBe(true);
+  expect(String(carried.inputs_digest)).toBe(String(row.inputs_digest));
+  expect(String(carried.prompt_hash)).toBe(String(row.prompt_hash));
+  // …and it is the SAME digest the response reported, so the three agree.
+  expect(String(res.judge.inputsDigest)).toBe(String(row.inputs_digest));
+});
+
+test("#806 a refused enforce judging leaves NO ROW — it is a rollback, not a row that says so", async () => {
+  // The claim docs/decisions.md used to make, executed. `judgeSessionAdmin`
+  // always supplies `beforeRecord = transitionWithin(…, 'judged', …)`, whose
+  // admitted set {aggregated, judged} is a STRICT SUBSET of
+  // OPINION_WRITABLE_STATES — so a session that is no longer transitionable is
+  // refused by the GATE, inside the judge's transaction, and everything rolls
+  // back. `applied_skipped_reason` is not reachable from here at all.
+  const { session, members } = await aggregatedSession("judge-806-refused");
+  await setJudgeConfig({ mode: "enforce" });
+  const before = JSON.stringify(await recOf(session.id));
+
+  await ic.publishSession(session.id); // the race, resolved before the judging
+  expect(await stateOf(session.id)).toBe("published");
+
+  const res = await admin.judgeSessionAdmin(session.id, undefined) as any;
+  expect(res.ok).toBe(false);
+  expect(String(res.error)).toBe("terminal_state:published");
+  // NOTHING recorded. This is the sentence the canonical doc got backwards.
+  expect(await judgementRows(session.id)).toEqual([]);
+  expect(await latestJudgement(session.id)).toBeNull();
+  expect(JSON.stringify(await recOf(session.id)), "the published session is untouched").toBe(before);
+});
+
+// ── AC3: `inForce` reconciles against the session ───────────────────────────
+
+test("#806 `inForce` reports SUPERSEDED after the legal close -> aggregate that wipes the judge's prose", async () => {
+  const { session, members } = await aggregatedSession("judge-806-superseded");
+  await setJudgeConfig({ mode: "enforce" });
+  expect(((await admin.judgeSessionAdmin(session.id, undefined)) as any).ok).toBe(true);
+
+  // Before: the record and the session agree, and the panel's sentence is true.
+  const fresh = await admin.getSessionJudgementsAdmin(session.id) as any;
+  expect(fresh.inForce.applied).toBe(true);
+  expect(fresh.inForce.carriedBySession).toBe(true);
+  expect(fresh.inForce.supersededReason).toBeNull();
+  expect(fresh.sessionJudge.inputsDigest).toBe(fresh.inForce.inputsDigest);
+
+  // TWO LEGAL ADMIN ACTIONS. `judged -> window_closed` and
+  // `window_closed -> aggregated` are both in the transition table; nothing
+  // here is a race or a misuse. `domain.aggregateSession` then replaces
+  // `swarm_recommendation` WHOLESALE.
+  expect((await admin.closeSessionAdmin(session.id, undefined, "admin", "reopening")).ok).toBe(true);
+  expect((await admin.aggregateSessionAdmin(session.id, undefined)).ok).toBe(true);
+  expect(await sessionJudgeOf(session.id), "the judge's fingerprint went with it").toBeNull();
+
+  // After: the ROW is unchanged (append-only history is not rewritten), and the
+  // READ PATH tells the truth about it. Before #806 this said
+  // "In force — enforce · applied to the session" over prose that was gone.
+  const [row] = await judgementRows(session.id);
+  expect(row.applied, "the row still records what happened when it committed").toBe(true);
+
+  const stale = await admin.getSessionJudgementsAdmin(session.id) as any;
+  expect(stale.inForce.id).toBe(String(row.id));
+  expect(stale.inForce.applied).toBe(true);
+  expect(stale.inForce.carriedBySession).toBe(false);
+  expect(stale.inForce.supersededReason).toBe("recommendation_overwritten");
+  expect(stale.sessionJudge).toBeNull();
+  // Every row in the list is reconciled, not just `inForce`.
+  expect((stale.judgements as any[]).every((j) => j.carriedBySession === false)).toBe(true);
+});
+
+test("#806 a shadow row is never called superseded — it was never on the session to lose", async () => {
+  const { session, members } = await aggregatedSession("judge-806-shadow-not-superseded");
+  await setJudgeConfig({ mode: "shadow" });
+  expect(((await admin.judgeSessionAdmin(session.id, undefined)) as any).ok).toBe(true);
+
+  const res = await admin.getSessionJudgementsAdmin(session.id) as any;
+  expect(res.inForce.applied).toBe(false);
+  expect(res.inForce.carriedBySession, "shadow reaches no session, by definition").toBe(false);
+  expect(res.inForce.supersededReason, "…and that is not a LOSS, so it is not reported as one").toBeNull();
+});
+
+// ── AC4: `swarm.aggregate` cannot silently overwrite a judged session ───────
+
+test("#806 a re-delivered swarm.aggregate cannot rewrite a judged session — it is a clean skip, not an overwrite", async () => {
+  const { session, members } = await aggregatedSession("judge-806-aggregate-guard");
+  await setJudgeConfig({ mode: "enforce" });
+  expect(((await admin.judgeSessionAdmin(session.id, undefined)) as any).ok).toBe(true);
+  const judged = JSON.stringify(await recOf(session.id));
+  expect(await sessionJudgeOf(session.id)).not.toBeNull();
+
+  // The re-delivery, through the REAL claim loop and the REAL handler.
+  const jobId = Number((await sql`
+    INSERT INTO jobs (kind, payload) VALUES ('swarm.aggregate', ${sql.json({ sessionId: session.id } as any)})
+    RETURNING id`)[0].id);
+  await drainUntilRun(jobId);
+
+  // BEFORE #806: `ic.aggregateSession` ran unguarded from ANY state and the
+  // judge's rationale/disagreements/release_safety/fingerprint were gone, with
+  // the judgement row still saying `applied = true`.
+  expect(JSON.stringify(await recOf(session.id))).toBe(judged);
+  expect(await sessionJudgeOf(session.id)).not.toBeNull();
+  expect(await stateOf(session.id)).toBe("judged");
+
+  // …and it is a SKIP, not five red rows: nothing dequeues lifecycle jobs.
+  const job = await jobRow(jobId);
+  expect(job.status).toBe("succeeded");
+  expect(Number(job.attempts)).toBe(1);
+  const runs = await runsOf(jobId);
+  expect(runs.filter((r) => r.status === "degraded").length).toBe(0);
+  expect(runs[0].output).toEqual({ skipped: "illegal_transition:judged->aggregated", sessionId: session.id });
+});
+
+// ── AC5: benign terminals write ZERO degraded runs ─────────────────────────
+//
+// Driven through the REAL claim loop against a real Postgres — not a mocked
+// handler — because the thing being asserted is what `worker/loop.ts` RECORDS,
+// and `isDegradedResult()` is the code under test as much as the handler is.
+// Each case below wrote FIVE `degraded` rows before this change.
+
+/** Drain a job to completion (through every retry it takes), bounded. */
+async function drainToSettled(jobId: number): Promise<void> {
+  for (let i = 0; i < 30; i++) {
+    const [j] = await sql`SELECT status FROM jobs WHERE id = ${jobId}`;
+    if (j && (j.status === "succeeded" || j.status === "dead")) return;
+    // Retries back off into the future; pull them due so the loop can claim.
+    await sql`UPDATE jobs SET run_after = now() WHERE id = ${jobId} AND status = 'pending'`;
+    if (!(await processOneJob({ lane: LANES.swarm, workerId: `test-806-${jobId}` }))) return;
+  }
+}
+
+const degradedCount = async (jobId: number) =>
+  Number((await sql`SELECT count(*)::int AS n FROM job_runs WHERE job_id = ${jobId} AND status = 'degraded'`)[0].n);
+
+async function judgeJobFor(sessionId: string): Promise<number> {
+  return Number((await sql`
+    INSERT INTO jobs (kind, payload) VALUES ('swarm.judge', ${sql.json({ sessionId } as any)})
+    RETURNING id`)[0].id);
+}
+
+test("#806 terminal_state:cancelled — cancelling a session mid-soak writes ZERO degraded runs", async () => {
+  const { session, members } = await aggregatedSession("judge-806-cancelled");
+  await setJudgeConfig({ mode: "shadow" });
+  // No race needed, and that is the point: `cancelSessionAdmin` is a bare
+  // guardedTransition and there is no `DELETE FROM jobs` anywhere in the
+  // backend, so the queued judging survives the cancellation.
+  await sql`UPDATE swarm_sessions SET state = 'collecting' WHERE id = ${session.id}`;
+  expect((await admin.cancelSessionAdmin(session.id, undefined, "admin", "operator stopped it")).ok).toBe(true);
+
+  const jobId = await judgeJobFor(session.id);
+  await drainToSettled(jobId);
+
+  const job = await jobRow(jobId);
+  expect(job.status, "one clean success, not five retries into `dead`").toBe("succeeded");
+  expect(Number(job.attempts)).toBe(1);
+  expect(await degradedCount(jobId), "five red rows for a control working as designed").toBe(0);
+  expect((await runsOf(jobId))[0].output).toEqual({ skipped: "terminal_state:cancelled", sessionId: session.id });
+  expect(await judgementRows(session.id)).toEqual([]);
+});
+
+test("#806 terminal_state:published — a judging that lost its race writes ZERO degraded runs", async () => {
+  const { session, members } = await aggregatedSession("judge-806-published");
+  await setJudgeConfig({ mode: "shadow" });
+  await ic.publishSession(session.id);
+
+  const jobId = await judgeJobFor(session.id);
+  await drainToSettled(jobId);
+
+  expect((await jobRow(jobId)).status).toBe("succeeded");
+  expect(Number((await jobRow(jobId)).attempts)).toBe(1);
+  expect(await degradedCount(jobId)).toBe(0);
+  expect((await runsOf(jobId))[0].output).toEqual({ skipped: "terminal_state:published", sessionId: session.id });
+});
+
+test("#806 illegal_transition:window_closed->judged — a reopened session writes ZERO degraded runs", async () => {
+  const { session, members } = await aggregatedSession("judge-806-illegal");
+  await setJudgeConfig({ mode: "shadow" });
+  expect((await admin.closeSessionAdmin(session.id, undefined, "admin", "reopening")).ok).toBe(true);
+  expect(await stateOf(session.id)).toBe("window_closed");
+
+  const jobId = await judgeJobFor(session.id);
+  await drainToSettled(jobId);
+
+  expect((await jobRow(jobId)).status).toBe("succeeded");
+  expect(await degradedCount(jobId)).toBe(0);
+  expect((await runsOf(jobId))[0].output)
+    .toEqual({ skipped: "illegal_transition:window_closed->judged", sessionId: session.id });
+});
+
+test("#806 the translation is NOT a blanket amnesty — a failure a retry could fix stays degraded", async () => {
+  // The red control for the three tests above. If the seam translated every
+  // `{ok:false}` it would be green for the wrong reason, and a real failure
+  // would stop being visible. `session not found` is the shape that must
+  // survive: it is neither an operator's answer nor a session past judging.
+  await setJudgeConfig({ mode: "shadow" });
+  const jobId = await judgeJobFor(crypto.randomUUID());
+  await drainToSettled(jobId);
+  expect(await degradedCount(jobId)).toBeGreaterThan(0);
+});
+
+// ── AC8 / test plan 4: the driver's enqueue is deduplicated ────────────────
+
+test("#806 two judge enqueues for one session produce ONE job and ONE judgement row", async () => {
+  const { session, members } = await aggregatedSession("judge-806-dedupe");
+  await setJudgeConfig({ mode: "shadow" });
+
+  // The driver restart case: `waitForSubjectSession` exists precisely to
+  // re-adopt an in-flight session, and re-adoption re-runs the judge step.
+  const first = await enqueueOverAdmin("judge", session.id);
+  const second = await enqueueOverAdmin("judge", session.id);
+  expect(second.jobId, "the second enqueue is answered with the job that exists").toBe(first.jobId);
+  expect(await kindsFor(session.id)).toEqual(["swarm.judge"]);
+  expect((await sql`SELECT dedupe_key FROM jobs WHERE id = ${first.jobId}`)[0].dedupe_key)
+    .toBe(`swarm:${session.id}:judge`);
+
+  await drainToSettled(first.jobId);
+  // BEFORE #806: two jobs, two judgement rows — and in `enforce`, two rewrites
+  // of the recommendation with the second winning. The advisory lock serializes
+  // them; it does not deduplicate them, and `judged -> judged` is idempotent
+  // success rather than a refusal.
+  expect((await judgementRows(session.id)).length).toBe(1);
+});
+
+test("#806 re-judging is still available, but you have to ASK for it — `force: true`", async () => {
+  const { session, members } = await aggregatedSession("judge-806-force");
+  await setJudgeConfig({ mode: "shadow" });
+
+  const first = await enqueueOverAdmin("judge", session.id);
+  await drainToSettled(first.jobId);
+  expect((await judgementRows(session.id)).length).toBe(1);
+  // Deduped forever, because dedupe_key is unique across ALL time — which is
+  // exactly why the manual lever has to be explicit rather than implicit.
+  expect((await enqueueOverAdmin("judge", session.id)).jobId).toBe(first.jobId);
+
+  const forced = await enqueueOverAdmin("judge", session.id, { force: true });
+  expect(forced.jobId).not.toBe(first.jobId);
+  expect((await sql`SELECT dedupe_key FROM jobs WHERE id = ${forced.jobId}`)[0].dedupe_key).toBeNull();
+  await drainToSettled(forced.jobId);
+  expect((await judgementRows(session.id)).length, "a deliberate re-judging is recorded").toBe(2);
+});
+
+// ── The mode flip warns about what is STILL true, and nothing else ──────────
+
+test("#806 flipping the mode off `off` returns the residual hazards — and `off` returns none", async () => {
+  const off = await admin.setJudgeConfigAdmin({ mode: "off" }) as any;
+  expect(off.warnings, "turning the judge OFF is not a hazard").toEqual([]);
+
+  const shadow = await admin.setJudgeConfigAdmin({ mode: "shadow" }) as any;
+  expect(shadow.warnings.length).toBe(1);
+  expect(shadow.warnings[0]).toContain("EXACTLY ONE `swarm`-lane worker");
+
+  // `enforce` carries one more, because it is the only mode whose prose reaches
+  // the session and therefore the only one that can lose it.
+  const enforce = await admin.setJudgeConfigAdmin({ mode: "enforce" }) as any;
+  expect(enforce.warnings.length).toBe(2);
+  expect(enforce.warnings.join(" ")).toContain("NOT permanent");
+
+  // Audited WITH the warnings: "what were they told at the time" is the second
+  // question asked of any prose that turns out to be wrong.
+  const [entry] = await sql`
+    SELECT scope FROM audit_log WHERE action = 'judge_config' ORDER BY id DESC LIMIT 1` as any[];
+  expect((entry.scope.warnings as string[]).length).toBe(2);
+});
+
+test("#806 the warning names only what is STILL untrue — every problem this issue fixed is absent from it", async () => {
+  // THE INVERSION RULE, pinned. A warning that lists fixed problems trains an
+  // operator to skip warnings, and this list only earns its place by being
+  // short. If a later change closes one of the two, the line is deleted rather
+  // than left standing — and if a later change REOPENS one of the below, this
+  // test is what makes adding it back a deliberate act.
+  const text = admin.judgeModeWarnings("enforce").join(" ").toLowerCase();
+  for (const fixed of [
+    "degraded",             // benign terminals are clean skips now
+    "applied_skipped",      // `applied` is read back, not inferred
+    "publishing anyway",    // a failed enqueue aborts the run
+    "dedupe",               // the driver's enqueue carries the key
+    "swarm_schedules",      // unset is fatal at boot
+    "applied to the session", // the panel sentence `inForce` used to render falsely
+    "silently",             // the aggregate overwrite is guarded
+  ]) {
+    expect(text, `the warning still mentions "${fixed}", which #806 fixed`).not.toContain(fixed);
+  }
+  expect(admin.judgeModeWarnings("off")).toEqual([]);
 });
