@@ -223,14 +223,29 @@ const PREWARM: readonly RenderArgs[] = [
   { knobs: { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1" }, files: DEMO_COMPOSE_FILES },
 ];
 
-// The whole file's Docker cost, paid once, outside any case's budget. Locally
-// the loop takes ~3.5 s; 120 s is ~35x that, sized for a cold shared runner
-// paying the Docker CLI's own start-up on the first render and running several
-// times slower than a warm workstation thereafter. It is still bounded, so a
-// genuinely wedged Docker fails the job in well under the workflow timeout
-// rather than hanging it. A missing or broken docker CLI throws here and turns
-// the whole file RED — never a silent skip (test-coverage policy).
-const PREWARM_TIMEOUT_MS = 120_000;
+// The whole file's Docker cost, paid once, outside any case's budget.
+//
+// SIZED AGAINST A DEGRADED SHARED RUNNER, NOT THIS WORKSTATION. The local loop
+// takes ~3.5 s, but that number is the wrong one to multiply: the degradation
+// this budget exists to survive — a cold, contended `ubuntu-latest` paying the
+// Docker CLI's own start-up and running several times slower thereafter — was
+// measured at 44-92 s for these 18 renders. 300 s is ~3.3-6.8x THAT, which is
+// the margin that matters; against the local figure it looks like ~85x, and
+// quoting that would be self-deception.
+//
+// The bound must stay explicit and must stay generous. On the pinned bun 1.3.5
+// a `beforeAll` with NO timeout argument expires at 5000.16 ms, so dropping
+// this argument would silently put the prewarm back under the same default
+// that reddened PR #801 and make the whole hoist a no-op on CI. Equally, a
+// budget only ~1.3x the degraded cost would just move the flake into the hook.
+//
+// It is still bounded, so a genuinely wedged Docker fails loudly in five
+// minutes instead of running out the job. (The enclosing bound is GitHub's
+// 6-hour default — neither unit.yml nor integration.yml sets `timeout-minutes`
+// — so this is the only tight limit on a hung render.) A missing or broken
+// docker CLI throws here and turns the whole file RED — never a silent skip
+// (test-coverage policy).
+const PREWARM_TIMEOUT_MS = 300_000;
 
 beforeAll(() => {
   for (const { knobs, files, profiles } of PREWARM) composeConfig(knobs, files, profiles ?? []);

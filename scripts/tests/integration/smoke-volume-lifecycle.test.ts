@@ -138,15 +138,26 @@ function configJson(extraFiles: string[], env: Record<string, string>): Cfg {
 
 // Both renderings the offline cases ask for. A case that asks for one this list
 // does not name is caught by the regression guard at the end of the file, not
-// left to be rediscovered as a flake. Locally the two renders cost ~0.8 s; the
-// 60 s budget is ~75x that, sized for a cold shared runner paying the Docker
-// CLI's own start-up on the first render, and still bounded so a wedged Docker
-// fails loudly instead of hanging.
+// left to be rediscovered as a flake.
+//
+// SIZED AGAINST A DEGRADED SHARED RUNNER, NOT THIS WORKSTATION. The two renders
+// cost ~0.8 s locally, but the degradation this budget exists to survive — a
+// cold, contended `ubuntu-latest`, where the first render also pays the Docker
+// CLI's own start-up — puts them at roughly 10-20 s. 120 s is ~6-12x THAT.
+// Multiplying the local figure would read as ~150x and would be self-deception.
+//
+// The argument must stay explicit: on the pinned bun 1.3.5 a `beforeAll` with
+// no timeout expires at 5000.16 ms, which would put this prewarm right back
+// under the default the four cases were just lifted out of.
+//
+// Still bounded, so a wedged Docker fails loudly rather than running out the
+// job, and a missing or broken docker CLI throws here and turns the file RED —
+// never a silent skip (test-coverage policy).
 const PREWARM: ReadonlyArray<readonly [string[], Record<string, string>]> = [
   [[], composeEnv()],
   [["-f", pgDataOverrideFile], composeEnv()],
 ];
-const PREWARM_TIMEOUT_MS = 60_000;
+const PREWARM_TIMEOUT_MS = 120_000;
 
 beforeAll(() => {
   for (const [files, env] of PREWARM) configJson(files, env);
