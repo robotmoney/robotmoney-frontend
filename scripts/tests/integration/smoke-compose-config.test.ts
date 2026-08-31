@@ -17,7 +17,7 @@
 // repo's test harness (the backend suite boots ephemeral Postgres through it);
 // a missing docker CLI fails this test loudly — never a silent skip
 // (test-coverage policy).
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { resolveSmokeEnv } from "../../smoke.ts";
 import { COMMITTED_REGIME_CRON, COMMITTED_RESEARCH_CRON, resolveSmokeCadence } from "../../lib/smoke-schedule.ts";
@@ -77,11 +77,65 @@ function baseEnv(): Record<string, string> {
 
 const DEMO_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.smoke.yml"] as const;
 
-function composeConfig(
+const BASE_COMPOSE_FILES = ["docker-compose.yml"] as const;
+const STAGE_COMPOSE_FILES = [...DEMO_COMPOSE_FILES, "docker-compose.stage.yml"] as const;
+// The three compositions this repo actually boots, in the order the describes
+// below iterate them.
+const ALL_COMPOSITIONS: ReadonlyArray<readonly string[]> = [
+  BASE_COMPOSE_FILES,
+  DEMO_COMPOSE_FILES,
+  STAGE_COMPOSE_FILES,
+];
+
+// ---------------------------------------------------------------------------
+// ONE `docker compose config` RUN PER DISTINCT ARGUMENT SET (issue #809).
+//
+// Every case below reads a RENDERED compose configuration, and rendering one
+// shells out to the Docker CLI. On a cold GitHub-hosted `ubuntu-latest` runner
+// that costs seconds, which is enough for the 5000 ms Bun gives a test that
+// declares no timeout to expire on a diff that changed nothing here: PR #801's
+// `unit` run 33355162238 died at 5187 ms with the same test green one commit
+// earlier. At roughly one effective concurrency a spurious red costs a full
+// re-queue behind the whole merge train, so the budget is not the thing to
+// raise — the redundant work is the thing to remove.
+//
+// So `composeConfig` memoises on its FULL argument set (knobs + compose files +
+// profiles), and `PREWARM` renders every distinct set once in a `beforeAll`
+// with an explicit budget. Two cases asking for the same rendering then share
+// one Docker run and NO test body ever waits on Docker.
+//
+// The memo key deliberately includes the overlay list and the profile list.
+// Several cases here render genuinely DIFFERENT configurations — base vs smoke
+// vs stage, the profile-gated member-agent resolution, the resolver's
+// `--stage` cadence profile — and collapsing those into one shared render
+// would make them pass while asserting against the wrong config, which is
+// strictly worse than the flake this removes.
+//
+// The cache stores the raw JSON TEXT and re-parses per call, so every case gets
+// its own object graph: a case that mutated its config could never leak that
+// into a sibling.
+const renderCache = new Map<string, string>();
+let prewarmed = false;
+/** Renders that missed the prewarm — see the regression guard at end of file. */
+const coldRendersAfterPrewarm: string[] = [];
+
+function renderKey(
   knobs: Record<string, string>,
-  composeFiles: readonly string[] = DEMO_COMPOSE_FILES,
-  profiles: readonly string[] = [],
-): ComposeConfig {
+  composeFiles: readonly string[],
+  profiles: readonly string[],
+): string {
+  return JSON.stringify({
+    files: [...composeFiles],
+    profiles: [...profiles],
+    knobs: Object.entries(knobs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  });
+}
+
+function renderComposeConfig(
+  knobs: Record<string, string>,
+  composeFiles: readonly string[],
+  profiles: readonly string[],
+): string {
   const r = Bun.spawnSync(
     [
       "docker", "compose",
@@ -94,8 +148,123 @@ function composeConfig(
   if (r.exitCode !== 0) {
     throw new Error(`docker compose config failed (exit ${r.exitCode}): ${new TextDecoder().decode(r.stderr)}`);
   }
-  return JSON.parse(new TextDecoder().decode(r.stdout)) as ComposeConfig;
+  return new TextDecoder().decode(r.stdout);
 }
+
+function composeConfig(
+  knobs: Record<string, string>,
+  composeFiles: readonly string[] = DEMO_COMPOSE_FILES,
+  profiles: readonly string[] = [],
+): ComposeConfig {
+  const key = renderKey(knobs, composeFiles, profiles);
+  let json = renderCache.get(key);
+  if (json === undefined) {
+    if (prewarmed) coldRendersAfterPrewarm.push(key);
+    json = renderComposeConfig(knobs, composeFiles, profiles);
+    renderCache.set(key, json);
+  }
+  return JSON.parse(json) as ComposeConfig;
+}
+
+interface RenderArgs {
+  knobs: Record<string, string>;
+  files: readonly string[];
+  profiles?: readonly string[];
+}
+
+// Every distinct rendering the cases below ask for. Adding a case that needs a
+// new one without listing it here is caught mechanically by the regression
+// guard at the end of this file, not left to be rediscovered as a flake.
+//
+// The INPUT knobs are duplicated here on purpose: the values a case asserts on
+// stay written out in the case itself, so mutating an expected value still
+// turns that case red.
+const PREWARM: readonly RenderArgs[] = [
+  ...ALL_COMPOSITIONS.flatMap((files): RenderArgs[] => [
+    // "AUM producer revision reaches every backend image build", explicit.
+    { knobs: { AUM_PRODUCER_REVISION: "git-fixture-abc123" }, files },
+    // The unset baseline: the revision cases, the healthcheck sweep, and the
+    // boot-guard "even when UNSET" cases all read it.
+    { knobs: {}, files },
+    // "boot-guard operator controls reach the api container", both set.
+    {
+      knobs: { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1", PG_NAMESPACE_GUARD_TIMEOUT_MS: "15000" },
+      files,
+    },
+  ]),
+  // "production capability TTLs" — explicit TTLs, base composition only.
+  {
+    knobs: { HTTP_FETCH_CACHE_TTL_MS: "45000", TOKEN_PRICE_CACHE_TTL_MS: "90000" },
+    files: BASE_COMPOSE_FILES,
+  },
+  // "explicit BASE_RPC_URL override is honored".
+  { knobs: { BASE_RPC_URL: "http://127.0.0.1:9999" }, files: DEMO_COMPOSE_FILES },
+  // The resolver-driven renders. The non-stage and stage cadence profiles are
+  // DIFFERENT argument sets and keep their own renders; `resolveSmokeEnv({})`
+  // and `resolveSmokeEnv({}, { stage: false })` resolve to the same composeEnv
+  // and legitimately share one.
+  { knobs: resolveSmokeEnv({}).composeEnv, files: DEMO_COMPOSE_FILES },
+  { knobs: resolveSmokeEnv({}, { stage: false }).composeEnv, files: DEMO_COMPOSE_FILES },
+  { knobs: resolveSmokeEnv({}, { stage: true }).composeEnv, files: DEMO_COMPOSE_FILES },
+  // "member-agent compose template — zero ambient model configuration".
+  {
+    knobs: { OPENCODE_API_KEY: "planted-compose-secret", AGENT_MODEL: "opencode/planted-model" },
+    files: DEMO_COMPOSE_FILES,
+  },
+  {
+    knobs: { ANALYTICS_TOKEN_FILE_HOST: "/tmp/robotmoney-smoke-session-secrets/analytics-token" },
+    files: DEMO_COMPOSE_FILES,
+  },
+  // "the retired per-property cache knobs are NOT compose passthroughs anymore".
+  { knobs: { FETCH_CACHE_TTL_MS: "123", GECKO_PRICE_CACHE_TTL_MS: "456" }, files: DEMO_COMPOSE_FILES },
+  // The profile-gated member-agent resolution.
+  { knobs: {}, files: DEMO_COMPOSE_FILES, profiles: ["member-agent"] },
+  // "the controls are scoped to the api".
+  { knobs: { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1" }, files: DEMO_COMPOSE_FILES },
+];
+
+// The whole file's Docker cost, paid once, outside any case's budget.
+//
+// SIZED AGAINST A DEGRADED SHARED RUNNER, NOT THIS WORKSTATION — and against a
+// real measurement of one, not an extrapolation. The local loop takes ~3.5 s,
+// but that is the wrong number to multiply.
+//
+// THE DATUM: the very run this issue is about. GitHub Actions run 33355162238
+// attempt 1 (PR #801, `unit` job) is still retrievable —
+//   gh api repos/robotmoney/robotmoney-frontend/actions/runs/33355162238/attempts/1/logs
+// — and its group for this file spans 03:52:19.465 to 03:52:29.953, i.e. 10.49 s
+// for what were then 43 renders. The shape is NOT "uniformly slow": the 5186.99 ms
+// case was the FIRST in the file, and all 42 cases after it ran at a mean of
+// 126 ms, none above 260 ms. So the degradation is ONE cold Docker CLI start-up
+// of ~5.2 s plus ~0.13 s per render, which puts these 18 renders at about 7.4 s
+// on that runner. 300 s is ~40x that.
+//
+// Say "extrapolated" if you ever have to extrapolate. An earlier revision of
+// this comment inherited a bound of 44-92 s — 1.7-5.2 s per render, obtained by
+// multiplying the single 5187 ms datapoint by 18 — and wrote it down as
+// "measured". It was 6-12x too high, and the next reader who checks would have
+// been right to stop trusting the rest of this comment.
+//
+// The bound must stay explicit and must stay generous. On the pinned bun 1.3.5
+// a `beforeAll` with NO timeout argument expires at 5000.16 ms, so dropping
+// this argument would silently put the prewarm back under the same default
+// that reddened PR #801 and make the whole hoist a no-op on CI. A budget only a
+// small multiple of the real cost would just move the flake into the hook, and
+// 300 s costs nothing unless a render actually exceeds it — which the profile
+// above says will not happen.
+//
+// It is still bounded, so a genuinely wedged Docker fails loudly in five
+// minutes instead of running out the job. (The enclosing bound is GitHub's
+// 6-hour default — neither unit.yml nor integration.yml sets `timeout-minutes`
+// — so this is the only tight limit on a hung render.) A missing or broken
+// docker CLI throws here and turns the whole file RED — never a silent skip
+// (test-coverage policy).
+const PREWARM_TIMEOUT_MS = 300_000;
+
+beforeAll(() => {
+  for (const { knobs, files, profiles } of PREWARM) composeConfig(knobs, files, profiles ?? []);
+  prewarmed = true;
+}, PREWARM_TIMEOUT_MS);
 
 function serviceEnv(cfg: ComposeConfig, svc: string): Record<string, string | null> {
   const env = cfg.services?.[svc]?.environment;
@@ -110,10 +279,12 @@ const HTTP_CACHE_CONSUMERS = [...RPC_CONSUMERS, "analytics-producer"] as const;
 const BACKEND_IMAGE_BUILDS = [...RPC_CONSUMERS, "analytics-producer"] as const;
 
 describe("AUM producer revision reaches every backend image build", () => {
+  // The same three file lists PREWARM renders — shared so a case can never ask
+  // for a composition the prewarm did not pay for.
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
-    ["base", ["docker-compose.yml"]],
+    ["base", BASE_COMPOSE_FILES],
     ["smoke", DEMO_COMPOSE_FILES],
-    ["stage", [...DEMO_COMPOSE_FILES, "docker-compose.stage.yml"]],
+    ["stage", STAGE_COMPOSE_FILES],
   ];
 
   for (const [label, files] of COMPOSITIONS) {
@@ -144,7 +315,7 @@ describe("AUM producer revision reaches every backend image build", () => {
 
 describe("docker compose config — production capability TTLs", () => {
   test("base compose leaves optional TTLs blank so backend defaults remain authoritative", () => {
-    const cfg = composeConfig({}, ["docker-compose.yml"]);
+    const cfg = composeConfig({}, BASE_COMPOSE_FILES);
     for (const svc of HTTP_CACHE_CONSUMERS) {
       expect(serviceEnv(cfg, svc).HTTP_FETCH_CACHE_TTL_MS ?? "").toBe("");
     }
@@ -157,7 +328,7 @@ describe("docker compose config — production capability TTLs", () => {
   test("base compose honors explicit TTLs only on services that consume them", () => {
     const cfg = composeConfig(
       { HTTP_FETCH_CACHE_TTL_MS: "45000", TOKEN_PRICE_CACHE_TTL_MS: "90000" },
-      ["docker-compose.yml"],
+      BASE_COMPOSE_FILES,
     );
     for (const svc of HTTP_CACHE_CONSUMERS) {
       expect(serviceEnv(cfg, svc).HTTP_FETCH_CACHE_TTL_MS).toBe("45000");
@@ -410,10 +581,12 @@ describe("every long-running service reports its own health", () => {
   // Checked against every composition the repo actually boots, not just the
   // smoke one: an overlay that replaces a service's block can drop the base
   // healthcheck, and the stage overlay is what runs the public smoke.
+  // The same three file lists PREWARM renders — shared so a case can never ask
+  // for a composition the prewarm did not pay for.
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
-    ["base", ["docker-compose.yml"]],
+    ["base", BASE_COMPOSE_FILES],
     ["smoke", DEMO_COMPOSE_FILES],
-    ["stage", [...DEMO_COMPOSE_FILES, "docker-compose.stage.yml"]],
+    ["stage", STAGE_COMPOSE_FILES],
   ];
 
   for (const [label, files] of COMPOSITIONS) {
@@ -500,10 +673,12 @@ describe("every long-running service reports its own health", () => {
 // close, and they close it the only way it can be closed — against the RENDERED
 // compose configuration, over every composition the repo actually boots.
 describe("boot-guard operator controls reach the api container (issue #602)", () => {
+  // The same three file lists PREWARM renders — shared so a case can never ask
+  // for a composition the prewarm did not pay for.
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
-    ["base", ["docker-compose.yml"]],
+    ["base", BASE_COMPOSE_FILES],
     ["smoke", DEMO_COMPOSE_FILES],
-    ["stage", [...DEMO_COMPOSE_FILES, "docker-compose.stage.yml"]],
+    ["stage", STAGE_COMPOSE_FILES],
   ];
   const CONTROLS = ["RM_ALLOW_HANDLE_NAMESPACE_VIOLATION", "PG_NAMESPACE_GUARD_TIMEOUT_MS"] as const;
 
@@ -567,5 +742,18 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
       expect(`${key}:${new RegExp(`^\\s*ENV\\s+${key}(?:=|\\s)`, "m").test(dockerfile)}`)
         .toBe(`${key}:false`);
     }
+  });
+});
+
+// Issue #809's regression guard. Every case above reads its compose
+// configuration through `composeConfig`, which serves it from the prewarmed
+// memo; a case that asks for a rendering `PREWARM` does not list falls back to
+// shelling out to Docker inside its own 5000 ms budget, which is exactly the
+// flake this file was changed to remove. Declared last so every case has run.
+describe("compose renders stay hoisted out of the case bodies (issue #809)", () => {
+  test("no case shelled out to Docker on its own — every rendering was prewarmed", () => {
+    // A failure lists the argument sets that missed. The fix is to add each one
+    // to PREWARM, not to give the case a bigger timeout.
+    expect(coldRendersAfterPrewarm).toEqual([]);
   });
 });

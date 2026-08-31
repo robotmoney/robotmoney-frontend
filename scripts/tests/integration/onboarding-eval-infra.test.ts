@@ -192,9 +192,19 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     }
   }, SETUP_TIMEOUT_MS);
 
-  test("assertDockerAvailable THROWS on an unusable daemon — it can never degrade into a skip", () => {
-    expect(() => unreachableDaemonStack().assertDockerAvailable()).toThrow(/docker is required/);
-  });
+  // Budgeted like its siblings (issue #809). It reads as a pure in-process
+  // throw, but assertDockerAvailable() runs `docker version` through
+  // Bun.spawnSync — with DOCKER_HOST pointed at a dead port, so the connection
+  // is refused immediately and there is no daemon round-trip, but the Docker
+  // CLI's own start-up is still paid. On a cold shared runner that is the very
+  // cost that expires Bun's 5000 ms default.
+  test(
+    "assertDockerAvailable THROWS on an unusable daemon — it can never degrade into a skip",
+    () => {
+      expect(() => unreachableDaemonStack().assertDockerAvailable()).toThrow(/docker is required/);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   test(
     "member-agent container starts — no Robot Money tooling, no model call needed",

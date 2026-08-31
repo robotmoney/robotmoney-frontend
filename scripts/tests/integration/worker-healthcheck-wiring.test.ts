@@ -18,7 +18,18 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dir, "../../..");
 const backendDir = join(repoRoot, "backend");
 
-function resolvedHealthcheckCommand(service: string): string[] {
+// One `docker compose config` run for the whole file (issue #809). Shelling out
+// to the Docker CLI costs seconds on a cold shared runner, which is enough for
+// the 5000 ms Bun applies to a test that declares no timeout to expire on an
+// unrelated diff. The rendering is the same for every service, so it is
+// resolved ONCE — on the first call, which happens while the describe below is
+// being collected, not inside any test's budget — and every later lookup reads
+// the cached config. A missing or broken docker CLI still throws loudly here;
+// it is never a silent skip (test-coverage policy).
+let renderedServices: Record<string, { healthcheck?: { test?: string[] } }> | undefined;
+
+function composeServices(): Record<string, { healthcheck?: { test?: string[] } }> {
+  if (renderedServices) return renderedServices;
   const r = Bun.spawnSync(
     ["docker", "compose", "-f", "docker-compose.yml", "config", "--format", "json"],
     {
@@ -36,7 +47,12 @@ function resolvedHealthcheckCommand(service: string): string[] {
   const cfg = JSON.parse(new TextDecoder().decode(r.stdout)) as {
     services: Record<string, { healthcheck?: { test?: string[] } }>;
   };
-  const test_ = cfg.services[service]?.healthcheck?.test;
+  renderedServices = cfg.services;
+  return renderedServices;
+}
+
+function resolvedHealthcheckCommand(service: string): string[] {
+  const test_ = composeServices()[service]?.healthcheck?.test;
   if (!test_?.length) throw new Error(`service "${service}" declares no healthcheck test`);
   // ["CMD", ...argv] — the exec form the lanes and the producer both use.
   if (test_[0] !== "CMD") throw new Error(`expected an exec-form CMD healthcheck, got ${test_[0]}`);
