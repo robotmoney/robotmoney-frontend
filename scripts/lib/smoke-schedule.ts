@@ -229,8 +229,12 @@ export interface ProductionCadenceIntent {
    * shipped crons are subject-blind (resolveSwarmSchedules emits no subjectId,
    * so the handler calls openSession("") and hits a foreign-key violation) and
    * the host driver is the real scheduler. docker-compose.smoke.yml pins "0";
-   * this asserts nobody exported a "1" into the boot that would have been
-   * passed through had the overlay not pinned it.
+   * this asserts a production boot carries EXACTLY that.
+   *
+   * Absent is not acceptable (issue #806): docker-compose.yml declares
+   * `SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-1}`, so an unset
+   * variable IS the cron cadence — and that cadence seeds five schedules with
+   * no `swarm.judge` among them. The check demands the literal "0".
    */
   swarmSchedulesEnabled: "0";
 }
@@ -279,10 +283,21 @@ export function productionConstantMismatches(
           `${PRODUCTION_CADENCE_INTENT.swarmWindowMs}`,
       );
     }
-    if (schedules !== undefined && schedules !== "" && schedules !== PRODUCTION_CADENCE_INTENT.swarmSchedulesEnabled) {
+    // UNSET IS A FAILURE, NOT A PASS (issue #806). This used to skip when the
+    // variable was absent or empty, on the reading that "nobody exported one"
+    // is safe. It is the opposite of safe: docker-compose.yml declares
+    // `SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-1}`, so an unset
+    // variable is not "no crons" — it is the DEFAULT-ON cron cadence, whose five
+    // seeded `job_schedules` rows are subject-blind (`resolveSwarmSchedules`
+    // emits no subjectId) and, critically, include NO `swarm.judge`. A boot that
+    // simply failed to export it therefore got a third cadence, running sessions
+    // that can never be judged, past an assertion that reported nothing wrong.
+    // The intent is a literal "0" and the check now demands exactly that.
+    if (schedules !== PRODUCTION_CADENCE_INTENT.swarmSchedulesEnabled) {
       problems.push(
-        `SWARM_SCHEDULES_ENABLED='${schedules}' is exported into a production boot; production intends ` +
-          `'${PRODUCTION_CADENCE_INTENT.swarmSchedulesEnabled}' (the host driver is the scheduler)`,
+        `SWARM_SCHEDULES_ENABLED=${schedules === undefined ? "(unset)" : `'${schedules}'`} in a production boot; ` +
+          `production intends '${PRODUCTION_CADENCE_INTENT.swarmSchedulesEnabled}' (the host driver is the ` +
+          "scheduler, and compose defaults this variable to '1' when it is not exported)",
       );
     }
   } else {

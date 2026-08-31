@@ -237,10 +237,30 @@ export type SessionEvent =
 export type SessionProgress = (ev: SessionEvent) => void;
 
 export async function admin(action: string, body: unknown = {}, automationToken?: string) {
+  return (await adminCall(action, body, automationToken)).body;
+}
+
+/**
+ * The same call, WITH ITS HTTP STATUS (issue #806).
+ *
+ * `admin()` returns the parsed body and nothing else, so a non-2xx — a 403
+ * after an automation-token rotation, a 400 `unknown action`, a 500 — is
+ * indistinguishable from a success at the call site, and every caller that only
+ * reads fields off the body treats the error object as a result. That is how a
+ * failed enqueue became `enqueued undefined (job #undefined)` and a 120-second
+ * wait for a job that was never queued. Callers that must not proceed on a
+ * failure use this and check `ok`; the ones that legitimately read an error
+ * body keep `admin()`.
+ */
+export async function adminCall(
+  action: string,
+  body: unknown = {},
+  automationToken?: string,
+): Promise<{ ok: boolean; status: number; body: any }> {
   const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.admin.action, { action })}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) }, body: JSON.stringify(body),
   });
-  return responseJson(r);
+  return { ok: r.ok, status: r.status, body: await responseJson(r) };
 }
 
 // Active swarm roster size, read from the backend — the gate the standing
@@ -585,10 +605,33 @@ export async function waitUntilWindowCloses(
   }
 }
 
+/**
+ * Enqueue one lifecycle step, and FAIL LOUDLY IF IT DID NOT GET QUEUED
+ * (issue #806).
+ *
+ * This used to read the response body without ever looking at the status. On
+ * any non-2xx it printed `enqueued undefined (job #undefined)` and returned
+ * normally, so the caller went on to wait for a state that nothing was going to
+ * produce. For every step but the judge that wait throws and fails the run; the
+ * judge's wait is CAUGHT and publishes anyway, so a rotated automation token
+ * turned into "judge did not reach 'judged' in time … publishing anyway" — a
+ * log line blaming a slow judge for a judging that was never queued.
+ *
+ * A throw is the right answer here for the same reason it is for the other
+ * steps: the driver cannot do its job without the queue, and pretending
+ * otherwise loses the one session it was running.
+ */
 export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}, automationToken?: string) {
-  const result = await admin("enqueue-job", { action, ...payload }, automationToken);
-  console.log(`  enqueued ${result.kind} (job #${result.jobId})`);
-  return result;
+  const { ok, status, body } = await adminCall("enqueue-job", { action, ...payload }, automationToken);
+  if (!ok || body?.jobId == null) {
+    throw new Error(
+      `enqueue-job '${action}' failed (HTTP ${status}): ${JSON.stringify(body)} — ` +
+        "nothing was queued, so nothing will happen; check AUTOMATION_TOKEN and the api container",
+    );
+  }
+  const deduped = body.deduped === true ? ` (already queued, status=${body.existingStatus})` : "";
+  console.log(`  enqueued ${body.kind} (job #${body.jobId})${deduped}`);
+  return body;
 }
 
 // How long runJudgeStep will wait for a judging to land before publishing
@@ -623,11 +666,32 @@ export async function readJudgeMode(automationToken?: string): Promise<string | 
   }
 }
 
-/** Injection seam for runJudgeStep's four effects. Real callers pass none. */
+/**
+ * How many judgement rows this session has on the append-only record
+ * (issue #806). Read only on the expiry path, to tell an operator which of two
+ * very different things happened. Never throws: it exists to make a log line
+ * more honest, and must not turn a survivable timeout into a failed run.
+ */
+export async function countJudgements(sessionId: string | number, automationToken?: string): Promise<number | null> {
+  try {
+    const r = await fetch(
+      `${backendUrl()}${routePath(ROUTES.swarm.admin.sessionJudgements, { id: String(sessionId) })}`,
+      { headers: getAutomationHeaders(automationToken) },
+    );
+    if (!r.ok) return null;
+    const body = await responseJson<{ judgements?: unknown[] }>(r);
+    return Array.isArray(body.judgements) ? body.judgements.length : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Injection seam for runJudgeStep's effects. Real callers pass none. */
 export interface JudgeStepDeps {
   readMode?: () => Promise<string | null>;
   enqueue?: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
   waitForJudged?: () => Promise<unknown>;
+  countJudgements?: () => Promise<number | null>;
   log?: (line: string) => void;
 }
 
@@ -679,13 +743,19 @@ export async function runJudgeStep(
   const enqueue = deps.enqueue
     ?? ((action: string, payload: Record<string, unknown>) => enqueueLifecycleJob(action, payload, automationToken));
   const waitForJudged = deps.waitForJudged ?? (() => waitForSessionState(date, subjectId, "judged", JUDGE_WAIT_MS));
+  const judgementCount = deps.countJudgements ?? (() => countJudgements(sessionId, automationToken));
   const log = deps.log ?? ((line: string) => console.log(line));
 
   // Read the switch BEFORE enqueueing, so the branch below is about the mode
   // that was in force when this step ran rather than one an operator flipped
   // while the job sat in the queue.
   const mode = await readMode();
-  await enqueue("judge", { sessionId });
+  // NOT inside the try below, and that is deliberate. `enqueueLifecycleJob`
+  // throws when nothing was queued (issue #806) — a failed enqueue is not a
+  // slow judge and must not be absorbed by the wait's survivable-timeout
+  // branch, which would publish the session and log the wrong cause.
+  const queued = await enqueue("judge", { sessionId });
+  const queuedJobId = (queued as { jobId?: unknown } | undefined)?.jobId;
 
   if (mode !== "shadow" && mode !== "enforce") {
     log(`  judge mode=${mode ?? "unreadable"} — the queued judging drains as a clean skip; not waiting for 'judged'`);
@@ -696,8 +766,22 @@ export async function runJudgeStep(
     log(`  judged (mode=${mode})`);
     return { mode, waitedForJudged: true, judged: true };
   } catch (err) {
+    // SAY WHICH FAILURE THIS IS (issue #806). "did not reach 'judged' in time"
+    // asserts a slow judge, and on the single-worker swarm lane that is usually
+    // untrue: publish is enqueued only after this wait returns and cannot be
+    // claimed while the judge holds the lane, so an expiry here is more often a
+    // judging that ran and was REFUSED, or one still queued behind a wedged
+    // lane, than one that was merely slow. The record answers it — a judgement
+    // row exists or it does not — so the log reports that instead of guessing.
+    const recorded = await judgementCount();
+    const record = recorded == null
+      ? "could not read the judgement record"
+      : recorded > 0
+        ? `${recorded} judgement row(s) ARE recorded — the judging ran; the session did not transition`
+        : "NO judgement row was recorded — the judging did not run to completion";
     log(
-      `  judge did not reach 'judged' in time (mode=${mode}) — publishing anyway rather than wedging the cadence: ${err instanceof Error ? err.message : err}`,
+      `  judge job #${queuedJobId ?? "?"} was queued but the session did not reach 'judged' in time (mode=${mode}) — ` +
+        `${record}; publishing anyway rather than wedging the cadence: ${err instanceof Error ? err.message : err}`,
     );
     return { mode, waitedForJudged: true, judged: false };
   }

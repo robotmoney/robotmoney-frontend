@@ -1935,6 +1935,21 @@ export async function loadFrozenTakeSet(sessionId: string): Promise<FrozenTakeSe
   return { session: s as Record<string, any>, takes: takes as any[], activeMembers, rosterFrozen: rosterRows.length > 0 };
 }
 
+// THE ROLLUP, AND NO STATE OPINION (issue #806). This function REPLACES
+// `swarm_recommendation` wholesale — the judge's `rationale`, `disagreements`,
+// `release_safety` and `judge` fingerprint do not survive it — and it deliberately
+// does not decide whether that is allowed. Its two callers own that:
+// `aggregateSessionAdmin` (and therefore the `swarm.aggregate` handler and the
+// admin dispatcher, which both go through it) puts it behind `guardedTransition`,
+// so `judged -> aggregated` and anything out of a terminal state are refused.
+// Do NOT call it from a new site without a guard in front of it.
+//
+// The SANCTIONED re-aggregation of a judged session — `judged -> window_closed
+// -> aggregated`, two deliberate admin actions — still drops the judge's prose,
+// by design: the aggregator owns the recommendation. That loss is not silent;
+// `getSessionJudgementsAdmin` reconciles every judgement row against
+// `swarm_recommendation->'judge'` and reports the opinion as SUPERSEDED rather
+// than "applied to the session".
 export async function aggregateSession(sessionId: string) {
   const frozen = await loadFrozenTakeSet(sessionId);
   if (!frozen) throw new Error(`aggregateSession: no such session ${sessionId}`);
