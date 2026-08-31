@@ -1224,9 +1224,11 @@ On the admin path, `createSessionAdmin` now enqueues FIVE session-scoped jobs,
 not four: `swarm.judge` sits between `swarm.aggregate` and `swarm.publish`,
 dedupe key `swarm:<session-id>:judge` like every other. Ordering is carried by
 `run_after` and the queue's `ORDER BY priority DESC, run_after`, not by a guess
-at how long aggregation takes; the judge instant is clamped strictly below
-`publish_at` so a degenerate one-second window cannot push a judging past its own
-publish.
+at how long aggregation takes. BOTH intermediate instants are clamped downward
+from `publish_at`, not just the judge's: validation guarantees only
+`windowClosesAt < publishAt`, so on a window narrower than the one-second offsets
+assume, clamping the judge alone pulled it BELOW the aggregate and inverted the
+one pair whose order is the point.
 
 The host driver has no such instants to order — it opens a session with
 `open_session` (and `domain.openSession` enqueues NO jobs at all; it only INSERTs
@@ -3841,8 +3843,9 @@ Acceptance:
 - Creation inserts the session in `scheduled`, snapshots all currently active
   members into `swarm_session_members`, and enqueues five one-off jobs:
   `publish_brief` at brief open, `close_window` at window close, `aggregate` one
-  second after close, `judge` one second after that (clamped strictly below
-  publish time), and `publish` at publish time. `judge` is what puts the
+  second after close, `judge` one second after that, and `publish` at publish
+  time. The two intermediate instants are clamped downward from publish time, so
+  a window too narrow to hold them stays monotonic instead of inverting. `judge` is what puts the
   consensus judge on this path's cadence (issue #767, §9.7); with
   `swarm_judge_config.mode = off` — the shipped default — it drains as a single
   clean success recording `{ skipped: "judge_disabled" }`, never a `degraded`
