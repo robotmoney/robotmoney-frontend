@@ -47,7 +47,7 @@
              and it is the reason verified does not equal takes, so it belongs
              inside that figure's explanation rather than beside it. Each figure
              explains itself on demand instead of being guessed at. -->
-        <dl class="rm-stats rm-stats--3">
+        <dl class="rm-stats">
           <div class="rm-stat">
             <dt>Takes filed<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">Every take this member has filed, across every portfolio.</span></span></dt>
             <dd x-text="recordStats().takes"></dd>
@@ -81,7 +81,7 @@
                    subject can convene more than once a day, and Alpine renders
                    nothing at all for a duplicate key. -->
               <template x-for="row in inProgressTakes()" :key="`ip-${row.take.id}`">
-                <article class="mp-take mp-take--live">
+                <article class="mp-take">
                   <div class="mp-take__top">
                     <div class="mp-take__head">
                       <span class="mp-when" tabindex="0" :aria-label="filedTitle(row)"><time class="mp-take__date" :datetime="filedAt(row)" x-text="filedLabel(row)"></time><span class="mp-when__tip" role="tooltip" x-text="filedTitle(row)"></span></span>
@@ -183,7 +183,10 @@
               </button>
             </template>
           </div>
-          <div class="mp-sort" role="group" aria-label="Sort the record">
+          <!-- mp-chip--sort carries no style. It is the handle that tells a sort
+             chip from a filter chip: both are .mp-chip, and
+             swarm-member-profile.spec.ts selects the pressed one through it. -->
+        <div class="mp-sort" role="group" aria-label="Sort the record">
             <span class="mp-sort__label" aria-hidden="true">Sort</span>
             <template x-for="o in [
               { k: 'newest', t: 'Newest', h: 'When it was filed, newest first' },
