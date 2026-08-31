@@ -57,6 +57,18 @@ export interface ClaimOptions {
 // FOR UPDATE SKIP LOCKED (the lane predicate only narrows which kinds are
 // visible to this worker; it never weakens ownership). Priority is preserved
 // WITHIN the lane (ORDER BY priority DESC applies to the lane-filtered set).
+//
+// `, id` IS LOAD-BEARING (issue #806), not cosmetic. `run_after` is a
+// millisecond instant and jobs routinely share one: every swarm session job is
+// priority 0, and `createSessionAdmin`'s clamp collapses `swarm.aggregate` and
+// `swarm.judge` onto an IDENTICAL run_after for any window under ~2s. Without a
+// tiebreak the claim order among equals is whatever the plan returns, and
+// executed against a real Postgres the judge lost it: `aggregate` and `publish`
+// both drained first and the judge burned all five attempts on
+// `terminal_state:published` — final state `published`, zero judgement rows, in
+// `shadow` mode. It does NOT self-heal, because the window that collapses the
+// instants is the same window that puts the publish inside the judge's first
+// backoff. `id` is insertion order, which is the order the enqueuer intended.
 // Returns true if a job was processed (caller can poll faster when busy).
 export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
   const lane = opts.lane ?? LANES.generic;
@@ -67,7 +79,11 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
       WHERE status = 'pending' AND run_after <= now()
         AND kind LIKE ANY(${[...lane.include]})
         AND kind NOT LIKE ALL(${[...lane.exclude]})
-      ORDER BY priority DESC, run_after
+      -- The ", id" tiebreak is LOAD-BEARING (issue #806) and is explained in
+      -- the comment above this function: run_after is a millisecond instant
+      -- that same-priority jobs routinely share, and without a tiebreak the
+      -- swarm judge measurably lost the tie to its own publish.
+      ORDER BY priority DESC, run_after, id
       FOR UPDATE SKIP LOCKED
       LIMIT 1
     )

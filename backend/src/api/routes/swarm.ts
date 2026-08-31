@@ -3,6 +3,7 @@
 // calls these under the hood). Returns {status, body} for the Bun router to send.
 import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
 import * as ic from "../../swarm/domain.ts";
+import * as swarmAdmin from "../../swarm/admin.ts";
 import { handleSwarmAdmin } from "./swarm-admin.ts";
 import { isRegistrablePublicKey, isValidEd25519PublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
@@ -377,7 +378,16 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
         if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
         if (action === "brief") return { status: 200, body: await ic.publishBrief(sessionId, parsePositiveNumber(b.windowMinutes, 60)) };
         if (action === "close") return { status: 200, body: await ic.closeWindow(sessionId) };
-        if (action === "aggregate") return { status: 200, body: await ic.aggregateSession(sessionId) };
+        // STATE-GUARDED (issue #806). `domain.aggregateSession` replaces
+        // `swarm_recommendation` WHOLESALE and has no state opinion of its own,
+        // so reaching it directly here was a second unguarded door onto a
+        // judged or published session's prose. `aggregateSessionAdmin` is the
+        // same rollup behind `guardedTransition`; a caller that asked for an
+        // impossible aggregation is told 409 rather than silently getting one.
+        if (action === "aggregate") {
+          const res = await swarmAdmin.aggregateSessionAdmin(sessionId, undefined);
+          return { status: res.status, body: res };
+        }
         return { status: 200, body: await ic.publishSession(sessionId) };
       }
       case "enqueue-job": {
@@ -397,11 +407,66 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
         const queueAction = requiredString(b, "action", 100);
         const kind = queueAction ? actionMap[queueAction] : undefined;
         if (!kind) return { status: 400, body: { error: `unknown action: ${b.action}` } };
-        const { action: _, ...payload } = b;
+        const { action: _, force: _force, ...payload } = b;
+        // THE JUDGE, AND ONLY THE JUDGE, IS DEDUPLICATED HERE (issue #806).
+        //
+        // WHY IT IS DEDUPLICATED. This endpoint INSERTed with no key at all.
+        // Executed: two `judge` enqueues for one session both succeeded and
+        // produced TWO judgement rows — in `enforce` both said `applied: true`
+        // and the recommendation was rewritten twice, second write winning. The
+        // advisory lock serializes them; it does not deduplicate them, and
+        // `transitionWithin` treats `judged -> judged` as idempotent success. A
+        // driver restart that re-adopts an in-flight session (the case
+        // `waitForSubjectSession` exists for) is enough to trigger it.
+        //
+        // WHY ONLY THE JUDGE. `jobs_dedupe_key_idx` is
+        // `UNIQUE (dedupe_key) WHERE dedupe_key IS NOT NULL` across the WHOLE
+        // table INCLUDING TERMINAL ROWS, so a key makes a job that once died
+        // permanently un-re-enqueueable. `worker/handlers/repair.ts` documents
+        // the same hazard and deliberately carries no key for it. Applied to
+        // `close_window`, that is fatal to the driver rather than merely lossy:
+        // the job goes `dead`, `openSession` keeps returning the same still-
+        // `collecting` session, every later re-enqueue is suppressed, and
+        // `waitForSessionState` times out — a wedged subject, not a degraded one.
+        // The judge is the one action that can carry the key safely, because it
+        // is the one step whose absence the driver tolerates by design
+        // (`runJudgeStep` publishes anyway and says so).
+        //
+        // THE KEY IS STICKY ACROSS TERMINAL STATES, and that is the point rather
+        // than an oversight: treating a `succeeded` judge job as re-enqueueable
+        // would hand a re-adopting driver a second judging of a session that has
+        // already been judged, which is precisely the defect above.
+        //
+        // MANUAL RE-JUDGING STAYS AVAILABLE, EXPLICITLY. It is a real lever —
+        // re-running a judging after fixing a model, repairing a pre-#767
+        // session — so it is kept, as `force: true`, which enqueues with NO
+        // dedupe key. What is gone is getting it by accident.
+        const rawSessionId = payload.sessionId;
+        const sessionId = typeof rawSessionId === "string" || typeof rawSessionId === "number"
+          ? String(rawSessionId).slice(0, 100)
+          : "";
+        const force = b.force === true;
+        const dedupeKey = sessionId && !force && queueAction === "judge"
+          ? `swarm:${sessionId}:judge`
+          : null;
         const rows = await sql`
-          INSERT INTO jobs (kind, payload) VALUES (${kind}, ${sql.json(jsonValue(payload))})
+          INSERT INTO jobs (kind, payload, dedupe_key)
+          VALUES (${kind}, ${sql.json(jsonValue(payload))}, ${dedupeKey})
+          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
           RETURNING id, kind`;
-        return { status: 200, body: { jobId: rows[0].id, kind: rows[0].kind } };
+        if (rows[0]) return { status: 200, body: { jobId: rows[0].id, kind: rows[0].kind, deduped: false } };
+        // Suppressed by the key: the job this caller asked for already exists.
+        // Answer with IT rather than with `undefined` — the driver logs the job
+        // id and then waits on a session state that this very row will produce.
+        const existing = (await sql`
+          SELECT id, kind, status FROM jobs WHERE dedupe_key = ${dedupeKey}`)[0] as
+          | { id: number; kind: string; status: string }
+          | undefined;
+        if (!existing) return { status: 500, body: { error: "enqueue-job: dedupe conflict with no surviving row" } };
+        return {
+          status: 200,
+          body: { jobId: existing.id, kind: existing.kind, deduped: true, existingStatus: existing.status },
+        };
       }
       default: return { status: 404, body: { error: "unknown admin action" } };
     }

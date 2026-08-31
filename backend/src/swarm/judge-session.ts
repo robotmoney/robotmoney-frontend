@@ -191,18 +191,27 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     // APPLY FIRST, THEN RECORD (issue #767). Both are in this one transaction
     // under this one advisory lock, so the pair still commits together or not
     // at all — the ordering changes nothing about atomicity and everything
-    // about what the row can say. `applyOpinion` is CONDITIONAL: it refuses to
-    // write onto a session that published while the model was thinking, and
-    // that refusal used to be reported on the HTTP response and then lost, so a
-    // `mode = 'enforce'` row was not evidence that the session carries the
-    // judge's prose. Recording after the attempt lets `applied` be a fact about
-    // this row rather than an inference from the mode — and keeps the table
-    // strictly append-only, which an UPDATE-after-INSERT would not.
+    // about what the row can say. Recording after the attempt lets `applied` be
+    // a fact about this row rather than an inference from the mode — and keeps
+    // the table strictly append-only, which an UPDATE-after-INSERT would not.
+    //
+    // A REFUSED ENFORCE JUDGING LEAVES NO ROW AT ALL (issue #806). It is worth
+    // being exact about this, because docs/decisions.md said the opposite until
+    // #806 corrected it. `beforeRecord` above IS the refusal for a session that
+    // moved: `judgeSessionAdmin` passes `transitionWithin(…, "judged", …)`,
+    // whose admitted set `{aggregated, judged}` is a strict SUBSET of
+    // OPINION_WRITABLE_STATES, and it holds the row `FOR UPDATE` from there to
+    // COMMIT. So a session that published while the model was thinking is
+    // refused by the GATE — rollback, no transition, no judgement row, nothing
+    // recorded — and `applyOpinion` never sees a state it would refuse.
     //
     // SHADOW NEVER APPLIES. That is the whole point of the mode, and migration
     // 0041's CHECK refuses a shadow row that claims otherwise.
-    const applied = config.mode === "enforce" ? await applyOpinion(tx, sessionId, outcome) : false;
-    const appliedSkippedReason = config.mode === "enforce" && !applied ? "session_no_longer_writable" : null;
+    const attempt = config.mode === "enforce"
+      ? await applyOpinion(tx, sessionId, outcome)
+      : { applied: false as const, reason: null };
+    const applied = attempt.applied;
+    const appliedSkippedReason = applied ? null : attempt.reason;
 
     const inserted = (await tx`
       INSERT INTO swarm_session_judgements
@@ -255,6 +264,9 @@ class JudgeRollback extends Error {
 // refuse is writing onto a session that is already TERMINAL.
 const OPINION_WRITABLE_STATES = ["scheduled", "collecting", "window_closed", "aggregated", "judged"];
 
+/** The outcome of trying to put an opinion onto its session. */
+type ApplyOutcome = { applied: true; reason: null } | { applied: false; reason: string };
+
 // Merge the judge's three fields into the recommendation. Read-modify-write in
 // JS rather than a jsonb operator so the merge is one obvious list of keys:
 // rationale, disagreements, release_safety, and NOTHING ELSE. `weights`,
@@ -265,18 +277,36 @@ const OPINION_WRITABLE_STATES = ["scheduled", "collecting", "window_closed", "ag
 // unconditional `UPDATE ... SET state='published'` in a different process, and
 // the window between forming an opinion and writing it is a model call. An
 // operator pressing Judge at 09:59:30 against a 10:00 publish job used to have
-// the judge's prose land on an ALREADY-PUBLISHED, terminal session. The row
-// count is the answer: zero means the session moved under us, which is reported
-// as a no-op reason rather than passing silently.
+// the judge's prose land on an ALREADY-PUBLISHED, terminal session.
+//
+// THE ANSWER IS A READ-BACK, NOT A ROW COUNT (issue #806). The UPDATE's row
+// count says "a row matched my WHERE clause"; `applied` claims something
+// stronger, and the admin panel renders that stronger claim verbatim as
+// "applied to the session". So the fact is established the way the read path
+// establishes it: SELECT `swarm_recommendation->'judge'` straight back and
+// compare it against THIS outcome's `prompt_hash`/`inputs_digest`. Nothing else
+// makes the column mean what it is read to mean.
+//
+// This matters because the row count could never answer it on the production
+// entry point at all. `judgeSessionAdmin` gates every judging behind
+// `transitionWithin(…, "judged", …)`, whose admitted set `{aggregated, judged}`
+// is a strict SUBSET of OPINION_WRITABLE_STATES and which holds the session row
+// `FOR UPDATE` until COMMIT — so the state check below can never fail there,
+// `applied` restated `mode`, and `applied_skipped_reason` was unreachable. The
+// state check is still here because `judgeSession()` is also a direct entry
+// point (replay, and shadow-then-enforce on a live `aggregated` session), and
+// there it is real.
 //
 // Takes a `tx` because the read and the write are a read-modify-write and must
 // be one transaction, under the caller's advisory lock.
-async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutcome): Promise<boolean> {
+async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutcome): Promise<ApplyOutcome> {
   const row = (await tx`
     SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
     | { state: string; swarm_recommendation: Record<string, unknown> | null }
     | undefined;
-  if (!row || !OPINION_WRITABLE_STATES.includes(String(row.state))) return false;
+  if (!row || !OPINION_WRITABLE_STATES.includes(String(row.state))) {
+    return { applied: false, reason: "session_no_longer_writable" };
+  }
   const rec = { ...(row?.swarm_recommendation ?? {}) } as Record<string, unknown>;
   rec.rationale = outcome.opinion.rationale;
   rec.disagreements = outcome.opinion.disagreements;
@@ -292,7 +322,37 @@ async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutco
     UPDATE swarm_sessions SET swarm_recommendation = ${sql.json(rec as any)}
     WHERE id = ${sessionId} AND state = ANY(${OPINION_WRITABLE_STATES}::text[])
     RETURNING id`;
-  return upd.length > 0;
+  if (upd.length === 0) return { applied: false, reason: "session_no_longer_writable" };
+  // The read-back. Same transaction and same advisory lock as the write, so
+  // this reads OUR row and nobody else's interleaved one.
+  const carried = await sessionJudgeFingerprint(tx, sessionId);
+  if (carried && carried.inputsDigest === outcome.inputsDigest && carried.promptHash === outcome.promptHash) {
+    return { applied: true, reason: null };
+  }
+  return { applied: false, reason: "session_does_not_carry_opinion" };
+}
+
+/**
+ * What `swarm_sessions.swarm_recommendation` says the judge left on it, or null.
+ *
+ * ONE definition, read by the writer (above, to establish `applied`) and by the
+ * admin read path (`getSessionJudgementsAdmin`, to decide whether the opinion it
+ * calls IN FORCE is still the one the session carries). Two copies of this
+ * comparison would be two chances to disagree about the very fact the pair
+ * exists to keep honest.
+ */
+export async function sessionJudgeFingerprint(
+  handle: DbHandle,
+  sessionId: string,
+): Promise<{ promptHash: string; inputsDigest: string } | null> {
+  const row = (await handle`
+    SELECT swarm_recommendation->'judge'->>'prompt_hash'   AS prompt_hash,
+           swarm_recommendation->'judge'->>'inputs_digest' AS inputs_digest
+      FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+    | { prompt_hash: string | null; inputs_digest: string | null }
+    | undefined;
+  if (!row || row.prompt_hash == null || row.inputs_digest == null) return null;
+  return { promptHash: String(row.prompt_hash), inputsDigest: String(row.inputs_digest) };
 }
 
 // ORDER BY id, NOT created_at. `created_at` defaults to `now()`, which is the

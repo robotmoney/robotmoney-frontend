@@ -2920,12 +2920,44 @@ off the public session page.
 Two facts the record was missing, both silences rather than errors:
 
 - **Whether the opinion landed.** In `enforce`, `applyOpinion()` refuses to
-  write onto a session that published while the model was thinking, and that
+  write onto a session that published while the model was thinking, so the
+  judgement is written AFTER the apply attempt — same transaction, same advisory
+  lock, so atomicity is unchanged — and the row records `applied`. Recording
+  after, rather than an UPDATE-after-INSERT, is what keeps the table strictly
+  append-only.
+
+  **A CORRECTION OF RECORD (issue #806).** This entry used to read *"that
   refusal was reported on the HTTP response and then lost — so `mode='enforce'`
-  was never evidence that the session carries the judge's prose. The judgement
-  is now written AFTER the apply attempt (same transaction, same advisory lock),
-  so `applied` is a fact on the row. Recording after, rather than an
-  UPDATE-after-INSERT, is what keeps the table strictly append-only.
+  was never evidence that the session carries the judge's prose"*. That sentence
+  described a row that was never producible, and being wrong in a canonical
+  document is worse than being silent in one: it gets quoted later as a settled
+  finding. What actually happens on the production entry point is a ROLLBACK,
+  not a row.
+
+  `judgeSession()`'s only production caller is `judgeSessionAdmin`, which always
+  supplies `beforeRecord = transitionWithin(…, "judged", …)`. That gate runs
+  FIRST, inside the judge's transaction, under the judge's advisory lock, and it
+  holds the session row `FOR UPDATE` from then until commit. Its admitted set is
+  exactly `{aggregated, judged}` — a strict SUBSET of
+  `OPINION_WRITABLE_STATES`. So a session that published while the model was
+  thinking is refused by the GATE, and a refused gate throws `JudgeRollback`:
+  the transition does not survive, no judgement row is inserted, and the soak
+  records nothing at all. `applyOpinion()` cannot then return false for a
+  state reason, because no state the gate admits is one it refuses.
+
+  The correct account was already written down in the same PR, on
+  `runJudgeStep`'s header in `scripts/lib/swarm/session.ts` — *"the transition is
+  refused, the whole judging transaction rolls back, and the soak records
+  NOTHING"*. Two documents in one change described the same race with opposite
+  outcomes and the wrong one was the canonical doc. Migration 0041's header
+  carries the same #767-era framing; it is applied history and is not rewritten,
+  and this entry is the correction that governs.
+
+  Left as it stood, `applied` would have been redundant with `mode` for every
+  producible row — `applied ≡ mode === 'enforce'`, `applied_skipped_reason`
+  never non-null, and the admin panel's `"recorded, NOT applied (…)"` branch
+  unreachable. #806 makes the column load-bearing instead of documenting the
+  redundancy; see **`applied` is read back, not counted** below.
 - **Whether the response was trimmed.** #773's drop of a `positions[]` entry
   naming a member with no take body left no trace: `source='model'`,
   `fallback_reason` NULL. Counts (`dropped_positions`,
@@ -2967,3 +2999,141 @@ two-take session into looking well supported.
 - **Gate the hardcoded `position_actions` literals behind a flag instead of
   deleting them.** Rejected. They were derived from no member input; there is no
   configuration under which publishing them is correct.
+
+### Amendment (issue #806) — the soak must not report success it cannot verify
+
+#767 made the shadow soak operable. Three independent gates on PR #797 then said
+the same thing from different angles: its operator-facing surface reported
+success it could not verify, and swallowed the failures that made it collect
+nothing. None of it was reachable at the shipped `mode: off`, which is why it was
+worth fixing before a soak rather than during one. Ten changes, one theme.
+
+**`applied` is read back, not counted.** See the correction of record above for
+why the row count could never fail on the production entry point. `applyOpinion()`
+now SELECTs `swarm_recommendation->'judge'` straight back inside its own
+transaction and compares `prompt_hash`/`inputs_digest` against the outcome it
+just wrote. `applied = true` means "the session row carries THIS opinion" —
+which is exactly what the admin panel renders it as. Rejected: documenting the
+redundancy and keeping the column as forward-proofing. It is cheaper to make a
+column true than to teach every future reader that it is not, and the same
+comparison is what `inForce` needs anyway, so one definition
+(`sessionJudgeFingerprint()`) now serves the writer and the read path.
+
+**`inForce` reconciles against the session.** The append-only record and
+`swarm_sessions.swarm_recommendation` are two stores. Two legal admin actions —
+`judged -> window_closed`, then `window_closed -> aggregated` — have
+`domain.aggregateSession` replace the recommendation wholesale, so the judgement
+row still says `applied = true` while the session carries nothing. The panel
+rendered "In force — enforce · applied to the session" over prose that was gone.
+The read path now returns the session's own fingerprint as `sessionJudge` and
+stamps each row with `carriedBySession` and a `supersededReason`.
+
+**The overwrite is guarded AND visible.** `domain.aggregateSession` keeps no
+state opinion — it is the rollup — but its two unguarded callers (the
+`swarm.aggregate` handler, the admin dispatcher's `aggregate` action) now go
+through `aggregateSessionAdmin`, so `guardedTransition` refuses
+`judged -> aggregated` and every terminal source state. A re-delivered job can no
+longer rewrite a judged session from any state, outside the judge's advisory
+lock. The DELIBERATE two-step re-aggregation still drops the judge's prose, by
+design — the aggregator owns the recommendation — and that is the loss the read
+path reports rather than prevents.
+
+**Benign terminals are skips, on the same argument `judge_disabled` won — and
+ONLY the terminal ones.** Measured against a real Postgres driving the real claim
+loop, `terminal_state:cancelled` and `terminal_state:published` each wrote five
+`degraded` runs before `max_attempts` settled the job; cancelling a session
+during a soak needed no race to produce them. The test applied is **"can a retry
+change the answer"**. Rejected: changing `isDegradedResult()`, which would have
+made every lane's `{ok:false}` mean something new to fix one seam's problem.
+
+**The first cut of that list failed its own test, and an independent review
+caught it.** It also translated `illegal_transition:*->judged`. That wildcard is
+wrong for `window_closed`, `collecting` and `scheduled` alike, and the sequence
+it lost needs no race: `aggregate` is due one second before `judge`, fails once
+(the rollup is ~6 statements), and backs off past the judge's instant; the judge
+finds the session still `window_closed` and settles `succeeded` on attempt one
+with zero degraded runs. The aggregate then retries and succeeds, the session
+publishes, and there is no judgement row and nothing to re-enqueue —
+`dedupe_key` is unique across all time and that job is terminal. Untranslated the
+sequence self-heals and is visible while it does.
+
+So the fix had reintroduced this issue's own headline — *swallowing the failure
+that makes the soak collect nothing* — while closing nine other instances of it,
+and it did so on the issue that gates flipping the mode off `off`. The clause is
+dropped entirely; `terminal_state:*` already covers the two states where the
+operator-noise argument bites. **Retrying a recoverable misordering is not queue
+noise. It is the mechanism that makes the lifecycle self-heal, and translating it
+away converts a loud, temporary failure into a silent, permanent one.**
+
+The test that covered it asserted the defect, and could not have caught it: the
+observable state is IDENTICAL to the bug's — `succeeded`, one attempt, zero
+degraded rows — and only the cause differs, which the seam cannot see. A test
+written from the same wrong premise as the code confirms the premise. The
+replacement drives one claim, requires `pending` with a visible degraded run,
+then commits the aggregate and requires the judging to land.
+
+**A failed enqueue fails the run.** `admin()` returned the parsed body and never
+the status, so a 403 after a token rotation printed
+`enqueued undefined (job #undefined)` and returned normally; the driver then
+waited 120s for a job that did not exist, took the expiry branch, and logged
+"judge did not reach 'judged' in time … publishing anyway". The judge step is the
+only lifecycle step whose wait failure is caught, so it was the only one where
+this was survivable and therefore silent. `adminCall()` carries the status,
+`enqueueLifecycleJob` throws when nothing was queued, and the expiry log now
+names the job id and whether a judgement row exists instead of asserting the
+judge was slow.
+
+**Ordering is made explicit in three places.** The claim query gains its `, id`
+tiebreak (`run_after` is a shared millisecond, and the judge measurably lost the
+tie); session validation gains `MIN_SESSION_STEP_MS` so a one-millisecond window
+is rejected rather than clamped into a collapse; and `docs/architecture.md` now
+states **exactly one `swarm`-lane worker** as a requirement, because everything
+`run_after` buys is a CLAIM-order property that `FOR UPDATE SKIP LOCKED` gives
+away the moment a second worker exists.
+
+**The manual re-judging lever is explicit rather than implicit — on the judge
+alone.** `enqueue-job` INSERTed with no dedupe key, so two `judge` enqueues for
+one session produced two judgement rows and, in `enforce`, two rewrites of the
+recommendation — the advisory lock serializes, it does not deduplicate, and
+`judged -> judged` is idempotent success. It now carries `swarm:<session-id>:judge`,
+and re-judging is `force: true`, which enqueues with no key.
+
+The first cut applied the key to all five lifecycle actions, which the same
+review caught as a second defect of the same family. `jobs_dedupe_key_idx` is
+unique across the whole table **including terminal rows**, so a key makes a job
+that once died permanently un-re-enqueueable — the hazard
+`worker/handlers/repair.ts` already documents and deliberately avoids. On
+`close_window` it wedges the subject outright: the job dies, `openSession` keeps
+returning the same still-`collecting` session, and every later enqueue is
+suppressed. The judge is the one action that can carry a key safely, because it
+is the one step whose absence the driver tolerates by design. The key stays
+sticky across terminal states on purpose: treating a `succeeded` judge job as
+re-enqueueable would hand a re-adopting driver a second judging of a session
+already judged, which is the defect this closed.
+
+**`SWARM_SCHEDULES_ENABLED` unset is now a failure.** The production assertion
+skipped when the variable was absent, on the reading that "nobody exported one"
+is safe. `docker-compose.yml` defaults it to `1`, so unset is the cron cadence —
+five subject-blind schedules with no `swarm.judge` among them. A third cadence,
+running sessions that can never be judged, past a check that reported nothing
+wrong.
+
+**The mode flip warns about what is still true, and nothing else.** The obvious
+last step was an operator-facing warning at `POST /api/swarm/admin/judge`
+listing what to watch for during a soak. Written before the fixes above it would
+have had ten entries; written after them it has two, and both are design
+trade-offs rather than defects: ordering assumes exactly one `swarm`-lane
+worker, and an `enforce` opinion is not permanent because the sanctioned
+re-aggregation discards it. The inversion is the point — the warning shrank
+because the code got honest, and a warning that recites problems the code no
+longer has is how operators learn to skip warnings. It is returned on the
+response and written into the same audit row as the change, and a test pins that
+it names none of the nine defects this issue closed, so re-adding one has to be
+a deliberate act.
+
+**One operator action this requires.** With the production assertion now strict,
+a `--static-port` boot whose environment does not export
+`SWARM_SCHEDULES_ENABLED` refuses to start, naming the fix in its message.
+`.env.example` ships the value (`0`). This is the intended trade: a one-time,
+loud, self-describing boot failure in exchange for never again running a third
+cadence that cannot judge.

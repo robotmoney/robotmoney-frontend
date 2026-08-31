@@ -205,10 +205,25 @@ export function registerAdminSwarmSession(Alpine) {
     // What actually happened to the session, in one phrase. `mode` alone does
     // not answer it: an `enforce` opinion formed while the session was
     // publishing is recorded and does NOT reach the prose.
+    //
+    // AND `applied` ALONE DOES NOT ANSWER IT EITHER (issue #806). `applied` is a
+    // fact about the moment the judging committed. Two legal admin actions
+    // afterwards — close, then aggregate — have `domain.aggregateSession`
+    // replace `swarm_recommendation` wholesale, taking the judge's prose with
+    // it. This panel used to render "applied to the session" over prose the
+    // session no longer carried, which is the one sentence an operator grading a
+    // soak must be able to trust. `carriedBySession` is the backend's
+    // reconciliation of the row against the session as it stands now.
     judgementEffect(j) {
       if (!j) return "—";
       if (j.mode !== "enforce") return "recorded only (shadow)";
-      return j.applied ? "applied to the session" : `recorded, NOT applied (${j.appliedSkippedReason || "unknown reason"})`;
+      if (!j.applied) return `recorded, NOT applied (${j.appliedSkippedReason || "unknown reason"})`;
+      // `=== false` on purpose: a response from before this field existed leaves
+      // it undefined, and that must read as the old answer rather than as loss.
+      if (j.carriedBySession === false) {
+        return `applied, then SUPERSEDED — the session no longer carries it (${j.supersededReason || "unknown reason"})`;
+      }
+      return "applied to the session";
     },
     // A partial drop is not a fallback — `source` stays "model" — so it needs
     // its own line or it reads as a clean model answer.

@@ -25,7 +25,7 @@ import { deriveMemberHandle } from "./handle.ts";
 // Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
 // an env var, because the swarm is live and an operator must be able to take
 // the judge off published sessions without restarting anything.
-import { getJudgeConfig, judgeSession, latestJudgement, listJudgements, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
+import { getJudgeConfig, judgeSession, latestJudgement, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
@@ -798,6 +798,22 @@ function isValidUtcDate(date: string): boolean {
 // the swarm actually did. The mode switch stays the on/off control; this list
 // is what gives it something to switch.
 const SESSION_JOB_KINDS = ["swarm.publish_brief", "swarm.close_window", "swarm.aggregate", "swarm.judge", "swarm.publish"] as const;
+
+// The narrowest gap a session may declare between two of its own instants
+// (issue #806). Validation used to be strict `<` on millisecond timestamps,
+// which admits a ONE-MILLISECOND window — and the lifecycle needs three
+// distinct instants between `windowClosesAt` and `publishAt` to order
+// aggregate, judge and publish at all. Below three seconds the clamp below can
+// only collapse them onto each other, and once `aggregate` and `judge` share a
+// `run_after` the claim order among them is a tiebreak, not a schedule. Stating
+// the requirement in validation is cheaper than making every consumer of the
+// queue defend against a degenerate one that was accepted.
+//
+// The clamp is KEPT even though validation now guarantees the room it needs:
+// it is the property (monotonic, never crossing) and this is the input bound,
+// and a bound is not a substitute for the property holding.
+export const MIN_SESSION_STEP_MS = 3_000;
+
 const JOB_ACTION: Record<(typeof SESSION_JOB_KINDS)[number], string> = {
   "swarm.publish_brief": "publish_brief",
   "swarm.close_window": "close_window",
@@ -817,6 +833,11 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
     return err(400, "briefOpensAt date does not match date (date mismatch)");
   if (!(briefOpensAt.getTime() < windowClosesAt.getTime() && windowClosesAt.getTime() < publishAt.getTime()))
     return err(400, "invalid timestamp ordering: briefOpensAt < windowClosesAt < publishAt required");
+  // A MINIMUM, not merely an ordering (issue #806) — see MIN_SESSION_STEP_MS.
+  if (windowClosesAt.getTime() - briefOpensAt.getTime() < MIN_SESSION_STEP_MS)
+    return err(400, `collection window is ${windowClosesAt.getTime() - briefOpensAt.getTime()}ms; at least ${MIN_SESSION_STEP_MS}ms is required between briefOpensAt and windowClosesAt`);
+  if (publishAt.getTime() - windowClosesAt.getTime() < MIN_SESSION_STEP_MS)
+    return err(400, `only ${publishAt.getTime() - windowClosesAt.getTime()}ms between windowClosesAt and publishAt; at least ${MIN_SESSION_STEP_MS}ms is required to order aggregate, judge and publish`);
 
   const subject = (await sql`SELECT id, status, name FROM swarm_subjects WHERE id = ${input.subjectId}`)[0] as
     | { id: string; status: string; name: string }
@@ -1181,6 +1202,53 @@ export async function getJudgeConfigAdmin(): Promise<AdminResult<{ judge: JudgeC
   return { ok: true, status: 200, judge: await getJudgeConfig() };
 }
 
+/**
+ * What is STILL true, and hazardous, once the judge is switched on (issue #806).
+ *
+ * DELIBERATELY SHORT, AND IT SHRANK. #806 closed nine of the ten things an
+ * operator would otherwise have had to be warned about — the unverifiable
+ * `applied`, the stale `inForce`, the silent `aggregate` overwrite, the five
+ * degraded runs per TERMINAL-STATE refusal, the swallowed enqueue, the untied
+ * claim order, the degenerate window, the un-deduped judge enqueue, the skipped
+ * production assertion. A warning listing fixed problems trains an operator to
+ * skip warnings, so this names ONLY what remains, and both entries are design
+ * trade-offs rather than defects. If a later change closes one, DELETE the line
+ * — do not leave it standing as decoration.
+ *
+ * NOT LISTED, on purpose: a judging can still be lost when its rollup takes
+ * longer to land than the judge job's five backed-off attempts (~30s), because
+ * the dedupe key is sticky across terminal states and nothing re-enqueues a
+ * `dead` job. That is a real cost of the sticky key — but it is LOUD, not
+ * silent: five degraded runs, a `dead` job, and a driver log line naming that
+ * no judgement row exists. This list is for what the surface cannot tell you,
+ * and that one it tells you plainly.
+ */
+export function judgeModeWarnings(mode: JudgeMode): string[] {
+  if (mode === "off") return [];
+  const warnings = [
+    // Not a defect: `FOR UPDATE SKIP LOCKED` is what makes the queue safe under
+    // N workers, and the swarm lane's ordering is bought by run_after, which is
+    // a CLAIM-order property. It holds today by topology, not by construction.
+    "ordering assumes EXACTLY ONE `swarm`-lane worker: `FOR UPDATE SKIP LOCKED` hands " +
+      "`swarm.judge` and `swarm.publish` to two workers the instant both are due, and the judge " +
+      "holds its worker for up to 60s on the model call. docker-compose.yml declares one " +
+      "`worker-swarm` with no replicas; scaling the lane requires making the ordering " +
+      "independent of worker count first (docs/architecture.md §9.7).",
+  ];
+  if (mode === "enforce") {
+    // Not a defect either: the aggregator OWNS the recommendation, and #806
+    // chose to report this loss rather than prevent it. But an operator reading
+    // "applied to the session" should know it is a fact about a moment.
+    warnings.push(
+      "an `enforce` opinion is NOT permanent: the sanctioned `judged -> window_closed -> aggregated` " +
+        "re-run replaces `swarm_recommendation` wholesale and discards the judge's prose. The judgement " +
+        "row survives (the record is append-only) and `GET /api/swarm/admin/sessions/:id/judgements` " +
+        "reports it as superseded rather than in force — but the session no longer carries it.",
+    );
+  }
+  return warnings;
+}
+
 export async function setJudgeConfigAdmin(
   patch: { mode?: JudgeMode; minTakes?: number; model?: string | null },
   actor: Actor = ADMIN_ACTOR,
@@ -1191,8 +1259,14 @@ export async function setJudgeConfigAdmin(
   } catch (e) {
     return err(400, e instanceof Error ? e.message : "invalid judge config");
   }
-  await audit(actor, "judge_config", { mode: judge.mode, minTakes: judge.minTakes, model: judge.model });
-  return { ok: true, status: 200, judge };
+  // Audited WITH the warnings, not just beside them: "who turned the judge on,
+  // and what were they told at the time" is the second question asked of any
+  // prose that turns out to be wrong.
+  const warnings = judgeModeWarnings(judge.mode);
+  await audit(actor, "judge_config", {
+    mode: judge.mode, minTakes: judge.minTakes, model: judge.model, warnings,
+  });
+  return { ok: true, status: 200, judge, warnings };
 }
 
 // ── The soak's read path (issue #767, folded from #768) ────────────────────
@@ -1208,9 +1282,29 @@ export async function setJudgeConfigAdmin(
 // the public session page; serving it unauthenticated would publish, through the
 // read path, exactly what the mode exists to withhold.
 
-/** One judgement row, camelCased and with the operator-facing facts up front. */
-function toJudgementAdmin(r: Record<string, unknown>) {
+/**
+ * One judgement row, camelCased and with the operator-facing facts up front.
+ *
+ * `carried` is what the SESSION says the judge left on it, read at request time
+ * (`swarm_recommendation.judge`). It is passed in rather than re-derived per row
+ * so the whole list is reconciled against one reading.
+ */
+function toJudgementAdmin(
+  r: Record<string, unknown>,
+  carried: { promptHash: string; inputsDigest: string } | null,
+) {
   const dropped = { positions: Number(r.dropped_positions ?? 0), disagreements: Number(r.dropped_disagreements ?? 0) };
+  // Does the session STILL carry this opinion? (issue #806.) `applied` is a
+  // fact about the moment the judging committed; it is not a claim about now,
+  // and the panel renders it as one ("applied to the session"). Two legal admin
+  // actions are enough to make that reading false — `judged -> window_closed`
+  // then `window_closed -> aggregated`, at which point `domain.aggregateSession`
+  // replaces `swarm_recommendation` wholesale and the judge's prose,
+  // release_safety and fingerprint go with it. So the read path reconciles
+  // instead of trusting the column.
+  const carriedBySession = carried != null
+    && carried.inputsDigest === String(r.inputs_digest)
+    && carried.promptHash === String(r.prompt_hash);
   return {
     id: String(r.id),
     mode: String(r.mode),
@@ -1234,6 +1328,13 @@ function toJudgementAdmin(r: Record<string, unknown>) {
     partiallyDegraded: dropped.positions > 0 || dropped.disagreements > 0,
     opinion: r.opinion ?? null,
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+    // Reconciliation against the session as it stands NOW (issue #806).
+    carriedBySession,
+    // Only an `applied` row can be SUPERSEDED — a shadow row was never on the
+    // session, and saying "superseded" about it would invent a loss.
+    supersededReason: r.applied === true && !carriedBySession
+      ? (carried == null ? "recommendation_overwritten" : "session_carries_a_different_opinion")
+      : null,
   };
 }
 
@@ -1248,13 +1349,23 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
   // order the session was actually written in, and re-deriving that here would
   // be a second copy of a rule that has already been got wrong once.
   const latest = await latestJudgement(sessionId);
+  // …but "newest row" is not "what the session carries" (issue #806). The
+  // append-only record and the session are two different stores, and the
+  // sanctioned `judged -> window_closed -> aggregated` re-run rewrites the
+  // second without touching the first. Read the session's own fingerprint once
+  // and reconcile every row against it, so `inForce` can report SUPERSEDED
+  // rather than "applied to the session" for prose the session no longer has.
+  const carried = await sessionJudgeFingerprint(sql, sessionId);
   return {
     ok: true,
     status: 200,
     sessionId,
     state: session.state,
-    inForce: latest ? toJudgementAdmin(latest as Record<string, unknown>) : null,
-    judgements: rows.map(toJudgementAdmin),
+    // What the session itself carries, so an operator can see the two stores
+    // side by side rather than inferring the disagreement from a boolean.
+    sessionJudge: carried,
+    inForce: latest ? toJudgementAdmin(latest as Record<string, unknown>, carried) : null,
+    judgements: rows.map((r) => toJudgementAdmin(r, carried)),
   };
 }
 

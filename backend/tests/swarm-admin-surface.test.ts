@@ -258,50 +258,53 @@ test("session creation: rejects bad date, timestamp ordering, date/briefOpensAt 
   expect(jobsAgain.length).toBe(5);
 });
 
-// DEGENERATE WINDOWS must not invert aggregate -> judge (issue #767).
+// DEGENERATE WINDOWS are now REFUSED, not clamped (issues #767, #806).
 //
-// Validation guarantees only `windowClosesAt < publishAt`. The first cut derived
-// the aggregate instant as `windowClosesAt + 1s` UNCLAMPED and clamped only the
-// judge below publish — so on a window narrower than the two seconds those
-// offsets assume, the clamp pulled the judge BELOW the aggregate and the queue
-// would claim them in the wrong order. Both instants are now clamped downward
-// from publish, which keeps the sequence monotonic for any legal input.
-test("session create: a degenerate one-second window still orders close_window <= aggregate <= judge < publish", async () => {
+// #767 clamped both intermediate instants downward from publish so a window too
+// narrow to hold three of them collapsed instead of inverting. That kept the
+// sequence monotonic, and left a session whose `aggregate` and `judge` share an
+// identical `run_after` — at which point their claim order is a tiebreak rather
+// than a schedule, and the judge can drain after the publish it must beat.
+// #806 states the requirement in validation instead: MIN_SESSION_STEP_MS
+// between each pair. The clamp is kept, because the property (monotonic, never
+// crossing) is not the same thing as the input bound that gives it room.
+test("session create: a window too narrow to order aggregate/judge/publish is REFUSED, and the narrowest legal one is strict", async () => {
   const subjectId = await activeSubject();
   const date = "2026-08-23";
-  const created = await admin.createSessionAdmin({
+  const tooNarrow = await admin.createSessionAdmin({
     date, subjectId,
     briefOpensAt: `${date}T09:00:00Z`,
     windowClosesAt: `${date}T10:00:00Z`,
-    publishAt: `${date}T10:00:01Z`, // one second: narrower than the offsets assume
+    publishAt: `${date}T10:00:01Z`, // one second: cannot hold three instants
   });
-  expect(created.status).toBe(201);
-  const sessionId = (created as any).session.id as string;
-
-  const jobs = await sql<{ kind: string; run_after: Date }[]>`
-    SELECT kind, run_after FROM jobs WHERE payload->>'sessionId' = ${sessionId}`;
-  const at = (kind: string) => new Date(jobs.find((j) => j.kind === kind)!.run_after).getTime();
-  // Monotonic, never crossing. A gap this narrow cannot hold three distinct
-  // instants, so the two intermediates may coincide — but the judge is never
-  // scheduled ahead of the rollup it reads, and never at or after its publish.
-  expect(at("swarm.close_window")).toBeLessThanOrEqual(at("swarm.aggregate"));
-  expect(at("swarm.aggregate")).toBeLessThanOrEqual(at("swarm.judge"));
-  expect(at("swarm.judge")).toBeLessThan(at("swarm.publish"));
-
-  // …and a two-second window, the narrowest that CAN hold them, is strict.
-  const wide = await admin.createSessionAdmin({
+  expect(tooNarrow.status).toBe(400);
+  expect(String((tooNarrow as any).error)).toContain("windowClosesAt and publishAt");
+  // …and the collection window itself is bounded on the same terms.
+  const noWindow = await admin.createSessionAdmin({
+    date, subjectId,
+    briefOpensAt: `${date}T10:00:00.000Z`,
+    windowClosesAt: `${date}T10:00:00.001Z`,
+    publishAt: `${date}T10:05:00Z`,
+  });
+  expect(noWindow.status).toBe(400);
+  expect(String((noWindow as any).error)).toContain("collection window");
+  // The narrowest LEGAL window: MIN_SESSION_STEP_MS on both gaps, and the four
+  // instants are strictly ordered — no pair collapses onto another.
+  const legal = await admin.createSessionAdmin({
     date: "2026-08-24", subjectId,
-    briefOpensAt: "2026-08-24T09:00:00Z",
+    briefOpensAt: "2026-08-24T09:59:57Z",
     windowClosesAt: "2026-08-24T10:00:00Z",
-    publishAt: "2026-08-24T10:00:02Z",
+    publishAt: "2026-08-24T10:00:03Z",
   });
-  const wideId = (wide as any).session.id as string;
-  const wideJobs = await sql<{ kind: string; run_after: Date }[]>`
-    SELECT kind, run_after FROM jobs WHERE payload->>'sessionId' = ${wideId}`;
-  const wat = (kind: string) => new Date(wideJobs.find((j) => j.kind === kind)!.run_after).getTime();
-  expect(wat("swarm.close_window")).toBeLessThan(wat("swarm.aggregate"));
-  expect(wat("swarm.aggregate")).toBeLessThan(wat("swarm.judge"));
-  expect(wat("swarm.judge")).toBeLessThan(wat("swarm.publish"));
+  expect(legal.status).toBe(201);
+  const legalId = (legal as any).session.id as string;
+  const legalJobs = await sql<{ kind: string; run_after: Date }[]>`
+    SELECT kind, run_after FROM jobs WHERE payload->>'sessionId' = ${legalId}`;
+  const at = (kind: string) => new Date(legalJobs.find((j) => j.kind === kind)!.run_after).getTime();
+  expect(at("swarm.publish_brief")).toBeLessThan(at("swarm.close_window"));
+  expect(at("swarm.close_window")).toBeLessThan(at("swarm.aggregate"));
+  expect(at("swarm.aggregate")).toBeLessThan(at("swarm.judge"));
+  expect(at("swarm.judge")).toBeLessThan(at("swarm.publish"));
 });
 
 // A session scheduled through the ADMIN path before #767 carries only the
