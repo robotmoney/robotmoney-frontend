@@ -19,7 +19,7 @@
 // It is deliberately filesystem-only — no database, no docker, no network — so
 // it runs in any CI job and cannot be skipped for being slow.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
@@ -33,6 +33,7 @@ import {
   BACKFILL_WINDOW_JOB_KIND,
   COLLAPSE_PER_BUCKET_KINDS,
   MIGRATION_TOUCHED_TABLES,
+  PRIOR_RELEASE_MIGRATIONS,
   NEW_SCHEDULE_CRON,
   NEW_SCHEDULE_KIND,
   NEW_COLUMNS,
@@ -181,9 +182,9 @@ describe("v0.3.0 rollout manifest ↔ runbook", () => {
 });
 
 describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
-  test("the release inventory includes the terminal AUM snapshot foundation migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(7);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0038_wallet_aum_snapshot_foundation.sql");
+  test("the release inventory includes the terminal soak-record migration", () => {
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(10);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0041_swarm_judgement_soak_record.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");
@@ -193,6 +194,73 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     expect(AUM_GUARD_TRIGGERS).toHaveLength(11);
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_balance_samples");
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_sleeve_samples");
+    // 0039 CREATEs it, 0040 installs its append-only triggers and REVOKEs on
+    // it, 0041 ALTERs it — the exact case this constant's doc-comment names
+    // ("if a future edit adds a migration that DOES touch a protected table,
+    // the check fails instead of the runbook quietly going stale").
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_session_judgements");
+    // 0039 swaps swarm_sessions' state CHECK constraint to admit 'judged'.
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_sessions");
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // THE DRIFT GUARD. Everything else in this describe grades the roster against
+  // a fact somebody wrote down; this grades it against the DIRECTORY.
+  //
+  // THIS_RELEASE_MIGRATIONS is hand-maintained at release-prep time, so between
+  // a migration landing on main and somebody remembering to add a line here,
+  // the roster is wrong — and preflight's `schema-migrations` check FAILs on a
+  // pending migration it does not declare. That failure surfaces at CUTOVER,
+  // against production, under time pressure. It has already happened once:
+  // 0039/0040/0041 landed across #752/#757/#797 and none was declared (issue
+  // #807).
+  //
+  // Same mechanism as the two roster cross-checks below it and as
+  // APPEND_ONLY_MIGRATIONS' union pin in tests/append-only-enforcement.ts: an
+  // executed test that reads BOTH sides and requires them to agree. Filesystem
+  // only, so it runs wherever this file runs — and every PR that adds a
+  // migration touches backend/**, which is exactly the path filter the backend
+  // workflow gates on, so a migration can never land without this executing.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /** The numeric prefix a migration filename opens with. */
+  const migrationNumber = (file: string): number => Number(file.slice(0, 4));
+
+  /**
+   * Where v0.3.0's own set begins. It is a FLOOR on the numeric prefix and
+   * nothing more: its only job is to keep the frozen 0001–0031 archive out of
+   * scope. It cannot let a NEW migration slip past, because every file that
+   * lands from here on has a higher prefix than every file already on disk.
+   *
+   * Membership itself is decided by FILENAME, never by number — v0.2.2 shipped
+   * `0032_append_only_history.sql` / `0033_swarm_member_uuid_ids.sql` and this
+   * release adds a SECOND `0032_` and a SECOND `0033_` (§2.2.1), so the two
+   * releases genuinely share prefixes. PRIOR_RELEASE_MIGRATIONS is what says
+   * which of each pair production already has.
+   */
+  const RELEASE_FLOOR = 32;
+
+  test("no migration on disk is left undeclared by the release rosters", () => {
+    const onDisk = readdirSync(join(repoRoot, "backend", "migrations"))
+      .filter((f) => f.endsWith(".sql"))
+      .sort();
+    // Vacuity guards: a check that grades an empty directory, or an empty
+    // roster, passes while protecting nothing.
+    expect(onDisk.length).toBeGreaterThan(RELEASE_FLOOR);
+    expect(THIS_RELEASE_MIGRATIONS.length).toBeGreaterThan(0);
+    // The floor may never rise above the roster's own first entry — that would
+    // silently take declared migrations out of scope.
+    expect(Math.min(...THIS_RELEASE_MIGRATIONS.map(migrationNumber))).toBe(RELEASE_FLOOR);
+
+    const declared = new Set<string>([...THIS_RELEASE_MIGRATIONS, ...PRIOR_RELEASE_MIGRATIONS]);
+    const undeclared = onDisk.filter((f) => migrationNumber(f) >= RELEASE_FLOOR && !declared.has(f));
+    expect({
+      undeclared,
+      hint: "add each file to THIS_RELEASE_MIGRATIONS in backend/scripts/upgrades/0.2.2-to-0.3.0/release.ts",
+    }).toEqual({
+      undeclared: [],
+      hint: "add each file to THIS_RELEASE_MIGRATIONS in backend/scripts/upgrades/0.2.2-to-0.3.0/release.ts",
+    });
   });
 
   test("every named migration exists on disk", () => {

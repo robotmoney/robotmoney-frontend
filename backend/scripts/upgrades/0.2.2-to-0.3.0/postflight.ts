@@ -43,10 +43,10 @@ const repoRoot = join(scriptDir, "..", "..", "..", "..");
  *  in for production. The rehearsal is explicitly not production. */
 const RECEIPT_STEPS = ["P5.postflight-smoke-twin", "P8.postflight-prod"] as const;
 
-/** Check 1 — all seven migrations recorded, under their FULL filenames.
+/** Check 1 — all ten migrations recorded, under their FULL filenames.
  *
  *  The duplicate-prefix property this release introduces is only real if the
- *  ledger actually holds seven new NAMES. If the runner had keyed on the numeric
+ *  ledger actually holds ten new NAMES. If the runner had keyed on the numeric
  *  prefix, two of them would be silently absent here — which is precisely the
  *  failure this check exists to make impossible to miss. */
 async function checkMigrationsApplied(db: Db, { record }: Checker): Promise<void> {
@@ -258,7 +258,7 @@ async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
       "new-tables",
       "WARN",
       [`present but not empty: ${nonEmpty.join(", ")}`],
-      "Non-empty operational tables mean repair already dispatched; non-empty evidence tables mean 0037 archived an rc-era quarantined cohort. Reconcile the reported counts before tagging.",
+      "swarm_judge_config ALWAYS reports one row — 0039 seeds the operator switch. Beyond that: non-empty operational tables mean repair already dispatched; non-empty evidence tables mean 0037 archived an rc-era quarantined cohort. Reconcile the reported counts before tagging.",
     );
     return;
   }
