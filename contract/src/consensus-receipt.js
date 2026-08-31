@@ -368,6 +368,176 @@ export function participationBps(submitted, active) {
   return Math.floor((submitted / active) * 10_000 + 0.5);
 }
 
+// ── bps_conversion: shares in 0..1 to integer bps ───────────────────────────
+
+/** A whole allocation is exactly this many basis points. */
+export const BPS_DENOMINATOR = 10_000;
+
+// How far the shares may sum from 1 and still be a share vector. 1e-6 is a
+// hundredth of a basis point — far wider than the float dust a mean over eight
+// analysts leaves behind (~1e-16), far narrower than any real mis-normalization.
+const SHARE_SUM_TOLERANCE = 1e-6;
+
+/**
+ * bps_conversion, AND THE ONLY IMPLEMENTATION OF IT: LARGEST REMAINDER
+ * (Hare quota). Floor every bucket's `share * BPS_DENOMINATOR`, then hand the
+ * leftover bps out one at a time to the largest fractional remainders, TIES
+ * BROKEN BY CANONICAL BUCKET ORDER.
+ *
+ * WHY IT IS EXPORTED. Three places need this rule — the producer (`toBps()` in
+ * backend/src/swarm/consensus-receipt.ts), a verifier's weights recomputation,
+ * and the published spec's `bps_conversion` prose — and a rule spelled three
+ * times is three rules.
+ *
+ * WHAT REPLACED WHAT, AND WHY (issue #798, robotmoney-core#1290). The rule used
+ * to round the first three canonical buckets to the nearest bps and SETTLE THE
+ * POSITIONALLY LAST one to `10000 - prefix`, refusing when that fell outside
+ * 0..10000. When the last canonical bucket (`real_world_assets`) is exactly
+ * zero the three prefix buckets carry the whole distribution, three independent
+ * nearest-integer roundings overshoot by +1 bps about ONE TIME IN EIGHT, the
+ * settled entry becomes -1, and the vector had no representation at all — no
+ * receipt could be assembled for that session. A zero `real_world_assets` is
+ * four of the six real archived allocations, so this was the committee's own
+ * commonest shape. Largest remainder sums to exactly BPS_DENOMINATOR by
+ * construction, for every share vector, whatever sits in the last bucket.
+ *
+ * THE OTHER CANDIDATE core#1290 OFFERED — settle onto the largest-weight bucket
+ * rather than the last — IS REJECTED THERE, in its own words: it "only moves
+ * the failure: it still refuses when the largest bucket is itself near zero."
+ *
+ * THE TIE-BREAK IS PART OF THE RULE, NOT AN ARTEFACT OF `Array.prototype.sort`.
+ * Two buckets can hold the identical share and therefore the identical
+ * remainder (a three-way mean of thirds does it), and which of them takes the
+ * leftover bps CHANGES THE CANONICAL BYTES and so the anchored digest. It is
+ * therefore stated: canonical bucket order — the earlier bucket in
+ * `canonical_bucket_order` wins — and the comparator below is total, so no
+ * implementation has to know whether its sort is stable.
+ *
+ * THE ARITHMETIC DOMAIN IS PART OF THE RULE TOO, and for the same reason the
+ * tie-break is. Everything below is IEEE-754 BINARY64 on the `mean_weight`
+ * double: `raw` is a SINGLE binary64 multiply by BPS_DENOMINATOR, and
+ * `remainder` is `raw - Math.floor(raw)` in binary64 — exact by Sterbenz, and
+ * therefore bit-identical in every conforming implementation. Recomputing the
+ * same prose in decimal, rational or fixed-point arithmetic is FORBIDDEN, not
+ * merely discouraged: a decimal implementation over the 8-decimal shares the
+ * producer emits disagrees with this one on real vectors. The worked case is in
+ * `bps_conversion.divergent_example` — {0.05649855, 0.91716132, 0.01047881,
+ * 0.01586132} converts to [565, 9171, 105, 159] here and to [565, 9172, 105,
+ * 158] in decimal, because two remainders that are an exact tie in decimal
+ * differ by one ULP in binary64 and the tie-break therefore never fires. One
+ * such divergence is a verification failure against an anchored digest.
+ *
+ * `shares` is a Map (or a plain object) from bucket to a share in 0..1, read in
+ * `bucketOrder`. THIS AUTHORS NO WEIGHT: it neither re-averages nor
+ * re-normalizes. A vector that is not a share vector — a missing bucket, a
+ * share above 1 or more than SHARE_SUM_TOLERANCE below 0, or a total more than
+ * 1e-6 away from 1 — is REFUSED by name rather than converted into a
+ * plausible-looking wrong answer. That refusal is about the INPUT, and no
+ * longer about where a bucket sits: the positional refusal this function used
+ * to carry is gone. The ONE input it silently repairs is the producer's own
+ * negative settle dust, floored to 0 — see the comment at the clamp, and
+ * `bps_conversion.negative_dust_clamp`. The sum check reads the CLAMPED shares,
+ * because those are the numbers actually converted.
+ *
+ * @throws {ReceiptCanonicalizationError}
+ */
+export function bucketSharesToBps(shares, bucketOrder) {
+  if (!Array.isArray(bucketOrder) || bucketOrder.length === 0) {
+    throw new ReceiptCanonicalizationError(
+      "bucketSharesToBps: bucketOrder must be a non-empty array of bucket names",
+    );
+  }
+  const read = (bucket) =>
+    shares instanceof Map
+      ? shares.get(bucket)
+      : shares !== null && typeof shares === "object" ? shares[bucket] : undefined;
+
+  let total = 0;
+  const entries = bucketOrder.map((bucket, index) => {
+    const supplied = read(bucket);
+    if (
+      typeof supplied !== "number" ||
+      !Number.isFinite(supplied) ||
+      supplied < -SHARE_SUM_TOLERANCE ||
+      supplied > 1
+    ) {
+      throw new ReceiptCanonicalizationError(
+        `bucketSharesToBps: bucket "${bucket}" holds ${JSON.stringify(supplied) ?? "undefined"} — every bucket in canonical_bucket_order must hold a finite share in 0..1 (a share in -${SHARE_SUM_TOLERANCE}..0 is producer settle dust and is floored to 0; anything more negative is refused by name)`,
+      );
+    }
+    // NEGATIVE SETTLE DUST IS ABSORBED, NOT AUTHORED. The producer runs its own
+    // settle-the-last one layer up: meanTakeWeights() (backend/src/swarm/
+    // domain.ts:1733-1751) rounds every averaged entry to 8 decimal places and
+    // then OVERWRITES the positionally last one with round(1 - prefixTotal, 8).
+    // localeCompare order over the four canonical buckets equals
+    // canonical_bucket_order, so that last entry IS real_world_assets — and
+    // when every member zeroes it, the three prefix roundings can sum just
+    // above 1 and the settled entry lands on exactly -1e-8. That is about ONE
+    // VECTOR IN EIGHT of the committee's commonest shape (12.39% measured over
+    // 200000 producer-shaped zero-RWA sessions), so refusing it would
+    // reintroduce, unchanged, the very defect this function was rewritten to
+    // remove — and as a bare ReceiptCanonicalizationError rather than a named
+    // refusal, i.e. an unnamed 500.
+    //
+    // Flooring it to 0 is a REPRESENTATION change of the same kind the whole
+    // function performs: -1e-8 of a vault is not an allocation, it is the
+    // residue of an 8-decimal subtraction, and 0 is the only integer bps it can
+    // mean. It authors no weight — the value moves by less than one
+    // ten-thousandth of a basis point, and every OTHER bucket is untouched. The
+    // bound is SHARE_SUM_TOLERANCE, the same 1e-6 the sum check already allows
+    // the vector to miss 1 by; a share more negative than that is a real
+    // negative allocation and is still refused by name, above. The bound is NOT
+    // widened for this: 1e-8 dust sits two orders of magnitude inside it.
+    //
+    // THE COMPARISON IS `> 0`, NOT `< 0`, AND THAT IS LOAD-BEARING. The same
+    // settle also emits NEGATIVE ZERO — round(1 - prefixTotal, 8) is
+    // Math.round(-1.1e-16 * 1e8) / 1e8, and Math.round of a small negative is
+    // -0. IEEE-754 says `-0 < 0` is FALSE, so a `< 0` clamp lets -0 straight
+    // through, `Math.floor(-0 * 10000)` is -0, and the returned weight_bps is
+    // an integer -0. JSON.stringify serializes that as "0" so the canonical
+    // bytes survive, but a receipt whose weights carry -0 in memory is one
+    // Object.is() away from a spurious mismatch in any verifier, and nothing
+    // should depend on a stringifier to launder it.
+    const share = supplied > 0 ? supplied : 0;
+    total += share;
+    const raw = share * BPS_DENOMINATOR;
+    const floored = Math.floor(raw);
+    return { bucket, index, weight_bps: floored, remainder: raw - floored };
+  });
+  if (Math.abs(total - 1) > SHARE_SUM_TOLERANCE) {
+    throw new ReceiptCanonicalizationError(
+      `bucketSharesToBps: the shares sum to ${total}, not 1 — normalize the vector before converting it; this function changes representation and never authors a weight`,
+    );
+  }
+
+  // The leftover is what flooring threw away, and it is at most one bp per
+  // bucket: every remainder is < 1, so their sum is < bucketOrder.length, and
+  // the floors are integers no greater than BPS_DENOMINATOR once the total is
+  // within tolerance of 1. Handing it out one at a time is therefore always
+  // possible, and the result sums to exactly BPS_DENOMINATOR by construction.
+  let leftover = BPS_DENOMINATOR - entries.reduce((sum, entry) => sum + entry.weight_bps, 0);
+  const byRemainder = [...entries].sort(
+    (a, b) => (b.remainder - a.remainder) || (a.index - b.index),
+  );
+  for (const entry of byRemainder) {
+    if (leftover <= 0) break;
+    entry.weight_bps += 1;
+    leftover -= 1;
+  }
+  // THE HEADLINE INVARIANT, ASSERTED RATHER THAN ARGUED. The paragraph above is
+  // a proof, and a proof is exactly the kind of thing that stops holding when
+  // someone widens SHARE_SUM_TOLERANCE. A vector that does not close on
+  // BPS_DENOMINATOR must never leave this function: a receipt carrying one
+  // would be signed and anchored, and `receiptSemanticErrors` would only find
+  // it after the fact.
+  if (leftover !== 0) {
+    throw new ReceiptCanonicalizationError(
+      `bucketSharesToBps: ${leftover} basis point(s) could not be apportioned across ${bucketOrder.length} buckets — the shares summed to ${total}, which is not a share vector`,
+    );
+  }
+  return entries.map(({ bucket, weight_bps }) => ({ bucket, weight_bps }));
+}
+
 export function receiptSemanticErrors(receipt, spec) {
   // Same all-or-nothing rule as canonicalizeReceipt, and read up front for the
   // same reason: `canonical_bucket_order` is only consulted for a receipt that
