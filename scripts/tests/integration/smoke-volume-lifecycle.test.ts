@@ -13,7 +13,7 @@
 // Docker is a hard dependency of this repo's test harness; a missing docker CLI fails
 // loudly here — never a silent skip (test-coverage policy). Every executed test
 // force-cleans its own project + volume in a finally/afterAll so it can never leak.
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -76,14 +76,82 @@ interface Cfg {
   services: Record<string, { volumes?: Array<{ type?: string; source?: string; target?: string }> }>;
   volumes: Record<string, { name?: string; labels?: Record<string, string> }>;
 }
-function configJson(extraFiles: string[], env: Record<string, string>): Cfg {
-  const r = Bun.spawnSync(
-    ["docker", "compose", ...BASE, ...extraFiles, "config", "--format", "json"],
-    { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
-  );
-  if (r.exitCode !== 0) throw new Error(`docker compose config failed (exit ${r.exitCode}): ${new TextDecoder().decode(r.stderr)}`);
-  return JSON.parse(new TextDecoder().decode(r.stdout)) as Cfg;
+// The `--pg-data <dir>` override file, written exactly as smoke-main.ts writes
+// it for that flag. Created here rather than inside the case that reads it so
+// its path — and therefore the rendering that resolves it — is fixed and can be
+// prewarmed below.
+const pgDataDir = mkdtempSync(join(tmpdir(), "rmsmoke-pgdata-"));
+const pgDataOverrideFile = join(pgDataDir, "pgdata.yml");
+writeFileSync(
+  pgDataOverrideFile,
+  `services:\n  postgres:\n    volumes:\n      - ${pgDataDir}:/var/lib/postgresql/data\n`,
+);
+
+// ---------------------------------------------------------------------------
+// ONE `docker compose config` RUN PER DISTINCT ARGUMENT SET (issue #809).
+//
+// The four offline cases below each read a RENDERED compose configuration, and
+// rendering one shells out to the Docker CLI. On a cold GitHub-hosted runner
+// that costs seconds — enough for the 5000 ms Bun gives a case that declares no
+// timeout to expire on a diff that changed nothing here, which is exactly how
+// PR #801's `unit` job went red at 5187 ms. Between them the four cases need
+// only TWO distinct renderings, so `configJson` memoises on its full argument
+// set and `beforeAll` pays for both once, outside any case's budget.
+//
+// The key keeps the two renderings apart on purpose: the `--pg-data` bind
+// override resolves a DIFFERENT configuration from the default one, and serving
+// one in place of the other would make a case pass while asserting against the
+// wrong config — strictly worse than the flake this removes.
+//
+// The cache stores the raw JSON TEXT and re-parses per call, so each case gets
+// its own object graph and none can leak a mutation into another.
+//
+// A missing or broken docker CLI throws in the hook and turns the file RED —
+// never a silent skip (test-coverage policy).
+const renderCache = new Map<string, string>();
+let prewarmed = false;
+/** Renders that missed the prewarm — see the regression guard at end of file. */
+const coldRendersAfterPrewarm: string[] = [];
+
+function renderKey(extraFiles: readonly string[], env: Record<string, string>): string {
+  return JSON.stringify({
+    files: [...extraFiles],
+    env: Object.entries(env).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  });
 }
+
+function configJson(extraFiles: string[], env: Record<string, string>): Cfg {
+  const key = renderKey(extraFiles, env);
+  let json = renderCache.get(key);
+  if (json === undefined) {
+    if (prewarmed) coldRendersAfterPrewarm.push(key);
+    const r = Bun.spawnSync(
+      ["docker", "compose", ...BASE, ...extraFiles, "config", "--format", "json"],
+      { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
+    );
+    if (r.exitCode !== 0) throw new Error(`docker compose config failed (exit ${r.exitCode}): ${new TextDecoder().decode(r.stderr)}`);
+    json = new TextDecoder().decode(r.stdout);
+    renderCache.set(key, json);
+  }
+  return JSON.parse(json) as Cfg;
+}
+
+// Both renderings the offline cases ask for. A case that asks for one this list
+// does not name is caught by the regression guard at the end of the file, not
+// left to be rediscovered as a flake. Locally the two renders cost ~0.8 s; the
+// 60 s budget is ~75x that, sized for a cold shared runner paying the Docker
+// CLI's own start-up on the first render, and still bounded so a wedged Docker
+// fails loudly instead of hanging.
+const PREWARM: ReadonlyArray<readonly [string[], Record<string, string>]> = [
+  [[], composeEnv()],
+  [["-f", pgDataOverrideFile], composeEnv()],
+];
+const PREWARM_TIMEOUT_MS = 60_000;
+
+beforeAll(() => {
+  for (const [files, env] of PREWARM) configJson(files, env);
+  prewarmed = true;
+}, PREWARM_TIMEOUT_MS);
 
 describe("smoke overlay — pgdata volume namespacing (offline)", () => {
   test("the pgdata volume carries robotmoney.smoke=1 + the project label", () => {
@@ -120,16 +188,14 @@ describe("smoke overlay — pgdata volume namespacing (offline)", () => {
 
 describe("--pg-data bind override merges by target (offline)", () => {
   test("a bind override REPLACES the named-volume mount on postgres", () => {
-    // Mirror exactly what smoke-main.ts writes for `--pg-data <dir>`.
-    const dir = mkdtempSync(join(tmpdir(), "rmsmoke-pgdata-"));
-    const overrideFile = join(dir, "pgdata.yml");
-    writeFileSync(overrideFile, `services:\n  postgres:\n    volumes:\n      - ${dir}:/var/lib/postgresql/data\n`);
-    const cfg = configJson(["-f", overrideFile], composeEnv());
+    // Renders the override file hoisted above — mirroring exactly what
+    // smoke-main.ts writes for `--pg-data <dir>`.
+    const cfg = configJson(["-f", pgDataOverrideFile], composeEnv());
     const mounts = cfg.services?.postgres?.volumes ?? [];
     const data = mounts.find((m) => m.target === "/var/lib/postgresql/data");
     // Merged by target path → the bind wins; the named-volume mount is gone.
     expect(data?.type).toBe("bind");
-    expect(data?.source).toBe(dir);
+    expect(data?.source).toBe(pgDataDir);
     // And postgres no longer references the pgdata named volume at all.
     expect(mounts.some((m) => m.type === "volume" && m.target === "/var/lib/postgresql/data")).toBe(false);
   });
@@ -210,4 +276,17 @@ describe("teardown keeps the volume; resume converges; smoke:clean reclaims it (
     },
     120_000,
   );
+});
+
+// Issue #809's regression guard. Every offline case reads its compose
+// configuration through `configJson`, which serves it from the prewarmed memo;
+// a case that asks for a rendering `PREWARM` does not list falls back to
+// shelling out to Docker inside its own 5000 ms budget, which is the flake this
+// file was changed to remove. Declared last so every case has run.
+describe("compose renders stay hoisted out of the case bodies (issue #809)", () => {
+  test("no offline case shelled out to Docker on its own — every rendering was prewarmed", () => {
+    // A failure lists the argument sets that missed. The fix is to add each one
+    // to PREWARM, not to give the case a bigger timeout.
+    expect(coldRendersAfterPrewarm).toEqual([]);
+  });
 });
