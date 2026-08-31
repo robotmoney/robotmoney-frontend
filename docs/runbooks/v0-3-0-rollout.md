@@ -390,11 +390,33 @@ A lock is therefore not a collision, and **`append-only-safety` PASSes for 0035
 and 0039** (issue #815). It names both tables in its PASS detail, as locked and
 not written, so the distinction stays visible rather than silent.
 
-> **Read the PASS, do not skim it.** The check reports what it FOUND: this
-> release does issue three row removals (0036 on `wallet_backfill_state`, 0037
-> on the two sample tables), and none targets a protected table. A PASS that
-> lists zero statements on a release that clearly deletes something is a signal
-> that the scan is not seeing the file, not a clean bill of health.
+**"Protected" is not one set, and not only the append-only roster.** Three
+kinds of guard are in play, and the check reads all three: `rm_append_only_guard()`
+via `APPEND_ONLY_TABLES`, the table-specific pairs 0037/0038 install via
+`AUM_GUARD_TRIGGERS`, and whatever the live database's own trigger catalog
+reports. It also matters *when*: 0037 archives and then **deletes** rows from
+`wallet_balance_samples` and `wallet_sleeve_samples`, and **0038 guards those
+same tables afterwards**. That delete is correct — the guard does not exist yet
+when it runs — and the same delete in a later migration would abort the boot. So
+the check reads each migration's guard installations out of the files and grades
+a removal against the protection in force *at the point that migration applies*.
+The ordering this release depends on is therefore computed and re-checked on
+every run, not assumed.
+
+> **Read the PASS, do not skim it.** The check reports what it FOUND, in three
+> buckets, and the bucket is the claim:
+>
+> - *removals against tables no guard covers, before or after this release* —
+>   `wallet_backfill_state` (0036), an operational ledger by design;
+> - *removals that run **before** this release installs the guard for their
+>   table* — 0037's two sample-table deletes, each naming `0038_…` as the file
+>   that guards it afterwards. **These are correct only in this migration
+>   order.** If the set is reordered or extended, re-read this list against §2.2;
+> - *protected tables locked or altered but **not** written* — `swarm_members`,
+>   `swarm_sessions` and the rest.
+>
+> A PASS that lists zero statements on a release that clearly deletes something
+> is a signal that the scan is not seeing the file, not a clean bill of health.
 
 **What the check cannot see, and you therefore still read here.** It matches text
 in the migration files, so a removal built with dynamic SQL
@@ -792,7 +814,7 @@ pass. The harness, receipt format and verdict wording are
 | `server-version` | PG 11+ | 0034's `NOT NULL DEFAULT` is instant on 11+ and a full table REWRITE before it (§2.2) |
 | `schema-migrations` | pending set is **exactly** this release's ten; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
 | `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `.env.readonly` points somewhere else |
-| `append-only-safety` | guard installed, and **no statement** in this release removes a row from a protected table or disables a guard | §2.2.1 — this is what makes the out-of-order warning harmless |
+| `append-only-safety` | guard installed, and **no statement** in this release removes a row from a table protected *at the point that migration runs*, or disables a guard | §2.2.1 — this is what makes the out-of-order warning harmless |
 | `clean-targets` | the 8 tables and 26 columns do not exist yet | A target that already exists means an out-of-band change |
 | `catchup-baseline` | records `job_schedules` as it stands now | §4.3 — 0034 OVERWRITES these rows; §9 check 3 grades against this |
 | `wallet-samples-size` | row count + table size | Informational, for §7's wall-clock measurement |

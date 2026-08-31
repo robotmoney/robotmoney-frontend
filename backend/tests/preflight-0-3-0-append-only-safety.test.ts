@@ -20,6 +20,7 @@
 // db-preflight.test.ts uses) so nothing this file does can disturb a sibling
 // test file's fixtures.
 
+import { readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,7 @@ import { type CheckResult, createChecker, printVerdict } from "../scripts/lib/ch
 import type { Db } from "../scripts/lib/preflight-utils.ts";
 import {
   checkAppendOnlySafety,
+  guardedTablesInstalledBy,
   type MigrationSql,
   runChecks,
   scanMigrationSql,
@@ -168,9 +170,11 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
   test("GREEN: disabling an ordinary trigger on an unprotected table passes", async () => {
     // The near-miss for the two RED cases above: neither the name nor the table
     // says "immutability guard", so this is ordinary DDL and must stay green.
+    // `job_schedules` is deliberate — it is in MIGRATION_TOUCHED_TABLES but in
+    // neither guard roster, so it is the honest "unprotected" example.
     const r = await check({
       file: "9008c_disable_unrelated_trigger.sql",
-      sql: "ALTER TABLE wallet_balance_samples DISABLE TRIGGER wallet_balance_samples_touch_recorded_at;",
+      sql: "ALTER TABLE job_schedules DISABLE TRIGGER job_schedules_touch_updated_at;",
     });
     expect(r.status).toBe("PASS");
   });
@@ -187,7 +191,7 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
   test("GREEN: a trigger whose NAME starts with the word ALL is not the ALL keyword", async () => {
     const r = await check({
       file: "9008e_all_prefixed_name.sql",
-      sql: "ALTER TABLE wallet_balance_samples DISABLE TRIGGER all_events_notify;",
+      sql: "ALTER TABLE job_schedules DISABLE TRIGGER all_events_notify;",
     });
     expect(r.status).toBe("PASS");
   });
@@ -274,6 +278,154 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     expect(r.detail.join("\n")).toContain("DELETE swarm_session_judgements");
   });
 
+  // ── The guards this release installs on ITS OWN tables ────────────────────
+  //
+  // The live catalog reads `%_append_only` triggers only, so it cannot see the
+  // table-specific pairs 0037/0038 install; and it is read against a v0.2.2
+  // database, so it cannot see a table this release creates. Both gaps graded
+  // real protected tables as UNPROTECTED, and `main`'s over-broad rule would
+  // have caught them — a detection regression hidden by main's noise.
+
+  test("RED: DELETE FROM wallet_balance_sample_evidence fails — 0037 guards it inside this release", async () => {
+    const r = await check({
+      file: "9017_delete_from_evidence.sql",
+      sql: "DELETE FROM wallet_balance_sample_evidence WHERE sample_date < '2020-01-01';",
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("DELETE wallet_balance_sample_evidence");
+  });
+
+  test("GREEN: the near-miss — ALTERing that same evidence table passes", async () => {
+    const r = await check({
+      file: "9018_alter_evidence.sql",
+      sql: "ALTER TABLE wallet_balance_sample_evidence ADD COLUMN note text;",
+    });
+    expect(r.status).toBe("PASS");
+  });
+
+  test("RED: TRUNCATE of wallet_aum_snapshot_runs and the sleeve evidence table fails", async () => {
+    const r = await check({
+      file: "9019_truncate_aum.sql",
+      sql: "TRUNCATE wallet_aum_snapshot_runs, wallet_sleeve_sample_evidence;",
+    });
+    expect(r.status).toBe("FAIL");
+    const d = r.detail.join("\n");
+    expect(d).toContain("TRUNCATE wallet_aum_snapshot_runs");
+    expect(d).toContain("TRUNCATE wallet_sleeve_sample_evidence");
+  });
+
+  // ── Protection is ORDERED, and the order is computed, not assumed ──────────
+
+  test("a removal AFTER the migration that installs the guard fails; the same removal BEFORE it passes", async () => {
+    // This is 0037/0038's real relationship, reduced. 0037 deletes from
+    // wallet_balance_samples and 0038 guards that table afterwards; grading
+    // against the end-state roster alone would re-block the release for a guard
+    // that does not exist yet when the delete runs. Both directions asserted, so
+    // the ordering is a checked fact rather than a coincidence.
+    const installer: MigrationSql = {
+      file: "9020_installs_guard.sql",
+      sql: [
+        "DO $$ DECLARE t text; BEGIN",
+        "  FOREACH t IN ARRAY ARRAY['wallet_balance_samples'] LOOP",
+        "    EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION rm_x()', t || '_immutable', t);",
+        "  END LOOP;",
+        "END $$;",
+      ].join("\n"),
+    };
+    const remover: MigrationSql = {
+      file: "9021_removes_rows.sql",
+      sql: "DELETE FROM wallet_balance_samples WHERE sample_date < '2020-01-01';",
+    };
+
+    const after = await check(installer, remover);
+    expect({ order: "install then delete", status: after.status }).toEqual({
+      order: "install then delete",
+      status: "FAIL",
+    });
+
+    const before = await check(remover, installer);
+    expect({ order: "delete then install", status: before.status }).toEqual({
+      order: "delete then install",
+      status: "PASS",
+    });
+    // …and the PASS must say WHY it is safe, naming the file that guards it.
+    expect(before.detail.join("\n")).toContain("guarded from 9020_installs_guard.sql");
+  });
+
+  test("a removal that is safe only by ordering is never called UNPROTECTED", async () => {
+    // The string that used to be the operator-facing lie. `wallet_balance_samples`
+    // carries a BEFORE DELETE guard by the end of this release, so no line of
+    // this check may describe it as a table no guard covers.
+    const r = await check(
+      { file: "9022_remove_then_guard.sql", sql: "DELETE FROM wallet_balance_samples WHERE true;" },
+      {
+        file: "9023_guard.sql",
+        sql: "DO $$ BEGIN EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION rm_x()', 'wallet_balance_samples_immutable', 'wallet_balance_samples'); END $$;",
+      },
+    );
+    expect(r.status).toBe("PASS");
+    const d = r.detail.join("\n");
+    expect(d).toContain("run BEFORE this release installs the guard");
+    // The "no guard covers" bucket must not claim this table.
+    const unguardedLine = r.detail.find((l) => l.includes("no guard covers")) ?? "";
+    expect(unguardedLine).not.toContain("wallet_balance_samples");
+  });
+
+  // ── Blocker 2: the anchored rules must see inside a DO $$ … $$ block ───────
+  //
+  // stripSqlNoise() unwraps a dollar-quoted body so its contents are scanned,
+  // but the unwrapped text begins `BEGIN …`, not the statement. DELETE FROM is
+  // matched anywhere and survived that; TRUNCATE, DROP TABLE, DISABLE TRIGGER
+  // and DROP TRIGGER were anchored and were invisible in every DO block — while
+  // the comment claimed DO blocks were handled and only the DELETE case was
+  // asserted. 0037, 0038 and 0040 all do their trigger DDL inside one.
+
+  test.each([
+    ["TRUNCATE", "DO $$ BEGIN TRUNCATE swarm_briefs; END $$;", "TRUNCATE swarm_briefs"],
+    ["DROP TABLE", "DO $$ BEGIN DROP TABLE swarm_subjects; END $$;", "DROP TABLE swarm_subjects"],
+    [
+      "DISABLE TRIGGER",
+      "DO $$ BEGIN ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_append_only; END $$;",
+      "DISABLE TRIGGER",
+    ],
+    [
+      "DROP TRIGGER",
+      "DO $$ BEGIN DROP TRIGGER swarm_members_append_only ON swarm_members; END $$;",
+      "DROP TRIGGER",
+    ],
+    [
+      "TRUNCATE inside IF",
+      "DO $$ BEGIN IF to_regclass('public.audit_log') IS NOT NULL THEN TRUNCATE TABLE audit_log; END IF; END $$;",
+      "TRUNCATE audit_log",
+    ],
+    [
+      "TRUNCATE inside FOREACH LOOP",
+      "DO $$ DECLARE t text; BEGIN FOREACH t IN ARRAY ARRAY['x'] LOOP TRUNCATE swarm_memos; END LOOP; END $$;",
+      "TRUNCATE swarm_memos",
+    ],
+  ])("RED: %s inside a DO $$ ... $$ block fails", async (_label, sql, expected) => {
+    const r = await check({ file: "9024_do_block_shapes.sql", sql });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain(expected);
+  });
+
+  test("GREEN: a DO block that only CREATEs guards is still clean", async () => {
+    // 0040's real shape, and the near-miss for every RED case above: peeling
+    // block openers must not turn a guard INSTALLATION into a guard removal.
+    const r = await check({
+      file: "9025_do_block_installs.sql",
+      sql: [
+        "DO $$ DECLARE t text; BEGIN",
+        "  FOREACH t IN ARRAY ARRAY['swarm_session_judgements'] LOOP",
+        "    EXECUTE format('CREATE TRIGGER %I BEFORE DELETE OR TRUNCATE ON %I FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard()', t || '_append_only', t);",
+        "    EXECUTE format('ALTER TABLE %I ENABLE ALWAYS TRIGGER %I', t, t || '_append_only');",
+        "  END LOOP;",
+        "END $$;",
+      ].join("\n"),
+    });
+    expect(r.status).toBe("PASS");
+  });
+
   // ── And the real thing ────────────────────────────────────────────────────
 
   test("the REAL v0.3.0 migration set passes, and the scan is visibly non-vacuous", async () => {
@@ -284,14 +436,48 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     const detail = r.detail.join("\n");
     // 0036 deletes from wallet_backfill_state; 0037 deletes from both sample
     // tables. The scanner FINDS all three — that is what makes its PASS mean
-    // something — and none of the three targets is protected.
-    expect(detail).toContain("wallet_backfill_state");
-    expect(detail).toContain("wallet_balance_samples");
-    expect(detail).toContain("wallet_sleeve_samples");
+    // something — and each lands in the bucket that is TRUE of it.
+    const unguardedLine = r.detail.find((l) => l.includes("no guard covers")) ?? "";
+    expect(unguardedLine).toContain("wallet_backfill_state");
+    // The two sample tables are guarded by 0038, LATER in this same release, so
+    // they may never appear in the unguarded bucket — that string was the
+    // operator-facing lie this pass exists to remove.
+    expect(unguardedLine).not.toContain("wallet_balance_samples");
+    expect(unguardedLine).not.toContain("wallet_sleeve_samples");
+    expect(detail).toContain("run BEFORE this release installs the guard");
+    expect(detail).toContain("0037_aum_repairable_quarantine.sql: DELETE wallet_balance_samples");
+    expect(detail).toContain("0037_aum_repairable_quarantine.sql: DELETE wallet_sleeve_samples");
+    expect(detail).toContain("guarded from 0038_wallet_aum_snapshot_foundation.sql");
     // And the two false positives that used to block the release are reported
     // as what they are: locked, not written.
     expect(detail).toContain("swarm_members");
     expect(detail).toContain("swarm_sessions");
+  });
+
+  test("the guard-installation map derived from the REAL migrations is exact", () => {
+    // The ordering above is only trustworthy if this map is. Pinned against the
+    // files rather than asserted in prose, and covering both shapes the repo
+    // uses: a static CREATE TRIGGER (0038's snapshot-run pair) and a DO block
+    // that builds the trigger with format() over an ARRAY of table names
+    // (0037, 0038's constituent guards, 0040).
+    const expected: Record<string, string[]> = {
+      "0037_aum_repairable_quarantine.sql": ["wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence"],
+      "0038_wallet_aum_snapshot_foundation.sql": [
+        "wallet_aum_snapshot_runs",
+        "wallet_balance_sample_evidence",
+        "wallet_balance_samples",
+        "wallet_sleeve_sample_evidence",
+        "wallet_sleeve_samples",
+      ],
+      "0040_swarm_judgements_append_only.sql": ["swarm_session_judgements"],
+    };
+    const actual: Record<string, string[]> = {};
+    for (const file of THIS_RELEASE_MIGRATIONS) {
+      const sql = readFileSync(join(migrationsDir, file), "utf8");
+      const tables = [...guardedTablesInstalledBy(sql)].sort();
+      if (tables.length > 0) actual[file] = tables;
+    }
+    expect(actual).toEqual(expected);
   });
 
   test("the guard-missing and guard-gone failures are unchanged", async () => {
