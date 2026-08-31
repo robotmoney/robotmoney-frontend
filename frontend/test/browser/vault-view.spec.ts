@@ -170,6 +170,24 @@ test("the retired vocabulary and the banned risk claim do not survive the port",
   await expect(body).not.toContainText("Vault assets");
 });
 
+test("drift is closed by routing new deposits, never by a rebalance the vault does not do", async ({ page }) => {
+  await stubEnvironment(page);
+  await openVault(page);
+  const body = page.locator("section.vp");
+
+  // The vault does not rebalance positions it already holds — a deliberate
+  // policy, not a gap: "we're not going to be messing with rebalancing on
+  // behalf of users. We're going to allow them to route new dollars coming in."
+  // An earlier draft said drift was closed by "a rebalance" and that
+  // rebalancing was "not yet automatic", which described a mechanism the
+  // protocol has decided against building. A holder who wants the current
+  // allocation withdraws and re-deposits.
+  await expect(page.locator("#allocation")).toContainText("where new deposits go");
+  await expect(body).toContainText("does not rebalance positions it already holds");
+  await expect(body).not.toContainText("rebalancing is not yet automatic");
+  await expect(body).not.toContainText("closing it is a rebalance");
+});
+
 test("Holdings carries balance AND price AND idle USDC, and reconciles to vault TVL", async ({ page }) => {
   const economics = economicsGolden();
   await stubEnvironment(page, economics);

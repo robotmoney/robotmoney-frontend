@@ -292,8 +292,9 @@
     </div>
     <p class="vp__sub">
       <b>Allocation</b> is the weight each sleeve is meant to carry. <b>Holdings</b>
-      is what it carries today. <b>Drift</b> is the gap between them, and closing it
-      is a <b>rebalance</b>.<sup>7</sup>
+      is what it carries today. <b>Drift</b> is the gap between them, and it is closed
+      by <b>where new deposits go</b>, not by selling what the vault already
+      holds.<sup>7</sup>
     </p>
 
     <p class="vp__empty" x-show="!loading && !sleeves().length" x-cloak>
@@ -478,8 +479,12 @@
         served; the current NAV per share above is live.
       </li>
       <li>
-        Allocation weights are currently seeded and cannot yet be changed through the
-        product. Drift is reported; rebalancing is not yet automatic.
+        The vault does not rebalance positions it already holds. New deposits are
+        routed toward the allocation, so drift closes as capital arrives rather than
+        by selling. This is deliberate: rebalancing on a depositor's behalf inside a
+        vault of vaults is expensive and is not something the protocol does. A holder
+        who wants the current allocation can withdraw and re-deposit. Allocation
+        weights are currently seeded and cannot yet be changed through the product.
       </li>
       <li>
         The venue comparison and the recorded value series are a dated reference
