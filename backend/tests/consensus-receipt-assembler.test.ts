@@ -97,30 +97,60 @@ test("the four normalizations the producer really needs are all exercised by the
   expect(receipt.quorum).toEqual({ active: 3, submitted: 2, absent: 1, participation_bps: 6667 });
 });
 
-test("bps conversion closes on exactly 10000, with the residue on the last canonical bucket", () => {
-  const raw = input();
-  // A vector that does NOT divide evenly: 1/3, 1/3, 1/3, 0 rounds to
-  // 3333 + 3333 + 3333 = 9999 on the prefix, and the final bucket takes 1.
+test("bps conversion closes on exactly 10000 by LARGEST REMAINDER, and a zero last bucket is no longer a refusal", () => {
+  // THE RULE CHANGED UNDER THIS TEST (#798/#801, robotmoney-core#1290). It used
+  // to round the three prefix buckets half-up and settle `real_world_assets` to
+  // 10000 minus the prefix; it is now largest remainder, so the leftover bp
+  // goes to the LARGEST FRACTIONAL REMAINDER and ties are broken by canonical
+  // bucket order rather than by position.
   //
-  // THE TAKES MOVE WITH IT, and they have to: `weights` is now recomputed from
-  // the embedded submissions by the shipped verifier, so a session-level vector
-  // rewritten on its own is a refusal (see the test below). Both members
-  // submitting this vector is what makes it the session's mean.
-  const thirds = [
-    { bucket: "agent_tokens", weight: 1 / 3 },
-    { bucket: "conservative_defi_yield", weight: 1 / 3 },
-    { bucket: "protocol_tokens", weight: 1 / 3 },
-    { bucket: "real_world_assets", weight: 0 },
+  // THE TAKES MOVE WITH THE VECTOR, and they have to: `weights` is recomputed
+  // from the embedded submissions by the shipped verifier, so a session-level
+  // vector rewritten on its own is a refusal (see the test below). Both members
+  // submitting the vector is what makes it the session's mean.
+  const withVector = (vector: { bucket: string; weight: number }[]) => {
+    const raw = input();
+    for (const analyst of raw.analysts) analyst.payload.weights = structuredClone(vector);
+    raw.weights = structuredClone(vector);
+    return raw;
+  };
+  const vec = (a: number, c: number, p: number, r: number) => [
+    { bucket: "agent_tokens", weight: a },
+    { bucket: "conservative_defi_yield", weight: c },
+    { bucket: "protocol_tokens", weight: p },
+    { bucket: "real_world_assets", weight: r },
   ];
-  for (const analyst of raw.analysts) analyst.payload.weights = structuredClone(thirds);
-  raw.weights = structuredClone(thirds);
-  const { receipt } = assembleConsensusReceipt(raw);
+
+  // 1/3, 1/3, 1/3, 0 floors to 3333 + 3333 + 3333 + 0 = 9999. The three
+  // remainders are an exact three-way tie, so canonical bucket order gives the
+  // leftover bp to `agent_tokens` — NOT to the positionally last bucket.
+  const { receipt } = assembleConsensusReceipt(withVector(vec(1 / 3, 1 / 3, 1 / 3, 0)));
   expect(receipt.weights).toEqual([
-    { bucket: "agent_tokens", weight_bps: 3333 },
+    { bucket: "agent_tokens", weight_bps: 3334 },
     { bucket: "conservative_defi_yield", weight_bps: 3333 },
     { bucket: "protocol_tokens", weight_bps: 3333 },
-    { bucket: "real_world_assets", weight_bps: 1 },
+    { bucket: "real_world_assets", weight_bps: 0 },
   ]);
+
+  // THE ZERO-RWA SHAPE THE SUPERSEDED RULE REFUSED, ASSEMBLED END TO END. Under
+  // settle-the-last this vector rounded to a prefix of 4000 + 3001 + 3000 =
+  // 10001 and settled `real_world_assets` to -1, so NO receipt could be
+  // assembled for the session at all — and a zero `real_world_assets` is four
+  // of the six real archived allocations. It now converts, and closes on
+  // exactly 10000 with nothing negative in it.
+  const zeroRwa = assembleConsensusReceipt(withVector(vec(0.4, 0.30005, 0.29995, 0))).receipt;
+  const entries = zeroRwa.weights as { bucket: string; weight_bps: number }[];
+  expect(entries).toEqual([
+    { bucket: "agent_tokens", weight_bps: 4000 },
+    { bucket: "conservative_defi_yield", weight_bps: 3001 },
+    { bucket: "protocol_tokens", weight_bps: 2999 },
+    { bucket: "real_world_assets", weight_bps: 0 },
+  ]);
+  expect(entries.reduce((sum, e) => sum + e.weight_bps, 0)).toBe(10_000);
+  // Positive zero, not negative zero: the producer's settle emits -0 and the
+  // clamp in `bucketSharesToBps` is written `share > 0 ? share : 0` precisely
+  // so that -0 does not survive into a signed artifact.
+  expect(Object.is(entries[3]!.weight_bps, -0)).toBe(false);
 });
 
 test("the aggregate is BOUND to the takes: a vector the submissions do not mean to is refused", () => {

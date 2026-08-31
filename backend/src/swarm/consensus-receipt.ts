@@ -123,7 +123,7 @@ export type ConsensusReceiptRefusalReason =
   | "nonce_replayed"
   | "weights_malformed"
   | "weights_not_canonical_four"
-  | "weights_bps_out_of_range"
+  | "weights_not_a_share_vector"
   | "schema_invalid"
   | "semantics_invalid"
   | "canonicalization_failed";
@@ -175,16 +175,30 @@ function hash32(value: string, field: string): string {
 }
 
 /**
- * bps conversion, exactly as consensus-receipt.canonicalization.json#bps_conversion
- * states it: round every bucket but the last half-up, then set the last to
- * 10000 minus the prefix sum so the vector closes on exactly 10000.
+ * bps conversion — THE SHAPE CHECKS AND THE NAMED REFUSALS ONLY. The rule
+ * itself is `bucketSharesToBps()` in the contract, the single implementation of
+ * consensus-receipt.canonicalization.json#bps_conversion (LARGEST REMAINDER,
+ * Hare quota, ties broken by canonical bucket order). This function's job is to
+ * get `swarm_recommendation.weights` — untyped jsonb — into the shape that rule
+ * accepts, and to turn every way it can fail into an operator-visible reason.
  *
- * THIS AUTHORS NO WEIGHT. The input is the vector `meanTakeWeights()` already
- * derived and `swarm_recommendation.weights` already published; this is a
- * change of REPRESENTATION (a float in 0..1 to an integer in 0..10000) forced
- * by the rule that every number in the canonical bytes is a bare integer,
- * because `1250.0` and `1.25e3` are different bytes for the same receipt.
- * Nothing here re-averages, re-normalizes or re-orders anything.
+ * THIS AUTHORS NO WEIGHT, AND IT REPAIRS NOTHING EITHER. The input is the
+ * vector `meanTakeWeights()` already derived and `swarm_recommendation.weights`
+ * already published; this is a change of REPRESENTATION (a float in 0..1 to an
+ * integer in 0..10000) forced by the rule that every number in the canonical
+ * bytes is a bare integer, because `1250.0` and `1.25e3` are different bytes
+ * for the same receipt. Nothing here re-averages, re-normalizes or re-orders
+ * anything.
+ *
+ * IN PARTICULAR THE VECTOR IS PASSED THROUGH UNCHANGED, NEGATIVE DUST
+ * INCLUDED. `meanTakeWeights()` settles its positionally last entry —
+ * `real_world_assets` — to `round(1 - prefixTotal, 8)`, which lands on exactly
+ * `-1e-8`, or on negative zero, in about one in eight zero-RWA sessions.
+ * `bucketSharesToBps` floors that to positive zero itself, as the published
+ * `bps_conversion.negative_dust_clamp` states. A clamp, a `Math.abs()`, a
+ * re-normalization or a filter HERE would move the repair off the one
+ * implementation both repos read and into a producer-local rule the verifier
+ * does not know about.
  */
 function toBps(weights: { bucket: string; weight: number }[]): { bucket: string; weight_bps: number }[] {
   // SHAPE FIRST, AND IT IS A NAMED REFUSAL. `swarm_recommendation.weights` is
@@ -236,24 +250,37 @@ function toBps(weights: { bucket: string; weight: number }[]): { bucket: string;
     );
   }
   // THE RULE ITSELF IS IMPORTED, not restated. `bucketSharesToBps` is the one
-  // implementation of consensus-receipt.canonicalization.json#bps_conversion,
-  // shared with the verifier's weights recomputation in
-  // `receiptSemanticErrors` — so the two can never disagree about the vector,
-  // and ISSUE #798 (which changes this rule; robotmoney-core#1290 found
-  // settle-the-last refuses ~1 in 8 vectors whose last canonical bucket is
-  // exactly zero) has ONE site to land in rather than three.
+  // implementation of consensus-receipt.canonicalization.json#bps_conversion —
+  // LARGEST REMAINDER since #798/#801 — shared with the verifier's weights
+  // recomputation in `receiptSemanticErrors`, so the two can never disagree
+  // about the vector.
   //
-  // RANGE-CHECKING THE FINAL BUCKET IS THIS CALLER'S OBLIGATION, and here it is
-  // an operator-visible refusal rather than an exception out of shared code.
-  const out = bucketSharesToBps(byBucket as Map<string, number>, canonical as readonly string[]);
-  const final = out[out.length - 1]!.weight_bps;
-  if (!Number.isSafeInteger(final) || final < 0 || final > 10_000) {
+  // THERE IS NO LONGER A RANGE CHECK ON THE OUTPUT, and adding one back would
+  // be dead code. Largest remainder floors every bucket and then hands out at
+  // most one leftover bp per bucket, so every entry is an integer in 0..10000
+  // and the vector sums to exactly BPS_DENOMINATOR BY CONSTRUCTION, whatever
+  // the last canonical bucket holds. The refusal that used to sit here
+  // (`weights_bps_out_of_range`, "the final bucket fell outside 0..10000")
+  // could not fire under this rule at all, and a public refusal enum must not
+  // carry an unreachable member.
+  //
+  // WHAT DID NOT GO AWAY IS THE OBLIGATION TO NAME THE FAILURE. The refusal
+  // MOVED rather than vanished: `bucketSharesToBps` now rejects an input that
+  // is not a share vector — a share above 1, a share more negative than the
+  // -1e-6 producer-dust clamp, or a total more than 1e-6 from 1 — by raising
+  // `ReceiptCanonicalizationError`. Letting that escape would be an unnamed
+  // 500, exactly what this file's header forbids, so it is caught here and
+  // re-raised as an operator-visible reason. Range-checking the OUTPUT was
+  // always a proxy for "was the INPUT a share vector"; this checks the thing
+  // itself, and does it where the answer is actually known.
+  try {
+    return bucketSharesToBps(byBucket as Map<string, number>, canonical as readonly string[]);
+  } catch (e) {
     throw new ConsensusReceiptRefusal(
-      "weights_bps_out_of_range",
-      `bps conversion left the final bucket at ${final}, outside 0..10000 — the vector did not sum to 1`,
+      "weights_not_a_share_vector",
+      `the session's weight vector is not a share vector, so it has no basis-point representation: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  return out;
 }
 
 /**

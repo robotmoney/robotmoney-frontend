@@ -693,41 +693,42 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     // THE RULE IS NEEDED IN THREE PLACES — the producer's toBps()
     // (backend/src/swarm/consensus-receipt.ts), the verifier's weights
     // recomputation in receiptSemanticErrors, and the spec's bps_conversion
-    // prose — and a rule spelled three times is three rules. ISSUE #798 CHANGES
-    // THIS RULE (robotmoney-core#1290: settle-the-last refuses ~1 in 8 vectors
-    // whose last canonical bucket is exactly zero), so this test is what makes
-    // "one site to fix" a fact rather than an intention.
+    // prose — and a rule spelled three times is three rules. THE RULE ITSELF —
+    // largest remainder, its tie-break, its arithmetic domain and its
+    // negative-dust clamp — is exercised in
+    // consensus-receipt-bps-conversion.test.ts (#798/#801); what is checked
+    // HERE is the narrower fixture-level claim: the committed receipts'
+    // `weights` are reproducible by that one exported function, so a change to
+    // it cannot leave the goldens describing a rule nothing implements.
     const order = [...RECEIPT_CANONICAL_BUCKET_ORDER];
     const shares = (values: number[]) => new Map(order.map((bucket, i) => [bucket, values[i]!]));
 
-    // The residue lands on the LAST canonical bucket, and the vector closes on
-    // exactly 10000 even where the prefix does not.
-    expect(bucketSharesToBps(shares([1 / 3, 1 / 3, 1 / 3, 0]), order)).toEqual([
-      { bucket: "agent_tokens", weight_bps: 3333 },
-      { bucket: "conservative_defi_yield", weight_bps: 3333 },
-      { bucket: "protocol_tokens", weight_bps: 3333 },
-      { bucket: "real_world_assets", weight_bps: 1 },
-    ]);
-    // Half-UP on the prefix, not half-even: 0.00005 is an exact .5 boundary at
-    // the fourth digit and rounds AWAY from zero. (Half-even would give 0.)
-    expect(bucketSharesToBps(shares([0.00005, 0.5, 0.3, 0.19995]), order)[0]).toEqual({
-      bucket: "agent_tokens", weight_bps: 1,
-    });
-    for (const vector of [[0.25, 0.25, 0.25, 0.25], [0.125, 0.6, 0.175, 0.1], [1 / 7, 2 / 7, 3 / 7, 1 / 7]]) {
-      expect(bucketSharesToBps(shares(vector), order).reduce((sum, e) => sum + e.weight_bps, 0)).toBe(10_000);
-    }
-
-    // THE KNOWN DEFECT, PINNED RATHER THAN HIDDEN (#798). A vector whose last
-    // canonical bucket is exactly zero and whose prefix does not land on whole
-    // bps settles the last bucket NEGATIVE, which the producer refuses outright.
-    // Four of six real archived allocations have this shape.
-    const zeroRwa = bucketSharesToBps(shares([1 / 3, 1 / 3, 1 / 3, 0]), order);
-    expect(zeroRwa.at(-1)!.weight_bps).toBe(1); // this one is fine…
-    const negative = bucketSharesToBps(shares([0.4, 0.30005, 0.29995, 0]), order);
-    expect(negative.at(-1)!.weight_bps).toBeLessThan(0); // …and this one is the defect
-    // The golden itself is unaffected, so #798 is a change to the rule and not
-    // a correction of these bytes.
+    // The committed golden's own vector, converted by the exported rule. (The
+    // escaping fixture carries no `weights` — it exists to pin string escaping.)
     expect(valid.weights).toEqual(bucketSharesToBps(shares([0.125, 0.6, 0.175, 0.1]), order));
+
+    // THE DEFECT THIS TEST USED TO PIN IS GONE, and that is asserted rather
+    // than merely no longer mentioned. Under the superseded settle-the-last
+    // rule a vector whose last canonical bucket is exactly zero and whose
+    // prefix does not land on whole bps settled that bucket NEGATIVE, and the
+    // producer refused the session outright — four of the six real archived
+    // allocations have that shape. Largest remainder closes on exactly
+    // BPS_DENOMINATOR for all of them, with nothing negative anywhere.
+    for (const vector of [
+      [1 / 3, 1 / 3, 1 / 3, 0],
+      [0.4, 0.30005, 0.29995, 0],
+      [0.00005, 0.5, 0.3, 0.19995],
+      [0.25, 0.25, 0.25, 0.25],
+      [1 / 7, 2 / 7, 3 / 7, 1 / 7],
+    ]) {
+      const converted = bucketSharesToBps(shares(vector), order);
+      expect(converted.map((e) => e.bucket)).toEqual(order);
+      expect(converted.reduce((sum, e) => sum + e.weight_bps, 0)).toBe(10_000);
+      for (const entry of converted) expect(entry.weight_bps).toBeGreaterThanOrEqual(0);
+    }
+    expect(spec.bps_conversion.rule).toContain("LARGEST REMAINDER");
+    expect(spec.bps_conversion.superseded_rule).toContain("NO REPRESENTATION");
+    expect(spec.bps_conversion.reference).toContain("bucketSharesToBps()");
   });
 
   test("the weights cardinality obligation is stated, not left to the assembler", () => {
