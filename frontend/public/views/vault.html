@@ -474,6 +474,14 @@
   font-family: var(--font-mono); font-size: 0.62rem; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.18em;
   color: var(--color-text-muted); margin: 0;
+  /* Explicit, in rem, so the headline below lands on the SAME offset as every
+     other nav page's hero (spa.spec.ts's "one size, one typeface, one offset"
+     invariant). Every other hero pins its h1 with `padding-top: 10rem` on the
+     inner and puts the h1 first; this page opens with the eyebrow instead, so
+     the offset is .vp's 9rem plus this line box — 144 + 16 = 160px. Left to
+     `normal` it is whatever the mono face's metrics happen to give (17px), and
+     the headline jumps by a pixel on every navigation into /vault. */
+  line-height: 1rem;
 }
 
 /* ── hero ──────────────────────────────────────────────────────────────── */

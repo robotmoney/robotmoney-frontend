@@ -103,16 +103,28 @@ async function main() {
     "stub__table",
     "stub__series",
   ]);
-  await checkView("/views/allocation.html", [
-    "x-data=\"allocationView()\"",
-    "alloc-tablecard",             // vault/wallet holdings table card
-    "alloc-aum__value",            // hero Total AUM (live vault-economics binding, issue #40)
-    "alloc-chip__value",           // 7-day APY chip (live vault-economics binding, issue #40)
-    "walletNonLive()",             // live prop-wallet feed provenance badge (issue #84)
+  // /vault (RM-105, PR #774) is the depositor-capital factsheet that replaced
+  // /allocation; routes.js resolves /allocation and /allocation2 to it. This
+  // check used to name /views/allocation.html — a fragment NO route resolves to
+  // any more, so it went on passing while the page it was written to protect
+  // was no longer the one being served (issue #800).
+  //
+  // The prop-wallet markers this list used to carry (alloc-aum__value's
+  // combined Total AUM, walletNonLive()) are deliberately absent: /vault must
+  // never read wallet-balances or wallet-sleeves — that is the whole point of
+  // the page — and the house book has no route of its own until RM-103.
+  await checkView("/views/vault.html", [
+    "x-data=\"vaultView()\"",
+    "vp__title",                   // the hero headline
+    "vp__stats",                   // stat rail: yield, net vs Aave, vault TVL
+    "id=\"allocation\"",            // the anchor the skill/home/swarm cards link
+    "id=\"holdings\"",              // per-adapter holdings, live vault-economics
+    "vaultNonLive()",              // stub-source badge (issue #50)
+    "vaultStale()",                // stale-read badge
   ]);
   // The wallet-performance charts (walletPerfView(), formerly embedded in
-  // allocation.html) moved to their own page under the pixel-perfect lift
-  // (#39); "rm-chartcard" was renamed to "a2-card" in that same lift.
+  // the retired allocation.html) live on their own page under the
+  // pixel-perfect lift (#39); "rm-chartcard" was renamed to "a2-card" there.
   await checkView("/views/performance.html", [
     "x-data=\"walletPerfView()\"",
     "a2-card",  // shared chart-card component

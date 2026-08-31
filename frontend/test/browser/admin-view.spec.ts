@@ -664,13 +664,39 @@ async function mockSwarmApi(
     route.fulfill(jsonReply({ ok: false, status: 409, error: "illegal_transition:published->cancelled" }, 409)));
 }
 
-async function signIn(page: Page, path: string): Promise<void> {
+// Type the admin password and submit, without waiting for the outcome. Only
+// the "a refused load logs you back out" test wants this: it is about a
+// sign-in whose FOLLOW-UP load is refused, so the signed-in state signIn()
+// waits for below is one that page passes through and then loses.
+async function submitSignIn(page: Page, path: string): Promise<void> {
   await page.goto(path);
   // Scoped to the login card specifically — every admin page also carries
   // several (initially hidden) .adm-input form fields of its own, which would
   // otherwise make this a strict-mode-ambiguous locator.
   await page.locator(".adm-login .adm-input").fill("smoke-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+}
+
+async function signIn(page: Page, path: string): Promise<void> {
+  await submitSignIn(page, path);
+  // The click only STARTS the login. loginAndLoad() (alpine/views/admin/
+  // shared.js) dynamically imports lib/api.js, awaits POST /api/admin/auth, and
+  // only THEN writes the token to sessionStorage and flips `authed`. Returning
+  // on the click alone leaves a caller free to navigate before that write
+  // lands, and the token lives in sessionStorage — so the next page boots with
+  // no stored token, `bootWithStoredToken()` returns early, `member`/`session`
+  // stays null, and the page renders the login gate instead of its content.
+  //
+  // Every other caller happened to assert something on the signed-in overview
+  // first, which absorbed the race; the one caller that navigates immediately
+  // (the #794 rotate-key remedy test) did not, and failed in CI while passing
+  // locally — issue #800 Cluster B. Reproduced by delaying the auth response
+  // 500ms: the failure is byte-identical to CI's, down to the assertion line.
+  //
+  // Waiting for the gate to close is the exact signal, not a sleep: Alpine only
+  // hides .adm-login after `authed = true`, which is the statement immediately
+  // after sessionStorage.setItem().
+  await expect(page.locator(".adm-login")).toBeHidden();
 }
 
 // AC: route map + direct navigation + back/forward.
@@ -706,7 +732,11 @@ test("swarm admin: a mocked 403 logs out and shows session-expired", async ({ pa
   // (?.*)? tolerates the ?full=1 swarm-overview.js now sends (issue #243).
   await page.route(/\/api\/swarm\/sessions(\?.*)?$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
 
-  await signIn(page, "/admin/swarm");
+  // submitSignIn, not signIn: the auth POST here SUCCEEDS and the gate does
+  // close for an instant — then the first load 403s, _handle403() clears the
+  // token and the gate comes back. Waiting for "signed in" would be waiting
+  // for a state this page is designed to lose.
+  await submitSignIn(page, "/admin/swarm");
   await expect(page.getByText("Session expired — sign in again.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
 

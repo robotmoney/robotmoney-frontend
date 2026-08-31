@@ -4,7 +4,7 @@
 // table from GET /api/dashboards/wallet-balances (holdings[] = fixed
 // group/colour order, history[] = continuous sparse byAsset per day).
 //
-// Same harness as allocation-view.spec.ts: the SPA + view HTML are served by the
+// Same harness as vault-view.spec.ts: the SPA + view HTML are served by the
 // backend at baseURL, vendor CDN scripts are fulfilled from node_modules, and the
 // wallet-balances endpoint is stubbed inline (no live prop-wallet capture — the
 // addresses are owner data). Asserts: the table's series order matches the

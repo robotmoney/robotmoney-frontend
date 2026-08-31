@@ -348,7 +348,7 @@ or workers**. Contributor workflow in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
   never serves any of it.
 - `frontend/public/` — the production SPA, byte-for-byte untouched by preview.
 - `goldens/api-goldens.json` — the goldens. Pinned at `goldens/` because it is a
-  **shared test fixture**: `frontend/test/browser/allocation-view.spec.ts`,
+  **shared test fixture**: `frontend/test/browser/vault-view.spec.ts`,
   `tokenomics-fees.spec.ts`, and the provenance note in
   `frontend/public/views/regime/indicators.html` all reference it there.
 
@@ -1663,7 +1663,7 @@ degrade rules) those feeds were built against is the
   instead of the retired static 2026-06-26 literals.
 - **Preview/smoke fidelity (D14)** — `goldens/api-goldens.json` carries a real
   captured `/api/dashboards/vault-economics` entry so `bun run preview` and the
-  e2e Playwright spec (`frontend/test/browser/allocation-view.spec.ts`) render
+  e2e Playwright spec (`frontend/test/browser/vault-view.spec.ts`) render
   this section offline.
 
 ### 10.1 Wallet balances (prop-wallet valuation)

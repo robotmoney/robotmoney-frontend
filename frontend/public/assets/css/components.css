@@ -598,7 +598,7 @@
    the rules above use it: each page's inline <style> is injected after this
    sheet and would otherwise win. */
 .sk__title, .rv__title, .tok__h1, .a2-hero__title,
-.md-hero__title, .cl__h1, .sv__title {
+.md-hero__title, .cl__h1, .sv__title, .vp__title {
   font-family: var(--font-display) !important;
   font-weight: 700 !important;
   font-size: clamp(2.5rem, 4.2vw, 3.75rem) !important;
