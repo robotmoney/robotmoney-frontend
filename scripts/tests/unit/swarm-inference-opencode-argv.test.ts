@@ -345,6 +345,29 @@ describe("a funded-inference failure carries a machine-readable kind", () => {
   });
 });
 
+// The inference deadline here is driven by an INJECTED CLOCK, not by wall time.
+//
+// This test needs one precise interleaving: the subprocess must have booted far
+// enough to install its SIGTERM handler and write its stderr banner — the
+// "partial diagnostics" the test exists to prove are preserved — while its
+// stdout is still only a `step_start` and no primary stream has been observed;
+// and ONLY THEN may the deadline fire.
+//
+// Expressed as a real millisecond budget that ordering is a coin flip: a 40 ms
+// deadline against a ~50 ms `node` start-up (issue #821), which lost 14 runs in
+// 30 on this machine and would invert again on any differently loaded host. A
+// bigger number would only re-weight the coin.
+//
+// So the deadline stops being a duration. OPENCODE_TIMEOUT_MS is set to a
+// sentinel no other timer in the process would ever use, `setTimeout` is
+// wrapped for the duration of this test, and the deadline callback registered
+// under that sentinel is fired by the `first_stderr_byte` telemetry milestone
+// instead of by the clock. The ordering under assertion is therefore CAUSAL:
+// the timeout cannot fire before the boot banner has been read, and no amount
+// of host load can delay it past that point. Every other setTimeout in the
+// process passes straight through to the real one.
+const INJECTED_DEADLINE_SENTINEL_MS = 987_654_321;
+
 test("pre-stream timeout preserves partial diagnostics and reports that no primary stream was observed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "swarm-inference-hang-"));
   const bin = join(dir, "opencode-hang");
@@ -359,14 +382,46 @@ setInterval(() => {}, 60_000);
   const previousTimeout = process.env.OPENCODE_TIMEOUT_MS;
   const previousKey = process.env.OPENCODE_API_KEY;
   process.env.OPENCODE_BIN = bin;
-  process.env.OPENCODE_TIMEOUT_MS = "40";
+  process.env.OPENCODE_TIMEOUT_MS = String(INJECTED_DEADLINE_SENTINEL_MS);
   process.env.OPENCODE_API_KEY = "sk-planted-secret-123456789";
+
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const injectedHandles = new Set<{ cancelled: boolean }>();
+  let releaseDeadline: () => void = () => {};
+  const deadlineGate = new Promise<void>((resolve) => { releaseDeadline = resolve; });
+  // Failure backstop, never the success path: if the banner never arrives the
+  // gate would never open and this test would hang instead of failing. Release
+  // it after a bound far above any plausible spawn so the assertions below fail
+  // LOUDLY on an empty diagnostic tail.
+  const backstop = realSetTimeout(() => releaseDeadline(), 10_000);
+  globalThis.setTimeout = ((handler: (...a: never[]) => void, delay?: number, ...args: never[]) => {
+    if (delay !== INJECTED_DEADLINE_SENTINEL_MS) return realSetTimeout(handler, delay, ...args);
+    const handle = { cancelled: false };
+    injectedHandles.add(handle);
+    void deadlineGate.then(() => { if (!handle.cancelled) handler(...args); });
+    return handle;
+  }) as unknown as typeof globalThis.setTimeout;
+  globalThis.clearTimeout = ((handle: unknown) => {
+    if (handle && typeof handle === "object" && injectedHandles.has(handle as { cancelled: boolean })) {
+      (handle as { cancelled: boolean }).cancelled = true;
+      return;
+    }
+    realClearTimeout(handle as Parameters<typeof globalThis.clearTimeout>[0]);
+  }) as unknown as typeof globalThis.clearTimeout;
+
   const milestones: string[] = [];
   try {
     const started = Date.now();
     try {
       await authorTake(persona("hang"), { composite: 0.5 }, "subject-1", {
-        telemetry: (event) => milestones.push(event.milestone),
+        telemetry: (event) => {
+          milestones.push(event.milestone);
+          // The causal trigger. At this instant the boot banner has been read
+          // and no primary stream has been observed — precisely the pre-stream
+          // state whose diagnostics this test asserts are preserved.
+          if (event.milestone === "first_stderr_byte") releaseDeadline();
+        },
         diagnosticArtifactPath: "/safe/artifacts/run",
       });
       throw new Error("expected timeout");
@@ -389,6 +444,9 @@ setInterval(() => {}, 60_000);
     expect(milestones).not.toContain("primary_stream_observed");
     expect(milestones.filter((milestone) => milestone === "kill_signal")).toHaveLength(2);
   } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+    realClearTimeout(backstop);
     if (previousBin === undefined) delete process.env.OPENCODE_BIN; else process.env.OPENCODE_BIN = previousBin;
     if (previousTimeout === undefined) delete process.env.OPENCODE_TIMEOUT_MS; else process.env.OPENCODE_TIMEOUT_MS = previousTimeout;
     if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
