@@ -591,6 +591,118 @@ export async function enqueueLifecycleJob(action: string, payload: Record<string
   return result;
 }
 
+// How long runJudgeStep will wait for a judging to land before publishing
+// anyway. The model call itself is bounded at ~60s (SWARM_JUDGE_TIMEOUT_MS),
+// and the judge job still has to be claimed off the swarm lane first, so this
+// is deliberately generous. It is a CEILING, not a budget: with the mode `off`
+// — the shipped default — nothing waits at all.
+const JUDGE_WAIT_MS = 120_000;
+
+/**
+ * The judge's runtime mode, read from the switch itself
+ * (`GET /api/swarm/admin/judge`, `swarm_judge_config.mode`).
+ *
+ * Returns `null` when the switch cannot be read, and NEVER a guess: `off` and
+ * "unknown" have to stay distinguishable because runJudgeStep branches on them
+ * differently, and a mislabelled `off` would make the driver wait two minutes
+ * per session for a judging that is never coming.
+ */
+export async function readJudgeMode(automationToken?: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
+      headers: getAutomationHeaders(automationToken),
+    });
+    if (!r.ok) throw new Error(`GET ${ROUTES.swarm.admin.judgeConfig} -> ${r.status}`);
+    const body = await responseJson<{ judge?: { mode?: unknown } }>(r);
+    return typeof body.judge?.mode === "string" ? body.judge.mode : null;
+  } catch (err) {
+    console.error(
+      `[e2e] judge mode read failed — the judging is still queued, but this driver cannot wait for it: ${err instanceof Error ? err.message : err}`,
+    );
+    return null;
+  }
+}
+
+/** Injection seam for runJudgeStep's four effects. Real callers pass none. */
+export interface JudgeStepDeps {
+  readMode?: () => Promise<string | null>;
+  enqueue?: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
+  waitForJudged?: () => Promise<unknown>;
+  log?: (line: string) => void;
+}
+
+/**
+ * The judge step of THIS DRIVER'S cadence (issue #767).
+ *
+ * THERE ARE TWO SESSION-CREATION PATHS AND ONLY ONE OF THEM IS A SCHEDULER.
+ * `createSessionAdmin` (POST /api/swarm/admin/sessions) enqueues all five
+ * lifecycle jobs up front, at `run_after` instants derived from the session's
+ * own timestamps. This driver — the one production actually runs, with
+ * `SWARM_SCHEDULES_ENABLED=0` (see scripts/lib/smoke-schedule.ts) — does not go
+ * through it: it opens a session with `open_session` (domain.openSession
+ * enqueues NOTHING) and then enqueues each step by hand as the previous one
+ * lands. So putting `swarm.judge` on `SESSION_JOB_KINDS` gave a judging to
+ * admin-created sessions and to NO session this driver creates, however long
+ * anyone waited. This function is the other half.
+ *
+ * WHY IT WAITS, WHEN IT WAITS. The other steps are enqueued and then awaited by
+ * state, and the judge has to be too — but for a stronger reason than symmetry.
+ * `swarm.publish` is an unconditional `UPDATE ... SET state='published'`, while
+ * `judgeSessionAdmin` needs the `aggregated -> judged` transition to still be
+ * legal when its model call returns up to a minute later. Enqueue both back to
+ * back and the publish very often wins: the transition is refused, the whole
+ * judging transaction rolls back, and the soak records NOTHING while the job
+ * queue fills with `degraded` rows. Waiting for `judged` removes the race.
+ *
+ * WHY IT DOES NOT ALWAYS WAIT. `off` is the shipped default and must stay a
+ * clean, instant no-op on the cadence: with the judge disabled the queued job
+ * drains as `{ skipped: "judge_disabled" }` and the session never leaves
+ * `aggregated`, so waiting for `judged` would burn the ceiling above on every
+ * single session. The job is enqueued either way — that is what makes flipping
+ * the database switch take effect on the next session with nothing redeployed
+ * and this driver not restarted.
+ *
+ * WHY A TIMEOUT IS NOT FATAL. Publishing is this driver's job. A judge that is
+ * slow, wedged, or misconfigured must never wedge the session cadence behind
+ * it, so the wait is loud on expiry and then proceeds. The judging that lands
+ * late is refused honestly by `applyOpinion`'s state check rather than writing
+ * onto a published session.
+ */
+export async function runJudgeStep(
+  sessionId: string | number,
+  date: string,
+  subjectId: string,
+  automationToken?: string,
+  deps: JudgeStepDeps = {},
+): Promise<{ mode: string | null; waitedForJudged: boolean; judged: boolean }> {
+  const readMode = deps.readMode ?? (() => readJudgeMode(automationToken));
+  const enqueue = deps.enqueue
+    ?? ((action: string, payload: Record<string, unknown>) => enqueueLifecycleJob(action, payload, automationToken));
+  const waitForJudged = deps.waitForJudged ?? (() => waitForSessionState(date, subjectId, "judged", JUDGE_WAIT_MS));
+  const log = deps.log ?? ((line: string) => console.log(line));
+
+  // Read the switch BEFORE enqueueing, so the branch below is about the mode
+  // that was in force when this step ran rather than one an operator flipped
+  // while the job sat in the queue.
+  const mode = await readMode();
+  await enqueue("judge", { sessionId });
+
+  if (mode !== "shadow" && mode !== "enforce") {
+    log(`  judge mode=${mode ?? "unreadable"} — the queued judging drains as a clean skip; not waiting for 'judged'`);
+    return { mode, waitedForJudged: false, judged: false };
+  }
+  try {
+    await waitForJudged();
+    log(`  judged (mode=${mode})`);
+    return { mode, waitedForJudged: true, judged: true };
+  } catch (err) {
+    log(
+      `  judge did not reach 'judged' in time (mode=${mode}) — publishing anyway rather than wedging the cadence: ${err instanceof Error ? err.message : err}`,
+    );
+    return { mode, waitedForJudged: true, judged: false };
+  }
+}
+
 export type ProducerComposeRail = Pick<
   SessionRail,
   "repoRoot" | "composeProject" | "composeFiles" | "composeSpawnEnv" | "backendUrl"
@@ -858,6 +970,14 @@ export async function runSession(
   await enqueueLifecycleJob("aggregate", { sessionId }, rail.automationToken);
   await waitForSessionState(date, subject.id, "aggregated");
   emitSession("aggregated", sessionId);
+
+  // The judge sits HERE — between the rollup it reads and the publish it must
+  // beat (issue #767). Without this line the consensus judge reaches only
+  // sessions created through POST /api/swarm/admin/sessions, which is not a
+  // path this driver, or production's cadence, ever takes. See runJudgeStep for
+  // why it waits in `shadow`/`enforce`, why it does not wait at the shipped
+  // `off`, and why an expired wait publishes rather than wedging.
+  await runJudgeStep(sessionId, date, subject.id, rail.automationToken);
 
   await enqueueLifecycleJob("publish", { sessionId }, rail.automationToken);
   await waitForSessionState(date, subject.id, "published");

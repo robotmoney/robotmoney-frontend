@@ -32,6 +32,8 @@ import * as admin from "../src/swarm/admin.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { config } from "../src/config.ts";
+import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -1559,6 +1561,166 @@ test("cadence: turning the mode on takes effect on the NEXT drain of an already-
   // Nothing re-enqueued anything: B's job is the row created before the flip.
   expect((await sql`SELECT id FROM jobs WHERE dedupe_key = ${`swarm:${b.session.id}:judge`}`).map((r: any) => Number(r.id)))
     .toEqual([jobB]);
+});
+
+// ── The HOST DRIVER's cadence, not the admin form's (issue #767) ────────────
+//
+// THE PATH GAP THIS FILE MISSED FIRST TIME. Production does not create sessions
+// through `createSessionAdmin`. `SWARM_SCHEDULES_ENABLED` is "0" there and "the
+// host driver is the real scheduler" (scripts/lib/smoke-schedule.ts) — that
+// driver is `scripts/lib/swarm/session.ts`, which opens a session with
+// `swarm.open_session` (and `domain.openSession` enqueues NO jobs at all, it
+// only INSERTs the row) and then enqueues every later step BY HAND over
+// `POST /api/swarm/admin/enqueue-job` as the previous one lands.
+//
+// So putting `swarm.judge` on `SESSION_JOB_KINDS` gave a judging to
+// admin-created sessions and to NO session production creates. That gap is a
+// PATH gap, not a temporal one: it does not close by waiting.
+//
+// The tests below walk the driver's tail over the SAME HTTP action the driver
+// calls, against real Postgres, and DRAIN it. The scripts-side half — that the
+// driver makes this call, with this action string, between aggregate and
+// publish — is pinned by scripts/tests/unit/swarm-session-judge-step.test.ts.
+
+/** Exactly what `enqueueLifecycleJob(action, { sessionId })` does, over HTTP. */
+async function enqueueOverAdmin(action: string, sessionId: string): Promise<{ jobId: number; kind: string }> {
+  const adminToken = config.adminToken;
+  const allowInsecure = config.allowInsecure;
+  config.adminToken = null;
+  config.allowInsecure = true;
+  try {
+    const req = new Request("http://x/api/swarm/admin/enqueue-job", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, sessionId }),
+    });
+    const res = await handleSwarm(req, new URL(req.url));
+    expect(res?.status, `enqueue-job ${action} -> ${JSON.stringify(res?.body)}`).toBe(200);
+    const body = res!.body as { jobId: number | string; kind: string };
+    return { jobId: Number(body.jobId), kind: String(body.kind) };
+  } finally {
+    config.adminToken = adminToken;
+    config.allowInsecure = allowInsecure;
+  }
+}
+
+const kindsFor = async (sessionId: string) =>
+  (await sql`SELECT kind FROM jobs WHERE payload->>'sessionId' = ${sessionId} ORDER BY id`)
+    .map((r: any) => String(r.kind));
+
+test("host-driver path: a session opened the way production opens one carries NO judge job until the driver enqueues it", async () => {
+  const { session } = await aggregatedSession("judge-driver-gap");
+  // `domain.openSession` INSERTs a row and enqueues nothing — this is the fact
+  // that makes SESSION_JOB_KINDS alone insufficient, and it is asserted rather
+  // than assumed because it is the whole reason the driver needs its own step.
+  expect(await kindsFor(session.id)).toEqual([]);
+
+  const { kind } = await enqueueOverAdmin("judge", session.id);
+  expect(kind, "the driver's `judge` action maps to the swarm-lane kind").toBe("swarm.judge");
+  expect(await kindsFor(session.id)).toEqual(["swarm.judge"]);
+});
+
+test("host-driver path, mode `shadow`: the driver's aggregate → judge → publish sequence records a judgement and then publishes", async () => {
+  const { session } = await aggregatedSession("judge-driver-shadow");
+  const cfg = await setJudgeConfig({ mode: "shadow" });
+  expect(cfg.mode).toBe("shadow");
+  expect(cfg.model, "no model configured — this test never reaches a network").toBeNull();
+
+  // The driver's tail verbatim: it has already seen `aggregated`, so it
+  // enqueues the judging, waits for `judged`, and only then enqueues publish.
+  const judgeJob = await enqueueOverAdmin("judge", session.id);
+  expect(judgeJob.kind).toBe("swarm.judge");
+  await drainUntilRun(judgeJob.jobId);
+
+  const judgement = (await latestJudgement(session.id)) as any;
+  expect(judgement, "the soak accumulates on the path production actually runs").not.toBeNull();
+  expect(String(judgement.mode)).toBe("shadow");
+  expect(await stateOf(session.id)).toBe("judged");
+
+  const publishJob = await enqueueOverAdmin("publish", session.id);
+  expect(publishJob.kind).toBe("swarm.publish");
+  await drainUntilRun(publishJob.jobId);
+  expect(await stateOf(session.id)).toBe("published");
+
+  // ORDER, on the rows themselves: the judging was queued before the publish.
+  expect(await kindsFor(session.id)).toEqual(["swarm.judge", "swarm.publish"]);
+  expect(judgeJob.jobId).toBeLessThan(publishJob.jobId);
+});
+
+// Migration 0041's CHECKs, exercised rather than merely read. They encode
+// promises §9.7 makes in prose — "shadow reaches no session", "`applied` and a
+// reason it did not apply are mutually exclusive" — and a schema promise nothing
+// tests is one a later ALTER can drop without anything going red.
+const OPINION = { rationale: "r", disagreements: [], release_safety: { verdict: "safe", concerns: [] } };
+
+/** Insert one judgement row directly, bypassing the writer, to test the schema. */
+async function rawJudgement(sessionId: string, o: {
+  mode: string; applied?: boolean; appliedSkippedReason?: string | null;
+  droppedPositions?: number; droppedDisagreements?: number;
+}) {
+  return await sql`
+    INSERT INTO swarm_session_judgements
+      (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, take_count, min_takes,
+       applied, applied_skipped_reason, dropped_positions, dropped_disagreements, opinion)
+    VALUES (${sessionId}, ${o.mode}, 'fallback', 'model_unconfigured', NULL, 'ph', 'id', 3, 1,
+            ${o.applied ?? false}, ${o.appliedSkippedReason ?? null},
+            ${o.droppedPositions ?? 0}, ${o.droppedDisagreements ?? 0}, ${sql.json(OPINION as any)})
+    RETURNING id`;
+}
+
+/** The constraint name Postgres refused with, or "" if the INSERT succeeded. */
+async function refusedBy(p: Promise<unknown>): Promise<string> {
+  try {
+    await p;
+    return "";
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+test("migration 0041: the database refuses a shadow row that claims to have applied, and every other impossible shape", async () => {
+  const { session } = await aggregatedSession("judge-0041-checks");
+  const id = session.id as string;
+
+  // SHADOW REACHES NO SESSION — that is the mode, and the schema holds it.
+  expect(await refusedBy(rawJudgement(id, { mode: "shadow", applied: true })))
+    .toContain("swarm_session_judgements_applied_mode_check");
+  expect(await refusedBy(rawJudgement(id, { mode: "shadow", appliedSkippedReason: "session_no_longer_writable" })))
+    .toContain("swarm_session_judgements_applied_mode_check");
+  // "It applied" and "here is why it did not" cannot both be true.
+  expect(await refusedBy(rawJudgement(id, { mode: "enforce", applied: true, appliedSkippedReason: "session_no_longer_writable" })))
+    .toContain("swarm_session_judgements_applied_reason_check");
+  // Drop COUNTS, so they are counts.
+  expect(await refusedBy(rawJudgement(id, { mode: "shadow", droppedPositions: -1 })))
+    .toContain("swarm_session_judgements_drop_counts_check");
+  expect(await refusedBy(rawJudgement(id, { mode: "shadow", droppedDisagreements: -1 })))
+    .toContain("swarm_session_judgements_drop_counts_check");
+
+  // …and the legal shapes are genuinely accepted, so the constraints are not
+  // vacuously green by refusing everything.
+  expect((await rawJudgement(id, { mode: "shadow", droppedPositions: 2, droppedDisagreements: 1 })).length).toBe(1);
+  expect((await rawJudgement(id, { mode: "enforce", applied: true })).length).toBe(1);
+  expect((await rawJudgement(id, { mode: "enforce", appliedSkippedReason: "session_no_longer_writable" })).length).toBe(1);
+});
+
+test("host-driver path, the shipped `off`: the driver still queues the judging, and it drains as one clean skip", async () => {
+  expect((await getJudgeConfig()).mode, "off is the shipped default").toBe("off");
+  const { session } = await aggregatedSession("judge-driver-off");
+  const before = await recOf(session.id);
+
+  // The driver enqueues UNCONDITIONALLY — that is what makes flipping the
+  // database switch take effect on the next session with nothing redeployed and
+  // this driver not restarted.
+  const judgeJob = await enqueueOverAdmin("judge", session.id);
+  await drainUntilRun(judgeJob.jobId);
+
+  const job = await jobRow(judgeJob.jobId);
+  expect(job.status).toBe("succeeded");
+  expect(Number(job.attempts), "a disabled judge is not retried on the driver's path either").toBe(1);
+  expect((await runsOf(judgeJob.jobId))[0].output).toEqual({ skipped: "judge_disabled", sessionId: session.id });
+  expect(await stateOf(session.id)).toBe("aggregated");
+  expect(await latestJudgement(session.id)).toBeNull();
+  expect(await recOf(session.id)).toEqual(before);
 });
 
 // ── The soak's record and its read path (issue #767, folded from #768/#787) ──

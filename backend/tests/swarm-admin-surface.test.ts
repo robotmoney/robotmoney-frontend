@@ -258,8 +258,57 @@ test("session creation: rejects bad date, timestamp ordering, date/briefOpensAt 
   expect(jobsAgain.length).toBe(5);
 });
 
-// A session scheduled BEFORE #767 carries only the original four jobs and would
-// never be judged on its own. There is no migration for that — the remedy is the
+// DEGENERATE WINDOWS must not invert aggregate -> judge (issue #767).
+//
+// Validation guarantees only `windowClosesAt < publishAt`. The first cut derived
+// the aggregate instant as `windowClosesAt + 1s` UNCLAMPED and clamped only the
+// judge below publish — so on a window narrower than the two seconds those
+// offsets assume, the clamp pulled the judge BELOW the aggregate and the queue
+// would claim them in the wrong order. Both instants are now clamped downward
+// from publish, which keeps the sequence monotonic for any legal input.
+test("session create: a degenerate one-second window still orders close_window <= aggregate <= judge < publish", async () => {
+  const subjectId = await activeSubject();
+  const date = "2026-08-23";
+  const created = await admin.createSessionAdmin({
+    date, subjectId,
+    briefOpensAt: `${date}T09:00:00Z`,
+    windowClosesAt: `${date}T10:00:00Z`,
+    publishAt: `${date}T10:00:01Z`, // one second: narrower than the offsets assume
+  });
+  expect(created.status).toBe(201);
+  const sessionId = (created as any).session.id as string;
+
+  const jobs = await sql<{ kind: string; run_after: Date }[]>`
+    SELECT kind, run_after FROM jobs WHERE payload->>'sessionId' = ${sessionId}`;
+  const at = (kind: string) => new Date(jobs.find((j) => j.kind === kind)!.run_after).getTime();
+  // Monotonic, never crossing. A gap this narrow cannot hold three distinct
+  // instants, so the two intermediates may coincide — but the judge is never
+  // scheduled ahead of the rollup it reads, and never at or after its publish.
+  expect(at("swarm.close_window")).toBeLessThanOrEqual(at("swarm.aggregate"));
+  expect(at("swarm.aggregate")).toBeLessThanOrEqual(at("swarm.judge"));
+  expect(at("swarm.judge")).toBeLessThan(at("swarm.publish"));
+
+  // …and a two-second window, the narrowest that CAN hold them, is strict.
+  const wide = await admin.createSessionAdmin({
+    date: "2026-08-24", subjectId,
+    briefOpensAt: "2026-08-24T09:00:00Z",
+    windowClosesAt: "2026-08-24T10:00:00Z",
+    publishAt: "2026-08-24T10:00:02Z",
+  });
+  const wideId = (wide as any).session.id as string;
+  const wideJobs = await sql<{ kind: string; run_after: Date }[]>`
+    SELECT kind, run_after FROM jobs WHERE payload->>'sessionId' = ${wideId}`;
+  const wat = (kind: string) => new Date(wideJobs.find((j) => j.kind === kind)!.run_after).getTime();
+  expect(wat("swarm.close_window")).toBeLessThan(wat("swarm.aggregate"));
+  expect(wat("swarm.aggregate")).toBeLessThan(wat("swarm.judge"));
+  expect(wat("swarm.judge")).toBeLessThan(wat("swarm.publish"));
+});
+
+// A session scheduled through the ADMIN path before #767 carries only the
+// original four jobs and would never be judged on its own. (Driver-created
+// sessions have no such backlog and no such remedy — the driver enqueues the
+// judging inside the run; see docs/architecture.md §9.7.) There is no migration
+// for that — the remedy is the
 // idempotent one that already exists, and this pins that it actually works:
 // re-creating a still-`scheduled` session inserts the MISSING judge row and
 // nothing else, so an operator repairing a pre-#767 session does not

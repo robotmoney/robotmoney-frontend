@@ -1209,13 +1209,38 @@ rationale/disagreements on the session it judged).
 (issue #767). #752 shipped the handler, the per-session enqueue endpoint and the
 admin button, but nothing SCHEDULED a judging — so a session was judged only when
 a human asked for one, and moving the mode row to `shadow` changed nothing about
-what the swarm did on its own. `createSessionAdmin` now enqueues FIVE
-session-scoped jobs, not four: `swarm.judge` sits between `swarm.aggregate` and
-`swarm.publish`, dedupe key `swarm:<session-id>:judge` like every other. Ordering
-is carried by `run_after` and the queue's `ORDER BY priority DESC, run_after`, not
-by a guess at how long aggregation takes; the judge instant is clamped strictly
-below `publish_at` so a degenerate one-second window cannot push a judging past
-its own publish.
+what the swarm did on its own.
+
+**BOTH session-creation paths schedule it, because they are genuinely different
+schedulers.** This is the trap the first attempt fell into: fixing one of them
+looks complete and leaves production untouched.
+
+| Path | Who takes it | How the judging gets queued |
+|---|---|---|
+| `createSessionAdmin` (`POST /api/swarm/admin/sessions`) | the admin form | all five jobs enqueued up front, at `run_after` instants derived from the session's own timestamps |
+| `scripts/lib/swarm/session.ts` — the HOST DRIVER | production, whenever `SWARM_SCHEDULES_ENABLED = "0"` (see `scripts/lib/smoke-schedule.ts`) | `runJudgeStep()` enqueues `judge` over `POST /api/swarm/admin/enqueue-job`, between the `aggregate` it just watched land and the `publish` it is about to queue |
+
+On the admin path, `createSessionAdmin` now enqueues FIVE session-scoped jobs,
+not four: `swarm.judge` sits between `swarm.aggregate` and `swarm.publish`,
+dedupe key `swarm:<session-id>:judge` like every other. Ordering is carried by
+`run_after` and the queue's `ORDER BY priority DESC, run_after`, not by a guess
+at how long aggregation takes; the judge instant is clamped strictly below
+`publish_at` so a degenerate one-second window cannot push a judging past its own
+publish.
+
+The host driver has no such instants to order — it opens a session with
+`open_session` (and `domain.openSession` enqueues NO jobs at all; it only INSERTs
+the row) and then enqueues each step by hand as the previous one lands. So
+`runJudgeStep()` orders the judging the way that driver orders everything else:
+by WAITING. In `shadow`/`enforce` it blocks on the session reaching `judged`
+before the publish is queued, because `publishSession` is an unconditional
+`UPDATE ... SET state='published'` while the judge needs `aggregated -> judged`
+to still be legal when its model call returns up to a minute later — queue both
+back to back and the publish wins, the transition is refused, the whole judging
+transaction rolls back, and the soak records nothing. At the shipped `off` it
+waits for nothing (a disabled judge never produces `judged`), and an expired wait
+publishes anyway and says so: publishing is that driver's job, and a slow judge
+must not wedge the cadence behind it.
 
 **With the mode `off`, the scheduled judging is a SKIP, not a degradation.**
 `judgeSessionAdmin` answers `{ ok:false, error:"judge_disabled" }`, and that is
@@ -1254,14 +1279,22 @@ Migration 0041's CHECK refuses a `shadow` row that claims either.
 `applied_skipped_reason` is NOT a `fallback_reason`: the opinion is intact and
 was formed from the model, it simply arrived after the door closed.
 
-**Turning it on needs no redeploy and no re-scheduling — for sessions scheduled
-after #767.** The mode is a database row, and the job is already in the queue for
-every session created since, so flipping `off` → `shadow` changes the next
-session's behaviour with nothing restarted. Sessions created BEFORE #767 shipped
-carry only the original four jobs and will never be judged on their own; the
-remedy is the existing idempotent one — re-run session creation while the session
-is still `scheduled`, which inserts the missing `swarm.judge` row and no others
+**Turning it on needs no redeploy and no re-scheduling.** The mode is a database
+row and the judging is queued unconditionally on both paths above — the admin
+path puts the job in the queue at creation, and the host driver enqueues it on
+every session it runs regardless of the mode — so flipping `off` → `shadow` is
+one UPDATE and changes the next session's behaviour with nothing restarted and
+the driver not even reloaded.
+
+**What #767 left behind is a PATH gap, not a temporal one.** Sessions the admin
+form created BEFORE #767 shipped carry only the original four jobs; that set is
+frozen, so those specific sessions will never be judged on their own. The remedy
+is the existing idempotent one — re-run session creation while the session is
+still `scheduled`, which inserts the missing `swarm.judge` row and no others
 (`ON CONFLICT (dedupe_key) DO NOTHING`) — or judge them over the admin POST.
+Driver-created sessions have no such backlog: the driver enqueues the judging
+inside the run, so every session it starts from now on has one, and no session it
+started before has one no matter how long anyone waits.
 
 **Failure is an outcome, never an error.** Model unconfigured
 (`model_unconfigured`), a session with no takes at all (`no_takes`), a session
@@ -2682,7 +2715,11 @@ scheduled → collecting → window_closed → aggregated → published   (+ can
 ```
 
 (The smoke does not enter `judged`: the consensus judge ships off, and a session
-that never judges is exactly the session the smoke has always run.)
+that never judges is exactly the session the smoke has always run. Since #767 the
+driver does ENQUEUE the judging on every session — see §9.7 — but at `mode = off`
+that job drains as one clean `{ skipped: "judge_disabled" }` and the state never
+moves. The step is on the cadence; the switch is what decides whether it does
+anything.)
 
 | Stage | What the smoke must exercise |
 |---|---|
@@ -2701,7 +2738,8 @@ Transitions must go through the **worker job pipeline**, not direct domain calls
 
 - Each lifecycle transition is a job kind (`swarm.open_session`,
   `swarm.publish_brief`, `swarm.close_window`, `swarm.aggregate`,
-  `swarm.publish`) enqueued via the scheduler or explicitly for the smoke.
+  `swarm.judge`, `swarm.publish`) enqueued via the scheduler or explicitly by
+  the host driver.
 - Jobs are claimed and executed through the real `FOR UPDATE SKIP LOCKED` claim loop.
 - Job schedules are seeded so a no-intervention run would also progress through the
   lifecycle (even if the smoke also triggers them explicitly for determinism).
@@ -3805,10 +3843,15 @@ Acceptance:
   `publish_brief` at brief open, `close_window` at window close, `aggregate` one
   second after close, `judge` one second after that (clamped strictly below
   publish time), and `publish` at publish time. `judge` is what puts the
-  consensus judge on the cadence at all (issue #767, §9.7); with
+  consensus judge on this path's cadence (issue #767, §9.7); with
   `swarm_judge_config.mode = off` — the shipped default — it drains as a single
   clean success recording `{ skipped: "judge_disabled" }`, never a `degraded`
   run.
+- This is the ADMIN path. Production's sessions are opened by the host driver
+  (`scripts/lib/swarm/session.ts`), which takes none of it: it enqueues each step
+  by hand, including the judging, and orders the judging against the publish by
+  waiting rather than by `run_after` (§9.7). Both paths schedule a judge; neither
+  covers the other.
 - Each job has `scope_type = 'swarm_session'`, `scope_id = session UUID`, and
   dedupe key `swarm:<session-id>:<action>`. Repeated creation or enqueue does
   not duplicate jobs.

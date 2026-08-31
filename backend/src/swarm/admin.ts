@@ -878,15 +878,25 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
     // run_after values are ordered — the seconds between them are not a bet on
     // how long a step takes. The judge reads the AGGREGATED take set and must
     // land before the session publishes, so it sits one second behind aggregate
-    // and is clamped strictly below publishAt (only `windowClosesAt <
-    // publishAt` is validated above, so a degenerate one-second window must not
-    // push the judge past its own publish).
-    const aggregateAt = new Date(windowClosesAt.getTime() + 1_000);
+    // and is clamped strictly below publishAt.
+    //
+    // BOTH intermediate instants are clamped, not just the judge's. Validation
+    // guarantees only `windowClosesAt < publishAt` — a gap that may be a single
+    // millisecond — so `windowClosesAt + 1s` can itself land at or beyond
+    // publish. Clamping the judge alone then pulled it BELOW the aggregate and
+    // inverted the one pair whose order is the whole point. Clamping downward
+    // from publish keeps the sequence monotonic for any legal input; on a gap
+    // too narrow to hold three distinct instants they collapse onto each other
+    // rather than crossing, which a two-second window is already wide enough to
+    // avoid.
+    const lastBeforePublish = publishAt.getTime() - 1;
+    const judgeMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 2_000, lastBeforePublish));
+    const aggregateMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 1_000, judgeMs));
     const jobTimes: Record<(typeof SESSION_JOB_KINDS)[number], Date> = {
       "swarm.publish_brief": briefOpensAt,
       "swarm.close_window": windowClosesAt,
-      "swarm.aggregate": aggregateAt,
-      "swarm.judge": new Date(Math.min(aggregateAt.getTime() + 1_000, publishAt.getTime() - 1)),
+      "swarm.aggregate": new Date(aggregateMs),
+      "swarm.judge": new Date(judgeMs),
       "swarm.publish": publishAt,
     };
     const jobIds: number[] = [];
