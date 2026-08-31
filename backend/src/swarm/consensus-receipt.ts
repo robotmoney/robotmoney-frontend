@@ -585,6 +585,18 @@ async function loadAssemblyInput(
       `session ${sessionId} has no judgement on file — a receipt carries the judge's opinion, its prompt_hash and its inputs_digest, so there is nothing to assemble until the session has been judged`,
     );
   }
+  // THE SAME TWO DIGESTS `sessionJudgeFingerprint()` READS, AND DELIBERATELY NOT
+  // THROUGH IT (issue #765/#810). That helper is the one definition of "which
+  // opinion is in force" for the writer and the admin read path, and its
+  // docstring is right that two copies of the comparison would be two chances to
+  // disagree — but it takes a `sessionId` and issues its OWN query, while every
+  // gate in this function reads the single frozen snapshot loaded above. Calling
+  // it here would add a second read of `swarm_sessions` between the take set and
+  // the judgement, which is exactly the divergence the four gates exist to
+  // detect: a re-judge landing between the two reads would let the receipt
+  // attest to one session state while being validated against another. So the
+  // fields are read off `rec`, and this comment is here so the duplication is
+  // not "consolidated" back into a second query later.
   const adopted = (rec.judge ?? null) as { prompt_hash?: unknown; inputs_digest?: unknown } | null;
   if (!adopted || typeof adopted.prompt_hash !== "string" || typeof adopted.inputs_digest !== "string") {
     throw new ConsensusReceiptRefusal(
