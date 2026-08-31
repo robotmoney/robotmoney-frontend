@@ -256,6 +256,68 @@ test("no vector at all OMITS weights; a non-canonical vector REFUSES rather than
   expect(() => assembleConsensusReceipt(foreign)).toThrow(/not the four canonical buckets/);
 });
 
+test("a four-bucket vector that is not a SHARE vector is the named refusal weights_not_a_share_vector", () => {
+  // THE MEMBER THAT REPLACED `weights_bps_out_of_range`. Largest remainder made
+  // the old post-hoc range check unreachable — every entry is an integer in
+  // 0..10000 by construction — so the check was dropped. But the obligation it
+  // discharged did not vanish: `bucketSharesToBps` refuses an input that is not
+  // a share vector by RAISING, and an unnamed error escaping as a 500 is what
+  // this file's header forbids. `toBps()` catches it and re-raises it by name.
+  // Without this test that name is reachable but unpinned.
+  const withWeights = (weights: unknown) => {
+    const raw = input();
+    (raw as { weights: unknown }).weights = weights;
+    return raw;
+  };
+  const vec = (a: number, c: number, p: number, r: number) => [
+    { bucket: "agent_tokens", weight: a },
+    { bucket: "conservative_defi_yield", weight: c },
+    { bucket: "protocol_tokens", weight: p },
+    { bucket: "real_world_assets", weight: r },
+  ];
+  const refusalFor = (weights: unknown) => {
+    let raised: ConsensusReceiptRefusal | null = null;
+    try { assembleConsensusReceipt(withWeights(weights)); } catch (e) { raised = e as ConsensusReceiptRefusal; }
+    expect(raised).toBeInstanceOf(ConsensusReceiptRefusal);
+    return raised!;
+  };
+
+  // Finite, four canonical buckets, in order — and sums to 2, not 1.
+  const doubled = refusalFor(vec(0.5, 0.5, 0.5, 0.5));
+  expect(doubled.reason).toBe("weights_not_a_share_vector");
+  expect(doubled.message).toContain("no basis-point representation");
+  // The reason the shared rule gave is carried through to the operator rather
+  // than swallowed — this is the half that makes the refusal actionable.
+  expect(doubled.message).toContain("shares sum to");
+
+  // Sums to well under 1.
+  expect(refusalFor(vec(0.1, 0.1, 0.1, 0.1)).reason).toBe("weights_not_a_share_vector");
+  // A single share above 1.
+  expect(refusalFor(vec(1.5, 0, 0, 0)).reason).toBe("weights_not_a_share_vector");
+  // A REAL negative allocation — more negative than the producer-dust clamp,
+  // which is bounded by SHARE_SUM_TOLERANCE (1e-6).
+  const negative = refusalFor(vec(0.6, 0.5, 0.0001, -0.1));
+  expect(negative.reason).toBe("weights_not_a_share_vector");
+
+  // AND THE OTHER SIDE OF THAT BOUNDARY, so the refusal cannot be widened into
+  // the producer's own output by accident. meanTakeWeights() settles the
+  // positionally last entry to round(1 - prefixTotal, 8), which lands on
+  // exactly -1e-8 in about one zero-RWA session in eight. That is NOT refused:
+  // `bucketSharesToBps` floors it to POSITIVE zero, and the receipt assembles.
+  const dust = input();
+  const clean = vec(0.33333333, 0.33333333, 0.33333334, 0);
+  for (const analyst of dust.analysts) analyst.payload.weights = structuredClone(clean);
+  (dust as { weights: unknown }).weights = vec(0.33333333, 0.33333333, 0.33333334, -1e-8);
+  const settled = assembleConsensusReceipt(dust).receipt.weights as { bucket: string; weight_bps: number }[];
+  expect(settled).toEqual([
+    { bucket: "agent_tokens", weight_bps: 3333 },
+    { bucket: "conservative_defi_yield", weight_bps: 3333 },
+    { bucket: "protocol_tokens", weight_bps: 3334 },
+    { bucket: "real_world_assets", weight_bps: 0 },
+  ]);
+  expect(Object.is(settled[3]!.weight_bps, -0)).toBe(false);
+});
+
 test("a replayed take is refused: a duplicated nonce, and a take signed over another subject", () => {
   const duplicate = input();
   duplicate.analysts = duplicate.analysts.map((a) => ({

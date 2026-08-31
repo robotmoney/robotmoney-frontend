@@ -784,7 +784,7 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  10 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  11 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
@@ -795,6 +795,7 @@ for this release:
          0039_swarm_judge.sql
          0040_swarm_judgements_append_only.sql
          0041_swarm_judgement_soak_record.sql
+         0042_swarm_consensus_receipts.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
@@ -1172,12 +1173,12 @@ All must pass before `v0.3.0` is tagged.
 
 | # | Check id | Asserts | Expected |
 |---|---|---|---|
-| 1 | `migrations-applied` | all ten names in `schema_migrations` | Both `0032_*`, both `0033_*`, and `0034_*` through `0041_*` present — the check that would catch a runner keyed on the numeric prefix or an omitted AUM migration |
+| 1 | `migrations-applied` | all eleven names in `schema_migrations` | Both `0032_*`, both `0033_*`, and `0034_*` through `0042_*` present — the check that would catch a runner keyed on the numeric prefix or an omitted AUM migration |
 | 2 | `strategy-nav-column` | the column exists and **the migration populated nothing** | `NULL` on every row untouched since `0032_wallet_*` applied. Rows written or re-upserted afterwards carry values legitimately — that is the sampler working. (This row used to expect `NULL` on *every* row, which postflight can never see: it runs after readiness, so the per-minute sampler has always written by then, and the check WARNed on every clean run.) |
 | 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). This grades the schedule-policy write; `0036`/`0037` separately quarantine and archive wallet samples |
-| 4 | `new-tables` | all eight new tables and all 26 new columns exist | The two operational tables may already hold repair rows after cold-start dispatch; the two evidence tables may already hold an rc-era quarantined cohort archived by `0037`; snapshot-run headers remain empty until a P1 publisher lands; **`swarm_judge_config` is never empty — `0039` seeds its single operator-switch row**. A WARN reports counts for reconciliation; empty is only the fresh direct-from-v0.2.2 expectation |
+| 4 | `new-tables` | all nine new tables and all 26 new columns exist | The two operational tables may already hold repair rows after cold-start dispatch; the two evidence tables may already hold an rc-era quarantined cohort archived by `0037`; snapshot-run headers remain empty until a P1 publisher lands; **`swarm_judge_config` is never empty — `0039` seeds its single operator-switch row**. A WARN reports counts for reconciliation; empty is only the fresh direct-from-v0.2.2 expectation |
 | 5 | `repair-schedule` | the new schedule is seeded, exactly once, enabled, on the cron `release.ts` names — and what the DEPLOYMENT reports it actually did | Read from the latest `ops.repair_gaps` `job_runs` row: dispatched, or declined and why. It used to infer this from `BASE_RPC_MAX_CALLS_PER_SEC` **in postflight's own process**, which is not where the app reads it — an operator taking §5.2's opt-out via `.env` was told the backfill "WILL dispatch" while production had it off. **Confirm it is the world you chose** (§5.2) |
-| 6 | `append-only-intact` | every shared and AUM-specific guard survived the migration | **Both** shared triggers live and enabled on all fourteen protected tables, plus all eleven exact P0/P1 evidence, constituent-immutability, header-immutability and finalization triggers present with `ENABLE ALWAYS`. A missing, disabled, or replication-bypassable guard fails postflight |
+| 6 | `append-only-intact` | every shared and AUM-specific guard survived the migration | **Both** shared triggers live and enabled on all sixteen protected tables, plus all eleven exact P0/P1 evidence, constituent-immutability, header-immutability and finalization triggers present with `ENABLE ALWAYS`. A missing, disabled, or replication-bypassable guard fails postflight |
 | 7 | ⛔ **manual — no script** | a real passkey ceremony completes against the public HTTPS origin | The §5.1 fix, verified end-to-end. Step `P8.acceptance`; reading `WEBAUTHN_ORIGIN` back out of the container proves configuration, not function |
 | 8 | `no-wedge` | the cutover window did not wedge a schedule | `next_run_at` within one cadence of now. Compare against preflight's `wedged-schedules` baseline — a pre-existing wedge is not this release's damage |
 
@@ -1210,7 +1211,7 @@ both. rollout-procedure.md §10 carries the same warning.
 **Rolling back the code without rolling back the database is survivable here,
 and that is unusual.** The new schema objects and columns are backward-compatible:
 v0.2.2's code does not
-know about `strategy_nav_idle_only`, `catchup_policy`, snapshot identity, or the eight new tables,
+know about `strategy_nav_idle_only`, `catchup_policy`, snapshot identity, or the nine new tables,
 and ignores them. The data-write residues are `0034`'s schedule-policy update
 and `0036`/`0037` moving suspect rc-era samples out of the active tables into
 immutable evidence. v0.2.2 never reads `catchup_policy`, while archived suspect

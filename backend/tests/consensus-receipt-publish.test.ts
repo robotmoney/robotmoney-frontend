@@ -111,6 +111,50 @@ async function judgedSession(prefix: string, weights: (number[] | null)[]) {
   return session;
 }
 
+test("the frozen-name LEFT JOIN cannot fan out, so a roster snapshot never duplicates a signature", async () => {
+  // #765 (PR #808) added `LEFT JOIN swarm_session_members sm` to
+  // loadFrozenTakeSet() so `member_name` comes from the seating-time snapshot
+  // rather than live. #754 reads its analyst SIGNATURES off the rows of that
+  // same query. A join that matched twice would therefore not merely duplicate
+  // takes into the judge's digest — it would duplicate an analyst's signature
+  // INTO A SIGNED, ANCHORED RECEIPT, and `analyst_signatures: count !==
+  // quorum.submitted` would be the only thing standing between that and a
+  // published artifact.
+  //
+  // It cannot, and the reason is a schema fact rather than a code reading:
+  // swarm_session_members is PRIMARY KEY (session_id, member_id) and the join
+  // pins BOTH halves of that key, so it matches at most one row. Asserted from
+  // the live catalog, because that is the fact the argument rests on.
+  const { sessionId, members } = await collectingSession("recjoin", [[0.25, 0.25, 0.25, 0.25], [0.1, 0.2, 0.3, 0.4]]);
+  const pk = (await sql`
+    SELECT pg_get_constraintdef(c.oid) AS def
+      FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+     WHERE t.relname = 'swarm_session_members' AND c.contype = 'p'`) as unknown as { def: string }[];
+  expect(pk.length).toBe(1);
+  expect(pk[0]!.def.replace(/\s+/g, "")).toBe("PRIMARYKEY(session_id,member_id)");
+
+  // The openSession path leaves no roster snapshot, so the COALESCE falls
+  // through to the live name — seat the members explicitly to put the join on
+  // its MATCHING branch, which is the only branch that could ever fan out.
+  const before = (await ic.loadFrozenTakeSet(sessionId))!;
+  expect(before.takes.length).toBe(members.length);
+  for (const m of members) {
+    await sql`INSERT INTO swarm_session_members (session_id, member_id, member_name)
+              VALUES (${sessionId}, ${m.id}, ${`seated_${m.id.slice(0, 8)}`})`;
+  }
+  const after = (await ic.loadFrozenTakeSet(sessionId))!;
+
+  // Same number of rows, one per member, with the join now matching.
+  expect(after.takes.length).toBe(members.length);
+  expect(new Set(after.takes.map((t: any) => t.member_id)).size).toBe(members.length);
+  expect(after.takes.every((t: any) => String(t.member_name).startsWith("seated_"))).toBe(true);
+  // And the columns #754 rides on this query are present and one-per-member —
+  // a fan-out would show up here first.
+  expect(after.takes.every((t: any) => typeof t.signature === "string" && t.signature.length > 0)).toBe(true);
+  expect(new Set(after.takes.map((t: any) => t.signature)).size).toBe(members.length);
+  expect(after.takes.every((t: any) => typeof t.nonce === "string" && t.nonce.length > 0)).toBe(true);
+});
+
 test("a judged session publishes a receipt that is fetchable, verified, and byte-consistent", async () => {
   const { sessionId, subjectId } = await judgedSession("recpub", [[0.15, 0.55, 0.2, 0.1], [0.1, 0.65, 0.15, 0.1]]);
 

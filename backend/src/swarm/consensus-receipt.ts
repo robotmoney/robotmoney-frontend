@@ -519,7 +519,7 @@ async function loadAssemblyInput(
   // window_closed -> collecting reopens the take window, a member amends,
   // aggregation re-runs, and `swarm_recommendation` — which is what
   // GET /api/swarm/sessions/:id serves — now says something else. The receipt
-  // cannot follow, because migration 0041 makes the row immutable and
+  // cannot follow, because migration 0042 makes the row immutable and
   // robotmoney-core anchors keccak256 over its bytes. So the signed artifact
   // and the public API disagreed about the same session, permanently, with
   // `verified: true` on both surfaces. Refusing until the session can no longer
