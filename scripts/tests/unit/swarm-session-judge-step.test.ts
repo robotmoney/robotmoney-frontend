@@ -26,7 +26,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { enqueueLifecycleJob, runJudgeStep } from "../../lib/swarm/session.ts";
+import type { SessionEvent } from "../../lib/swarm/session.ts";
+import { enqueueLifecycleJob, judgedProgress, runJudgeStep, sessionEmitter } from "../../lib/swarm/session.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const sessionSrc = readFileSync(join(repoRoot, "scripts", "lib", "swarm", "session.ts"), "utf8");
@@ -94,7 +95,7 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     // `judged` state that a disabled judge never produces: the job drains as
     // `{ skipped: "judge_disabled" }` and the session stays `aggregated`.
     expect(h.calls).toEqual(["readMode", "enqueue:judge"]);
-    expect(out).toEqual({ mode: "off", waitedForJudged: false, judged: false });
+    expect(out).toEqual({ mode: "off", waitedForJudged: false, judged: false, recorded: null });
     expect(h.logs.join("\n")).toContain("judge mode=off");
   });
 
@@ -108,12 +109,12 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     // refused, the whole judging transaction rolls back, and the soak records
     // nothing.
     expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged"]);
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true });
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null });
   });
 
   test("`enforce` waits on the same terms", async () => {
     const { h, result } = run("enforce");
-    expect(await result).toEqual({ mode: "enforce", waitedForJudged: true, judged: true });
+    expect(await result).toEqual({ mode: "enforce", waitedForJudged: true, judged: true, recorded: null });
     expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged"]);
   });
 
@@ -121,18 +122,24 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     const { h, result } = run(null);
     const out = await result;
     expect(h.calls).toEqual(["readMode", "enqueue:judge"]);
-    expect(out).toEqual({ mode: null, waitedForJudged: false, judged: false });
+    expect(out).toEqual({ mode: null, waitedForJudged: false, judged: false, recorded: null });
     expect(h.logs.join("\n")).toContain("unreadable");
   });
 
   test("a wait that expires PUBLISHES ANYWAY — a slow judge must never wedge the session cadence", async () => {
     const { h, result } = run("shadow", { waitFails: true });
     const out = await result;
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false });
+    // `recorded` is carried out of the expiry path because it, not the wait's
+    // opinion, is what the progress stream keys the `judged` event on (#817).
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0 });
     // Loud, not silent: the operator reading the driver's log learns the
     // session published without its judging, and why.
     expect(h.logs.join("\n")).toContain("publishing anyway");
-    expect(h.logs.join("\n")).toContain("did not reach 'judged'");
+    // The line reports the WAIT expiring — an event this driver observed — and
+    // no longer asserts "the judge did not reach 'judged' in time", which on
+    // the single-worker lane is usually false (#817).
+    expect(h.logs.join("\n")).toContain("wait for the session to reach 'judged' EXPIRED");
+    expect(h.logs.join("\n")).not.toContain("did not reach 'judged' in time");
   });
 
   // ── The expiry log must not assert something it did not check (#806) ──────
@@ -295,5 +302,193 @@ describe("red controls: the judge-order graders must REPORT a regression", () =>
     const o = judgeStepOrder(broken);
     expect(o.judge).toBeGreaterThan(o.publish);
     expect(sessionSrc.length).toBeGreaterThan(1000); // the scan is over real text
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PROGRESS STREAM (issue #817).
+//
+// The defect this section grades is not "no judgement was recorded" — the rows
+// were there all along. It is that the one surface an operator watches emitted
+// `aggregated` and then `published` whether the soak had judged or not, so a
+// judge running in shadow was indistinguishable from a judge that was off.
+// Every assertion below is therefore ON THE EVENTS, never on a judgement row.
+//
+// runSession drives docker, the job queue and live inference, so it cannot be
+// executed here. What CAN be executed is every piece it composes: the real
+// `sessionEmitter`, the real `runJudgeStep` over injected effects, and the real
+// `judgedProgress` decision. The segment below wires exactly those three in
+// exactly the order runSession wires them — and that ORDER is not taken on
+// trust: the source-text graders further down pin it against runSession itself,
+// each with a red control.
+// ---------------------------------------------------------------------------
+
+/**
+ * runSession's aggregate → judge → publish segment, over the real emitter and
+ * the real decision, with only the judge's four effects injected.
+ * Returns the events a viewer would have seen, in order.
+ */
+async function judgeSegmentStream(
+  mode: string | null,
+  opts: { waitFails?: boolean; recorded?: number | null } = {},
+) {
+  const events: SessionEvent[] = [];
+  const emitSession = sessionEmitter((ev) => events.push(ev), "woon", "2026-08-31");
+  const h = harness(mode, opts);
+
+  emitSession("aggregated", 42);
+  const judgeOutcome = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps);
+  const judged = judgedProgress(judgeOutcome);
+  if (judged) emitSession("judged", 42, judged);
+  emitSession("published", 42);
+
+  return { events, states: events.map((e) => e.type === "session" ? e.state : e.type), logs: h.logs };
+}
+
+describe("the progress stream reports the judging (#817)", () => {
+  test("`shadow` — a driver-run session emits aggregated, judged, published IN THAT ORDER", async () => {
+    const { events, states } = await judgeSegmentStream("shadow");
+    expect(states).toEqual(["aggregated", "judged", "published"]);
+    const judged = events[1];
+    expect(judged).toEqual({
+      type: "session",
+      state: "judged",
+      sessionId: 42,
+      subject: "woon",
+      date: "2026-08-31",
+      judgeMode: "shadow",
+    });
+  });
+
+  test("`off` — the shipped default — emits aggregated, published and NO judged", async () => {
+    const { states, events } = await judgeSegmentStream("off");
+    // This is the distinction the stream could not previously draw: "nothing
+    // was judged" now looks different from "a judgement was recorded and
+    // deliberately not applied".
+    expect(states).toEqual(["aggregated", "published"]);
+    expect(events.some((e) => e.type === "session" && e.state === "judged")).toBe(false);
+  });
+
+  test("`enforce` is distinguishable from `shadow` ON THE STREAM, not just in the database", async () => {
+    const shadow = await judgeSegmentStream("shadow");
+    const enforce = await judgeSegmentStream("enforce");
+    expect(shadow.states).toEqual(enforce.states); // same states…
+    const modeOf = (s: { events: SessionEvent[] }) =>
+      s.events.find((e) => e.type === "session" && e.state === "judged") as Extract<SessionEvent, { type: "session" }>;
+    // …so if the mode did not ride on the payload, a viewer could not tell a
+    // withheld judgement from an applied one at all.
+    expect(modeOf(shadow).judgeMode).toBe("shadow");
+    expect(modeOf(enforce).judgeMode).toBe("enforce");
+  });
+
+  test("a judging that LANDS AFTER THE WAIT EXPIRES still produces the event", async () => {
+    // review-reliability on PR #797: on the single-worker swarm lane the expiry
+    // is usually a false alarm — publish is enqueued only after this wait
+    // returns and cannot be claimed while the judge holds the lane, so the
+    // judging still lands. An event keyed on `judged` (the wait's opinion)
+    // would drop it; this one is keyed on the RECORD.
+    const { states, events, logs } = await judgeSegmentStream("shadow", { waitFails: true, recorded: 1 });
+    expect(states).toEqual(["aggregated", "judged", "published"]);
+    expect((events[1] as Extract<SessionEvent, { type: "session" }>).judgeMode).toBe("shadow");
+    // …and the log now agrees with the stream instead of contradicting it.
+    expect(logs.join("\n")).toContain("1 judgement row(s) ARE recorded");
+    expect(logs.join("\n")).not.toContain("did not reach 'judged' in time");
+  });
+
+  test("an expiry with NOTHING recorded emits no judged — the stream and the log say the same thing", async () => {
+    const { states, logs } = await judgeSegmentStream("shadow", { waitFails: true, recorded: 0 });
+    expect(states).toEqual(["aggregated", "published"]);
+    expect(logs.join("\n")).toContain("NO judgement row was recorded");
+  });
+
+  test("an unreadable judgement record is not treated as a judging", async () => {
+    // `null` means "could not read", which is not `0` and is certainly not a
+    // judgement. Claiming `judged` here would put a fact on the stream that
+    // nothing established.
+    const { states } = await judgeSegmentStream("shadow", { waitFails: true, recorded: null });
+    expect(states).toEqual(["aggregated", "published"]);
+  });
+
+  test("an unreadable judge switch emits no judged either", async () => {
+    expect((await judgeSegmentStream(null)).states).toEqual(["aggregated", "published"]);
+  });
+});
+
+describe("judgedProgress — the decision, graded directly", () => {
+  const outcome = (o: Partial<Parameters<typeof judgedProgress>[0]>) =>
+    judgedProgress({ mode: null, waitedForJudged: false, judged: false, recorded: null, ...o });
+
+  test("it fires only for shadow/enforce, and only when a judging actually landed", () => {
+    expect(outcome({ mode: "shadow", judged: true })).toEqual({ judgeMode: "shadow" });
+    expect(outcome({ mode: "enforce", judged: true })).toEqual({ judgeMode: "enforce" });
+    expect(outcome({ mode: "shadow", judged: false, recorded: 3 })).toEqual({ judgeMode: "shadow" });
+    expect(outcome({ mode: "shadow", judged: false, recorded: 0 })).toBeNull();
+    expect(outcome({ mode: "shadow", judged: false, recorded: null })).toBeNull();
+    expect(outcome({ mode: "off", judged: false })).toBeNull();
+    expect(outcome({ mode: null, judged: false })).toBeNull();
+  });
+
+  test("`off` can never emit, even if the record somehow says otherwise", () => {
+    // Belt and braces on the acceptance criterion: `off` is the shipped
+    // default and must stay silent whatever else is true.
+    expect(outcome({ mode: "off", judged: true, recorded: 9 })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SOURCE-TEXT CHECK on the EVENT's position and on the return no longer being
+// discarded — the two things judgeSegmentStream above mirrors and therefore
+// cannot itself prove.
+// ---------------------------------------------------------------------------
+const JUDGED_EMIT = 'if (judged) emitSession("judged", sessionId, judged);';
+
+export function judgedEventOrder(src: string) {
+  return {
+    aggregated: src.indexOf('emitSession("aggregated", sessionId);'),
+    judged: src.indexOf(JUDGED_EMIT),
+    published: src.indexOf('emitSession("published", sessionId);'),
+  };
+}
+
+describe("runSession emits `judged` between `aggregated` and `published`", () => {
+  const order = judgedEventOrder(sessionSrc);
+
+  test("the event exists at all", () => {
+    for (const [name, at] of Object.entries(order)) expect(`${name}:${at >= 0}`).toBe(`${name}:true`);
+  });
+
+  test("aggregated, then judged, then published", () => {
+    expect(order.aggregated).toBeLessThan(order.judged);
+    expect(order.judged).toBeLessThan(order.published);
+  });
+
+  test("the judge step's return value is READ, not discarded", () => {
+    // The whole defect: `await runJudgeStep(...)` with the result dropped.
+    expect(sessionSrc).toContain("const judgeOutcome = await runJudgeStep(sessionId, date, subject.id, rail.automationToken);");
+    expect(sessionSrc).toContain("const judged = judgedProgress(judgeOutcome);");
+  });
+
+  test("the emit is guarded — runSession never announces a judging unconditionally", () => {
+    expect(sessionSrc).not.toContain('emitSession("judged", sessionId);');
+  });
+});
+
+describe("red controls: the judged-event graders must REPORT a regression", () => {
+  test("it catches the event being deleted", () => {
+    expect(judgedEventOrder(sessionSrc.replace(JUDGED_EMIT, "")).judged).toBe(-1);
+  });
+
+  test("it catches the event being moved after the publish", () => {
+    const broken = sessionSrc
+      .replace(JUDGED_EMIT, "")
+      .replace('emitSession("published", sessionId);', `emitSession("published", sessionId);\n  ${JUDGED_EMIT}`);
+    const o = judgedEventOrder(broken);
+    expect(o.judged).toBeGreaterThan(o.published);
+  });
+
+  test("it catches the guard being dropped, which would announce a judging in `off`", () => {
+    const broken = sessionSrc.replace(JUDGED_EMIT, 'emitSession("judged", sessionId);');
+    expect(broken).toContain('emitSession("judged", sessionId);');
+    expect(judgedEventOrder(broken).judged).toBe(-1);
   });
 });

@@ -231,10 +231,37 @@ async function responseJson<T = any>(response: Response): Promise<T> {
 // transitions and per-member pipeline stages so a UI can render live swarm
 // state. Default undefined ⇒ zero behaviour change (standalone main() never passes
 // it). Members that are deliberate no-shows surface as stage 'absent'.
+//
+// `judgeMode` is carried ONLY by the `judged` event (issue #817). The state name
+// alone cannot answer the question an operator watching the soak actually has —
+// whether the judgement that landed was RECORDED and withheld (`shadow`) or
+// APPLIED (`enforce`) — and encoding it into `state` would make the state string
+// something no other consumer of this stream can match on. It is a separate
+// optional field for that reason, and it is absent on every other event.
 export type SessionEvent =
-  | { type: "session"; state: string; sessionId?: number; subject: string; date: string }
+  | { type: "session"; state: string; sessionId?: number; subject: string; date: string; judgeMode?: string }
   | { type: "member"; memberId: string; stage: AgentStage | "absent"; stance?: string; confidence?: number };
 export type SessionProgress = (ev: SessionEvent) => void;
+
+/**
+ * The session-lifecycle emitter runSession threads through its transitions —
+ * one call per REAL state change, never a fabricated sub-step.
+ *
+ * It is a named export rather than a closure inside runSession because
+ * runSession itself drives docker, the job queue and live inference and
+ * therefore cannot be executed in a unit test. The events it produces still
+ * have to be gradeable, so the shape lives here and the tests drive the real
+ * emitter; runSession's ORDER of calls is pinned separately by source-text
+ * graders (scripts/tests/unit/swarm-session-judge-step.test.ts).
+ */
+export function sessionEmitter(
+  onProgress: SessionProgress | undefined,
+  subject: string,
+  date: string,
+): (state: string, sessionId?: number, extra?: { judgeMode?: string }) => void {
+  return (state, sessionId, extra) =>
+    onProgress?.({ type: "session", state, sessionId, subject, date, ...extra });
+}
 
 export async function admin(action: string, body: unknown = {}, automationToken?: string) {
   return (await adminCall(action, body, automationToken)).body;
@@ -686,6 +713,56 @@ export async function countJudgements(sessionId: string | number, automationToke
   }
 }
 
+/**
+ * What the judge step actually did, as the driver observed it (issue #817).
+ *
+ * This is a RETURN VALUE THAT HAS TO BE READ. It used to be discarded at
+ * runSession's call site, which is why a session that recorded a judgement was
+ * indistinguishable, on the progress stream, from one that judged nothing:
+ * every session emitted `aggregated` and then `published`.
+ *
+ * `recorded` is the judgement-row count, and it is read ONLY on the expiry
+ * path (that is the only path that has to tell "the judge was slow" apart from
+ * "the judging ran and the session did not transition"). It is `null`
+ * everywhere else — including on the success path, where `judged` already says
+ * the judging landed — and `null` also means "the record could not be read",
+ * which is deliberately not the same as `0`.
+ */
+export interface JudgeStepOutcome {
+  mode: string | null;
+  waitedForJudged: boolean;
+  judged: boolean;
+  recorded: number | null;
+}
+
+/**
+ * Whether a judge outcome is something the PROGRESS STREAM must report, and
+ * under which mode (issue #817).
+ *
+ * Three things an operator watching a session go by has to be able to tell
+ * apart, and before this they all rendered as `aggregated -> published`:
+ *
+ *   1. `off` — the shipped default. Nothing was judged, and nothing should be
+ *      claimed: this returns null, so the stream stays silent and "not judged"
+ *      remains distinguishable from "judged and not applied".
+ *   2. `shadow` / `enforce` with a judgement on the record — the event fires,
+ *      carrying the mode, because "recorded and withheld" and "applied" are
+ *      different facts about the same session.
+ *   3. a wait that expired with NOTHING recorded — no judging landed, so no
+ *      event: the stream says exactly what the expiry log says.
+ *
+ * The landing test is `judged || recorded > 0`, NOT `judged` alone. On the
+ * single-worker swarm lane the wait's expiry is often a false alarm — publish
+ * cannot be claimed while the judge holds the lane, so the judging still lands
+ * — and an event keyed on the wait's opinion rather than on the record would
+ * reproduce, on the stream, exactly the wrong claim the expiry log used to make.
+ */
+export function judgedProgress(outcome: JudgeStepOutcome): { judgeMode: string } | null {
+  if (outcome.mode !== "shadow" && outcome.mode !== "enforce") return null;
+  const landed = outcome.judged || (outcome.recorded ?? 0) > 0;
+  return landed ? { judgeMode: outcome.mode } : null;
+}
+
 /** Injection seam for runJudgeStep's effects. Real callers pass none. */
 export interface JudgeStepDeps {
   readMode?: () => Promise<string | null>;
@@ -738,7 +815,7 @@ export async function runJudgeStep(
   subjectId: string,
   automationToken?: string,
   deps: JudgeStepDeps = {},
-): Promise<{ mode: string | null; waitedForJudged: boolean; judged: boolean }> {
+): Promise<JudgeStepOutcome> {
   const readMode = deps.readMode ?? (() => readJudgeMode(automationToken));
   const enqueue = deps.enqueue
     ?? ((action: string, payload: Record<string, unknown>) => enqueueLifecycleJob(action, payload, automationToken));
@@ -759,12 +836,12 @@ export async function runJudgeStep(
 
   if (mode !== "shadow" && mode !== "enforce") {
     log(`  judge mode=${mode ?? "unreadable"} — the queued judging drains as a clean skip; not waiting for 'judged'`);
-    return { mode, waitedForJudged: false, judged: false };
+    return { mode, waitedForJudged: false, judged: false, recorded: null };
   }
   try {
     await waitForJudged();
     log(`  judged (mode=${mode})`);
-    return { mode, waitedForJudged: true, judged: true };
+    return { mode, waitedForJudged: true, judged: true, recorded: null };
   } catch (err) {
     // SAY WHICH FAILURE THIS IS (issue #806). "did not reach 'judged' in time"
     // asserts a slow judge, and on the single-worker swarm lane that is usually
@@ -777,13 +854,15 @@ export async function runJudgeStep(
     const record = recorded == null
       ? "could not read the judgement record"
       : recorded > 0
-        ? `${recorded} judgement row(s) ARE recorded — the judging ran; the session did not transition`
+        ? `${recorded} judgement row(s) ARE recorded — the judging ran; the session did not transition, ` +
+          "and the progress stream reports it as 'judged' on the strength of the record (issue #817)"
         : "NO judgement row was recorded — the judging did not run to completion";
     log(
-      `  judge job #${queuedJobId ?? "?"} was queued but the session did not reach 'judged' in time (mode=${mode}) — ` +
-        `${record}; publishing anyway rather than wedging the cadence: ${err instanceof Error ? err.message : err}`,
+      `  judge job #${queuedJobId ?? "?"} was queued and this driver's wait for the session to reach 'judged' ` +
+        `EXPIRED (mode=${mode}) — ${record}; publishing anyway rather than wedging the cadence: ` +
+        `${err instanceof Error ? err.message : err}`,
     );
-    return { mode, waitedForJudged: true, judged: false };
+    return { mode, waitedForJudged: true, judged: false, recorded };
   }
 }
 
@@ -934,8 +1013,9 @@ export async function runSession(
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
   // Session-lifecycle emitter — one call per real state transition below.
-  const emitSession = (state: string, sid?: number) =>
-    onProgress?.({ type: "session", state, sessionId: sid, subject: subject.id, date });
+  // The factory lives at module scope (sessionEmitter) so the events this
+  // driver puts on the stream are gradeable without running docker.
+  const emitSession = sessionEmitter(onProgress, subject.id, date);
 
   // Regime is already seeded by the first session; later ones self-seed. The
   // subject itself is ensured ABOVE, before the session that references it —
@@ -1061,7 +1141,17 @@ export async function runSession(
   // path this driver, or production's cadence, ever takes. See runJudgeStep for
   // why it waits in `shadow`/`enforce`, why it does not wait at the shipped
   // `off`, and why an expired wait publishes rather than wedging.
-  await runJudgeStep(sessionId, date, subject.id, rail.automationToken);
+  const judgeOutcome = await runJudgeStep(sessionId, date, subject.id, rail.automationToken);
+  // AND THE STREAM HAS TO SAY SO (issue #817). This return used to be dropped
+  // on the floor, so the one surface an operator actually watches went
+  // `aggregated -> published` whether the soak had recorded a judgement or
+  // judged nothing at all — which is the same thing as the judge not running.
+  // `judgedProgress` decides from the RECORD, not from the wait's opinion: it
+  // stays silent at the shipped `off`, and it still fires for a judging that
+  // landed after the wait expired, which is the case the expiry log had to stop
+  // contradicting.
+  const judged = judgedProgress(judgeOutcome);
+  if (judged) emitSession("judged", sessionId, judged);
 
   await enqueueLifecycleJob("publish", { sessionId }, rail.automationToken);
   await waitForSessionState(date, subject.id, "published");

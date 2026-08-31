@@ -28,8 +28,11 @@ export interface MemberState { stage: "connect" | "fetch" | "thinking" | "report
 // (scripts/lib/swarm/session.ts SessionProgress). The driver is loaded
 // via a dynamic import() (untyped) so this annotation stays decoupled from
 // that dynamic boundary.
+// `judgeMode` rides only on the `judged` event (issue #817) and says whether
+// the judgement that landed was recorded and withheld (`shadow`) or applied
+// (`enforce`) — the distinction the soak exists to observe.
 export type SessionProgress = (ev:
-  | { type: "session"; state: string; sessionId?: number; subject: string; date?: string }
+  | { type: "session"; state: string; sessionId?: number; subject: string; date?: string; judgeMode?: string }
   | { type: "member"; memberId: string; stage: MemberState["stage"]; stance?: string; confidence?: number }
 ) => void;
 // Per-subject swarm pane. Each subject (woon, mav, …) runs on its OWN
@@ -169,7 +172,9 @@ export function swarmProgress(state: SmokeState, subjectId: string, log: (msg: s
       if (ev.state === "window_closed") {
         for (const id of Object.keys(c.members)) if (c.members[id].stage === "done") c.members[id].stage = "waiting";
       }
-      log(`swarm ${subjectId}: ${ev.state}`);
+      // The judge's mode is the whole point of the `judged` event: "judged"
+      // alone cannot tell a recorded-and-withheld judgement from an applied one.
+      log(`swarm ${subjectId}: ${ev.state}${ev.judgeMode ? ` (${ev.judgeMode})` : ""}`);
     } else {
       c.members[ev.memberId] = { stage: ev.stage, stance: ev.stance, confidence: ev.confidence };
       // If this is an onboarding prospect, reflect its first live participation
