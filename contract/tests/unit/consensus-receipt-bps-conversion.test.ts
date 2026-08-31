@@ -92,6 +92,77 @@ function sumBps(vector: Bps[]): number {
   return vector.reduce((sum, entry) => sum + entry.weight_bps, 0);
 }
 
+// ── THE PRODUCER'S OWN ARITHMETIC ────────────────────────────────────────────
+// MIRRORS backend/src/swarm/domain.ts:1733-1751 — normalizedTakeWeights() and
+// meanTakeWeights(), the only thing in the system allowed to author a bucket
+// weight. REPLICATED RATHER THAN IMPORTED on purpose: contract/ is a
+// zero-dependency package that backend/ depends on, and importing backend/ from
+// a contract test would invert that edge. It is copied line for line; if
+// domain.ts changes, this copy is what tells us the conversion has to be
+// re-checked against the new shape.
+//
+// WHY IT IS HERE AT ALL. randomShares() below builds a zeroed bucket as EXACTLY
+// 0 — an input the producer never emits. meanTakeWeights() rounds every averaged
+// entry to 8 decimal places and then OVERWRITES the positionally last one with
+// round(1 - prefixTotal, 8); localeCompare order over the four canonical buckets
+// equals canonical_bucket_order, so that last entry IS real_world_assets, and
+// when every member zeroes it the three prefix roundings can sum just above 1
+// and the settled entry lands on EXACTLY -1e-8. A corpus drawn from
+// randomShares() is structurally blind to that value. This one is not.
+const round8 = (value: number): number => Math.round(value * 1e8) / 1e8;
+
+/** domain.ts normalizedTakeWeights(): each analyst vector normalized to sum 1. */
+function normalizedTakeWeights(
+  entries: { bucket: string; weight: number }[],
+): { bucket: string; weight: number }[] | null {
+  let total = 0;
+  for (const { weight } of entries) total += weight;
+  if (!(total > 0) || !Number.isFinite(total)) return null;
+  return entries.map(({ bucket, weight }) => ({ bucket, weight: weight / total }));
+}
+
+/** domain.ts meanTakeWeights(): mean, re-normalize, round to 8dp, settle the last. */
+function meanTakeWeights(
+  vectors: { bucket: string; weight: number }[][],
+): { bucket: string; weight: number }[] | undefined {
+  const normalized = vectors
+    .map(normalizedTakeWeights)
+    .filter((weights): weights is { bucket: string; weight: number }[] => weights !== null);
+  if (normalized.length === 0) return undefined;
+  const totals = new Map<string, number>();
+  for (const weights of normalized) {
+    for (const { bucket, weight } of weights) totals.set(bucket, (totals.get(bucket) ?? 0) + weight);
+  }
+  const averaged = [...totals.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([bucket, total]) => ({ bucket, weight: total / normalized.length }));
+  const averageTotal = averaged.reduce((sum, entry) => sum + entry.weight, 0);
+  const result = averaged.map(({ bucket, weight }) => ({
+    bucket,
+    weight: round8(weight / averageTotal),
+  }));
+  const finalIndex = result.length - 1;
+  const prefixTotal = result.slice(0, finalIndex).reduce((sum, entry) => sum + entry.weight, 0);
+  result[finalIndex]!.weight = round8(1 - prefixTotal);
+  return result;
+}
+
+/** One session's worth of member vectors, `zeroed` buckets set to 0 by every member. */
+function producerShares(rand: () => number, zeroed: readonly string[]): Map<string, number> {
+  const members = 2 + Math.floor(rand() * 6);
+  const vectors: { bucket: string; weight: number }[][] = [];
+  while (vectors.length < members) {
+    const draws = ORDER.map((bucket) => (zeroed.includes(bucket) ? 0 : rand()));
+    if (draws.reduce((sum, value) => sum + value, 0) <= 0) continue;
+    vectors.push(ORDER.map((bucket, i) => ({ bucket, weight: draws[i]! })));
+  }
+  const mean = meanTakeWeights(vectors)!;
+  return new Map(mean.map(({ bucket, weight }) => [bucket, weight]));
+}
+
+/** The clamp bound, which is SHARE_SUM_TOLERANCE in consensus-receipt.js. */
+const SHARE_SUM_TOLERANCE = 1e-6;
+
 describe("consensus receipt bps_conversion — largest remainder (issue #798)", () => {
   // ── the published rule and the implementation are one rule ────────────────
 
@@ -313,5 +384,189 @@ describe("consensus receipt bps_conversion — largest remainder (issue #798)", 
     // shares, not about the container the caller happens to hold them in.
     expect(bucketSharesToBps(Object.fromEntries(complete), ORDER))
       .toEqual(bucketSharesToBps(complete, ORDER));
+  });
+
+  // ── (4) THE CORPUS THE PRODUCER ACTUALLY EMITS ────────────────────────────
+  // Every corpus above is built by randomShares(), which sets a zeroed bucket
+  // to EXACTLY 0. meanTakeWeights() does not: it settles the positionally last
+  // entry to round(1 - prefixTotal, 8), and that entry is real_world_assets.
+  // The tests below draw their vectors from the producer's own arithmetic, so
+  // the input under test is the one swarm_recommendation.weights holds.
+
+  test("the PRODUCER's zero-RWA corpus converts with ZERO refusals — negative settle dust and all", () => {
+    const rand = mulberry32(0x1749);
+    const SAMPLES = 50_000;
+    let refused = 0;
+    let negativeDust = 0;
+    let mostNegative = 0;
+    for (let i = 0; i < SAMPLES; i++) {
+      const shares = producerShares(rand, ["real_world_assets"]);
+      const settled = shares.get("real_world_assets")!;
+      if (settled < 0) {
+        negativeDust++;
+        mostNegative = Math.min(mostNegative, settled);
+      }
+      let vector: Bps[] | undefined;
+      try {
+        vector = bucketSharesToBps(shares, ORDER);
+      } catch {
+        refused++;
+        continue;
+      }
+      expect(sumBps(vector)).toBe(BPS_DENOMINATOR);
+      expect(vector.map((entry) => entry.bucket)).toEqual([...ORDER]);
+      for (const entry of vector) {
+        expect(Number.isSafeInteger(entry.weight_bps)).toBe(true);
+        expect(entry.weight_bps).toBeGreaterThanOrEqual(0);
+        expect(entry.weight_bps).toBeLessThanOrEqual(BPS_DENOMINATOR);
+      }
+      // The clamp must not become an allocation: -1e-8 of a vault is 0 bps of
+      // it, never 1. A committee that allocated nothing to real_world_assets
+      // gets a receipt saying so. Object.is, not toBe: the producer also emits
+      // NEGATIVE ZERO here (round(1 - prefixTotal, 8) of a tiny overshoot), and
+      // -0 must be normalized rather than passed through as an integer -0.
+      expect(vector.at(-1)!.weight_bps).toBe(0);
+      expect(Object.is(vector.at(-1)!.weight_bps, 0)).toBe(true);
+    }
+    // THE HEADLINE: 12.39% of this corpus was refused before the clamp.
+    expect(refused).toBe(0);
+    // LOUD, NOT SILENT — the corpus really is the one that used to fail. Without
+    // this the test above would still pass if producerShares() quietly stopped
+    // producing dust, and would then be proving nothing at all.
+    expect(negativeDust).toBeGreaterThan(SAMPLES * 0.05);
+    // And the dust is DUST: two orders of magnitude inside the clamp bound, so
+    // absorbing it never needed the bound widened.
+    expect(mostNegative).toBeLessThan(0);
+    expect(mostNegative).toBeGreaterThanOrEqual(-1e-7);
+    expect(mostNegative).toBeGreaterThan(-SHARE_SUM_TOLERANCE);
+  });
+
+  test("every producer-shaped session converts, wherever the zero sits and whether or not there is one", () => {
+    const rand = mulberry32(0x788);
+    const shapes: readonly string[][] = [[], ...ORDER.map((bucket) => [bucket])];
+    let converted = 0;
+    for (const zeroed of shapes) {
+      for (let i = 0; i < 10_000; i++) {
+        const shares = producerShares(rand, zeroed);
+        const vector = bucketSharesToBps(shares, ORDER);
+        expect(sumBps(vector)).toBe(BPS_DENOMINATOR);
+        for (const bucket of zeroed) {
+          expect(vector.find((entry) => entry.bucket === bucket)!.weight_bps).toBe(0);
+        }
+        converted++;
+      }
+    }
+    expect(converted).toBe(shapes.length * 10_000);
+  });
+
+  test("the exact -1e-8 vector the producer emits, pinned rather than sampled", () => {
+    // Lifted verbatim from a producer run: three members, all of them zeroing
+    // real_world_assets, whose prefix roundings sum to 1 + 1e-8.
+    const dusty = new Map([
+      ["agent_tokens", 0.32328275],
+      ["conservative_defi_yield", 0.38341626],
+      ["protocol_tokens", 0.293301],
+      ["real_world_assets", -1e-8],
+    ]);
+    expect(dusty.get("real_world_assets")).toBeLessThan(0);
+    const vector = bucketSharesToBps(dusty, ORDER);
+    expect(sumBps(vector)).toBe(BPS_DENOMINATOR);
+    expect(vector.map((entry) => entry.weight_bps)).toEqual([3233, 3834, 2933, 0]);
+  });
+
+  test("the clamp is bounded by SHARE_SUM_TOLERANCE — below it a negative share is still refused BY NAME", () => {
+    const at = (rwa: number): Map<string, number> =>
+      new Map([
+        ["agent_tokens", 0.3],
+        ["conservative_defi_yield", 0.4],
+        ["protocol_tokens", 0.3 - rwa],
+        ["real_world_assets", rwa],
+      ]);
+    // The closed end of the range: exactly -SHARE_SUM_TOLERANCE is absorbed.
+    expect(bucketSharesToBps(at(-SHARE_SUM_TOLERANCE), ORDER).at(-1)!.weight_bps).toBe(0);
+    expect(sumBps(bucketSharesToBps(at(-SHARE_SUM_TOLERANCE), ORDER))).toBe(BPS_DENOMINATOR);
+    // NEGATIVE ZERO, which `-0 < 0` does NOT catch, is normalized to +0 — an
+    // integer weight_bps of -0 must never leave this function.
+    expect(Object.is(-0 < 0, false)).toBe(true); // the trap, stated
+    expect(Object.is(bucketSharesToBps(at(-0), ORDER).at(-1)!.weight_bps, 0)).toBe(true);
+    expect(Object.is(bucketSharesToBps(at(-1e-8), ORDER).at(-1)!.weight_bps, 0)).toBe(true);
+    // One step past it is a REAL negative allocation, and it is refused naming
+    // the bucket — not swallowed, and not thrown as an unnamed internal error.
+    expect(() => bucketSharesToBps(at(-1e-5), ORDER)).toThrow(
+      /real_world_assets.*finite share in 0\.\.1/s,
+    );
+    expect(() => bucketSharesToBps(at(-0.25), ORDER)).toThrow(
+      /real_world_assets.*finite share in 0\.\.1/s,
+    );
+    // And the clamp never becomes a licence to author: a zero share and a dust
+    // share convert to the same vector, so nothing is invented at the boundary.
+    expect(bucketSharesToBps(at(0), ORDER)).toEqual(bucketSharesToBps(at(-1e-9), ORDER));
+  });
+
+  // ── (5) THE ARITHMETIC DOMAIN ─────────────────────────────────────────────
+
+  test("the spec pins IEEE-754 binary64, the exact remainder form, and the dust clamp", () => {
+    // These clauses exist for an implementer in ANOTHER LANGUAGE — core is
+    // Python, where decimal.Decimal is the natural instinct for allocation
+    // math. They are asserted as published PROSE for the same reason the
+    // tie-break is: a reader of this file must not be able to implement the
+    // rule in the wrong domain and still call it 1.0.
+    const bps = spec.bps_conversion;
+    expect(bps.arithmetic_domain).toContain("IEEE-754 BINARY64");
+    expect(bps.arithmetic_domain).toContain("FORBIDDEN");
+    expect(bps.arithmetic_domain).toContain("decimal.Decimal");
+    expect(bps.floor_rule).toContain("SINGLE IEEE-754 BINARY64 MULTIPLY");
+    expect(bps.remainder_rule).toContain("remainder = raw - floor(raw)");
+    expect(bps.remainder_rule).toContain("EXACT");
+    expect(bps.tie_break).toContain("BITWISE-EQUAL BINARY64 REMAINDERS");
+    expect(bps.negative_dust_clamp.rule).toContain("FLOORED TO POSITIVE ZERO");
+    expect(bps.negative_dust_clamp.rule).toContain("NEGATIVE ZERO IS CLAMPED TOO");
+    expect(bps.negative_dust_clamp.rule).toContain("REFUSED BY NAME");
+    expect(bps.negative_dust_clamp.why).toContain("round(1 - prefixTotal, 8)");
+    expect(bps.refusal).toContain("negative_dust_clamp");
+    // The input clause has to describe what meanTakeWeights ACTUALLY computes:
+    // a verifier recomputes the mean from the frozen take set, so an unstated
+    // step decides the bytes just as much as a stated one.
+    expect(bps.input).toContain("localeCompare");
+    expect(bps.input).toContain("8 DECIMAL PLACES");
+    expect(bps.input).toContain("SETTLE THE POSITIONALLY LAST ENTRY");
+    expect(bps.input).toContain("meanTakeWeights()");
+    expect(bps.input).toContain("backend/src/swarm/domain.ts");
+  });
+
+  test("the spec's divergent example converts the way the spec says it does", () => {
+    // A SELF-TEST published for other implementations, executed here so it can
+    // never go stale: this is the vector where a decimal implementation of the
+    // same prose produces DIFFERENT SIGNED BYTES.
+    const example = spec.bps_conversion.divergent_example;
+    const shares = new Map(ORDER.map((bucket) => [bucket, example.shares[bucket] as number]));
+    const vector = bucketSharesToBps(shares, ORDER);
+    expect(vector.map((entry) => entry.weight_bps)).toEqual(example.bps_binary64);
+    expect(sumBps(vector)).toBe(BPS_DENOMINATOR);
+    // The decimal answer is a DIFFERENT answer, not a rounding nicety — one bp
+    // moved between two vaults, which is one verification failure against an
+    // anchored digest.
+    expect(example.bps_decimal_WRONG).not.toEqual(example.bps_binary64);
+    expect(
+      (example.bps_decimal_WRONG as number[]).reduce((sum: number, bp: number) => sum + bp, 0),
+    ).toBe(BPS_DENOMINATOR);
+
+    // THE MECHANISM, executed rather than described: the two contested
+    // remainders are NOT bitwise equal in binary64, so the tie-break never
+    // fires and real_world_assets takes the bp outright. In decimal they ARE
+    // equal, the tie-break fires, and canonical order hands it to
+    // conservative_defi_yield instead.
+    const remainder = (share: number): number => {
+      const raw = share * BPS_DENOMINATOR;
+      return raw - Math.floor(raw);
+    };
+    const cdy = remainder(example.shares.conservative_defi_yield as number);
+    const rwa = remainder(example.shares.real_world_assets as number);
+    expect(cdy).not.toBe(rwa);
+    expect(rwa).toBeGreaterThan(cdy);
+    // Both are ".6132" to the eight decimals the producer emits — the whole
+    // point being that "the same number" in decimal is two numbers here.
+    expect(cdy.toFixed(4)).toBe("0.6132");
+    expect(rwa.toFixed(4)).toBe("0.6132");
   });
 });

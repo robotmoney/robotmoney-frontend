@@ -87,9 +87,17 @@ export function participationBps(submitted: number, active: number): number;
  * canonical bucket order. Returns one entry per bucket, in `bucketOrder`,
  * summing to exactly `BPS_DENOMINATOR`.
  *
+ * ALL ARITHMETIC IS IEEE-754 BINARY64 — a single multiply by
+ * `BPS_DENOMINATOR`, `raw - Math.floor(raw)` for the remainder, and a
+ * tie-break that fires only on bitwise-equal remainders. A decimal or
+ * fixed-point recomputation of the same rule produces different bytes; see
+ * `bps_conversion.arithmetic_domain` and its worked `divergent_example`.
+ *
  * Refuses (`ReceiptCanonicalizationError`) a vector that is not a share
- * vector — a missing bucket, a share outside 0..1, or a total more than 1e-6
- * from 1. It never refuses because of where a bucket sits in the order.
+ * vector — a missing bucket, a share above 1 or more than 1e-6 below 0, or a
+ * total more than 1e-6 from 1. It never refuses because of where a bucket sits
+ * in the order. The one input it repairs is the producer's own negative settle
+ * dust: a share in -1e-6..0, and negative zero, floor to positive zero.
  */
 export function bucketSharesToBps(
   shares: ReadonlyMap<string, number> | Readonly<Record<string, number>>,
