@@ -22,10 +22,11 @@
  * (`0033_swarm_member_uuid_ids.sql`), so preflight's `schema-migrations` check
  * reports it as out-of-order and returns WARN. See the runbook §6 for why that
  * warning is the correct output here and what makes it safe — in short, the
- * append-only guard is already installed by then, and none of the ten REMOVES
- * a row from a protected table. Two of them LOCK one (0035's foreign key on
- * `swarm_members`, 0039's constraint swap on `swarm_sessions`); the guard fires
- * BEFORE DELETE OR TRUNCATE only, so neither can trip it. preflight's
+ * append-only guard is already installed by then, and none of the eleven
+ * REMOVES a row from a protected table. Three of them LOCK one (0035's foreign
+ * key on `swarm_members`, 0039's constraint swap on `swarm_sessions`, 0042's
+ * two foreign keys on `swarm_sessions` and `swarm_session_judgements`); the
+ * guard fires BEFORE DELETE OR TRUNCATE only, so none can trip it. preflight's
  * append-only-safety check does not yet draw that distinction — see
  * MIGRATION_TOUCHED_TABLES below and runbook §2.2.1.
  */
@@ -40,6 +41,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0039_swarm_judge.sql",
   "0040_swarm_judgements_append_only.sql",
   "0041_swarm_judgement_soak_record.sql",
+  "0042_swarm_consensus_receipts.sql",
 ] as const;
 
 /**
@@ -77,6 +79,13 @@ export const NEW_TABLES = [
   // on a database claiming to be at v0.2.2 is an out-of-band change.
   "swarm_judge_config",
   "swarm_session_judgements",
+  // 0042 (issue #754's published consensus receipt). Unlike `swarm_judge_config`
+  // above this one IS empty after the migration — 0042 seeds nothing, a receipt
+  // exists only once an operator publishes one — so both halves apply as
+  // written: preflight's clean-targets check refuses a database that already
+  // has the table, and postflight's new-tables check requires it present and
+  // empty.
+  "swarm_consensus_receipts",
 ] as const;
 export const NEW_COLUMNS = [
   { table: "wallet_balance_samples", column: "strategy_nav_idle_only" },
@@ -119,10 +128,12 @@ export const MIGRATION_TOUCHED_TABLES = [
   "wallet_sleeve_samples",
   "job_schedules",
   "swarm_members",
-  // 0039 swaps swarm_sessions' state CHECK constraint to admit 'judged'. Like
-  // `swarm_members` above this is a LOCK, not a write — an ALTER TABLE ADD
-  // CONSTRAINT removes no row, so rm_append_only_guard() (BEFORE DELETE OR
-  // TRUNCATE) cannot fire on it. Both tables ARE append-only protected, and
+  // 0039 swaps swarm_sessions' state CHECK constraint to admit 'judged', and
+  // 0042 adds a foreign key to it (and another to `swarm_session_judgements`,
+  // already covered by the NEW_TABLES spread above). Like `swarm_members` above
+  // these are LOCKS, not writes — an ALTER TABLE ADD CONSTRAINT removes no row,
+  // so rm_append_only_guard() (BEFORE DELETE OR TRUNCATE) cannot fire on them.
+  // Both tables ARE append-only protected, and
   // preflight's append-only-safety check does not currently distinguish
   // "locks" from "writes", so it reports them as collisions; that over-broad
   // rule is a defect in the check, not a reason to under-declare the roster

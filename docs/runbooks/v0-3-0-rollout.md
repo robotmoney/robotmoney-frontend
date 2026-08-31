@@ -240,7 +240,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — ten migrations
+### 2.2 🔴 The database delta — eleven migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -260,6 +260,7 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0039_swarm_judge.sql` | Swap `swarm_sessions`' state CHECK to admit `'judged'`; `CREATE TABLE swarm_judge_config` (one operator-switch row, seeded `mode='off'`) and `CREATE TABLE swarm_session_judgements` + index | Additive new tables **plus one constraint swap on a protected table** |
 | `0040_swarm_judgements_append_only.sql` | Install the statement- and row-level `rm_append_only_guard()` triggers on `swarm_session_judgements`; `REVOKE INSERT/UPDATE/DELETE` from `rm_worker` on it and on `swarm_judge_config` | Triggers + grants on a table created earlier in **this same release** |
 | `0041_swarm_judgement_soak_record.sql` | `ADD COLUMN applied / applied_skipped_reason / dropped_positions / dropped_disagreements` on `swarm_session_judgements`, with three CHECK constraints | Additive columns with constant defaults; **no historical row is rewritten** |
+| `0042_swarm_consensus_receipts.sql` | `CREATE TABLE swarm_consensus_receipts` (one published receipt per session, keyed on `session_id`, with foreign keys to `swarm_sessions` and `swarm_session_judgements`); install the `rm_append_only_guard()` pair on it; install a second `rm_consensus_receipt_immutable()` pair refusing **UPDATE**; `REVOKE INSERT/UPDATE/DELETE` from `rm_worker` | Additive new table, seeded with nothing; **the only table in the set that refuses UPDATE as well as DELETE** |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
@@ -295,7 +296,13 @@ table the append-only guard protects (see §2.2.1). `0040` installs four trigger
 on the table `0039` just created and issues two `REVOKE`s; `0041` adds four
 columns to it with constant defaults, which is catalog-only on PG 11+, plus
 three CHECK constraints validated against a table that is empty on a database
-coming directly from v0.2.2.
+coming directly from v0.2.2. `0042` creates one more empty table and declares
+two foreign keys — one on `swarm_sessions`, one on `swarm_session_judgements` —
+each validated against an empty child table, so validation is trivial, but each
+does take a brief lock on its parent for the duration (the same shape as
+`0035`'s foreign key on `swarm_members`). It seeds no row: a consensus receipt
+exists only once an operator publishes one, which is a post-cutover action and
+not part of this delta.
 **Confirm that on the smoke-twin (§7) rather than trusting it here** — §2.2's timings
 are read off the DDL, not measured.
 
@@ -344,15 +351,18 @@ before `_wallet`, `_swarm` before `_wallet` — so on a fresh database the
 append-only guard is installed *before* the new wallet migrations run, which is
 the same relative order production will see. And no new migration **removes a
 row from** a protected table: `APPEND_ONLY_TABLES` in
-`backend/src/db/append-only-guard.ts` lists fifteen tables, and none of
+`backend/src/db/append-only-guard.ts` lists sixteen tables, and none of
 `wallet_balance_samples`, `chain_day_blocks`, `wallet_backfill_state`,
 `swarm_member_avatars`, `swarm_judge_config` or `job_schedules` is among them.
 `swarm_session_judgements` **is** on that list, but `0039` creates it and `0040`
 protects it inside this very release — it does not exist on the v0.2.2 database
 the guard is being read against, and `0041`'s `ADD COLUMN … DEFAULT` rewrites no
-row and deletes none.
+row and deletes none. `swarm_consensus_receipts` is the same shape one migration
+later: `0042` creates it AND protects it in the same file, so it likewise does
+not exist on the database the guard is being read against.
 
-Two nuances the list does surface, and both are LOCKS rather than writes:
+Three nuances the list does surface, and all of them are LOCKS rather than
+writes:
 
 - `swarm_members` **is** protected, and `0035` declares
   `member_id … REFERENCES swarm_members(id) ON DELETE CASCADE`. The cascade is
@@ -363,10 +373,15 @@ Two nuances the list does surface, and both are LOCKS rather than writes:
   `rm_append_only_guard()` fires `BEFORE DELETE OR TRUNCATE` only, so it cannot
   fire here either — but the validation does take `ACCESS EXCLUSIVE` on the
   table for the duration.
+- `swarm_sessions` and `swarm_session_judgements` are both protected, and `0042`
+  declares a foreign key to each from the new `swarm_consensus_receipts`.
+  Neither key cascades, both are validated against an empty child table, and
+  adding a constraint removes no row — so again a lock, briefly, and never a
+  guard trip.
 
-Both appear in `MIGRATION_TOUCHED_TABLES`, because that constant means "creates,
-alters, locks, or writes". **`append-only-safety` therefore reports both as
-collisions and FAILs**: the check compares touched-vs-protected and does not
+All of them appear in `MIGRATION_TOUCHED_TABLES`, because that constant means
+"creates, alters, locks, or writes". **`append-only-safety` therefore reports
+them as collisions and FAILs**: the check compares touched-vs-protected and does not
 distinguish a lock from a write. That is a defect in the check, not a hazard in
 the migrations — do not read a green there as the thing that clears §2.2.1, and
 do not clear it by deleting rows from the roster. See the lock profile above.
@@ -888,7 +903,7 @@ each result in the stage rehearsal report (§7.4):
 
 | Requirement | Proven by |
 |---|---|
-| All ten migrations apply in one boot, no error, no skip | boot log's ten `migrated:` lines, then postflight's `migrations-applied` |
+| All eleven migrations apply in one boot, no error, no skip | boot log's eleven `migrated:` lines, then postflight's `migrations-applied` |
 | `schema_migrations` holds **both** `0032_*` and **both** `0033_*` — §2.2.1 observed rather than reasoned | postflight `migrations-applied` |
 | `0034`'s `UPDATE` hit exactly the two wallet samplers, everything else left `'all'` | postflight `catchup-policy` |
 | `ops.repair_gaps` present, enabled, **exactly one row** | postflight `repair-schedule` |
@@ -925,7 +940,7 @@ Run it against a smoke-twin that has **already been migrated by the rc**, becaus
 is the state a real rollback starts from. Rehearsing against an unmigrated
 database rehearses nothing.
 
-1. Restore a smoke-twin and boot the rc against it so the ten migrations apply
+1. Restore a smoke-twin and boot the rc against it so the eleven migrations apply
    (`bun run smoke-twin:rehearse` does the restore-and-migrate half).
 2. Capture `job_schedules` **before** rolling back — kind, cron, enabled,
    timezone, payload, next_run_at, catchup_policy. This is the *before* side of
@@ -1182,7 +1197,7 @@ Trigger, procedure and the "what rollback does NOT undo" list are structurally
 unchanged from [rollout-procedure.md §10](./rollout-procedure.md). Two v0.3.0-specific
 notes:
 
-**None of the ten migrations has a down migration.** The runner is forward-only
+**None of the eleven migrations has a down migration.** The runner is forward-only
 (`backend/src/db/migrate.ts` header). Rollback means restoring the Gate C dump,
 not reversing DDL.
 
