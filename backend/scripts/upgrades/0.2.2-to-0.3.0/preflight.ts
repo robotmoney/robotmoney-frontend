@@ -15,7 +15,7 @@
 //
 // Exit codes: 0 = SAFE TO UPGRADE, 1 = BLOCKED, 2 = could not run the check.
 
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { columnExists, tableExists } from "../../lib/checks.ts";
@@ -24,6 +24,7 @@ import { type Db, runPreflightMain } from "../../lib/preflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
   APPEND_ONLY_MIGRATION,
+  APPEND_ONLY_TABLES,
   COLLAPSE_PER_BUCKET_KINDS,
   MIGRATION_TOUCHED_TABLES,
   NEW_COLUMNS,
@@ -209,6 +210,247 @@ async function checkPendingMigrations(db: Db, { record }: Checker): Promise<Set<
   return appliedSet;
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// DESTRUCTIVE-STATEMENT DETECTION — the half of append-only-safety that has to
+// agree with `rm_append_only_guard()`.
+//
+// WHY IT IS NOT THE TOUCHED-TABLES ROSTER. This check used to ask "does this
+// release TOUCH a table the guard protects?" and print the answer as "this
+// release may DESTROY protected history". Two different claims, and only the
+// first was true. `rm_append_only_guard()` (migration 0032) fires
+// `BEFORE DELETE OR TRUNCATE` only, so 0035's `VALIDATE CONSTRAINT` on
+// `swarm_members` and 0039's `DROP/ADD CONSTRAINT` on `swarm_sessions` take a
+// lock and can never trip it — yet both were reported as blocking collisions,
+// which is how v0.3.0 preflight came to exit BLOCKED with nothing actually
+// wrong (issue #815). `MIGRATION_TOUCHED_TABLES` stays what it is — the roster
+// of everything the release creates, alters, locks or writes, kept honest by
+// tests/rollout-steps-0-3-0.test.ts — and risk is now read off the SQL the
+// release will actually execute. The check and the trigger agree by
+// construction rather than by coincidence.
+//
+// WHAT THIS DOES NOT CATCH. Stated plainly on purpose: a check whose blind
+// spots are written down is honest; one that implies completeness it does not
+// have is the exact defect being fixed here.
+//   1. DYNAMIC SQL. `EXECUTE format('DELETE FROM %I', t)` is a string literal
+//      to this scanner and is stripped before matching. Migration 0040
+//      legitimately drops and recreates append-only triggers exactly this way,
+//      and nothing here sees it. This is the one blind spot that errs towards a
+//      FALSE NEGATIVE, which is why the runbook still asks the operator to read
+//      §2.2's migration table rather than treating a PASS as the whole story.
+//   2. A removal reached INDIRECTLY — through a view, a rule, an
+//      `ON DELETE CASCADE` chain, or a function the migration merely calls.
+//      Only text the migration file itself contains is read. (The guard itself
+//      still refuses all of these at runtime; they are invisible here, not
+//      unprotected.)
+//   3. SCHEMA QUALIFICATION. Tables are matched on the BARE name, so
+//      `other_schema.swarm_members` is treated as `swarm_members` — a false
+//      positive, i.e. the safe direction.
+//   4. `standard_conforming_strings = off`, or a backslash-escaped quote inside
+//      an `E'…'` literal: literals end on `'` with `''` doubling only, so such a
+//      literal can end early and shift what is scanned.
+//   5. Statement splitting is on a bare `;`, so a semicolon inside a
+//      double-quoted identifier splits one statement into two.
+// Apart from (1), every limit above errs towards flagging a release that is
+// fine rather than passing one that is not.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** One statement in a migration that removes rows, or changes the guard's
+ *  ability to refuse a removal. */
+export interface DestructiveFinding {
+  /** Migration filename the statement was found in. */
+  file: string;
+  kind: "DELETE" | "TRUNCATE" | "DROP TABLE" | "DISABLE TRIGGER" | "DROP TRIGGER" | "REPLACE TRIGGER" | "GUARD FUNCTION";
+  /** The table for a row-removal finding; the trigger or function name for a
+   *  guard-tampering one. */
+  target: string;
+  /** True when this finding must BLOCK the release: it removes rows from an
+   *  append-only table, or it changes what the guard can refuse. A row-removing
+   *  statement against an UNPROTECTED table is reported (so the check is
+   *  visibly non-vacuous) but does not block. */
+  blocking: boolean;
+}
+
+/** A migration file as the scanner reads it. */
+export interface MigrationSql {
+  file: string;
+  sql: string;
+}
+
+const DOLLAR_TAG = /\$([A-Za-z_][A-Za-z0-9_]*)?\$/y;
+
+/**
+ * Remove everything a `DELETE`/`TRUNCATE` keyword could hide in without being
+ * executed: line comments, (nestable) block comments, and single-quoted string
+ * literals.
+ *
+ * Dollar-quoted bodies are the deliberate exception — they are KEPT and
+ * recursively stripped, so a `DO $$ … DELETE FROM swarm_members; … $$` block
+ * and a function body the migration defines are both scanned. That is the
+ * conservative direction: a function body that merely mentions a removal is
+ * flagged even though defining it removes nothing.
+ */
+export function stripSqlNoise(sql: string): string {
+  const out: string[] = [];
+  const n = sql.length;
+  let i = 0;
+  while (i < n) {
+    if (sql[i] === "-" && sql[i + 1] === "-") {
+      const nl = sql.indexOf("\n", i);
+      i = nl === -1 ? n : nl;
+      out.push(" ");
+      continue;
+    }
+    if (sql[i] === "/" && sql[i + 1] === "*") {
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (sql[i] === "/" && sql[i + 1] === "*") {
+          depth++;
+          i += 2;
+        } else if (sql[i] === "*" && sql[i + 1] === "/") {
+          depth--;
+          i += 2;
+        } else i++;
+      }
+      out.push(" ");
+      continue;
+    }
+    if (sql[i] === "$") {
+      DOLLAR_TAG.lastIndex = i;
+      const m = DOLLAR_TAG.exec(sql);
+      if (m) {
+        const tag = m[0];
+        const end = sql.indexOf(tag, i + tag.length);
+        if (end === -1) break; // unterminated — nothing after it is parseable
+        out.push(" ", stripSqlNoise(sql.slice(i + tag.length, end)), " ");
+        i = end + tag.length;
+        continue;
+      }
+    }
+    if (sql[i] === "'") {
+      i++;
+      while (i < n) {
+        if (sql[i] === "'") {
+          if (sql[i + 1] === "'") {
+            i += 2;
+            continue;
+          }
+          i++;
+          break;
+        }
+        i++;
+      }
+      out.push(" '' ");
+      continue;
+    }
+    out.push(sql[i]!);
+    i++;
+  }
+  return out.join("");
+}
+
+/** Bare table name out of an optionally schema-qualified, optionally quoted,
+ *  optionally `ONLY`-prefixed reference. */
+function bareTable(ref: string): string | null {
+  const m = /^\s*(?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?/i.exec(ref);
+  return m?.[1] ?? null;
+}
+
+/** `TRUNCATE a, public.b RESTART IDENTITY CASCADE` → ["a", "b"]. */
+function tableList(clause: string): string[] {
+  const head = clause.split(/\b(?:RESTART|CONTINUE|CASCADE|RESTRICT)\b/i)[0] ?? "";
+  return head
+    .split(",")
+    .map(bareTable)
+    .filter((t): t is string => t !== null);
+}
+
+/** A trigger name this release must not be quietly turning off. Matches both
+ *  the statement trigger (`<t>_append_only`) and the row one
+ *  (`<t>_append_only_row`) that 0032/0040 install as a pair. */
+const isAppendOnlyTrigger = (name: string): boolean => /_append_only/i.test(name);
+
+/**
+ * Read one migration's SQL and report every statement that removes rows, or
+ * that changes the append-only guard's capability. See the header block above
+ * for what it deliberately does not see.
+ */
+export function scanMigrationSql(
+  file: string,
+  sql: string,
+  protectedTables: ReadonlySet<string>,
+): DestructiveFinding[] {
+  const findings: DestructiveFinding[] = [];
+  const push = (kind: DestructiveFinding["kind"], target: string, blocking: boolean): void => {
+    findings.push({ file, kind, target, blocking });
+  };
+
+  for (const raw of stripSqlNoise(sql).split(";")) {
+    const stmt = raw.replace(/\s+/g, " ").trim();
+    if (!stmt) continue;
+
+    // `DELETE FROM` is unambiguous: a trigger event list says `BEFORE DELETE ON`,
+    // never `DELETE FROM`. So this is matched ANYWHERE in the statement, which
+    // also covers a `WITH … AS (DELETE FROM …)` data-modifying CTE.
+    for (const m of stmt.matchAll(/\bDELETE\s+FROM\s+((?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?[A-Za-z_][\w$]*"?)/gi)) {
+      const t = bareTable(m[1]!);
+      if (t) push("DELETE", t, protectedTables.has(t));
+    }
+
+    // TRUNCATE and DROP TABLE, by contrast, must LEAD the statement: the same
+    // words appear inside `CREATE TRIGGER … BEFORE DELETE OR TRUNCATE ON …`,
+    // which removes nothing and must not be reported.
+    const truncate = /^TRUNCATE\s+(?:TABLE\s+)?(.+)$/i.exec(stmt);
+    if (truncate) {
+      for (const t of tableList(truncate[1]!)) push("TRUNCATE", t, protectedTables.has(t));
+    }
+    const dropTable = /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(.+)$/i.exec(stmt);
+    if (dropTable) {
+      // Dropping the table takes its append-only triggers with it, so this is
+      // destructive on a protected table however few rows it holds.
+      for (const t of tableList(dropTable[1]!)) push("DROP TABLE", t, protectedTables.has(t));
+    }
+
+    // ── Guard tampering. A migration runs as the table's owner, so it CAN turn
+    // the guard off; `rm_append_only_guard()` cannot see that happen to itself.
+    const disable = /^ALTER\s+TABLE\s+(?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?\s+(?:DISABLE|ENABLE\s+REPLICA)\s+TRIGGER\s+(?:"?([A-Za-z_][\w$]*)"?|(ALL|USER))/i.exec(
+      stmt,
+    );
+    if (disable) {
+      const table = disable[1]!;
+      const named = disable[2];
+      // `ENABLE REPLICA` is here with `DISABLE` on purpose: 0032 installs the
+      // guard as ENABLE ALWAYS precisely so a `session_replication_role =
+      // replica` apply cannot bypass it, and demoting it to REPLICA re-opens
+      // that door without ever saying DISABLE.
+      if (named && isAppendOnlyTrigger(named)) push("DISABLE TRIGGER", `${table}.${named}`, true);
+      else if (!named && protectedTables.has(table)) push("DISABLE TRIGGER", `${table}.ALL`, true);
+    }
+    const dropTrigger = /^DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?"?([A-Za-z_][\w$]*)"?\s+ON\s+(?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?/i.exec(
+      stmt,
+    );
+    if (dropTrigger && isAppendOnlyTrigger(dropTrigger[1]!)) {
+      push("DROP TRIGGER", `${dropTrigger[2]!}.${dropTrigger[1]!}`, true);
+    }
+    const replaceTrigger = /^CREATE\s+OR\s+REPLACE\s+TRIGGER\s+"?([A-Za-z_][\w$]*)"?/i.exec(stmt);
+    if (replaceTrigger && isAppendOnlyTrigger(replaceTrigger[1]!)) {
+      push("REPLACE TRIGGER", replaceTrigger[1]!, true);
+    }
+    // Replacing or dropping the FUNCTION is the same capability change one
+    // level down: every append-only trigger executes this one function.
+    const guardFn = /^(?:CREATE\s+OR\s+REPLACE|DROP)\s+FUNCTION\b[^]*?\brm_append_only_guard\b/i.exec(stmt);
+    if (guardFn) push("GUARD FUNCTION", "rm_append_only_guard", true);
+  }
+  return findings;
+}
+
+/** Reads this release's migration files off disk, in runner order. */
+async function loadReleaseMigrations(): Promise<MigrationSql[]> {
+  return Promise.all(
+    THIS_RELEASE_MIGRATIONS.map(async (file) => ({ file, sql: await readFile(join(migrationsDir, file), "utf8") })),
+  );
+}
+
 /**
  * The reason the out-of-order warning above is tolerable.
  *
@@ -216,11 +458,21 @@ async function checkPendingMigrations(db: Db, { record }: Checker): Promise<Set<
  * before `0032_wallet_...` (`_append` sorts before `_wallet`), so the guard is
  * installed first. On THIS upgrade the guard is already installed, which is the
  * same relative order. Either way the new migrations run with the guard live —
- * so the only question that matters is whether any of them writes to a
- * protected table. None does, and this asserts it against the database's own
+ * so the only question that matters is whether any of them REMOVES A ROW from a
+ * protected table, or turns the guard off. Both are read out of the migrations'
+ * own SQL (scanMigrationSql, above) and graded against the database's own
  * trigger catalog rather than against a list in a doc.
+ *
+ * `loadMigrations` is injectable so the check itself — not a re-implementation
+ * of it — can be graded against fixture migrations in both directions
+ * (tests/preflight-0-3-0-append-only-safety.test.ts).
  */
-async function checkAppendOnlySafety(db: Db, { record }: Checker, applied: Set<string>): Promise<void> {
+export async function checkAppendOnlySafety(
+  db: Db,
+  { record }: Checker,
+  applied: Set<string>,
+  loadMigrations: () => Promise<MigrationSql[]> = loadReleaseMigrations,
+): Promise<void> {
   if (!applied.has(APPEND_ONLY_MIGRATION)) {
     record(
       "append-only-safety",
@@ -241,9 +493,9 @@ async function checkAppendOnlySafety(db: Db, { record }: Checker, applied: Set<s
        AND t.tgname LIKE '%_append_only'
      GROUP BY c.relname
   `) as unknown as { table_name: string }[];
-  const protectedTables = new Set(rows.map((r) => r.table_name));
+  const live = new Set(rows.map((r) => r.table_name));
 
-  if (protectedTables.size === 0) {
+  if (live.size === 0) {
     record(
       "append-only-safety",
       "FAIL",
@@ -253,27 +505,56 @@ async function checkAppendOnlySafety(db: Db, { record }: Checker, applied: Set<s
     return;
   }
 
-  // Every table this release creates, alters, locks, or writes, against the
-  // ones the guard protects. This includes 0036/0037's active sleeve archive
-  // path, not only DDL targets.
-  const touched = [...MIGRATION_TOUCHED_TABLES];
-  const collisions = touched.filter((t) => protectedTables.has(t));
-  if (collisions.length > 0) {
+  // The live catalog UNION the declared roster. The catalog alone would miss a
+  // table this very release protects — `swarm_session_judgements` does not
+  // exist on a v0.2.2 database, so a later migration deleting from it would
+  // read as unprotected here while the guard refused it at runtime.
+  const protectedTables = new Set<string>([...live, ...APPEND_ONLY_TABLES]);
+
+  let migrations: MigrationSql[];
+  try {
+    migrations = await loadMigrations();
+  } catch (e) {
     record(
       "append-only-safety",
       "FAIL",
-      [
-        `${collisions.length} table(s) this release's migrations touch ARE append-only protected:`,
-        ...collisions.map((t) => `  ${t}`),
-      ],
-      "A migration writing to a protected table will abort the whole boot. Re-read the migration set before proceeding.",
+      `cannot read this release's migration files: ${e instanceof Error ? e.message : e}`,
+      "The checkout is incomplete. Do not upgrade from a tree whose migrations cannot be read.",
     );
     return;
   }
 
+  const findings = migrations.flatMap((m) => scanMigrationSql(m.file, m.sql, protectedTables));
+  const blocking = findings.filter((f) => f.blocking);
+  if (blocking.length > 0) {
+    record(
+      "append-only-safety",
+      "FAIL",
+      [
+        `${blocking.length} statement(s) in this release remove protected history, or the guard that protects it:`,
+        ...blocking.map((f) => `  ${f.file}: ${f.kind} ${f.target}`),
+      ],
+      "rm_append_only_guard() will abort the boot on a removal, and a disabled guard is worse. Do not upgrade until each line above is removed or justified.",
+    );
+    return;
+  }
+
+  // Reported even on the happy path, because it is the evidence that the
+  // scanner is looking at real statements rather than passing everything: this
+  // release DOES issue row removals (0036 on wallet_backfill_state, 0037 on the
+  // two sample tables) and none of them targets a protected table.
+  const removals = findings.filter((f) => f.kind === "DELETE" || f.kind === "TRUNCATE" || f.kind === "DROP TABLE");
+  const lockedOnly = [...MIGRATION_TOUCHED_TABLES].filter((t) => protectedTables.has(t));
+
   record("append-only-safety", "PASS", [
-    `guard live on ${protectedTables.size} table(s); none is touched by this release`,
-    `touched: ${touched.join(", ")}`,
+    `guard live on ${live.size} table(s); no statement in this release's ${migrations.length} migration(s) removes a row from one`,
+    removals.length > 0
+      ? `${removals.length} row-removing statement(s) found, all against UNPROTECTED tables: ${[...new Set(removals.map((f) => f.target))].join(", ")}`
+      : "no DELETE/TRUNCATE/DROP TABLE statement anywhere in the set",
+    lockedOnly.length > 0
+      ? `${lockedOnly.length} protected table(s) are LOCKED or ALTERED but not written: ${lockedOnly.join(", ")} — rm_append_only_guard() fires BEFORE DELETE OR TRUNCATE only`
+      : "no protected table is touched at all",
+    "not seen by this check: removals built with dynamic SQL, or reached through a view/rule/cascade — see §2.2 for the read-through",
   ]);
 }
 
