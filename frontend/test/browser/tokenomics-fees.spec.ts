@@ -2,7 +2,7 @@
 // legend + per-partner breakdown cards are bound by the feeChart() factory to
 // GET /api/dashboards/token-metrics (`feeSplit`) — the Protocol/Bankr/Clanker %
 // literals are no longer baked into the view. Same harness pattern as
-// allocation-view.spec.ts: the SPA + view HTML are served by the backend at
+// vault-view.spec.ts: the SPA + view HTML are served by the backend at
 // baseURL (a preview server replaying goldens/api-goldens.json), vendor CDN
 // scripts are fulfilled from node_modules, and the endpoint under test is stubbed.
 import { expect, test, type Page } from "@playwright/test";
@@ -92,4 +92,86 @@ test("tokenomics fee-split reflects the SERVED percentages, not baked 57/40/3 li
   // Never the retired baked Protocol=57% literal.
   await expect(pctCards.nth(0)).not.toHaveText("57%");
   await expect(page.locator(".tok__legend-item").nth(0)).toContainText("Protocol (50%)");
+});
+
+// ── Migrated from allocation-view.spec.ts (issue #800, Cluster A) ────────────
+// RM-105 (PR #774) deleted the /allocation route, taking with it the only other
+// rendering of the buyback history — and its spec was left driving an address
+// that no longer resolves. /tokenomics renders the SAME feed, every row and the
+// same tfoot totals, through the buybackSummary() factory, so the binding
+// assertion moves here rather than being dropped with the page.
+interface BuybackRow { date: string; txHash: string; wethSpent: number; valueUsd: number; robotmoneyReceived: number }
+interface Buybacks { rows: BuybackRow[]; totals: { wethSpent: number; valueUsd: number; robotmoneyReceived: number }; source: string }
+
+function loadBuybacksGolden(): Buybacks {
+  const goldens = JSON.parse(readFileSync(join(process.cwd(), "goldens/api-goldens.json"), "utf8")) as {
+    routes: Record<string, unknown>;
+  };
+  const payload = goldens.routes["/api/dashboards/buybacks"];
+  if (!payload) throw new Error("no /api/dashboards/buybacks golden — run `bun run goldens:update`");
+  return payload as Buybacks;
+}
+
+const fmtWeth = (v: number) => v.toFixed(4);
+const fmtWethLabel = (v: number) => v.toFixed(6) + " WETH";
+const fmtUsd0 = (v: number) => "$" + v.toLocaleString("en-US", { maximumFractionDigits: 0 });
+const fmtRmoney = (v: number) => (v / 1e6).toFixed(2) + "M";
+
+test("Buyback History rows + totals render FROM GET /api/dashboards/buybacks, not baked rows", async ({ page }) => {
+  const metrics = loadTokenMetricsGolden();
+  const buybacks = loadBuybacksGolden();
+  expect(buybacks.rows.length).toBeGreaterThan(0);
+  let hit = false;
+  await stubEnvironment(page, metrics);
+  await page.route("**/api/dashboards/buybacks", (route) => {
+    hit = true;
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(buybacks) });
+  });
+  await page.goto("/");
+  await navigate(page, "/tokenomics");
+
+  // One row per served buyback. The loading and empty placeholder <tr>s carry
+  // no date cell content, so scope to the rendered rows by their tbody
+  // position: x-for emits exactly rows.length of them between the two.
+  const table = page.locator("#buybacks .tok__table");
+  const dataRows = table.locator("tbody tr").filter({ hasText: buybacks.rows[0]!.date.slice(0, 4) });
+  await expect(dataRows).toHaveCount(buybacks.rows.length);
+  expect(hit).toBe(true); // the endpoint was actually fetched
+
+  // Every column of the first row comes from the served DTO, not a literal.
+  const first = dataRows.first().locator("td");
+  await expect(first.nth(0)).toHaveText(buybacks.rows[0]!.date);
+  await expect(first.nth(1)).toHaveText(fmtWeth(buybacks.rows[0]!.wethSpent));
+  await expect(first.nth(2)).toHaveText(fmtUsd0(buybacks.rows[0]!.valueUsd));
+  await expect(first.nth(3)).toHaveText(fmtRmoney(buybacks.rows[0]!.robotmoneyReceived));
+
+  // Total-spent chip + tfoot totals are computed by the API and echoed verbatim.
+  const wethLabel = fmtWethLabel(buybacks.totals.wethSpent);
+  await expect(page.locator("#buybacks .tok__bb-summary-val")).toHaveText(wethLabel);
+  const totalRow = table.locator("tfoot tr").locator("td");
+  await expect(totalRow.nth(1)).toHaveText(wethLabel);
+  await expect(totalRow.nth(2)).toHaveText(fmtUsd0(buybacks.totals.valueUsd));
+  await expect(totalRow.nth(3)).toHaveText(fmtRmoney(buybacks.totals.robotmoneyReceived));
+});
+
+test("Buyback History reflects the SERVED rows, not the goldens it usually matches", async ({ page }) => {
+  // The mutation half: a payload that shares no value with the golden. If these
+  // numbers reach the DOM, the table can only be reading the response.
+  const mutated: Buybacks = {
+    source: "live",
+    rows: [{ date: "2026-01-02", txHash: "0xdead", wethSpent: 9.5, valueUsd: 12345, robotmoneyReceived: 7000000 }],
+    totals: { wethSpent: 9.5, valueUsd: 12345, robotmoneyReceived: 7000000 },
+  };
+  await stubEnvironment(page, loadTokenMetricsGolden());
+  await page.route("**/api/dashboards/buybacks", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(mutated) }));
+  await page.goto("/");
+  await navigate(page, "/tokenomics");
+
+  const table = page.locator("#buybacks .tok__table");
+  const row = table.locator("tbody tr").filter({ hasText: "2026-01-02" }).locator("td");
+  await expect(row.nth(1)).toHaveText("9.5000");
+  await expect(row.nth(2)).toHaveText("$12,345");
+  await expect(row.nth(3)).toHaveText("7.00M");
+  await expect(page.locator("#buybacks .tok__bb-summary-val")).toHaveText("9.500000 WETH");
 });

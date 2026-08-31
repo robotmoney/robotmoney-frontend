@@ -10,7 +10,7 @@
 // vault. Separating the pots is the entire reason this page exists, so a
 // request to either endpoint is a product regression, not a performance one.
 //
-// Same harness as allocation-view.spec.ts: the SPA and its view fragments are
+// Same harness as performance-view.spec.ts: the SPA and its view fragments are
 // served at baseURL, and the two endpoints the page IS allowed to read are
 // stubbed from the committed goldens (goldens/api-goldens.json), the single
 // source of truth per docs/architecture.md's preview section.
@@ -290,4 +290,118 @@ test("the fan diagram, not the list, is what renders at desktop width", async ({
   const overflow = await page.evaluate(() =>
     document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
+});
+
+// ── Migrated from allocation-view.spec.ts (issue #800, Cluster A) ────────────
+// RM-105 (PR #774) replaced /allocation with this page and deleted its route,
+// but left allocation-view.spec.ts driving the address it removed. These four
+// assertions are the ones that spec made about the VAULT half — the half that
+// moved here — and that this file did not already make. They are reproduced
+// against /vault rather than dropped with the page they used to run on.
+//
+// The rest of allocation-view.spec.ts was about the HOUSE BOOK — the hero's
+// combined "Total AUM", the prop-wallet provenance badges (#84, #614 AC4), the
+// partial-total rule (#160), the buyback table and the per-wallet sleeve cards.
+// Those cannot be reproduced here: this page is defined by NOT reading that
+// money (see the FORBIDDEN assertion at the top of this file), and #774 left
+// no other route rendering them. The buyback binding moved to
+// tokenomics-fees.spec.ts, which drives the card /tokenomics still renders; the
+// rest is tracked as coverage RM-103 has to restore with the token page.
+
+test("the 7-day yield is the LIVE apy7d, and says so when it is the reference series instead", async ({ page }) => {
+  const economics = economicsGolden();
+  await stubEnvironment(page, { ...economics, apy7d: 0.0731 });
+  await openVault(page);
+
+  const yieldStat = page.locator(".vp__stat", { hasText: "Yield · 7-day" });
+  await expect(yieldStat.locator("dd")).toHaveText("7.31%");
+  // Never /allocation's retired baked 4.06% chip, and not the reference series
+  // while a live figure exists.
+  await expect(yieldStat.locator("dd")).not.toHaveText("4.06%");
+  // The "· reference series" qualifier is x-show'd, so it is in the DOM either
+  // way — assert on whether it is SHOWN, which is what a reader sees.
+  await expect(yieldStat.locator(".vp__stat-sub span")).toBeHidden();
+});
+
+test("with no live apy7d the yield figure is labelled as the reference series, not passed off as live", async ({ page }) => {
+  const economics = economicsGolden();
+  await stubEnvironment(page, { ...economics, apy7d: null });
+  await openVault(page);
+
+  const yieldStat = page.locator(".vp__stat", { hasText: "Yield · 7-day" });
+  const qualifier = yieldStat.locator(".vp__stat-sub span");
+  await expect(qualifier).toBeVisible();
+  await expect(qualifier).toHaveText("· reference series");
+});
+
+test("a vault feed carrying nothing renders '—' everywhere and never fabricates a zero", async ({ page }) => {
+  const economics = economicsGolden();
+  const dead: VaultEconomics = {
+    ...economics,
+    stale: true,
+    tvlUsd: null,
+    sharePrice: null,
+    totalShares: null,
+    idleUsdc: null,
+    apy7d: null,
+    // configured: true is the point — a CONFIGURED adapter with no balance is
+    // an unknown, not a zero. issue #50's "Not configured" case is the other
+    // test; this one is the degraded-read case.
+    adapters: economics.adapters.map((a) => ({ ...a, configured: true, balanceUsd: null })),
+  };
+  await stubEnvironment(page, dead);
+  await openVault(page);
+
+  await expect(page.locator(".vp__badge--stale")).toBeVisible();
+  await expect(page.locator(".vp__stat", { hasText: "Vault TVL" }).locator("dd")).toHaveText("—");
+
+  const holdings = page.locator("#holdings");
+  const rows = holdings.locator("tbody tr");
+  await expect(rows).toHaveCount(economics.adapters.length + 2);
+  for (let i = 0; i < economics.adapters.length; i++) {
+    const cells = rows.nth(i).locator("td");
+    await expect(cells.nth(2)).toHaveText("—"); // balance
+    await expect(cells.nth(3)).toHaveText("—"); // price
+    await expect(cells.nth(4)).toHaveText("—"); // value
+  }
+  await expect(holdings.locator("tr.tot td").nth(4)).toHaveText("—");
+  // The failure mode this guards is a blank read rendered as a real number.
+  await expect(holdings).not.toContainText("$0.00");
+});
+
+test("the Holdings total is the same tvlUsd the hero states, read from the one feed", async ({ page }) => {
+  const economics = economicsGolden();
+  await stubEnvironment(page, economics);
+  await openVault(page);
+
+  const expected = "$" + Number(economics.tvlUsd).toLocaleString("en-US", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+  await expect(page.locator("#holdings tr.tot td").nth(4)).toHaveText(expected);
+  await expect(page.locator(".vp__stat", { hasText: "Vault TVL" }).locator("dd")).toHaveText(expected);
+});
+
+test("sleeve target weights derive FROM the allocation feed, not the baked 95/5/0/0 literal", async ({ page }) => {
+  // A payload deliberately DIFFERENT from the literal /allocation used to bake:
+  // if the sleeves read 70/30 they can only have come from this response.
+  const mutated: AllocationFramework = {
+    ...allocationGolden(),
+    strategy: [
+      { label: "Conservative DeFi Yield", targetPct: 70 },
+      { label: "Agent Tokens", targetPct: 30 },
+      { label: "Protocol Tokens", targetPct: 0 },
+      { label: "Real World Assets", targetPct: 0 },
+    ],
+  };
+  await stubEnvironment(page, economicsGolden(), mutated);
+  await openVault(page);
+
+  const bullets = page.locator(".vp__bullet");
+  await expect(bullets).toHaveCount(4);
+  await expect(bullets.nth(0)).toContainText("target 70%");
+  await expect(bullets.nth(1)).toContainText("target 30%");
+  await expect(page.locator("#allocation")).not.toContainText("target 95%");
+  // The target markers on the tracks are driven by the same numbers.
+  await expect(bullets.nth(0).locator(".vp__target")).toHaveAttribute("data-t", "70");
+  await expect(bullets.nth(1).locator(".vp__target")).toHaveAttribute("data-t", "30");
 });

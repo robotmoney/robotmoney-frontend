@@ -1,4 +1,20 @@
-<!-- Asset Allocation
+<!-- UNREACHABLE SINCE RM-105 (PR #774). NO ROUTE RESOLVES TO THIS FRAGMENT.
+     routes.js sends /allocation and /allocation2 to VAULT_VIEW (views/vault.html);
+     nothing points here any more, so nothing below this line is served to a
+     visitor. It is kept, not deleted, because RM-103 has to port the house-book
+     half of it — the buyback table, the per-wallet sleeve cards and the
+     prop-wallet provenance badges — onto the token page, and that is the last
+     rendering of them.
+
+     Its Playwright spec (frontend/test/browser/allocation-view.spec.ts) was
+     removed in issue #800: it drove /allocation, which now serves the vault
+     page, so all fourteen of its tests failed on every run from the moment #774
+     merged. The assertions that had a home on /vault moved to
+     vault-view.spec.ts and the buyback binding moved to tokenomics-fees.spec.ts;
+     what is left is coverage RM-103 owns restoring. Until then, TREAT EVERYTHING
+     BELOW AS UNTESTED AND UNSHIPPED.
+
+     Asset Allocation
      Buildless port of robotmoney-site/src/app/allocation/page.tsx — now fully
      data-driven, no baked DATA literals. Every pie is a Chart.js pie drawn by
      the boot-registered allocationView() factory (alpine/views.js) from live
