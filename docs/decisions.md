@@ -2999,3 +2999,105 @@ two-take session into looking well supported.
 - **Gate the hardcoded `position_actions` literals behind a flag instead of
   deleting them.** Rejected. They were derived from no member input; there is no
   configuration under which publishing them is correct.
+
+### Amendment (issue #806) — the soak must not report success it cannot verify
+
+#767 made the shadow soak operable. Three independent gates on PR #797 then said
+the same thing from different angles: its operator-facing surface reported
+success it could not verify, and swallowed the failures that made it collect
+nothing. None of it was reachable at the shipped `mode: off`, which is why it was
+worth fixing before a soak rather than during one. Ten changes, one theme.
+
+**`applied` is read back, not counted.** See the correction of record above for
+why the row count could never fail on the production entry point. `applyOpinion()`
+now SELECTs `swarm_recommendation->'judge'` straight back inside its own
+transaction and compares `prompt_hash`/`inputs_digest` against the outcome it
+just wrote. `applied = true` means "the session row carries THIS opinion" —
+which is exactly what the admin panel renders it as. Rejected: documenting the
+redundancy and keeping the column as forward-proofing. It is cheaper to make a
+column true than to teach every future reader that it is not, and the same
+comparison is what `inForce` needs anyway, so one definition
+(`sessionJudgeFingerprint()`) now serves the writer and the read path.
+
+**`inForce` reconciles against the session.** The append-only record and
+`swarm_sessions.swarm_recommendation` are two stores. Two legal admin actions —
+`judged -> window_closed`, then `window_closed -> aggregated` — have
+`domain.aggregateSession` replace the recommendation wholesale, so the judgement
+row still says `applied = true` while the session carries nothing. The panel
+rendered "In force — enforce · applied to the session" over prose that was gone.
+The read path now returns the session's own fingerprint as `sessionJudge` and
+stamps each row with `carriedBySession` and a `supersededReason`.
+
+**The overwrite is guarded AND visible.** `domain.aggregateSession` keeps no
+state opinion — it is the rollup — but its two unguarded callers (the
+`swarm.aggregate` handler, the admin dispatcher's `aggregate` action) now go
+through `aggregateSessionAdmin`, so `guardedTransition` refuses
+`judged -> aggregated` and every terminal source state. A re-delivered job can no
+longer rewrite a judged session from any state, outside the judge's advisory
+lock. The DELIBERATE two-step re-aggregation still drops the judge's prose, by
+design — the aggregator owns the recommendation — and that is the loss the read
+path reports rather than prevents.
+
+**Benign terminals are skips, on the same argument `judge_disabled` won.**
+Measured against a real Postgres driving the real claim loop,
+`terminal_state:cancelled`, `terminal_state:published` and
+`illegal_transition:window_closed->judged` each wrote five `degraded` runs before
+`max_attempts` settled the job. Cancelling a session during a soak needed no race
+to produce them. The test applied is "can a retry change the answer", which is
+why the rollup seam translates only `illegal_transition:judged->aggregated` and
+not the not-yet-aggregated states, where a retry genuinely might. Rejected:
+changing `isDegradedResult()`, which would have made every lane's `{ok:false}`
+mean something new to fix one seam's problem.
+
+**A failed enqueue fails the run.** `admin()` returned the parsed body and never
+the status, so a 403 after a token rotation printed
+`enqueued undefined (job #undefined)` and returned normally; the driver then
+waited 120s for a job that did not exist, took the expiry branch, and logged
+"judge did not reach 'judged' in time … publishing anyway". The judge step is the
+only lifecycle step whose wait failure is caught, so it was the only one where
+this was survivable and therefore silent. `adminCall()` carries the status,
+`enqueueLifecycleJob` throws when nothing was queued, and the expiry log now
+names the job id and whether a judgement row exists instead of asserting the
+judge was slow.
+
+**Ordering is made explicit in three places.** The claim query gains its `, id`
+tiebreak (`run_after` is a shared millisecond, and the judge measurably lost the
+tie); session validation gains `MIN_SESSION_STEP_MS` so a one-millisecond window
+is rejected rather than clamped into a collapse; and `docs/architecture.md` now
+states **exactly one `swarm`-lane worker** as a requirement, because everything
+`run_after` buys is a CLAIM-order property that `FOR UPDATE SKIP LOCKED` gives
+away the moment a second worker exists.
+
+**The manual re-judging lever is explicit rather than implicit.** `enqueue-job`
+INSERTed with no dedupe key, so two `judge` enqueues for one session produced two
+judgement rows and, in `enforce`, two rewrites of the recommendation — the
+advisory lock serializes, it does not deduplicate, and `judged -> judged` is
+idempotent success. It now carries `swarm:<session-id>:<action>` like the admin
+path, and re-judging is `force: true`, which enqueues with no key.
+
+**`SWARM_SCHEDULES_ENABLED` unset is now a failure.** The production assertion
+skipped when the variable was absent, on the reading that "nobody exported one"
+is safe. `docker-compose.yml` defaults it to `1`, so unset is the cron cadence —
+five subject-blind schedules with no `swarm.judge` among them. A third cadence,
+running sessions that can never be judged, past a check that reported nothing
+wrong.
+
+**The mode flip warns about what is still true, and nothing else.** The obvious
+last step was an operator-facing warning at `POST /api/swarm/admin/judge`
+listing what to watch for during a soak. Written before the fixes above it would
+have had ten entries; written after them it has two, and both are design
+trade-offs rather than defects: ordering assumes exactly one `swarm`-lane
+worker, and an `enforce` opinion is not permanent because the sanctioned
+re-aggregation discards it. The inversion is the point — the warning shrank
+because the code got honest, and a warning that recites problems the code no
+longer has is how operators learn to skip warnings. It is returned on the
+response and written into the same audit row as the change, and a test pins that
+it names none of the nine defects this issue closed, so re-adding one has to be
+a deliberate act.
+
+**One operator action this requires.** With the production assertion now strict,
+a `--static-port` boot whose environment does not export
+`SWARM_SCHEDULES_ENABLED` refuses to start, naming the fix in its message.
+`.env.example` ships the value (`0`). This is the intended trade: a one-time,
+loud, self-describing boot failure in exchange for never again running a third
+cadence that cannot judge.

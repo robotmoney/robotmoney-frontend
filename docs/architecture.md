@@ -518,6 +518,13 @@ A Postgres-backed queue replaces the old GitHub Actions cron + `scripts/`. Each
 worker process (`backend/src/worker/`, entry `index.ts` → `runtime.ts`) runs
 three loops:
 
+- **Claim order**: `ORDER BY priority DESC, run_after, id`. The `id` tiebreak is
+  required, not cosmetic (issue #806): `run_after` is a millisecond instant that
+  same-priority jobs routinely share — `createSessionAdmin`'s clamp collapses
+  `swarm.aggregate` and `swarm.judge` onto an identical one for any window under
+  ~2s — and without it the judge could lose the tie, drain after the publish, and
+  burn every attempt on `terminal_state:published`. It does not self-heal, so it
+  is ordered rather than retried.
 - **Claim loop** (`loop.ts`): claims one due job **within its lane's kind
   allowlist** with `FOR UPDATE SKIP LOCKED` (safe across N workers), runs its
   handler by `kind`, and records the outcome in `job_runs`. On failure it retries
@@ -1242,7 +1249,22 @@ back to back and the publish wins, the transition is refused, the whole judging
 transaction rolls back, and the soak records nothing. At the shipped `off` it
 waits for nothing (a disabled judge never produces `judged`), and an expired wait
 publishes anyway and says so: publishing is that driver's job, and a slow judge
-must not wedge the cadence behind it.
+must not wedge the cadence behind it. That log line names the judge job id and
+whether a judgement row exists, because on this topology an expiry is more often
+a refused or still-queued judging than a slow one, and a message that asserts
+"slow" is usually asserting the wrong thing.
+
+**REQUIREMENT: exactly one `swarm`-lane worker** (issue #806). Everything above
+about ordering is a CLAIM-order property, not an execution-order one.
+`FOR UPDATE SKIP LOCKED` hands `swarm.judge` to one worker and `swarm.publish` to
+another the instant both are due, and the judge holds its worker for up to 60s
+on the model call — so with two `worker-swarm` containers the publish overtakes
+the judging on the ADMIN cadence, and the host driver's wait is the only thing
+still ordering it. Today this holds by construction: `docker-compose.yml`
+declares one `worker-swarm` with no `deploy.replicas`, and no `--scale` appears
+anywhere in the repo. It is stated here as a requirement rather than left as an
+accident of the compose file. Scaling the swarm lane requires making the
+judge/publish ordering independent of worker count first.
 
 **With the mode `off`, the scheduled judging is a SKIP, not a degradation.**
 `judgeSessionAdmin` answers `{ ok:false, error:"judge_disabled" }`, and that is
@@ -1254,6 +1276,41 @@ error into a truthy `{ skipped: "judge_disabled" }`, which the loop records as a
 single clean `succeeded` run naming the reason. `off` is an operator's answer, not
 a transient blip a retry can fix. The HTTP path keeps its 409: there a caller
 asked for a judging and must be told it cannot have one.
+
+**And so is every other benign terminal** (issue #806). #767 translated exactly
+one error; measured against a real Postgres driving the real claim loop, each of
+the others wrote FIVE `degraded` runs before `max_attempts` settled the job.
+`terminal_state:cancelled` needs no race at all — `cancelSessionAdmin` is a bare
+`guardedTransition` and nothing dequeues a session's remaining lifecycle jobs, so
+cancelling a session during a soak reliably produced five red rows for a control
+working as designed. The seam now translates `terminal_state:*` and
+`illegal_transition:*->judged` for the judge, and `terminal_state:*` plus
+`illegal_transition:judged->aggregated` for the rollup. The test is **"can a
+retry change the answer"**, not "is it an error": a session that has not yet
+been aggregated MIGHT become aggregatable, which is why the rollup's list names
+only `judged`. `isDegradedResult()` itself is untouched — the translation lives
+at the seam that knows nobody asked.
+
+**Flipping the mode off `off` returns the residual hazards, and only those**
+(issue #806). `POST /api/swarm/admin/judge` answers with a `warnings` array,
+audited alongside the change, naming what is STILL true once the judge is on:
+that ordering assumes exactly one `swarm`-lane worker, and — in `enforce` only —
+that an applied opinion is not permanent, because the sanctioned
+`judged -> window_closed -> aggregated` re-run discards it. Both are design
+trade-offs rather than defects, and the list is deliberately short: everything
+else #806 found is fixed, and a warning that lists fixed problems trains an
+operator to skip warnings. A later change that closes one of the two deletes the
+line rather than leaving it standing.
+
+**The driver's enqueue is deduplicated, and re-judging is explicit** (issue
+#806). `POST /api/swarm/admin/enqueue-job` now inserts with the same
+`swarm:<session-id>:<action>` key `createSessionAdmin` uses, answering a
+suppressed insert with the job that already exists (`deduped: true`) rather than
+with `undefined`. Two `judge` enqueues for one session — what a driver restart
+that re-adopts an in-flight session produces — therefore leave one job and one
+judgement row; the advisory lock serializes concurrent judgings but does not
+deduplicate them, and `judged -> judged` is idempotent success. Manual
+re-judging is `force: true`, which enqueues with no key.
 
 **The soak has a read path** (issue #767, folded from #768).
 `GET /api/swarm/admin/sessions/:id/judgements` returns every judge run for one
@@ -1284,9 +1341,44 @@ judge's transaction, under its advisory lock, holding the session row `FOR
 UPDATE`. Its admitted set `{aggregated, judged}` is a strict SUBSET of
 `OPINION_WRITABLE_STATES`, so a session that published mid-flight is refused by
 the GATE; the refusal throws `JudgeRollback`, the transition does not survive,
-no judgement row is inserted, and the soak records nothing. Left there, `applied`
-would restate `mode` for every producible row. It does not, because it is READ
-BACK rather than counted: see below.
+no judgement row is inserted, and the soak records nothing.
+
+**`applied` IS READ BACK, NOT COUNTED** (issue #806). Left as a row count,
+`applied` restated `mode` for every producible row — the UPDATE's `WHERE` clause
+repeats a state test the gate above already made unfailable, so
+`applied ≡ mode === 'enforce'`, `applied_skipped_reason` was never non-null, and
+the admin panel's `"recorded, NOT applied (…)"` branch was unreachable. It is
+now established the way the read path establishes it: after the UPDATE,
+`applyOpinion()` SELECTs `swarm_recommendation->'judge'` straight back inside the
+same transaction and compares its `prompt_hash`/`inputs_digest` against this
+outcome's. `applied = true` therefore means "the session row carries THIS
+opinion", which is what the panel has always claimed it means. One definition
+(`sessionJudgeFingerprint()`) serves both the writer and the read path, so the
+two cannot drift.
+
+**`inForce` reconciles against the session, and reports SUPERSEDED** (issue
+#806). `latestJudgement()` still decides which ROW is newest, but newest-row is
+not "what the session carries": the append-only record and
+`swarm_sessions.swarm_recommendation` are two stores, and the sanctioned
+`judged -> window_closed -> aggregated` re-run rewrites the second without
+touching the first — `domain.aggregateSession` replaces the recommendation
+wholesale, taking the judge's `rationale`, `disagreements`, `release_safety` and
+fingerprint with it. `GET …/judgements` therefore reads the session's own
+fingerprint once and returns it as `sessionJudge`, and stamps every row with
+`carriedBySession` plus a `supersededReason`
+(`recommendation_overwritten` | `session_carries_a_different_opinion`). The panel
+renders "applied, then SUPERSEDED — the session no longer carries it" instead of
+"applied to the session".
+
+**`swarm.aggregate` is state-guarded like every other transition** (issue #806).
+`domain.aggregateSession` is the rollup and has no state opinion; it used to be
+reachable straight from the `swarm.aggregate` handler and from the admin
+dispatcher's `aggregate` action, so a re-delivered job overwrote a judged or
+published session's prose from ANY state, outside the judge's advisory lock.
+Both now go through `aggregateSessionAdmin`, i.e. `guardedTransition`, which
+refuses `judged -> aggregated` and anything out of a terminal state. The
+deliberate two-step re-aggregation is unchanged and still drops the judge's
+prose — that loss is by design, and it is the one the read path reports.
 `applied_skipped_reason` is NOT a `fallback_reason`: the opinion is intact and
 was formed from the model, it simply arrived after the door closed.
 
@@ -3886,7 +3978,11 @@ Acceptance:
   window-close timestamp, publish timestamp, and reason.
 - Times are ISO 8601 instants. Validation is
   `briefOpensAt < windowClosesAt < publishAt` and session date equals the UTC date
-  of `briefOpensAt`.
+  of `briefOpensAt`. Ordering alone is not enough: each gap must also be at least
+  `MIN_SESSION_STEP_MS` (3s, issue #806), because the lifecycle needs three
+  distinct instants between `windowClosesAt` and `publishAt` to order aggregate,
+  judge and publish at all, and strict `<` on millisecond timestamps admits a
+  one-millisecond window that can only collapse them onto each other.
 - `(date, subject_id)` remains unique.
 - Creation inserts the session in `scheduled`, snapshots all currently active
   members into `swarm_session_members`, and enqueues five one-off jobs:
