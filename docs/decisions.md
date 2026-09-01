@@ -3137,3 +3137,53 @@ a `--static-port` boot whose environment does not export
 `.env.example` ships the value (`0`). This is the intended trade: a one-time,
 loud, self-describing boot failure in exchange for never again running a third
 cadence that cannot judge.
+
+### Amendment (issue #817) — the soak's one live surface reports the judging
+
+#767 gave the soak a read path and #806 made it stop reporting success it could
+not verify. Both are surfaces an operator goes and looks at. The PROGRESS STREAM
+is the one they are already watching while a session runs, and it said nothing
+about the judge at all: `runJudgeStep`'s return was discarded at runSession's
+call site, so the stream went `aggregated -> published` whether the soak had
+recorded a judgement or judged nothing. Three different sessions rendered
+identically — the shipped `off`, a `shadow` judgement recorded and deliberately
+withheld, and a judging that never landed — which is the same failure this
+decision has now hit three times: a soak nobody can read.
+
+`runSession` emits `judged` between `aggregated` and `published`.
+
+**The mode rides on the payload, not in the state name.** `SessionEvent`'s
+session variant carries an optional `judgeMode`, set only on this event.
+`shadow` and `enforce` are different facts about the same session — recorded and
+withheld versus applied — and that is exactly the distinction the soak exists to
+observe. Rejected: encoding it into `state` (`"judged:shadow"`), which would
+make the state string something no other consumer of the stream can match on.
+
+**`off` emits nothing, on purpose.** Otherwise the stream still could not tell
+"not judged" from "judged and not applied", which is the whole point of the
+event.
+
+**The event is keyed on the RECORD, not on the wait's opinion.** The obvious
+condition is the wait's own success. It is wrong: with exactly one `swarm`-lane
+worker (a requirement `docs/architecture.md` now states) `swarm.publish` is
+enqueued only after this wait returns and cannot be claimed while the judge
+holds the lane, so a judging that outruns the 120s ceiling still lands. Keying
+the event on the wait would have reproduced ON THE STREAM the same wrong claim
+#806 removed from the expiry LOG. `judgedProgress()` fires on
+`judged || recorded > 0`, reusing the judgement count `runJudgeStep` already
+reads on that path, and the expiry log stops asserting "the session did not
+reach 'judged' in time" — a claim about the judge's speed it never checked — in
+favour of what the driver observed: its own wait expired, and whether the record
+shows a judging. The log and the stream now say the same thing.
+
+**An unreadable record is not a judging.** `null` from `countJudgements()` means
+"could not read", which is not `0` and is certainly not evidence. No event.
+
+**Why the emitter became a named export.** `runSession` drives docker, the job
+queue and live inference and cannot be executed in a unit test, so its inline
+emitter closure moved to `sessionEmitter()` at module scope — behaviour
+unchanged. The events are then graded by EXECUTING the real emitter, the real
+`runJudgeStep` over injected effects and the real `judgedProgress`, with the
+ORDER pinned separately by source-text graders over `runSession` itself, each
+with a red control. The alternative — asserting that a judgement row exists —
+would have proved nothing about what a viewer sees, which is the entire defect.
