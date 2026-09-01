@@ -354,9 +354,13 @@ jobs:
           # robotmoney.env=ci + robotmoney.env.hash labels from the helper, which
           # is the channel tooling should select on.
           SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
-          # Swarm takes are always live-authored through opencode. A missing
-          # credential, CLI, or model response fails this required gate loudly;
-          # there is no deterministic memo fallback.
+          # Swarm takes are always live-authored through opencode. Ordinary PRs
+          # use the registry's keyless `free` family, so this required gate does
+          # not depend on the paid Zen workspace that the optional onboarding
+          # admission measures. The paid model (and its credential) is reserved
+          # for the explicit real-eval paths below. A missing CLI or model
+          # response still fails this required gate loudly; there is no
+          # deterministic memo fallback.
           #
           # Every OTHER external dependency here IS live and keyless: public Base
           # mainnet JSON-RPC (vault-economics eth_call reads), and the keyless
@@ -368,27 +372,29 @@ jobs:
           # than the retired hermetic boot was — an accepted, deliberate
           # consequence of issue #147/#163, not a bug in this workflow.
           #
-          # Stage 7 (§11 R8) + issue #289: the onboarding eval is OFF by default
-          # on pull requests and opt-in per PR. ONBOARDING_REAL_EVAL below
+          # Stage 7 (§11 R8) + issue #289: the paid onboarding eval is OFF by
+          # default on pull requests and opt-in per PR. ONBOARDING_REAL_EVAL below
           # resolves to "1" for exactly three cases — (1) a push to main, (2) a
           # `pull_request` event whose PR carries the `real-eval` label, (3) a
           # `workflow_dispatch` run started with real_eval=true — and to the
-          # empty string otherwise, so an ordinary PR run spends no model call.
+          # empty string otherwise, so an ordinary PR run spends no paid model
+          # call (it still live-authors the swarm session with `free`).
           # Add the `real-eval` label to a PR to opt it in; remove it to opt out
           # (full rationale in this file's header, "OPTING ONE PR IN"). The
           # nightly `schedule` mirror of THIS workflow (04:37 UTC — issue #373
           # retired swarm-opencode-nightly.yml, which used to hold that
           # slot) owns the trend measurement, one admission a night, recorded to
           # the job summary and an artifact. smoke-main.ts reads ONBOARDING_REAL_EVAL ===
-          # "1"; empty is simply "off". When it IS on, it runs the funded
-          # default model (D22 as amended). OPENCODE_API_KEY below is injected
-          # ONLY into the short-lived member-agent container
+          # "1"; empty is simply "off". When it IS on, it runs the configured
+          # paid default model (D22 as amended). The same predicate injects
+          # OPENCODE_API_KEY below; otherwise the keyless model receives none.
+          # That credential is injected ONLY into the short-lived member-agent container
           # scripts/lib/onboarding-eval.ts launches (never into the api/worker
           # services), and only when the "Configure onboarding real-inference
           # eval" step resolved one — so a labelled FORK PR still gets no key
-          # and a loud failure rather than a silent degrade. AGENT_MODEL is left
-          # unset so the repo default applies; set it to a family name (e.g.
-          # `kimi`) to switch which agent this gate measures.
+          # and a loud failure rather than a silent degrade. Paid runs honour an
+          # explicit AGENT_MODEL repository variable; ordinary PRs are pinned to
+          # the keyless family instead.
           #
           # This expression is duplicated as REAL_EVAL_REQUESTED on the
           # "Configure onboarding real-inference eval" step above so the job
@@ -396,11 +402,11 @@ jobs:
           # byte-identical, which
           # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts asserts.
           ONBOARDING_REAL_EVAL: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
-          # The swarm session always requires live authoring. On an
-          # untrusted fork GitHub supplies an empty secret and the session fails
-          # loudly instead of fabricating a template take.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          # The swarm session always requires live authoring. An ordinary PR
+          # uses the credential-free model; an opted-in fork receives no secret
+          # and therefore fails loudly rather than fabricating a template take.
+          OPENCODE_API_KEY: ${{ (((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && secrets.OPENCODE_API_KEY) || '' }}
+          AGENT_MODEL: ${{ (((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && (vars.AGENT_MODEL || 'deepseek')) || 'free' }}
         # 40 min for the pre-existing checks + headroom for the onboarding eval
         # on the runs that spend one (push to main, a `real-eval`-labelled PR, a
         # dispatch with real_eval=true — issue #289; an ordinary PR run stops
