@@ -426,33 +426,108 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     expect(r.status).toBe("PASS");
   });
 
+  // ── Installing a guard is not removing one ────────────────────────────────
+  //
+  // 0032, 0040 and 0042 all install idempotently with
+  // `DROP TRIGGER IF EXISTS x; CREATE TRIGGER x …`, and 0042 opens with
+  // `CREATE OR REPLACE FUNCTION rm_consensus_receipt_immutable()` to define its
+  // OWN new guard. Reading either as tampering would block the release for
+  // ADDING protection. Both exemptions are narrow and both are asserted against
+  // their near-miss, so neither can quietly swallow a real removal.
+
+  test("GREEN: DROP TRIGGER followed by CREATE TRIGGER in the SAME migration is an install", async () => {
+    const r = await check({
+      file: "9026_install_idiom.sql",
+      sql: [
+        "DROP TRIGGER IF EXISTS swarm_consensus_receipts_immutable ON swarm_consensus_receipts;",
+        "CREATE TRIGGER swarm_consensus_receipts_immutable",
+        "  BEFORE UPDATE ON swarm_consensus_receipts",
+        "  FOR EACH STATEMENT EXECUTE FUNCTION rm_consensus_receipt_immutable();",
+      ].join("\n"),
+    });
+    expect(r.status).toBe("PASS");
+    // Seen and reported, not silently ignored.
+    expect(r.detail.join("\n")).toContain("dropped and re-created by the SAME migration");
+  });
+
+  test("RED: the near-miss — DROP TRIGGER with NO re-creation still fails", async () => {
+    const r = await check({
+      file: "9027_drop_without_recreate.sql",
+      sql: "DROP TRIGGER IF EXISTS swarm_consensus_receipts_immutable ON swarm_consensus_receipts;",
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("DROP TRIGGER");
+  });
+
+  test("RED: a re-creation on a DIFFERENT table does not excuse the drop", async () => {
+    const r = await check({
+      file: "9028_recreate_elsewhere.sql",
+      sql: [
+        "DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members;",
+        "CREATE TRIGGER swarm_briefs_append_only BEFORE DELETE ON swarm_briefs",
+        "  FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard();",
+      ].join("\n"),
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("swarm_members.swarm_members_append_only");
+  });
+
+  test("GREEN: CREATE OR REPLACE FUNCTION defining a NEW guard is protection being added", async () => {
+    // 0042's real opening line. The function does not exist on the database and
+    // no earlier migration defines it, so this defines a guard rather than
+    // swapping a live one's body.
+    const r = await check({
+      file: "9029_define_new_guard_fn.sql",
+      sql: "CREATE OR REPLACE FUNCTION rm_brand_new_thing_immutable() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN RAISE EXCEPTION 'no'; END; $fn$;",
+    });
+    expect(r.status).toBe("PASS");
+  });
+
+  test("RED: the near-miss — CREATE OR REPLACE of a guard function that ALREADY exists fails", async () => {
+    // `rm_append_only_guard()` is on the database (0032), so replacing its body
+    // swaps a live guard out from under every trigger pointing at it.
+    const r = await check({
+      file: "9030_replace_live_guard_fn.sql",
+      sql: "CREATE OR REPLACE FUNCTION rm_append_only_guard() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN RETURN OLD; END; $fn$;",
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("GUARD FUNCTION rm_append_only_guard");
+  });
+
+  test("RED: defining a guard function then REPLACING it later in the same release fails", async () => {
+    const r = await check(
+      {
+        file: "9031_defines.sql",
+        sql: "CREATE FUNCTION rm_late_defined_guard() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN RAISE EXCEPTION 'no'; END; $fn$;",
+      },
+      {
+        file: "9032_replaces.sql",
+        sql: "CREATE OR REPLACE FUNCTION rm_late_defined_guard() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN RETURN OLD; END; $fn$;",
+      },
+    );
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("9032_replaces.sql: GUARD FUNCTION rm_late_defined_guard");
+  });
+
+  test("RED: DROP FUNCTION of a guard always fails — you cannot drop what was never there", async () => {
+    const r = await check({
+      file: "9033_drop_guard_fn.sql",
+      sql: "DROP FUNCTION IF EXISTS rm_consensus_receipt_immutable();",
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("GUARD FUNCTION");
+  });
+
   // ── And the real thing ────────────────────────────────────────────────────
 
-  test("the REAL v0.3.0 migration set passes, and the scan is visibly non-vacuous", async () => {
-    const checker = createChecker("");
-    await checkAppendOnlySafety(db, checker, GUARD_APPLIED);
-    const r = checker.results.find((x) => x.name === "append-only-safety")!;
-    expect(r.status).toBe("PASS");
-    const detail = r.detail.join("\n");
-    // 0036 deletes from wallet_backfill_state; 0037 deletes from both sample
-    // tables. The scanner FINDS all three — that is what makes its PASS mean
-    // something — and each lands in the bucket that is TRUE of it.
-    const unguardedLine = r.detail.find((l) => l.includes("no guard covers")) ?? "";
-    expect(unguardedLine).toContain("wallet_backfill_state");
-    // The two sample tables are guarded by 0038, LATER in this same release, so
-    // they may never appear in the unguarded bucket — that string was the
-    // operator-facing lie this pass exists to remove.
-    expect(unguardedLine).not.toContain("wallet_balance_samples");
-    expect(unguardedLine).not.toContain("wallet_sleeve_samples");
-    expect(detail).toContain("run BEFORE this release installs the guard");
-    expect(detail).toContain("0037_aum_repairable_quarantine.sql: DELETE wallet_balance_samples");
-    expect(detail).toContain("0037_aum_repairable_quarantine.sql: DELETE wallet_sleeve_samples");
-    expect(detail).toContain("guarded from 0038_wallet_aum_snapshot_foundation.sql");
-    // And the two false positives that used to block the release are reported
-    // as what they are: locked, not written.
-    expect(detail).toContain("swarm_members");
-    expect(detail).toContain("swarm_sessions");
-  });
+  // NOTE. The REAL migration set is graded in the end-to-end block below, not
+  // here. It has to be: this describe runs against the suite's database, which
+  // is FULLY MIGRATED — 0042 is applied, so `rm_consensus_receipt_immutable()`
+  // already exists and 0042's own `CREATE OR REPLACE FUNCTION` reads as
+  // replacing a live guard. That is the correct answer to the question asked,
+  // and the wrong question: a preflight grades a database that has NOT had this
+  // release applied, and one that had would fail `schema-migrations` first. The
+  // v0.2.2 baseline below is the only honest premise for the real set.
 
   test("the guard-installation map derived from the REAL migrations is exact", () => {
     // The ordering above is only trustworthy if this map is. Pinned against the
@@ -470,6 +545,11 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
         "wallet_sleeve_samples",
       ],
       "0040_swarm_judgements_append_only.sql": ["swarm_session_judgements"],
+      // 0042 installs its guard pair statically (`CREATE TRIGGER
+      // swarm_consensus_receipts_immutable … ON swarm_consensus_receipts`) AND
+      // names the table in a DO block's `protected text[]` — both branches see
+      // it, and the set dedupes to one entry.
+      "0042_swarm_consensus_receipts.sql": ["swarm_consensus_receipts"],
     };
     const actual: Record<string, string[]> = {};
     for (const file of THIS_RELEASE_MIGRATIONS) {
@@ -599,6 +679,29 @@ describe("v0.3.0 preflight, end to end on a v0.2.2 baseline database", () => {
       name: "append-only-safety",
       status: "PASS",
     });
+
+    // …and the PASS is non-vacuous. This release DOES issue row removals — 0036
+    // on wallet_backfill_state, 0037 on both sample tables — and each lands in
+    // the bucket that is TRUE of it. A PASS listing nothing would mean the scan
+    // is not reading the files.
+    const detail = appendOnly.detail.join("\n");
+    const unguardedLine = appendOnly.detail.find((l) => l.includes("no guard covers")) ?? "";
+    expect(unguardedLine).toContain("wallet_backfill_state");
+    // 0038 guards both sample tables LATER in this same release, so neither may
+    // ever appear in the unguarded bucket — that string was the operator-facing
+    // lie this check exists to remove.
+    expect(unguardedLine).not.toContain("wallet_balance_samples");
+    expect(unguardedLine).not.toContain("wallet_sleeve_samples");
+    expect(detail).toContain("run BEFORE this release installs the guard");
+    expect(detail).toContain("0037_aum_repairable_quarantine.sql: DELETE wallet_balance_samples");
+    expect(detail).toContain("0037_aum_repairable_quarantine.sql: DELETE wallet_sleeve_samples");
+    expect(detail).toContain("guarded from 0038_wallet_aum_snapshot_foundation.sql");
+    // 0042's idempotent install idiom is seen and reported, not silently ignored.
+    expect(detail).toContain("dropped and re-created by the SAME migration");
+    // And the two false positives that used to BLOCK the release are reported as
+    // what they are: locked, not written.
+    expect(detail).toContain("swarm_members");
+    expect(detail).toContain("swarm_sessions");
 
     // `schema-migrations` is legitimately WARN, not PASS: this release adds a
     // second `0032_`, which sorts before the newest already-applied file. WARN

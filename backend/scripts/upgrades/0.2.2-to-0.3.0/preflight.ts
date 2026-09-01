@@ -265,8 +265,15 @@ async function checkPendingMigrations(db: Db, { record }: Checker): Promise<Set<
 //      derived map is pinned against the real migration set by
 //      tests/preflight-0-3-0-append-only-safety.test.ts, so a new shape shows up
 //      as a failing test rather than as a quiet gap.
-// Apart from (1) and (7), every limit above errs towards flagging a release that
-// is fine rather than passing one that is not.
+//   8. TWO NARROW EXEMPTIONS, both for installing protection rather than
+//      removing it: a guard trigger dropped and re-created by the SAME
+//      migration on the same table, and a `CREATE OR REPLACE FUNCTION` naming a
+//      guard function that does not exist yet. Neither compares definitions, so
+//      a migration that reinstalled a WEAKER guard reads like one that
+//      reinstalled the same guard. Both are REPORTED in the PASS detail rather
+//      than hidden, and both are asserted against their near-miss.
+// Apart from (1), (7) and (8), every limit above errs towards flagging a release
+// that is fine rather than passing one that is not.
 // ───────────────────────────────────────────────────────────────────────────
 
 /** One statement in a migration that removes rows, or changes the guard's
@@ -450,6 +457,12 @@ export function scanMigrationSql(
   file: string,
   sql: string,
   protectedTables: ReadonlySet<string>,
+  /** Guard functions that ALREADY EXIST when this migration runs. A
+   *  `CREATE OR REPLACE FUNCTION` naming one of these swaps a live guard's body;
+   *  naming anything else defines a new guard, which is protection being added.
+   *  Empty means "assume any guard-shaped name is pre-existing", which is the
+   *  conservative default for a caller grading one file in isolation. */
+  existingGuardFunctions?: ReadonlySet<string>,
 ): DestructiveFinding[] {
   const findings: DestructiveFinding[] = [];
   const push = (kind: DestructiveFinding["kind"], target: string, blocking: boolean): void => {
@@ -462,6 +475,17 @@ export function scanMigrationSql(
   // rules cover each other's gap.
   const guardChange = (table: string, trigger: string): boolean =>
     isGuardTriggerName(trigger) || protectedTables.has(table);
+
+  // `DROP TRIGGER IF EXISTS x; CREATE TRIGGER x …` is how 0032, 0040 and 0042
+  // all INSTALL a guard idempotently. Dropping a guard the same migration
+  // re-creates on the same table is installation, not removal, so it is
+  // recorded and reported but does not block.
+  //
+  // The limit, stated because it is real: this does not compare the dropped
+  // trigger's definition with the re-created one, so a migration that reinstalls
+  // a WEAKER guard reads the same as one that reinstalls the identical guard.
+  // Narrowed to DROP on purpose — a DISABLE is never part of an install.
+  const reinstalls = guardedTablesInstalledBy(sql);
 
   for (const raw of stripSqlNoise(sql).split(";")) {
     const stmt = raw.replace(/\s+/g, " ").trim();
@@ -514,7 +538,7 @@ export function scanMigrationSql(
       head,
     );
     if (dropTrigger && guardChange(dropTrigger[2]!, dropTrigger[1]!)) {
-      push("DROP TRIGGER", `${dropTrigger[2]!}.${dropTrigger[1]!}`, true);
+      push("DROP TRIGGER", `${dropTrigger[2]!}.${dropTrigger[1]!}`, !reinstalls.has(dropTrigger[2]!));
     }
     const replaceTrigger = /^CREATE\s+OR\s+REPLACE\s+TRIGGER\s+"?([A-Za-z_][\w$]*)"?[^]*?\bON\s+(?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?/i.exec(
       head,
@@ -525,9 +549,16 @@ export function scanMigrationSql(
     // Replacing or dropping the FUNCTION is the same capability change one
     // level down: a guard trigger is only as good as the function it executes,
     // and swapping that body silently defangs every trigger pointing at it.
-    const guardFn = /^(?:CREATE\s+OR\s+REPLACE|DROP)\s+FUNCTION\b([^]*)$/i.exec(head);
-    const fnName = guardFn ? GUARD_FUNCTION.exec(guardFn[1]!) : null;
-    if (fnName) push("GUARD FUNCTION", fnName[0], true);
+    const guardFn = /^(CREATE\s+OR\s+REPLACE|DROP)\s+FUNCTION\b([^]*)$/i.exec(head);
+    const fnName = guardFn ? GUARD_FUNCTION.exec(guardFn[2]!) : null;
+    if (fnName) {
+      // DROP always counts — you cannot drop a guard that was never there.
+      // CREATE OR REPLACE counts only if the function already exists; otherwise
+      // this migration is DEFINING a guard, not defanging one.
+      const isDrop = /^DROP/i.test(guardFn![1]!);
+      const known = existingGuardFunctions?.has(fnName[0].toLowerCase()) ?? true;
+      if (isDrop || known) push("GUARD FUNCTION", fnName[0], true);
+    }
   }
   return findings;
 }
@@ -603,6 +634,23 @@ export function guardedTablesInstalledBy(sql: string): Set<string> {
   return out;
 }
 
+/**
+ * The guard FUNCTIONS a migration defines.
+ *
+ * Needed for the same reason the table map is: `CREATE OR REPLACE FUNCTION` is
+ * tampering only when the function ALREADY EXISTS. 0042 opens with
+ * `CREATE OR REPLACE FUNCTION rm_consensus_receipt_immutable()` to define its
+ * OWN new guard — ordinary defensive DDL — and grading that as "this migration
+ * replaces a guard" would block the release for installing protection.
+ */
+export function guardFunctionsDefinedBy(sql: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of sql.matchAll(/\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?/gi)) {
+    if (GUARD_FUNCTION.test(m[1]!)) out.add(m[1]!.toLowerCase());
+  }
+  return out;
+}
+
 /** Reads this release's migration files off disk, in runner order. */
 async function loadReleaseMigrations(): Promise<MigrationSql[]> {
   return Promise.all(
@@ -653,6 +701,19 @@ export async function checkAppendOnlySafety(
      GROUP BY c.relname
   `) as unknown as { table_name: string }[];
   const live = new Set(rows.map((r) => r.table_name));
+
+  // The guard FUNCTIONS already on the database, read the same way as the
+  // triggers. A migration that CREATE OR REPLACEs one of these swaps a live
+  // guard's body; one that names a function nothing has defined yet is
+  // installing a new guard, which is the opposite of tampering.
+  const fnRows = (await db`
+    SELECT p.proname AS name
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname LIKE 'rm\\_%'
+  `) as unknown as { name: string }[];
+  const liveGuardFunctions = new Set(fnRows.map((r) => r.name.toLowerCase()).filter((n) => GUARD_FUNCTION.test(n)));
 
   if (live.size === 0) {
     record(
@@ -722,7 +783,22 @@ export async function checkAppendOnlySafety(
   // the report can never call a table "unguarded" when it ends up guarded.
   const protectedAtEnd = new Set<string>([...live, ...declared]);
 
-  const findings = migrations.flatMap((m, i) => scanMigrationSql(m.file, m.sql, protectedFor(i)));
+  // Guard functions defined by an EARLIER migration in this release count as
+  // existing by the time a later one runs — the same ordering rule as the
+  // tables above.
+  const definedAt = new Map<string, number>();
+  migrations.forEach((m, i) => {
+    for (const fn of guardFunctionsDefinedBy(m.sql)) if (!definedAt.has(fn)) definedAt.set(fn, i);
+  });
+  const guardFunctionsFor = (i: number): Set<string> => {
+    const set = new Set<string>(liveGuardFunctions);
+    for (const [fn, at] of definedAt) if (at < i) set.add(fn);
+    return set;
+  };
+
+  const findings = migrations.flatMap((m, i) =>
+    scanMigrationSql(m.file, m.sql, protectedFor(i), guardFunctionsFor(i)),
+  );
   const blocking = findings.filter((f) => f.blocking);
   if (blocking.length > 0) {
     record(
@@ -778,6 +854,12 @@ export async function checkAppendOnlySafety(
       ? `${lockedOnly.length} protected table(s) are LOCKED or ALTERED but not written: ${lockedOnly.join(", ")} — rm_append_only_guard() fires BEFORE DELETE OR TRUNCATE only`
       : "no protected table is touched at all",
   );
+  const reinstalled = findings.filter((f) => !f.blocking && f.kind === "DROP TRIGGER");
+  if (reinstalled.length > 0) {
+    detail.push(
+      `${reinstalled.length} guard trigger(s) dropped and re-created by the SAME migration (the idempotent install idiom), not treated as removal: ${reinstalled.map((f) => f.target).join(", ")}`,
+    );
+  }
   detail.push(
     "not seen by this check: removals built with dynamic SQL, or reached through a view/rule/cascade — see §2.2 for the read-through",
   );

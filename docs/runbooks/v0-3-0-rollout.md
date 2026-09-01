@@ -379,16 +379,28 @@ writes:
   adding a constraint removes no row — so again a lock, briefly, and never a
   guard trip.
 
-Both appear in `MIGRATION_TOUCHED_TABLES`, because that constant means "creates,
-alters, locks, or writes" — it is the roster of the release's SCOPE, and it stays
-complete. **`append-only-safety` does not read it to decide risk.** The check
+All of them appear in `MIGRATION_TOUCHED_TABLES`, because that constant means
+"creates, alters, locks, or writes" — it is the roster of the release's SCOPE,
+and it stays complete. **`append-only-safety` does not read it to decide risk.** The check
 scans each migration's own SQL for the statements the guard actually refuses —
 `DELETE FROM`, `TRUNCATE`, `DROP TABLE` against a protected table — plus any
 statement that disables, drops or replaces an immutability guard, which is the
 one destructive change the row trigger structurally cannot see happen to itself.
-A lock is therefore not a collision, and **`append-only-safety` PASSes for 0035
-and 0039** (issue #815). It names both tables in its PASS detail, as locked and
-not written, so the distinction stays visible rather than silent.
+A lock is therefore not a collision, and **`append-only-safety` PASSes for 0035,
+0039 and 0042** (issue #815). It names those tables in its PASS detail, as locked
+and not written, so the distinction stays visible rather than silent.
+
+**Installing a guard is not removing one.** 0032, 0040 and 0042 all install
+idempotently with `DROP TRIGGER IF EXISTS x; CREATE TRIGGER x …`, and 0042 opens
+with `CREATE OR REPLACE FUNCTION rm_consensus_receipt_immutable()` to define its
+own new guard. Reading either as tampering would block the release for *adding*
+protection, so the check exempts exactly two narrow cases: a guard trigger
+dropped and re-created by the same migration on the same table, and a
+`CREATE OR REPLACE FUNCTION` naming a guard function that does not exist yet. It
+reports both rather than hiding them. The limit is that it does not compare the
+dropped trigger's definition with the re-created one, so a migration that
+reinstalled a *weaker* guard would read like one that reinstalled the same guard
+— §2.2's table is where you check that.
 
 **"Protected" is not one set, and not only the append-only roster.** Three
 kinds of guard are in play, and the check reads all three: `rm_append_only_guard()`
@@ -413,7 +425,10 @@ every run, not assumed.
 >   that guards it afterwards. **These are correct only in this migration
 >   order.** If the set is reordered or extended, re-read this list against §2.2;
 > - *protected tables locked or altered but **not** written* — `swarm_members`,
->   `swarm_sessions` and the rest.
+>   `swarm_sessions`, `swarm_consensus_receipts` and the rest;
+> - *guard triggers dropped and re-created by the same migration* — 0042's
+>   immutability pair, the idempotent install idiom, reported so you can see the
+>   drops were seen.
 >
 > A PASS that lists zero statements on a release that clearly deletes something
 > is a signal that the scan is not seeing the file, not a clean bill of health.
