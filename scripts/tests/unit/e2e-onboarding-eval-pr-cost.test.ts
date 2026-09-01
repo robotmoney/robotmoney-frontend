@@ -715,6 +715,20 @@ describe("the expression interpreter reproduces Actions semantics", () => {
 //    nightly the summary points at, both still exist.
 // ---------------------------------------------------------------------------
 describe("the coverage that replaces the per-PR eval is really there", () => {
+  test("a failed smoke prominently classifies exhausted OpenCode credit", () => {
+    const smoke = stepContaining(e2eYml, "bun run scripts/smoke.ts", "e2e.yml");
+    expect(smoke).toContain('set -o pipefail');
+    expect(smoke).toContain('tee "$RUNNER_TEMP/e2e-smoke.log"');
+
+    const diagnosis = stepContaining(e2eYml, "E2E blocked by OpenCode billing credit", "e2e.yml");
+    expect(diagnosis).toContain("Diagnose OpenCode billing exhaustion");
+    expect(diagnosis).toContain("if: ${{ failure() }}");
+    expect(diagnosis).toContain('rg -Fq -- "cause=exhausted-credits" "${diagnostic_paths[@]}"');
+    expect(diagnosis).toContain('.agents/swarm-sessions/$SMOKE_PROJECT');
+    expect(diagnosis).toContain('.agents/onboarding-evals/$SMOKE_PROJECT');
+    expect(diagnosis).toContain("add balance to the configured OpenCode/Zen workspace");
+  });
+
   test("a configured key is not misreported as funded, and the external billing prerequisite is actionable", () => {
     // A GitHub secret expression can establish only presence, not Zen workspace
     // balance. Keep the production-parity gate loud, but make the summary tell

@@ -330,7 +330,12 @@ jobs:
       - name: Set up Docker builder
         uses: docker/setup-buildx-action@v3
       - name: Full-stack smoke (smoke readiness gate)
-        run: bun run scripts/smoke.ts
+        # Keep the complete transcript locally until the next step. `pipefail`
+        # preserves smoke's exit status through tee, so capturing evidence can
+        # never turn a failed readiness gate green.
+        run: |
+          set -o pipefail
+          bun run scripts/smoke.ts 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
         env:
           CI: "true"
           # Pin a deterministic, per-run compose project name (issue: smoke
@@ -415,6 +420,37 @@ jobs:
         # truncation from the eval to the job, which reports as an infra kill
         # rather than the honest `timed-out` outcome.
         timeout-minutes: 105
+      # The OpenCode client emits this typed marker only after Zen reports an
+      # exhausted balance. Surface it in the job summary, where an operator can
+      # distinguish an external billing prerequisite from an application/E2E
+      # regression without trawling the full smoke transcript. Inspect both the
+      # captured stdout and the run-scoped swarm/onboarding artifacts: ordinary
+      # PR smoke uses the former surface while opt-in onboarding emits the latter.
+      # This is strictly diagnostic: the smoke failure remains red and every
+      # other failure keeps its normal signal.
+      - name: Diagnose OpenCode billing exhaustion
+        if: ${{ failure() }}
+        env:
+          SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          diagnostic_paths=("$RUNNER_TEMP/e2e-smoke.log")
+          for path in \
+            ".agents/swarm-sessions/$SMOKE_PROJECT" \
+            ".agents/onboarding-evals/$SMOKE_PROJECT"; do
+            [ -d "$path" ] && diagnostic_paths+=("$path")
+          done
+          if rg -Fq -- "cause=exhausted-credits" "${diagnostic_paths[@]}"; then
+            {
+              echo "## E2E blocked by OpenCode billing credit"
+              echo
+              echo 'Zen/OpenCode reported `cause=exhausted-credits` in the smoke transcript.'
+              echo "This is an external billing prerequisite, not an application regression."
+              echo "**Action:** add balance to the configured OpenCode/Zen workspace, then re-run this job."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No typed OpenCode billing-exhaustion marker found in the failed smoke evidence."
+          fi
       # Stack-leak backstop (issue: smoke persistent volumes; hardened after e2e
       # run 30406428674). The smoke boot above tears its own stack down on both
       # success and failure. This always() step is the belt-and-suspenders case:
