@@ -1995,8 +1995,12 @@ export function registerStaticViews(Alpine) {
       if (!rec || this.isRollupRecommendation()) return "";
       return rec.rationale || "";
     },
-    // Structured, and correct on a rollup as much as on a typed recommendation:
-    // these are the positions the swarm is actually calling for.
+    // Legacy — present only on sessions published before #752 (D42,
+    // architecture.md §9.7). No session aggregated from now on carries an
+    // `actions` array; when present this is append-only history (two
+    // hardcoded USDC/rmUSDC rows derived from no member input) and the page
+    // labels it as pre-#752 output rather than swarm-derived. See
+    // session.html's `.sv__rec-actions` block.
     recommendationActions() {
       return this.session?.swarmRecommendation?.actions || [];
     },

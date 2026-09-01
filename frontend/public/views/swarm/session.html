@@ -303,6 +303,7 @@
               </template>
             </div>
             <div class="sv__rec-actions" x-show="recommendationActions().length">
+              <p class="sv__panel-sub sv__legacy-note">Pre-#752 legacy output — not swarm-derived (see D42 §9.7). Present only on sessions published before #752; no new session carries it.</p>
               <template x-for="a in recommendationActions()" :key="`${a.token}-${a.action}`">
                 <div class="sv__action-row">
                   <span x-text="a.token"></span>

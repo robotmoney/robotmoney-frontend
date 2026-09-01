@@ -3018,6 +3018,25 @@ two-take session into looking well supported.
   deleting them.** Rejected. They were derived from no member input; there is no
   configuration under which publishing them is correct.
 
+### Amendment (issue #770) — legacy `actions` are labeled, not rendered as current output
+
+#752 deleted the two hardcoded USDC/rmUSDC `position_actions` literals, so no
+session aggregated from now on carries an `actions` array. Already-published
+sessions still store that two-row array in
+`swarm_recommendation.actions`; that history is append-only and is not
+rewritten. The public session page
+(`frontend/public/views/swarm/session.html` +
+`frontend/public/assets/js/app/alpine/static-views.js:recommendationActions()`)
+previously rendered a legacy `actions` array indistinguishably from
+swarm-derived output, while this decision states "there is no configuration
+under which publishing them is correct". The page now labels any present
+`actions` array as **pre-#752 legacy output — not swarm-derived** (D42,
+`docs/architecture.md` §9.7), so a reader is told what they are looking at.
+The alternative — stop rendering the array — was also acceptable per #770;
+labeling was chosen to keep append-only history visible while making its
+provenance explicit. `contract/src/swarm.d.ts` marks `actions` as legacy in
+both the prose and the declaration. See `docs/architecture.md` §9.7.
+
 ### Amendment (issue #806) — the soak must not report success it cannot verify
 
 #767 made the shadow soak operable. Three independent gates on PR #797 then said
