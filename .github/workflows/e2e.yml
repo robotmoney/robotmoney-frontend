@@ -279,7 +279,7 @@ jobs:
       # summary — loudly — on every such run. When the eval IS on (push to main,
       # the nightly schedule, the `real-eval` label, or a dispatch that asked
       # for it) this step keeps its
-      # original job: resolve whether the funded key is reachable, and say so.
+      # original job: resolve whether the configured key is present, and say so.
       #
       # REAL_EVAL_REQUESTED below MUST stay textually identical to
       # ONBOARDING_REAL_EVAL on the "Full-stack smoke" step — one expression, two
@@ -296,9 +296,9 @@ jobs:
         run: |
           if [ "$REAL_EVAL_REQUESTED" = "1" ]; then
             if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_ZEN_KEY" = "true" ]; then
-              MSG="§11 R8 real-inference onboarding eval: RUNNING on the funded default model (trusted context, OPENCODE_API_KEY configured) as part of the Full-stack smoke step below. Requested by: push to main, the 'real-eval' pull-request label, or workflow_dispatch with real_eval=true — whichever triggered this run."
+              MSG="§11 R8 real-inference onboarding eval: RUNNING on the configured paid default model (trusted context, OPENCODE_API_KEY configured) as part of the Full-stack smoke step below. Credential presence does not attest provider balance: Zen must retain pay-as-you-go credit. A typed cause=exhausted-credits is an external billing prerequisite — top up that workspace, then re-run; do not substitute a fixture or disable this live gate. Requested by: push to main, the 'real-eval' pull-request label, or workflow_dispatch with real_eval=true — whichever triggered this run."
             else
-              MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is funded (D22 as amended), so the eval will fail loudly rather than silently degrade. Configure the OPENCODE_API_KEY secret, or set AGENT_MODEL=free to run keyless."
+              MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is paid, so the eval will fail loudly rather than silently degrade. Configure a Zen credential with pay-as-you-go credit, or set AGENT_MODEL=free to run keyless."
             fi
           elif [ "$IS_PULL_REQUEST" = "true" ]; then
             MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the exclusive runner time per-PR evals cost against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: THIS SAME WORKFLOW, on every push to main and on its nightly schedule mirror at 04:37 UTC (cron '37 4 * * *'), plus workflow_dispatch with real_eval=true. Issue #373 retired .github/workflows/swarm-opencode-nightly.yml, which used to hold that slot: each of those runs now spends exactly one real admission and writes an admission record to the job summary and an uploaded artifact, so the admission rate over time is read off run history — thirty nights is thirty samples. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."

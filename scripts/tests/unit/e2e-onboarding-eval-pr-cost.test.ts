@@ -715,6 +715,17 @@ describe("the expression interpreter reproduces Actions semantics", () => {
 //    nightly the summary points at, both still exist.
 // ---------------------------------------------------------------------------
 describe("the coverage that replaces the per-PR eval is really there", () => {
+  test("a configured key is not misreported as funded, and the external billing prerequisite is actionable", () => {
+    // A GitHub secret expression can establish only presence, not Zen workspace
+    // balance. Keep the production-parity gate loud, but make the summary tell
+    // an operator exactly what a typed CreditsError requires.
+    expect(e2eYml).toContain("Credential presence does not attest provider balance");
+    expect(e2eYml).toContain("cause=exhausted-credits");
+    expect(e2eYml).toContain("top up that workspace, then re-run");
+    expect(e2eYml).toContain("do not substitute a fixture or disable this live gate");
+    expect(e2eYml).not.toContain("RUNNING on the funded default model");
+  });
+
   // Issue #275 addendum: this step moved out of e2e.yml into its own
   // onboarding-eval-rails.yml workflow (it never needed the full LIVE smoke
   // boot e2e.yml exists for — its own minimal postgres+api stack was always

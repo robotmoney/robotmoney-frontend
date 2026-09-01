@@ -22,7 +22,7 @@
  * (`0033_swarm_member_uuid_ids.sql`), so preflight's `schema-migrations` check
  * reports it as out-of-order and returns WARN. See the runbook §6 for why that
  * warning is the correct output here and what makes it safe — in short, the
- * append-only guard is already installed by then, and none of the eleven
+ * append-only guard is already installed by then, and none of the twelve
  * REMOVES a row from a protected table. Three of them LOCK one (0035's foreign
  * key on `swarm_members`, 0039's constraint swap on `swarm_sessions`, 0042's
  * two foreign keys on `swarm_sessions` and `swarm_session_judgements`); the
@@ -42,6 +42,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0040_swarm_judgements_append_only.sql",
   "0041_swarm_judgement_soak_record.sql",
   "0042_swarm_consensus_receipts.sql",
+  "0043_swarm_member_judges.sql",
 ] as const;
 
 /**
@@ -118,6 +119,12 @@ export const NEW_COLUMNS = [
   { table: "swarm_session_judgements", column: "applied_skipped_reason" },
   { table: "swarm_session_judgements", column: "dropped_positions" },
   { table: "swarm_session_judgements", column: "dropped_disagreements" },
+  // 0043 graduates an existing member identity to a judge. `role` keeps that
+  // identity out of take rosters; the two judgement columns make every
+  // member-authored judgement attributable without inventing a second key.
+  { table: "swarm_members", column: "role" },
+  { table: "swarm_session_judgements", column: "judged_by" },
+  { table: "swarm_session_judgements", column: "judged_by_member_id" },
 ] as const;
 
 /** Every table this release creates, alters, locks, or writes: the roster of the
