@@ -51,6 +51,7 @@
           <dt>Handle</dt><dd x-text="member.handle || member.id" data-testid="member-handle"></dd>
           <dt>Name</dt><dd x-text="member.name"></dd>
           <dt>Status</dt><dd x-text="member.status"></dd>
+          <dt>Swarm role</dt><dd x-text="member.role"></dd>
           <dt>Application</dt><dd x-text="pendingApplication ? pendingApplication.status : '—'"></dd>
           <dt>Contact email</dt><dd x-text="member.contactEmail || '—'"></dd>
           <dt>Lens</dt><dd x-text="member.lens || '—'"></dd>
@@ -66,6 +67,8 @@
           <button type="button" class="adm-btn adm-btn--ghost" x-show="canDeactivate()" @click="openConfirm('deactivate')" data-testid="member-deactivate">Deactivate</button>
           <button type="button" class="adm-btn" x-show="canReactivate()" @click="openConfirm('reactivate')" data-testid="member-reactivate">Reactivate</button>
           <button type="button" class="adm-btn" x-show="canRotateKey()" @click="openConfirm('rotate-key')" data-testid="member-rotate-key">Rotate key</button>
+          <button type="button" class="adm-btn" x-show="canGrantJudge()" @click="openConfirm('grant-judge')" data-testid="member-grant-judge">Grant judge role</button>
+          <button type="button" class="adm-btn adm-btn--ghost" x-show="canRevokeJudge()" @click="openConfirm('revoke-judge')" data-testid="member-revoke-judge">Revoke judge role</button>
           <button type="button" class="adm-btn adm-btn--ghost" x-show="canReject()" @click="openConfirm('reject')" data-testid="member-reject">Reject</button>
         </div>
 
@@ -137,6 +140,7 @@
           <div class="adm-modal__panel">
             <h3>Confirm <span x-text="confirm?.action"></span> for <span x-text="member.name"></span></h3>
             <p class="adm-dim">This changes swarm membership state; existing recommendations and roster snapshots are never rewritten.</p>
+            <p class="adm-dim" x-show="confirm?.action === 'grant-judge'">A judge keeps this member's key and bearer token, but is excluded from takes and future rosters.</p>
             <label class="adm-field" x-show="confirm?.action === 'rotate-key'">
               <span>New public key (optional — omit to rotate the credential against the existing on-file key)</span>
               <input type="text" x-model="confirm.publicKey" class="adm-input" data-testid="member-action-public-key" />

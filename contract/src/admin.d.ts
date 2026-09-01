@@ -313,6 +313,7 @@ export interface AdminTopicListResponse {
 //      that one IS path-gated on `backend/**`.
 
 export type AdminMemberStatus = "applied" | "active" | "inactive";
+export type AdminMemberRole = "member" | "judge";
 export type ApplicationStatus = "pending" | "approved" | "rejected";
 
 /** Private admin member projection — backend toMemberAdmin()'s exact shape. */
@@ -322,6 +323,8 @@ export interface AdminMember {
   /** Public, administrator-editable URL segment (issue #593). */
   handle: string;
   status: AdminMemberStatus;
+  /** A judge retains this identity and credential but cannot submit takes. */
+  role: AdminMemberRole;
   version: number;
   name: string;
   tagline: string | null;

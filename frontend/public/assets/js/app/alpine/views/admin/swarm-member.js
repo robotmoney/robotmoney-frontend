@@ -39,7 +39,7 @@ import { adminAuthState, apiErrorText, fmtUtc, redactForDisplay } from "./shared
 //
 // If we want `reason` to mean something, the fix is to persist it (there is an
 // audit route at ROUTES.swarm.admin.audit), not to validate it harder here.
-const REASON_REQUIRED = new Set(["reject", "deactivate", "reactivate", "rotate-key"]);
+const REASON_REQUIRED = new Set(["reject", "deactivate", "reactivate", "rotate-key", "grant-judge", "revoke-judge"]);
 
 // ── Profile edit (issue #567) ───────────────────────────────────────────────
 // Every field on this form is nullable on the row, so "" means CLEAR and is
@@ -154,6 +154,8 @@ export function registerAdminSwarmMember(Alpine) {
     // with the application and is the thing under review; rotating it before a
     // decision would change what was reviewed, and rejection is terminal.
     canRotateKey() { return this.member?.status === "active" || this.member?.status === "inactive"; },
+    canGrantJudge() { return this.member?.status === "active" && this.member?.role === "member" && Boolean(ROUTES.swarm.admin.memberRole); },
+    canRevokeJudge() { return this.member?.status === "active" && this.member?.role === "judge" && Boolean(ROUTES.swarm.admin.memberRole); },
     canReject() { return this.member?.status === "applied" && !!this.pendingApplication; },
 
     // ── Profile edit ────────────────────────────────────────────────────────
@@ -294,6 +296,9 @@ export function registerAdminSwarmMember(Alpine) {
           route = path(ROUTES.swarm.admin.memberRotateKey, { id: this.memberId });
           body = {};
           if (publicKey.trim()) body.publicKey = publicKey.trim();
+        } else if (action === "grant-judge" || action === "revoke-judge") {
+          route = path(ROUTES.swarm.admin.memberRole, { id: this.memberId });
+          body = { expectedVersion: this.member.version, role: action === "grant-judge" ? "judge" : "member" };
         } else {
           throw new Error(`unknown member action: ${action}`);
         }
