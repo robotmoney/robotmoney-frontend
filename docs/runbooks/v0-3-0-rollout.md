@@ -397,11 +397,13 @@ own new guard. Reading either as tampering would block the release for *adding*
 protection, so the check exempts exactly two narrow cases, and it reports both
 rather than hiding them:
 
-- a guard trigger dropped by a migration that also contains a **static**
-  `CREATE [OR REPLACE] TRIGGER <guard-name> … ON <that same table>`. A
-  dynamically-built re-creation does not qualify — and does not need to, because
-  the matching drop in those migrations is built the same way and is invisible to
-  the scan;
+- a guard trigger dropped by a migration that also **contains** a **static**
+  `CREATE [OR REPLACE] TRIGGER <guard-name> … ON <that same table>`. *Contains*,
+  not *executes*: the check reads text and does not evaluate control flow, so a
+  correctly-named re-creation inside `IF false THEN … END IF` would exempt the
+  drop. A dynamically-built re-creation does not qualify — and does not need to,
+  because the matching drop in those migrations is built the same way and is
+  invisible to the scan;
 - a `CREATE OR REPLACE FUNCTION` naming a guard function that exists neither on
   the database nor in an earlier migration of this release.
 
@@ -435,9 +437,11 @@ every run, not assumed.
 >   order.** If the set is reordered or extended, re-read this list against §2.2;
 > - *protected tables locked or altered but **not** written* — `swarm_members`,
 >   `swarm_sessions`, `swarm_consensus_receipts` and the rest;
-> - *guard triggers dropped and re-created by the same migration* — 0042's
->   immutability pair, the idempotent install idiom, reported so you can see the
->   drops were seen.
+> - *guard triggers dropped where the same migration also contains a re-creation
+>   for that table* — 0042's immutability pair, the idempotent install idiom,
+>   reported so you can see the drops were seen. The line says "presence is what
+>   is checked, not execution" because that is what it means: it is not proof the
+>   trigger is back.
 >
 > A PASS that lists zero statements on a release that clearly deletes something
 > is a signal that the scan is not seeing the file, not a clean bill of health.

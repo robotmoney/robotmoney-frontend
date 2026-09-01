@@ -466,7 +466,7 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     });
     expect(r.status).toBe("PASS");
     // Seen and reported, not silently ignored.
-    expect(r.detail.join("\n")).toContain("dropped and re-created by the SAME migration");
+    expect(r.detail.join("\n")).toContain("also CONTAINS a re-creation for that table");
   });
 
   test("RED: the near-miss — DROP TRIGGER with NO re-creation still fails", async () => {
@@ -518,14 +518,20 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     expect(r.status).toBe("FAIL");
     expect(r.detail.join("\n")).toContain("DROP TRIGGER swarm_sessions.swarm_sessions_append_only");
     // And no line may claim it was put back.
-    expect(r.detail.join("\n")).not.toContain("dropped and re-created by the SAME migration");
+    expect(r.detail.join("\n")).not.toContain("also CONTAINS a re-creation for that table");
   });
 
-  test("GREEN: a DO block that merely names a table does not make the drop of ANOTHER table's guard safe either", async () => {
-    // The narrower half of the same defect: the harvest is per-table, so the
-    // exemption must be too.
+  test("GREEN: the static install idiom still passes after the exemption source was tightened", async () => {
+    // Named for what it does. It was previously called "a DO block that merely
+    // names a table does not make the drop of ANOTHER table's guard safe
+    // either" — a property this fixture never exercised, since it contains no DO
+    // block and no second table. That property is 9028's, and the drop-and-
+    // recreate path is 9026's; what this adds is a regression guard that
+    // narrowing the source to guardTriggersReinstalledBy() did not break the
+    // legitimate idiom. A test whose name promises protection its body does not
+    // perform is the exact defect this PR exists to remove.
     const r = await check({
-      file: "9035_recreates_only_one.sql",
+      file: "9035_static_install_idiom_after_tightening.sql",
       sql: [
         "DROP TRIGGER IF EXISTS swarm_briefs_append_only ON swarm_briefs;",
         "CREATE TRIGGER swarm_briefs_append_only BEFORE DELETE ON swarm_briefs",
@@ -533,7 +539,27 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
       ].join("\n"),
     });
     expect(r.status).toBe("PASS");
-    expect(r.detail.join("\n")).toContain("dropped and re-created by the SAME migration");
+    expect(r.detail.join("\n")).toContain("also CONTAINS a re-creation for that table");
+  });
+
+  test("the exemption tests CONTAINS, not EXECUTES — pinned as a limit, not a claim", async () => {
+    // Blind spot 8(a). A correctly-named re-creation that can never run still
+    // exempts the drop, because this scanner reads text and does not evaluate
+    // control flow. Asserted so the limit cannot be quietly lost, and so nobody
+    // reads the PASS line as proof the trigger is back — which is why that line
+    // now says "presence is what is checked, not execution".
+    const r = await check({
+      file: "9037_contains_not_executes.sql",
+      sql: [
+        "DROP TRIGGER IF EXISTS swarm_briefs_append_only ON swarm_briefs;",
+        "DO $$ BEGIN IF false THEN",
+        "  CREATE TRIGGER swarm_briefs_append_only BEFORE DELETE ON swarm_briefs",
+        "    FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard();",
+        "END IF; END $$;",
+      ].join("\n"),
+    });
+    expect(r.status).toBe("PASS");
+    expect(r.detail.join("\n")).toContain("presence is what is checked, not execution");
   });
 
   test("GREEN: CREATE OR REPLACE FUNCTION defining a NEW guard is protection being added", async () => {
@@ -643,6 +669,21 @@ describe("scanMigrationSql — the units behind the check", () => {
   test("schema qualification and ONLY do not hide the table", () => {
     const f = scanMigrationSql("x.sql", 'DELETE FROM ONLY public."swarm_members" WHERE true;', PROTECTED);
     expect(f).toEqual([{ file: "x.sql", kind: "DELETE", target: "swarm_members", blocking: true }]);
+  });
+
+  test("a -- comment containing /* does not swallow the install literal after it", () => {
+    // The strip used to chain two replaces, block-comments first, so a line
+    // comment containing `/*` opened a block strip that ran to the next `*/` —
+    // eating whatever sat between, including the ARRAY literal naming the table.
+    // That is a second route into the composition blind spot 7 describes, so it
+    // gets an executed assertion rather than a note.
+    const sql = [
+      "DO $$ BEGIN",
+      "  -- historical note: the old shape was /* see 0032 */ different",
+      "  EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I', 'x', 'swarm_briefs');",
+      "END $$;",
+    ].join("\n");
+    expect([...guardedTablesInstalledBy(sql)]).toContain("swarm_briefs");
   });
 
   test("dynamic SQL is the documented blind spot, not an accident", () => {
@@ -761,7 +802,7 @@ describe("v0.3.0 preflight, end to end on a v0.2.2 baseline database", () => {
     expect(detail).toContain("0037_aum_repairable_quarantine.sql: DELETE wallet_sleeve_samples");
     expect(detail).toContain("guarded from 0038_wallet_aum_snapshot_foundation.sql");
     // 0042's idempotent install idiom is seen and reported, not silently ignored.
-    expect(detail).toContain("dropped and re-created by the SAME migration");
+    expect(detail).toContain("also CONTAINS a re-creation for that table");
     // And the two false positives that used to BLOCK the release are reported as
     // what they are: locked, not written.
     expect(detail).toContain("swarm_members");
