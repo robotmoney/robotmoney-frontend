@@ -9,10 +9,17 @@
 // must be able to leave it computing in `shadow` for as long as it takes to
 // trust it. `off` is the shipped default and is today's behaviour to the byte.
 //
-// WHAT NEVER MOVES. `swarm_recommendation.weights` is not read, not written and
-// not recomputed anywhere in this file. Judging a session cannot change its
-// vector; that is the property replaySessionJudge() below exists to demonstrate
-// against real history rather than against a fixture.
+// WHAT NEVER MOVES. `swarm_recommendation.weights` is never WRITTEN on the
+// judging path — not by judgeSession(), not by applyOpinion(), which merges
+// exactly `rationale`, `disagreements`, `release_safety` and the `judge`
+// fingerprint and nothing else. Judging a session cannot change its vector.
+//
+// NOTHING IN THIS FILE MAY READ THE DERIVATION EITHER. `meanTakeWeights` is not
+// imported here and must not be — `backend/tests/swarm-consensus-weights.test.ts`
+// pins that, for this file by name. The offline audit that DOES recompute a
+// vector to compare it against the published one lives in `judge-replay.ts`,
+// deliberately outside the write path; see that file's header for why the
+// pre-#766 version of it proved nothing.
 import { sql, type DbHandle } from "../db/client.ts";
 import { loadFrozenTakeSet } from "./domain.ts";
 import { judge, type JudgeInput, type JudgeOptions, type JudgeOutcome, type JudgeTake } from "./judge.ts";
@@ -93,6 +100,13 @@ export async function buildJudgeInput(sessionId: string, minTakes: number): Prom
  * digest whatever that one returned — which is a different take set from the
  * one being embedded whenever a take lands between the two reads, i.e. exactly
  * the divergence the comparison exists to detect.
+ *
+ * `judge-replay.ts` (issue #766) is the second caller, for the same reason
+ * spelled a different way: it compares a published `weights` vector against
+ * `meanTakeWeights()` over the take set THIS input was built from, and two
+ * loads would let an amendment land between them so the comparison would be
+ * against a set the opinion was not derived from. One load, both uses — this
+ * function, not a second `preloaded` parameter beside it.
  */
 export async function judgeInputFromFrozen(
   frozen: NonNullable<Awaited<ReturnType<typeof loadFrozenTakeSet>>>,
@@ -396,63 +410,4 @@ export async function listJudgements(sessionId: string, limit = 50) {
 /** The opinion IN FORCE — the newest row, by the ordering argued above. */
 export async function latestJudgement(sessionId: string) {
   return (await listJudgements(sessionId, 1))[0] ?? null;
-}
-
-// ── Replay (issue #752, 2.9) ────────────────────────────────────────────────
-// Validate against real history, not fixtures. This runs the judge over a
-// session that has ALREADY published and reports whether its weight vector
-// moved. It writes nothing: no judgement row, no session update. The answer it
-// is built to produce is "unchanged", on real sessions carrying real absences,
-// thin quorums, superseded revisions and rotated keys — the things a fixture
-// does not contain.
-
-export interface JudgeReplayResult {
-  sessionId: string;
-  state: string;
-  takeCount: number;
-  weightsBefore: unknown;
-  weightsAfter: unknown;
-  weightsUnchanged: boolean;
-  outcome: JudgeOutcome;
-}
-
-export async function replaySessionJudge(
-  sessionId: string,
-  opts: JudgeOptions = {},
-  minTakesOverride?: number,
-): Promise<JudgeReplayResult | null> {
-  const config = await getJudgeConfig();
-  const minTakes = minTakesOverride ?? config.minTakes;
-  const input = await buildJudgeInput(sessionId, minTakes);
-  if (!input) return null;
-  const before = (await sql`SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { state: string; swarm_recommendation: Record<string, unknown> | null }
-    | undefined;
-  const weightsBefore = before?.swarm_recommendation?.weights ?? null;
-  const outcome = await judge(input, { model: config.model, ...opts });
-  const after = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { swarm_recommendation: Record<string, unknown> | null }
-    | undefined;
-  const weightsAfter = after?.swarm_recommendation?.weights ?? null;
-  return {
-    sessionId,
-    state: before?.state ?? "unknown",
-    takeCount: input.takes.length,
-    weightsBefore,
-    weightsAfter,
-    // BYTE-IDENTICAL, not "equivalent": the canonical JSON of the two vectors
-    // must match exactly, so a rounding change would fail this as loudly as a
-    // reordering would.
-    weightsUnchanged: JSON.stringify(weightsBefore) === JSON.stringify(weightsAfter),
-    outcome,
-  };
-}
-
-/** The N most recently convened sessions that have something to judge. */
-export async function recentJudgeableSessions(limit = 10): Promise<string[]> {
-  const rows = (await sql`
-    SELECT id FROM swarm_sessions
-    WHERE state IN ('aggregated', 'judged', 'published')
-    ORDER BY convened_at DESC LIMIT ${Math.max(1, Math.min(limit, 200))}`) as unknown as { id: string }[];
-  return rows.map((r) => String(r.id));
 }

@@ -43,9 +43,11 @@ import {
   type JudgeInput, type JudgeTransport,
 } from "../src/swarm/judge.ts";
 import {
-  buildJudgeInput, getJudgeConfig, judgeSession, latestJudgement,
-  recentJudgeableSessions, replaySessionJudge, setJudgeConfig,
+  buildJudgeInput, getJudgeConfig, judgeSession, latestJudgement, setJudgeConfig,
 } from "../src/swarm/judge-session.ts";
+import {
+  checkRationaleLadder, listRationaleLadderDrift, recentJudgeableSessions, replaySessionJudge,
+} from "../src/swarm/judge-replay.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -716,7 +718,13 @@ test("replaying published sessions through the judge leaves every weight vector 
     const replay = (await replaySessionJudge(id, {
       transport: fixedTransport(goodAnswer(full.members[0].id, full.members[1].id)),
     }))!;
-    expect(replay.weightsUnchanged, `session ${id} moved its vector`).toBe(true);
+    expect(replay.judgeWroteNothing, `session ${id} had its vector written by the replay`).toBe(true);
+    // The HEADLINE assertion (issue #766): the stored vector still equals the
+    // derivation over the session's current frozen take set. `judgeWroteNothing`
+    // above cannot fail on healthy code — it compares a column against itself
+    // across a call that writes nothing — so it is kept as its own named guard
+    // and this one is what the test is actually for.
+    expect(replay.weightsVerdict, `session ${id} is no longer reproducible`).toBe("reproduced");
     expect(replay.state).toBe("published");
     // Replay writes NOTHING: not the session, not a judgement row.
     expect(JSON.stringify(await recOf(id))).toBe(before);
@@ -812,17 +820,257 @@ test("the replay CLI runs against real session rows and reports every vector unc
   const stderr = proc.stderr.toString();
   expect(proc.exitCode, `replay CLI failed:\n${stdout}\n${stderr}`).toBe(0);
   const report = JSON.parse(stdout.slice(stdout.indexOf("{"))) as {
-    moved: number; sessions: { sessionId: string; weightsUnchanged: boolean; source: string; promptHash: string }[];
+    mismatched: number;
+    wrote: number;
+    rationaleDrift: unknown[];
+    sessions: {
+      sessionId: string; weightsVerdict: string; judgeWroteNothing: boolean; source: string; promptHash: string;
+    }[];
   };
-  expect(report.moved).toBe(0);
+  expect(report.mismatched).toBe(0);
+  expect(report.wrote).toBe(0);
   expect(report.sessions.length).toBeGreaterThanOrEqual(2);
   expect(report.sessions.map((r) => r.sessionId)).toContain(messy.session.id);
   for (const row of report.sessions) {
-    expect(row.weightsUnchanged, `${row.sessionId} moved its vector`).toBe(true);
+    expect(row.weightsVerdict, `${row.sessionId} is no longer reproducible`).toBe("reproduced");
+    expect(row.judgeWroteNothing, `${row.sessionId} had its vector written`).toBe(true);
     expect(row.promptHash).toBe(JUDGE_PROMPT_HASH);
   }
   // The script wrote nothing: replay is read-only.
   expect(await latestJudgement(full.session.id)).toBeNull();
+});
+
+// ── 9b. The replay DISCRIMINATES (issue #766) ───────────────────────────────
+//
+// A TOOL THAT REPORTS NOTHING ON HEALTHY DATA IS INDISTINGUISHABLE FROM A TOOL
+// THAT CANNOT REPORT. Every assertion in this section is therefore paired: a
+// constructed defect the replay must name, and a healthy session it must leave
+// alone. Without the first half these tests would pass against the pre-#766
+// version of the tool, whose only check was a column compared against itself.
+
+/**
+ * A published session whose stored vector no longer equals the derivation.
+ *
+ * THE DIVERGENCE IS WRITTEN AT THE DATABASE, and that is not a shortcut. The
+ * app path that used to produce this state — an amendment landing after
+ * aggregation, which moves the take set while the stored recommendation stays
+ * where it was — is exactly what PR #757 closed: `submitRecommendation` now
+ * refuses an amendment once the session leaves TAKES_AMENDABLE_STATES. So the
+ * fixture writes the take row the old path would have accepted. The tool under
+ * test still only READS.
+ *
+ * `which` picks which side is moved, because both are real: `takes` is history
+ * moving out from under a published number, `stored` is a published number that
+ * was never the derivation in the first place.
+ */
+async function nonReproducibleSession(prefix: string, which: "takes" | "stored") {
+  const s = await aggregatedSession(prefix, 3);
+  await admin.publishSessionAdmin(s.session.id, undefined);
+  const other = [{ bucket: "agent_tokens", weight: 1 }, { bucket: "protocol", weight: 3 }];
+  if (which === "takes") {
+    await sql`
+      UPDATE swarm_recommendations
+         SET payload = jsonb_set(coalesce(payload, '{}'::jsonb), '{weights}', ${JSON.stringify(other)}::text::jsonb)
+       WHERE session_id = ${s.session.id} AND member_id = ${s.members[0]!.id}`;
+  } else {
+    await sql`
+      UPDATE swarm_sessions
+         SET swarm_recommendation = jsonb_set(swarm_recommendation, '{weights}', ${JSON.stringify(other)}::text::jsonb)
+       WHERE id = ${s.session.id}`;
+  }
+  return s;
+}
+
+test("the replay NAMES a session whose stored vector no longer equals meanTakeWeights() over its takes — and clears a healthy one", async () => {
+  const healthy = await aggregatedSession("repro-healthy", 3);
+  await admin.publishSessionAdmin(healthy.session.id, undefined);
+  const movedTakes = await nonReproducibleSession("repro-moved-takes", "takes");
+  const movedStored = await nonReproducibleSession("repro-moved-stored", "stored");
+  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+
+  const ok = (await replaySessionJudge(healthy.session.id, { transport: null }))!;
+  expect(ok.weightsVerdict).toBe("reproduced");
+  expect(ok.weightsReproducible).toBe(true);
+  expect(JSON.stringify(ok.weightsStored)).toBe(JSON.stringify(ok.weightsRederived));
+
+  for (const broken of [movedTakes, movedStored]) {
+    const bad = (await replaySessionJudge(broken.session.id, { transport: null }))!;
+    expect(bad.weightsVerdict, `${broken.session.id} was not named`).toBe("mismatch");
+    expect(bad.weightsReproducible).toBe(false);
+    // Both sides are REPORTED, not merely counted — an operator has to be able
+    // to see which number moved without opening psql.
+    expect(JSON.stringify(bad.weightsStored)).not.toBe(JSON.stringify(bad.weightsRederived));
+    expect(bad.weightsRederived!.length).toBeGreaterThan(0);
+    // The kept assertion is INDEPENDENT: the replay still wrote nothing, and
+    // says so, even on the session it is reporting as broken. That separation
+    // is the point of naming the two checks apart.
+    expect(bad.judgeWroteNothing).toBe(true);
+  }
+
+  // Nothing was repaired. Read-only, per D42.
+  expect(JSON.stringify((await recOf(movedStored.session.id)).weights))
+    .toBe(JSON.stringify([{ bucket: "agent_tokens", weight: 1 }, { bucket: "protocol", weight: 3 }]));
+});
+
+test("a position_actions session with no vector is `not_applicable`, not a false mismatch", async () => {
+  // The subject default is `position_actions`, for which aggregateSession
+  // writes no `weights` at all. Reporting that absence as a mismatch would make
+  // the tool cry wolf on every non-weights session in production.
+  const subj = rid("repro-actions");
+  await ic.ensureSubject(subj, "actions subject");
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${subj}`;
+  const session = await ic.openSession(subj);
+  await ic.publishBrief(session.id, 60);
+  const date = sessionDate(session);
+  const m = await activeMember();
+  await submit(m, date, subj, { body: "an actions take" });
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  await admin.publishSessionAdmin(session.id, undefined);
+  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+
+  const replay = (await replaySessionJudge(session.id, { transport: null }))!;
+  expect(replay.weightsStored).toBeNull();
+  expect(replay.weightsVerdict).toBe("not_applicable");
+  expect(replay.weightsReproducible).toBe(true);
+});
+
+/**
+ * A published session with two stances TIED at the maximum.
+ *
+ * `bearish` and `bullish` are the ladder's first and last entries, so the fixed
+ * tie-break elects `bearish` — which makes "the stored rationale names bullish"
+ * a state the fixed ladder demonstrably would not produce, rather than one that
+ * merely happens to differ.
+ */
+async function tiedSession(prefix: string) {
+  const { subj, session, date } = await weightedSession(prefix);
+  const members: Member[] = [];
+  for (const stance of ["bullish", "bullish", "bearish", "bearish"]) {
+    const m = await activeMember();
+    members.push(m);
+    await submit(m, date, subj, { stance, body: `a ${stance} take on ${subj}`, weights: W });
+  }
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  await admin.publishSessionAdmin(session.id, undefined);
+  return { subj, session, date, members };
+}
+
+test("the D42 report LISTS a tied published session whose stored rationale names a majority the ladder would not elect — and not one that agrees", async () => {
+  const agrees = await tiedSession("d42-agrees");
+  const drifted = await tiedSession("d42-drifted");
+
+  // The healthy session's aggregation already wrote the ladder's answer.
+  const agreesRec = await recOf(agrees.session.id);
+  expect(agreesRec.stances).toEqual({ bullish: 2, bearish: 2 });
+  expect(agreesRec.rationale).toStartWith("Majority stance is bearish (2 of 4 submitted takes)");
+
+  // The affected one carries the sentence the PRE-FIX reduce would have written
+  // when the bullish takes arrived first — the exact prose D42 says is left in
+  // place rather than rewritten.
+  const preFix = String(agreesRec.rationale).replace("bearish", "bullish");
+  await sql`
+    UPDATE swarm_sessions
+       SET swarm_recommendation = jsonb_set(swarm_recommendation, '{rationale}', to_jsonb(${preFix}::text))
+     WHERE id = ${drifted.session.id}`;
+
+  const report = await listRationaleLadderDrift();
+  const ids = report.drifted.map((d) => d.sessionId);
+  expect(ids, "the drifted session was not identified").toContain(drifted.session.id);
+  expect(ids, "the agreeing session was falsely identified").not.toContain(agrees.session.id);
+  expect(report.tied).toBeGreaterThanOrEqual(2);
+  expect(report.templateShaped).toBeGreaterThanOrEqual(2);
+
+  // Session id, date, subject and BOTH strings — the AC's list, verbatim.
+  const row = report.drifted.find((d) => d.sessionId === drifted.session.id)!;
+  expect(row.date).toBe(drifted.date);
+  expect(row.subjectId).toBe(drifted.subj);
+  expect(row.subjectLabel).toBe(`d42-drifted subject`);
+  expect(row.tiedStances).toEqual(["bearish", "bullish"]);
+  expect(row.storedLeadStance).toBe("bullish");
+  expect(row.rederivedLeadStance).toBe("bearish");
+  expect(row.storedRationale).toBe(preFix);
+  expect(row.rederivedRationale).toStartWith("Majority stance is bearish (2 of 4 submitted takes)");
+  expect(row.storedRationale).not.toBe(row.rederivedRationale);
+
+  // Read-only, per D42: the listed session still carries the prose it was filed
+  // with after the report has run.
+  expect((await recOf(drifted.session.id)).rationale).toBe(preFix);
+});
+
+test("a model-authored rationale on a tied session is out of scope, not a false positive", async () => {
+  // D42's defect lives in buildRationale(); the judge never calls
+  // majorityStance() at all. Scoring authored prose by "which stance word comes
+  // first" would list every enforce session whose model said "constructive"
+  // early — a report an operator learns to ignore.
+  const s = await tiedSession("d42-authored");
+  await sql`
+    UPDATE swarm_sessions
+       SET swarm_recommendation = jsonb_set(
+             swarm_recommendation, '{rationale}',
+             to_jsonb('The submitted takes converge on a bullish read, with two dissents.'::text))
+     WHERE id = ${s.session.id}`;
+
+  const report = await listRationaleLadderDrift();
+  expect(report.drifted.map((d) => d.sessionId)).not.toContain(s.session.id);
+  const check = checkRationaleLadder(await recOf(s.session.id), "x", null);
+  expect(check.tiedStances).toEqual(["bearish", "bullish"]);
+  expect(check.storedRationaleShape).toBe("authored");
+  expect(check.disagrees).toBe(false);
+});
+
+test("the replay CLI names the non-reproducible vector, prints the D42 list, and goes red only for the vector", async () => {
+  // EXECUTED, not asserted from the source — and executed against BOTH defects
+  // at once, because the exit code has to separate them: a vector that can no
+  // longer be re-derived is a defect in force, while a D42 session is history
+  // that is deliberately not repaired. If drift went red the command would be
+  // permanently red on any deployment carrying one, which is how a report stops
+  // being read.
+  const broken = await nonReproducibleSession("cli-mismatch", "takes");
+  const tied = await tiedSession("cli-d42");
+  const preFix = String((await recOf(tied.session.id)).rationale).replace("bearish", "bullish");
+  await sql`
+    UPDATE swarm_sessions
+       SET swarm_recommendation = jsonb_set(swarm_recommendation, '{rationale}', to_jsonb(${preFix}::text))
+     WHERE id = ${tied.session.id}`;
+  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+
+  const env = { ...process.env, OPENCODE_API_KEY: "", DATABASE_URL: await currentDatabaseUrl() };
+  const cwd = new URL("..", import.meta.url).pathname;
+
+  const bad = Bun.spawnSync(
+    ["bun", "run", "scripts/swarm-judge-replay.ts", "--session", broken.session.id],
+    { cwd, env },
+  );
+  const badOut = bad.stdout.toString();
+  expect(bad.exitCode, `expected a red run:\n${badOut}${bad.stderr.toString()}`).toBe(1);
+  expect(badOut).toContain("MISMATCH");
+  expect(badOut).toContain(broken.session.id);
+  expect(badOut).toContain("stored:");
+  expect(badOut).toContain("rederived:");
+  // `--session` is one operator asking about one session, so no census.
+  expect(badOut).not.toContain("D42 tie-break report");
+
+  const census = Bun.spawnSync(
+    ["bun", "run", "scripts/swarm-judge-replay.ts", "--limit", "1", "--json"],
+    { cwd, env },
+  );
+  const report = JSON.parse(census.stdout.toString().slice(census.stdout.toString().indexOf("{"))) as {
+    mismatched: number;
+    rationaleDrift: {
+      scanned: number; tied: number; templateShaped: number;
+      drifted: { sessionId: string; storedRationale: string; rederivedRationale: string }[];
+    };
+  };
+  // A one-session replay window still enumerates the WHOLE published table:
+  // "the affected set" is not "the affected set among the most recent session".
+  expect(report.rationaleDrift.drifted.map((d) => d.sessionId)).toContain(tied.session.id);
+  expect(report.rationaleDrift.scanned).toBeGreaterThan(1);
+  // …and the drift alone does not turn the run red.
+  expect(census.exitCode, `drift must not fail the run:\n${census.stdout.toString()}`)
+    .toBe(report.mismatched === 0 ? 0 : 1);
+  expect(report.mismatched).toBe(0);
 });
 
 /** This test file's own clone, as a URL a child process can connect to. */
