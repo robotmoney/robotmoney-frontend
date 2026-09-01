@@ -157,6 +157,14 @@ const ROUTES = {
   "/allocation": ALLOCATION_VIEW,
   "/performance": PERFORMANCE_VIEW,
   "/allocation2": PERFORMANCE_VIEW, // legacy redirect
+  // /vault resolves to NOT FOUND, explicitly. Deleting the ROUTE is not enough
+  // to retire a page: the catch-all at the bottom of viewFor() maps any unknown
+  // path to `/views/<path>.html`, so leaving views/vault.html in the tree with
+  // no entry here left /vault rendering the full page exactly as before. That
+  // is how views/allocation.html stayed genuinely unreachable while /vault
+  // owned the content — /allocation had an explicit entry pointing elsewhere,
+  // so the catch-all never ran for it. This is the same trick, pointed at 404.
+  "/vault": NOT_FOUND_VIEW,
   "/projects": PROJECTS_VIEW,
   // Legacy article URL, still live on robotmoney.network and still linked from the
   // synthesis prose of twenty archived swarm sessions (they cite

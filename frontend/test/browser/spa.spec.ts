@@ -300,6 +300,18 @@ for (const { path, title } of NOINDEX_STUB_ROUTES) {
   });
 }
 
+test("/vault renders not-found, not the retired page still sitting in views/", async ({ page }) => {
+  await page.goto("/");
+  await navigate(page, "/vault");
+  // Removing the ROUTE does not retire a page: the catch-all maps any unknown
+  // path to /views/<path>.html, and views/vault.html is deliberately kept in
+  // the tree. routes.js pins /vault to NOT_FOUND_VIEW for exactly this reason,
+  // and this asserts the pin rather than the absence of an entry.
+  await expect(page.locator("section.vp")).toHaveCount(0);
+  await expect(page.locator("h1.vp__title")).toHaveCount(0);
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex, follow");
+});
+
 test("the noindex override does not leak onto the next route", async ({ page }) => {
   await page.goto("/");
   await navigate(page, "/flow-field");

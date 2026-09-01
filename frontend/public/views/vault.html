@@ -1,7 +1,13 @@
 <!-- UNREACHABLE. NO ROUTE RESOLVES TO THIS FRAGMENT.
-     routes.js has no /vault entry, and /allocation and /allocation2 resolve to
-     views/allocation.html again. Nothing below this line is served to a
-     visitor.
+     routes.js pins /vault to NOT_FOUND_VIEW, and /allocation and /allocation2
+     resolve to views/allocation.html again. Nothing below this line is served
+     to a visitor.
+
+     The pin is load-bearing, and deleting the route was NOT enough on its own:
+     viewFor()'s catch-all maps any unknown path to `/views/<path>.html`, so
+     with the entry merely removed, /vault went on rendering this file in full.
+     Caught on stage before review. If this fragment is ever moved or renamed,
+     the pin can go with it; while it sits here, the pin is what retires it.
 
      Why it is kept rather than deleted: RM-104's information architecture is
      being reworked against the recommendation-receipt model settled on

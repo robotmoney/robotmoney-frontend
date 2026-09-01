@@ -140,6 +140,15 @@ const META = {
   // site's soft 404s. `follow` (not `nofollow`, unlike the styleguide below)
   // because each stub's only links are /changelog and /, both real indexed
   // pages whose value should carry.
+  // /vault was live and in sitemap.xml between #774 and this rollback, so
+  // crawlers have the URL. It resolves to the not-found view now; noindex says
+  // so directly rather than leaving a soft 404 to be inferred. `follow` because
+  // the not-found view links only to real indexed pages.
+  "/vault": {
+    title: "Vault (not available) — Robot Money",
+    description: "The Robot Money vault factsheet is being rebuilt. Allocation and holdings are at /allocation; wallet performance history is at /performance.",
+    robots: "noindex, follow",
+  },
   "/flow-field": {
     title: "Flow Field (in progress) — Robot Money",
     description: "Placeholder for an experimental flow-field visualization of capital movement across the Robot Money vault's strategies. Not yet released.",
