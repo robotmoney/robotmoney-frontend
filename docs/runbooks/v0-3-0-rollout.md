@@ -380,11 +380,82 @@ writes:
   guard trip.
 
 All of them appear in `MIGRATION_TOUCHED_TABLES`, because that constant means
-"creates, alters, locks, or writes". **`append-only-safety` therefore reports
-them as collisions and FAILs**: the check compares touched-vs-protected and does not
-distinguish a lock from a write. That is a defect in the check, not a hazard in
-the migrations — do not read a green there as the thing that clears §2.2.1, and
-do not clear it by deleting rows from the roster. See the lock profile above.
+"creates, alters, locks, or writes" — it is the roster of the release's SCOPE,
+and it stays complete. **`append-only-safety` does not read it to decide risk.** The check
+scans each migration's own SQL for the statements the guard actually refuses —
+`DELETE FROM`, `TRUNCATE`, `DROP TABLE` against a protected table — plus any
+statement that disables, drops or replaces an immutability guard, which is the
+one destructive change the row trigger structurally cannot see happen to itself.
+A lock is therefore not a collision, and **`append-only-safety` PASSes for 0035,
+0039 and 0042** (issue #815). It names those tables in its PASS detail, as locked
+and not written, so the distinction stays visible rather than silent.
+
+**Installing a guard is not removing one.** 0032, 0040 and 0042 all install
+idempotently with `DROP TRIGGER IF EXISTS x; CREATE TRIGGER x …`, and 0042 opens
+with `CREATE OR REPLACE FUNCTION rm_consensus_receipt_immutable()` to define its
+own new guard. Reading either as tampering would block the release for *adding*
+protection, so the check exempts exactly two narrow cases, and it reports both
+rather than hiding them:
+
+- a guard trigger dropped by a migration that also **contains** a **static**
+  `CREATE [OR REPLACE] TRIGGER <guard-name> … ON <that same table>`. *Contains*,
+  not *executes*: the check reads text and does not evaluate control flow, so a
+  correctly-named re-creation inside `IF false THEN … END IF` would exempt the
+  drop. A dynamically-built re-creation does not qualify — and does not need to,
+  because the matching drop in those migrations is built the same way and is
+  invisible to the scan;
+- a `CREATE OR REPLACE FUNCTION` naming a guard function that exists neither on
+  the database nor in an earlier migration of this release.
+
+The limit is that neither compares definitions, so a migration that reinstalled a
+*weaker* guard would read like one that reinstalled the same guard — §2.2's table
+is where you check that. What the exemption will **not** do is take a migration's
+word for it: a drop whose table is merely *named* nearby, without a re-creation
+targeting it, still fails.
+
+**"Protected" is not one set, and not only the append-only roster.** Three
+kinds of guard are in play, and the check reads all three: `rm_append_only_guard()`
+via `APPEND_ONLY_TABLES`, the table-specific pairs 0037/0038 install via
+`AUM_GUARD_TRIGGERS`, and whatever the live database's own trigger catalog
+reports. It also matters *when*: 0037 archives and then **deletes** rows from
+`wallet_balance_samples` and `wallet_sleeve_samples`, and **0038 guards those
+same tables afterwards**. That delete is correct — the guard does not exist yet
+when it runs — and the same delete in a later migration would abort the boot. So
+the check reads each migration's guard installations out of the files and grades
+a removal against the protection in force *at the point that migration applies*.
+The ordering this release depends on is therefore computed and re-checked on
+every run, not assumed.
+
+> **Read the PASS, do not skim it.** The check reports what it FOUND, in three
+> buckets, and the bucket is the claim:
+>
+> - *removals against tables no guard covers, before or after this release* —
+>   `wallet_backfill_state` (0036), an operational ledger by design;
+> - *removals that run **before** this release installs the guard for their
+>   table* — 0037's two sample-table deletes, each naming `0038_…` as the file
+>   that guards it afterwards. **These are correct only in this migration
+>   order.** If the set is reordered or extended, re-read this list against §2.2;
+> - *protected tables locked or altered but **not** written* — `swarm_members`,
+>   `swarm_sessions`, `swarm_consensus_receipts` and the rest;
+> - *guard triggers dropped where the same migration also contains a re-creation
+>   for that table* — 0042's immutability pair, the idempotent install idiom,
+>   reported so you can see the drops were seen. The line says "presence is what
+>   is checked, not execution" because that is what it means: it is not proof the
+>   trigger is back.
+>
+> A PASS that lists zero statements on a release that clearly deletes something
+> is a signal that the scan is not seeing the file, not a clean bill of health.
+
+**What the check cannot see, and you therefore still read here.** It matches text
+in the migration files, so a removal built with dynamic SQL
+(`EXECUTE format('DELETE FROM %I', t)`) is invisible to it — 0040 legitimately
+rebuilds its append-only triggers that way. Its other limits (indirect removals
+via view/rule/cascade, bare-name table matching, statement splitting) all err
+towards flagging a safe release rather than passing an unsafe one, and every one
+of them is enumerated in the header block above `scanMigrationSql()` in
+`backend/scripts/upgrades/0.2.2-to-0.3.0/preflight.ts`. So: §2.2's migration
+table is still the thing you read; the check is what stops that reading from
+going stale.
 
 **This pattern has already shipped.** v0.2.2 itself carried two `0029_*` files
 (`0029_admin_auth_recovery.sql`, `0029_admin_passkey.sql`) and applied both in
@@ -771,7 +842,7 @@ pass. The harness, receipt format and verdict wording are
 | `server-version` | PG 11+ | 0034's `NOT NULL DEFAULT` is instant on 11+ and a full table REWRITE before it (§2.2) |
 | `schema-migrations` | pending set is **exactly** this release's ten; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
 | `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `.env.readonly` points somewhere else |
-| `append-only-safety` | guard installed, and **no** table this release touches is protected | §2.2.1 — this is what makes the out-of-order warning harmless |
+| `append-only-safety` | guard installed, and **no statement** in this release removes a row from a table protected *at the point that migration runs*, or disables a guard | §2.2.1 — this is what makes the out-of-order warning harmless |
 | `clean-targets` | the 8 tables and 26 columns do not exist yet | A target that already exists means an out-of-band change |
 | `catchup-baseline` | records `job_schedules` as it stands now | §4.3 — 0034 OVERWRITES these rows; §9 check 3 grades against this |
 | `wallet-samples-size` | row count + table size | Informational, for §7's wall-clock measurement |
@@ -805,14 +876,18 @@ for this release:
 apply it "out of order" relative to a fresh database. **`append-only-safety` is
 the check that makes that harmless** — on a fresh database the DDL it would have
 run after is the append-only guard, the guard is already installed here, and no
-migration in this set writes to a protected table.
+migration in this set removes a row from a protected table.
 
 > **So: a WARN on `schema-migrations` is the expected shape of a clean v0.3.0
-> preflight.** `append-only-safety` cannot be read as the confirmation until the
-> lock-vs-write defect recorded in §2.2.1 is fixed: it FAILs on `swarm_members`
-> and `swarm_sessions`, both of which this release LOCKS and neither of which it
-> deletes from. Confirm §2.2.1's reasoning by hand until that check can tell the
-> two apart.
+> preflight.** It is the only warning THIS RELEASE'S MIGRATION SET produces by
+> design; `blocking-xacts`, `wedged-schedules` and `catchup-baseline` may also
+> WARN, but each of those is a statement about the database you are pointed at
+> right now, not about the release, and each says what to do about it.
+>
+> **`append-only-safety` must be PASS.** If it FAILs, stop — it names the exact
+> file and statement it objects to, and that line is a migration removing
+> protected history or turning a guard off. There is no known-benign failure of
+> this check to read past.
 
 ## 7. Digital-smoke-twin rehearsal (release-runbooks.md §4.4)
 

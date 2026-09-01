@@ -27,8 +27,8 @@
  * key on `swarm_members`, 0039's constraint swap on `swarm_sessions`, 0042's
  * two foreign keys on `swarm_sessions` and `swarm_session_judgements`); the
  * guard fires BEFORE DELETE OR TRUNCATE only, so none can trip it. preflight's
- * append-only-safety check does not yet draw that distinction — see
- * MIGRATION_TOUCHED_TABLES below and runbook §2.2.1.
+ * append-only-safety check draws that distinction from the migrations' own SQL
+ * rather than from the roster below — see runbook §2.2.1.
  */
 export const THIS_RELEASE_MIGRATIONS = [
   "0032_wallet_balance_samples_strategy_nav_idle_only.sql",
@@ -120,8 +120,11 @@ export const NEW_COLUMNS = [
   { table: "swarm_session_judgements", column: "dropped_disagreements" },
 ] as const;
 
-/** Every table this release creates, alters, locks, or writes. Preflight checks
- * this complete set against the live append-only trigger catalog. */
+/** Every table this release creates, alters, locks, or writes: the roster of the
+ * release's SCOPE, for review and for preflight's PASS detail. It is NOT what
+ * decides append-only risk — that is read off each migration's own SQL
+ * (scanMigrationSql in preflight.ts), because "touches" and "destroys" are two
+ * different claims and this constant only ever meant the first (issue #815). */
 export const MIGRATION_TOUCHED_TABLES = [
   ...NEW_TABLES,
   "wallet_balance_samples",
@@ -133,11 +136,10 @@ export const MIGRATION_TOUCHED_TABLES = [
   // already covered by the NEW_TABLES spread above). Like `swarm_members` above
   // these are LOCKS, not writes — an ALTER TABLE ADD CONSTRAINT removes no row,
   // so rm_append_only_guard() (BEFORE DELETE OR TRUNCATE) cannot fire on them.
-  // Both tables ARE append-only protected, and
-  // preflight's append-only-safety check does not currently distinguish
-  // "locks" from "writes", so it reports them as collisions; that over-broad
-  // rule is a defect in the check, not a reason to under-declare the roster
-  // this constant exists to keep honest. See the PR for issue #807.
+  // Both tables ARE append-only protected, and preflight reports them in
+  // append-only-safety's PASS detail as locked and not written. Declaring them
+  // here is what keeps that visible; under-declaring to quiet a check is what
+  // #807 exists to prevent.
   "swarm_sessions",
 ] as const;
 
