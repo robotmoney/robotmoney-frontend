@@ -80,9 +80,10 @@ const ONE_POSITION_ANSWER = JSON.stringify({
 /**
  * The assembler, reduced to exactly the obligations
  * consensus-receipt.canonicalization.json#assembler_obligations states: the
- * judge block is a VERBATIM copy of JudgeOpinion plus `source`, `stances` is
- * zero-filled from the sparse rollup, and participation_bps is round-half-up.
- * Nothing here reshapes, pads, or truncates the opinion — that is the point.
+ * judge block is a VERBATIM copy of JudgeOpinion plus the two ENVELOPE fields
+ * (`source` and `mode`), `stances` is zero-filled from the sparse rollup, and
+ * participation_bps is round-half-up. Nothing here reshapes, pads, or truncates
+ * the opinion — that is the point.
  */
 function assembleReceipt(opinion: JudgeOpinion, source: "model" | "fallback"): any {
   const submitted = input.takes.length;
@@ -102,7 +103,10 @@ function assembleReceipt(opinion: JudgeOpinion, source: "model" | "fallback"): a
       constructive: input.byStance.constructive ?? 0,
       bullish: input.byStance.bullish ?? 0,
     },
-    judge: { ...opinion, source },
+    // `mode` is always "enforce" in a publishable receipt: the assembler embeds
+    // only the judgement the session ADOPTED, and shadow judgements are never
+    // applied. See consensus-receipt.ts loadAssemblyInput.
+    judge: { ...opinion, source, mode: "enforce" },
     analyst_signatures: template.analyst_signatures,
     weights: template.weights,
   };
@@ -133,7 +137,7 @@ test("a ONE-position model answer parses, and the receipt schema accepts it verb
 
   // VERBATIM, asserted as such: the receipt's judge block is the opinion plus
   // one field. Nothing is reshaped on the way in.
-  expect(receipt.judge).toEqual({ ...opinion, source: "model" });
+  expect(receipt.judge).toEqual({ ...opinion, source: "model", mode: "enforce" });
   expect(Object.keys(receipt.judge)).toEqual(schema.properties.judge.required);
   expect(canonicalizeReceipt(receipt, spec)).toContain(JSON.stringify(ALPHA_BODY).slice(1, -1));
 });
@@ -188,11 +192,16 @@ test("both judge() sources round-trip into an anchorable receipt, and source rec
 
 test("every JudgeOpinion field has a receipt field, and the receipt invents none", () => {
   // A drift guard on the SHAPE rather than on one bound: the judge block's
-  // property set is the opinion's property set plus exactly `source`.
+  // property set is the opinion's property set plus exactly the two ENVELOPE
+  // fields — `source` (which produced the prose) and `mode` (whether the
+  // session adopted it). Neither is part of JudgeOpinion; both come off the
+  // JudgeOutcome envelope and the judgement row, so the split is stated here
+  // rather than left to whichever list happens to be longer.
+  const ENVELOPE = ["source", "mode"];
   const opinion = parseJudgeResponse(ONE_POSITION_ANSWER, input);
   const receiptKeys = Object.keys(schema.properties.judge.properties);
-  expect(receiptKeys.filter((key) => key !== "source").sort()).toEqual(Object.keys(opinion).sort());
-  expect(receiptKeys).toContain("source");
+  expect(receiptKeys.filter((key) => !ENVELOPE.includes(key)).sort()).toEqual(Object.keys(opinion).sort());
+  for (const key of ENVELOPE) expect(receiptKeys).toContain(key);
   expect(schema.properties.judge.additionalProperties).toBe(false);
 
   const rs = opinion.release_safety;

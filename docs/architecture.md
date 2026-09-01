@@ -1744,6 +1744,201 @@ asserting the digest a **consumer obligation** and says so in `digest_note`:
 must commit the digest of the golden beside its own code and assert it, or the
 on-chain anchor is never checked against this pin in CI.
 
+### 9.7.1 Assembling and publishing the receipt
+
+§9.7 pins the *format*; this is the code that produces one (issue #754).
+`backend/src/swarm/consensus-receipt.ts` turns one judged session into the
+payload, stores it once, and re-verifies it on every read.
+
+| Concern | Where it lives |
+|---|---|
+| The bytes, the schema, the arithmetic | **Imported** from `@robotmoney/contract/consensus-receipt` — `canonicalizeReceipt`, `validateReceipt`, `receiptSemanticErrors`, `participationBps`, `compareCodePoints`. Nothing about the format is restated in the backend. |
+| The assembly | `assembleConsensusReceipt()` — pure: no database, no clock, no configuration |
+| The database seam | `publishConsensusReceipt()` — idempotent, immutable, writes `swarm_consensus_receipts` |
+| The read | `GET /api/swarm/sessions/:id/consensus-receipt` — public, re-verified per request |
+| The trigger | `POST /api/swarm/admin/sessions/:id/consensus-receipt` — privileged, idempotent |
+| The store | `swarm_consensus_receipts` (migration 0042) — append-only **and** UPDATE-refusing |
+
+**The reference canonicalizer is imported, never re-derived.** A cross-repo pin
+whose executable form lives in two places is two pins. Everything the assembler
+adds is a *normalization the producer needs and the format does not describe*:
+`0x`-prefixing the bare sha256 hex `judge.ts` emits, truncating a `timestamptz`
+to whole seconds, zero-filling the sparse stance rollup to its fixed five keys,
+converting the float weight vector to bps, and sorting the signatures by
+`compareCodePoints`. Each is published in
+`consensus-receipt.canonicalization.json#assembler_obligations`, and the order —
+validate, recompute, **then** canonicalize — is normative, because
+`canonicalizeReceipt()` throws on an undefined required field rather than
+emitting bytes with the key missing.
+
+**A refusal, never a quietly incomplete receipt.** `ConsensusReceiptRefusal`
+carries a stable reason code that the admin route returns. The one that matters
+is `weights_not_canonical_four`: `optionalWeights()` accepts any bucket set and
+`meanTakeWeights()` unions whatever appears, so a session where every member
+submitted three buckets has a valid, publicly-served
+`swarm_recommendation.weights` schema 1.0 cannot carry. Omitting `weights` there
+would publish a signed artifact asserting the session produced no allocation
+while `GET /api/swarm/sessions/:id` serves a concrete one for the same session.
+`weights` is omitted **only** when `meanTakeWeights()` returned nothing at all.
+The vector itself is **read**, never re-derived — `meanTakeWeights()` still has
+exactly one caller — so the receipt and the public API cannot disagree.
+
+**Key rotation: the receipt embeds the key that SIGNED, not the roster's current
+one.** Every other read path in this repo resolves a take's key as
+`WHERE k.member_id = … AND k.active`, which is not necessarily the key that
+signed it — issue #697 is that defect at the per-take level and it is still
+open. The aggregate must not inherit it: a receipt is anchored on chain and
+re-verified by strangers who cannot ask what the roster looked like at the time.
+So assembly tries every one of the member's registered keys against that take's
+own signature and embeds the one that verifies; read-time verification then uses
+the embedded key and **never consults the roster**. A member may rotate,
+re-register or leave and the receipt keeps verifying exactly as it did on the
+day it was published. A signing key that is no longer registered at all is a
+refusal, not a receipt carrying an unverifiable signature.
+
+**What `verified: true` therefore means, and what it does not.** It means *each
+carried `canonical_submission` was signed by the key carried beside it* — not
+"member X endorses this". That is the deliberate consequence of never consulting
+the roster: the receipt attests to a **key**, and binding that key to a person
+was the roster's job at signing time rather than the receipt's forever after.
+
+**And it is why a key compromise has to be handled BEFORE publication.** There
+is no post-publication remedy in this design and that is worth stating plainly:
+revoking a key changes nothing a reader can see, because verification reads the
+embedded key; the row is append-only and UPDATE-refusing; and the anchored
+digest commits to those exact bytes, so a receipt cannot even be annotated.
+**If a member key is believed compromised, receipts for the affected sessions
+must not be published at all.** Adding a revocation list later would change what
+`verified` MEANS for receipts already anchored under schema 1.0, which is a
+major bump rather than an amendment. Published as
+`assembler_obligations.key_compromise_has_no_remedy`.
+
+**The embedded key must not be a low-order Ed25519 point, and that rule is in
+the PUBLISHED pin rather than only in this repo.** For the fourteen low-order
+encodings the single constant `0x01 || 0x00*63` verifies over any message, so an
+entry carrying one satisfies every structural, binding and arithmetic rule in
+the receipt while proving nothing about its member. This repo has refused such
+keys at decode time since issue #789 — but that gate is
+`backend/src/lib/signing.ts`, which `robotmoney-core` cannot import and does not
+run, so a verifier written to the pin with a stock ed25519 library would have
+accepted one. The blacklist therefore **lives in the contract**
+(`LOW_ORDER_ED25519_POINT_ENCODINGS`, seven masked encodings standing for the
+fourteen), `signing.ts` reads it from there so the two can never drift, and
+`receiptSemanticErrors()` — the one verifier function a cross-repo consumer
+imports — applies it. Stated in `verifier_invariants` and in the schema's
+`public_key` description, both naming libsodium's `ge25519_has_small_order` as
+the check a consumer needs.
+
+**These invariants only mean anything against the anchored digest.**
+`canonicalizeSubmission` covers a submission's own fields — not `session_id`,
+`created_at`, `prompt_hash`, `inputs_digest`, or the judge block — so **no
+analyst signature cryptographically binds the receipt it sits in**. A document
+that reuses published signatures under a fabricated session passes every
+invariant the pin lists. Only the keccak256 digest `robotmoney-core` anchors
+distinguishes the real receipt from that forgery, which makes checking it a
+consumer obligation rather than a nicety. Published as the two `SCOPE, NOT AN
+INVARIANT` entries in `verifier_invariants` so a cross-repo implementer cannot
+read the list as a self-contained procedure.
+
+**Read-time verification is three checks, and one failure fails the whole
+receipt.** Mirroring `toVerifiedTake()`, which recomputes rather than trusting a
+stored `verified` column, and extending it to what an aggregate adds: (1) every
+embedded signature verifies against the key embedded beside it, over the
+`canonical_submission` string **as carried** — never re-parsed, because whether
+`0.15` survives a JSON round trip is a property of one serializer rather than of
+the signed bytes; (2) the payload still canonicalizes to the bytes published for
+it — an analyst signature covers only that analyst's own submission, so the
+rationale, the quorum and the weights are outside all of them and signatures
+alone cannot detect a tampered payload; (3) the payload still validates and its
+invariants still recompute. A receipt that fails any of them is served `200`
+with `verified: false` and the reasons stated — never withheld, and never passed
+off as valid.
+
+**Immutable once published, at the database.** `swarm_consensus_receipts` joins
+the append-only set and additionally refuses `UPDATE`
+(`rm_consensus_receipt_immutable()`, migration 0042). For every other protected
+table erasure is the boundary and modification is legitimate; here it is not,
+because the anchored digest commits to those exact bytes — an `UPDATE` does not
+amend the receipt, it orphans the anchor. `publishConsensusReceipt()` re-reads
+before it assembles, so a second call returns the row already on file even if
+the session's prose has since been rewritten by a later judge run.
+
+**Four gates before anything is assembled, and every one of them was reachable
+through documented admin operations.** `loadAssemblyInput()` reads three
+independently-timed sources — the frozen take set, the judgement row, and the
+aggregation-time `swarm_recommendation` — and nothing used to hold them
+together, so two supported operator paths produced a signed, immutable,
+chain-anchored artifact that contradicted the session it was about, served as
+`verified: true`.
+
+1. **The session must be terminal (`published`).** There was no state predicate
+   at all. Every non-terminal state can still be moved: `aggregated ->
+   window_closed -> collecting` reopens the window, a member amends, aggregation
+   re-runs, and `GET /api/swarm/sessions/:id` now serves a different allocation
+   — while the receipt's bytes are immutable and anchored. Refusing until the
+   session can no longer move makes that unreachable rather than unlikely. **The
+   operator order is therefore: publish the session, then publish its receipt.**
+   A session anyone may still want to reopen must be reopened *before* the
+   receipt exists. Refusal: `session_not_published`.
+2. **The rollup must describe the takes that exist now.** A member may file a
+   *first* take right up to the advertised `window_closes_at` whatever state the
+   session is in — the timestamp is the timing contract, not the state — so the
+   rollup can legitimately be one member short. Refusal:
+   `session_not_reaggregated`, whose message names the remedy (re-aggregate and
+   re-judge) rather than surfacing as two arithmetic errors that read like
+   corruption.
+3. **The judgement must be the one the session adopted.** The judge block used
+   to be copied from the newest `swarm_session_judgements` row with no filter on
+   mode and no check that the opinion ever reached the session. In `shadow` —
+   *the documented rollout mode* — `applyOpinion()` is never called and the
+   session keeps its aggregator-authored prose, so by the design of the rollout
+   the first receipts ever published would have carried model prose the session
+   never showed. A `mode = 'enforce'` filter alone is insufficient (an enforce
+   run whose `applyOpinion()` returned false leaves an unadopted enforce row),
+   so the selection is an equality in three parts: the digests the session's own
+   `swarm_recommendation.judge` names, `mode = 'enforce'`, and finally the
+   `{rationale, disagreements, release_safety}` the session actually carries.
+   Refusal: `judgement_not_adopted`.
+4. **That judgement must have been formed over this take set.** The judge input
+   is rebuilt from the frozen set just loaded and `inputsDigest()` compared
+   against the row. One comparison closes stances, weights, the judge's prose,
+   its *verbatim quotation of a named analyst* in
+   `disagreements[].positions[].view`, and `prompt_hash` divergence at once.
+   Refusal: `judgement_stale`.
+
+**Disclosed in the signed bytes, not only enforced by the producer.** `judge`
+carries `mode`, so a verifier holding nothing but the receipt can tell an
+adopted opinion from a withheld one, and `receiptSemanticErrors` refuses
+anything but `enforce`. Each `analyst_signatures[]` entry carries `revision`,
+because takes have been amendable since migration 0028 and "member X's take"
+does not otherwise name a unique object. `swarm_consensus_receipts` records the
+session's `version` beside the row so a later divergence would be a detectable
+fact; the per-member revisions live *inside* the payload, which is stronger,
+because the anchor covers them.
+
+**The shipped verifier recomputes rather than counts.** `receiptSemanticErrors`
+— the function robotmoney-core and any third party runs — used to check only
+cardinality, so any change preserving the member count while changing content
+passed silently. It now parses each carried `canonical_submission` and requires
+its `memberId` to equal the entry's `member_id` and its `subjectId` the
+receipt's (otherwise member B's genuinely-signed submission filed under member
+A's entry verifies clean), recomputes `stances` as the histogram of those
+submissions, and recomputes `weights` as their deterministic mean in bps.
+**The signature is still verified over the raw carried string, never over a
+re-serialization** — whether `0.15` survives a JSON round trip is a property of
+one serializer rather than of the signed bytes. Every one of these is published
+in `consensus-receipt.canonicalization.json#verifier_invariants`, so a
+cross-repo verifier inherits them rather than reimplementing a weaker check.
+
+**The conformance vector.** `consensus-receipt.assembler-input.json` is a
+committed assembler input; feeding it to `assembleConsensusReceipt()` reproduces
+`consensus-receipt.valid.json` and, byte for byte,
+`consensus-receipt.valid.canonical.txt`. So the pinned golden is *regenerated by
+the shipped assembler* rather than transcribed, which is what makes it a fixed
+target for robotmoney-core#1280 rather than a claim about a hand-written file.
+The keccak256 digest over those bytes remains the consumer obligation §9.7
+describes; nothing in this repository can compute it.
+
 ### 9.8 Testing & smoke
 
 Decision [D25](./decisions.md#d25--external-actor-rail-for-simulated-independent-entities)

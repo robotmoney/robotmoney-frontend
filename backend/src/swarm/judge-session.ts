@@ -80,7 +80,26 @@ export async function setJudgeConfig(
 export async function buildJudgeInput(sessionId: string, minTakes: number): Promise<JudgeInput | null> {
   const frozen = await loadFrozenTakeSet(sessionId);
   if (!frozen) return null;
+  return judgeInputFromFrozen(frozen, minTakes);
+}
+
+/**
+ * The same input, built from a frozen take set the CALLER already loaded.
+ *
+ * Extracted for the consensus receipt (issue #754), which has to rebuild the
+ * judge input over the exact set it is about to embed and compare
+ * `inputsDigest()` against the judgement on file. Re-entering
+ * `buildJudgeInput()` there would issue a SECOND `loadFrozenTakeSet` query and
+ * digest whatever that one returned — which is a different take set from the
+ * one being embedded whenever a take lands between the two reads, i.e. exactly
+ * the divergence the comparison exists to detect.
+ */
+export async function judgeInputFromFrozen(
+  frozen: NonNullable<Awaited<ReturnType<typeof loadFrozenTakeSet>>>,
+  minTakes: number,
+): Promise<JudgeInput> {
   const s = frozen.session;
+  const sessionId = String(s.id);
   const briefRow = (await sql`SELECT body FROM swarm_briefs WHERE session_id = ${sessionId}`)[0] as
     | { body: unknown }
     | undefined;

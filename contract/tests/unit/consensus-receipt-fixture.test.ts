@@ -29,8 +29,12 @@ import {
   RECEIPT_SCHEMA_VERSION,
   RECEIPT_STANCE_KEYS,
   RECEIPT_TRAILING_NEWLINE,
+  LOW_ORDER_ED25519_POINT_ENCODINGS,
+  bucketSharesToBps,
   canonicalizeReceipt,
   compareCodePoints,
+  isLowOrderEd25519PublicKey,
+  isLowOrderEd25519PublicKeyBytes,
   participationBps,
   receiptSemanticErrors,
   validateReceipt,
@@ -414,7 +418,7 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     // release_safety }`. The 1.0 draft also carried `judge.consensus`, which no
     // judge produces; its only producer is buildConsensus() in
     // backend/src/swarm/domain.ts, and that restates quorum/stances in English.
-    const order = ["rationale", "disagreements", "release_safety", "source"];
+    const order = ["rationale", "disagreements", "release_safety", "source", "mode"];
     expect(schema.properties.judge.required).toEqual(order);
     expect(Object.keys(schema.properties.judge.properties)).toEqual(order);
     expect(schema.properties.judge.additionalProperties).toBe(false);
@@ -458,6 +462,143 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     const noPositions = structuredClone(valid);
     noPositions.judge.disagreements[0].positions = [];
     expect(validateReceipt(noPositions, schema)).toContain("/judge/disagreements/0/positions: minItems 1");
+  });
+
+  test("judge.mode is in the signed bytes, and only an ADOPTED opinion is publishable", () => {
+    // WHY THIS FIELD EXISTS. `shadow` records the judgement and leaves the
+    // session alone — and shadow is the documented rollout mode operators are
+    // told to sit in "for as long as it takes to trust it". A receipt that
+    // copied whatever judgement row existed therefore carried, BY DESIGN OF THE
+    // ROLLOUT, prose the session never showed: model-authored rationale with
+    // `source: "model"` next to a session still serving the aggregator's. The
+    // mode is disclosed inside the bytes so a verifier holding only the receipt
+    // can tell the two apart, and it is an INVARIANT so the refusal is one a
+    // stranger reproduces rather than one only the producer applies.
+    expect(schema.properties.judge.properties.mode.enum).toEqual(["shadow", "enforce"]);
+    expect(spec.nested_field_order.judge.at(-1)).toBe("mode");
+    for (const receipt of [valid, validNoWeights, escaping]) expect(receipt.judge.mode).toBe("enforce");
+    expect(golden).toContain('"source":"model","mode":"enforce"');
+    expect(receiptSemanticErrors(valid, spec)).toEqual([]);
+
+    const withheld = structuredClone(valid);
+    withheld.judge.mode = "shadow";
+    // Still a STRUCTURALLY VALID document — that is the point of keeping
+    // "shadow" in the enum — and still refused, by name.
+    expect(validateReceipt(withheld, schema)).toEqual([]);
+    expect(receiptSemanticErrors(withheld, spec)).toContain(
+      'judge: mode is "shadow", not "enforce" — the opinion was recorded but never adopted by the session',
+    );
+    // And it cannot be omitted to dodge the check: the canonicalizer refuses.
+    const missing = structuredClone(valid);
+    delete missing.judge.mode;
+    expect(validateReceipt(missing, schema)).toContain('/judge: missing required "mode"');
+    expect(() => canonicalizeReceipt(missing, spec)).toThrow(/required field "\/judge\/mode" is undefined/);
+  });
+
+  test("every entry states WHICH revision it carries", () => {
+    // Takes are amendable (migration 0028 replaced one-take-per-member with one
+    // per member per revision), so "member X's take in session S" does not name
+    // a unique object. Without this the receipt could not be lined up against
+    // the take store at all.
+    expect(schema.definitions.analyst_signature.required.at(-1)).toBe("revision");
+    expect(schema.definitions.analyst_signature.properties.revision.minimum).toBe(1);
+    expect(spec.nested_field_order["analyst_signatures[]"].at(-1)).toBe("revision");
+    for (const receipt of [valid, validNoWeights, escaping]) {
+      for (const entry of receipt.analyst_signatures) expect(entry.revision).toBeGreaterThanOrEqual(1);
+    }
+    const zero = structuredClone(valid);
+    zero.analyst_signatures[0].revision = 0;
+    expect(validateReceipt(zero, schema)).toContain("/analyst_signatures/0/revision: minimum 1");
+  });
+
+  test("a submission filed under the wrong member, or about another subject, is caught by the SHIPPED verifier", () => {
+    // THE GAP THIS CLOSES. assembleConsensusReceipt binds each payload at WRITE
+    // time; none of those assertions existed on the read side, and
+    // receiptSemanticErrors — the verifier robotmoney-core and any third party
+    // actually runs — never inspected canonical_submission at all. So a receipt
+    // in which member B's genuinely-signed submission sits under member A's
+    // entry, with B's key beside it, verified clean: `verified` certified only
+    // that N well-formed signatures over N strings existed.
+    expect(spec.verifier_invariants.join(" ")).toContain("memberId == member_id");
+    expect(spec.assembler_obligations.submission_binding).toContain("RAW CARRIED STRING");
+
+    // Two entries' submissions swapped — every signature still verifies against
+    // the key beside it, because the keys move with them.
+    const swapped = structuredClone(valid);
+    const [a, b] = swapped.analyst_signatures;
+    [a.canonical_submission, b.canonical_submission] = [b.canonical_submission, a.canonical_submission];
+    [a.public_key, b.public_key] = [b.public_key, a.public_key];
+    [a.signature, b.signature] = [b.signature, a.signature];
+    const errors = receiptSemanticErrors(swapped, spec);
+    expect(errors.join(" ")).toContain("is filed under");
+    expect(errors.filter((e: string) => e.includes("is filed under"))).toHaveLength(2);
+
+    // A submission about a different subject, carried into this receipt.
+    const elsewhere = structuredClone(valid);
+    const payload = JSON.parse(elsewhere.analyst_signatures[0].canonical_submission);
+    payload.subjectId = "some-other-subject";
+    elsewhere.analyst_signatures[0].canonical_submission = JSON.stringify(payload);
+    expect(receiptSemanticErrors(elsewhere, spec).join(" ")).toContain(
+      'concerns subject "some-other-subject", not "treasury-allocation"',
+    );
+
+    // Unparseable bytes are a named error, never a thrown exception that takes
+    // the whole verification down with it.
+    const garbage = structuredClone(valid);
+    garbage.analyst_signatures[0].canonical_submission = "{not json";
+    expect(receiptSemanticErrors(garbage, spec)).toContain(
+      "analyst_signatures/0: canonical_submission is not parseable JSON",
+    );
+  });
+
+  test("stances and weights are RECOMPUTED from the embedded submissions, not merely counted", () => {
+    // WHAT CARDINALITY MISSED. stances and weights are written by the
+    // AGGREGATOR at aggregation time; analyst_signatures is derived at PUBLISH
+    // time. The only cross-check was the stance TOTAL against quorum.submitted,
+    // so any change preserving member count while changing content passed
+    // silently — which is exactly how an amended take produced a receipt
+    // asserting an allocation the session no longer served, reported verified.
+    expect(receiptSemanticErrors(valid, spec)).toEqual([]);
+
+    // One stance moved. The total still equals quorum.submitted, so the old
+    // check was blind to it.
+    const restanced = structuredClone(valid);
+    restanced.stances = { bearish: 1, cautious: 0, neutral: 0, constructive: 1, bullish: 0 };
+    expect(restanced.stances.bearish + restanced.stances.constructive).toBe(restanced.quorum.submitted);
+    const stanceErrors = receiptSemanticErrors(restanced, spec);
+    expect(stanceErrors).not.toContain("stances: counts do not sum to quorum.submitted");
+    expect(stanceErrors).toContain("stances: bearish is 1 but the embedded submissions carry 0");
+    expect(stanceErrors).toContain("stances: neutral is 0 but the embedded submissions carry 1");
+
+    // A weight vector that still closes on 10000 in canonical order — the two
+    // checks that already existed — but is not the mean of the takes carried
+    // beside it.
+    const reweighted = structuredClone(valid);
+    reweighted.weights = [
+      { bucket: "agent_tokens", weight_bps: 9000 },
+      { bucket: "conservative_defi_yield", weight_bps: 400 },
+      { bucket: "protocol_tokens", weight_bps: 400 },
+      { bucket: "real_world_assets", weight_bps: 200 },
+    ];
+    const weightErrors = receiptSemanticErrors(reweighted, spec);
+    expect(weightErrors).not.toContain("weights: not in canonical bucket order");
+    expect(weightErrors.some((e: string) => e.startsWith("weights: bps sum"))).toBe(false);
+    expect(weightErrors.join(" ")).toContain('"weight_bps":1250');
+
+    // And the recomputation really is the producer's rule: the golden's own
+    // vector is the mean of its own two submissions, to the bps.
+    expect(valid.weights).toEqual([
+      { bucket: "agent_tokens", weight_bps: 1250 },
+      { bucket: "conservative_defi_yield", weight_bps: 6000 },
+      { bucket: "protocol_tokens", weight_bps: 1750 },
+      { bucket: "real_world_assets", weight_bps: 1000 },
+    ]);
+    expect(spec.assembler_obligations.weights_recomputation).toContain("OMISSION IS NOT CHECKABLE");
+    // A receipt that omits weights is not asked to justify the omission — a
+    // position_actions subject produces no vector however many members
+    // submitted one, and the receipt does not say which kind of subject it is.
+    expect(receiptSemanticErrors(escaping, spec)).toEqual([]);
+    expect("weights" in escaping).toBe(false);
   });
 
   test("release_safety carries the shipped shape whole, so a verifier recomputes rather than trusts", () => {
@@ -551,6 +692,48 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     }
   });
 
+  test("bps_conversion has exactly ONE implementation, and it is the exported one", () => {
+    // THE RULE IS NEEDED IN THREE PLACES — the producer's toBps()
+    // (backend/src/swarm/consensus-receipt.ts), the verifier's weights
+    // recomputation in receiptSemanticErrors, and the spec's bps_conversion
+    // prose — and a rule spelled three times is three rules. THE RULE ITSELF —
+    // largest remainder, its tie-break, its arithmetic domain and its
+    // negative-dust clamp — is exercised in
+    // consensus-receipt-bps-conversion.test.ts (#798/#801); what is checked
+    // HERE is the narrower fixture-level claim: the committed receipts'
+    // `weights` are reproducible by that one exported function, so a change to
+    // it cannot leave the goldens describing a rule nothing implements.
+    const order = [...RECEIPT_CANONICAL_BUCKET_ORDER];
+    const shares = (values: number[]) => new Map(order.map((bucket, i) => [bucket, values[i]!]));
+
+    // The committed golden's own vector, converted by the exported rule. (The
+    // escaping fixture carries no `weights` — it exists to pin string escaping.)
+    expect(valid.weights).toEqual(bucketSharesToBps(shares([0.125, 0.6, 0.175, 0.1]), order));
+
+    // THE DEFECT THIS TEST USED TO PIN IS GONE, and that is asserted rather
+    // than merely no longer mentioned. Under the superseded settle-the-last
+    // rule a vector whose last canonical bucket is exactly zero and whose
+    // prefix does not land on whole bps settled that bucket NEGATIVE, and the
+    // producer refused the session outright — four of the six real archived
+    // allocations have that shape. Largest remainder closes on exactly
+    // BPS_DENOMINATOR for all of them, with nothing negative anywhere.
+    for (const vector of [
+      [1 / 3, 1 / 3, 1 / 3, 0],
+      [0.4, 0.30005, 0.29995, 0],
+      [0.00005, 0.5, 0.3, 0.19995],
+      [0.25, 0.25, 0.25, 0.25],
+      [1 / 7, 2 / 7, 3 / 7, 1 / 7],
+    ]) {
+      const converted = bucketSharesToBps(shares(vector), order);
+      expect(converted.map((e) => e.bucket)).toEqual(order);
+      expect(converted.reduce((sum, e) => sum + e.weight_bps, 0)).toBe(10_000);
+      for (const entry of converted) expect(entry.weight_bps).toBeGreaterThanOrEqual(0);
+    }
+    expect(spec.bps_conversion.rule).toContain("LARGEST REMAINDER");
+    expect(spec.bps_conversion.superseded_rule).toContain("NO REPRESENTATION");
+    expect(spec.bps_conversion.reference).toContain("bucketSharesToBps()");
+  });
+
   test("the weights cardinality obligation is stated, not left to the assembler", () => {
     expect(schema.required).not.toContain("weights");
     expect(schema.properties.weights.minItems).toBe(4);
@@ -616,6 +799,7 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect(schemaErrors).toContain("/judge/rationale: minLength 1");
     expect(schemaErrors).toContain('/judge/release_safety/release: must be one of ["safe","hold"]');
     expect(schemaErrors).toContain('/judge/source: must be one of ["model","fallback"]');
+    expect(schemaErrors).toContain('/judge/mode: must be one of ["shadow","enforce"]');
     expect(schemaErrors).toContain("/analyst_signatures: minItems 1");
 
     const semantic = receiptSemanticErrors(invalid, spec);
@@ -685,5 +869,68 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect(spec.valid_fixture_digest).toBeUndefined();
     expect(spec.digest_algorithm).toBe("keccak256");
     expect(spec.digest_note).toContain("CONSUMER OBLIGATION");
+  });
+
+  // ── the low-order key rule, which is the pin's only crypto obligation ─────
+
+  test("a LOW-ORDER embedded public_key is refused by the shipped verifier, and the rule is published", () => {
+    // THE VULNERABILITY THIS CLOSES. For the fourteen low-order Ed25519 point
+    // encodings the single constant signature `0x01 || 0x00*63` verifies over
+    // ANY message. The producing repo has refused such keys at decode time
+    // since issue #789 — but that gate is backend-only, and
+    // `receiptSemanticErrors` is the one verifier function robotmoney-core
+    // imports. Without the rule HERE, a verifier written to the published pin
+    // with a stock ed25519 library accepts an entry that proves nothing about
+    // its member, and every other invariant passes over it.
+    expect(LOW_ORDER_ED25519_POINT_ENCODINGS).toHaveLength(7);
+
+    const encode = (hex: string, signBit: number) => {
+      const bytes = Uint8Array.from(hex.match(/../g)!.map((h) => parseInt(h, 16)));
+      bytes[31] = ((bytes[31] as number) & 0x7f) | signBit;
+      return { bytes, b64: btoa(String.fromCharCode(...bytes)) };
+    };
+
+    // Seven y-values x two settings of byte 31's sign bit = the fourteen
+    // encodings, every one of them detected through BOTH entry points.
+    let checked = 0;
+    for (const hex of LOW_ORDER_ED25519_POINT_ENCODINGS) {
+      for (const signBit of [0x00, 0x80]) {
+        const { bytes, b64 } = encode(hex, signBit);
+        expect(isLowOrderEd25519PublicKeyBytes(bytes)).toBe(true);
+        expect(isLowOrderEd25519PublicKey(b64)).toBe(true);
+        // Each one satisfies the SCHEMA's base64 pattern — which is exactly why
+        // this has to be a semantic rule: the shape cannot express it.
+        expect(new RegExp(schema.definitions.analyst_signature.properties.public_key.pattern).test(b64)).toBe(true);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(14);
+
+    // AND THE VERIFIER ACTUALLY APPLIES IT, over the committed fixture — the
+    // exact substitution that used to come back clean.
+    expect(receiptSemanticErrors(valid, spec)).toEqual([]);
+    const attacked = structuredClone(valid);
+    attacked.analyst_signatures[0].public_key = encode(LOW_ORDER_ED25519_POINT_ENCODINGS[1]!, 0x00).b64;
+    // Still schema-valid: the shape is untouched, only the point is bad.
+    expect(validateReceipt(attacked, schema)).toEqual([]);
+    expect(receiptSemanticErrors(attacked, spec).join(" ")).toContain("LOW-ORDER");
+
+    // An honest key is NOT refused — the rule must not over-reject.
+    expect(isLowOrderEd25519PublicKey(valid.analyst_signatures[0].public_key)).toBe(false);
+    // Malformed input answers "not one of the fourteen", never "usable".
+    expect(isLowOrderEd25519PublicKey("not base64!!")).toBe(false);
+    expect(isLowOrderEd25519PublicKeyBytes(new Uint8Array(31))).toBe(false);
+
+    // PUBLISHED, not merely implemented: core reads these two documents.
+    const invariants = spec.verifier_invariants.join(" ");
+    expect(invariants).toContain("LOW-ORDER");
+    expect(invariants).toContain("ge25519_has_small_order");
+    expect(schema.definitions.analyst_signature.properties.public_key.description).toContain("LOW-ORDER");
+
+    // The two scope statements, so the list cannot be read as a self-contained
+    // procedure: nothing binds the receipt to its signatures except the anchor.
+    expect(invariants).toContain("SCOPE, NOT AN INVARIANT");
+    expect(invariants).toContain("anchored");
+    expect(spec.assembler_obligations.key_compromise_has_no_remedy).toContain("must not be published");
   });
 });

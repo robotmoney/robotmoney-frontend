@@ -71,7 +71,7 @@
     "judge": {
       "type": "object",
       "description": "The shipped JudgeOpinion (backend/src/swarm/judge.ts) field for field — {rationale, disagreements, release_safety} — plus `source` from the JudgeOutcome envelope. The receipt is the signed artifact and the judge opinion is what the backend produces; keeping the two identical is what makes 'the receipt says what the judge said' checkable rather than asserted. The rest of the JudgeOutcome ENVELOPE is deliberately not mirrored: prompt_hash and inputs_digest ride at the receipt's top level (they pin the whole session, not just the prose), take_count and min_takes ride inside release_safety where a verifier needs them, and fallbackReason/model are omitted — fallbackReason interpolates model-controlled text and is operator debugging rather than a public commitment, and model is deployment configuration that would make the anchored bytes depend on a vendor string. Both remain appendable after `source` in a later minor version without changing any byte already published.",
-      "required": ["rationale", "disagreements", "release_safety", "source"],
+      "required": ["rationale", "disagreements", "release_safety", "source", "mode"],
       "additionalProperties": false,
       "properties": {
         "rationale": {
@@ -120,6 +120,11 @@
           "type": "string",
           "enum": ["model", "fallback"],
           "description": "JudgeOutcome.source. THE ONLY FIELD THAT SEPARATES MODEL PROSE FROM TEMPLATE PROSE. templateOpinion() calls the same buildRationale()/buildDisagreements() the aggregator uses and runJudge() stamps the same prompt_hash and inputs_digest on both paths, so nothing else in this payload — not the hashes, not the shape of the opinion — tells a verifier whether a model actually read the takes. \"fallback\" is not a defect: it is the fail-closed path (model unconfigured, timed out, answered unparsably, or smuggled a weight), and a fallback receipt is a complete, valid, anchorable receipt. It is carried so the artifact is attributable to exactly what produced it, which is the reason this phase exists."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["shadow", "enforce"],
+          "description": "swarm_session_judgements.mode — WHETHER THE SESSION ADOPTED THIS OPINION OR MERELY RECORDED IT. In `shadow` the judgement row is written and applyOpinion() is never called, so the session keeps its aggregator-authored prose; in `enforce` the opinion is written onto swarm_recommendation. Shadow is the DOCUMENTED ROLLOUT MODE (judge-session.ts: operators sit in it \"for as long as it takes to trust it\"), so without this field the first receipts ever published would have carried, in anchored bytes, a rationale the session never showed — with no refusal and no warning. Only \"enforce\" is publishable: receiptSemanticErrors refuses anything else, and the assembler independently refuses to embed a judgement the session's own swarm_recommendation.judge does not name. \"shadow\" stays in the enum so that refusal is EXPRESSIBLE — a receipt carrying it is a well-formed document that fails a recomputable invariant, rather than one no vocabulary can describe — and so a later mode can be added without retyping the field."
         }
       }
     },
@@ -167,7 +172,7 @@
     },
     "analyst_signature": {
       "type": "object",
-      "required": ["member_id", "public_key", "canonical_submission", "signature"],
+      "required": ["member_id", "public_key", "canonical_submission", "signature", "revision"],
       "additionalProperties": false,
       "properties": {
         "member_id": {
@@ -178,17 +183,22 @@
         "public_key": {
           "type": "string",
           "pattern": "^[A-Za-z0-9+/]{43}=$",
-          "description": "Standard padded base64 of a raw 32-byte Ed25519 public key."
+          "description": "Standard padded base64 of a raw 32-byte Ed25519 public key. IT MUST NOT BE ONE OF THE FOURTEEN LOW-ORDER Ed25519 POINT ENCODINGS: for those the single constant signature `0x01 || 0x00*63` verifies over ANY message, so the entry would satisfy every other rule in this schema and the canonicalization spec while proving nothing about its member. A stock ed25519 verify does NOT screen for this — use a library that rejects small-order points (libsodium `ge25519_has_small_order`). The pattern above cannot express it, so it is a SEMANTIC rule: see verifier_invariants in consensus-receipt.canonicalization.json, the published LOW_ORDER_ED25519_POINT_ENCODINGS table, and receiptSemanticErrors(), which applies it."
         },
         "canonical_submission": {
           "type": "string",
           "minLength": 2,
-          "description": "Exact UTF-8 JSON bytes produced by robotmoney-frontend canonicalizeSubmission. Carrying the string avoids reparsing float weights before signature verification."
+          "description": "Exact UTF-8 JSON bytes produced by robotmoney-frontend canonicalizeSubmission. Carrying the string avoids reparsing float weights before signature verification. THE SIGNATURE IS ALWAYS VERIFIED OVER THIS STRING AS CARRIED, never over a re-serialization. A verifier may additionally PARSE it to check the binding invariants (submission_binding in consensus-receipt.canonicalization.json): its `memberId` must equal this entry's member_id and its `subjectId` must equal the receipt's subject_id, or member B's genuinely-signed submission filed under member A's entry verifies clean."
         },
         "signature": {
           "type": "string",
           "pattern": "^[A-Za-z0-9+/]{86}==$",
           "description": "Standard padded base64 of the raw 64-byte Ed25519 signature over canonical_submission."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "swarm_recommendations.revision of the take this entry carries. Takes are AMENDABLE (migration 0028 replaced one-take-per-member with one-take-per-member-per-revision), so \"member X's take in session S\" does not name a unique object and a receipt that omitted this could not be lined up against the take store at all. Carried per entry rather than once for the session because members amend independently; the set of (member_id, revision) pairs is the receipt's statement of exactly which take set it attests to."
         }
       }
     },

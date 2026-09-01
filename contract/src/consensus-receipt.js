@@ -258,12 +258,27 @@ export function canonicalizeReceipt(receipt, spec) {
         concerns: [...required(releaseSafety, "concerns", "/judge/release_safety/concerns")],
       },
       source: required(judge, "source", "/judge/source"),
+      // THE MODE THE OPINION WAS FORMED UNDER, INSIDE THE SIGNED BYTES.
+      // `swarm_session_judgements.mode` records whether the judge was running
+      // in `shadow` (record the opinion, leave the session alone) or `enforce`
+      // (record it AND write it onto the session). Without this field the
+      // receipt cannot distinguish an opinion the session adopted from one it
+      // withheld — and shadow is the documented rollout mode, so the first
+      // receipts ever published would have carried prose the session never
+      // showed. See judge_mode_disclosure in the canonicalization spec, and
+      // the recomputable invariant below that refuses anything but `enforce`.
+      mode: required(judge, "mode", "/judge/mode"),
     },
     analyst_signatures: signatures.map((item, i) => ({
       member_id: required(item, "member_id", `/analyst_signatures/${i}/member_id`),
       public_key: required(item, "public_key", `/analyst_signatures/${i}/public_key`),
       canonical_submission: required(item, "canonical_submission", `/analyst_signatures/${i}/canonical_submission`),
       signature: required(item, "signature", `/analyst_signatures/${i}/signature`),
+      // WHICH REVISION THIS IS. Takes are amendable (migration 0028), so
+      // "member X's take" is not a unique object; the receipt states which one
+      // it carries so a reader can line the receipt up against the take store
+      // rather than assume the two describe the same revision.
+      revision: required(item, "revision", `/analyst_signatures/${i}/revision`),
     })),
   };
   if (receipt.weights != null) {
@@ -538,6 +553,173 @@ export function bucketSharesToBps(shares, bucketOrder) {
   return entries.map(({ bucket, weight_bps }) => ({ bucket, weight_bps }));
 }
 
+// ── Recomputing the rollup from the embedded submissions ────────────────────
+// `stances` and `weights` are written by the AGGREGATOR at aggregation time,
+// while `analyst_signatures` is derived at PUBLISH time from the frozen take
+// set. Nothing used to hold the two together beyond cardinality — the stance
+// total and the signature count — so any change that preserved the member count
+// while changing content passed silently, which is exactly how an amended take
+// produced a receipt asserting an allocation the session no longer served.
+//
+// Every ingredient is already inside the receipt: each `canonical_submission`
+// carries its author's own stance and weight vector. So this is a
+// RECOMPUTATION a stranger holding nothing but the receipt can perform, and
+// therefore it belongs here in the shipped verifier rather than in the
+// assembler's private write-time assertions.
+
+// ── The embedded analyst key must not be a low-order point ──────────────────
+// THIS IS PART OF THE PUBLISHED PIN, NOT A BACKEND DETAIL, and it is here
+// because `receiptSemanticErrors` is the one verifier function a cross-repo
+// consumer imports. The producing repo has rejected low-order keys at decode
+// time since issue #789 — but that gate lives in
+// backend/src/lib/signing.ts, which robotmoney-core cannot import and does not
+// run. A verifier written to the published `verifier_invariants` with a stock
+// ed25519 library would therefore accept an entry whose `public_key` is one of
+// these encodings, and for those the single constant signature
+// `0x01 || 0x00*63` verifies over ANY message — so every other invariant in
+// this file could pass over a submission nobody signed. That is issue #789
+// re-opened at the repository boundary, which is exactly the boundary this
+// receipt exists to cross.
+//
+// SEVEN Y-VALUES, FOURTEEN ENCODINGS. Byte 31's high bit is the x-sign, and
+// both settings of it decode to a low-order point for every entry, so the bit
+// is masked before comparing and each row below stands for two accepted
+// encodings. The list is the small-order subgroup plus the three non-canonical
+// y >= p spellings; it is the same set libsodium's
+// `crypto_core_ed25519_is_valid_point` / `ge25519_has_small_order` screen.
+//
+// NO HONEST KEY CAN COLLIDE. A keypair's public half is [k]B in the
+// prime-order subgroup, so reaching one of these would mean hitting 8 points
+// out of ~2^252.
+export const LOW_ORDER_ED25519_POINT_ENCODINGS = Object.freeze([
+  "0000000000000000000000000000000000000000000000000000000000000000",
+  "0100000000000000000000000000000000000000000000000000000000000000",
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+]);
+
+const B64_STANDARD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/**
+ * Standard padded base64 to bytes, or null. Hand-rolled rather than `atob` so
+ * this module keeps its zero-dependency, zero-ambient-API discipline and so
+ * malformed input is a null rather than a throw inside a verifier.
+ */
+function standardBase64ToBytes(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length % 4 !== 0) return null;
+  let pad = 0;
+  while (pad < 2 && value[value.length - 1 - pad] === "=") pad += 1;
+  let acc = 0;
+  let bits = 0;
+  let written = 0;
+  const out = new Uint8Array((value.length / 4) * 3 - pad);
+  for (let i = 0; i < value.length - pad; i++) {
+    const digit = B64_STANDARD.indexOf(value[i]);
+    if (digit < 0) return null;
+    acc = (acc << 6) | digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[written] = (acc >> bits) & 0xff;
+      written += 1;
+    }
+  }
+  return written === out.length ? out : null;
+}
+
+/**
+ * True when `bytes` is one of the fourteen low-order Ed25519 point encodings.
+ *
+ * ANSWERS ONLY THAT ONE QUESTION. A non-32-byte input is `false` — "not one of
+ * the fourteen" — and NOT a statement that the key is usable. Shape validation
+ * is the caller's separate obligation, and both callers do it first:
+ * `receiptSemanticErrors` below checks the schema's base64 shape before asking,
+ * and the producer's `canonicalPublicKeyBytes` (backend/src/lib/signing.ts)
+ * decodes to exactly 32 bytes before asking. Ordering it the other way would
+ * let a malformed key answer "not low order" and be waved through.
+ */
+export function isLowOrderEd25519PublicKeyBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length !== 32) return false;
+  let hex = "";
+  for (let i = 0; i < 32; i++) {
+    const byte = i === 31 ? bytes[31] & 0x7f : bytes[i];
+    hex += byte.toString(16).padStart(2, "0");
+  }
+  return LOW_ORDER_ED25519_POINT_ENCODINGS.includes(hex);
+}
+
+/**
+ * The same predicate over a receipt's `public_key` as carried: standard padded
+ * base64 of a raw 32-byte key. Malformed base64 is `false` for the reason given
+ * above — it is not low-order, it is not a key at all, and that is a different
+ * error the caller reports separately.
+ */
+export function isLowOrderEd25519PublicKey(publicKeyB64) {
+  return isLowOrderEd25519PublicKeyBytes(standardBase64ToBytes(publicKeyB64));
+}
+
+const round8 = (value) => Math.round(value * 1e8) / 1e8;
+
+/**
+ * One analyst's weight vector, normalized to sum 1 — the reference for
+ * `normalizedTakeWeights()` in backend/src/swarm/domain.ts. Returns null for a
+ * take that carries no usable vector, which is a legal take rather than an
+ * error: `weights` is optional on a submission.
+ */
+function normalizedSubmissionWeights(value) {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const seen = new Set();
+  const entries = [];
+  let total = 0;
+  for (const candidate of value) {
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const { bucket, weight } = candidate;
+    if (typeof bucket !== "string" || bucket.trim() === "" || seen.has(bucket) ||
+        typeof weight !== "number" || !Number.isFinite(weight) || weight < 0) return null;
+    seen.add(bucket);
+    entries.push({ bucket, weight });
+    total += weight;
+  }
+  if (!(total > 0) || !Number.isFinite(total)) return null;
+  return entries.map(({ bucket, weight }) => ({ bucket, weight: weight / total }));
+}
+
+/**
+ * The deterministic mean of already-normalized vectors, in bps — the reference
+ * for `meanTakeWeights()` (backend/src/swarm/domain.ts) composed with the
+ * bps_conversion rule. Returns null when the union of buckets across the
+ * vectors is not exactly `bucketOrder`, which is the one case schema 1.0
+ * cannot carry and the assembler is obliged to refuse. It composes with
+ * LARGEST REMAINDER, so the returned vector sums to exactly BPS_DENOMINATOR;
+ * it can also RAISE, because `bucketSharesToBps` refuses a mean that is not a
+ * share vector — the caller in `receiptSemanticErrors` turns that into a
+ * reported error rather than letting it escape the verifier.
+ *
+ * THE VECTORS ARRIVE IN THE RECEIPT'S OWN ORDER (member_id ascending), which
+ * is not necessarily the order the producer summed them in (received_at). Float
+ * addition is not associative, so the two can differ by an ulp before
+ * `round8`; that only reaches the bps output for a mean sitting exactly on a
+ * 5e-9 boundary, and the consequence would be a refusal at assembly rather than
+ * a bad artifact. Stated so an implementer knows the order is normative.
+ */
+function meanWeightsBps(vectors, bucketOrder) {
+  const totals = new Map();
+  for (const vector of vectors) {
+    for (const { bucket, weight } of vector) totals.set(bucket, (totals.get(bucket) ?? 0) + weight);
+  }
+  if (totals.size !== bucketOrder.length || bucketOrder.some((bucket) => !totals.has(bucket))) return null;
+  const averaged = bucketOrder.map((bucket) => ({ bucket, weight: totals.get(bucket) / vectors.length }));
+  const averageTotal = averaged.reduce((sum, entry) => sum + entry.weight, 0);
+  const result = averaged.map(({ bucket, weight }) => ({ bucket, weight: round8(weight / averageTotal) }));
+  const finalIndex = result.length - 1;
+  const prefixTotal = result.slice(0, finalIndex).reduce((sum, entry) => sum + entry.weight, 0);
+  result[finalIndex].weight = round8(1 - prefixTotal);
+  return bucketSharesToBps(new Map(result.map((entry) => [entry.bucket, entry.weight])), bucketOrder);
+}
+
 export function receiptSemanticErrors(receipt, spec) {
   // Same all-or-nothing rule as canonicalizeReceipt, and read up front for the
   // same reason: `canonical_bucket_order` is only consulted for a receipt that
@@ -574,11 +756,151 @@ export function receiptSemanticErrors(receipt, spec) {
     }
   }
 
+  // ── The judge block is the one the session ADOPTED ────────────────────────
+  // `shadow` is the documented rollout mode: the opinion is recorded and the
+  // session keeps its aggregator-authored prose. A receipt carrying a shadow
+  // opinion would state, in signed and anchored bytes, a rationale the session
+  // never showed. The assembler refuses to build one; this is the same refusal
+  // stated as a fact a stranger holding only the receipt can check.
+  if (receipt.judge.mode !== "enforce") {
+    errors.push(`judge: mode is "${receipt.judge.mode}", not "enforce" — the opinion was recorded but never adopted by the session`);
+  }
+
+  // ── The embedded key is a usable Ed25519 key, not a low-order point ───────
+  // WITHOUT THIS, EVERY OTHER INVARIANT IN THIS FUNCTION IS BYPASSABLE. For any
+  // of the fourteen encodings the single constant signature `0x01 || 0x00*63`
+  // verifies over ANY message, so an entry carrying one has a signature that
+  // "verifies" over a `canonical_submission` its named member never wrote —
+  // and the submission-binding, stance and weight recomputations below all pass
+  // over it, because they read the carried string rather than asking who signed
+  // it. The producing repo has refused these keys at decode time since #789,
+  // but that gate is backend-only; this is the same rule stated where a
+  // cross-repo verifier actually runs. See verifier_invariants in
+  // consensus-receipt.canonicalization.json.
+  //
+  // SHAPE FIRST, THEN THE POINT. `isLowOrderEd25519PublicKey` answers only "is
+  // it one of the fourteen", so a malformed key would otherwise come back
+  // "false" and be waved through as fine.
+  receipt.analyst_signatures.forEach((entry, i) => {
+    if (typeof entry.public_key !== "string" || !/^[A-Za-z0-9+\/]{43}=$/.test(entry.public_key)) {
+      errors.push(
+        `analyst_signatures/${i}: public_key is not standard padded base64 of a raw 32-byte Ed25519 key`,
+      );
+      return;
+    }
+    if (isLowOrderEd25519PublicKey(entry.public_key)) {
+      errors.push(
+        `analyst_signatures/${i}: public_key is a LOW-ORDER Ed25519 point — one constant signature verifies over any message for these, so this entry proves nothing about its member`,
+      );
+    }
+  });
+
+  // ── Each carried submission belongs to the entry it sits in ───────────────
+  // assembleConsensusReceipt asserts this at WRITE time; nothing asserted it on
+  // the read side, so a receipt filing member B's genuinely-signed submission
+  // under member A's entry (with B's key) verified clean. The signature check
+  // cannot catch it: it verifies the carried string and never looks inside.
+  //
+  // PARSING HERE IS SAFE AND IS NOT A SUBSTITUTE FOR THE SIGNATURE CHECK. The
+  // signature must still be verified over the raw carried string, never over a
+  // re-serialization — whether `0.15` survives a JSON round trip is a property
+  // of one serializer rather than of the signed bytes.
+  const submissions = [];
+  receipt.analyst_signatures.forEach((entry, i) => {
+    let payload;
+    try {
+      payload = JSON.parse(entry.canonical_submission);
+    } catch {
+      errors.push(`analyst_signatures/${i}: canonical_submission is not parseable JSON`);
+      submissions.push(null);
+      return;
+    }
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+      errors.push(`analyst_signatures/${i}: canonical_submission is not a JSON object`);
+      submissions.push(null);
+      return;
+    }
+    if (payload.memberId !== entry.member_id) {
+      errors.push(
+        `analyst_signatures/${i}: canonical_submission was signed as "${String(payload.memberId)}" but is filed under "${entry.member_id}"`,
+      );
+    }
+    if (payload.subjectId !== receipt.subject_id) {
+      errors.push(
+        `analyst_signatures/${i}: canonical_submission concerns subject "${String(payload.subjectId)}", not "${receipt.subject_id}"`,
+      );
+    }
+    submissions.push(payload);
+  });
+  const allParsed = submissions.length > 0 && submissions.every((payload) => payload !== null);
+
+  // ── stances, RECOMPUTED rather than counted ───────────────────────────────
+  if (allParsed) {
+    const recomputed = Object.fromEntries(RECEIPT_STANCE_KEYS.map((key) => [key, 0]));
+    let unknownStance = false;
+    for (const payload of submissions) {
+      if (!RECEIPT_STANCE_KEYS.includes(payload.stance)) {
+        errors.push(`stances: submission of "${String(payload.memberId)}" carries stance "${String(payload.stance)}", which is not one of the five`);
+        unknownStance = true;
+        continue;
+      }
+      recomputed[payload.stance] += 1;
+    }
+    if (!unknownStance) {
+      for (const key of RECEIPT_STANCE_KEYS) {
+        const carried = receipt.stances[key] ?? 0;
+        if (carried !== recomputed[key]) {
+          errors.push(`stances: ${key} is ${carried} but the embedded submissions carry ${recomputed[key]}`);
+        }
+      }
+    }
+  }
+
   if (receipt.weights != null) {
     const buckets = receipt.weights.map((w) => w.bucket);
     if (buckets.join(",") !== bucketOrder.join(",")) errors.push("weights: not in canonical bucket order");
     const sum = receipt.weights.reduce((acc, w) => acc + w.weight_bps, 0);
     if (sum !== 10_000) errors.push(`weights: bps sum is ${sum}, not 10000`);
+
+    // ── weights, RECOMPUTED from the same submissions ───────────────────────
+    // OMISSION IS NOT CHECKED, and cannot be: a `position_actions` subject
+    // produces no vector however many members submitted one, and the receipt
+    // does not carry the subject's recommendation type. Presence, though, is a
+    // claim about the takes carried beside it, and that claim is checkable.
+    if (allParsed) {
+      const vectors = submissions
+        .map((payload) => normalizedSubmissionWeights(payload.weights))
+        .filter((vector) => vector !== null);
+      // THE VERIFIER REPORTS, IT DOES NOT THROW. `bucketSharesToBps` refuses a
+      // vector that is not a share vector by raising, and everything on this
+      // path is attacker-supplied — a third party running this over a receipt
+      // they were handed must get the reason back in `errors`, never an
+      // exception out of a function whose whole contract is "returns the list
+      // of things wrong with this receipt".
+      let expected = null;
+      let refusal = null;
+      if (vectors.length > 0) {
+        try {
+          expected = meanWeightsBps(vectors, bucketOrder);
+        } catch (e) {
+          refusal = e instanceof ReceiptCanonicalizationError ? e.message : String(e);
+        }
+      }
+      if (expected === null) {
+        errors.push(
+          `weights: cannot be recomputed from the embedded submissions — ${refusal ?? "no carried submission has a vector over exactly the canonical buckets"}`,
+        );
+      } else {
+        for (let i = 0; i < expected.length; i++) {
+          const carried = receipt.weights[i];
+          if (carried?.bucket !== expected[i].bucket || carried?.weight_bps !== expected[i].weight_bps) {
+            errors.push(
+              `weights: entry ${i} is ${JSON.stringify(carried ?? null)} but the embedded submissions mean to ${JSON.stringify(expected[i])}`,
+            );
+          }
+        }
+      }
+    }
   }
   return errors;
 }

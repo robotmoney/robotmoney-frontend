@@ -141,6 +141,14 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *    wrong that somebody would want gone. Its triggers are installed by
  *    migration 0040, not 0032, because an applied migration is frozen; see
  *    APPEND_ONLY_MIGRATIONS below.
+ *  - `swarm_consensus_receipts` — the PUBLISHED consensus receipt for a session
+ *    (issue #754, migration 0042): the canonical bytes `robotmoney-core`
+ *    anchors a keccak256 digest of, plus the payload they serialize. A deleted
+ *    receipt leaves an on-chain digest pointing at nothing anyone can produce
+ *    again — the analyst signatures inside it were made by keys the server
+ *    never held. It is also the one protected table that additionally refuses
+ *    UPDATE (`rm_consensus_receipt_immutable()`, migration 0042), because
+ *    amending these bytes does not amend the receipt, it orphans the anchor.
  *  - `swarm_applications` — the inbound application record behind an admission
  *    or a rejection.
  *  - `audit_log`, `agent_activity_log` — the trail of who did what. An audit
@@ -211,6 +219,7 @@ export const APPEND_ONLY_TABLES = [
   "swarm_session_members",
   "swarm_subject_snapshots",
   "swarm_session_judgements",
+  "swarm_consensus_receipts",
   "swarm_applications",
   "audit_log",
   "agent_activity_log",
@@ -236,6 +245,7 @@ export const APPEND_ONLY_MIGRATION = "0032_append_only_history.sql";
 export const APPEND_ONLY_MIGRATIONS = [
   "0032_append_only_history.sql",
   "0040_swarm_judgements_append_only.sql",
+  "0042_swarm_consensus_receipts.sql",
 ] as const;
 
 /** The two trigger names migration 0032 installs on each protected table. */

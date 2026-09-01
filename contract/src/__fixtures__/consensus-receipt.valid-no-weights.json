@@ -31,14 +31,16 @@
         "The session produced no complete four-bucket allocation vector, so it cannot draft a RouterGovernance proposal."
       ]
     },
-    "source": "fallback"
+    "source": "fallback",
+    "mode": "enforce"
   },
   "analyst_signatures": [
     {
       "member_id": "analyst-alpha",
       "public_key": "yHpKXrITLSHd0VcGhH6N2KbFrd1v7jK22U0Tyq4D53g=",
       "canonical_submission": "{\"memberId\":\"analyst-alpha\",\"date\":\"2026-08-26\",\"subjectId\":\"position-review\",\"nonce\":\"fusion-1244-alpha-2\",\"stance\":\"cautious\",\"confidence\":68,\"body\":\"No complete four-bucket vector was submitted for this subject.\",\"memoUrl\":\"https://robotmoney.net/swarm/memos/1244-alpha-no-weights\"}",
-      "signature": "13wL57dNz39bSRA/vzTnVz3VeLFEqSqPno+5Jx5v206POF8aukgNv+57eh81elbtEgfq7FRKHIYg2ZxfviyVAg=="
+      "signature": "13wL57dNz39bSRA/vzTnVz3VeLFEqSqPno+5Jx5v206POF8aukgNv+57eh81elbtEgfq7FRKHIYg2ZxfviyVAg==",
+      "revision": 1
     }
   ]
 }

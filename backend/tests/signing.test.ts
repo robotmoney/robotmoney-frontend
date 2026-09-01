@@ -8,6 +8,7 @@ import {
   signMessage,
   verifyApplicationSignature,
   verifyClaimChallengeSignature,
+  verifyDetachedSignature,
   verifyStoredSubmissionSignature,
   verifySubmissionSignature,
 } from "../src/lib/signing.ts";
@@ -186,9 +187,24 @@ test("the forgery constant fails on every signature entry point, over two differ
     // A low-order key gets no fingerprint either: the admin surface must not
     // present one as an ordinary registered identity.
     expect(await fingerprintPublicKey(publicKeyB64)).toBeNull();
-    assertions += 5;
+    // THE SIXTH ENTRY POINT (issue #754). `verifyDetachedSignature` verifies
+    // over a RAW STRING rather than a canonicalized object, because a consensus
+    // receipt carries the exact bytes that were signed and re-serializing them
+    // would change what is checked. It is in this sweep because the headline
+    // claim of this test is "every signature entry point", and a verifier
+    // reached only through the receipt path is still an entry point — the
+    // receipt is the artifact robotmoney-core anchors, so a forgery accepted
+    // here is a forgery accepted on chain.
+    //
+    // It is correct today BY CONSTRUCTION — it routes through
+    // importEd25519PublicKey -> canonicalPublicKeyBytes -> the low-order
+    // table — which is exactly why nothing would have failed if someone swapped
+    // that for a direct crypto.subtle.importKey. That is what this pins.
+    expect(await verifyDetachedSignature(canonicalizeSubmission(messageA), FORGED_SIGNATURE_B64, publicKeyB64)).toBe(false);
+    expect(await verifyDetachedSignature(canonicalizeSubmission(messageB), FORGED_SIGNATURE_B64, publicKeyB64)).toBe(false);
+    assertions += 7;
   }
-  expect(assertions).toBe(14 * 9);
+  expect(assertions).toBe(14 * 11);
 });
 
 test("honest keys and honest signatures still verify — the fix does not over-reject", async () => {

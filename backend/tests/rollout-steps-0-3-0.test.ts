@@ -182,9 +182,16 @@ describe("v0.3.0 rollout manifest ↔ runbook", () => {
 });
 
 describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
-  test("the release inventory includes the terminal soak-record migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(10);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0041_swarm_judgement_soak_record.sql");
+  // THIS PIN MOVES ONLY UPWARD, AND ONLY WITH A DECLARATION BESIDE IT. It is a
+  // tripwire on the roster's terminal entry, so that growing the release is a
+  // deliberate act somebody had to write down here as well as in release.ts —
+  // NOT a lever for shrinking scope. 0042 joined via #754: the drift guard
+  // below named `0042_swarm_consensus_receipts.sql` as undeclared, and the fix
+  // was to DECLARE it, which is why this count went 10 -> 11 rather than the
+  // floor going 32 -> 43.
+  test("the release inventory includes the terminal consensus-receipt migration", () => {
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(11);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0042_swarm_consensus_receipts.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");
@@ -199,8 +206,14 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     // ("if a future edit adds a migration that DOES touch a protected table,
     // the check fails instead of the runbook quietly going stale").
     expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_session_judgements");
-    // 0039 swaps swarm_sessions' state CHECK constraint to admit 'judged'.
+    // 0039 swaps swarm_sessions' state CHECK constraint to admit 'judged', and
+    // 0042 declares a foreign key to it.
     expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_sessions");
+    // 0042 CREATEs it and protects it in the same file. Empty after the
+    // migration — nothing seeds a receipt — so postflight's present-and-empty
+    // half applies as written, unlike `swarm_judge_config`.
+    expect(NEW_TABLES).toContain("swarm_consensus_receipts");
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_consensus_receipts");
   });
 
   // ───────────────────────────────────────────────────────────────────────────

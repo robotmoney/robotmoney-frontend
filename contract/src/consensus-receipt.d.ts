@@ -30,6 +30,13 @@ export interface ConsensusReceiptJudge {
   release_safety: ConsensusReceiptReleaseSafety;
   /** JudgeOutcome.source: whether a model wrote this prose or a template did. */
   source: "model" | "fallback";
+  /**
+   * swarm_session_judgements.mode: whether the session ADOPTED this opinion
+   * (`enforce`) or merely recorded it (`shadow`). Only `enforce` is
+   * publishable — `receiptSemanticErrors` refuses anything else — and the
+   * union admits `shadow` so that refusal is expressible.
+   */
+  mode: "shadow" | "enforce";
 }
 
 export interface ConsensusReceiptAnalystSignature {
@@ -37,6 +44,8 @@ export interface ConsensusReceiptAnalystSignature {
   public_key: string;
   canonical_submission: string;
   signature: string;
+  /** swarm_recommendations.revision of the take this entry carries. */
+  revision: number;
 }
 
 export interface ConsensusReceipt {
@@ -79,6 +88,24 @@ export const RECEIPT_CANONICAL_BUCKET_ORDER: readonly string[];
 /** A whole allocation is exactly this many basis points. */
 export const BPS_DENOMINATOR: number;
 
+/**
+ * The seven masked encodings of the fourteen low-order Ed25519 points, as
+ * lowercase 32-byte hex with byte 31's sign bit cleared. Part of the published
+ * pin: a consensus receipt embeds analyst public keys, and for one of these the
+ * constant signature `0x01 || 0x00*63` verifies over any message.
+ */
+export const LOW_ORDER_ED25519_POINT_ENCODINGS: readonly string[];
+
+/**
+ * True when `bytes` is one of the fourteen low-order Ed25519 point encodings.
+ * A non-32-byte input is `false` — "not one of the fourteen", NOT "usable";
+ * validate the shape first.
+ */
+export function isLowOrderEd25519PublicKeyBytes(bytes: Uint8Array): boolean;
+
+/** The same predicate over standard padded base64, as a receipt carries it. */
+export function isLowOrderEd25519PublicKey(publicKeyB64: string): boolean;
+
 export function compareCodePoints(a: string, b: string): number;
 export function participationBps(submitted: number, active: number): number;
 /**
@@ -120,3 +147,32 @@ export function receiptSemanticErrors(
   receipt: ConsensusReceipt,
   spec?: ConsensusReceiptCanonicalizationSpec,
 ): string[];
+
+/** One embedded signature's read-time verdict. */
+export interface ConsensusReceiptSignatureVerdict {
+  memberId: string;
+  verified: boolean;
+}
+
+/**
+ * The body served by `GET ROUTES.swarm.sessionConsensusReceipt` (issue #754).
+ *
+ * `verified` is RECOMPUTED on every request — it is not a stored column. A
+ * receipt with one bad embedded signature, one failed invariant, or a payload
+ * that no longer canonicalizes to `canonicalBytes` is served with
+ * `verified: false` and the reasons stated, never withheld and never passed off
+ * as valid.
+ */
+export interface SwarmConsensusReceiptResponse {
+  sessionId: string;
+  subjectId: string;
+  schemaVersion: string;
+  publishedAt: string;
+  receipt: ConsensusReceipt;
+  /** The exact canonical bytes an on-chain digest commits to, domain prefix and trailing newline included. */
+  canonicalBytes: string;
+  verified: boolean;
+  signatures: ConsensusReceiptSignatureVerdict[];
+  /** Empty iff `verified`. */
+  unverifiedReasons: string[];
+}

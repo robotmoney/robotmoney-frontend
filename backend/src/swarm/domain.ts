@@ -1904,10 +1904,29 @@ export async function loadFrozenTakeSet(sessionId: string): Promise<FrozenTakeSe
   // so the COALESCE falls through only for a session with NO roster snapshot at
   // all — the legacy/smoke `openSession` path, whose behaviour is unchanged,
   // exactly as the `rosterRows.length > 0` fallback below leaves it.
+  //
+  // SIGNATURE AND NONCE ride along for issue #754, and it is the SAME argument
+  // #765 makes, pointed the other way. The consensus receipt embeds each
+  // contributing analyst's signature and the exact bytes it covers, and it must
+  // do so over THE SAME frozen set the judge and the aggregator read — a second
+  // query for the signatures would be a second take set, and the judgement's
+  // inputs_digest would then attest to one while the receipt carried the other.
+  // #765 makes the name inside that one set frozen; this makes the signature
+  // part of it. Both are needed: a receipt whose signatures came from a
+  // different read, or a digest that moves when nobody amended a take, breaks
+  // the same binding from opposite ends.
+  //
+  // THESE TWO COLUMNS CANNOT FAN THE RESULT OUT. Both are plain columns of
+  // `swarm_recommendations r` — the table `DISTINCT ON (r.member_id)` already
+  // drives — so they add no join and no row. The cardinality argument is
+  // entirely #765's `LEFT JOIN`, which matches at most once because
+  // `swarm_session_members` is `PRIMARY KEY (session_id, member_id)` and the
+  // join pins both halves of that key.
   const takeRows = await sql`
     SELECT * FROM (
       SELECT DISTINCT ON (r.member_id)
              r.member_id, r.stance, r.confidence, r.body, r.payload, r.revision,
+             r.signature, r.nonce,
              r.received_at, COALESCE(sm.member_name, m.name) AS member_name
       FROM swarm_recommendations r
       JOIN swarm_members m ON m.id = r.member_id
