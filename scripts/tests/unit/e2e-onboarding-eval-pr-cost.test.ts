@@ -11,8 +11,7 @@
 // still minutes of exclusive runner time per PR against a stochastic metric.
 //
 // The arrangement the workflow now encodes, and this file asserts:
-//   - an UNLABELLED pull_request run spends ZERO paid-model tokens (the
-//     required live swarm smoke uses the credential-free model);
+//   - an UNLABELLED pull_request run spends ZERO model tokens;
 //   - a PR carrying the `real-eval` label DOES run the eval (that is the
 //     debugging escape hatch — without it a change to this gate cannot be
 //     exercised before merge, and only breaks `main` afterwards);
@@ -716,22 +715,6 @@ describe("the expression interpreter reproduces Actions semantics", () => {
 //    nightly the summary points at, both still exist.
 // ---------------------------------------------------------------------------
 describe("the coverage that replaces the per-PR eval is really there", () => {
-  test("ordinary PR smoke uses the keyless model and never receives the paid credential", () => {
-    // This is separate from ONBOARDING_REAL_EVAL: the smoke always requires
-    // genuine authorship, but an unlabelled PR must not be coupled to Zen
-    // workspace credit. Supply paid values deliberately: the false PR
-    // predicate must still select `free` and suppress that credential.
-    const model = unwrap(soleMappingValue(e2eYml, "AGENT_MODEL"), "AGENT_MODEL");
-    const credential = unwrap(soleMappingValue(e2eYml, "OPENCODE_API_KEY"), "OPENCODE_API_KEY");
-    const ordinaryPr = { ...CTX.prPlain, vars: { AGENT_MODEL: "gpt" }, secrets: { OPENCODE_API_KEY: "paid-key" } };
-    expect(evalExpression(model, ordinaryPr)).toBe("free");
-    expect(evalExpression(credential, ordinaryPr)).toBe("");
-
-    const optedInPr = { ...CTX.prOptedIn, vars: { AGENT_MODEL: "gpt" }, secrets: { OPENCODE_API_KEY: "paid-key" } };
-    expect(evalExpression(model, optedInPr)).toBe("gpt");
-    expect(evalExpression(credential, optedInPr)).toBe("paid-key");
-  });
-
   test("a configured key is not misreported as funded, and the external billing prerequisite is actionable", () => {
     // A GitHub secret expression can establish only presence, not Zen workspace
     // balance. Keep the production-parity gate loud, but make the summary tell
