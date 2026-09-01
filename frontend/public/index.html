@@ -94,7 +94,7 @@
     <link rel="stylesheet" href="/assets/css/sections/footer.css?v=996afb9d" />
 
     <!-- Data-driven view styles (regime + swarm). -->
-    <link rel="stylesheet" href="/assets/css/views.css?v=2622e946" />
+    <link rel="stylesheet" href="/assets/css/views.css?v=c902ab72" />
     <link rel="stylesheet" href="/assets/css/docs-shell.css?v=bd6eace3" />
 
     <!-- Analytics dashboard theme scope (issue #379): every rule inside
@@ -128,13 +128,9 @@
           <div class="nav__links">
             <a href="/" class="nav__link">Home<span class="nav__underline"></span></a>
             <a href="/skills" class="nav__link">Skill<span class="nav__underline"></span></a>
-            <!-- Vault · Token · Regime · Swarm (RM-105). "Allocation" and
-                 "Performance" both leave: the vault half of both pages is now
-                 /vault, and the house-book half moves to the token page under
-                 RM-103. /performance keeps its ROUTE until then — it is just
-                 no longer advertised here. No dropdown. -->
-            <a href="/vault" class="nav__link">Vault<span class="nav__underline"></span></a>
             <a href="/tokenomics" class="nav__link">Token<span class="nav__underline"></span></a>
+            <a href="/allocation" class="nav__link">Allocation<span class="nav__underline"></span></a>
+            <a href="/performance" class="nav__link">Performance<span class="nav__underline"></span></a>
             <a href="/regime" class="nav__link">Regime<span class="nav__underline"></span></a>
             <a href="/swarm" class="nav__link">Swarm<span class="nav__underline"></span></a>
             <!-- ANALYTICS is deliberately ABSENT from the nav. It pointed at
@@ -156,10 +152,9 @@
         <div class="nav__mobile-inner">
           <a href="/" class="nav__mlink" @click="mobileOpen=false">Home</a>
           <a href="/skills" class="nav__mlink" @click="mobileOpen=false">Skill</a>
-          <!-- Same four destinations as the desktop nav above; the two menus
-               must list the same set. -->
-          <a href="/vault" class="nav__mlink" @click="mobileOpen=false">Vault</a>
           <a href="/tokenomics" class="nav__mlink" @click="mobileOpen=false">Token</a>
+          <a href="/allocation" class="nav__mlink" @click="mobileOpen=false">Allocation</a>
+          <a href="/performance" class="nav__mlink" @click="mobileOpen=false">Performance</a>
           <a href="/regime" class="nav__mlink" @click="mobileOpen=false">Regime</a>
           <a href="/swarm" class="nav__mlink" @click="mobileOpen=false">Swarm</a>
           <!-- ANALYTICS removed here too — see the desktop nav above. The two

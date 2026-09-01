@@ -38,36 +38,30 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
   expect(errors).toEqual([]);
 }
 
-test("renders the vault and dynamic swarm routes through Alpine", async ({ page }) => {
+test("renders allocation and dynamic swarm routes through Alpine", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   const today = new Date().toISOString().slice(0, 10);
 
   await page.goto("/");
-  // RM-105 (PR #774) replaced /allocation with /vault, and /allocation now
-  // resolves to it. This drives the CANONICAL path: a route that only survives
-  // as a legacy alias is the wrong subject for "the SPA renders its pages".
-  await navigate(page, "/vault");
-  await expect(page.locator("h1.vp__title")).toContainText("four sleeves");
-  // The vaultView factory draws the mandate fan; /vault's charts are inline
-  // SVG, not the Chart.js canvases /allocation used.
-  await expect(page.locator(".vp__fan > svg")).toBeVisible();
-  // Vault TVL is bound to the LIVE vault-economics feed, served in CI by the
-  // deterministic Base RPC stub (issue #48) with ZERO live Base mainnet calls.
-  // Derive the expectation from the same endpoint the page reads so this stays
-  // correct as the stub fixtures evolve.
-  //
-  // What this stopped asserting, deliberately: /allocation's hero added the
-  // prop-wallet total (GET /api/dashboards/wallet-balances) to vault TVL under
-  // one "Total AUM" figure. RM-105 separated those pots on purpose, and
-  // vault-view.spec.ts now asserts /vault must NEVER read wallet-balances — so
-  // re-asserting the combined figure here would contradict the product.
-  const expectedTvl = await page.evaluate(async () => {
-    const v = await fetch("/api/dashboards/vault-economics").then((r) => r.json());
-    return "$" + Number(v.tvlUsd).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  await navigate(page, "/allocation");
+  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
+  // The allocationView factory draws the strategy/vault/wallet pie canvases.
+  await expect(page.locator("canvas").first()).toBeVisible();
+  // Hero Total AUM combines BOTH live halves (issue #84): the live prop-wallet
+  // feed (GET /api/dashboards/wallet-balances) + the live vault-economics tvlUsd,
+  // both served by the in-CI deterministic Base RPC stub (issue #48) with ZERO
+  // live Base mainnet calls. Derive the expectation from the same endpoints the
+  // page reads so this stays correct as the stub fixtures evolve.
+  const expectedAum = await page.evaluate(async () => {
+    const [w, v] = await Promise.all([
+      fetch("/api/dashboards/wallet-balances").then((r) => r.json()),
+      fetch("/api/dashboards/vault-economics").then((r) => r.json()),
+    ]);
+    const total = w.totalUsd + v.tvlUsd;
+    return "$" + total.toLocaleString("en-US", { maximumFractionDigits: Math.abs(total) < 1000 ? 2 : 0 });
   });
-  const tvl = page.locator(".vp__stats .vp__stat", { hasText: "Vault TVL" }).locator("dd");
-  await expect(tvl).toHaveText(expectedTvl);
-  await expect(tvl).not.toHaveText("—");
+  await expect(page.locator(".alloc-aum__value")).toHaveText(expectedAum);
+  await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
 
   // Test performance page with Wallet Performance heading
   await navigate(page, "/performance");
@@ -165,15 +159,13 @@ test("the skills hero pairs the headline with the install card and runs the tree
 // The route list is READ OFF THE NAV, not hand-maintained here. It used to be
 // a literal, and RM-105 (PR #774) shipped /vault — a new nav page whose
 // headline was 48px at a 9px-lower offset than every other one — without this
-// test ever looking at it: the literal still said "/allocation", which now
-// resolves to /vault as a legacy alias, so the failure it did produce read as
-// a stale-route problem rather than the design regression it was. Deriving the
-// list means the next page added to the nav is covered the day it lands.
+// test ever looking at it, because the literal still said "/allocation". The
+// vault route has since been rolled back, but the lesson is why this list is
+// derived: the next page added to the nav is covered the day it lands, not the
+// day someone remembers to edit an array.
 const EXTRA_HERO_ROUTES = [
   // Routed and hero-shaped, but deliberately not advertised in the nav:
-  // /performance keeps its route until RM-103 moves the house book (see
-  // index.html's nav comment), and /projects is linked from content only.
-  "/performance",
+  // /projects is linked from content only.
   "/projects",
 ];
 
@@ -232,13 +224,13 @@ test("latest navigation wins when an earlier fragment response is delayed", asyn
   await page.evaluate(() => {
     history.pushState({}, "", "/swarm/members/athena");
     window.dispatchEvent(new PopStateEvent("popstate"));
-    history.pushState({}, "", "/vault");
+    history.pushState({}, "", "/allocation");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
 
-  await expect(page.locator("h1.vp__title")).toContainText("four sleeves");
+  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
   await page.waitForTimeout(400);
-  await expect(page.locator("h1.vp__title")).toContainText("four sleeves");
+  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
   await expect(page.locator(".profile-name")).toHaveCount(0);
 
   await expectNoBrowserErrors(errors);
@@ -248,10 +240,10 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
   const errors = failOnBrowserErrors(page);
 
   await page.goto("/");
-  // /performance, not /allocation: RM-105 (PR #774) replaced /allocation with
-  // /vault, whose charts are inline SVG — a page with no Chart.js instance
-  // cannot assert that navigating away destroys one. /performance is the
-  // remaining route whose view factory builds Chart.js canvases.
+  // /performance rather than /allocation. Both view factories build Chart.js
+  // canvases, so either proves the teardown; this one moved here in #802 when
+  // /allocation briefly resolved to an inline-SVG page, and there is no reason
+  // to move it back now that it does not.
   await navigate(page, "/performance");
   const perfCanvas = page.locator(".a2-chart canvas").first();
   await expect(perfCanvas).toBeVisible();
@@ -307,6 +299,18 @@ for (const { path, title } of NOINDEX_STUB_ROUTES) {
     await expectNoBrowserErrors(errors);
   });
 }
+
+test("/vault renders not-found, not the retired page still sitting in views/", async ({ page }) => {
+  await page.goto("/");
+  await navigate(page, "/vault");
+  // Removing the ROUTE does not retire a page: the catch-all maps any unknown
+  // path to /views/<path>.html, and views/vault.html is deliberately kept in
+  // the tree. routes.js pins /vault to NOT_FOUND_VIEW for exactly this reason,
+  // and this asserts the pin rather than the absence of an entry.
+  await expect(page.locator("section.vp")).toHaveCount(0);
+  await expect(page.locator("h1.vp__title")).toHaveCount(0);
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex, follow");
+});
 
 test("the noindex override does not leak onto the next route", async ({ page }) => {
   await page.goto("/");

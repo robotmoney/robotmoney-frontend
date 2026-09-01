@@ -38,13 +38,9 @@ const META = {
     title: "$ROBOTMONEY Tokenomics & Governance — Robot Money",
     description: "$ROBOTMONEY directs allocation of the Robot Money USDC vault on Base. Holders vote which agent tokens it holds; protocol revenue funds buybacks and burns.",
   },
-  // /vault (RM-105) replaces /allocation. Both /allocation and /allocation2
-  // now render this page and declare it canonical (LEGACY_ALIASES below), so
-  // neither keeps a META entry of its own — a second entry would be a second
-  // description for one page.
-  "/vault": {
-    title: "Vault — Yield, Allocation & Holdings | Robot Money",
-    description: "Robot Money's USDC vault on Base: what it pays against Aave, where each sleeve is allocated, what it holds per venue, and the daily series behind both.",
+  "/allocation": {
+    title: "Allocation — Live Vault & Wallet AUM | Robot Money",
+    description: "Track Robot Money's live allocation: vault strategy breakdown, per-adapter TVL, 7-day APY, agent wallet holdings, and $ROBOTMONEY buyback history on Base.",
   },
   "/performance": {
     title: "Wallet Performance & AUM History — Robot Money",
@@ -144,6 +140,15 @@ const META = {
   // site's soft 404s. `follow` (not `nofollow`, unlike the styleguide below)
   // because each stub's only links are /changelog and /, both real indexed
   // pages whose value should carry.
+  // /vault was live and in sitemap.xml between #774 and this rollback, so
+  // crawlers have the URL. It resolves to the not-found view now; noindex says
+  // so directly rather than leaving a soft 404 to be inferred. `follow` because
+  // the not-found view links only to real indexed pages.
+  "/vault": {
+    title: "Vault (not available) — Robot Money",
+    description: "The Robot Money vault factsheet is being rebuilt. Allocation and holdings are at /allocation; wallet performance history is at /performance.",
+    robots: "noindex, follow",
+  },
   "/flow-field": {
     title: "Flow Field (in progress) — Robot Money",
     description: "Placeholder for an experimental flow-field visualization of capital movement across the Robot Money vault's strategies. Not yet released.",
@@ -286,13 +291,7 @@ const LEGACY_ALIASES = [
   // treasury-allocation blog post served under "Page Not Found" and
   // `noindex, follow`, on a URL that is still live on robotmoney.network and
   // cited inline by the archived swarm sessions (routes.js:152,161).
-  // RM-105 repointed both of these at /vault: routes.js resolves /allocation,
-  // /allocation2 and /vault to the same fragment, so all three would be
-  // duplicate URLs unless one of them is named canonical. /allocation2 used to
-  // alias /performance, which is unchanged as a ROUTE but is no longer the
-  // page either address renders.
-  ["/allocation", "/vault"],
-  ["/allocation2", "/vault"],
+  ["/allocation2", "/performance"],
   ["/articles/treasury-allocation", "/blog/treasury-allocation"],
 ];
 

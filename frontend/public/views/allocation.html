@@ -1,20 +1,4 @@
-<!-- UNREACHABLE SINCE RM-105 (PR #774). NO ROUTE RESOLVES TO THIS FRAGMENT.
-     routes.js sends /allocation and /allocation2 to VAULT_VIEW (views/vault.html);
-     nothing points here any more, so nothing below this line is served to a
-     visitor. It is kept, not deleted, because RM-103 has to port the house-book
-     half of it — the buyback table, the per-wallet sleeve cards and the
-     prop-wallet provenance badges — onto the token page, and that is the last
-     rendering of them.
-
-     Its Playwright spec (frontend/test/browser/allocation-view.spec.ts) was
-     removed in issue #800: it drove /allocation, which now serves the vault
-     page, so all fourteen of its tests failed on every run from the moment #774
-     merged. The assertions that had a home on /vault moved to
-     vault-view.spec.ts and the buyback binding moved to tokenomics-fees.spec.ts;
-     what is left is coverage RM-103 owns restoring. Until then, TREAT EVERYTHING
-     BELOW AS UNTESTED AND UNSHIPPED.
-
-     Asset Allocation
+<!-- Asset Allocation
      Buildless port of robotmoney-site/src/app/allocation/page.tsx — now fully
      data-driven, no baked DATA literals. Every pie is a Chart.js pie drawn by
      the boot-registered allocationView() factory (alpine/views.js) from live
@@ -98,7 +82,7 @@
             <div class="alloc-bucket__info">
               <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#10b981;"></span><span x-text="stratPct(0)">—</span></div>
               <h4 class="alloc-bucket__title">Conservative DeFi Yield</h4>
-              <p class="alloc-bucket__desc">Aave, Compound, Morpho, Sky on Base. Near-zero principal risk.</p>
+              <p class="alloc-bucket__desc">Aave, Compound, Morpho, Sky on Base. The lowest-volatility sleeve, aimed at capital preservation.</p>
             </div>
             <div class="alloc-bucket__pie"><canvas x-ref="mini1"></canvas></div>
           </div>
@@ -857,7 +841,14 @@
   .a2-hero__title { font-size: 3.25rem; }
   .a2-h2 { font-size: 2rem; }
   .alloc-buckets { grid-template-columns: 1fr 1fr; }
-  .alloc-hero__inner { flex-direction: row; align-items: center; }
+  /* flex-start, not center: centring made the taller Total AUM card push the
+     headline 8px down, so /allocation's h1 sat at 168px while every other hero
+     sat at 160 — the drift spa.spec's "one size, one typeface and one offset"
+     invariant exists to catch. It has failed on this page since that test
+     landed (#405, 2026-07-31) against a layout from #61 (2026-07-07). The card
+     keeps its centred look via align-self below; only the headline is pinned. */
+  .alloc-hero__inner { flex-direction: row; align-items: flex-start; }
+  .alloc-aum { align-self: center; }
 }
 
 @media (min-width: 1024px) {
