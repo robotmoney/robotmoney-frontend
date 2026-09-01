@@ -162,6 +162,38 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
   expect(await page.locator("canvas").count()).toBeGreaterThanOrEqual(4);
 });
 
+// The panel row's three ways out to more detail. Each one was inert before:
+// the glossary link hung off an 11px icon rather than the name, the row tooltip
+// recited the sign convention instead of saying what the indicator was, and the
+// source label's `x-if="ind.source_url"` branch never fired because the payload
+// did not carry the field. The last two are fixed at the source — the snapshot
+// now serialises `description` and `source_url` — so this asserts against the
+// vendored snapshot, which has carried both all along.
+test("regime panel rows link out to the glossary, the prose and the upstream source", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  const row = page.locator(".rv__panel-card", { hasText: "Macro panel" })
+    .locator("tbody tr", { hasText: "10y–2y yield curve" });
+
+  // The NAME is the link, and it lands on that indicator's own section.
+  const name = row.locator("a.rv__ind-name");
+  await expect(name).toHaveAttribute("href", "/regime/indicators#T10Y2Y");
+  await expect(name).toContainText("10y–2y yield curve");
+  // One link over name + glyph, not two to the same place.
+  await expect(row.locator(".rv__ind-tipwrap a")).toHaveCount(1);
+
+  // The tooltip leads with what the indicator IS, then its orientation.
+  const tip = row.locator(".rv__tip");
+  await expect(tip).toContainText("10-year and 2-year US Treasury yields");
+  await expect(tip).toContainText("Sign +1");
+
+  // The provenance line's source label is a real link to the upstream series.
+  await expect(row.locator(".rv__ind-src a")).toHaveAttribute(
+    "href", "https://fred.stlouisfed.org/series/T10Y2Y");
+});
+
 // Regression guard for the dropped-`panels` bug: the live backend used to serve
 // `panels: null` even though the Equity factor index was computed & present, so the
 // /regime view fell back to only two panel cards (macro + on-chain) and silently
