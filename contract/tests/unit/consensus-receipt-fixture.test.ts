@@ -636,6 +636,13 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     // A number that is not an integer never becomes bytes either.
     const floaty = applyPatch(valid, { "/quorum/participation_bps": 6666.667 });
     expect(() => canonicalizeReceipt(floaty, spec)).toThrow(/safe integer/);
+    // JSON.stringify(-0) is "0", so this must be refused before bytes exist.
+    const negativeZero = applyPatch(valid, { "/stances/bearish": -0 });
+    expect(Object.is(negativeZero.stances.bearish, -0)).toBe(true);
+    // Semantic validation cannot see the sign distinction; canonicalization is
+    // the boundary that must name and refuse it before a digest is produced.
+    expect(receiptSemanticErrors(negativeZero, spec)).toEqual([]);
+    expect(() => canonicalizeReceipt(negativeZero, spec)).toThrow(/negative zero/);
     expect(spec.assembler_obligations.order).toContain("VALIDATE, THEN CANONICALIZE");
   });
 
