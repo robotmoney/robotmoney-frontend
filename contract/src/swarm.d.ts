@@ -255,8 +255,10 @@ export interface SwarmBucketWeight {
 
 // The rich swarm_recommendation object the backend aggregateSession builds:
 // the deterministic rollup (quorum/stances/meanConfidence/absent) plus the
-// reference rich fields (rationale/consensus/disagreements and, depending on
-// the subject's recommendation type, actions or weights).
+// reference rich fields (rationale/consensus/disagreements and, when the
+// subject's recommendation type is bucket_weights, weights). `actions` is
+// legacy — present only on sessions published before #752 and never produced
+// now (D42, architecture.md §9.7); new sessions carry no `actions` array.
 export interface SwarmRecommendation {
   quorum: SwarmQuorum;
   stances: Record<string, number>; // stance (Stance vocabulary) → count
@@ -270,6 +272,13 @@ export interface SwarmRecommendation {
   rationale?: string;
   consensus: string[];
   disagreements: SwarmDisagreement[];
+  /**
+   * Legacy — present only on sessions published before #752. Never produced
+   * now (D42, architecture.md §9.7): a `position_actions` session aggregated
+   * today carries no `actions` array. When present this is append-only history
+   * (two hardcoded USDC/rmUSDC rows derived from no member input) and the
+   * public session page labels it as pre-#752 legacy output, not swarm-derived.
+   */
   actions?: SwarmRecommendedAction[];
   weights?: SwarmBucketWeight[];
 }
