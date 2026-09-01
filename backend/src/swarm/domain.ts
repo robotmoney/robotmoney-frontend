@@ -1781,7 +1781,12 @@ function stanceBreakdown(byStance: Record<string, number>): string {
 // The tie-break is the same one stanceBreakdown() already sorts on — the
 // canonical ascending STANCES ladder, lowest index first — so the two lines of
 // prose can never disagree about which stance led.
-function majorityStance(byStance: Record<string, number>): { stance: string; count: number } | null {
+//
+// Exported since #766: `listRationaleLadderDrift()` in judge-session.ts has to
+// re-elect the majority for an ALREADY-PUBLISHED session to enumerate the set
+// D42 promises to report. Re-implementing the ladder there would give the
+// enumeration its own chance to disagree with the rule it is auditing against.
+export function majorityStance(byStance: Record<string, number>): { stance: string; count: number } | null {
   const entries = Object.entries(byStance);
   if (!entries.length) return null;
   const rank = (stance: string) => {

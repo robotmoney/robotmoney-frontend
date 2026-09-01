@@ -1560,12 +1560,57 @@ only under the rule in force when it was made. Because `mode` ships `off` and
 `judgeSession()` refuses with `judge_disabled` in that mode, no such row exists
 on a deployment that has not deliberately turned the judge on.
 
-`replaySessionJudge()` runs the judge over an already-published session and
-writes nothing, so real history — absences, thin quorums, superseded revisions,
-rotated keys — can be replayed to demonstrate that judging never moves a weight
-vector. `bun run --cwd backend swarm-judge:replay [--limit N] [--session <uuid>]
-[--json]` is that, as a command an operator can point at a production database
-with a read-only role; it exits non-zero if any vector moved.
+**The replay audits published history; it does not re-state its own
+preconditions** (issue #766). `replaySessionJudge()` runs over an
+already-published session and writes nothing — no judgement row, no session
+update, no repair — so real history (absences, thin quorums, superseded
+revisions, rotated keys) can be audited against the properties the receipt
+rests on. `bun run --cwd backend swarm-judge:replay [--limit N] [--session
+<uuid>] [--json]` is that, as a command an operator can point at a production
+database with a read-only role.
+
+Until #766 it checked one thing and it was worthless: it read
+`swarm_recommendation.weights`, called `judge()` — which writes nothing — then
+re-read the SAME COLUMN and compared the two. A value compared against itself
+across a call that cannot write is TRUE BY CONSTRUCTION; the only defect it
+could ever report was `judge()` starting to write, and this section presented it
+as the evidence that judging never moves a vector against real history. It was
+not evidence of anything. What the tool proves now, three assertions kept
+separate because they fail for different reasons:
+
+| Assertion | What it establishes | Effect on the exit code |
+|---|---|---|
+| **Reproducibility** — stored `weights` vs `meanTakeWeights()` over the session's CURRENT frozen take set | D4 puts the signed number on `meanTakeWeights`, so this is "anyone holding the take set can recompute the vector" — the property the receipt rests on, and the one nothing asserted against real history before. It is the check that would have surfaced the `judged`-state amendment defect PR #757 fixed | `MISMATCH` → non-zero |
+| **The judge wrote nothing** — the column, byte-identical either side of the `judge()` call | Kept, and named for what it is: a guard on THIS path, not a fact about history. Worth having, not the headline | written → non-zero |
+| **D42 tie-break drift** — published sessions whose stored TEMPLATE rationale names a majority the fixed ladder would not elect | The enumeration D42 promises (see below). Deliberately reported and not repaired | none — reporting only |
+
+A session carrying no vector legitimately — a `position_actions` subject, or a
+`bucket_weights` session in which no member filed one — reports `n/a`, not a
+mismatch. The two vectors are compared CANONICALLY (sorted by bucket) rather
+than bytewise, because `jsonb` does not preserve key order and a bytewise
+comparison would be asserting a Postgres storage detail alongside the property;
+the weights themselves are still compared exactly, so a rounding change fails as
+loudly as a missing bucket.
+
+**D42's affected set is enumerated by the same command.** D42 says the published
+sessions affected by the `majorityStance()` tie-break fix are "identified and
+reported" rather than rewritten; `listRationaleLadderDrift()` is the reporting
+half, and it prints session id, date, subject and BOTH rationale strings.
+Read-only by design: append-only history is not rewritten to make a later rule
+look retroactive. It scans every published session rather than the `--limit N`
+replay window, because "the affected set" is not "the affected set among the ten
+most recent sessions", and it prints its denominators (sessions scanned, ties
+found, how many still carry the template rationale) so an empty list is legibly
+"nothing to report" rather than indistinguishable from a scan that could not
+report. Only a TEMPLATE-shaped rationale is in scope: D42's defect lives in
+`buildRationale()`, the judge never calls `majorityStance()` at all, and scoring
+model-authored prose by which stance word it mentions first would list every
+`enforce` session — a report an operator learns to ignore.
+
+Both halves are pinned by paired tests in `backend/tests/swarm-judge.test.ts`
+(§9b) — a constructed defect the tool must name AND a healthy session it must
+leave alone, for each half — because a tool that reports nothing on healthy data
+is indistinguishable from a tool that cannot report.
 
 **The consensus receipt carries the opinion, not a paraphrase of it** (issue
 #775). The receipt is the signed, publicly-anchored artifact — the thing

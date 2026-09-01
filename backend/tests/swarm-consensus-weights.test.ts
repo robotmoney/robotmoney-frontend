@@ -146,9 +146,34 @@ test("meanTakeWeights is defined exactly once in the backend source", () => {
   expect(definitions.map((f) => f.replace(`${SRC}/`, ""))).toEqual(["swarm/domain.ts"]);
 });
 
-test("nothing outside swarm/domain.ts CALLS meanTakeWeights — the derivation has one caller, its own aggregator", () => {
+test("meanTakeWeights has exactly two callers: its own aggregator, and the read-only replay audit", () => {
+  // ONE WRITER, ONE AUDITOR (issue #766). `domain.ts` is the aggregator that
+  // AUTHORS the vector. `swarm/judge-replay.ts` is an offline, read-only audit
+  // that recomputes one purely to compare it against what a published session
+  // stored — the reproducibility property D4 puts the signed number on, which
+  // nothing asserted against real history before. Recomputing to CHECK is the
+  // opposite of the danger this guard exists for; recomputing to WRITE is the
+  // danger, and the next two tests are what hold that line.
+  //
+  // The allowlist is exactly two entries and stays that way. A third caller is
+  // a review conversation, not a test edit.
   const callers = tsFiles(SRC).filter((f) => /\bmeanTakeWeights\s*\(/.test(codeOnly(f)));
-  expect(callers.map((f) => f.replace(`${SRC}/`, ""))).toEqual(["swarm/domain.ts"]);
+  expect(callers.map((f) => f.replace(`${SRC}/`, "")).sort())
+    .toEqual(["swarm/domain.ts", "swarm/judge-replay.ts"]);
+});
+
+test("the replay audit is READ ONLY — it may recompute a vector, it may not write one anywhere", () => {
+  // What makes the allowlist entry above safe is not the file's name; it is
+  // that the file cannot write. Asserted, not asserted-in-a-comment: no DML at
+  // all, and no `weights` authored, in the one module permitted to reach the
+  // derivation from outside domain.ts. D42 turns on the same property — the
+  // tie-break report identifies affected published sessions and must never
+  // repair one.
+  const src = codeOnly(join(SRC, "swarm/judge-replay.ts"));
+  for (const dml of [/\bINSERT\s+INTO\b/i, /\bUPDATE\s+\w/i, /\bDELETE\s+FROM\b/i, /\bTRUNCATE\b/i]) {
+    expect(dml.test(src), `swarm/judge-replay.ts must not write: ${dml}`).toBe(false);
+  }
+  expect(/\bweights\s*[:=][^=]/.test(src), "swarm/judge-replay.ts must not author a weights field").toBe(false);
 });
 
 test("swarm_recommendation is written from exactly two files, and only one of them may touch weights", () => {
@@ -163,6 +188,10 @@ test("swarm_recommendation is written from exactly two files, and only one of th
 });
 
 test("the judge modules never reach the derivation and never ASSIGN a weights field", () => {
+  // DELIBERATELY NOT WIDENED FOR #766. The replay audit that does read the
+  // derivation was moved OUT of judge-session.ts into its own module precisely
+  // so this list — the production judging path, the one that writes — could
+  // stay exactly as strict as it was.
   for (const rel of ["swarm/judge.ts", "swarm/judge-session.ts"]) {
     const src = codeOnly(join(SRC, rel));
     expect(src.includes("meanTakeWeights"), `${rel} must not reach the derivation`).toBe(false);

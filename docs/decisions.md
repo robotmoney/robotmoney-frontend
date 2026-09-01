@@ -2881,6 +2881,24 @@ Two things, both reported rather than quietly repaired:
    already-published recommendations are left exactly as they were filed.
    Append-only history is not rewritten to make a later rule look retroactive.
 
+   **THE REPORT IS `listRationaleLadderDrift()`** (`backend/src/swarm/judge-session.ts`),
+   printed by `bun run --cwd backend swarm-judge:replay`. Until issue #766 the
+   sentence above promised an identification with nothing shipped to produce
+   it — the affected set was enumerable and never enumerated. That function is
+   the promise's other half, by name: it scans every PUBLISHED session whose
+   `stances` carries two or more keys tied at the maximum and whose stored
+   rationale still bears `buildRationale()`'s sentence, and lists the ones
+   naming a majority the fixed ladder would not elect — session id, date,
+   subject, and BOTH rationale strings. It READS ONLY. Nothing in it writes a
+   published row, and the remedy for a listed session is an operator reading
+   the two strings, not a rewrite. It also does not affect the command's exit
+   code: a run that went red on history it is not permitted to repair would be
+   permanently red on any deployment carrying one, which is how a report stops
+   being read. Model-authored rationales are OUT of scope — this defect lives
+   in `buildRationale()` and the judge never calls `majorityStance()` at all.
+   See `docs/architecture.md` §9.7 for the two weight-vector assertions the
+   same command makes.
+
 **The switch had nothing to switch until #767, and turning it on must not be
 loud.** #752 shipped the handler, the per-session enqueue endpoint and the admin
 button, but `swarm.judge` was never added to `createSessionAdmin`'s job set — so
