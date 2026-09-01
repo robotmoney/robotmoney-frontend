@@ -67,8 +67,7 @@ test("an aliased path inherits the renamed page's metadata rather than 404 metad
     ["/committee", "/swarm"],
     ["/admin/committee", "/admin/swarm"],
     ["/docs/investment-committee", "/docs/investment-swarm"],
-    ["/allocation", "/vault"],
-    ["/allocation2", "/vault"],
+    ["/allocation2", "/performance"],
     ["/articles/treasury-allocation", "/blog/treasury-allocation"],
   ];
 

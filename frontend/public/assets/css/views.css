@@ -960,10 +960,24 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rs__series-canvas { height: 120px; }
 @media (min-width: 768px) { .rs__gauges { grid-template-columns: repeat(2, 1fr); } .rs__series-grid { grid-template-columns: repeat(2, 1fr); } }
 
-/* The /allocation .alloc-* residue is gone with the page (RM-105): /allocation
-   now resolves to /vault, whose styles are page-local to views/vault.html. The
-   .alloc-* rules that survive do so inside views/allocation.html's own <style>
-   block, which the shared sheet never owned. */
+/* allocation (/allocation) residue — the page is built almost entirely from the
+   shared .rm-* components (see components.css) + the regime hero shell; these
+   few page-local rules cover content shapes the shared library doesn't: the
+   two-up chart grid, standalone category-legend spacing, section/chart ledes,
+   the stacked value-over-quantity numeric cell, the accent total column, table
+   header swatches, and the footer link/margin. */
+.alloc-charts { display: grid; grid-template-columns: 1fr; gap: 1.5rem; margin-bottom: 2.5rem; }
+.alloc-legend { flex-wrap: wrap; gap: 0.75rem 1.25rem; margin-bottom: 1.5rem; }
+.alloc-lede { font-size: 0.875rem; color: var(--color-text-muted); margin: 0.75rem 0 0; max-width: 42rem; }
+.alloc-chart-sub { font-size: 0.75rem; color: var(--color-text-muted); margin: 0.25rem 0 0; }
+.alloc-num span { display: block; }
+.alloc-num i { display: block; font-style: normal; font-size: 0.6rem; color: var(--color-text-dim); margin-top: 1px; }
+.alloc-total { color: var(--color-green); font-weight: 700; }
+.alloc-table th .rm-legend-swatch { margin-right: 0.4rem; }
+.alloc-foot { margin-top: 2.5rem; }
+.alloc-foot a { color: var(--color-accent); text-decoration: none; }
+.alloc-foot a:hover { text-decoration: underline; }
+@media (min-width: 768px) { .alloc-charts { grid-template-columns: 1fr 1fr; } }
 
 /* ── Admin task-queue dashboard (/admin) ─────────────────────────────────────
    A password-gated operator view over the Postgres task queue. Reuses the shared
