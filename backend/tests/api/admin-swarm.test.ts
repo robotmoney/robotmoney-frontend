@@ -47,6 +47,7 @@ test("prod-mode with no token → 403 on every owned route, before body parsing"
     ["POST", "/api/swarm/admin/members/x/deactivate"],
     ["POST", "/api/swarm/admin/members/x/reactivate"],
     ["POST", "/api/swarm/admin/members/x/rotate-key"],
+    ["POST", "/api/swarm/admin/members/x/role"],
     ["POST", "/api/swarm/admin/sessions"],
     ["GET", "/api/swarm/admin/sessions/x/roster"],
     // Issue #767: a `shadow` judgement is model-authored prose about named
@@ -71,6 +72,25 @@ test("prod-mode with no token → 403 on every owned route, before body parsing"
 
 test("wrong token → 403", async () => {
   expect((await call(req("GET", "/api/swarm/admin/subjects", { token: "nope" }), PROD))?.status).toBe(403);
+});
+
+test("member judge-role route is privileged, versioned, and never mints a credential", async () => {
+  const { publicKeyB64 } = await generateKeyPair();
+  const added = await call(req("POST", "/api/swarm/admin/members", {
+    token: PROD.adminToken, body: { name: "Route Judge", publicKey: publicKeyB64 },
+  }), PROD);
+  expect(added?.status).toBe(201);
+  const member = (added!.body as any).member;
+  const promoted = await call(req("POST", `/api/swarm/admin/members/${member.id}/role`, {
+    token: PROD.adminToken, body: { expectedVersion: member.version, role: "judge" },
+  }), PROD);
+  expect(promoted?.status).toBe(200);
+  expect((promoted!.body as any).member.role).toBe("judge");
+  expect((promoted!.body as any).token).toBeUndefined();
+  const stale = await call(req("POST", `/api/swarm/admin/members/${member.id}/role`, {
+    token: PROD.adminToken, body: { expectedVersion: member.version, role: "member" },
+  }), PROD);
+  expect((stale!.body as any).error).toBe("stale_version");
 });
 
 test("malformed JSON body never reaches parsing when unauthenticated (auth runs first)", async () => {
@@ -446,6 +466,7 @@ test("members: update writes every editable field, bumps version, and the projec
     // handle stays a separate, audited act.
     handle,
     status: "active",
+    role: "member",
     version: 2,
     name: "Woon",
     tagline: "peaq's social media intern",

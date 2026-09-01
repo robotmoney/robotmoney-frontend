@@ -3224,3 +3224,25 @@ unchanged. The events are then graded by EXECUTING the real emitter, the real
 ORDER pinned separately by source-text graders over `runSession` itself, each
 with a red control. The alternative — asserting that a judgement row exists —
 would have proved nothing about what a viewer sees, which is the entire defect.
+
+### Amendment (issue #812) — a judge is a graduated member, never a second identity
+
+The consensus judge uses the existing `swarm_members` identity, Ed25519 key,
+bearer token and rotation/revocation paths. An administrator may approve an
+application directly as `judge` or change an active member between `member`
+and `judge` through the existing admin-members surface; neither operation issues
+or changes a credential. The change is versioned and audited.
+
+Judges are separated from proposers as a standing duty, not per session: a
+judge is excluded from new take rosters and `submitRecommendation()` refuses
+its bearer token. A member who already has a take in a session is also refused
+if it attempts to judge that session. This keeps the quorum denominator and
+the author of the judge prose free of a market view. A role revocation is read
+inside the judgement write transaction, so it takes effect without a redeploy
+and cannot leave a newly written judgement after revocation.
+
+Every `swarm_session_judgements` row records `judged_by`: either the immutable
+member id or `robotmoney-in-house` for the built-in worker. The member id is
+also foreign-keyed, so an attribution cannot name an identity that never
+existed. The later third-party transport/rollout flag remains #796's concern;
+this decision supplies only the identity and fail-closed authorization seam.

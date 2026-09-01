@@ -157,6 +157,8 @@ export interface JudgeSessionResult {
 }
 
 export interface JudgeSessionOptions extends JudgeOptions {
+  /** Existing member acting as judge. Omit only for the built-in worker. */
+  judgeMemberId?: string;
   /**
    * The mode/threshold/model, read ONCE by the caller and passed down. Without
    * this the config is read twice — by the caller's gate and again here — and
@@ -194,7 +196,7 @@ export interface JudgeSessionOptions extends JudgeOptions {
  * and no row lock or pooled connection may be held across it.
  */
 export async function judgeSession(sessionId: string, opts: JudgeSessionOptions = {}): Promise<JudgeSessionResult> {
-  const { config: passedConfig, beforeRecord, ...judgeOpts } = opts;
+  const { config: passedConfig, beforeRecord, judgeMemberId, ...judgeOpts } = opts;
   const config = passedConfig ?? (await getJudgeConfig());
   if (config.mode === "off") {
     return { ok: false, status: 409, error: "judge_disabled", sessionId, mode: config.mode };
@@ -212,6 +214,26 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     // `_xact_` form releases at COMMIT/ROLLBACK, so a crashed judge cannot leave
     // a session locked.
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))`;
+    if (judgeMemberId) {
+      // Read inside the write transaction: an admin revocation that committed
+      // while the model was thinking is observed before any judgement row can
+      // land. This is the fail-closed boundary for #796's future transport.
+      const member = (await tx<{ status: string; role: string }[]>`
+        SELECT status, role FROM swarm_members WHERE id = ${judgeMemberId} FOR UPDATE`)[0];
+      if (!member || member.status !== "active") {
+        refusal = { ok: false, status: 403, error: "judge_member_inactive" };
+        throw new JudgeRollback();
+      }
+      if (member.role !== "judge") {
+        refusal = { ok: false, status: 403, error: "judge_role_required" };
+        throw new JudgeRollback();
+      }
+      const take = (await tx`SELECT 1 FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${judgeMemberId} LIMIT 1`)[0];
+      if (take) {
+        refusal = { ok: false, status: 409, error: "judge_member_has_take_in_session" };
+        throw new JudgeRollback();
+      }
+    }
     if (beforeRecord) {
       const gate = await beforeRecord(tx);
       if (!gate.ok) {
@@ -249,12 +271,13 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     const inserted = (await tx`
       INSERT INTO swarm_session_judgements
         (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, take_count, min_takes,
-         applied, applied_skipped_reason, dropped_positions, dropped_disagreements, opinion)
+         applied, applied_skipped_reason, dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion)
       VALUES (
         ${sessionId}, ${config.mode}, ${outcome.source}, ${outcome.fallbackReason ?? null}, ${outcome.model},
         ${outcome.promptHash}, ${outcome.inputsDigest}, ${outcome.takeCount}, ${outcome.minTakes},
         ${applied}, ${appliedSkippedReason},
         ${outcome.drops?.positions ?? 0}, ${outcome.drops?.disagreements ?? 0},
+        ${judgeMemberId ?? "robotmoney-in-house"}, ${judgeMemberId ?? null},
         ${sql.json(outcome.opinion as any)}
       ) RETURNING id`)[0] as { id: string | number };
 
@@ -402,7 +425,7 @@ export async function listJudgements(sessionId: string, limit = 50) {
   return (await sql`
     SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest,
            take_count, min_takes, applied, applied_skipped_reason,
-           dropped_positions, dropped_disagreements, opinion, created_at
+           dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at
     FROM swarm_session_judgements WHERE session_id = ${sessionId}
     ORDER BY id DESC LIMIT ${bounded}`) as Record<string, unknown>[];
 }

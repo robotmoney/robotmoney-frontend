@@ -59,6 +59,7 @@ export interface SwarmMember {
    */
   handle?: string;
   status: MemberStatus;
+  role?: "member" | "judge";
   name: string;
   tagline: string | null;
   lens: string | null;

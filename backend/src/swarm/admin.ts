@@ -99,6 +99,7 @@ function toMemberAdmin(row: Record<string, any>): AdminMember {
     id: row.id,
     handle: row.handle ?? row.id,
     status: row.status,
+    role: row.role ?? "member",
     version: Number(row.version),
     name: row.name,
     tagline: row.tagline ?? null,
@@ -282,7 +283,7 @@ export async function getMemberSilenceFlags(tx: DbHandle = sql): Promise<Record<
       FROM swarm_session_members sm
       JOIN swarm_sessions s ON s.id = sm.session_id
       JOIN swarm_members m  ON m.id = sm.member_id
-      WHERE m.status = 'active'
+      WHERE m.status = 'active' AND m.role = 'member'
         AND sm.status != 'excused'
         AND s.convened_at > m.activated_at
       GROUP BY sm.member_id
@@ -304,7 +305,7 @@ export async function getMemberSilenceFlags(tx: DbHandle = sql): Promise<Record<
     JOIN swarm_sessions s ON s.id = sm.session_id
     JOIN swarm_members m  ON m.id = sm.member_id
     JOIN last_take lt      ON lt.member_id = sm.member_id
-    WHERE m.status = 'active'
+    WHERE m.status = 'active' AND m.role = 'member'
       AND sm.status != 'excused'
       AND s.convened_at > lt.last_take_at
     GROUP BY sm.member_id
@@ -418,18 +419,20 @@ export async function reviewApplicationAdmin(
   memberId: string,
   decision: "approve" | "reject",
   actor: Actor = ADMIN_ACTOR,
+  role: MemberRole = "member",
 ): Promise<AdminResult> {
   if (decision === "approve") {
     // Reuse the SAME activation transaction the public path uses. Approval
     // activates the pending key, queues the email, and flips status active;
     // bearer plaintext is minted only by the member's first signed claim.
-    const res = await activateMember(memberId);
+    const res = await activateMember(memberId, role);
     if (!res.ok) return res as AdminResult;
     return {
       ok: true,
       status: 200,
       memberId,
       memberStatus: "active",
+      role,
       claimRequired: true,
       notificationQueued: res.notificationQueued,
     };
@@ -446,6 +449,39 @@ export async function reviewApplicationAdmin(
     await tx`UPDATE swarm_applications SET status = 'rejected', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
     await audit(actor, "member_reject", { memberId }, tx);
     return { ok: true, status: 200, memberId, memberStatus: "inactive", applicationStatus: "rejected" };
+  });
+}
+
+export type MemberRole = "member" | "judge";
+
+/** Change an existing member's duty without issuing a new credential. */
+export async function setMemberRoleAdmin(
+  memberId: string,
+  expectedVersion: number,
+  role: MemberRole,
+  actor: Actor = ADMIN_ACTOR,
+): Promise<AdminResult> {
+  return sql.begin(async (tx) => {
+    const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
+    if (!row) return err(404, "member not found");
+    if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
+    if (row.status !== "active") return err(409, "only active members may hold the judge role");
+    if (row.role === role) return { ok: true, status: 200, member: toMemberAdmin(row) };
+    const upd = await tx`
+      UPDATE swarm_members SET role = ${role}, version = version + 1, updated_at = now()
+      WHERE id = ${memberId} AND version = ${expectedVersion}
+      RETURNING *`;
+    if (upd.length === 0) return err(409, "stale_version");
+    // Scheduled rosters are still mutable, so the standing no-take rule is
+    // reflected immediately. Later rosters are historical snapshots.
+    if (role === "judge") {
+      await tx`
+        UPDATE swarm_session_members sm SET status = 'excused', excused_at = now(), reason = 'member holds judge role'
+        FROM swarm_sessions s
+        WHERE sm.session_id = s.id AND sm.member_id = ${memberId} AND s.state = 'scheduled' AND sm.status = 'expected'`;
+    }
+    await audit(actor, role === "judge" ? "member_grant_judge" : "member_revoke_judge", { memberId, role }, tx);
+    return { ok: true, status: 200, member: toMemberAdmin(upd[0]) };
   });
 }
 
@@ -883,7 +919,7 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
     // deactivation NEVER rewrites this list — roster add/excuse are the only
     // sanctioned edits, and only before collecting begins.
     const activeMembers = await tx<{ id: string; name: string; lens: string | null }[]>`
-      SELECT id, name, lens FROM swarm_members WHERE status = 'active'`;
+      SELECT id, name, lens FROM swarm_members WHERE status = 'active' AND role = 'member'`;
     for (const m of activeMembers) {
       await tx`
         INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
@@ -967,8 +1003,9 @@ export async function rosterAddAdmin(sessionId: string, memberId: string, actor:
   return sql.begin(async (tx) => {
     const gate = await requireRosterEditable(tx, sessionId);
     if (!gate.ok) return err(gate.status, gate.error);
-    const member = (await tx<{ id: string; name: string; lens: string | null }[]>`SELECT id, name, lens FROM swarm_members WHERE id = ${memberId}`)[0];
+    const member = (await tx<{ id: string; name: string; lens: string | null; role: string }[]>`SELECT id, name, lens, role FROM swarm_members WHERE id = ${memberId}`)[0];
     if (!member) return err(404, "member not found");
+    if (member.role === "judge") return err(409, "judge_role_cannot_join_take_roster");
     await tx`
       INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
       VALUES (${sessionId}, ${memberId}, ${member.name}, ${member.lens}, 'expected')

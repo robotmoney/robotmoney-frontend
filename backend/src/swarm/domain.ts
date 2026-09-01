@@ -573,6 +573,8 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   const memberId = await memberIdForToken(token);
   if (!memberId) return { ok: false, status: 401, error: "unknown member token" };
   if (memberId !== sub.memberId) return { ok: false, status: 403, error: "token/member mismatch" };
+  const member = (await sql<{ role: string }[]>`SELECT role FROM swarm_members WHERE id = ${memberId}`)[0];
+  if (member?.role === "judge") return { ok: false, status: 403, error: "judge_role_cannot_submit_takes" };
 
   // Resolve the session by WHICH ONE IS COLLECTING for this subject, not by the
   // date the member signed. Since migration 0022 a subject may convene several
@@ -952,14 +954,15 @@ export type ApplicationState = "applied" | "approved" | "claimed" | "rejected" |
 export interface ApplicationStatus {
   id: string;
   state: ApplicationState;
+  role: "member" | "judge";
   appliedAt: string | null;
   reviewedAt: string | null;
   claimedAt: string | null;
 }
 
 export async function getApplyStatus(memberId: string): Promise<ApplicationStatus | null> {
-  const member = (await sql<{ status: string; applied_at: Date | null }[]>`
-    SELECT status, applied_at FROM swarm_members WHERE id = ${memberId}`)[0];
+  const member = (await sql<{ status: string; role: "member" | "judge"; applied_at: Date | null }[]>`
+    SELECT status, role, applied_at FROM swarm_members WHERE id = ${memberId}`)[0];
   if (!member) return null;
 
   const application = (await sql<{ status: string; reviewed_at: Date | null }[]>`
@@ -981,6 +984,7 @@ export async function getApplyStatus(memberId: string): Promise<ApplicationStatu
   return {
     id: memberId,
     state,
+    role: member.role,
     appliedAt: member.applied_at ? new Date(member.applied_at).toISOString() : null,
     reviewedAt: application?.reviewed_at ? new Date(application.reviewed_at).toISOString() : null,
     claimedAt: key?.token_hash && challenge?.consumed_at ? new Date(challenge.consumed_at).toISOString() : null,
@@ -992,9 +996,9 @@ export async function getApplyStatus(memberId: string): Promise<ApplicationStatu
 // approves the application, and enqueues the persisted activation email. The
 // first successful key-proof claim below is the only public path that installs
 // a token hash.
-export async function activateMember(memberId: string) {
+export async function activateMember(memberId: string, role: "member" | "judge" = "member") {
   try {
-    return await activateMemberTx(memberId);
+    return await activateMemberTx(memberId, role);
   } catch (e) {
     // THIS CATCH IS NEW WITH THE DERIVATION (issue #562), and it is the reason
     // the two sibling create paths have had one since #596 while this one did
@@ -1012,7 +1016,7 @@ export async function activateMember(memberId: string) {
   }
 }
 
-async function activateMemberTx(memberId: string) {
+async function activateMemberTx(memberId: string, role: "member" | "judge") {
   return await sql.begin(async (tx) => {
     // `name` rides along on the row we are already locking, because the approval
     // email leads with it: an operator running several members recognises the name
@@ -1051,7 +1055,7 @@ async function activateMemberTx(memberId: string) {
       : existing.handle;
     await tx`
       UPDATE swarm_members
-      SET status = 'active', handle = ${handle}, activated_at = now(), version = version + 1, updated_at = now()
+      SET status = 'active', role = ${role}, handle = ${handle}, activated_at = now(), version = version + 1, updated_at = now()
       WHERE id = ${memberId}`;
     await tx`UPDATE swarm_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
     await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId, handle })})`;
