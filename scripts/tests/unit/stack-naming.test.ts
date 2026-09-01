@@ -243,8 +243,9 @@ describe("the scheme is actually wired into every spawner", () => {
         expect({ workflow: w, value: m[1]!.startsWith(`${CI_PROJECT_PREFIX}_`) }).toEqual({ workflow: w, value: true });
       }
     }
-    // Both steps in the one remaining workflow — boot + always() teardown.
-    expect(seen).toBe(2);
+    // The smoke boot, billing-diagnostic, and always() teardown steps each
+    // carry the run-scoped project name.
+    expect(seen).toBe(3);
   });
 });
 });
