@@ -106,7 +106,7 @@
 .governance__card-note {
   font-size: 10px;                /* text-[10px] */
   font-family: var(--font-mono);
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* ── Quantitative Filter ── */
@@ -173,7 +173,7 @@
 .governance__metric-note {
   font-size: 10px;                /* text-[10px] */
   font-family: var(--font-mono);
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   padding-top: 0.5rem;            /* pt-2 */
   margin: 0;
 }
@@ -223,7 +223,7 @@
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;          /* tracking-widest */
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 .governance__pcard-value {
   font-size: 0.875rem;            /* text-sm */

@@ -67,7 +67,7 @@ export function registerResearchView(Alpine) {
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
           scales: { y: { grid: { color: GRID_COLOR }, ticks: { color: PALETTE.textMuted } },
-            x: { grid: { display: false }, ticks: { color: PALETTE.textDim, maxTicksLimit: 8 } } },
+            x: { grid: { display: false }, ticks: { color: PALETTE.textMuted, maxTicksLimit: 8 } } },
           plugins: { legend: { labels: { color: PALETTE.textMuted } } },
         },
       });

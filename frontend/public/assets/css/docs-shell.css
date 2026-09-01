@@ -20,14 +20,14 @@ body:has(.docs-shell) .footer { display: none !important; }
 .docs-sidebar__home {
   display: flex; align-items: center; gap: 0.5rem; margin-bottom: 2rem;
   font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.22em; color: var(--color-text-dim); text-decoration: none;
+  letter-spacing: 0.22em; color: var(--color-text-muted); text-decoration: none;
 }
 .docs-sidebar__home:hover { color: var(--color-accent); }
 .docs-sidebar__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
 .docs-sidebar__group { margin-bottom: 2rem; }
 .docs-sidebar__grouptitle {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.2em; color: var(--color-text-dim); margin: 0 0 0.75rem;
+  letter-spacing: 0.2em; color: var(--color-text-muted); margin: 0 0 0.75rem;
 }
 .docs-sidebar__list { list-style: none; margin: 0; padding: 0; }
 .docs-sidebar__link {
@@ -40,15 +40,15 @@ body:has(.docs-shell) .footer { display: none !important; }
 .docs-sidebar__link--active { color: var(--color-text); border-color: var(--color-accent); }
 .docs-sidebar__foot {
   margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--color-border);
-  font-size: 11px; color: var(--color-text-dim);
+  font-size: 11px; color: var(--color-text-muted);
   display: flex; flex-direction: column; gap: 0.5rem;
 }
-.docs-sidebar__foot a { color: var(--color-text-dim); text-decoration: none; }
-.docs-sidebar__foot a:hover { color: var(--color-text-muted); }
+.docs-sidebar__foot a { color: var(--color-text-muted); text-decoration: none; }
+.docs-sidebar__foot a:hover { color: var(--color-text); }
 
 .docs-toc__label {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.2em; color: var(--color-text-dim); margin: 0 0 0.75rem;
+  letter-spacing: 0.2em; color: var(--color-text-muted); margin: 0 0 0.75rem;
 }
 .docs-toc__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .docs-toc__list a { color: var(--color-text-muted); text-decoration: none; font-size: 0.875rem; line-height: 1.4; }
@@ -78,7 +78,7 @@ body:has(.docs-shell) .footer { display: none !important; }
 .docs-shell .docs-codeblock__copy {
   flex-shrink: 0;
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.15em; color: var(--color-text-dim);
+  letter-spacing: 0.15em; color: var(--color-text-muted);
   background: transparent; border: 1px solid var(--color-border);
   padding: 0.1rem 0.5rem; border-radius: var(--radius); cursor: pointer;
   transition: color 0.2s, border-color 0.2s;

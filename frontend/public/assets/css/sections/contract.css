@@ -90,13 +90,13 @@
   width: 100%;
 }
 
-/* text-[10px] font-mono uppercase tracking-[0.2em] text-text-dim mb-1.5 */
+/* text-[10px] font-mono uppercase tracking-[0.2em] text-text-muted mb-1.5 */
 .contract__address-label {
   font-family: var(--font-mono);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin-bottom: 0.375rem; /* mb-1.5 */
   text-align: left;
 }

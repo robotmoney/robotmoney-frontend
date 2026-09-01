@@ -27,7 +27,11 @@
   /* Re-derived shadcn HSL tokens (src/index.css :root), scoped locally so they
      never read as (or overwrite) the marketing tokens.css set. */
   --background: 222 33% 4%;      /* #06080c void, matches --color-void */
-  --foreground: 230 15% 90%;     /* #e2e4ec, matches --color-text */
+  /* Was annotated "matches --color-text" back when both read #e2e4ec. The
+     night register has since lifted its text ramp; this token is re-derived
+     here rather than aliased to the marketing one, so it never tracked it
+     mechanically and the value stands. */
+  --foreground: 230 15% 90%;     /* #e2e4ec */
   --card: 218 28% 9%;            /* #10141c surface, matches --color-surface */
   --popover: 218 28% 9%;
   --primary: 186 100% 50%;       /* cyan #00e5ff */

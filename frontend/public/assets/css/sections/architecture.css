@@ -151,7 +151,7 @@
 .architecture__depositors-sub {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* ── Arrows ── */
@@ -217,7 +217,7 @@
 .architecture__tag {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
   padding: 0.125rem 0.5rem;       /* py-0.5 px-2 */
 }
@@ -308,7 +308,7 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.1em;          /* tracking-widest */
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 .architecture__bucket-risk {
   font-family: var(--font-mono);
@@ -322,7 +322,7 @@
 .architecture__bucket-assets {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin: 0.5rem 0 0;             /* mt-2 */
 }
 
@@ -338,7 +338,7 @@
 .architecture__fee-text {
   font-family: var(--font-mono);
   font-size: 0.75rem;             /* text-xs */
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 .architecture__fee-sweep {
   display: flex;
@@ -412,7 +412,7 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin-left: 0.5rem;            /* ml-2 */
 }
 .architecture__terminal-code {
@@ -500,7 +500,7 @@
 .architecture__skill-note {
   font-family: var(--font-mono);
   font-size: 0.75rem;             /* text-xs */
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin: 0;
 }
 .architecture__skill-warn {

@@ -69,7 +69,10 @@
   background: var(--color-deep);
   border-bottom: 1px solid var(--color-border);
 }
-.ma-glyph { font-size: 2.5rem; opacity: 0.5; color: var(--color-text-dim); }
+/* The glyph is the stand-in for an article thumbnail image, not something a
+   reader reads: it carries no information the card title and preview do not
+   already carry, so it takes a border token rather than a text-ramp rung. */
+.ma-glyph { font-size: 2.5rem; opacity: 0.5; color: var(--color-border-light); }
 .ma-card__body { flex: 1; padding: 1.25rem; display: flex; flex-direction: column; justify-content: space-between; }
 .ma-meta {
   display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
