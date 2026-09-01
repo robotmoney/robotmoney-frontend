@@ -40,6 +40,10 @@ const FIXTURES = join(import.meta.dir, "../../src/__fixtures__");
 const spec = JSON.parse(
   readFileSync(join(FIXTURES, "consensus-receipt.canonicalization.json"), "utf8"),
 );
+const DOMAIN_SOURCE = readFileSync(
+  join(import.meta.dir, "../../../backend/src/swarm/domain.ts"),
+  "utf8",
+);
 const ORDER = RECEIPT_CANONICAL_BUCKET_ORDER as readonly string[];
 
 type Bps = { bucket: string; weight_bps: number };
@@ -527,11 +531,27 @@ describe("consensus receipt bps_conversion — largest remainder (issue #798)", 
     // The input clause has to describe what meanTakeWeights ACTUALLY computes:
     // a verifier recomputes the mean from the frozen take set, so an unstated
     // step decides the bytes just as much as a stated one.
+    expect(bps.input).toContain("IN TAKE ORDER");
+    expect(bps.input).toContain("Take order is immaterial");
     expect(bps.input).toContain("localeCompare");
     expect(bps.input).toContain("8 DECIMAL PLACES");
+    expect(bps.input).toContain("HALF TOWARD POSITIVE INFINITY");
+    expect(bps.input).toContain("Math.round(-0.5) is -0");
+    expect(bps.input).toContain("NOT BANKER'S ROUNDING");
+    expect(bps.input).toContain("NOT floor(x + 0.5)");
     expect(bps.input).toContain("SETTLE THE POSITIONALLY LAST ENTRY");
     expect(bps.input).toContain("meanTakeWeights()");
     expect(bps.input).toContain("backend/src/swarm/domain.ts");
+    expect(bps.input).not.toContain("lines ");
+    expect(spec.bps_conversion.divergent_example.mechanism).toContain("roughly once per 10^4–10^5");
+    expect(spec.bps_conversion.divergent_example.mechanism).toContain("depends on the sampling corpus");
+  });
+
+  test("the producer reference resolves to meanTakeWeights, so moving it makes the citation red", () => {
+    // The fixture deliberately cites a stable symbol rather than a line range.
+    // This source guard turns a rename or move of that symbol into a failing
+    // contract test instead of letting the cross-repo authority silently rot.
+    expect(DOMAIN_SOURCE).toContain("export function meanTakeWeights(");
   });
 
   test("the spec's divergent example converts the way the spec says it does", () => {
