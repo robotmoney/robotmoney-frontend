@@ -352,6 +352,25 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     expect(before.detail.join("\n")).toContain("guarded from 9020_installs_guard.sql");
   });
 
+  test("RED: installing a guard and removing rows in the SAME migration blocks, and never self-references", async () => {
+    // Strict `at < i` graded this unprotected and printed
+    // `p1.sql: DELETE … (guarded from p1.sql)` under a header reading "run
+    // BEFORE this release installs the guard" — which the same file plainly does
+    // not. The order inside one file is not visible to this check, and the
+    // honest answer to an unknown order is to block.
+    const r = await check({
+      file: "9036_install_and_remove.sql",
+      sql: [
+        "DELETE FROM wallet_aum_snapshot_runs WHERE started_at < '2020-01-01';",
+        "CREATE TRIGGER wallet_aum_snapshot_runs_immutable BEFORE UPDATE ON wallet_aum_snapshot_runs",
+        "  FOR EACH STATEMENT EXECUTE FUNCTION rm_wallet_aum_snapshot_run_guard();",
+      ].join("\n"),
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("DELETE wallet_aum_snapshot_runs");
+    expect(r.detail.join("\n")).not.toContain("guarded from 9036_install_and_remove.sql");
+  });
+
   test("a removal that is safe only by ordering is never called UNPROTECTED", async () => {
     // The string that used to be the operator-facing lie. `wallet_balance_samples`
     // carries a BEFORE DELETE guard by the end of this release, so no line of
@@ -470,6 +489,51 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     });
     expect(r.status).toBe("FAIL");
     expect(r.detail.join("\n")).toContain("swarm_members.swarm_members_append_only");
+  });
+
+  test("RED: a DO block that NAMES the table but CONTINUEs past it does not excuse the drop", async () => {
+    // The review finding, verbatim. The first version of the exemption was built
+    // from guardedTablesInstalledBy(), which harvests every identifier-shaped
+    // literal in any `$$` body mentioning CREATE TRIGGER — so merely naming
+    // `swarm_sessions` in the array exempted the drop of its guard, and the PASS
+    // detail then ASSERTED the trigger had been re-created. The loop CONTINUEs
+    // past it; nothing is re-created; the table ships unguarded. Nothing catches
+    // that at boot either, because the guard is precisely what was removed.
+    const r = await check({
+      file: "9034_names_but_never_recreates.sql",
+      sql: [
+        "-- Housekeeping: swarm_sessions no longer needs the statement-level guard.",
+        "DROP TRIGGER IF EXISTS swarm_sessions_append_only ON swarm_sessions;",
+        "",
+        "DO $$",
+        "DECLARE t text; protected text[] := ARRAY['swarm_consensus_receipts', 'swarm_sessions'];",
+        "BEGIN",
+        "  FOREACH t IN ARRAY protected LOOP",
+        "    IF t = 'swarm_sessions' THEN CONTINUE; END IF;",
+        "    EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard()', t || '_append_only_row', t);",
+        "  END LOOP;",
+        "END $$;",
+      ].join("\n"),
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("DROP TRIGGER swarm_sessions.swarm_sessions_append_only");
+    // And no line may claim it was put back.
+    expect(r.detail.join("\n")).not.toContain("dropped and re-created by the SAME migration");
+  });
+
+  test("GREEN: a DO block that merely names a table does not make the drop of ANOTHER table's guard safe either", async () => {
+    // The narrower half of the same defect: the harvest is per-table, so the
+    // exemption must be too.
+    const r = await check({
+      file: "9035_recreates_only_one.sql",
+      sql: [
+        "DROP TRIGGER IF EXISTS swarm_briefs_append_only ON swarm_briefs;",
+        "CREATE TRIGGER swarm_briefs_append_only BEFORE DELETE ON swarm_briefs",
+        "  FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard();",
+      ].join("\n"),
+    });
+    expect(r.status).toBe("PASS");
+    expect(r.detail.join("\n")).toContain("dropped and re-created by the SAME migration");
   });
 
   test("GREEN: CREATE OR REPLACE FUNCTION defining a NEW guard is protection being added", async () => {

@@ -394,13 +394,22 @@ and not written, so the distinction stays visible rather than silent.
 idempotently with `DROP TRIGGER IF EXISTS x; CREATE TRIGGER x …`, and 0042 opens
 with `CREATE OR REPLACE FUNCTION rm_consensus_receipt_immutable()` to define its
 own new guard. Reading either as tampering would block the release for *adding*
-protection, so the check exempts exactly two narrow cases: a guard trigger
-dropped and re-created by the same migration on the same table, and a
-`CREATE OR REPLACE FUNCTION` naming a guard function that does not exist yet. It
-reports both rather than hiding them. The limit is that it does not compare the
-dropped trigger's definition with the re-created one, so a migration that
-reinstalled a *weaker* guard would read like one that reinstalled the same guard
-— §2.2's table is where you check that.
+protection, so the check exempts exactly two narrow cases, and it reports both
+rather than hiding them:
+
+- a guard trigger dropped by a migration that also contains a **static**
+  `CREATE [OR REPLACE] TRIGGER <guard-name> … ON <that same table>`. A
+  dynamically-built re-creation does not qualify — and does not need to, because
+  the matching drop in those migrations is built the same way and is invisible to
+  the scan;
+- a `CREATE OR REPLACE FUNCTION` naming a guard function that exists neither on
+  the database nor in an earlier migration of this release.
+
+The limit is that neither compares definitions, so a migration that reinstalled a
+*weaker* guard would read like one that reinstalled the same guard — §2.2's table
+is where you check that. What the exemption will **not** do is take a migration's
+word for it: a drop whose table is merely *named* nearby, without a re-creation
+targeting it, still fails.
 
 **"Protected" is not one set, and not only the append-only roster.** Three
 kinds of guard are in play, and the check reads all three: `rm_append_only_guard()`

@@ -266,12 +266,19 @@ async function checkPendingMigrations(db: Db, { record }: Checker): Promise<Set<
 //      tests/preflight-0-3-0-append-only-safety.test.ts, so a new shape shows up
 //      as a failing test rather than as a quiet gap.
 //   8. TWO NARROW EXEMPTIONS, both for installing protection rather than
-//      removing it: a guard trigger dropped and re-created by the SAME
-//      migration on the same table, and a `CREATE OR REPLACE FUNCTION` naming a
-//      guard function that does not exist yet. Neither compares definitions, so
-//      a migration that reinstalled a WEAKER guard reads like one that
-//      reinstalled the same guard. Both are REPORTED in the PASS detail rather
-//      than hidden, and both are asserted against their near-miss.
+//      removing it. Each is stated as the code implements it, because an
+//      exemption described more narrowly than it behaves is how the last one
+//      shipped a false negative:
+//        (a) A guard trigger dropped by a migration that also contains a STATIC
+//            `CREATE [OR REPLACE] TRIGGER <guard-name> … ON <that same table>`.
+//            A dynamically-built re-creation does not qualify — see
+//            guardTriggersReinstalledBy() for why it does not need to.
+//        (b) A `CREATE OR REPLACE FUNCTION` naming a guard function that exists
+//            neither on the database nor in an earlier migration of this release.
+//      Neither compares definitions, so a migration that reinstalled a WEAKER
+//      guard reads like one that reinstalled the identical guard. Both are
+//      REPORTED in the PASS detail rather than hidden, and both are asserted
+//      against their near-miss.
 // Apart from (1), (7) and (8), every limit above errs towards flagging a release
 // that is fine rather than passing one that is not.
 // ───────────────────────────────────────────────────────────────────────────
@@ -481,11 +488,15 @@ export function scanMigrationSql(
   // re-creates on the same table is installation, not removal, so it is
   // recorded and reported but does not block.
   //
-  // The limit, stated because it is real: this does not compare the dropped
-  // trigger's definition with the re-created one, so a migration that reinstalls
-  // a WEAKER guard reads the same as one that reinstalls the identical guard.
-  // Narrowed to DROP on purpose — a DISABLE is never part of an install.
-  const reinstalls = guardedTablesInstalledBy(sql);
+  // guardTriggersReinstalledBy(), NOT guardedTablesInstalledBy(): the exemption
+  // needs an actual re-creation on that table, and the permissive harvest would
+  // let a migration excuse a drop merely by naming the table (see that
+  // function's header). The limit that remains, stated because it is real: this
+  // does not compare the dropped trigger's definition with the re-created one,
+  // so a migration that reinstalls a WEAKER guard reads the same as one that
+  // reinstalls the identical guard. Narrowed to DROP on purpose — a DISABLE is
+  // never part of an install.
+  const reinstalls = guardTriggersReinstalledBy(sql);
 
   for (const raw of stripSqlNoise(sql).split(";")) {
     const stmt = raw.replace(/\s+/g, " ").trim();
@@ -612,6 +623,18 @@ function dollarQuotedBodies(sql: string): string[] {
  * It reads the RAW sql, not the stripped form — the literals are the point here.
  * Pinned against the real migration set by
  * tests/preflight-0-3-0-append-only-safety.test.ts.
+ *
+ * ⚠ THIS SET IS PERMISSIVE, AND MAY ONLY BE USED WHERE THAT ERRS SAFE. The
+ * second branch harvests every identifier-shaped literal in a `$$` body that
+ * mentions CREATE TRIGGER, so merely NAMING a table there attributes a guard
+ * installation to this migration. That is fine for `installedAt`, whose only
+ * effect is WHEN a table becomes protected: attribution can only land on the
+ * first migration that mentions the table, never later than the real install,
+ * so an error makes the table protected EARLIER — more blocking, not less.
+ *
+ * It is NOT fine for deciding that a dropped guard was put back. Use
+ * guardTriggersReinstalledBy() for that, which requires a re-creation this
+ * function does not.
  */
 export function guardedTablesInstalledBy(sql: string): Set<string> {
   const out = new Set<string>();
@@ -622,14 +645,50 @@ export function guardedTablesInstalledBy(sql: string): Set<string> {
   }
   for (const body of dollarQuotedBodies(sql)) {
     if (!/\bCREATE\s+TRIGGER\b/i.test(body)) continue;
-    // Line comments first: 0040's rationale quotes `session_replication_role =
+    // Comments first: 0040's rationale quotes `session_replication_role =
     // 'replica'`, and a word in a comment is not a table.
-    const code = body.replace(/--.*$/gm, "");
+    const code = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--.*$/gm, "");
     for (const lit of code.matchAll(/'([A-Za-z_][A-Za-z0-9_$]*)'/g)) {
       // A leading underscore is a trigger-name SUFFIX being concatenated
       // (`t || '_immutable'`), never a table.
       if (!lit[1]!.startsWith("_")) out.add(lit[1]!);
     }
+  }
+  return out;
+}
+
+/**
+ * Tables on which this migration DEMONSTRABLY re-creates a guard trigger.
+ *
+ * This is the exemption source for the drop-then-create install idiom, and it is
+ * deliberately much stricter than guardedTablesInstalledBy(). Using that
+ * function here was a real defect: a migration that dropped
+ * `swarm_sessions_append_only` and then ran a `DO` block which merely NAMED
+ * `swarm_sessions` in an array — `CONTINUE`-ing past it without creating
+ * anything — was exempted, and the PASS detail asserted the trigger had been
+ * re-created. The release would have shipped that table unguarded, and unlike a
+ * stray DELETE nothing catches it at boot: the guard is what was removed.
+ *
+ * So the bar here is an actual re-creation whose target table is ESTABLISHED,
+ * not merely mentioned: a static `CREATE [OR REPLACE] TRIGGER <guard-name> …
+ * ON <table>`. Read from the stripped SQL, so a CREATE TRIGGER inside a comment
+ * or a string literal cannot excuse a drop.
+ *
+ * Dynamically-built re-creations (`EXECUTE format('CREATE TRIGGER %I … ON %I',
+ * …)`) are deliberately NOT a source, and they do not need to be: the matching
+ * `DROP TRIGGER` in those migrations is built the same way, lives inside a
+ * string literal, and is stripped before the scan — so it never produces a
+ * finding for this set to excuse. A migration that dropped a guard STATICALLY
+ * and re-created it DYNAMICALLY would be reported rather than exempted. That is
+ * a false positive, i.e. the safe direction, and no migration in this repo has
+ * that shape.
+ */
+export function guardTriggersReinstalledBy(sql: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of stripSqlNoise(sql).matchAll(
+    /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\s+"?([A-Za-z_][\w$]*)"?[^;]*?\bON\s+(?:ONLY\s+)?(?:"?[A-Za-z_][\w$]*"?\s*\.\s*)?"?([A-Za-z_][\w$]*)"?/gi,
+  )) {
+    if (isGuardTriggerName(m[1]!)) out.add(m[2]!);
   }
   return out;
 }
@@ -775,7 +834,15 @@ export async function checkAppendOnlySafety(
     for (const t of declared) {
       const at = installedAt.get(t);
       // Not yet guarded while the migration that installs its guard has not run.
-      if (at === undefined || at < i) set.add(t);
+      //
+      // `<= i`, not `< i`: a migration that installs a guard on T and removes
+      // rows from T in the SAME file has an order this check cannot see, and
+      // the honest answer to an unknown order is to block. Strict `<` graded it
+      // unprotected and printed the self-referential line
+      // `p1.sql: DELETE t (guarded from p1.sql)` under a header reading "run
+      // BEFORE this release installs the guard" — which the same file plainly
+      // does not.
+      if (at === undefined || at <= i) set.add(t);
     }
     return set;
   };
