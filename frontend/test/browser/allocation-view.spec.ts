@@ -10,9 +10,13 @@
 //   - GET /api/dashboards/wallet-balances → an inline stub payload (there is no
 //     live prop-wallet capture — the addresses are owner data).
 //
-// Hero Total AUM = wallet.totalUsd (live prop-wallet feed) + vault tvlUsd (live
-// vault-economics) — issue #84 retired the static $71,526 snapshot. This spec
-// also asserts the served view no longer references WALLET_SNAPSHOT_TOTAL_USD.
+// The hero reports TWO POOLS SEPARATELY (RM-102b): the Robot Money protocol
+// wallets (wallet.totalUsd, .alloc-aum__value--wallets) and vault TVL
+// (economics.tvlUsd, .alloc-aum__value--vault). It used to print their SUM as
+// one "Total AUM", which put a $229 vault inside a $59.4k figure under a page
+// heading about the vault. Nothing in the hero may print the sum. Issue #84
+// retired the static $71,526 snapshot; this spec also asserts the served view
+// no longer references WALLET_SNAPSHOT_TOTAL_USD.
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -100,12 +104,10 @@ function fmtPct(v: number | null): string {
 function adapterValue(a: VaultEconomicsAdapter): string {
   return a.configured === false ? "Not configured" : fmtUsd(a.balanceUsd);
 }
-// Hero Total AUM = live prop-wallet total + live vault tvlUsd; null (renders "—")
-// only when BOTH halves are unknown. If exactly one half is null, the total is
-// the PARTIAL sum of whatever resolved (issue #160) — never blanked to "—"
-// just because one feed degraded.
-function totalAum(walletTotal: number | null, tvlUsd: number | null): number | null {
-  return walletTotal == null && tvlUsd == null ? null : (walletTotal ?? 0) + (tvlUsd ?? 0);
+// The sum the hero must never print. Kept as a helper so the "these two are not
+// added together" assertions read as one idea rather than an inline expression.
+function forbiddenSum(walletTotal: number | null, tvlUsd: number | null): string {
+  return fmtUsd((walletTotal ?? 0) + (tvlUsd ?? 0));
 }
 function adapterBalance(a: VaultEconomicsAdapter): string {
   return a.configured !== false && a.balanceUsd != null
@@ -129,19 +131,24 @@ async function stubEnvironment(page: Page, vault: VaultEconomics, wallet: Wallet
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(wallet) }));
 }
 
-test("allocation view binds vault economics to the golden payload, and Total AUM to the LIVE prop-wallet feed + vault tvl (issue #84)", async ({ page }) => {
+test("allocation view binds vault economics to the golden payload, and reports the protocol-wallet total and vault TVL as two separate figures (issue #84, RM-102b)", async ({ page }) => {
   const golden = loadVaultEconomicsGolden();
   const wallet = walletStub({ totalUsd: 55000, source: "live" });
   await stubEnvironment(page, golden, wallet);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  // Hero Total AUM == live wallet total + live tvlUsd (never the vault-only
-  // tvlUsd alone, nor the retired static $71,681 / $71,526 snapshot).
-  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(totalAum(wallet.totalUsd, golden.tvlUsd)));
-  await expect(page.locator(".alloc-aum__value")).not.toHaveText(fmtUsd(golden.tvlUsd));
-  await expect(page.locator(".alloc-aum__value")).not.toHaveText("$71,681");
-  await expect(page.locator(".alloc-aum__value")).not.toHaveText("$71,526");
+  // Each pool is bound to its own live feed, under its own label.
+  await expect(page.locator(".alloc-aum__value--wallets")).toHaveText(fmtUsd(wallet.totalUsd));
+  await expect(page.locator(".alloc-aum__value--vault")).toHaveText(fmtUsd(golden.tvlUsd));
+  // ...and the hero prints NOTHING that adds the two together, nor the retired
+  // static $71,681 / $71,526 snapshot.
+  await expect(page.locator(".alloc-aum")).not.toContainText(forbiddenSum(wallet.totalUsd, golden.tvlUsd));
+  await expect(page.locator(".alloc-aum")).not.toContainText("$71,681");
+  await expect(page.locator(".alloc-aum")).not.toContainText("$71,526");
+  // The label says whose money each figure is.
+  await expect(page.locator(".alloc-aum")).toContainText("Robot Money protocol wallets");
+  await expect(page.locator(".alloc-aum")).toContainText("Vault TVL");
 
   // The served view must no longer reference the retired baked scalar.
   // allocationView lives in its own module since the per-view split of the old
@@ -191,8 +198,8 @@ test("allocation hero flags a non-live wallet feed when wallet-balances reports 
   // Stub wallet numbers must never be presented as live chain data.
   await expect(page.locator(".alloc-wallet-nonlive")).toBeVisible();
   await expect(page.locator(".alloc-wallet-nonlive")).toContainText("stub");
-  // Total AUM still composes from the (stub) wallet total + live vault tvl.
-  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(totalAum(wallet.totalUsd, golden.tvlUsd)));
+  // The (stub) wallet figure still renders, under the badge that flags it.
+  await expect(page.locator(".alloc-aum__value--wallets")).toHaveText(fmtUsd(wallet.totalUsd));
 });
 
 test("allocation hero flags a stale wallet feed and renders '—' when a wallet leg has degraded (issue #84)", async ({ page }) => {
@@ -243,10 +250,11 @@ test("a wallet feed that recovered from transient rate-limiting renders LIVE —
   // Recovered → fully live: neither the stale nor the non-live wallet badge shows.
   await expect(page.locator(".alloc-wallet-stale")).toBeHidden();
   await expect(page.locator(".alloc-wallet-nonlive")).toBeHidden();
-  // Hero Total AUM composes the LIVE wallet total + live vault tvl (recovered
-  // numbers reach the component, never a degraded '—').
-  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(totalAum(wallet.totalUsd, golden.tvlUsd)));
-  await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
+  // Both hero figures carry the LIVE numbers (recovered values reach the
+  // component, never a degraded '—').
+  await expect(page.locator(".alloc-aum__value--wallets")).toHaveText(fmtUsd(wallet.totalUsd));
+  await expect(page.locator(".alloc-aum__value--vault")).toHaveText(fmtUsd(golden.tvlUsd));
+  await expect(page.locator(".alloc-aum__value--wallets")).not.toHaveText("—");
 });
 
 test("allocation view renders the vault non-live indicator when vault-economics reports source:'stub' (issue #50)", async ({ page }) => {
@@ -299,11 +307,11 @@ test("allocation view renders a stale badge and never fabricates numbers when va
   await navigate(page, "/allocation");
 
   await expect(page.locator(".alloc-stale")).toBeVisible();
-  // Vault tvl is null but the wallet total DID resolve (issue #160) — Total AUM
-  // must render the partial (wallet-only) sum, with the partial-total badge
-  // surfacing that the vault half is missing, never a blanked "—".
-  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(totalAum(wallet.totalUsd, degraded.tvlUsd)));
-  await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
+  // Vault tvl is null but the wallet total DID resolve (issue #160): the two
+  // figures degrade independently. The vault figure blanks to "—", the
+  // protocol-wallet figure stays live, and the chip says one feed is missing.
+  await expect(page.locator(".alloc-aum__value--vault")).toHaveText("—");
+  await expect(page.locator(".alloc-aum__value--wallets")).toHaveText(fmtUsd(wallet.totalUsd));
   await expect(page.locator(".alloc-aum-partial")).toBeVisible();
   await expect(page.locator(".alloc-chip__value")).toHaveText("—");
   const rows = page.locator(".alloc-tablecard").first().locator("tbody tr");
@@ -316,12 +324,13 @@ test("allocation view renders a stale badge and never fabricates numbers when va
   }
 });
 
-test("allocation hero renders a partial Total AUM (never '—') when the wallet feed fails entirely but the vault half resolves (issue #160)", async ({ page }) => {
+test("allocation hero blanks only the protocol-wallet figure when the wallet feed fails entirely, keeping the vault figure live (issue #160)", async ({ page }) => {
   // Simulates the nightly LIVE smoke failure mode: one live feed degrades to
   // fully unavailable (e.g. a tracked wallet leg's chain read fails with no
-  // persisted fallback) while the other resolves normally. Previously
-  // totalAum() blanked the ENTIRE figure to "—" whenever EITHER half was
-  // null; it must now sum whatever DID resolve and flag the result partial.
+  // persisted fallback) while the other resolves normally. The failure is now
+  // contained to its own figure: the vault reads live, the protocol-wallet
+  // figure reads "—", and the chip says which side is missing. Nothing sums a
+  // degraded half into a healthy one.
   const golden = loadVaultEconomicsGolden();
   await page.route("**/api/dashboards/vault-economics", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(golden) }));
@@ -336,8 +345,8 @@ test("allocation hero renders a partial Total AUM (never '—') when the wallet 
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(golden.tvlUsd));
-  await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
+  await expect(page.locator(".alloc-aum__value--vault")).toHaveText(fmtUsd(golden.tvlUsd));
+  await expect(page.locator(".alloc-aum__value--wallets")).toHaveText("—");
   await expect(page.locator(".alloc-aum-partial")).toBeVisible();
 });
 
@@ -527,4 +536,3 @@ test("allocation view renders dated stale badges rather than blank cells for sta
   await expect(sleeveStaleBadge).toBeVisible();
   await expect(sleeveStaleBadge).toContainText("stale");
 });
-

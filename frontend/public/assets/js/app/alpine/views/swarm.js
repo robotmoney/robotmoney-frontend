@@ -245,7 +245,9 @@ export function registerSwarmView(Alpine) {
       const rows = this.allocationFw?.strategy;
       if (!Array.isArray(rows) || !rows.length) return [];
       return rows.map((r, i) => ({
-        label: r?.label || `Bucket ${i + 1}`,
+        // "Sleeve" is the published word for one of the four allocation rows;
+        // `buckets` stays the manifest's own field name and is not renamed.
+        label: r?.label || `Sleeve ${i + 1}`,
         pct: Number.isFinite(Number(r?.targetPct)) ? Number(r.targetPct) : null,
         hue: CATEGORICAL[i % CATEGORICAL.length],
       }));

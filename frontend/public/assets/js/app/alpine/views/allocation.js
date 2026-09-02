@@ -35,11 +35,19 @@ export function registerAllocationView(Alpine) {
   // starts fresh at CATEGORICAL[0] (green = value anchor) and steps through
   // cyan / sand / slate / beacon / teal / mint for maximum adjacent contrast.
 
-  // The hero's "Total AUM" mirrors the original site's semantics
-  // (robotmoney-site src/app/allocation/page.tsx: totalValue + vaultTotalValue)
-  // — wallet holdings PLUS vault TVL, not vault TVL alone. Both halves are now
-  // LIVE (issue #84): the wallet half comes from GET /api/dashboards/wallet-balances
-  // (`wallet.totalUsd`), the vault half from vault-economics (`economics.tvlUsd`).
+  // The hero reports TWO POOLS SEPARATELY, and never sums them. It used to
+  // print one "Total AUM" carrying the original site's semantics
+  // (robotmoney-site src/app/allocation/page.tsx: totalValue + vaultTotalValue):
+  // the Robot Money protocol wallets PLUS vault TVL, added together under a
+  // page heading about the vault. On 2026-09-02 that put a $229 vault inside a
+  // $59.4k figure, 0.4% of the number a reader took for the vault. The two are
+  // different money with different owners (backend config.ts throws at boot if
+  // a prop wallet is ever configured as the vault, "would double-count vault
+  // TVL"), so each is bound on its own: the protocol-wallet figure from
+  // GET /api/dashboards/wallet-balances (`wallet.totalUsd`, dated by
+  // walletAsOfLabel()), the vault figure from vault-economics
+  // (`economics.tvlUsd`, dated by asOfLabel()). The summing helper is gone; a
+  // reader who wants the two added can add them, knowing what they are adding.
   // The baked static wallet-snapshot scalar that used to live here is retired.
   Alpine.data("allocationView", () => ({
     _charts: [],
@@ -87,10 +95,11 @@ export function registerAllocationView(Alpine) {
     // their own — this only needs to touch the imperative Chart.js canvas.
     async load() {
       // Each feed is fetched and assigned INDEPENDENTLY: the reactive x-text
-      // bindings (hero AUM, tables) update the instant that endpoint resolves,
-      // so a slow or failed feed only leaves its own widget in the loading/"—"
-      // state instead of blocking the page. A failed leg becomes null (never a
-      // fabricated value). Total AUM stays null-until-both-live (issue #84).
+      // bindings (the two hero figures, the tables) update the instant that
+      // endpoint resolves, so a slow or failed feed only leaves its own widget
+      // in the loading/"—" state instead of blocking the page. A failed leg
+      // becomes null (never a fabricated value), which renders as "—" under
+      // its own label.
       const fetchInto = (key, route) =>
         api.get(route).then((d) => { this[key] = d; }).catch(() => { this[key] = null; });
       await Promise.allSettled([
@@ -106,8 +115,8 @@ export function registerAllocationView(Alpine) {
       this.destroy();
       this.$nextTick(() => this.draw());
     },
-    // True when any live source (vault or wallet) is serving stub/degraded data,
-    // so the hero can flag that Total AUM is not fully live chain data.
+    // True when the protocol-wallet feed is serving stub/degraded data, so the
+    // hero can flag that the wallet figure is not fully live chain data.
     walletNonLive() {
       return this.wallet?.source === "stub" || (this.wallet?.holdings || []).some((h) => h.provenance === "stub");
     },
@@ -128,26 +137,25 @@ export function registerAllocationView(Alpine) {
       return "$" + n.toLocaleString("en-US", { maximumFractionDigits: Math.abs(n) < 1000 ? 2 : 0 });
     },
     fmtPct(v) { return v == null ? "—" : (Number(v) * 100).toFixed(2) + "%"; },
-    // Hero Total AUM = live prop-wallet total (wallet-balances) + live vault TVL
-    // (vault-economics) — issue #84. Null only while BOTH halves are unknown
-    // (still loading, or neither feed has ever resolved). If exactly one half
-    // degrades to null (issue #160 — e.g. a live RPC read fails for a tracked
-    // wallet leg, or the vault feed has no persisted fallback yet), sum
-    // whatever DID resolve rather than blanking the whole figure to "—": a
-    // partial-but-real total is more useful than hiding it, as long as
-    // aumPartial() below surfaces that it's not the full picture.
-    totalAum() {
-      const vault = this.economics?.tvlUsd;
-      const wallet = this.wallet?.totalUsd;
-      if (vault == null && wallet == null) return null;
-      return (wallet ?? 0) + (vault ?? 0);
+    // The protocol-wallet figure carries its own timestamp: wallet-balances'
+    // `asOf`, not the vault's. The hero used to date one combined number with
+    // the VAULT's timestamp, which mis-dated the wallet half by however far the
+    // two samplers had drifted. Each figure now dates itself from the feed that
+    // produced it, and reads "—" when that feed has not resolved.
+    walletAsOfLabel() {
+      const asOf = this.wallet?.asOf;
+      if (!asOf) return "—";
+      return new Date(asOf).toLocaleString("en-US", {
+        month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC",
+      }) + " UTC";
     },
-    // True when the hero Total AUM is a PARTIAL sum — exactly one of the two
-    // live halves (wallet total, vault TVL) failed to resolve, so the number
-    // shown understates the true total. Mirrors the existing
-    // walletNonLive()/walletStale() provenance badges (issue #160): a
-    // degraded input must never be presented as a silently "full-looking"
-    // figure.
+    // True when exactly one of the two live figures (protocol-wallet total,
+    // vault TVL) failed to resolve, so one of them is rendering "—" while the
+    // other looks normal. Mirrors the walletNonLive()/walletStale() provenance
+    // badges (issue #160): a blank next to a live-looking number must say why
+    // it is blank rather than leaving the reader to guess. Kept through the
+    // RM-102b split, because the two feeds still fail independently; there is
+    // just no combined total left for one of them to silently understate.
     aumPartial() {
       const vault = this.economics?.tvlUsd;
       const wallet = this.wallet?.totalUsd;

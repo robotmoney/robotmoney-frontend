@@ -1,9 +1,19 @@
 <!-- Performance / Wallet Performance
      Ported from robotmoney-site/src/app/allocation2/page.tsx
-     Buildless port. The AUM/Allocation charts are Chart.js stacked areas drawn
-     by the boot-registered walletPerfView() factory (alpine/views.js); the
-     constructivist hero is the boot-registered constructivistHero() canvas
-     factory (alpine/heroes.js).
+
+     WHOSE MONEY THIS PAGE SHOWS: the Robot Money protocol wallets, and only
+     those. It binds GET /api/dashboards/wallet-balances and nothing else: no
+     vault-economics, no vault TVL, not one dollar of depositor capital. It used
+     to call that "AUM", which reads as assets under management for depositors.
+     Every reader-facing "AUM" is gone; the internal names (x-ref="aum", the
+     walletPerfView totalAum array, _series("aum")) are deliberately left alone,
+     because renaming them buys nothing and breaks the issue #614 gap specs that
+     query canvas[x-ref="aum"].
+
+     Buildless port. The value/allocation charts are Chart.js stacked areas
+     drawn by the boot-registered walletPerfView() factory
+     (alpine/views/wallet-perf.js); the constructivist hero is the
+     boot-registered constructivistHero() canvas factory (alpine/heroes.js).
      Numbers are LIVE from GET /api/dashboards/wallet-balances (per-asset daily
      series + Historical Data table), fetched on init by walletPerfView() — no
      baked CSV. The endpoint degrades honestly to stale/seed-labelled rows when
@@ -18,19 +28,22 @@
     <div class="a2-hero__inner">
       <h1 class="a2-hero__title">Wallet <span class="a2-grad">Performance</span></h1>
       <p class="a2-hero__lede">
-        Historical AUM and allocation changes since inception. Tracks all prop
-        strategy wallets in aggregate.
+        Daily value and allocation of the Robot Money protocol wallets since
+        inception, aggregated across every wallet tracked. This is the
+        protocol's own book, not depositor capital: no vault money is on this
+        page. Vault TVL is on the <a href="/allocation">Allocation dashboard</a>.
       </p>
     </div>
   </header>
 
-  <!-- AUM Breakdown -->
+  <!-- Protocol Wallet Breakdown -->
   <section class="a2-section">
     <div class="a2-section__head">
       <span class="a2-eyebrow">03 / History</span>
-      <h2 class="a2-h2">AUM <span class="a2-grad">Breakdown</span></h2>
+      <h2 class="a2-h2">Protocol Wallet <span class="a2-grad">Breakdown</span></h2>
       <p class="a2-section__lede">
-        Daily snapshots of portfolio composition and value since March 18, 2026.
+        Daily snapshots of the Robot Money protocol wallets' composition and
+        value since March 18, 2026.
       </p>
     </div>
 
@@ -55,8 +68,8 @@
         <!-- Absolute value chart (Chart.js stacked area; data in walletPerfView) -->
         <div class="a2-card">
           <div class="a2-card__head">
-            <h3 class="a2-card__title">AUM Over Time</h3>
-            <p class="a2-card__sub">Total portfolio value in USD</p>
+            <h3 class="a2-card__title">Wallet Value Over Time</h3>
+            <p class="a2-card__sub">Combined value of the protocol wallets, in USD</p>
           </div>
           <div class="a2-chart"><canvas x-ref="aum"></canvas></div>
         </div>
@@ -65,7 +78,7 @@
         <div class="a2-card">
           <div class="a2-card__head">
             <h3 class="a2-card__title">Allocation Over Time</h3>
-            <p class="a2-card__sub">Asset composition as percentage of total</p>
+            <p class="a2-card__sub">Asset composition as a percentage of the wallet total</p>
           </div>
           <div class="a2-chart"><canvas x-ref="alloc"></canvas></div>
         </div>
@@ -87,7 +100,7 @@
                 <template x-for="col in columns" :key="col.sym">
                   <th class="a2-r"><span class="a2-dot" :style="`background:${col.color};`"></span><span x-text="col.sym"></span></th>
                 </template>
-                <th class="a2-r a2-total">Total AUM</th>
+                <th class="a2-r a2-total">Wallet Total</th>
               </tr>
             </thead>
             <tbody>
@@ -112,8 +125,8 @@
           </table>
         </div>
         <p class="a2-table__note">
-          * Values shown are aggregated across all tracked wallets. Per-wallet
-          breakdown available in raw data.
+          * Values are aggregated across the tracked Robot Money protocol
+          wallets. The per-wallet breakdown is on the Allocation dashboard.
         </p>
       </div>
 
@@ -121,7 +134,7 @@
 
     <div class="a2-foot">
       <p class="a2-foot__note">
-        See current vault composition and buyback history on the
+        See vault TVL, the per-wallet breakdown and buyback history on the
         <a href="/allocation">Allocation dashboard</a>, or the
         <a href="/regime">Regime</a> signal for market context.
       </p>
@@ -210,6 +223,10 @@
   margin: 0;
   max-width: 42rem;
 }
+/* Same link treatment as .a2-foot__note below. There is no global <a> rule,
+   so an unstyled link in the lede would render browser-default blue. */
+.a2-hero__lede a { color: var(--color-accent); text-decoration: none; }
+.a2-hero__lede a:hover { text-decoration: underline; }
 
 /* Section */
 .a2-section { padding-top: 1rem; }

@@ -81,12 +81,12 @@
           <div class="sv__how-step">
             <span class="sv__how-n">Step 1</span>
             <span class="sv__how-t">A session opens</span>
-            <p class="sv__how-d">One portfolio goes under review. Every member gets the same brief: the day's market indicators, the holdings, and the target weights in force.</p>
+            <p class="sv__how-d">One portfolio goes under review. Every member gets the same brief: the day's regime read, the portfolio's own record, and any research signals filed that day.</p>
           </div>
           <div class="sv__how-step">
             <span class="sv__how-n">Step 2</span>
             <span class="sv__how-t">Members submit takes</span>
-            <p class="sv__how-d">Members submit a <b>signed take</b> or validate other members' takes before the deadline. <b>Members can't see other takes until the window closes</b>.</p>
+            <p class="sv__how-d">Every member files one <b>signed take</b> before the deadline. <b>Members can't see other takes until the window closes</b>.</p>
           </div>
           <div class="sv__how-step">
             <span class="sv__how-n">Step 3</span>
@@ -151,7 +151,7 @@
         <div class="sv__sec">
           <div>
             <h2 class="sv__sec-h">Portfolios</h2>
-            The swarm reviews one portfolio at a time. One signed take per member, until the session window closes</p>
+            <p class="sv__sec-sub">The swarm reviews one portfolio per session. One signed take per member, until the session window closes.</p>
           </div>
         </div>
         <div class="sv__cov">
@@ -204,7 +204,7 @@
               <div class="sv__vault">
                 <p class="sv__vault-h">Flagship product</p>
                 <p class="sv__vault-t">Allocation targets.</p>
-                <p class="sv__vault-d">The swarm reads the vault's book each session, and the target weights it settles on are the weights the vault is held to.</p>
+                <p class="sv__vault-d">The swarm reads the vault's book each session. The target weights it settles on are the proposed allocation; applying them is gated by the admin multisig.</p>
                 <!-- The feed below lists this portfolio twice, because the two
                      reviews are two subjects in the backend with their own
                      sessions, takes and quorum. Saying so here is what stops
@@ -262,9 +262,9 @@
         <div class="sv__sec">
           <div>
             <h2 class="sv__sec-h">Sessions</h2>
-            <p class="sv__sec-sub">All published sessions are listed here. Sessions are published once the recommendation is ready.</p>
+            <p class="sv__sec-sub">A session publishes once its recommendation is ready. Target-allocation sessions are not listed here: they stay on their own subject page.</p>
           </div>
-          <span class="sv__session-count" x-text="`${publishedSessions().length} published`"></span>
+          <span class="sv__session-count" x-text="`${publishedSessions().length} listed`"></span>
         </div>
 
         <!-- Same filter component and colours as the member profile's track

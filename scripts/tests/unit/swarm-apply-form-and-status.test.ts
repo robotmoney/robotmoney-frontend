@@ -309,7 +309,7 @@ describe("swarmApplyStatus: stepClass()/stateChip()/liveStatus() across the stat
     expect(live.label).toBe("under review");
   });
 
-  test("approved — 'applied'/'approved' done, 'claimed' next; chip 'not voting yet'; live panel names the seat, not-voting-yet", () => {
+  test("approved — 'applied'/'approved' done, 'claimed' next; chip 'not filing yet'; live panel names the seat, not-filing-yet", () => {
     const s = factories.swarmApplyStatus() as any;
     s.id = "member-abc";
     s.member = { name: "Test Agent" };
@@ -318,14 +318,14 @@ describe("swarmApplyStatus: stepClass()/stateChip()/liveStatus() across the stat
     expect(s.stepClass("applied")).toBe("done");
     expect(s.stepClass("approved")).toBe("done");
     expect(s.stepClass("claimed")).toBe("next");
-    expect(s.stateChip()).toEqual({ label: "not voting yet", tone: "pending" });
+    expect(s.stateChip()).toEqual({ label: "not filing yet", tone: "pending" });
     const live = s.liveStatus();
     expect(live.tone).toBe("pending");
-    expect(live.label).toBe("not voting yet");
+    expect(live.label).toBe("not filing yet");
     expect(live.lead).toContain("Test Agent");
   });
 
-  test("claimed-no-takes — key claimed but the vote step reads 'next' (proof isn't the duty), chip 'no takes yet'", () => {
+  test("claimed-no-takes — key claimed but the take step reads 'next' (proof isn't the duty), chip 'no takes yet'", () => {
     const s = factories.swarmApplyStatus() as any;
     s.id = "member-abc";
     s.member = { name: "Test Agent" };
@@ -336,7 +336,7 @@ describe("swarmApplyStatus: stepClass()/stateChip()/liveStatus() across the stat
     expect(s.stepClass("applied")).toBe("done");
     expect(s.stepClass("approved")).toBe("done");
     // The special case (static-views.js): claimed-but-no-takes-yet reads
-    // "next", not "done" — claiming the key is not the duty, voting is.
+    // "next", not "done": claiming the key is not the duty, filing a take is.
     expect(s.stepClass("claimed")).toBe("next");
     expect(s.stateChip()).toEqual({ label: "no takes yet", tone: "pending" });
     const live = s.liveStatus();
@@ -344,7 +344,7 @@ describe("swarmApplyStatus: stepClass()/stateChip()/liveStatus() across the stat
     expect(live.label).toBe("no takes yet");
   });
 
-  test("voting — every step done including 'claimed' once a take exists; chip 'voting'; live panel is the good/voting state", () => {
+  test("filing — every step done including 'claimed' once a take exists; chip 'filing takes'; live panel is the good/filing state", () => {
     const s = factories.swarmApplyStatus() as any;
     s.id = "member-abc";
     s.member = { name: "Test Agent" };
@@ -355,10 +355,10 @@ describe("swarmApplyStatus: stepClass()/stateChip()/liveStatus() across the stat
     expect(s.stepClass("applied")).toBe("done");
     expect(s.stepClass("approved")).toBe("done");
     expect(s.stepClass("claimed")).toBe("done");
-    expect(s.stateChip()).toEqual({ label: "voting", tone: "good" });
+    expect(s.stateChip()).toEqual({ label: "filing takes", tone: "good" });
     const live = s.liveStatus();
     expect(live.tone).toBe("good");
-    expect(live.label).toBe("voting");
+    expect(live.label).toBe("filing takes");
     expect(live.url).toBe("/swarm/takes/take-1");
   });
 

@@ -626,12 +626,18 @@ export function registerStaticViews(Alpine) {
     // The KEYS above are lifecycle states and are pinned by
     // scripts/tests/unit/swarm-apply-form-and-status.test.ts. These are the
     // words an operator reads, and they are the apply page's three beats
-    // verbatim: Apply, Approve, Vote. "Claimed" was the API's word for the
-    // agent proving it holds its private key, and as a label it did two things
-    // wrong: it sat one synonym away from "approved" on a page whose whole job
-    // is telling those two apart, and it named an internal mechanism rather
-    // than the thing the operator is waiting for, which is the agent voting.
-    STEP_LABELS: { applied: "Apply", approved: "Approve", claimed: "Vote" },
+    // verbatim: Apply, Approve, File a take. "Claimed" was the API's word for
+    // the agent proving it holds its private key, and as a label it did two
+    // things wrong: it sat one synonym away from "approved" on a page whose
+    // whole job is telling those two apart, and it named an internal mechanism
+    // rather than the thing the operator is waiting for, which is the agent
+    // filing its first take.
+    //
+    // NOT "Vote". Nothing in this system votes: a member files a signed take,
+    // and the recommendation is the arithmetic mean over the take set. There is
+    // no ballot, no tally and no voting table behind the word, so it promised a
+    // mechanism the code does not have.
+    STEP_LABELS: { applied: "Apply", approved: "Approve", claimed: "File a take" },
     stepLabel(step) { return this.STEP_LABELS[step] || step; },
     id: null,
     loading: true,
@@ -761,9 +767,9 @@ export function registerStaticViews(Alpine) {
     // pinned contract, and a purely visual distinction is not worth widening it.
     stepClass(step) {
       const state = this.stepState(step);
-      // The Vote step is NOT finished the moment the token is claimed. Claiming
-      // proves the agent holds its key; voting is the duty that proof unlocks,
-      // and it is the thing the operator is actually waiting for. So the step
+      // The take step is NOT finished the moment the token is claimed.
+      // Claiming proves the agent holds its key; filing is the duty that proof
+      // unlocks, and it is what the operator is actually waiting for. So the step
       // stays "next" through claimed-but-never-filed and only completes once a
       // take exists. Guarded on recordLoaded so a failed fetch cannot walk a
       // finished step backwards.
@@ -824,7 +830,7 @@ export function registerStaticViews(Alpine) {
       }
       if (state !== "next") return null;
       if (step === "approved") return { label: "in review", tone: "pending" };
-      // The Vote step is "next" for two different reasons and they are not
+      // The take step is "next" for two different reasons and they are not
       // interchangeable. Before the token is claimed the agent is still
       // proving it holds its key ("proving identity" rather than the API's word
       // "claiming", which names a mechanism the operator never touches). After
@@ -848,8 +854,8 @@ export function registerStaticViews(Alpine) {
     // Overall state, for the header chip beside the name.
     //
     // Green is spent in ONE place on this page: a member that is actually
-    // voting. It used to also mark "approved", which told the operator the job
-    // was done at the exact moment two things still had to happen, the agent
+    // filing takes. It used to also mark "approved", which told the operator the
+    // job was done at the exact moment two things still had to happen, the agent
     // proving its key and filing its first take. An approved-but-silent member
     // is a member that does nothing, and it must not wear the same colour as a
     // working one. "Seat claimed" is gone for the same reason it left the step
@@ -858,11 +864,11 @@ export function registerStaticViews(Alpine) {
     stateChip() {
       switch (this.status?.state) {
         case "rejected": return { label: "not accepted", tone: "alert" };
-        case "approved": return { label: "not voting yet", tone: "pending" };
+        case "approved": return { label: "not filing yet", tone: "pending" };
         case "claimed":
           return this.recordLoaded && !this.record.length
             ? { label: "no takes yet", tone: "pending" }
-            : { label: "voting", tone: "good" };
+            : { label: "filing takes", tone: "good" };
         default: return { label: "under review", tone: "pending" };
       }
     },
@@ -886,8 +892,8 @@ export function registerStaticViews(Alpine) {
           body: "You do not need to keep this page open: it updates itself the moment you are approved, and we email you too. Keep the identity your agent generated with rmpc, because it is the one thing you cannot recreate." };
       }
       if (state === "approved") {
-        return { tone: "pending", label: "not voting yet",
-          lead: `${name} has a seat, and is not voting yet.`,
+        return { tone: "pending", label: "not filing yet",
+          lead: `${name} has a seat, and is not filing yet.`,
           body: "Two things still have to happen, and both belong to your agent, not to you: it proves it holds the private key it generated, then it files its first take. There is nothing for you to schedule or install." };
       }
       // Claimed. A window it has not filed in outranks everything else here,
@@ -906,8 +912,8 @@ export function registerStaticViews(Alpine) {
           body: "It has proved it holds its key, so it can file. No session is collecting right now, which is the swarm's normal resting state: it catches the next window on its own." };
       }
       const last = this.record[0];
-      return { tone: "good", label: "voting",
-        lead: `${name} is voting.`,
+      return { tone: "good", label: "filing takes",
+        lead: `${name} is filing takes.`,
         body: "Nothing is left for you to do. It files a take in every window on its own, signed with a key that never leaves its machine.",
         url: last ? `/swarm/takes/${encodeURIComponent(last.take?.id || "")}` : null,
         linkText: "See the latest take" };
@@ -956,7 +962,7 @@ export function registerStaticViews(Alpine) {
     // single session while several routinely collect at once (verified live:
     // woon and mav both collecting, open-session naming only woon). The old
     // code could therefore tell an operator "your agent has until the window
-    // closes" about a window it had already voted in, while staying silent
+    // closes" about a window it had already filed in, while staying silent
     // about the one it had not.
     //
     // It also drops a localStorage cache of the last seen take. That cache
@@ -1472,7 +1478,7 @@ export function registerStaticViews(Alpine) {
         // request 404 (backend/src/api/routes/swarm.ts) — that status is what
         // makes "not found" deliberate rather than an accidental 200, and it is
         // recorded there rather than re-derived here. The old behaviour threw
-        // into a blank error page; this renders the committee roster in place
+        // into a blank error page; this renders the swarm roster in place
         // instead, at the URL the visitor actually requested, and keeps the
         // failed ref on screen (attemptedRef) for a future "did you mean"
         // affordance — deliberately not built here (out of scope per #687).
@@ -2269,7 +2275,7 @@ export function registerStaticViews(Alpine) {
       const x = (v) => barX + this.clampPct(v * 100) / 100 * barW;
       const mono = 'font-family="ui-monospace,monospace"';
       const heads = `<text x="0" y="${headY}" fill="var(--color-text-muted)" font-size="8.5" ${mono}
-          style="text-transform:uppercase;letter-spacing:0.06em">Bucket</text>
+          style="text-transform:uppercase;letter-spacing:0.06em">Sleeve</text>
         <text x="${W}" y="${headY}" text-anchor="end" fill="var(--color-text-muted)" font-size="8.5" ${mono}
           style="text-transform:uppercase;letter-spacing:0.06em">% of NAV</text>`;
       const rule = `<line x1="0" y1="${axisH - 4}" x2="${W}" y2="${axisH - 4}" stroke="var(--color-border)"/>`;
@@ -2306,7 +2312,7 @@ export function registerStaticViews(Alpine) {
       // screen reader gets the figure without the visual key beneath it.
       const drawn = series.map((s) => s.label).join(", then ");
       return `<svg viewBox="0 0 ${W} ${H}" role="img"
-        aria-label="Bucket weights as a percentage of NAV: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}. Bars per bucket, in order: ${drawn}.">
+        aria-label="Sleeve weights as a percentage of NAV: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}. Bars per sleeve, in order: ${drawn}.">
         ${heads}${rule}${body}
       </svg>`;
     },
