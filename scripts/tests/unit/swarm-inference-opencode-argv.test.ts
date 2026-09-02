@@ -341,7 +341,7 @@ describe("a funded-inference failure carries a machine-readable kind", () => {
     for (const f of failures) expect(f!.message).toContain("top it up in the provider's billing settings");
     // No take row exists for a member whose author threw, so the gate that
     // guards a zero-take session must still reject — unchanged by this work.
-    expect(() => assertAuthoredTakes("[session 1]", [], [])).toThrow(/no authored takes to assert on/);
+    expect(() => assertAuthoredTakes("[session 1]", [], { active: 4, submitted: 0, absent: ["athena", "boreas", "cygnus"] }, ["athena", "boreas", "cygnus"], [])).toThrow(/no authored takes to assert on/);
   });
 });
 
