@@ -185,19 +185,21 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // THIS PIN MOVES ONLY UPWARD, AND ONLY WITH A DECLARATION BESIDE IT. It is a
   // tripwire on the roster's terminal entry, so that growing the release is a
   // deliberate act somebody had to write down here as well as in release.ts —
-  // NOT a lever for shrinking scope. 0042 joined via #754: the drift guard
-  // below named `0042_swarm_consensus_receipts.sql` as undeclared, and the fix
-  // was to DECLARE it, which is why this count went 10 -> 11 rather than the
-  // floor going 32 -> 43.
-  test("the release inventory includes the terminal consensus-receipt migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(11);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0042_swarm_consensus_receipts.sql");
+  // NOT a lever for shrinking scope. 0042 joined via #754 and 0043 via #835:
+  // in each case the drift guard below named the landed file as undeclared, and
+  // the fix was to DECLARE it (never to raise the numeric floor).
+  test("the release inventory includes the terminal graduated-judge migration", () => {
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(12);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0043_swarm_member_judges.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");
     expect(NEW_COLUMNS).toContainEqual({ table: "chain_day_blocks", column: "block_hash" });
     expect(NEW_COLUMNS).toContainEqual({ table: "wallet_balance_samples", column: "snapshot_run_id" });
     expect(NEW_COLUMNS).toContainEqual({ table: "wallet_balance_sample_evidence", column: "snapshot_run_id" });
+    expect(NEW_COLUMNS).toContainEqual({ table: "swarm_members", column: "role" });
+    expect(NEW_COLUMNS).toContainEqual({ table: "swarm_session_judgements", column: "judged_by" });
+    expect(NEW_COLUMNS).toContainEqual({ table: "swarm_session_judgements", column: "judged_by_member_id" });
     expect(AUM_GUARD_TRIGGERS).toHaveLength(11);
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_balance_samples");
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_sleeve_samples");

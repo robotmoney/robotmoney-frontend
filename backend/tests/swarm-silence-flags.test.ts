@@ -62,18 +62,26 @@ async function submit(m: { id: string; token: string; privateKey: CryptoKey }, d
   return r;
 }
 
-// Sequential UTC dates from 2026-09-01, far enough past "now" (the suite runs
-// in 2026-08) that briefOpensAt/windowClosesAt are always in the future
-// relative to the real clock submitRecommendation checks, and always after
-// activated_at (set to real now() by addMemberAdmin above).
+// Sequential UTC dates beginning tomorrow. They must remain after the real
+// clock because submitRecommendation deliberately checks the advertised
+// window against Date.now() and Postgres now(); hard-coding a once-future day
+// turns this behavioural suite into a calendar bomb. Starting tomorrow also
+// keeps every session after activated_at (set to real now() by addMemberAdmin).
 function datesFrom(startDay: number, count: number): string[] {
-  return Array.from({ length: count }, (_, i) => `2026-09-${String(startDay + i).padStart(2, "0")}`);
+  const tomorrow = new Date();
+  tomorrow.setUTCHours(0, 0, 0, 0);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + startDay);
+  return Array.from({ length: count }, (_, i) => {
+    const date = new Date(tomorrow);
+    date.setUTCDate(date.getUTCDate() + i);
+    return date.toISOString().slice(0, 10);
+  });
 }
 
 test("never fires on a single missed session — the issue's explicit constraint", async () => {
   const subjectId = await activeSubject();
   const quiet = await activeMember("quiet-once");
-  await createSession(subjectId, "2026-09-01");
+  await createSession(subjectId, datesFrom(1, 1)[0]!);
 
   const flags = await admin.getMemberSilenceFlags();
   expect(flags[quiet.id]).toBeUndefined();
@@ -136,8 +144,9 @@ test("never_submitted: an excused session does not count toward N — silence is
 test("gone_quiet: an established member with N silent sessions since its own last take is flagged, distinctly from never_submitted", async () => {
   const subjectId = await activeSubject();
   const wentQuiet = await activeMember("went-quiet");
-  await createSession(subjectId, "2026-09-01");
-  await submit(wentQuiet, "2026-09-01", subjectId);
+  const firstDate = datesFrom(1, 1)[0]!;
+  await createSession(subjectId, firstDate);
+  await submit(wentQuiet, firstDate, subjectId);
 
   const silentDates = datesFrom(2, N);
   for (const date of silentDates.slice(0, N - 1)) await createSession(subjectId, date);

@@ -240,7 +240,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — eleven migrations
+### 2.2 🔴 The database delta — twelve migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -261,6 +261,7 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0040_swarm_judgements_append_only.sql` | Install the statement- and row-level `rm_append_only_guard()` triggers on `swarm_session_judgements`; `REVOKE INSERT/UPDATE/DELETE` from `rm_worker` on it and on `swarm_judge_config` | Triggers + grants on a table created earlier in **this same release** |
 | `0041_swarm_judgement_soak_record.sql` | `ADD COLUMN applied / applied_skipped_reason / dropped_positions / dropped_disagreements` on `swarm_session_judgements`, with three CHECK constraints | Additive columns with constant defaults; **no historical row is rewritten** |
 | `0042_swarm_consensus_receipts.sql` | `CREATE TABLE swarm_consensus_receipts` (one published receipt per session, keyed on `session_id`, with foreign keys to `swarm_sessions` and `swarm_session_judgements`); install the `rm_append_only_guard()` pair on it; install a second `rm_consensus_receipt_immutable()` pair refusing **UPDATE**; `REVOKE INSERT/UPDATE/DELETE` from `rm_worker` | Additive new table, seeded with nothing; **the only table in the set that refuses UPDATE as well as DELETE** |
+| `0043_swarm_member_judges.sql` | Add `swarm_members.role` (`member` or `judge`); add `judged_by` and optional `judged_by_member_id` to `swarm_session_judgements`, with an attribution CHECK and the latter's foreign key to `swarm_members` | Additive role and attribution columns; historical worker judgements explicitly remain `robotmoney-in-house` |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
@@ -302,7 +303,9 @@ each validated against an empty child table, so validation is trivial, but each
 does take a brief lock on its parent for the duration (the same shape as
 `0035`'s foreign key on `swarm_members`). It seeds no row: a consensus receipt
 exists only once an operator publishes one, which is a post-cutover action and
-not part of this delta.
+not part of this delta. `0043` then adds the member-role and judgement-attribution
+columns with constant defaults and validates its member foreign key / attribution
+CHECK; it writes no historical identity and takes only the normal brief DDL locks.
 **Confirm that on the smoke-twin (§7) rather than trusting it here** — §2.2's timings
 are read off the DDL, not measured.
 
@@ -378,6 +381,10 @@ writes:
   Neither key cascades, both are validated against an empty child table, and
   adding a constraint removes no row — so again a lock, briefly, and never a
   guard trip.
+- `swarm_members` and `swarm_session_judgements` are protected, and `0043`
+  adds role / attribution columns plus a foreign key and CHECK constraint. The
+  migration alters metadata and validates constraints; it neither deletes nor
+  rewrites a protected history row.
 
 All of them appear in `MIGRATION_TOUCHED_TABLES`, because that constant means
 "creates, alters, locks, or writes" — it is the roster of the release's SCOPE,
@@ -387,7 +394,7 @@ scans each migration's own SQL for the statements the guard actually refuses —
 statement that disables, drops or replaces an immutability guard, which is the
 one destructive change the row trigger structurally cannot see happen to itself.
 A lock is therefore not a collision, and **`append-only-safety` PASSes for 0035,
-0039 and 0042** (issue #815). It names those tables in its PASS detail, as locked
+0039, 0042 and 0043** (issue #815). It names those tables in its PASS detail, as locked
 and not written, so the distinction stays visible rather than silent.
 
 **Installing a guard is not removing one.** 0032, 0040 and 0042 all install
@@ -840,10 +847,10 @@ pass. The harness, receipt format and verdict wording are
 | Check | Asserts | Why this release needs it |
 |---|---|---|
 | `server-version` | PG 11+ | 0034's `NOT NULL DEFAULT` is instant on 11+ and a full table REWRITE before it (§2.2) |
-| `schema-migrations` | pending set is **exactly** this release's ten; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
+| `schema-migrations` | pending set is **exactly** this release's twelve; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
 | `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `.env.readonly` points somewhere else |
 | `append-only-safety` | guard installed, and **no statement** in this release removes a row from a table protected *at the point that migration runs*, or disables a guard | §2.2.1 — this is what makes the out-of-order warning harmless |
-| `clean-targets` | the 8 tables and 26 columns do not exist yet | A target that already exists means an out-of-band change |
+| `clean-targets` | the 9 tables and 29 columns do not exist yet | A target that already exists means an out-of-band change |
 | `catchup-baseline` | records `job_schedules` as it stands now | §4.3 — 0034 OVERWRITES these rows; §9 check 3 grades against this |
 | `wallet-samples-size` | row count + table size | Informational, for §7's wall-clock measurement |
 | `blocking-xacts` | nothing older than 60s | Would queue in front of 0034/0035/0037's locks. Goes stale by the minute |
@@ -855,7 +862,7 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  11 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  12 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
@@ -867,6 +874,7 @@ for this release:
          0040_swarm_judgements_append_only.sql
          0041_swarm_judgement_soak_record.sql
          0042_swarm_consensus_receipts.sql
+         0043_swarm_member_judges.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
@@ -979,7 +987,7 @@ each result in the stage rehearsal report (§7.4):
 
 | Requirement | Proven by |
 |---|---|
-| All eleven migrations apply in one boot, no error, no skip | boot log's eleven `migrated:` lines, then postflight's `migrations-applied` |
+| All twelve migrations apply in one boot, no error, no skip | boot log's twelve `migrated:` lines, then postflight's `migrations-applied` |
 | `schema_migrations` holds **both** `0032_*` and **both** `0033_*` — §2.2.1 observed rather than reasoned | postflight `migrations-applied` |
 | `0034`'s `UPDATE` hit exactly the two wallet samplers, everything else left `'all'` | postflight `catchup-policy` |
 | `ops.repair_gaps` present, enabled, **exactly one row** | postflight `repair-schedule` |
@@ -1016,7 +1024,7 @@ Run it against a smoke-twin that has **already been migrated by the rc**, becaus
 is the state a real rollback starts from. Rehearsing against an unmigrated
 database rehearses nothing.
 
-1. Restore a smoke-twin and boot the rc against it so the eleven migrations apply
+1. Restore a smoke-twin and boot the rc against it so the twelve migrations apply
    (`bun run smoke-twin:rehearse` does the restore-and-migrate half).
 2. Capture `job_schedules` **before** rolling back — kind, cron, enabled,
    timezone, payload, next_run_at, catchup_policy. This is the *before* side of
@@ -1030,7 +1038,7 @@ database rehearses nothing.
 
    | Observation | The claim it discharges |
    |---|---|
-   | All four v0.3.0 migrations still in `schema_migrations` | §10: "the schema stays where the migration left it" |
+   | All twelve v0.3.0 migrations still in `schema_migrations` | §10: "the schema stays where the migration left it" |
    | v0.2.2 boots and serves against the new schema; `job_runs` advances | §10: additive DDL is survivable — rollout-procedure.md §10's mandatory question 1 |
    | `job_schedules` diffed against step 2's capture | The seed clobber, observed for the first time; it is why `P3.schedules` is an evidence artifact |
    | What happens to the surviving `ops.repair_gaps` row | **Expect trouble.** v0.2.2's `seed()` has never heard of this kind, so the row survives *still enabled* and the old scheduler keeps enqueuing a job its worker has no handler for. Record what actually happens — if it retry-loops, §10 needs a new bullet telling operators to disable it after a rollback. |
@@ -1248,10 +1256,10 @@ All must pass before `v0.3.0` is tagged.
 
 | # | Check id | Asserts | Expected |
 |---|---|---|---|
-| 1 | `migrations-applied` | all eleven names in `schema_migrations` | Both `0032_*`, both `0033_*`, and `0034_*` through `0042_*` present — the check that would catch a runner keyed on the numeric prefix or an omitted AUM migration |
+| 1 | `migrations-applied` | all twelve names in `schema_migrations` | Both `0032_*`, both `0033_*`, and `0034_*` through `0043_*` present — the check that would catch a runner keyed on the numeric prefix or an omitted migration |
 | 2 | `strategy-nav-column` | the column exists and **the migration populated nothing** | `NULL` on every row untouched since `0032_wallet_*` applied. Rows written or re-upserted afterwards carry values legitimately — that is the sampler working. (This row used to expect `NULL` on *every* row, which postflight can never see: it runs after readiness, so the per-minute sampler has always written by then, and the check WARNed on every clean run.) |
 | 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). This grades the schedule-policy write; `0036`/`0037` separately quarantine and archive wallet samples |
-| 4 | `new-tables` | all nine new tables and all 26 new columns exist | The two operational tables may already hold repair rows after cold-start dispatch; the two evidence tables may already hold an rc-era quarantined cohort archived by `0037`; snapshot-run headers remain empty until a P1 publisher lands; **`swarm_judge_config` is never empty — `0039` seeds its single operator-switch row**. A WARN reports counts for reconciliation; empty is only the fresh direct-from-v0.2.2 expectation |
+| 4 | `new-tables` | all nine new tables and all 29 new columns exist | The two operational tables may already hold repair rows after cold-start dispatch; the two evidence tables may already hold an rc-era quarantined cohort archived by `0037`; snapshot-run headers remain empty until a P1 publisher lands; **`swarm_judge_config` is never empty — `0039` seeds its single operator-switch row**. A WARN reports counts for reconciliation; empty is only the fresh direct-from-v0.2.2 expectation |
 | 5 | `repair-schedule` | the new schedule is seeded, exactly once, enabled, on the cron `release.ts` names — and what the DEPLOYMENT reports it actually did | Read from the latest `ops.repair_gaps` `job_runs` row: dispatched, or declined and why. It used to infer this from `BASE_RPC_MAX_CALLS_PER_SEC` **in postflight's own process**, which is not where the app reads it — an operator taking §5.2's opt-out via `.env` was told the backfill "WILL dispatch" while production had it off. **Confirm it is the world you chose** (§5.2) |
 | 6 | `append-only-intact` | every shared and AUM-specific guard survived the migration | **Both** shared triggers live and enabled on all sixteen protected tables, plus all eleven exact P0/P1 evidence, constituent-immutability, header-immutability and finalization triggers present with `ENABLE ALWAYS`. A missing, disabled, or replication-bypassable guard fails postflight |
 | 7 | ⛔ **manual — no script** | a real passkey ceremony completes against the public HTTPS origin | The §5.1 fix, verified end-to-end. Step `P8.acceptance`; reading `WEBAUTHN_ORIGIN` back out of the container proves configuration, not function |
@@ -1273,7 +1281,7 @@ Trigger, procedure and the "what rollback does NOT undo" list are structurally
 unchanged from [rollout-procedure.md §10](./rollout-procedure.md). Two v0.3.0-specific
 notes:
 
-**None of the eleven migrations has a down migration.** The runner is forward-only
+**None of the twelve migrations has a down migration.** The runner is forward-only
 (`backend/src/db/migrate.ts` header). Rollback means restoring the Gate C dump,
 not reversing DDL.
 
