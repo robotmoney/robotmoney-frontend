@@ -78,11 +78,38 @@ const OLD_TEMPLATE_RE = /the spread, not the composite, is where the signal live
 // Canonical stance vocabulary from the contract (finding 027) — never re-declared.
 const VALID_STANCES = new Set<string>(STANCES);
 
-// Post-publish structural assertions over every PRESENT member's authored take.
-// Throws on any failure so the standalone `bun run session.ts` entrypoint exits
-// non-zero (main() catches and process.exit(1)) — this is the required-CI signal
-// that each take was authored by a real inference call, not a template.
-export function assertAuthoredTakes(tag: string, takes: any[], expectedMemberIds: readonly string[]) {
+// Post-publish assertions over the LIVE-AUTHORED takes and the truthfulness of
+// the attendance record. Throws on any failure so the standalone
+// `bun run session.ts` entrypoint exits non-zero (main() catches and
+// process.exit(1)) — this is the required-CI signal that the session ran
+// through real inference (no template fallback) AND that the published absent
+// list tells the truth about the members this driver ran.
+//
+// Deliberately NOT a per-member attendance requirement: a member whose model
+// call times out or refuses the STANCE control line is DESIGNED to be absent
+// (#301/#319), so the gate must not depend on every stochastic inference call
+// succeeding (#803). It depends instead on the RECORD being truthful about
+// the members the driver has ground truth on:
+//
+//  - `observedAbsent` — configured no-shows + containers that rejected. Every
+//    one MUST appear in the published absent list; an under-report hides a
+//    broken pipeline.
+//  - `fulfilledMemberIds` — containers that resolved with a verified take.
+//    Every one MUST have a live-authored take in the published payload and
+//    MUST NOT appear in the published absent list; an over-report hides a take
+//    that DID land.
+//
+// Members the driver did not run (e.g. a mid-run registered identity like the
+// cross-role test fixture) carry no driver ground truth: the backend may
+// legitimately count them absent for not submitting, and the gate says nothing
+// about them.
+export function assertAuthoredTakes(
+  tag: string,
+  takes: any[],
+  attendance: AbsenceReport,
+  observedAbsent: readonly string[],
+  fulfilledMemberIds: readonly string[],
+) {
   // Present-member takes are the ones that actually posted a body; absent
   // no-shows enrolled but never submitted, so they carry no body.
   const authored = (takes ?? []).filter(
@@ -92,10 +119,33 @@ export function assertAuthoredTakes(tag: string, takes: any[], expectedMemberIds
     throw new Error(`${tag}: no authored takes to assert on (expected ≥1 present member)`);
   }
   const authoredIds = new Set(authored.map((t) => String(t.memberId)));
-  for (const memberId of expectedMemberIds) {
-    if (!authoredIds.has(memberId)) {
-      throw new Error(`${tag}: present member ${memberId} has no live-authored take`);
-    }
+  const publishedAbsent = new Set(attendance.absent);
+  // Directional attendance truthfulness over the members this driver ran.
+  // Under-report: a member the driver saw fail is missing from the record.
+  const unreported = observedAbsent.filter((id) => !publishedAbsent.has(id));
+  if (unreported.length > 0) {
+    throw new Error(
+      `${tag}: published absent ${JSON.stringify([...publishedAbsent])} omits ` +
+        `${JSON.stringify(unreported)} that this driver observed failing — an under-report hides ` +
+        `a broken pipeline`,
+    );
+  }
+  // Over-report: a member the driver saw submit is listed absent.
+  const misreported = fulfilledMemberIds.filter((id) => publishedAbsent.has(id));
+  if (misreported.length > 0) {
+    throw new Error(
+      `${tag}: published absent ${JSON.stringify([...publishedAbsent])} names ` +
+        `${JSON.stringify(misreported)} that this driver saw submit — an over-report hides a take ` +
+        `that DID land`,
+    );
+  }
+  // A fulfilled container must have its take in the published payload.
+  const missingTakes = fulfilledMemberIds.filter((id) => !authoredIds.has(id));
+  if (missingTakes.length > 0) {
+    throw new Error(
+      `${tag}: fulfilled member ${JSON.stringify(missingTakes)} has no live-authored take in the ` +
+        `published payload — a submission this driver verified did not land`,
+    );
   }
   const seenBodies = new Map<string, string>();
   for (const t of authored) {
@@ -1087,9 +1137,10 @@ export async function runSession(
   const present = opts.members.filter((m) => m.present);
   // Settle so one failed member container cannot freeze the session lifecycle
   // (#122). Concurrency is preserved at the CONTAINER level: at most
-  // SWARM_MAX_CONCURRENCY member containers in flight. The unconditional
-  // post-publish assertion below still fails the run if any present member did
-  // not produce a live-authored take.
+  // SWARM_MAX_CONCURRENCY member containers in flight. Rejected members are
+  // honestly absent — the post-publish assertion below verifies the published
+  // absent list matches exactly this driver's observed failures, and that at
+  // least one take is genuinely live-authored.
   const limit = Number(process.env.SWARM_MAX_CONCURRENCY ?? 4);
   const settled = await mapSettledWithConcurrency(present, limit, (m) => runAgent(
     rail,
@@ -1170,7 +1221,24 @@ export async function runSession(
   // authoring (non-template body,
   // REGIME/ALLOCATION/SUBJECT lead-ins, stance in the five-value set, confidence
   // in [0,1], distinct across members). Throws → exit 1 on any failure.
-  assertAuthoredTakes(tag, pub.takes, present.map((m) => m.memberId));
+  //
+  // Absence is a DESIGNED outcome (#301/#319), so this does not require every
+  // present member to have authored a take — a timed-out or control-line-refused
+  // member is honestly absent, never fabricated. What it DOES require is that
+  // the published record tells the truth about the members this driver ran:
+  // every observed failure (configured no-shows like draco plus rejected
+  // containers) must appear in the published absent list, and every fulfilled
+  // container must have its take land in the published payload and never be
+  // listed absent. Members the driver did not run (e.g. the mid-run
+  // cross-role test identity) carry no ground truth and are not asserted on.
+  const observedAbsent = [
+    ...absent.map((m) => m.memberId),
+    ...settled.filter((s) => s.status === "rejected").map((_, i) => present[i].memberId),
+  ];
+  const fulfilled = settled
+    .filter((s) => s.status === "fulfilled")
+    .map((_, i) => present[i].memberId);
+  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent, fulfilled);
 
   // Verify memos
   for (const r of results) {
