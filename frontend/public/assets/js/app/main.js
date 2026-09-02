@@ -18,6 +18,42 @@ import { api, ROUTES } from "./lib/api.js";
 const VAULT_ADDRESS = "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd";
 const shortAddr = (a) => `${a.slice(0, 6)}...${a.slice(-4)}`;
 
+// Prose for each allocation sleeve, keyed on the framework's own bucket keys.
+// No WEIGHT lives in here. Every number on those cards comes from
+// GET /api/dashboards/allocation. What a sleeve IS does not change when its
+// weight does, and the reader needs both facts on the same card.
+//
+// No FUNDING STATE lives in here either. A sleeve's target can move off zero
+// without anyone editing this file, and prose that said "funded at nothing"
+// would then contradict the bound number on the same card. The weight and the
+// status row carry that fact; these strings say only what the sleeve is.
+//
+// No VOLATILITY TIER lives in here either. The feed carries no risk field, so
+// a per-card hue would be this file's opinion painted as data, and the palette
+// reserves cyan for the interface and warm for a point of attention. Where
+// volatility is worth saying, the description says it in words.
+//
+// An unknown key (the framework gains a fifth sleeve) falls through to no
+// description, rather than borrowing another sleeve's.
+const SLEEVE_COPY = {
+  "defi-yield": {
+    desc: "The lowest-volatility sleeve, aimed at capital preservation. USDC lent on Base money markets. Principal is still at risk: see Smart Contract Risks, linked in the footer.",
+  },
+  "agent-tokens": {
+    // Not "buys THIS basket": the framework's published constituents and the
+    // list the skill's prepare-deposit actually buys are two different seven-
+    // token sets that overlap on three. Until one is derived from the other,
+    // this card may not assert they are the same basket.
+    desc: "The most volatile sleeve. Nothing in the vault holds it: the deposit skill buys an agent-token basket at deposit time and it lands in the depositor's own wallet.",
+  },
+  "protocol-tokens": {
+    desc: "Large-cap crypto. A published sleeve of the allocation framework.",
+  },
+  rwa: {
+    desc: "Equity and gold exposure. A published sleeve of the allocation framework.",
+  },
+};
+
 // Build the hero's boot-log lines. The bucket-split lines are injected from the
 // LIVE allocation framework (GET /api/dashboards/allocation) — never a baked
 // 33/33/33 — and are omitted entirely if the feed is unavailable rather than
@@ -87,6 +123,91 @@ document.addEventListener("alpine:init", () => {
       else if (t.startsWith("$")) tone = "term-line--cmd";
       else if (t.includes("Ready")) tone = "term-line--ready";
       return `term-line ${tone}${t === "" ? " term-line--blank" : ""}`;
+    },
+  }));
+
+  // The allocation sleeves drawn in the Architecture section, live from
+  // GET /api/dashboards/allocation, the same route terminalBoot reads above.
+  //
+  // What this replaces: a baked "Bucket A / B / C" at 50/25/25 that agreed
+  // with nothing on its own page. The governance section below it said the
+  // default was 33/33/33; the API has served four sleeves at 95/5/0/0 the
+  // whole time. Three weight sets, one page. The hardcoded weight WAS the
+  // false claim, so the fix is a binding, not better copy.
+  //
+  // Two rules the markup depends on:
+  //   • A sleeve at a 0% target renders AT ZERO, dimmed but present. A
+  //     published zero is a decision someone made, and hiding it would let
+  //     the page imply the sleeve does not exist.
+  //   • If the feed fails, no cards render at all and the absent state shows
+  //     instead. Same precedent terminalBoot follows for its split lines:
+  //     omit rather than fabricate. Never fall back to the old constants.
+  Alpine.data("allocationSleeves", () => ({
+    sleeves: [],
+    asOf: null,
+    loaded: false,
+    failed: false,
+    async load() {
+      try {
+        const fw = await api.get(ROUTES.dashboards.allocation);
+        const strategy = fw?.strategy || [];
+        const buckets = fw?.buckets || [];
+        // strategy[] carries the sleeve weight, buckets[] the constituents.
+        // Join on the label they share rather than on position, so a
+        // reordering on one side cannot silently pair a weight with the
+        // wrong sleeve. Position is the fallback, not the contract.
+        const byLabel = new Map(strategy.map((s) => [s.label, s]));
+        const rows = buckets.map((b, i) => {
+          const s = byLabel.get(b.label) || strategy[i] || {};
+          // A MISSING weight is not a zero weight. Defaulting to 0 here would
+          // print "0%" and "Held at zero" for a sleeve the framework never
+          // published a target for, which is a fabricated fact, not an absent
+          // one. Unresolvable weights fail the whole block instead.
+          const target = Number(s.targetPct);
+          const copy = SLEEVE_COPY[b.key] || {};
+          return {
+            key: b.key,
+            label: s.label || b.label,
+            target: Number.isFinite(target) ? target : null,
+            desc: copy.desc || "",
+            // The framework publishes the constituents it targets. Reading
+            // them from the feed is the only way this line stays true: the
+            // hardcoded one read "USDC/USDT on Aave, Compound, Morpho", and
+            // the vault's asset is USDC.
+            constituents: (b.items || []).map((it) => it.label).filter(Boolean).join(", "),
+          };
+        });
+        this.sleeves = rows.some((r) => r.target === null) ? [] : rows;
+        this.asOf = fw?.asOf || null;
+        this.failed = this.sleeves.length === 0;
+      } catch (e) {
+        this.sleeves = [];
+        this.asOf = null;
+        this.failed = true;
+      }
+      this.loaded = true;
+    },
+    // A target weight with no trailing ".0": 95%, 5%, 0%, 14.3%.
+    pct(v) {
+      if (v == null || !isFinite(v)) return "—";
+      return Number(v).toFixed(1).replace(/\.0$/, "") + "%";
+    },
+    // Card tint. Every sleeve carrying a target reads the same: the four are
+    // one framework, and the target weight on the card is what separates them.
+    // A sleeve at zero is dimmed, which is a state the feed can back, not a
+    // hue this file invented. The old cards tinted by volatility tier in cyan,
+    // warm and a raw #facc15 yellow: three hues the covenant spends elsewhere,
+    // over a fill far past the cap, rating a position nobody holds.
+    cardClass(s) {
+      return s.target > 0 ? "" : "architecture__bucket--zero";
+    },
+    // The one word below the card's divider. It says TARGETED, not "funded":
+    // this reads the published target weight, and the feed carries no holding.
+    // Agent Tokens is the case that makes the distinction load-bearing, since
+    // the vault holds none of it at any target: the basket is bought by the
+    // deposit skill into the depositor's own wallet.
+    statusLabel(s) {
+      return s.target > 0 ? "Targeted" : "Held at zero";
     },
   }));
 

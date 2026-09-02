@@ -15,7 +15,7 @@
         </h1>
         <p class="sk__lede">
           One deposit splits 95% into a multi-protocol USDC yield vault and 5% into a
-          curated basket of 6 agent tokens.
+          curated basket of 7 agent tokens.
         </p>
       </div>
 
@@ -45,7 +45,8 @@
           </button>
         </div>
         <p class="sk__install-note">
-          Works with Claude Code, Cursor, Codex, and any MCP-compatible agent runtime.
+          Works with Claude Code, Cursor, Codex, and any agent runtime that can run a
+          shell command.
         </p>
         <a class="sk__cta" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">Install Skill &rarr;</a>
       </div>
@@ -137,7 +138,8 @@
       </table>
     </div>
     <p class="sk__table-note">
-      Either flow works with Claude Code, Cursor, Codex, or any MCP-compatible agent.
+      Either flow works with Claude Code, Cursor, Codex, or any agent that can run a
+      shell command.
     </p>
   </div>
 
@@ -176,7 +178,7 @@
           </tr>
           <tr>
             <td><code>get-vault</code></td>
-            <td>Full vault state: caps, fees, share price, totals, per-adapter breakdown</td>
+            <td>Full vault state: caps, exit fee, share price, totals, per-adapter breakdown</td>
           </tr>
           <tr>
             <td><code>get-balance</code></td>
@@ -188,7 +190,7 @@
           </tr>
           <tr>
             <td><code>get-basket-holdings</code></td>
-            <td>Per-token balances + USD values for the 6 agent tokens in the basket</td>
+            <td>Per-token balances + USD values for the 7 agent tokens in the basket</td>
           </tr>
 
           <tr class="sk-table__group">
@@ -230,10 +232,11 @@
   <!-- 04 / Mechanics -->
   <div class="sk__section" id="mechanics">
     <span class="sk__eyebrow">04 / Mechanics</span>
-    <h2 class="sk__section-title">Trustless, on-chain,<br>no operator in the hot path.</h2>
+    <h2 class="sk__section-title">On-chain, multisig-administered,<br>no operator in the hot path.</h2>
     <p class="sk__sec-lede">
-      A single ERC-4626 vault on Base routes USDC across blue-chip lending protocols
-      and a Uniswap basket leg &mdash; fully on-chain pricing.
+      A single ERC-4626 vault on Base routes USDC across blue-chip lending protocols.
+      The basket leg is a separate Uniswap swap in the same deposit: those tokens land
+      in your own wallet, not in the vault.
     </p>
 
     <div class="sk__mech">
@@ -251,7 +254,7 @@
       </div>
       <div class="sk-mech">
         <h3 class="sk-mech__title">Exit fee: 0.25%</h3>
-        <p class="sk-mech__desc">Taken on withdraw or redeem. Fully on-chain, enforced in the contract.</p>
+        <p class="sk-mech__desc">The only fee. Taken on withdraw or redeem, enforced in the contract, and it stays in the vault. There is no management fee.</p>
       </div>
       <div class="sk-mech">
         <h3 class="sk-mech__title">Production caps</h3>
@@ -263,7 +266,7 @@
       </div>
       <div class="sk-mech">
         <h3 class="sk-mech__title">Agent-token basket leg</h3>
-        <p class="sk-mech__desc">5% of each deposit routes through Uniswap atomically into 6 agent tokens (VIRTUAL, ROBOTMONEY, BNKR, JUNO, ZYFAI, GIZA) &mdash; sent directly to your wallet.</p>
+        <p class="sk-mech__desc">5% of each deposit routes through Uniswap atomically into 7 agent tokens: VIRTUAL, ROBOT, BNKR, JUNO, ZFI, GIZA, PEAQ. They are sent straight to your own wallet, not to the vault.</p>
       </div>
       <div class="sk-mech">
         <h3 class="sk-mech__title">No new contracts for the basket</h3>
@@ -324,9 +327,13 @@
       </table>
     </div>
 
+    <!-- Seven tokens, per robotmoney-skills packages/cli/src/lib/basket/constants.ts
+         (v0.3.0). The allocation API seed lists a different seven (it carries Woon and
+         DEUS, which the skill does not buy, and drops VIRTUAL and BNKR, which it does).
+         That seed is not the basket. Do not copy it here. -->
     <h3 class="sk__sub-title">Basket tokens</h3>
     <p class="sk__sec-lede">
-      5% of each deposit routes through Uniswap directly into these 6 agent tokens.
+      5% of each deposit routes through Uniswap directly into these 7 agent tokens.
     </p>
 
     <div class="sk__table-wrap">
@@ -346,7 +353,7 @@
             </td>
           </tr>
           <tr>
-            <th scope="row">ROBOTMONEY</th>
+            <th scope="row">ROBOT</th>
             <td>
               <a class="sk-addr" href="https://basescan.org/address/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer">0x65021a79aeef22b17cdc1b768f5e79a8618beba3<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
             </td>
@@ -364,7 +371,7 @@
             </td>
           </tr>
           <tr>
-            <th scope="row">ZYFAI</th>
+            <th scope="row">ZFI</th>
             <td>
               <a class="sk-addr" href="https://basescan.org/address/0xd080ed3c74a20250a2c9821885203034acd2d5ae" target="_blank" rel="noopener noreferrer">0xd080ed3c74a20250a2c9821885203034acd2d5ae<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
             </td>
@@ -373,6 +380,12 @@
             <th scope="row">GIZA</th>
             <td>
               <a class="sk-addr" href="https://basescan.org/address/0x590830dfdf9a3f68afcdde2694773debdf267774" target="_blank" rel="noopener noreferrer">0x590830dfdf9a3f68afcdde2694773debdf267774<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">PEAQ</th>
+            <td>
+              <span class="sk-table__sub">address not listed here yet; the skill carries it in its basket constants</span>
             </td>
           </tr>
         </tbody>
@@ -386,8 +399,8 @@
     <h2 class="sk__section-title">Autonomous yield<br>for the agent economy.</h2>
     <p class="sk__footer-text">
       Once an agent has USDC and ETH on Base, the full deposit &rarr; yield + basket &rarr;
-      withdraw loop runs with no human in the loop &mdash; yield across Morpho, Aave, and
-      Compound, and a 5% basket leg into 6 curated agent tokens via Uniswap, in a single
+      withdraw loop runs with no human in the loop: yield across Morpho, Aave, and
+      Compound, and a 5% basket leg into 7 curated agent tokens via Uniswap, in a single
       prompt, fully permissionless.
     </p>
     <div class="sk__footer-links">

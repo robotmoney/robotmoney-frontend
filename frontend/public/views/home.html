@@ -20,14 +20,20 @@
           <span class="hero__title-serif">Robot</span>
           <span class="hero__title-bold text-gradient">Money</span>
         </h1>
+        <!-- Lede and stats carry no weight and no sleeve count. Both used to:
+             "Three diversified strategies" and a "3 / Buckets" stat, against
+             an API that has served four sleeves the whole time. A count in
+             static markup is the same bug as a weight in static markup, so
+             the third stat is now the deposit asset, which is a fact about
+             the contract rather than a number that can drift. -->
         <p class="hero__lede animate-fade-in-up" style="animation-delay:0.5s;opacity:0">
-          An autonomous treasury for the agent economy. One USDC deposit.
-          Three diversified strategies. Withdraw at NAV anytime.
+          An autonomous treasury for the agent economy. One USDC deposit,
+          allocated across the published sleeves. Withdraw at NAV anytime.
         </p>
         <div class="hero__stats animate-fade-in-up" style="animation-delay:0.65s;opacity:0">
           <div class="stat"><div class="stat__value">ERC-4626</div><div class="stat__label">Vault Standard</div></div>
           <div class="stat"><div class="stat__value">Base</div><div class="stat__label">Chain</div></div>
-          <div class="stat"><div class="stat__value">3</div><div class="stat__label">Buckets</div></div>
+          <div class="stat"><div class="stat__value">USDC</div><div class="stat__label">Deposit Asset</div></div>
         </div>
         <div class="hero__cta animate-fade-in-up" style="animation-delay:0.8s;opacity:0">
           <a href="/changelog" class="btn-primary btn-arrow">TRACK DEVELOPMENT <span class="btn-arrow__icon">&rarr;</span></a>
@@ -65,10 +71,17 @@
 <!-- ── Disclaimer ── -->
 <section class="disclaimer">
   <div class="disclaimer__inner">
+    <!-- The launch-era sentence is gone. "A design document and first
+         experiment" understates a vault that is deployed on Base with the
+         exit fee enforced in the contract, and "likely to take 6-12 months"
+         is a countdown nobody restarts, so it is wrong the day after it is
+         written. The /changelog link went with it: the hero CTA above and
+         the footer both already point there. /disclaimer stays in prose
+         because it is worth one click from the top of the page. -->
     <p class="disclaimer__text">
-      This is a design document and first experiment. Development is in progress and is likely to take 6-12 months. The protocol will evolve and is being built in public. Consider the
-      <a href="/disclaimer">disclaimer</a> herein. The latest updates to the project are tracked in the
-      <a href="/changelog">Change Log</a>.
+      The protocol is built in public and still being built. Parts of what
+      follows are live and parts are planned; where a mechanism is not built,
+      the page says so. Consider the <a href="/disclaimer">disclaimer</a> herein.
     </p>
     <p class="disclaimer__sub">Implementation details below are subject to change as development progresses.</p>
   </div>
@@ -668,11 +681,19 @@
             One USDC transfer. Diversified exposure.
             <span class="problem__title-accent text-gradient">One integration, not twenty.</span>
           </h3>
+          <!-- "stable yield, agent-token trading, and revenue-generating
+               positions" was the three-bucket split restated in prose. The
+               third bucket never existed. Nor does a vault deposit buy agent
+               tokens: the vault holds USDC lent across Aave, Morpho and
+               Compound, and the agent-token basket is bought by the deposit
+               skill into the depositor's own wallet. No weights here; they
+               are bound below and belong in one place. -->
           <p class="problem__solution-desc">
-            Robot Money eliminates the engineering burden. Deposit to the
-            vault contract. Get actively managed, diversified exposure across
-            stable yield, agent-token trading, and revenue-generating
-            positions. Withdraw at NAV anytime.
+            Robot Money eliminates the engineering burden. Deposit USDC to the
+            vault contract and hold rmUSDC, backed by USDC lent across Aave,
+            Morpho and Compound. The published allocation sets the target
+            weight of every sleeve, and those weights are on the page below.
+            Withdraw at NAV anytime.
           </p>
         </div>
         <div class="problem__badge-wrap">
@@ -688,6 +709,45 @@
   </div>
 </section>
 
+
+<!-- Fragment-local CSS for the sleeve cards. Everything else on this page
+     lives in assets/css/sections/architecture.css, which was written for a
+     fixed three-card row and cannot know how many sleeves the framework
+     serves. These four rules are the minimum the live binding needs: a grid
+     that holds four, and a neutral treatment for a sleeve published at zero.
+     No new colours, no new component. -->
+<style>
+  /* md:grid-cols-3 was sized for Bucket A/B/C. Two up on tablet, four up
+     once there is room for four readable columns. */
+  @media (min-width: 768px) {
+    .architecture__buckets { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (min-width: 1100px) {
+    .architecture__buckets { grid-template-columns: repeat(4, 1fr); }
+  }
+  /* A sleeve at a 0% target: present, legible, and visibly not funded.
+     Dimmed rather than hidden, because a published zero is a real fact about
+     the framework and hiding it would report four sleeves as two. Dimming is
+     the only per-card treatment on the grid, and it reads a number the feed
+     supplies rather than a tier this page assigned. */
+  .architecture__bucket--zero {
+    border-color: var(--color-border);
+    background: none;
+  }
+  .architecture__bucket--zero .architecture__bucket-target,
+  .architecture__bucket--zero .architecture__bucket-heading,
+  .architecture__bucket--zero .architecture__bucket-risk {
+    color: var(--color-text-muted);
+  }
+  /* Provenance line under the grid: same mono/muted register as the
+     per-card constituent line it sits below. */
+  .architecture__weights-note {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-muted);
+    margin: 1rem 0 0;
+  }
+</style>
 
 <!-- ── Architecture ── -->
 <section id="architecture" class="architecture">
@@ -927,13 +987,18 @@
   <div class="architecture__inner">
     <!-- Header -->
     <div class="architecture__header">
+      <!-- "The Token governs allocation" was false: there is no voting
+           table, route or job, and the token has never set a weight. The
+           published allocation is what sets them, and the multisig is what
+           applies them. -->
       <span class="architecture__eyebrow">02 / System Architecture</span>
       <h2 class="architecture__title">
-        Three contracts. <span class="architecture__title-accent text-gradient">Two wallets.</span>
+        One vault. <span class="architecture__title-accent text-gradient">A published allocation.</span>
       </h2>
       <p class="architecture__lede">
-        The Vault holds third-party capital. The Token governs allocation.
-        The Prop Wallet holds protocol-owned capital.
+        The Vault holds depositor capital as USDC on Base. The published
+        allocation sets the target weight of each sleeve. The Prop Wallet
+        holds protocol-owned capital, separately from the vault.
       </p>
     </div>
 
@@ -966,72 +1031,69 @@
           <span class="architecture__tag">ERC-4626</span>
         </div>
 
-        <!-- Three Buckets -->
-        <div class="architecture__buckets">
-          <div class="architecture__bucket architecture__bucket--low card-hover">
-            <div class="architecture__bucket-head">
-              <div class="architecture__bucket-id">
-                <span class="architecture__bucket-letter">A</span>
-                <span class="architecture__bucket-name">Bucket A</span>
+        <!-- The sleeves, live from GET /api/dashboards/allocation via the
+             allocationSleeves() factory (registered in app/main.js next to
+             terminalBoot, which reads the same route).
+
+             What was here: three cards, "Bucket A / B / C", hardcoded at
+             50 / 25 / 25, with two of them crediting $ROBOTMONEY tokenholder
+             voting for picking the constituents. Every part of that was
+             wrong. The framework has four sleeves, not three buckets; it has
+             served 95 / 5 / 0 / 0 the whole time; and no voting table, route
+             or job has ever existed. A hardcoded weight is not a formatting
+             choice, it is the false claim itself, so the weights are bound.
+
+             A sleeve at a 0% target still renders, dimmed. A published zero
+             is a decision, and dropping the card would let the page imply
+             the sleeve is not part of the framework. -->
+        <div x-data="allocationSleeves()" x-init="load()">
+          <div class="architecture__buckets">
+            <template x-for="s in sleeves" :key="s.key">
+              <div class="architecture__bucket card-hover" :class="cardClass(s)">
+                <div class="architecture__bucket-head">
+                  <span class="architecture__bucket-name">Target weight</span>
+                  <span class="architecture__bucket-target" x-text="pct(s.target)"></span>
+                </div>
+                <h4 class="architecture__bucket-heading" x-text="s.label"></h4>
+                <p class="architecture__bucket-desc" x-text="s.desc"></p>
+                <div class="architecture__bucket-foot">
+                  <div class="architecture__bucket-risk-row">
+                    <span class="architecture__bucket-risk-label">Status</span>
+                    <span class="architecture__bucket-risk" x-text="statusLabel(s)"></span>
+                  </div>
+                  <p class="architecture__bucket-assets" x-show="s.constituents" x-cloak
+                     x-text="'Target constituents: ' + s.constituents"></p>
+                </div>
               </div>
-              <span class="architecture__bucket-target">50%</span>
-            </div>
-            <h4 class="architecture__bucket-heading">Stable Yield</h4>
-            <p class="architecture__bucket-desc">The stability anchor. Generates 3-6% APY on stablecoins with near-zero risk of principal loss.</p>
-            <div class="architecture__bucket-foot">
-              <div class="architecture__bucket-risk-row">
-                <span class="architecture__bucket-risk-label">Risk</span>
-                <span class="architecture__bucket-risk architecture__bucket-risk--low">Low</span>
-              </div>
-              <p class="architecture__bucket-assets">USDC/USDT on Aave, Compound, Morpho</p>
-            </div>
+            </template>
           </div>
 
-          <div class="architecture__bucket architecture__bucket--high card-hover">
-            <div class="architecture__bucket-head">
-              <div class="architecture__bucket-id">
-                <span class="architecture__bucket-letter">B</span>
-                <span class="architecture__bucket-name">Bucket B</span>
-              </div>
-              <span class="architecture__bucket-target">25%</span>
-            </div>
-            <h4 class="architecture__bucket-heading">Diversified Agents</h4>
-            <p class="architecture__bucket-desc">The alpha engine. Tokens selected via $ROBOTMONEY tokenholder voting from agent-economy assets passing quantitative filter.</p>
-            <div class="architecture__bucket-foot">
-              <div class="architecture__bucket-risk-row">
-                <span class="architecture__bucket-risk-label">Risk</span>
-                <span class="architecture__bucket-risk architecture__bucket-risk--high">High</span>
-              </div>
-              <p class="architecture__bucket-assets">Agent-economy tokens via $ROBOTMONEY holder voting</p>
-            </div>
-          </div>
-
-          <div class="architecture__bucket architecture__bucket--medium card-hover">
-            <div class="architecture__bucket-head">
-              <div class="architecture__bucket-id">
-                <span class="architecture__bucket-letter">C</span>
-                <span class="architecture__bucket-name">Bucket C</span>
-              </div>
-              <span class="architecture__bucket-target">25%</span>
-            </div>
-            <h4 class="architecture__bucket-heading">Revenue Liquid Tokens</h4>
-            <p class="architecture__bucket-desc">The middle ground. Tokens selected via $ROBOTMONEY tokenholder voting: $10M+ market cap, 90+ days live, $100K+ daily volume.</p>
-            <div class="architecture__bucket-foot">
-              <div class="architecture__bucket-risk-row">
-                <span class="architecture__bucket-risk-label">Risk</span>
-                <span class="architecture__bucket-risk architecture__bucket-risk--medium">Medium</span>
-              </div>
-              <p class="architecture__bucket-assets">Revenue-generating assets via $ROBOTMONEY holder voting</p>
-            </div>
-          </div>
+          <!-- The framework serves a single current row, so its asOf is the
+               only handle a reader has on when these targets were set. An
+               undated target is an unqualified claim. -->
+          <p class="architecture__weights-note" x-show="loaded && !failed" x-cloak
+             x-text="asOf
+               ? 'Target weights, live from the published allocation. As of ' + asOf + '.'
+               : 'Target weights, live from the published allocation. The framework published no date.'"></p>
+          <!-- Absent state, worded the way /vault words it. No cards render
+               here: falling back to the old constants is what put three
+               disagreeing weight sets on one page. -->
+          <p class="architecture__weights-note" x-show="loaded && failed" x-cloak>
+            Allocation weights are unavailable right now.
+          </p>
         </div>
 
-        <!-- Fee bar -->
+        <!-- Fee bar. There is no management fee. The changelog lists the 2%
+             annual fee as an upcoming item, so stating it here as current was
+             the page charging a fee the contract does not. The only fee the
+             contract charges is 0.25% on withdrawal, and it is not swept
+             anywhere: it stays in the vault, which is why nothing here says
+             "sweep" any more. -->
         <div class="architecture__fee">
-          <span class="architecture__fee-text">2% annual management fee (0.00548%/day)</span>
+          <span class="architecture__fee-text">0.25% fee on withdrawal. No management fee.</span>
           <div class="architecture__fee-sweep">
             <div class="architecture__fee-line"></div>
-            <span class="architecture__fee-label">FEE SWEEP</span>
+            <span class="architecture__fee-label">STAYS IN THE VAULT</span>
             <div class="architecture__fee-line"></div>
           </div>
         </div>
@@ -1086,7 +1148,7 @@
                 <span class="architecture__step-num">02</span>
                 <div class="architecture__step-line"></div>
               </div>
-              <p class="architecture__step-text">Query vault balance, yield accrued, and bucket weights</p>
+              <p class="architecture__step-text">Query vault balance, APY, caps, and the live adapter breakdown</p>
             </div>
             <div class="architecture__step">
               <div class="architecture__step-marker">
@@ -1100,7 +1162,10 @@
                 <span class="architecture__step-num">04</span>
                 <div class="architecture__step-line"></div>
               </div>
-              <p class="architecture__step-text">Withdraw at NAV with pro-rata bucket exposure</p>
+              <!-- Not "pro-rata bucket exposure": a redeem burns rmUSDC and
+                   returns USDC in one transaction. The sleeves are target
+                   weights, not things the vault hands back. -->
+              <p class="architecture__step-text">Withdraw at NAV in one transaction, minus the 0.25% exit fee</p>
             </div>
             <div class="architecture__step">
               <div class="architecture__step-marker">
@@ -1131,16 +1196,22 @@
     <div class="token__grid">
       <!-- Left -->
       <div class="token__intro">
+        <!-- "steers the vault" and "governance over vault allocation" were
+             the same missing mechanism stated twice. Nothing lets a holder
+             move a weight: no voting table, no route, no job. The buyback
+             and burn is the one token mechanism that runs, and it is
+             described below. -->
         <span class="token__eyebrow">03 / The Token</span>
         <h2 class="token__title">
           <span class="token__title-ticker">$ROBOTMONEY</span>
           <br />
-          steers the vault.
+          is not the vault.
         </h2>
         <p class="token__lede">
-          The token serves exactly one function: governance over vault
-          allocation. It does not entitle holders to vault returns. The vault
-          is the investment product — the token is the steering mechanism.
+          The token does not entitle holders to vault returns. The vault is
+          the investment product. Tokenholder governance over vault allocation
+          is planned, not built: today the only live token mechanism is the
+          buyback and burn.
         </p>
 
         <!-- Key specs -->
@@ -1257,8 +1328,8 @@
             Burns are a function of trading performance, not a schedule.
             When the prop wallet realizes gains, those gains are used to
             buy back and burn $ROBOTMONEY. If the prop wallet
-            underperforms, no buyback occurs. Every transaction — wins and
-            losses — is published on-chain.
+            underperforms, no buyback occurs. Every transaction, wins and
+            losses alike, is published on-chain.
           </p>
         </div>
       </div>
@@ -1336,70 +1407,78 @@
   <div class="governance__grid grid-pattern"></div>
 
   <div class="governance__inner">
-    <!-- Header -->
+    <!-- Header. Rewritten to describe the aggregation that actually runs.
+         What was here: "Weekly Allocation Votes" over a 48-hour window, a
+         5%-of-circulating-supply quorum, and a "Monthly Weight Rebalance"
+         against a 33/33/33 default. None of it exists. There is no voting
+         table, no voting route, no voting job, no quorum, and the 33/33/33
+         default it cited disagreed with both the cards above it and the API.
+         What replaced it is the swarm pipeline: signed takes, an arithmetic
+         mean over the take set, and a multisig that decides whether the
+         result is applied. -->
     <div class="governance__header">
       <span class="governance__eyebrow">04 / Governance</span>
       <h2 class="governance__title">
-        The agent runs the fund.
-        <span class="governance__title-em text-gradient">Holders steer it.</span>
+        Independent takes.
+        <span class="governance__title-em text-gradient">One arithmetic mean.</span>
       </h2>
     </div>
 
     <!-- Governance flow -->
     <div class="governance__flow">
-      <!-- Allocation Voting -->
+      <!-- Signed takes -->
       <div class="governance__card card-hover">
         <div class="governance__icon governance__icon--accent">
-          <span class="governance__icon-letter governance__icon-letter--accent">W</span>
+          <span class="governance__icon-letter governance__icon-letter--accent">S</span>
         </div>
-        <h3 class="governance__card-title">Weekly Allocation Votes</h3>
+        <h3 class="governance__card-title">Signed Takes</h3>
         <p class="governance__card-text">
-          The Robot Money agent publishes a shortlist of 10-15 tokens that
-          pass the quantitative filter. $ROBOTMONEY holders rank their
-          preferred allocations over a 48-hour window.
+          Each swarm member works on its own and files a take signed with its
+          own key. The takes are published with the session, so a reader can
+          see who said what rather than being handed a consensus.
         </p>
         <div class="governance__card-foot">
           <span class="governance__card-note">
-            Votes weighted by token balance. Results determine Bucket B + C
-            composition.
+            Members generate their keys locally and are approved by the
+            operator before they can file.
           </span>
         </div>
       </div>
 
-      <!-- Default Behavior -->
+      <!-- The mean over the take set -->
       <div class="governance__card card-hover">
         <div class="governance__icon governance__icon--blue">
-          <span class="governance__icon-letter governance__icon-letter--blue">D</span>
+          <span class="governance__icon-letter governance__icon-letter--blue">M</span>
         </div>
-        <h3 class="governance__card-title">Default Behavior</h3>
+        <h3 class="governance__card-title">The Mean of the Takes</h3>
         <p class="governance__card-text">
-          If fewer than 5% of circulating supply votes, the agent&apos;s own
-          ranked allocation executes. The fund always has a strategy. Early
-          on, the agent effectively manages solo.
+          The recommendation vector is the arithmetic mean over the take set.
+          There is no chair, no tiebreak, and no weighting by stake, balance
+          or seniority.
         </p>
         <div class="governance__card-foot">
           <span class="governance__card-note">
-            As the token distributes, external preferences gradually override
-            the default.
+            Anyone holding the takes can recompute the vector and get the
+            same numbers.
           </span>
         </div>
       </div>
 
-      <!-- Monthly Rebalance -->
+      <!-- Execution -->
       <div class="governance__card card-hover">
         <div class="governance__icon governance__icon--purple">
-          <span class="governance__icon-letter governance__icon-letter--purple">M</span>
+          <span class="governance__icon-letter governance__icon-letter--purple">E</span>
         </div>
-        <h3 class="governance__card-title">Monthly Weight Rebalance</h3>
+        <h3 class="governance__card-title">Multisig-Gated Execution</h3>
         <p class="governance__card-text">
-          Bucket weights (the 33/33/33 default) are subject to monthly
-          governance votes. Token holders can shift allocation &mdash; e.g.,
-          50% stables / 25% trading / 25% liquid in a downturn.
+          For the allocation portfolio the swarm's output is a proposed
+          allocation. Applying it to the vault is a multisig transaction. For
+          every other portfolio the output is a verdict, and nothing executes.
         </p>
         <div class="governance__card-foot">
           <span class="governance__card-note">
-            If no quorum, weights remain unchanged. Agent proposes shifts
-            with supporting analysis.
+            Tokenholder governance of the allocation policy is planned. No
+            vote has ever set a weight.
           </span>
         </div>
       </div>
@@ -1409,12 +1488,15 @@
     <div class="governance__filter">
       <div class="governance__filter-grid">
         <div class="governance__filter-copy">
+          <!-- The ballot language went with the votes. The criteria stay,
+               labelled as what they are: a design, not a running screen. -->
           <h3 class="governance__filter-label">The Quantitative Filter</h3>
-          <p class="governance__filter-lede">The filter is the gate, not the vote.</p>
+          <p class="governance__filter-lede">Planned. Not built.</p>
           <p class="governance__filter-text">
-            Tokens must meet minimum thresholds to appear on the ballot.
-            Votes allocate weight among qualifying tokens only. An agent
-            cannot vote a token onto the ballot that the filter has excluded.
+            The intent is that a token has to clear published minimum
+            thresholds before a sleeve can hold it. Nothing enforces that
+            today: sleeve constituents are set in the published allocation,
+            and the multisig is what changes them.
           </p>
         </div>
 
@@ -1440,7 +1522,7 @@
             <span class="governance__metric-threshold">On-chain verifiable</span>
           </div>
           <p class="governance__metric-note">
-            Specific thresholds defined in the whitepaper and subject to governance.
+            Thresholds are described in the whitepaper. No code enforces them yet.
           </p>
         </div>
       </div>
@@ -1462,8 +1544,11 @@
           </div>
           <div>
             <span class="governance__pcard-key">What You Get</span>
+            <!-- "three-bucket allocation" was the last surviving copy of the
+                 diagram this page no longer draws. The vault holds USDC; the
+                 sleeves are target weights over it. -->
             <p class="governance__pcard-value">
-              Vault shares. Exposure to three-bucket allocation. Withdraw at NAV minus 0.25% exit fee.
+              rmUSDC vault shares against a published sleeve allocation. Withdraw at NAV minus a 0.25% exit fee, which stays in the vault.
             </p>
           </div>
         </div>
@@ -1472,7 +1557,8 @@
       <div class="governance__pcard card-hover">
         <div class="governance__pcard-head">
           <div class="governance__pcard-icon">T</div>
-          <h4 class="governance__pcard-mode">Token Holder / Voter</h4>
+          <!-- Not "Voter". There is nothing to vote on. -->
+          <h4 class="governance__pcard-mode">Token Holder</h4>
         </div>
         <div class="governance__pcard-body">
           <div>
@@ -1484,7 +1570,7 @@
           <div>
             <span class="governance__pcard-key">What You Get</span>
             <p class="governance__pcard-value">
-              Governance: vote on weekly allocation and monthly weight rebalance. Economic: benefit from buyback-and-burn.
+              Economic: exposure to the buyback-and-burn, which runs only when the prop wallet realizes a gain. Governance: planned, not built.
             </p>
           </div>
         </div>
@@ -1492,46 +1578,3 @@
     </div>
   </div>
 </section>
-
-<!-- ── Public comment thread (Postgres-backed; original site parity) ── -->
-<section class="comments" x-data="commentsThread('home')" x-init="load()">
-  <div class="comments__inner">
-    <h3 class="comments__title">Discussion</h3>
-    <p class="comments__sub">Join the conversation. Comments are public.</p>
-
-    <template x-if="loading">
-      <p class="comments__state">Loading comments…</p>
-    </template>
-    <template x-if="error">
-      <p class="comments__state comments__state--err" x-text="error"></p>
-    </template>
-
-    <ul class="comments__list" x-show="!loading && !error">
-      <template x-if="comments.length === 0">
-        <li class="comments__empty">No comments yet — be the first.</li>
-      </template>
-      <template x-for="c in comments" :key="c.id">
-        <li class="comment">
-          <div class="comment__head">
-            <span class="comment__author" x-text="c.author"></span>
-            <span class="comment__when" x-text="when(c.createdAt)"></span>
-          </div>
-          <p class="comment__body" x-text="c.content"></p>
-        </li>
-      </template>
-    </ul>
-
-    <form class="comments__form" @submit.prevent="submit()">
-      <input class="comments__input" type="text" maxlength="80" placeholder="Your name"
-             x-model="form.author" :disabled="posting" />
-      <textarea class="comments__textarea" maxlength="4000" rows="3" placeholder="Add a comment…"
-                x-model="form.content" :disabled="posting"></textarea>
-      <div class="comments__actions">
-        <button class="btn-primary" type="submit" :disabled="posting"
-                x-text="posting ? 'Posting…' : 'Post comment'"></button>
-      </div>
-      <p class="comments__notice" x-show="notice" x-text="notice"></p>
-    </form>
-  </div>
-</section>
-

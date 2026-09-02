@@ -86,15 +86,18 @@ test("performance view draws the eight stacked series + Historical Data table fr
   await expect(page.locator('canvas[x-ref="alloc"]')).toBeVisible();
 
   // Table column headers = Date + the eight fixed series (endpoint holdings[]
-  // order: Stable→Protocol→Agent→Stocks) + Total AUM.
+  // order: Stable→Protocol→Agent→Stocks) + the wallet total. That last column
+  // was headed "Total AUM" until RM-102b: this page reads wallet-balances only,
+  // so the figure is the Robot Money protocol wallets' own book, never assets
+  // under management for depositors.
   const headers = page.locator("table.a2-table thead th");
-  await expect(headers).toHaveText(["Date", ...SERIES.map((s) => s.symbol), "Total AUM"]);
+  await expect(headers).toHaveText(["Date", ...SERIES.map((s) => s.symbol), "Wallet Total"]);
 
   // Collapsed = last 5 days.
   const rows = page.locator("table.a2-table tbody tr");
   await expect(rows).toHaveCount(5);
 
-  // The latest row's date + Total AUM come straight from history[].
+  // The latest row's date + wallet total come straight from history[].
   const latest = HISTORY[HISTORY.length - 1]!;
   const lastRow = rows.last();
   await expect(lastRow.locator("td.a2-sticky")).toHaveText("Jun 27");

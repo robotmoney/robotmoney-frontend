@@ -259,7 +259,7 @@
     </template>
 
     <!-- #687: neither the live API nor the static-archive fallback resolved
-         this ref — render the committee roster in place, at the URL the
+         this ref, so render the swarm roster in place, at the URL the
          visitor actually requested, rather than a blank profile or a
          redirect that would misrepresent a reference that never resolved as
          one that "moved". The route already answered 404; this is what that
@@ -271,7 +271,7 @@
       <div>
         <section class="sv__panel">
           <div class="sv__panel-head">
-            <p class="sv__panel-label">Committee members (<span x-text="members.length"></span>)</p>
+            <p class="sv__panel-label">Swarm members (<span x-text="members.length"></span>)</p>
           </div>
           <p class="sv__body-copy">
             No member matches &ldquo;<span x-text="attemptedRef"></span>&rdquo;. Every current member is reachable below.

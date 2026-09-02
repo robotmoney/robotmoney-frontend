@@ -47,21 +47,36 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
   // The allocationView factory draws the strategy/vault/wallet pie canvases.
   await expect(page.locator("canvas").first()).toBeVisible();
-  // Hero Total AUM combines BOTH live halves (issue #84): the live prop-wallet
-  // feed (GET /api/dashboards/wallet-balances) + the live vault-economics tvlUsd,
-  // both served by the in-CI deterministic Base RPC stub (issue #48) with ZERO
-  // live Base mainnet calls. Derive the expectation from the same endpoints the
+  // The hero reports the two pools SEPARATELY (RM-102b): the Robot Money
+  // protocol wallets (GET /api/dashboards/wallet-balances) and vault TVL
+  // (vault-economics), both served by the in-CI deterministic Base RPC stub
+  // (issue #48) with ZERO live Base mainnet calls. It used to print their sum
+  // as one "Total AUM". Derive both expectations from the same endpoints the
   // page reads so this stays correct as the stub fixtures evolve.
-  const expectedAum = await page.evaluate(async () => {
+  const expected = await page.evaluate(async () => {
     const [w, v] = await Promise.all([
       fetch("/api/dashboards/wallet-balances").then((r) => r.json()),
       fetch("/api/dashboards/vault-economics").then((r) => r.json()),
     ]);
-    const total = w.totalUsd + v.tvlUsd;
-    return "$" + total.toLocaleString("en-US", { maximumFractionDigits: Math.abs(total) < 1000 ? 2 : 0 });
+    // Mirrors allocationView.fmtUsd INCLUDING its null branch. A documented
+    // #120 degrade (a null tvlUsd, say) has to surface here as a text diff
+    // against the rendered "—", not as an opaque TypeError inside evaluate().
+    const usd = (n: number | null) =>
+      n == null ? "—" : "$" + n.toLocaleString("en-US", { maximumFractionDigits: Math.abs(n) < 1000 ? 2 : 0 });
+    const bothLive = w.totalUsd != null && v.tvlUsd != null;
+    return { wallets: usd(w.totalUsd), vault: usd(v.tvlUsd), sum: bothLive ? usd(w.totalUsd + v.tvlUsd) : null };
   });
-  await expect(page.locator(".alloc-aum__value")).toHaveText(expectedAum);
-  await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
+  await expect(page.locator(".alloc-aum__value--wallets")).toHaveText(expected.wallets);
+  await expect(page.locator(".alloc-aum__value--vault")).toHaveText(expected.vault);
+  await expect(page.locator(".alloc-aum__value--wallets")).not.toHaveText("—");
+  // Depositor capital is never added to the house book under one heading.
+  // Asserted only when the sum is its own string. A vault under 50 cents beside
+  // a five-figure wallet total rounds the sum back onto the wallet figure, and
+  // that figure is legitimately on the card, so the check would go red for the
+  // wrong reason rather than catching a re-merged total.
+  if (expected.sum && expected.sum !== expected.wallets && expected.sum !== expected.vault) {
+    await expect(page.locator(".alloc-aum")).not.toContainText(expected.sum);
+  }
 
   // Test performance page with Wallet Performance heading
   await navigate(page, "/performance");

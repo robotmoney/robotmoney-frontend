@@ -14,8 +14,9 @@
          Transfer logs into the primary prop wallet; 10 seeded historical rows).
      Slice/legend COLOURS are presentation-only (client-side); the numbers are
      never baked. Each feed degrades independently (loading → "—"/empty state)
-     so one stale endpoint never blanks the page. The hero's Total AUM combines
-     the live wallet total with live vault TVL (totalAum() in alpine/views.js).
+     so one stale endpoint never blanks the page. The hero reports the two pools
+     of money SEPARATELY: the Robot Money protocol wallets (wallet-balances) and
+     vault TVL (vault-economics). They are never summed; see the hero comment.
      Shares the a2-* design system with performance.html.
 -->
 
@@ -28,29 +29,51 @@
       <div class="alloc-hero__text">
         <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
         <p class="a2-hero__lede">
-          Real-time portfolio holdings, vault strategy breakdown, and buyback
-          history across all prop wallets.
+          Vault TVL and target sleeves, plus the holdings and buyback history of
+          the Robot Money protocol wallets. Two separate pools of money,
+          reported separately.
         </p>
       </div>
-      <!-- Total AUM = live prop-wallet total (GET /api/dashboards/wallet-balances)
-           + live vault-economics tvlUsd (issue #84), matching the original
-           site's combined wallet+vault semantics (robotmoney-site
-           src/app/allocation/page.tsx). See totalAum() in alpine/views.js. -->
+      <!-- TWO POOLS, TWO FIGURES. This card used to print one "Total AUM": the
+           Robot Money protocol wallets PLUS vault TVL, added together under a
+           page heading about the vault. On 2026-09-02 the protocol wallets held
+           $59.2k and the vault held $229, so the vault was 0.4% of a number a
+           reader took for the vault. The two are different money with different
+           owners: the vault holds depositor capital, the protocol wallets hold
+           the house's own book, and backend config.ts throws at boot if a prop
+           wallet is ever configured as the vault ("would double-count vault
+           TVL"). Each half now shows its own value, its own timestamp and its
+           own provenance state, and nothing is summed across the two.
+           Wallet half ← GET /api/dashboards/wallet-balances (wallet.totalUsd).
+           Vault half  ← GET /api/dashboards/vault-economics (economics.tvlUsd).
+           The alloc-aum* class names are kept so the hero layout rules and the
+           browser specs keep resolving; only the labels and the split changed. -->
       <div class="alloc-aum">
-        <span class="alloc-aum__label">Total AUM</span>
-        <span class="alloc-aum__value" x-text="fmtUsd(totalAum())">—</span>
-        <span class="alloc-aum__sub" x-text="asOfLabel()">—</span>
-        <span class="alloc-aum__prov alloc-wallet-nonlive" x-show="walletNonLive()" x-cloak>
-          Wallet feed: non-live (stub) data
-        </span>
-        <span class="alloc-aum__prov alloc-wallet-stale" x-show="walletStale()" x-cloak>
-          Wallet feed: stale (last-persisted) data
-        </span>
-        <span class="alloc-aum__prov alloc-wallet-backfilled" x-show="walletBackfilled()" x-cloak>
-          Wallet feed: caught up late (still a live read)
-        </span>
+        <div class="alloc-aum__stat">
+          <span class="alloc-aum__label">Robot Money protocol wallets</span>
+          <span class="alloc-aum__value alloc-aum__value--wallets" x-text="fmtUsd(wallet?.totalUsd)">—</span>
+          <span class="alloc-aum__sub" x-text="walletAsOfLabel()">—</span>
+          <span class="alloc-aum__prov alloc-wallet-nonlive" x-show="walletNonLive()" x-cloak>
+            Wallet feed: non-live (stub) data
+          </span>
+          <span class="alloc-aum__prov alloc-wallet-stale" x-show="walletStale()" x-cloak>
+            Wallet feed: stale (last-persisted) data
+          </span>
+          <span class="alloc-aum__prov alloc-wallet-backfilled" x-show="walletBackfilled()" x-cloak>
+            Wallet feed: caught up late (still a live read)
+          </span>
+        </div>
+        <div class="alloc-aum__stat">
+          <span class="alloc-aum__label">Vault TVL</span>
+          <span class="alloc-aum__value alloc-aum__value--vault" x-text="fmtUsd(economics?.tvlUsd)">—</span>
+          <span class="alloc-aum__sub" x-text="asOfLabel()">—</span>
+        </div>
+        <p class="alloc-aum__note">
+          Two separate pools. The vault holds depositor capital; the protocol
+          wallets are Robot Money's own book. They are not added together.
+        </p>
         <span class="alloc-aum__prov alloc-aum-partial" x-show="aumPartial()" x-cloak>
-          Partial total: one feed (wallet or vault) has not resolved
+          One of the two feeds has not resolved; the figure it fills is blank.
         </span>
       </div>
     </div>
@@ -61,10 +84,19 @@
     <div class="a2-section__head">
       <span class="a2-eyebrow">01 / Strategy</span>
       <h2 class="a2-h2">Vault <span class="a2-grad">Allocation</span></h2>
+      <!-- No voting table, route or job exists. What runs today: swarm members
+           file signed takes, the recommendation is the arithmetic mean over the
+           take set, and applying a proposed allocation is gated by the admin
+           multisig. Tokenholder governance of allocation policy is planned, and
+           has to read as planned. The four sleeves are targets: the vault holds
+           USDC across Morpho, Aave and Compound, and the sleeves do not exist
+           on chain. Weights are bound live below (stratPct), never typed here. -->
       <p class="a2-section__lede">
-        This is the current investment philosophy, not yet holdings. These
-        buckets will be implemented once the vault is live with investment
-        selection - determined in part through voting by $ROBOTMONEY holders.
+        These are the four target sleeves, not holdings. The vault itself holds
+        USDC across Morpho, Aave and Compound. The swarm proposes changes to
+        these targets; applying one is gated by the admin multisig. Tokenholder
+        voting on allocation policy is planned, not built: no voting contract,
+        route or table exists today.
       </p>
     </div>
 
@@ -100,7 +132,7 @@
             <div class="alloc-bucket__info">
               <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#00e5ff;"></span><span x-text="stratPct(1)">—</span></div>
               <h4 class="alloc-bucket__title">Agent Tokens</h4>
-              <p class="alloc-bucket__desc">Tokens of Agents that are holders of $ROBOTMONEY, selected through governance.</p>
+              <p class="alloc-bucket__desc">Tokens of agents that hold $ROBOTMONEY. The list is admin-managed today; tokenholder selection is planned.</p>
             </div>
             <div class="alloc-bucket__pie"><canvas x-ref="mini2"></canvas></div>
           </div>
@@ -465,7 +497,8 @@
   max-width: 34rem;
 }
 
-/* Hero — allocation two-column inner (title/lede at left, Total AUM at right) */
+/* Hero: allocation two-column inner (title/lede at left, the two money
+   figures at right) */
 .alloc-hero__inner {
   display: flex;
   flex-direction: column;
@@ -492,16 +525,42 @@
   letter-spacing: 0.3em;
   color: var(--color-text-muted);
 }
+/* Cyan is the interface hue and never touches a figure: it is a line, not a
+   number. The site's other large mono readout, .rs__gauge-val on /regime,
+   already uses --color-text. These two were the last cyan money figures, and
+   splitting one tile into two would have doubled the violation. */
 .alloc-aum__value {
   font-family: var(--font-mono);
   font-size: 1.5rem;
   font-weight: 700;
-  color: var(--color-accent);
+  color: var(--color-text);
 }
 .alloc-aum__sub {
   font-family: var(--font-mono);
   font-size: 0.625rem;
   color: var(--color-text-muted);
+}
+
+/* Two pools, two figures: the protocol-wallet total and vault TVL stack inside
+   the one hero card, each with its own value, timestamp and provenance chips.
+   Stacked rather than side by side on purpose: a row would squeeze the h1 at
+   the 768px breakpoint, and the drift invariant below pins that headline. */
+.alloc-aum__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.alloc-aum__stat + .alloc-aum__stat {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--color-border);
+}
+.alloc-aum__note {
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  margin: 0.85rem 0 0;
+  max-width: 20rem;
 }
 
 /* Section */
@@ -571,9 +630,9 @@
   margin: 0.5rem 0 0;
 }
 
-/* Hero prop-wallet feed provenance badges (issue #84): the wallet half of Total
-   AUM is non-live (stub) or degraded (stale). Distinct classes from the vault
-   badges above so each surface is asserted independently. */
+/* Hero protocol-wallet feed provenance badges (issue #84): the wallet figure is
+   non-live (stub) or degraded (stale). Distinct classes from the vault badges
+   above so each surface is asserted independently. */
 .alloc-aum__prov {
   display: block;
   font-family: var(--font-mono);
@@ -841,7 +900,7 @@
   .a2-hero__title { font-size: 3.25rem; }
   .a2-h2 { font-size: 2rem; }
   .alloc-buckets { grid-template-columns: 1fr 1fr; }
-  /* flex-start, not center: centring made the taller Total AUM card push the
+  /* flex-start, not center: centring made the taller money card push the
      headline 8px down, so /allocation's h1 sat at 168px while every other hero
      sat at 160 — the drift spa.spec's "one size, one typeface and one offset"
      invariant exists to catch. It has failed on this page since that test

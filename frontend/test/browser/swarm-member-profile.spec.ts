@@ -281,7 +281,7 @@ const ROSTER_FIXTURE = [
   { id: "r2", handle: "athena", name: "Athena", lens: "on-chain flow", tagline: "Reads wallet flow." },
 ];
 
-test("an unresolvable member ref answers 404 and renders the committee roster in place, not a blank profile", async ({ page }) => {
+test("an unresolvable member ref answers 404 and renders the swarm roster in place, not a blank profile", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   let memberRouteStatus: number | null = null;
 
@@ -309,11 +309,11 @@ test("an unresolvable member ref answers 404 and renders the committee roster in
   await expect(page).toHaveURL(/\/swarm\/members\/not-a-real-member-anywhere$/);
   expect(memberRouteStatus).toBe(404);
 
-  // No blank/error profile: the committee roster renders instead, reachable
+  // No blank/error profile: the swarm roster renders instead, reachable
   // by each member's current handle (same link shape the /swarm directory's
   // Members panel uses).
   await expect(page.locator(".profile-name")).toHaveCount(0);
-  await expect(page.locator(".sv__panel", { hasText: "Committee members" })).toContainText("not-a-real-member-anywhere");
+  await expect(page.locator(".sv__panel", { hasText: "Swarm members" })).toContainText("not-a-real-member-anywhere");
   for (const m of ROSTER_FIXTURE) {
     const link = page.locator(`a.sv__row-title[href="/swarm/members/${m.handle}"]`);
     await expect(link).toHaveText(m.name);

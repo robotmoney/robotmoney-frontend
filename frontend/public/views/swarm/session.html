@@ -21,7 +21,7 @@
               <em>composite</em><b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b>
             </span>
             <span class="sv__fact" x-show="session.regimeSummary">
-              <em>bucket</em>
+              <em>regime</em>
               <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.regime)}`" aria-hidden="true"></i>
               <b x-text="regimeLabel(session.regimeSummary?.regime)"></b>
             </span>
@@ -218,7 +218,7 @@
                    percentages. Every bar now names itself on its own row and
                    the value column is headed "% of NAV", so the caption is free
                    to say what the figure IS instead of how to decode it. -->
-              <p class="sv__panel-sub">Each bucket as a share of the vault, in percent</p>
+              <p class="sv__panel-sub">Each sleeve as a share of the vault, in percent</p>
               <div class="sv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
               <!-- The key, once, under the figure. Naming the series on every
                    row printed the same three words four times and made the
@@ -243,7 +243,7 @@
                 <table class="sv__data-table">
                   <thead>
                     <tr>
-                      <th>Bucket</th>
+                      <th>Sleeve</th>
                       <th class="sv__num" x-show="bucketWeights().some(b => b.target != null)">Target</th>
                       <th class="sv__num" x-show="bucketWeights().some(b => b.actual != null)">Actual</th>
                       <th class="sv__num sv__num--rec">Recommended</th>
@@ -290,7 +290,7 @@
                  goes to each bucket; this says what is inside them, which is
                  the question the allocation subject exists to answer. -->
             <div class="sv__within" x-show="withinBucketWeights().length">
-              <p class="sv__panel-sub">Within-bucket weights &middot; per-item recommendations</p>
+              <p class="sv__panel-sub">Within-sleeve weights &middot; per-item recommendations</p>
               <template x-for="b in withinBucketWeights()" :key="b.bucket">
                 <div class="sv__within-bucket">
                   <p class="sv__within-name" x-text="b.bucket"></p>

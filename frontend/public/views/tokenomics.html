@@ -7,6 +7,18 @@
      GET /api/dashboards/token-metrics (`feeSplit`) via the feeChart() factory,
      and the Buyback History card is LIVE from GET /api/dashboards/buybacks via
      the buybackSummary() factory — no baked fee % or buyback rows remain.
+
+     COPY TRUTH, do not "restore" the old text:
+     • There is NO tokenholder vote. No ballot, no quorum, no eligibility
+       filter, no on-chain rebalance job. What runs is the swarm: members file
+       signed takes, the recommendation is the arithmetic mean over the take
+       set, and applying it is gated by the admin multisig. Every governance
+       claim on this page is therefore labelled planned.
+     • There is NO management fee. The only fee is 0.25% on withdrawal and it
+       stays in the vault (see views/vault.html, Notes 1), so it is not
+       protocol revenue. Buybacks are funded by swap fees only.
+     • The allocation is FOUR sleeves, not three buckets. Weights live at
+       /allocation, bound to GET /api/dashboards/allocation. Never bake one in.
 -->
 
 <section class="tok">
@@ -21,7 +33,7 @@
             Token <span class="tok__grad">Economics</span>
           </h1>
           <p class="tok__lede">
-            $ROBOTMONEY directs vault allocation. Fair launch via Bankr on Base, 0% premine.
+            Fair launch via Bankr on Base, 0% premine. Swap fees on its own pool fund buybacks. Tokenholder control of the allocation is planned, not live.
           </p>
         </div>
 
@@ -50,37 +62,37 @@
       <span class="tok__eyebrow">02 / Utility</span>
       <h2 class="tok__h2">What $ROBOTMONEY <span class="tok__grad">Does</span></h2>
       <p class="tok__intro">
-        The token has one role: directing vault allocation. Three sources of value follow from that role.
+        One mechanism runs today: swap fees fund buybacks, and the tokens bought are burned. The two governance mechanisms below are designed, not built. Each card says which it is.
       </p>
 
       <div class="tok__grid tok__grid--3">
         <a class="tok__card tok__card--link" href="#governance">
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><path d="M12 3L3 9v12h18V9L12 3z"/><path d="M12 12l-4-2"/><path d="M12 12l4-2"/><path d="M12 12v6"/></svg>
-          <h3 class="tok__card-title">Allocation Authority</h3>
+          <h3 class="tok__card-title">Allocation Authority (planned)</h3>
           <p class="tok__card-body">
-            Holders rank which qualifying tokens enter Buckets B and C each week. Votes are weighted by token balance. The agent executes the rebalance on-chain.
+            Not live. There is no ballot, no quorum and no vote contract. Allocation changes are proposed by the swarm and executed by the admin multisig. Moving that authority to holders is planned, with no ship date.
           </p>
         </a>
         <a class="tok__card tok__card--link" href="#governance">
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 12h4"/><path d="M13 12h4"/></svg>
-          <h3 class="tok__card-title">Inclusion Demand</h3>
+          <h3 class="tok__card-title">Inclusion Demand (planned)</h3>
           <p class="tok__card-body">
-            Any token meeting the quantitative filter is eligible for vault allocation. Project ecosystems and agent treasuries that want their qualifying tokens supported hold $ROBOTMONEY to participate in allocation voting.
+            Not live, and downstream of the vote above. The design: a token clears a published eligibility filter, then holders weight it, so ecosystems and agent treasuries would hold $ROBOTMONEY to push for inclusion. No filter and no ballot exist yet, so neither does the demand.
           </p>
         </a>
         <a class="tok__card tok__card--link" href="#buybacks">
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="1.5"><path d="M12 3c0 2-2 4-2 6s2 4 2 6"/><path d="M12 3c0 2 2 4 2 6s-2 4-2 6"/><path d="M8 15c0 2 2 3 4 3s4-1 4-3"/></svg>
           <h3 class="tok__card-title">Supply Reduction</h3>
           <p class="tok__card-body">
-            Robot Money generates revenue from vault management fees and token swap fees. When the protocol is profitable, that revenue funds discretionary buybacks of $ROBOTMONEY on the open market. Purchased tokens are burned.
+            Live. The protocol's only revenue is its share of the 1% fee on every $ROBOTMONEY swap. There is no management fee. When that revenue covers a purchase, the protocol buys $ROBOTMONEY on the open market and burns it. The buyback record is below.
           </p>
         </a>
       </div>
 
       <div class="tok__flow">
-        <span class="tok__flow-step">VOTE</span>
+        <span class="tok__flow-step">SWAP FEE</span>
         <span class="tok__flow-arrow">&rarr;</span>
-        <span class="tok__flow-step">ALLOCATE</span>
+        <span class="tok__flow-step">BUY BACK</span>
         <span class="tok__flow-arrow">&rarr;</span>
         <span class="tok__flow-step">BURN</span>
       </div>
@@ -106,16 +118,16 @@
         </div>
         <div class="tok__card" style="border-color:rgba(59,130,246,0.3);">
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><path d="M12 2L4 6v6c0 5.5 3.4 10.7 8 12 4.6-1.3 8-6.5 8-12V6l-8-4z"/></svg>
-          <h3 class="tok__card-title tok__card-title--sm">Governed vault</h3>
+          <h3 class="tok__card-title tok__card-title--sm">Open vault</h3>
           <p class="tok__card-body">
-            Strategy parameters are directed by token holders, not by an admin key. Vault logic is open and verifiable. Changes to strategy require holder approval.
+            Vault logic is open and verifiable on Base. Allocation changes are proposed by the swarm and executed by the admin multisig. Handing that authority to token holders is planned, not built.
           </p>
         </div>
         <div class="tok__card" style="border-color:rgba(139,92,246,0.3);">
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>
           <h3 class="tok__card-title tok__card-title--sm">Bounded governance</h3>
           <p class="tok__card-body">
-            Holders vote on allocation and bucket weights only. There is no treasury vote, no marketing vote, no operations vote. The governance surface is small and well-defined.
+            When holder governance ships, it covers sleeve weights and nothing else. No vote on the protocol wallets, no marketing vote, no operations vote. The constraint is written down now, before there is anything to vote on.
           </p>
         </div>
       </div>
@@ -124,69 +136,69 @@
     <!-- 03 / Governance -->
     <div class="tok__section tok__section--deep" id="governance">
       <span class="tok__eyebrow">03 / Governance</span>
-      <h2 class="tok__h2">The agent runs the fund. <span class="tok__grad">Holders steer it.</span></h2>
-      <p class="tok__intro">The agent runs the fund. Holders direct where capital goes.</p>
+      <h2 class="tok__h2">The swarm proposes. <span class="tok__grad">The multisig executes.</span></h2>
+      <p class="tok__intro">Two parties move the allocation today: an independent swarm that files signed takes, and the admin multisig that decides whether to apply the result. Token holders are not in that loop yet.</p>
 
       <div class="tok__grid tok__grid--3">
         <div class="tok__card">
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M16 2v4"/></svg>
-          <h3 class="tok__card-title">Weekly Allocation Cycle</h3>
+          <h3 class="tok__card-title">Daily Swarm Review</h3>
           <p class="tok__card-body">
-            Each week the agent runs the quantitative filter and publishes a shortlist of 10-15 qualifying tokens with supporting data: volume, holder distribution, treasury health, on-chain revenue, age. Other agents holding $ROBOTMONEY may also propose qualifying tokens. Holders rank their preferred allocation over a 48-hour balance-weighted window. The agent executes the rebalance on-chain.
+            The swarm runs on a daily cadence and reviews one portfolio per session. The Robot Money allocation is one of the portfolios it reviews. Members file signed takes independently and cannot read each other's until the window closes. The recommendation vector is the arithmetic mean over the take set, so anyone holding the published takes can recompute it and check the number. Applying it to the vault is gated by the admin multisig. Sessions and takes are at <a class="tok__inline-link" href="/swarm">/swarm</a>.
           </p>
         </div>
         <div class="tok__card">
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>
-          <h3 class="tok__card-title">Default Allocation</h3>
+          <h3 class="tok__card-title">Standing Weights</h3>
           <p class="tok__card-body">
-            If fewer than 5% of circulating supply votes, the agent's ranked allocation executes. The fund always has a strategy. As the token distributes, voter participation grows.
+            Nothing moves on its own. The current weights stand until the multisig applies a new proposal, so the fund always has a stated allocation. There is no quorum rule here, because there is no vote.
           </p>
         </div>
         <div class="tok__card">
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><path d="M12 3v18"/><circle cx="7" cy="14" r="3"/><circle cx="17" cy="10" r="3"/><path d="M7 11V8"/><path d="M17 13v4"/></svg>
-          <h3 class="tok__card-title">Monthly Weight Rebalance</h3>
+          <h3 class="tok__card-title">Four Sleeves</h3>
           <p class="tok__card-body">
-            Bucket weights default to 50% stable yield / 25% agent tokens / 25% revenue liquid. Holders vote monthly to shift the mix in response to market conditions. If no quorum, weights remain unchanged.
+            The allocation is four sleeves, not three buckets: Conservative DeFi Yield, Agent Tokens, Protocol Tokens, Real World Assets. Live weights and the date they were set are published at <a class="tok__inline-link" href="/allocation">/allocation</a>. No monthly holder vote sets them. Tokenholder voting on sleeve weights is planned.
           </p>
         </div>
       </div>
 
       <!-- Governance flow -->
       <div class="tok__gov-flow">
-        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:var(--color-accent);"></span><span>Agent Publishes Shortlist</span></div>
+        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:var(--color-accent);"></span><span>Swarm Files Takes</span></div>
         <span class="tok__flow-arrow">&rarr;</span>
-        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:#10b981;"></span><span>Holders Vote 48h</span></div>
+        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:#10b981;"></span><span>Mean Over The Take Set</span></div>
         <span class="tok__flow-arrow">&rarr;</span>
-        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:var(--color-warn);"></span><span>Agent Rebalances</span></div>
+        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:var(--color-warn);"></span><span>Multisig Applies</span></div>
       </div>
 
       <!-- Inclusion Economy -->
       <div class="tok__panel">
-        <h3 class="tok__panel-title">The Inclusion Economy</h3>
+        <h3 class="tok__panel-title">The Inclusion Economy (planned)</h3>
         <p class="tok__panel-lede">
-          $ROBOTMONEY creates a market for vault allocation among qualifying projects. The mechanism has two parts.
+          None of this is built. It is the intended shape of tokenholder governance, written down so it can be checked against what ships. Two parts.
         </p>
         <div class="tok__grid tok__grid--2">
           <div class="tok__numbered">
             <span class="tok__num">01</span>
             <div>
-              <h4 class="tok__num-title">The filter sets the eligible set.</h4>
+              <h4 class="tok__num-title">The filter would set the eligible set.</h4>
               <p class="tok__card-body">
-                Tokens must independently clear the quantitative filter to appear on any ballot. Holders cannot vote unqualified tokens onto the ballot.
+                A token would have to clear a published quantitative filter before any holder could weight it, and holders could not add one that fails. No such filter runs today.
               </p>
             </div>
           </div>
           <div class="tok__numbered">
             <span class="tok__num">02</span>
             <div>
-              <h4 class="tok__num-title">The vote sets the weighting within that set.</h4>
+              <h4 class="tok__num-title">The vote would set the weighting within that set.</h4>
               <p class="tok__card-body">
-                Project ecosystems, agent treasuries, and holders that want a qualifying token in the vault hold $ROBOTMONEY and vote. Inclusion routes vault USDC to the token. This creates structural demand for $ROBOTMONEY from any team or treasury with a qualifying token.
+                Ecosystems, agent treasuries and holders that wanted a qualifying token weighted would hold $ROBOTMONEY and vote on it. That is where structural demand for the token would come from. There is no vote contract, so today it does not.
               </p>
             </div>
           </div>
         </div>
-        <p class="tok__panel-foot">The filter governs eligibility. Holders govern weighting. Both are public.</p>
+        <p class="tok__panel-foot">The filter would govern eligibility. Holders would govern weighting. Both would be public. Neither exists yet.</p>
       </div>
     </div>
 
@@ -195,7 +207,7 @@
       <span class="tok__eyebrow">04 / Buybacks</span>
       <h2 class="tok__h2">Discretionary <span class="tok__grad">Buybacks</span></h2>
       <p class="tok__intro">
-        Robot Money generates revenue from the 2% vault management fee and the protocol's share of token swap fees. When the protocol is profitable, that revenue funds buybacks of $ROBOTMONEY on the open market. Purchased tokens are sent to the dead address (0x000&hellip;dEaD) and removed from circulation permanently.
+        Buybacks are funded by one thing: the protocol's share of the 1% fee on every $ROBOTMONEY swap. There is no management fee, and the 0.25% vault exit fee stays in the vault with the remaining depositors, so it is not protocol revenue either. That income is thin at this size, which is why buybacks are occasional and discretionary rather than scheduled. Purchased tokens are sent to the dead address (0x000&hellip;dEaD) and removed from circulation permanently.
       </p>
 
       <div class="tok__grid tok__grid--2">
@@ -203,8 +215,8 @@
         <div class="tok__card tok__card--glow">
           <h4 class="tok__mini-title">Mechanism</h4>
           <ol class="tok__steps">
-            <li><span class="tok__step-num">01</span><span>Protocol revenue accrues to the protocol-controlled wallet.</span></li>
-            <li><span class="tok__step-num">02</span><span>When the protocol is profitable, a buyback is initiated.</span></li>
+            <li><span class="tok__step-num">01</span><span>Swap fees accrue to the Robot Money protocol wallets.</span></li>
+            <li><span class="tok__step-num">02</span><span>When the balance covers a purchase, a buyback is initiated.</span></li>
             <li><span class="tok__step-num">03</span><span>$ROBOTMONEY is purchased on the Uniswap v4 pool.</span></li>
             <li><span class="tok__step-num">04</span><span>Purchased tokens are burned to 0x000&hellip;dEaD.</span></li>
           </ol>
@@ -257,7 +269,7 @@
     </div>
 
     <!-- 05 / Economics -->
-    <div class="tok__section tok__section--deep" id="fees">
+    <div class="tok__section tok__section--deep" id="fees" x-data="feeChart()">
       <span class="tok__eyebrow">05 / Economics</span>
       <h2 class="tok__h2">Fees &amp; <span class="tok__grad">Revenue</span></h2>
       <p class="tok__intro">
@@ -268,7 +280,7 @@
            a fixed Clanker-pool config constant) via feeChart(); the pie, the
            custom legend, and the breakdown-card percentages all bind to it —
            no baked 57/40/3 literals. Colours are presentation-only. -->
-      <div class="tok__grid tok__grid--2" x-data="feeChart()">
+      <div class="tok__grid tok__grid--2">
         <!-- Fee distribution pie (Chart.js via feeChart() factory) -->
         <div class="tok__card">
           <h4 class="tok__mini-title">Fee Distribution</h4>
@@ -306,20 +318,23 @@
       <div class="tok__panel">
         <h3 class="tok__panel-title tok__panel-title--warn">Revenue Streams</h3>
         <div class="tok__rev-list">
+          <!-- The swap-fee share is the SAME live feeSplit[0] the pie and the
+               breakdown cards bind to (feeChart() now scopes the whole #fees
+               section), so this row cannot drift from the served split. -->
           <div class="tok__rev-row">
-            <div><div class="tok__rev-name">Management Fee</div><div class="tok__rev-mech">2% annual on vault AUM, accrued daily</div></div>
-            <span class="tok__rev-to">Protocol wallet</span>
+            <div><div class="tok__rev-name">Token Swap Fees</div><div class="tok__rev-mech"><span x-text="feePctLabel(0)">—</span> of the 1% fee on every $ROBOTMONEY swap</div></div>
+            <span class="tok__rev-to">Protocol wallets</span>
           </div>
           <div class="tok__rev-row">
-            <div><div class="tok__rev-name">Token Swap Fees</div><div class="tok__rev-mech">57% of 1% fee on every $ROBOTMONEY swap</div></div>
-            <span class="tok__rev-to">Protocol wallet</span>
+            <div><div class="tok__rev-name">Management Fee</div><div class="tok__rev-mech">None. Listed as pending in the changelog, never charged</div></div>
+            <span class="tok__rev-to">Not charged</span>
           </div>
           <div class="tok__rev-row">
-            <div><div class="tok__rev-name">Vault Exit Fee</div><div class="tok__rev-mech">0.25% of withdrawal amount</div></div>
+            <div><div class="tok__rev-name">Vault Exit Fee</div><div class="tok__rev-mech">0.25% of withdrawal amount, not protocol revenue</div></div>
             <span class="tok__rev-to">Stays in vault for remaining depositors</span>
           </div>
           <div class="tok__rev-row">
-            <div><div class="tok__rev-name">Buybacks</div><div class="tok__rev-mech">Funded by protocol revenue when profitable</div></div>
+            <div><div class="tok__rev-name">Buybacks</div><div class="tok__rev-mech">Funded by swap fees, when they cover a purchase</div></div>
             <span class="tok__rev-to">Burned $ROBOTMONEY</span>
           </div>
         </div>
@@ -338,7 +353,7 @@
             <h3 class="tok__card-title">Curve</h3>
           </div>
           <p class="tok__card-body">
-            Gauge-style allocation voting. Token holders direct where capital flows; projects acquire and hold the governance token to influence inclusion. Robot Money adopts this pattern but gates the eligible set by an independent quantitative filter rather than emissions, so vote influence cannot compound through token-locking schemes that reward incumbents.
+            Gauge-style allocation voting. Token holders direct where capital flows; projects acquire and hold the governance token to influence inclusion. Robot Money's planned governance borrows the pattern, and would gate the eligible set by an independent quantitative filter rather than by emissions, so influence could not compound through lock-up schemes that reward incumbents. The gauge vote itself is not built.
           </p>
         </div>
         <div class="tok__card">
@@ -347,7 +362,7 @@
             <h3 class="tok__card-title">Botto</h3>
           </div>
           <p class="tok__card-body">
-            Minimal governance surface. Holders vote on allocation only - not on treasury, marketing, or operations. The agent executes a default if quorum is not met. Robot Money adopts this principle and adds third-party deposits, so the capital base is not bounded by the token's market cap.
+            Minimal governance surface. Holders vote on allocation only, not on treasury, marketing or operations, and the agent executes a default if quorum is not met. Robot Money carries the same constraint into its planned governance, and the vault is open to third-party deposits, so the capital base is not bounded by the token's market cap.
           </p>
         </div>
       </div>
@@ -367,13 +382,13 @@
           <div class="tok__part-block">
             <span class="tok__part-label">How</span>
             <p class="tok__card-body">
-              Deposit USDC to the vault contract via any Base-compatible wallet, via Bankr, or programmatically via the OpenClaw skill or x402 endpoint.
+              Deposit USDC to the vault contract via any Base-compatible wallet, via Bankr, or programmatically via the OpenClaw skill.
             </p>
           </div>
           <div class="tok__part-block">
             <span class="tok__part-label">What You Get</span>
             <p class="tok__card-body">
-              Vault shares. Pro-rata exposure to the three-bucket allocation. Withdraw at NAV anytime, minus a 0.25% exit fee that stays in the vault.
+              Vault shares. The vault holds USDC deployed across Aave, Morpho and Compound. Withdraw at NAV anytime, minus a 0.25% exit fee that stays in the vault. The published allocation is four sleeves, with live weights at <a class="tok__inline-link" href="/allocation">/allocation</a>.
             </p>
           </div>
           <a class="tok__btn tok__btn--solid tok__btn--block" href="/skills">OpenClaw Skill &rarr;</a>
@@ -392,7 +407,7 @@
           <div class="tok__part-block">
             <span class="tok__part-label">What You Get</span>
             <p class="tok__card-body">
-              Allocation voting. Monthly weight rebalance voting. Exposure to supply reduction from protocol-funded buybacks.
+              Exposure to supply reduction from buybacks funded by swap fees. Governance is planned, not live: there is no vote to join today.
             </p>
           </div>
           <a class="tok__btn tok__btn--solid tok__btn--block" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener &rarr;</a>

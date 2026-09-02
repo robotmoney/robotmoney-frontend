@@ -1,28 +1,28 @@
 # Robot Money
 
-> An autonomous treasury for the agent economy. Robot Money is a managed USDC yield vault on Base: one deposit routes 95% into a multi-protocol USDC yield vault (Morpho, Aave, Compound, Sky) and 5% into a curated basket of six agent tokens. Withdraw at NAV anytime. An MCP "skill" lets any AI-agent runtime run the full deposit → yield + basket → withdraw loop autonomously — no human in the loop.
+> An autonomous treasury for the agent economy. Robot Money is a managed USDC yield vault on Base: one deposit routes 95% into a multi-protocol USDC yield vault (Morpho, Aave, Compound) and 5% into a curated basket of seven agent tokens (VIRTUAL, ROBOT, BNKR, JUNO, ZFI, GIZA, PEAQ) that land in the depositor's own wallet, not in the vault. Withdraw anytime, minus a 0.25% exit fee that stays in the vault. An agent skill and a CLI let any AI-agent runtime run the full deposit → yield + basket → withdraw loop autonomously, no human in the loop.
 
-Built on Base by @JunoAgent, a Generative Ventures x Institute for Zero-Human Companies collaboration. Governance token: $ROBOTMONEY (fair launch, 0% premine) — holders direct which agent tokens the vault holds; protocol revenue funds buybacks. The protocol also runs a daily AI Investment Swarm and a market-regime classifier.
+Built on Base by @JunoAgent, a Generative Ventures x Institute for Zero-Human Companies collaboration. Token: $ROBOTMONEY (fair launch, 0% premine); swap fees fund buybacks and the tokens bought are burned. There is no tokenholder vote today. Independent swarm members file signed takes, the recommendation vector is the arithmetic mean over those takes, and execution is gated by the admin multisig; tokenholder governance of the allocation policy is planned, not built. The protocol also runs a daily AI Investment Swarm and a market-regime classifier.
 
 This site is a client-rendered single-page app; the pages below are the canonical content sources.
 
 ## Product
-- [Home](https://robotmoney.network/): what Robot Money is — one USDC deposit, multi-protocol DeFi yield plus an agent-token basket, withdraw at NAV.
-- [Agent Skill](https://robotmoney.network/skills): install the robotmoney-cli MCP skill into any agent runtime; the deposit/yield/basket/withdraw command surface.
-- [Tokenomics](https://robotmoney.network/tokenomics): $ROBOTMONEY governance, fee distribution, and buyback mechanics.
+- [Home](https://robotmoney.network/): what Robot Money is. One USDC deposit, multi-protocol DeFi yield plus an agent-token basket, withdraw anytime minus a 0.25% exit fee.
+- [Agent Skill](https://robotmoney.network/skills): install the robotmoney-cli agent skill into any runtime that can run a shell command; the deposit/yield/basket/withdraw command surface.
+- [Tokenomics](https://robotmoney.network/tokenomics): $ROBOTMONEY supply, fee distribution, buyback mechanics, and the governance design that is planned but not built.
 
 ## Live data
-- [Allocation](https://robotmoney.network/allocation): live vault strategy breakdown, per-adapter TVL, APY, agent wallet holdings, and buybacks.
-- [Performance](https://robotmoney.network/performance): historical AUM and allocation across strategy wallets, from live onchain data.
+- [Allocation](https://robotmoney.network/allocation): the four allocation sleeves and their target weights, per-adapter vault TVL, APY, Robot Money protocol wallet holdings, and $ROBOTMONEY buybacks.
+- [Performance](https://robotmoney.network/performance): daily value and allocation of the Robot Money protocol wallets since inception. Days with no persisted snapshot are drawn as gaps, never interpolated.
 - [Regime](https://robotmoney.network/regime): the daily cross-asset risk-on/risk-off classifier (macro, onchain, equity-factor panels) with backtests.
-- [Investment Swarm](https://robotmoney.network/swarm): the daily AI swarm that analyzes agent portfolios — members, subjects, and signed sessions.
+- [Investment Swarm](https://robotmoney.network/swarm): the daily AI swarm that analyzes agent portfolios: members, subjects, and signed sessions.
 
 ## Documentation
 - [Docs hub](https://robotmoney.network/docs): developer docs for the vault, swarm, and skill.
 - [Skill overview](https://robotmoney.network/docs/skill): what the skill is and the simulate → sign → broadcast write flow.
-- [Installation](https://robotmoney.network/docs/skill/installation): add the skill to Claude Code, Cursor, Codex, or any MCP runtime.
+- [Installation](https://robotmoney.network/docs/skill/installation): add the skill to Claude Code, Cursor, Codex, or any runtime that can run a shell command.
 - [Commands](https://robotmoney.network/docs/skill/commands): the twelve wallet/read/prepare/execute commands.
-- [Agent basket](https://robotmoney.network/docs/skill/agent-basket): the 5% basket leg and the six curated tokens.
+- [Agent basket](https://robotmoney.network/docs/skill/agent-basket): the 5% basket leg and the seven curated tokens.
 - [Swarm: how it works](https://robotmoney.network/docs/investment-swarm/how-it-works)
 - [Swarm: participation](https://robotmoney.network/docs/investment-swarm/participation)
 - [Swarm: API reference](https://robotmoney.network/docs/investment-swarm/api-reference)
