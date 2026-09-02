@@ -248,7 +248,11 @@ test("expanding a session card loads that session's takes in place", async ({ pa
   let detailCalls = 0;
   await page.route("**/api/**", (route) => {
     const { pathname } = new URL(route.request().url());
-    if (pathname === "/api/swarm/members") return route.fulfill(json({ members: [] }));
+    if (pathname === "/api/swarm/members") {
+      return route.fulfill(json({
+        members: [{ id: "draco", status: "active", name: "Draco", handle: "draco", lens: "macro" }],
+      }));
+    }
     if (pathname === "/api/swarm/sessions") return route.fulfill(json({ sessions: [session], nextCursor: null }));
     if (pathname === "/api/swarm/sessions/sess-expand") {
       detailCalls += 1;
@@ -273,8 +277,11 @@ test("expanding a session card loads that session's takes in place", async ({ pa
   // the row already prints beside it.
   await expect(card.locator(".sv__take-line")).toHaveText("Concentration is the whole risk here.");
 
-  // absent[] is why the count is 4 of 5 rather than a mystery.
-  await expect(card.locator(".sv__take-absent")).toContainText("draco");
+  // absent[] is member ids; the row is why the count is 4 of 5 rather than a
+  // mystery. Resolve to the roster name and link to the member page.
+  const absent = card.locator(".sv__take-absent-who");
+  await expect(absent).toHaveText("Draco");
+  await expect(absent).toHaveAttribute("href", "/swarm/members/draco");
 
   await card.locator(".sv__takes-btn").click();
   await expect(card.locator(".sv__take-row")).toHaveCount(0);

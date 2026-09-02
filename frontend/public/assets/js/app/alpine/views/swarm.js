@@ -700,6 +700,24 @@ export function registerSwarmView(Alpine) {
       }) || bullets[0] || "";
       return clean.length > 190 ? `${clean.slice(0, 187).trimEnd()}...` : clean;
     },
+    // The public roster is status=active only, so a member deactivated after
+    // this session is missing from `members` and we still print the id rather
+    // than drop them. A link to that id still resolves: the member route
+    // matches handle or id.
+    memberById(id) {
+      return this.members.find((m) => m.id === id || m.handle === id) || null;
+    },
+    memberHref(id) {
+      const m = this.memberById(id);
+      return `/swarm/members/${encodeURIComponent(m?.handle || id)}`;
+    },
+    absentOf(s) {
+      return (s?.swarmRecommendation?.absent || []).filter(Boolean).map((id) => ({
+        id,
+        name: this.memberById(id)?.name || id,
+        href: this.memberHref(id),
+      }));
+    },
     quorumText(s) {
       const q = s.swarmRecommendation?.quorum;
       return q ? `${q.submitted} of ${q.active} took part` : "";

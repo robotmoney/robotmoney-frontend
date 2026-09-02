@@ -866,8 +866,16 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .mp-conf b { color: var(--color-text-soft); font-weight: 500; font-variant-numeric: tabular-nums; }
 .sv__take-line { margin: 0.35rem 0 0; font-size: 0.85rem; line-height: 1.6;
   color: var(--color-text-muted); }
-.sv__take-absent { margin: 0.85rem 0 0; font-family: var(--font-mono); font-size: 0.68rem;
-  text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); }
+.sv__take-absent { margin: 0.85rem 0 0; }
+.sv__take-absent-k { font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-text-muted); margin-right: 0.55rem; }
+.sv__take-absent-who { color: var(--color-text); font-weight: 500; font-size: 0.85rem;
+  text-decoration: none; }
+.sv__take-absent-who:hover, .sv__take-absent-who:focus-visible {
+  text-decoration: underline; text-decoration-color: var(--color-accent);
+  text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.sv__take-absent-who + .sv__take-absent-who::before { content: ", "; color: var(--color-text-muted);
+  font-weight: 400; }
 .sv__profile-head { display: flex; align-items: flex-start; gap: 1.25rem; flex-wrap: wrap; margin: 1.5rem 0 2.5rem; }
 .sv__profile-main { flex: 1; min-width: 16rem; }
 .sv__detail-head { margin: 1.5rem 0 2.5rem; }

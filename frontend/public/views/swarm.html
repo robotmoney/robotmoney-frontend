@@ -361,10 +361,15 @@
                     <p class="sv__take-line" x-text="takeLine(t)"></p>
                   </div>
                 </template>
-                <!-- absent[] names who did not file; the row is the reason the
-                     count is 4 of 5 rather than a mystery. -->
-                <p class="sv__take-absent" x-show="s.swarmRecommendation?.absent?.length"
-                   x-text="`Did not file: ${(s.swarmRecommendation?.absent || []).join(', ')}`"></p>
+                <!-- absent[] is member ids. Print names from the roster, and
+                     link even when we only have the id: the member page is
+                     where the active indicator lives. -->
+                <p class="sv__take-absent" x-show="absentOf(s).length">
+                  <span class="sv__take-absent-k">Did not file</span>
+                  <template x-for="a in absentOf(s)" :key="a.id">
+                    <a class="sv__take-absent-who" :href="a.href" x-text="a.name"></a>
+                  </template>
+                </p>
               </div>
             </article>
           </template>
