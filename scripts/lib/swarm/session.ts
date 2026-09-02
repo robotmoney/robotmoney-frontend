@@ -78,11 +78,27 @@ const OLD_TEMPLATE_RE = /the spread, not the composite, is where the signal live
 // Canonical stance vocabulary from the contract (finding 027) — never re-declared.
 const VALID_STANCES = new Set<string>(STANCES);
 
-// Post-publish structural assertions over every PRESENT member's authored take.
-// Throws on any failure so the standalone `bun run session.ts` entrypoint exits
-// non-zero (main() catches and process.exit(1)) — this is the required-CI signal
-// that each take was authored by a real inference call, not a template.
-export function assertAuthoredTakes(tag: string, takes: any[], expectedMemberIds: readonly string[]) {
+// Post-publish assertions over the LIVE-AUTHORED takes and the truthfulness of
+// the attendance record. Throws on any failure so the standalone
+// `bun run session.ts` entrypoint exits non-zero (main() catches and
+// process.exit(1)) — this is the required-CI signal that the session ran
+// through real inference (no template fallback) AND that the published absent
+// list names exactly the members this driver observed failing, never fewer and
+// never more.
+//
+// Deliberately NOT a per-member attendance requirement: a member whose model
+// call times out or refuses the STANCE control line is DESIGNED to be absent
+// (#301/#319), so the gate must not depend on every stochastic inference call
+// succeeding (#803). It depends instead on the RECORD being truthful about
+// which members failed — `expectedAbsent` is the driver's own ground truth
+// (configured no-shows + rejected containers), `attendance.absent` is what the
+// backend published, and any divergence is a failed session.
+export function assertAuthoredTakes(
+  tag: string,
+  takes: any[],
+  attendance: AbsenceReport,
+  expectedAbsent: readonly string[],
+) {
   // Present-member takes are the ones that actually posted a body; absent
   // no-shows enrolled but never submitted, so they carry no body.
   const authored = (takes ?? []).filter(
@@ -91,11 +107,17 @@ export function assertAuthoredTakes(tag: string, takes: any[], expectedMemberIds
   if (authored.length === 0) {
     throw new Error(`${tag}: no authored takes to assert on (expected ≥1 present member)`);
   }
-  const authoredIds = new Set(authored.map((t) => String(t.memberId)));
-  for (const memberId of expectedMemberIds) {
-    if (!authoredIds.has(memberId)) {
-      throw new Error(`${tag}: present member ${memberId} has no live-authored take`);
-    }
+  // The published absent list must equal the driver-observed failures exactly,
+  // order-insensitively. An under-report hides a broken pipeline; an
+  // over-report hides a live-authored take. Both fail the run.
+  const expectedAbsentSorted = [...expectedAbsent].sort();
+  const publishedAbsentSorted = [...attendance.absent].sort();
+  if (JSON.stringify(expectedAbsentSorted) !== JSON.stringify(publishedAbsentSorted)) {
+    throw new Error(
+      `${tag}: published absent ${JSON.stringify(publishedAbsentSorted)} does not match the ` +
+        `${JSON.stringify(expectedAbsentSorted)} this driver observed failing — attendance must be ` +
+        `reported exactly as it happened, never fewer and never more`,
+    );
   }
   const seenBodies = new Map<string, string>();
   for (const t of authored) {
@@ -1087,9 +1109,10 @@ export async function runSession(
   const present = opts.members.filter((m) => m.present);
   // Settle so one failed member container cannot freeze the session lifecycle
   // (#122). Concurrency is preserved at the CONTAINER level: at most
-  // SWARM_MAX_CONCURRENCY member containers in flight. The unconditional
-  // post-publish assertion below still fails the run if any present member did
-  // not produce a live-authored take.
+  // SWARM_MAX_CONCURRENCY member containers in flight. Rejected members are
+  // honestly absent — the post-publish assertion below verifies the published
+  // absent list matches exactly this driver's observed failures, and that at
+  // least one take is genuinely live-authored.
   const limit = Number(process.env.SWARM_MAX_CONCURRENCY ?? 4);
   const settled = await mapSettledWithConcurrency(present, limit, (m) => runAgent(
     rail,
@@ -1170,7 +1193,19 @@ export async function runSession(
   // authoring (non-template body,
   // REGIME/ALLOCATION/SUBJECT lead-ins, stance in the five-value set, confidence
   // in [0,1], distinct across members). Throws → exit 1 on any failure.
-  assertAuthoredTakes(tag, pub.takes, present.map((m) => m.memberId));
+  //
+  // Absence is a DESIGNED outcome (#301/#319), so this does not require every
+  // present member to have authored a take — a timed-out or control-line-refused
+  // member is honestly absent, never fabricated. What it DOES require is that
+  // the published absent list names exactly the members this driver observed
+  // failing: the configured no-shows plus the present members whose containers
+  // rejected. That is the truthfulness check — the gate asserts on the record,
+  // not on model luck.
+  const observedAbsent = [
+    ...absent.map((m) => m.memberId),
+    ...settled.filter((s) => s.status === "rejected").map((_, i) => present[i].memberId),
+  ];
+  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent);
 
   // Verify memos
   for (const r of results) {
