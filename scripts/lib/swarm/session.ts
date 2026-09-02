@@ -83,21 +83,32 @@ const VALID_STANCES = new Set<string>(STANCES);
 // `bun run session.ts` entrypoint exits non-zero (main() catches and
 // process.exit(1)) — this is the required-CI signal that the session ran
 // through real inference (no template fallback) AND that the published absent
-// list names exactly the members this driver observed failing, never fewer and
-// never more.
+// list tells the truth about the members this driver ran.
 //
 // Deliberately NOT a per-member attendance requirement: a member whose model
 // call times out or refuses the STANCE control line is DESIGNED to be absent
 // (#301/#319), so the gate must not depend on every stochastic inference call
 // succeeding (#803). It depends instead on the RECORD being truthful about
-// which members failed — `expectedAbsent` is the driver's own ground truth
-// (configured no-shows + rejected containers), `attendance.absent` is what the
-// backend published, and any divergence is a failed session.
+// the members the driver has ground truth on:
+//
+//  - `observedAbsent` — configured no-shows + containers that rejected. Every
+//    one MUST appear in the published absent list; an under-report hides a
+//    broken pipeline.
+//  - `fulfilledMemberIds` — containers that resolved with a verified take.
+//    Every one MUST have a live-authored take in the published payload and
+//    MUST NOT appear in the published absent list; an over-report hides a take
+//    that DID land.
+//
+// Members the driver did not run (e.g. a mid-run registered identity like the
+// cross-role test fixture) carry no driver ground truth: the backend may
+// legitimately count them absent for not submitting, and the gate says nothing
+// about them.
 export function assertAuthoredTakes(
   tag: string,
   takes: any[],
   attendance: AbsenceReport,
-  expectedAbsent: readonly string[],
+  observedAbsent: readonly string[],
+  fulfilledMemberIds: readonly string[],
 ) {
   // Present-member takes are the ones that actually posted a body; absent
   // no-shows enrolled but never submitted, so they carry no body.
@@ -107,16 +118,33 @@ export function assertAuthoredTakes(
   if (authored.length === 0) {
     throw new Error(`${tag}: no authored takes to assert on (expected ≥1 present member)`);
   }
-  // The published absent list must equal the driver-observed failures exactly,
-  // order-insensitively. An under-report hides a broken pipeline; an
-  // over-report hides a live-authored take. Both fail the run.
-  const expectedAbsentSorted = [...expectedAbsent].sort();
-  const publishedAbsentSorted = [...attendance.absent].sort();
-  if (JSON.stringify(expectedAbsentSorted) !== JSON.stringify(publishedAbsentSorted)) {
+  const authoredIds = new Set(authored.map((t) => String(t.memberId)));
+  const publishedAbsent = new Set(attendance.absent);
+  // Directional attendance truthfulness over the members this driver ran.
+  // Under-report: a member the driver saw fail is missing from the record.
+  const unreported = observedAbsent.filter((id) => !publishedAbsent.has(id));
+  if (unreported.length > 0) {
     throw new Error(
-      `${tag}: published absent ${JSON.stringify(publishedAbsentSorted)} does not match the ` +
-        `${JSON.stringify(expectedAbsentSorted)} this driver observed failing — attendance must be ` +
-        `reported exactly as it happened, never fewer and never more`,
+      `${tag}: published absent ${JSON.stringify([...publishedAbsent])} omits ` +
+        `${JSON.stringify(unreported)} that this driver observed failing — an under-report hides ` +
+        `a broken pipeline`,
+    );
+  }
+  // Over-report: a member the driver saw submit is listed absent.
+  const misreported = fulfilledMemberIds.filter((id) => publishedAbsent.has(id));
+  if (misreported.length > 0) {
+    throw new Error(
+      `${tag}: published absent ${JSON.stringify([...publishedAbsent])} names ` +
+        `${JSON.stringify(misreported)} that this driver saw submit — an over-report hides a take ` +
+        `that DID land`,
+    );
+  }
+  // A fulfilled container must have its take in the published payload.
+  const missingTakes = fulfilledMemberIds.filter((id) => !authoredIds.has(id));
+  if (missingTakes.length > 0) {
+    throw new Error(
+      `${tag}: fulfilled member ${JSON.stringify(missingTakes)} has no live-authored take in the ` +
+        `published payload — a submission this driver verified did not land`,
     );
   }
   const seenBodies = new Map<string, string>();
@@ -1197,15 +1225,20 @@ export async function runSession(
   // Absence is a DESIGNED outcome (#301/#319), so this does not require every
   // present member to have authored a take — a timed-out or control-line-refused
   // member is honestly absent, never fabricated. What it DOES require is that
-  // the published absent list names exactly the members this driver observed
-  // failing: the configured no-shows plus the present members whose containers
-  // rejected. That is the truthfulness check — the gate asserts on the record,
-  // not on model luck.
+  // the published record tells the truth about the members this driver ran:
+  // every observed failure (configured no-shows like draco plus rejected
+  // containers) must appear in the published absent list, and every fulfilled
+  // container must have its take land in the published payload and never be
+  // listed absent. Members the driver did not run (e.g. the mid-run
+  // cross-role test identity) carry no ground truth and are not asserted on.
   const observedAbsent = [
     ...absent.map((m) => m.memberId),
     ...settled.filter((s) => s.status === "rejected").map((_, i) => present[i].memberId),
   ];
-  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent);
+  const fulfilled = settled
+    .filter((s) => s.status === "fulfilled")
+    .map((_, i) => present[i].memberId);
+  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent, fulfilled);
 
   // Verify memos
   for (const r of results) {
