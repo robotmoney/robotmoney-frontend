@@ -390,7 +390,7 @@ footer {
     <p><strong>backend/</strong> — Bun processes sharing one source tree: the <em>api</em> (HTTP + optional static
       serving when <code>STATIC_DIR</code> is set), one <em>worker</em> per queue lane, and the independent
       <em>analytics-producer</em>, which holds no database credential at all</p>
-    <p><strong>scripts/</strong> — the demo/stage stack driver, preview server, goldens capture, evals and checks</p>
+    <p><strong>scripts/</strong> — the smoke/stage stack driver, preview server, goldens capture, evals and checks</p>
   </div>
 
   <div class="grid-2">
@@ -1646,7 +1646,7 @@ footer {
     (<code>/api/swarm/admin/sessions/:id/{cancel,close,reopen,aggregate,publish}</code>, versioned and guarded) and a
     queue kind, so a deployment can run the sequence on the five <code>SWARM_*_CRON</code> schedules or drive it by
     hand. Those schedules ship <strong>seed-time disabled</strong> (<code>SWARM_SCHEDULES_ENABLED</code> defaults
-    false) so a fresh CI/demo database never auto-enqueues real lifecycle jobs.</p>
+    false) so a fresh CI/smoke database never auto-enqueues real lifecycle jobs.</p>
 
   <h3>Cryptography</h3>
   <p>Swarm uses Ed25519 for application and submission signing (not self-custody wallet signing).</p>
@@ -1686,7 +1686,7 @@ footer {
 <section id="scripts">
   <h2>🛠️ Scripts & Utilities</h2>
 
-  <h3>Development & Demo</h3>
+  <h3>Development & Smoke</h3>
   <table>
     <thead>
       <tr>
@@ -1696,30 +1696,30 @@ footer {
     </thead>
     <tbody>
       <tr>
-        <td><span class="file-path">scripts/demo.ts</span></td>
-        <td>Full-stack demo: spins up Postgres, applies migrations, seeds data, starts api/worker</td>
+        <td><span class="file-path">scripts/smoke.ts</span></td>
+        <td>Full-stack smoke: spins up Postgres, applies migrations, seeds data, starts api/worker</td>
       </tr>
       <tr>
-        <td><span class="file-path">scripts/demo-stage.ts</span></td>
-        <td>Thin wrapper over <code>demo.ts</code> for the standing/public demo: always passes
+        <td><span class="file-path">scripts/smoke-stage.ts</span></td>
+        <td>Thin wrapper over <code>smoke.ts</code> for the standing/public smoke: always passes
           <code>--static-port</code>, and adds <code>--external-pg</code> when <code>.env</code> describes a Postgres.
-          It prints the exact equivalent <code>demo.ts</code> command.</td>
+          It prints the exact equivalent <code>smoke.ts</code> command.</td>
       </tr>
       <tr>
-        <td><span class="file-path">scripts/demo-down.ts</span></td>
-        <td>Tear down demo containers + network (keeps Postgres data)</td>
+        <td><span class="file-path">scripts/smoke-down.ts</span></td>
+        <td>Tear down smoke containers + network (keeps Postgres data)</td>
       </tr>
       <tr>
-        <td><span class="file-path">scripts/demo-clean.ts</span></td>
-        <td>Delete demo Postgres data volumes</td>
+        <td><span class="file-path">scripts/smoke-clean.ts</span></td>
+        <td>Delete smoke Postgres data volumes</td>
       </tr>
       <tr>
-        <td><span class="file-path">scripts/demo-status.ts</span></td>
-        <td>Show running demo status (port, containers)</td>
+        <td><span class="file-path">scripts/smoke-status.ts</span></td>
+        <td>Show running smoke status (port, containers)</td>
       </tr>
       <tr>
-        <td><span class="file-path">scripts/demo-reap.ts</span></td>
-        <td>Clean up stale demo containers (with --older-than filter)</td>
+        <td><span class="file-path">scripts/smoke-reap.ts</span></td>
+        <td>Clean up stale smoke containers (with --older-than filter)</td>
       </tr>
       <tr>
         <td><span class="file-path">scripts/preview-server.ts</span></td>
@@ -1810,8 +1810,8 @@ footer {
         <td>Contribution advisory review (pre-commit checks)</td>
       </tr>
       <tr>
-        <td><span class="file-path">scripts/demo-live-smoke.ts</span></td>
-        <td>E2E smoke tests against running demo</td>
+        <td><span class="file-path">scripts/smoke-live-smoke.ts</span></td>
+        <td>E2E smoke tests against a running smoke stack</td>
       </tr>
     </tbody>
   </table>
@@ -1854,9 +1854,9 @@ footer {
 
   <div class="cmd">bun run preview<br># Serves frontend with mocked /api responses from goldens (no backend needed)</div>
 
-  <div class="cmd">bun run demo<br># Full-stack: Postgres + API + workers + producer + Swarm cycle<br># EVERY published host port is drawn free at boot — read the port off the startup line</div>
+  <div class="cmd">bun run smoke<br># Full-stack: Postgres + API + workers + producer + Swarm cycle<br># EVERY published host port is drawn free at boot — read the port off the startup line</div>
 
-  <div class="cmd">bun run demo:stage<br># Standing/public demo: passes --static-port (pins the web port to the tunnel origin 48787)<br># and --external-pg when .env describes a Postgres</div>
+  <div class="cmd">bun run smoke:stage<br># Standing/public smoke: passes --static-port (pins the web port to the tunnel origin 48787)<br># and --external-pg when .env describes a Postgres</div>
 
   <div class="cmd">cd backend<br>bun install<br>bun run migrate  # apply SQL migrations (and seed)<br>bun run api     # start API server only<br>WORKER_LANE=generic bun run worker  # WORKER_LANE is required — no default</div>
 
@@ -1873,13 +1873,13 @@ footer {
   <h3>Data Management</h3>
   <div class="cmd">bun run sync-contract    # vendor the contract runtime into frontend/…/app/contract/</div>
   <div class="cmd">bun run goldens:update   # refresh mocked API responses (requires a running backend)</div>
-  <div class="cmd">BACKEND_URL=http://127.0.0.1:&lt;the port the demo printed&gt; bun run goldens:update<br># The 127.0.0.1:48787 built-in default is correct ONLY for a --static-port boot</div>
+  <div class="cmd">BACKEND_URL=http://127.0.0.1:&lt;the port the smoke printed&gt; bun run goldens:update<br># The 127.0.0.1:48787 built-in default is correct ONLY for a --static-port boot</div>
 
-  <h3>Demo Lifecycle</h3>
-  <div class="cmd">bun run demo:status     # show running demo (port, containers)</div>
-  <div class="cmd">bun run demo:down       # tear down containers + network (keeps data)</div>
-  <div class="cmd">bun run demo:clean      # delete Postgres data volumes</div>
-  <div class="cmd">bun run demo:reap -- --older-than 6h  # clean up stale containers</div>
+  <h3>Smoke Lifecycle</h3>
+  <div class="cmd">bun run smoke:status    # show running smoke (port, containers)</div>
+  <div class="cmd">bun run smoke:down      # tear down containers + network (keeps data)</div>
+  <div class="cmd">bun run smoke:clean     # delete Postgres data volumes</div>
+  <div class="cmd">bun run smoke:reap -- --older-than 6h  # clean up stale containers</div>
 
   <h3>Evaluation & Analytics</h3>
   <div class="cmd">bun run onboarding-eval  # measure onboarding flow performance</div>
@@ -1887,7 +1887,7 @@ footer {
 
   <h3>Container Cleanup</h3>
   <div class="cmd">docker compose down -v   # tear down + wipe Postgres volume (ephemeral reset)</div>
-  <div class="cmd">docker ps --filter label=robotmoney.env=local  # show local demo containers</div>
+  <div class="cmd">docker ps --filter label=robotmoney.env=local  # show local smoke containers</div>
 </section>
 
 <!-- INTEGRATIONS & DEPENDENCIES -->
@@ -1990,9 +1990,9 @@ footer {
       </tr>
       <tr>
         <td><strong>Cloudflare Tunnel</strong></td>
-        <td>Public demo access (stage.robotmoney-labs.dev)</td>
+        <td>Public smoke access (stage.robotmoney-labs.dev)</td>
         <td><code>cloudflared.config.example.yml</code>. 48787 is the tunnel's origin port and the ONLY sanctioned
-          pin — reachable only via <code>demo:stage</code> / <code>demo -- --static-port</code>.</td>
+          pin — reachable only via <code>smoke:stage</code> / <code>smoke -- --static-port</code>.</td>
       </tr>
     </tbody>
   </table>
@@ -2048,7 +2048,7 @@ footer {
       <tr>
         <td><code>RM_ENV</code></td>
         <td><strong>prod</strong></td>
-        <td><code>ephemeral | demo | prod</code>. Fail-closed: <strong>unset defaults to prod</strong>, and an
+        <td><code>ephemeral | smoke | prod</code>. Fail-closed: <strong>unset defaults to prod</strong>, and an
           unrecognized value refuses to start, so a typo like "production" can never silently open the privileged
           surface.</td>
       </tr>
@@ -2067,7 +2067,7 @@ footer {
     <code>docker-compose.yml</code> refuses to start
     without an explicit value rather than falling back to a default. Pinning them caused a real outage — a pinned
     <code>.env</code> put the api on exactly the port cloudflared routes stage traffic to, and CI then raced it and
-    took the site down. <code>bun run demo</code> now warns loudly and ignores those variables if it finds them.
+    took the site down. <code>bun run smoke</code> now warns loudly and ignores those variables if it finds them.
     8787 is only the <em>container-internal</em> API port, which is unconfigurable by construction.
   </div>
 
@@ -2091,12 +2091,12 @@ footer {
       <tr>
         <td><code>ANALYTICS_TOKEN</code></td>
         <td>Bearer for /api/analytics/* and POST /api/swarm/regime (analytics-provider role)</td>
-        <td>Same fail-closed rule. The producer refuses to boot in demo/prod without it, and never accepts
+        <td>Same fail-closed rule. The producer refuses to boot in smoke/prod without it, and never accepts
           <code>ADMIN_TOKEN</code> or a member bearer as a substitute.</td>
       </tr>
       <tr>
         <td><code>RM_ALLOW_INSECURE</code></td>
-        <td>Opt in to privileged routes with no token — local throwaway demos only, never a reachable box</td>
+        <td>Opt in to privileged routes with no token — local throwaway smoke stacks only, never a reachable box</td>
         <td>No (implied by <code>RM_ENV=ephemeral</code>)</td>
       </tr>
       <tr>
@@ -2195,7 +2195,7 @@ footer {
       <tr>
         <td><code>SWARM_SCHEDULES_ENABLED</code> and the five <code>SWARM_*_CRON</code> vars</td>
         <td>Turn the daily open → publish-brief → close-window → aggregate → publish sequence on. Ships
-          <strong>disabled</strong> so a fresh CI/demo database never auto-enqueues real lifecycle jobs.</td>
+          <strong>disabled</strong> so a fresh CI/smoke database never auto-enqueues real lifecycle jobs.</td>
       </tr>
       <tr>
         <td><code>SWARM_WINDOW_MINUTES</code></td>
@@ -2278,12 +2278,12 @@ footer {
     <li>Set <code>SWARM_NOTIFICATION_EMAIL_FROM</code> + <code>…_TRANSPORT_URL</code> and
       <code>SWARM_PUBLIC_BASE_URL</code> for member notifications</li>
     <li>Run <code>bun run --cwd backend migrate</code> to apply the schema and seed</li>
-    <li>Run <code>bun run demo</code>, or <code>bun run api</code> plus one
+    <li>Run <code>bun run smoke</code>, or <code>bun run api</code> plus one
       <code>WORKER_LANE=&lt;lane&gt; bun run worker</code> per lane (separate terminals)</li>
   </ol>
 
   <div class="note">
-    <strong>Note:</strong> <code>RM_ENV=demo</code> allows the unauthenticated paths only when
+    <strong>Note:</strong> <code>RM_ENV=smoke</code> allows the unauthenticated paths only when
     <code>RM_ALLOW_INSECURE=1</code> is also set; <code>RM_ENV=ephemeral</code> implies it. Anything else — including
     an unset <code>RM_ENV</code>, which means prod — requires the real tokens for every privileged endpoint.
   </div>
