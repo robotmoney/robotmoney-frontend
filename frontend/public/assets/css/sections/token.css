@@ -87,13 +87,13 @@
   padding: 1.25rem;
 }
 
-/* text-[10px] font-mono uppercase tracking-[0.2em] text-dim */
+/* text-[10px] font-mono uppercase tracking-[0.2em] text-muted */
 .token__spec-label {
   font-size: 10px;
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* text-xl font-mono font-bold mt-2 accent */
@@ -105,10 +105,10 @@
   color: var(--color-accent);
 }
 
-/* text-[11px] text-dim */
+/* text-[11px] text-muted */
 .token__spec-sub {
   font-size: 11px;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* ── Right column ── */
@@ -165,10 +165,10 @@
   font-weight: 500;
 }
 
-/* text-xs text-dim */
+/* text-xs text-muted */
 .token__fee-dest {
   font-size: 0.75rem;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* h-1 bg-accent/20 — width set inline per fee */
@@ -240,10 +240,10 @@
   border-top: 1px solid var(--color-border);
 }
 
-/* text-xs text-dim font-mono */
+/* text-xs text-muted font-mono */
 .token__card-note-text {
   font-size: 0.75rem;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   font-family: var(--font-mono);
   margin: 0;
 }

@@ -157,7 +157,7 @@ export function registerRegimeView(Alpine) {
       return v.toFixed(2);
     },
     fmtSigned(v) { return v == null ? "—" : Math.round(v * 100).toString(); },
-    signedColor(v) { return v == null ? PALETTE.textDim : v >= 0.5 ? PALETTE.accent : PALETTE.warn; },
+    signedColor(v) { return v == null ? PALETTE.textMuted : v >= 0.5 ? PALETTE.accent : PALETTE.warn; },
 
     // Inline-SVG sparkline (percentiles in [0,1]); stroke cyan when the last
     // point is risk-on (>=0.5), amber otherwise. Mid-line reference at 0.5.
@@ -199,7 +199,7 @@ export function registerRegimeView(Alpine) {
     fwdCell(idx, col) { return this.latest?.correlations?.forward?.[idx]?.[col]; },
     conCell(idx, col) { return this.latest?.correlations?.concurrent?.[idx]?.[col]; },
     rhoText(cell) { if (!cell || cell.rho == null) return "—"; return (cell.rho >= 0 ? "+" : "") + cell.rho.toFixed(2); },
-    rhoColor(cell) { if (!cell || cell.rho == null) return PALETTE.textDim; const r = cell.rho; if (Math.abs(r) < 0.15) return PALETTE.textMuted; return r > 0 ? PALETTE.accent : PALETTE.warn; },
+    rhoColor(cell) { if (!cell || cell.rho == null) return PALETTE.textMuted; const r = cell.rho; if (Math.abs(r) < 0.15) return PALETTE.textMuted; return r > 0 ? PALETTE.accent : PALETTE.warn; },
     rhoTitle(cell) { return cell && cell.n != null ? "n = " + cell.n + " paired observations" : ""; },
     corrSampleMeta() {
       const c = this.latest?.correlations;
@@ -218,7 +218,7 @@ export function registerRegimeView(Alpine) {
     fmtNum2(v) { return v == null ? "—" : (+v).toFixed(2); },
     fmtPctSigned(v) { return v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%"; },
     fmtPctUnsigned(v) { return v == null ? "—" : (v * 100).toFixed(1) + "%"; },
-    ddColor(v) { return v == null ? PALETTE.textDim : v < -0.5 ? PALETTE.warn : PALETTE.textMuted; },
+    ddColor(v) { return v == null ? PALETTE.textMuted : v < -0.5 ? PALETTE.warn : PALETTE.textMuted; },
     tradesText(row) { return row.baseline ? "—" : (row.s.transitions ?? "—"); },
     describeWeights(w) { return Object.keys(ASSET_COLOR).filter((a) => w[a]).map((a) => Math.round(w[a] * 100) + "% " + ASSET_LABEL[a]).join(" / "); },
     // Allocation pie glyph (inline SVG) for a per-regime weight map.
@@ -312,7 +312,7 @@ export function registerRegimeView(Alpine) {
           scales: {
             x: monoAxis({ ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } }),
             y: { min: 0, max: 1, ...monoAxis({ ticks: { stepSize: 0.25 } }) },
-            yPrice: { type: "logarithmic", display: !!(showSpx || showEth), position: "right", ticks: { color: PALETTE.textDim, font: MONO_FONT }, grid: { drawOnChartArea: false } },
+            yPrice: { type: "logarithmic", display: !!(showSpx || showEth), position: "right", ticks: { color: PALETTE.textMuted, font: MONO_FONT }, grid: { drawOnChartArea: false } },
           },
         },
         plugins: [regimeBandsPlugin],

@@ -28,7 +28,7 @@ async function fetchJson(url) {
 }
 
 const LEGEND = { labels: { color: PALETTE.textMuted } };
-const X_DATE_AXIS = { grid: { display: false }, ticks: { color: PALETTE.textDim, maxTicksLimit: 8 } };
+const X_DATE_AXIS = { grid: { display: false }, ticks: { color: PALETTE.textMuted, maxTicksLimit: 8 } };
 const XMULT_AXIS = monoAxis({ ticks: { callback: (v) => `${Number(v).toFixed(1)}x` } });
 
 // treasury-allocation and regime-conservative-aggressive both back their
@@ -151,7 +151,7 @@ export function registerBlogCharts(Alpine) {
         },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
-          scales: { y: monoAxis({ ticks: { callback: (v) => Number(v).toFixed(2) } }), x: { grid: { display: false }, ticks: { color: PALETTE.textDim } } },
+          scales: { y: monoAxis({ ticks: { callback: (v) => Number(v).toFixed(2) } }), x: { grid: { display: false }, ticks: { color: PALETTE.textMuted } } },
           plugins: { legend: LEGEND },
         },
       });

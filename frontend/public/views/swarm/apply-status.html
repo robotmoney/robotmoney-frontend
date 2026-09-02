@@ -282,9 +282,11 @@
        stamps align digit for digit. */
     .ap-status .ap-step__stamp { display: flex; flex-direction: column; align-items: flex-end; gap: .12rem; }
     .ap-status .ap-step__date { font-size: .8rem; letter-spacing: .06em; text-transform: none;
-      color: var(--color-text-dim); }
-    /* --color-text-dim measured 2.57:1 on the page ground, roughly half the AA
-       minimum, on the line this design calls the discriminating one. */
+      color: var(--color-text-muted); }
+    /* The stamp reached a rung below this one once. It measured 2.57:1 on the
+       page ground, roughly half the AA minimum, on the line this design calls
+       the discriminating one. That rung is gone from the ramp, so the date
+       above and the time below both read at the label rung. */
     .ap-status .ap-step__time { font-size: .72rem; letter-spacing: .04em; text-transform: none;
       color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 

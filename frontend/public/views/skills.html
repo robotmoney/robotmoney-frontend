@@ -519,13 +519,13 @@
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 .sk__install-prompt {
   font-family: var(--font-mono);
   font-size: 0.85rem;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   flex-shrink: 0;
 }
 
@@ -556,17 +556,20 @@
   height: 1.9rem;
   background: none;
   border: 1px solid var(--color-border);
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   cursor: pointer;
   transition: color 0.2s, border-color 0.2s;
 }
-.sk__install-copy:hover { color: var(--color-text); border-color: var(--color-text-dim); }
+/* The hover frame is a hairline, not type, so it takes a border token rather
+   than a text colour: the retired dim rung used to sit a step above the
+   resting border, and --color-border-light is that step. */
+.sk__install-copy:hover { color: var(--color-text); border-color: var(--color-border-light); }
 .sk__install-copy.is-copied { color: var(--color-accent); border-color: var(--color-accent); }
 
 .sk__install-note {
   font-size: 0.8rem;
   line-height: 1.55;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin: 0;
   padding: 0 1rem 1rem;
 }
@@ -672,7 +675,7 @@
   font-family: var(--font-mono);
   font-size: 0.65rem;
   letter-spacing: 0.3em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 .sk-step__title {
@@ -744,7 +747,7 @@
   font-weight: 400;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   padding: 0.85rem 1rem;
   border-bottom: 1px solid var(--color-border);
   vertical-align: bottom;
@@ -782,13 +785,13 @@
   display: block;
   font-family: var(--font-mono);
   font-size: 0.65rem;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin-top: 0.35rem;
 }
 
 .sk__table-note {
   font-size: 0.8rem;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin: 0 0 0.5rem;
 }
 
@@ -809,7 +812,7 @@
 
 .sk-addr__ext {
   margin-left: 0.4rem;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* Mechanics */
@@ -864,7 +867,7 @@
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   text-decoration: none;
   transition: color 0.2s;
 }

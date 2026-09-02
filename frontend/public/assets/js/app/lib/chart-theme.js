@@ -4,6 +4,11 @@
 //
 // The `regimeView` dashboard is the reference look; every value here equals the
 // exact hex it already renders, so this is a pure consolidation — not a restyle.
+//
+// RM-102 is the single exception to that. It lifted the night-register text ramp
+// and retired its bottom rung, so `text` and `textMuted` below now carry the new
+// tokens.css values and `textDim` is gone. Chart TYPE moved with the ramp; the
+// SERIES and CATEGORICAL hexes below did not, because they encode data.
 
 // ── Design tokens (verbatim from tokens.css) ────────────────────────────────
 export const PALETTE = {
@@ -13,9 +18,8 @@ export const PALETTE = {
   surfaceLight: "#181d28",
   border: "#222a38",
   borderLight: "#2e3a4e",
-  text: "#e2e4ec",
-  textMuted: "#7e889e",
-  textDim: "#4a5268",
+  text: "#f2f4f9",
+  textMuted: "#8f9ab0",
   accent: "#00e5ff",
   accentDim: "#00b8d4",
   warm: "#e8a640",
@@ -28,6 +32,11 @@ export const PALETTE = {
 // slate — so charts stay on-covenant while series remain distinguishable. The
 // old Tailwind rainbow (blue #4488ff, purple #8b5cf6/#a374e0, red #ff6b6b,
 // amber #f59e0b, #ffcf80) is retired.
+//
+// `slate` is #7e889e, which was also the --color-text-muted hex until RM-102
+// lifted that rung to #8f9ab0. Slate did not follow and must not: it names a
+// bucket, an overlay and the hodl baselines, and a series keeps the one hex it
+// is recognised by wherever it is drawn.
 export const SERIES = {
   teal: "#5fb3a1", // on-chain bucket / SP500 price overlay
   slate: "#7e889e", // equity-factor bucket / ETH overlay / hodl baselines (neutral secondary)
@@ -73,7 +82,7 @@ export function rgba(hex, alpha) {
 // to merge extra tick/grid options (e.g. stepSize, callback, display).
 export function monoAxis({ ticks = {}, grid = {} } = {}) {
   return {
-    ticks: { color: PALETTE.textDim, font: MONO_FONT, ...ticks },
+    ticks: { color: PALETTE.textMuted, font: MONO_FONT, ...ticks },
     grid: { color: GRID_COLOR, ...grid },
   };
 }

@@ -27,8 +27,10 @@ import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 // top-N, plus any NAV the position list does not account for. It is a leftover
 // rather than an asset, so it takes neither an assetDot hue nor a CATEGORICAL
 // slot — dim slate reads as "everything else" without competing with a real
-// holding for attention. (--color-text-dim, kept literal: this goes into an SVG
-// fill where a var() indirection buys nothing.)
+// holding for attention. (Kept literal: it goes into an SVG fill where a var()
+// indirection buys nothing, and the hex stays where it is now that RM-102 has
+// retired the --color-text-dim rung it was borrowed from. A band fill encodes
+// data, not type, so it does not move when the text ramp does.)
 const OTHER_TOKEN = "other";
 const OTHER_COLOR = "#4a5268";
 
@@ -1369,10 +1371,10 @@ export function registerStaticViews(Alpine) {
       // show. 0 and 100 need no label: the stack fills the frame by construction.
       const mid = `<line x1="${padL}" y1="${y(0.5).toFixed(1)}" x2="${W}" y2="${y(0.5).toFixed(1)}"
           stroke="rgba(255,255,255,0.32)" stroke-width="1" stroke-dasharray="3 4"/>
-        <text x="0" y="${(y(0.5) + 3).toFixed(1)}" fill="var(--color-text-dim)" font-size="8.5" font-family="ui-monospace,monospace">50%</text>`;
+        <text x="0" y="${(y(0.5) + 3).toFixed(1)}" fill="var(--color-text-muted)" font-size="8.5" font-family="ui-monospace,monospace">50%</text>`;
       const axis = `<line x1="${padL}" y1="${padT + plotH}" x2="${W}" y2="${padT + plotH}" stroke="var(--color-border)" stroke-width="1"/>`;
-      const ends = `<text x="${padL}" y="${H - 3}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[0].date || "")}</text>
-        <text x="${W}" y="${H - 3}" text-anchor="end" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[rows.length - 1].date || "")}</text>`;
+      const ends = `<text x="${padL}" y="${H - 3}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[0].date || "")}</text>
+        <text x="${W}" y="${H - 3}" text-anchor="end" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[rows.length - 1].date || "")}</text>`;
       // The legend is HTML beside the figure, so the accessible name here spells
       // out what the bands are for a reader who gets only the image.
       const named = series.map((b) => `${b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
@@ -2038,7 +2040,7 @@ export function registerStaticViews(Alpine) {
         // members are arguing about was invisible in the figure.
         const fill = this.regimeColor(r.regime);
         return `<g>
-          <text x="0" y="${ty}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace" style="text-transform:uppercase;letter-spacing:0.05em">${this.escapeHtml(r.label)}</text>
+          <text x="0" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace" style="text-transform:uppercase;letter-spacing:0.05em">${this.escapeHtml(r.label)}</text>
           <rect x="${labelW}" y="${y + 4}" width="${barW}" height="${rowH - 8}" fill="transparent" stroke="var(--color-border)"/>
           <rect x="${labelW}" y="${y + 4}" width="${(pct * barW).toFixed(1)}" height="${rowH - 8}" fill="${fill}" fill-opacity="0.75"/>
           <text x="${labelW + barW + 4}" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.ordinal(r.pct)}</text>
@@ -2234,7 +2236,12 @@ export function registerStaticViews(Alpine) {
       const hasActual = buckets.some((b) => b.actual != null);
       const series = [
         hasTarget ? { key: "target", label: "target", fill: "transparent", stroke: "var(--color-text-muted)", txt: "var(--color-text-muted)" } : null,
-        hasActual ? { key: "actual", label: "actual", fill: "var(--color-text-dim)", opacity: "0.9", txt: "var(--color-text-muted)" } : null,
+        // "actual" is a filled bar rather than type, so it takes the muted tone
+        // knocked back rather than the tone itself: at full strength the slab
+        // would out-shout the recommended bar it exists to be compared against.
+        // The opacity is set so the bar composites to roughly the weight it had
+        // on the retired --color-text-dim rung.
+        hasActual ? { key: "actual", label: "actual", fill: "var(--color-text-muted)", opacity: "0.45", txt: "var(--color-text-muted)" } : null,
         { key: "recommended", label: "recommended", fill: "var(--color-accent)", txt: "var(--color-accent)" },
       ].filter(Boolean);
       // The series are NOT named per row. Repeating "target / actual /
@@ -2261,9 +2268,9 @@ export function registerStaticViews(Alpine) {
       const H = axisH + buckets.length * (groupH + gap) + 2;
       const x = (v) => barX + this.clampPct(v * 100) / 100 * barW;
       const mono = 'font-family="ui-monospace,monospace"';
-      const heads = `<text x="0" y="${headY}" fill="var(--color-text-dim)" font-size="8.5" ${mono}
+      const heads = `<text x="0" y="${headY}" fill="var(--color-text-muted)" font-size="8.5" ${mono}
           style="text-transform:uppercase;letter-spacing:0.06em">Bucket</text>
-        <text x="${W}" y="${headY}" text-anchor="end" fill="var(--color-text-dim)" font-size="8.5" ${mono}
+        <text x="${W}" y="${headY}" text-anchor="end" fill="var(--color-text-muted)" font-size="8.5" ${mono}
           style="text-transform:uppercase;letter-spacing:0.06em">% of NAV</text>`;
       const rule = `<line x1="0" y1="${axisH - 4}" x2="${W}" y2="${axisH - 4}" stroke="var(--color-border)"/>`;
       const body = buckets.map((b, i) => {
@@ -2277,7 +2284,7 @@ export function registerStaticViews(Alpine) {
           // and a number, which reads as missing data rather than as zero.
           const track = `<rect x="${barX}" y="${barY}" width="${barW}" height="${subH}" fill="var(--color-surface)"/>`;
           if (v == null) {
-            return `${track}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="var(--color-text-dim)" font-size="9" ${mono}>—</text>`;
+            return `${track}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="var(--color-text-muted)" font-size="9" ${mono}>—</text>`;
           }
           const w = Math.max(0, x(v) - barX);
           const rect = s.fill === "transparent"
@@ -2328,7 +2335,7 @@ export function registerStaticViews(Alpine) {
       const y = (v) => H - pad - Number(v || 0) * (H - pad * 2);
       const pts = h.map((d, i) => `${x(i).toFixed(1)},${y(d.composite).toFixed(1)}`).join(" ");
       const band = (v, label) => `<line x1="${gutter}" x2="${W - pad}" y1="${y(v)}" y2="${y(v)}" stroke="var(--color-border)" stroke-dasharray="2 3"/>
-        <text x="0" y="${(y(v) + 3).toFixed(1)}" fill="var(--color-text-dim)" font-size="8"
+        <text x="0" y="${(y(v) + 3).toFixed(1)}" fill="var(--color-text-muted)" font-size="8"
           font-family="ui-monospace,monospace">${label}</text>`;
       const last = h[h.length - 1];
       // The end dot takes the regime's own colour, so the line lands on the same

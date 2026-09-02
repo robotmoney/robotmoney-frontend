@@ -1205,7 +1205,9 @@
   border-left: 1px solid var(--color-border);
   padding: 0.25rem 0 0.25rem 1.5rem;
 }
-.stub__case--historic .stub__case-date { color: var(--color-text-dim); }
+/* Recent dates carry a beacon dot; historic ones are plain. Both sit at
+   --color-text-muted, so the historic case needs no date colour of its own. */
+
 .stub__case-head {
   display: flex;
   flex-wrap: wrap;
@@ -1294,6 +1296,10 @@
   color: var(--color-text-muted);
   overflow-wrap: anywhere;
 }
+/* The square bullet and the sub-list dash below are list markers, not rules: they
+   stand beside copy a reader has to parse, so they follow the list text at
+   --color-text-muted rather than dropping to a border token, which at this size
+   would leave them all but invisible. */
 .stub__list > li::before {
   content: '';
   position: absolute;
@@ -1301,7 +1307,7 @@
   top: 0.6em;
   width: 5px;
   height: 5px;
-  background: var(--color-text-dim);
+  background: var(--color-text-muted);
 }
 .stub__list > li strong { color: var(--color-text); font-weight: 600; }
 .stub__list--sub {
@@ -1312,7 +1318,7 @@
   width: 6px;
   height: 1px;
   top: 0.75em;
-  background: var(--color-text-dim);
+  background: var(--color-text-muted);
 }
 .stub__list--spaced > li { font-size: 0.9rem; }
 
@@ -1334,7 +1340,7 @@
 .stub__divider-text {
   text-align: center;
   font-size: 0.8125rem;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin: 0;
 }
 
@@ -1366,7 +1372,7 @@
 .stub__meta-text {
   font-size: 0.75rem;
   line-height: 1.7;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   font-family: var(--font-mono);
   margin: 0;
 }

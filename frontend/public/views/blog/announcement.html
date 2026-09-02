@@ -147,7 +147,7 @@
   font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin: 0 0 0.75rem;
 }
 .blog-post__links-row {
@@ -159,7 +159,12 @@
 }
 .blog-post__links-row a { color: var(--color-accent); text-decoration: none; }
 .blog-post__links-row a:hover { text-decoration: underline; }
-.blog-post__links-dot { color: var(--color-text-dim); }
+/* The interpuncts between the three links are separators rather than anything
+   a reader reads, so they take decoration rather than a rung of the text ramp.
+   Half-strength --color-text-muted lands almost exactly where the retired dim
+   rung sat, which keeps the row chunked into three links without borrowing a
+   colour that is meant for content. */
+.blog-post__links-dot { color: var(--color-text-muted); opacity: 0.5; }
 .blog-post__back {
   margin-top: 4rem;
   padding-top: 3rem;
