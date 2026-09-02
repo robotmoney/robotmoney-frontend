@@ -5,6 +5,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0040_swarm_judgements_append_only.sql",
   "0041_swarm_judgement_soak_record.sql",
   "0042_swarm_consensus_receipts.sql",
+  "0043_swarm_member_judges.sql",
 ] as const;
 export const PRIOR_RELEASE_MIGRATIONS = [
   "0032_append_only_history.sql",
