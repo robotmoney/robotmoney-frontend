@@ -433,7 +433,7 @@ tests or the contract).
 **Data fidelity caveat.** Because values are mock/point-in-time, preview is for
 **layout, copy, components, and navigation** — not for trusting numbers or charts.
 For realistic, evolving data (real analytics + simulations) run the full stack
-with `bun run smoke` (see the [Demo Specification](#smoke-specification)).
+with `bun run smoke` (see the [Smoke Specification](#smoke-specification)).
 
 ---
 
@@ -632,7 +632,7 @@ into six independently testable stages — **access → extract → transform �
   seeded data). `hermetic-source.ts` is the deterministic, offline
   **`hermeticDataSource`** (seeded walks from `provider.ts`'s `seededProvider`) used by
   the CI backend unit tests and available as an explicit local-debug override — never
-  a smoke default (the smoke default is `live`; see §7a of the Demo Specification).
+  a smoke default (the smoke default is `live`; see §7a of the Smoke Specification).
   **`ANALYTICS_SOURCE`**, resolved by
   **`resolveAnalyticsSource()`** in `backend/src/analytics/index.ts`, is the SINGLE
   authoritative selector: unset/`live` → `liveDataSource`, `hermetic` →
@@ -2800,7 +2800,7 @@ interface AllocationFramework {
 
 ---
 
-## Demo Specification
+## Smoke Specification
 
 What `bun run smoke` must smokenstrate to exercise the full Investment Swarm lifecycle —
 a single command that provisions everything, runs the session lifecycle end-to-end, and
@@ -3278,7 +3278,7 @@ RM never holds the private key at any point.
   `docker-compose.smoke.yml` mirrors its defaults so the two layers can never
   disagree (asserted by `scripts/tests/integration/smoke-compose-config.test.ts`).
 
-### 7b. Demo readiness gate
+### 7b. Smoke readiness gate
 
 The **smoke readiness gate** is the LIVE boot-and-check step block in the required
 `e2e` workflow (`.github/workflows/e2e.yml`, step "Full-stack smoke (smoke
@@ -3378,7 +3378,7 @@ no-history indicator is excluded + logged (never synthetic).
   --project`, and `smoke:clean` in that role **exits non-zero** on any surviving resource.
   A separate always() step reaps `robotmoney.env=ci` leftovers older than 6h from prior
   runs (`bun run smoke:reap`). Full rationale — and the incident that produced it, e2e run
-  30406428674 — under §"Demo Specification" (c).
+  30406428674 — under §"Smoke Specification" (c).
 - A missing Docker dependency (Postgres image, build failure) must fail the run
   loudly, never silently skip.
 
@@ -3403,7 +3403,7 @@ The smoke should smokenstrate at least two sessions (or the concept of rotation)
 - The brief for session N+1 references the outcome of session N.
 - The session list view (`list_sessions`) shows both.
 
-## 10. Demo output
+## 10. Smoke output
 
 ### 10.1 TUI (default, interactive terminal)
 

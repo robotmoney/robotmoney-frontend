@@ -267,7 +267,7 @@ important check is that the **fields** are correct, not the numbers.
 
 **Fidelity caveat.** Preview is for layout/copy/components/navigation; for
 realistic, evolving data run `bun run smoke` (see
-[architecture.md § Demo Specification](architecture.md#smoke-specification)).
+[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
 See [architecture.md § Preview mode](architecture.md#preview-mode-goldens-backed-no-backend)
 for the full design (revised by D19: the replay engine is now the client-side
 wrapper, not a server).
@@ -562,7 +562,7 @@ Cloudflare's, not ours; we own none of that subdomain. D13's properties
 **Fidelity caveat.** Unchanged from D14: preview is for layout/copy/components
 /navigation; values are mock/point-in-time. Run `bun run smoke` for realistic
 data (see
-[architecture.md § Demo Specification](architecture.md#smoke-specification)).
+[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
 
 ---
 
@@ -621,7 +621,7 @@ same PR.
 **Fidelity caveat.** Unchanged from D14/D19: preview is for
 layout/copy/components/navigation; values are mock/point-in-time. Run
 `bun run smoke` for realistic data (see
-[architecture.md § Demo Specification](architecture.md#smoke-specification)).
+[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
 
 ---
 

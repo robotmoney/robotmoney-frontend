@@ -132,7 +132,7 @@ Each was first verified at `ccf983f` and re-verified on 2026-08-17 against
 between the two — and each invalidates something an operator would otherwise
 assume. Re-check them against the tip you pin in §1 before you rely on them.
 
-1. **`bun smoke` boots a DEMO-shaped stack, not a production one.** It always
+1. **`bun smoke` boots a smoke-shaped stack, not a production one.** It always
    appends `docker-compose.smoke.yml` (`scripts/lib/smoke-main.ts:284-288`, which
    never consults smoke mode), which sets `RM_ALLOW_INSECURE: "1"`
    (`docker-compose.smoke.yml:35`) and pins `SWARM_SCHEDULES_ENABLED: "0"`
