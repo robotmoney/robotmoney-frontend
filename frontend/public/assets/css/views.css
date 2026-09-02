@@ -552,7 +552,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__apply-copy { font-size: 0.875rem; color: var(--color-text-soft); max-width: 70ch; display: block; }
 .sv__apply-seats { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.5rem; display: block; }
 
-/* Portfolios: three books of holdings, compact and after the members.
+/* Portfolios: compact and after the members.
    The tracks live on the container and every row takes them by subgrid, so the
    three rows share one axis instead of each inventing its own. Same mechanism
    as .sv__sleeves below, which is the proof this page already knows how to do
@@ -783,8 +783,17 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__session-card { position: relative; display: block; border: 1px solid var(--color-border); padding: 1.25rem; color: inherit; text-decoration: none; transition: border-color 0.16s ease, background 0.16s ease; }
 .sv__session-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .sv__session-card .sv__session-copy { margin-top: 0.75rem; max-width: 68ch; }
-.sv__session-title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.08rem; color: var(--color-text); }
+.sv__session-title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.08rem; color: var(--color-text); min-width: 0; }
 .sv__session-meta { display: flex; flex-wrap: wrap; gap: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
+/* Full-width spread under the title, then consensus left and recommendation
+   right. The card used to stack a 26rem bar over a coloured "lean" word over
+   a 68ch rec, which left the right half of a 1232px card empty. */
+.sv__session-body { display: grid; grid-template-columns: minmax(14rem, 0.85fr) minmax(0, 1.4fr);
+  gap: 1rem 2rem; align-items: start; margin-top: 0.95rem; }
+.sv__session-consensus { min-width: 0; display: grid; gap: 0.5rem; align-content: start; }
+.sv__session-payload { min-width: 0; }
+.sv__session-kicker { margin: 0; font-family: var(--font-mono); font-size: 0.62rem;
+  text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
 .sv__stance-dotline { display: inline-flex; align-items: center; gap: 0.32rem; font-family: var(--font-mono); font-size: 0.66rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
 /* .sv__dis-stance was rendering its dot at 0x0: the stance spread added to the
    Disagreements panel reused the badge markup but not the badge class, so it
@@ -803,33 +812,27 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    row of dots wider than the card. A bar carries any N at one width, and it
    answers "what did the swarm think" rather than making the reader add three
    numbers to find out. Segment order is fixed bullish -> bearish, so the same
-   shape always means the same lean. 1px gaps, 4px tall: a rule, not a block —
-   the pill stays what a single member's stance wears. */
-.sv__spread { display: flex; gap: 1px; height: 4px; width: min(100%, 26rem); margin: 1rem 0 0.6rem; }
-.sv__spread i { display: block; min-width: 2px; }
-/* NOT .sv__verdict. That class already belonged to session.html's verdict
-   BLOCK (line 165) — the big call, its detail line, the bar and the meta grid.
-   Declaring it again here made the later block win, so the session page's
-   verdict container silently became a flex row in 0.72rem mono. One name, one
-   component: this is the card's one-line reading, and it says so. */
-.sv__card-verdict { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; margin: 0;
+   shape always means the same lean. 1px gaps, 2px tall at half opacity: a
+   hairline, not a block. The pill below is what a single stance wears. */
+.sv__spread { display: flex; gap: 1px; height: 2px; width: 100%; margin: 0.85rem 0 0; }
+.sv__spread i { display: block; min-width: 2px; opacity: 0.45; }
+.sv__card-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.85rem; margin: 0;
   font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
-/* The lean takes its stance's colour because it IS the stance — the one word
-   the bar above it resolves to. Nothing else on the card spends a hue. */
-.sv__lean { font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; }
+.sv__card-verdict .sv__stance-badge { font-size: 0.64rem; flex-shrink: 0; }
 
-.sv__rec { margin: 1rem 0 0; display: grid; gap: 0.3rem; }
+.sv__rec { margin: 0; display: grid; gap: 0.5rem; }
+.sv__rec > div { display: grid; gap: 0.3rem; }
 .sv__rec dt { font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
   letter-spacing: 0.16em; color: var(--color-text-muted); }
-.sv__rec dd { margin: 0; color: var(--color-text-soft); font-size: 0.875rem; line-height: 1.55; max-width: 68ch; }
+.sv__rec dd { margin: 0; color: var(--color-text-soft); font-size: 0.875rem; line-height: 1.55; }
 .sv__rec dd b { color: var(--color-text); font-weight: 500; text-transform: uppercase;
   font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; }
 .sv__rec-n { font-variant-numeric: tabular-nums; }
 .sv__rec-more { color: var(--color-text-muted); font-size: 0.8rem; }
 /* Its own class, not a .sv__rec modifier: a selector that matches both the
    recommendation and the notice that there isn't one cannot be asserted on. */
-.sv__rec-empty { margin: 1rem 0 0; color: var(--color-text-muted); font-size: 0.8rem; }
+.sv__rec-empty { margin: 0; color: var(--color-text-muted); font-size: 0.8rem; }
 
 .sv__session-foot { display: flex; align-items: center; justify-content: space-between;
   gap: 1rem; margin-top: 1rem; }
@@ -848,24 +851,23 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 @media (prefers-reduced-motion: reduce) { .sv__takes-caret { transition: none; } }
 
 .sv__takes-panel { margin-top: 0.9rem; border-top: 1px solid var(--color-border); }
-.sv__take-row { display: grid; grid-template-columns: minmax(6rem, 10rem) max-content 1fr;
-  gap: 0.4rem 0.75rem; align-items: center; padding: 0.85rem 0;
-  border-bottom: 1px solid var(--color-border); }
-/* A grid item fills its track unless told otherwise, and the pill stretched
-   the width of the row — a stance badge as wide as a paragraph. */
-.sv__take-row .sv__stance-badge { justify-self: start; }
+.sv__take-row { padding: 0.85rem 0; border-bottom: 1px solid var(--color-border); }
 .sv__take-row:last-of-type { border-bottom: none; }
-.sv__take-who { color: var(--color-text); font-weight: 500; font-size: 0.9rem; }
-.sv__take-conf { font-family: var(--font-mono); font-size: 0.72rem;
-  font-variant-numeric: tabular-nums; color: var(--color-text-muted); margin-right: auto; }
-.sv__take-line { grid-column: 1 / -1; margin: 0; font-size: 0.85rem; line-height: 1.6;
+.sv__take-head { display: flex; align-items: baseline; gap: 0.7rem 1rem; flex-wrap: wrap; min-width: 0; }
+.sv__take-who { color: var(--color-text); font-weight: 500; font-size: 0.95rem; text-decoration: none; }
+.sv__take-who:hover, .sv__take-who:focus-visible {
+  text-decoration: underline; text-decoration-color: var(--color-accent);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
+/* Same figure as .mp-take on the member page: the word, then a mono number.
+   Hue stays on the pill. A bare "72%" after a gap used to look like a third
+   unexplained column. */
+.mp-conf { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.04em;
+  color: var(--color-text-muted); }
+.mp-conf b { color: var(--color-text-soft); font-weight: 500; font-variant-numeric: tabular-nums; }
+.sv__take-line { margin: 0.35rem 0 0; font-size: 0.85rem; line-height: 1.6;
   color: var(--color-text-muted); max-width: 72ch; }
 .sv__take-absent { margin: 0.85rem 0 0; font-family: var(--font-mono); font-size: 0.68rem;
   text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); }
-@media (max-width: 560px) {
-  .sv__take-row { grid-template-columns: 1fr auto; }
-  .sv__take-conf { margin-right: 0; }
-}
 .sv__profile-head { display: flex; align-items: flex-start; gap: 1.25rem; flex-wrap: wrap; margin: 1.5rem 0 2.5rem; }
 .sv__profile-main { flex: 1; min-width: 16rem; }
 .sv__detail-head { margin: 1.5rem 0 2.5rem; }
@@ -1049,6 +1051,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   .sv__sleeve-track { display: none; }
   .sv__body--narrow { padding-top: 6.5rem; }
   .sv__session-top, .sv__take-head { align-items: flex-start; }
+  .sv__session-body { grid-template-columns: 1fr; gap: 1.15rem; }
   .sv__action-row { grid-template-columns: 1fr; }
   /* Member and stance share the top line, view below across both — three 6.5rem
      columns do not survive a phone, and stacking all three wasted a full line

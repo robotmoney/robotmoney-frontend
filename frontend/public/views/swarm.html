@@ -203,7 +203,7 @@
             </div>
           </template>
           <p class="sv__sleeve-note" x-show="allocationNote()" x-text="allocationNote()"></p>
-          <a class="sv__cov-lnk" x-show="allocationHref()" :href="allocationHref()">See every allocation session &rarr;</a>
+          <a class="sv__cov-lnk" x-show="allocationHref()" :href="allocationHref()">See allocation history &rarr;</a>
         </div>
 
         <div class="sv__sec">
@@ -228,8 +228,7 @@
                   <template x-if="!p.isFramework">
                     <span>
                       <span x-show="walletsLine(p)" x-text="walletsLine(p)"></span>
-                      <span x-show="nftLine(p)"> &middot; <span x-text="nftLine(p)"></span></span>
-                      <span class="sv__unset" x-show="!walletsLine(p) && !nftLine(p)">No addresses</span>
+                      <span class="sv__unset" x-show="!walletsLine(p)">No addresses</span>
                     </span>
                   </template>
                   <template x-if="p.isFramework">
@@ -249,24 +248,22 @@
         <div class="sv__sec">
           <div>
             <h2 class="sv__sec-h">Sessions</h2>
-            <p class="sv__sec-sub">A session publishes once its recommendation is ready. Target-allocation sessions are not listed here: they stay on their own subject page.</p>
+            <p class="sv__sec-sub">A session publishes once its recommendation is ready.</p>
           </div>
           <span class="sv__session-count" x-text="`${publishedSessions().length} listed`"></span>
         </div>
 
-        <!-- Same filter component and colours as the member profile's track
-             record: one convention for "which portfolio is this", everywhere. -->
-        <div class="mp-filter" x-show="portfolios().length > 1" x-cloak>
+        <div class="mp-filter" x-show="sessionFilters().length" x-cloak>
           <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === null }"
                   @click="subjectFilter = null; shown = 20" :aria-pressed="subjectFilter === null">
             All <span class="mp-chip__n" x-text="publishedSessions().length"></span>
           </button>
-          <template x-for="p in portfolios()" :key="p.id">
-            <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === p.id }"
-                    @click="filterBy(p.id)" :aria-pressed="subjectFilter === p.id"
-                    :title="subjectFilter === p.id ? `Clear the ${p.name} filter` : `Show only ${p.name}`">
-              <span x-text="p.name"></span> <span class="mp-chip__n" x-text="p.count"></span>
-              <span class="mp-chip__x" x-show="subjectFilter === p.id" aria-hidden="true">×</span>
+          <template x-for="f in sessionFilters()" :key="f.id">
+            <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === f.id }"
+                    @click="filterBy(f.id)" :aria-pressed="subjectFilter === f.id"
+                    :title="subjectFilter === f.id ? `Clear the ${f.name} filter` : `Show only ${f.name}`">
+              <span x-text="f.name"></span> <span class="mp-chip__n" x-text="f.count"></span>
+              <span class="mp-chip__x" x-show="subjectFilter === f.id" aria-hidden="true">×</span>
             </button>
           </template>
         </div>
@@ -283,56 +280,59 @@
             <!-- An article, not a link around everything: the takes open in
                  place, and a button inside an anchor is not markup. -->
             <article class="sv__session-card">
+              <!-- Title is the identity; the date is when this review ran.
+                   "Window closed Nd ago" used to sit opposite, but on a
+                   published card that deadline has already passed, usually
+                   the same day, and the live strip above already says it
+                   while a session is in flight. -->
               <div class="sv__session-top">
-                <div class="sv__session-titleline">
-                  <span class="sv__date" x-text="formatDate(s.date, 'short')"></span>
-                  <a class="sv__session-title" :href="sessionHref(s)" x-text="portfolioName(portfolioIdOf(s))"></a>
-                  <span class="sv__qualifier" x-show="qualifierOf(s)" x-text="qualifierOf(s)"></span>
-                </div>
-                <!-- Was "regime: risk-on" on every card. The regime is a
-                     property of the DAY, identical for every session that
-                     ran on it, so as a per-card fact it distinguished
-                     nothing. It stays on the session page, where the whole
-                     panel that gives it meaning is. -->
-                <span class="sv__session-meta" x-show="closedAgo(s)">
-                  window closed <b class="sv__live-n" x-text="closedAgo(s)" :title="closedAbsolute(s)"></b>
-                </span>
+                <a class="sv__session-title" :href="sessionHref(s)" x-text="sessionSubjectName(s)"></a>
+                <time class="sv__date" :datetime="s.date" x-text="formatDate(s.date, 'short')"></time>
               </div>
 
-              <!-- The spread, then the one-line reading of it. -->
               <div class="sv__spread" role="img" :aria-label="`Stances: ${spreadLabel(s)}`" x-show="stanceSpread(s).length">
                 <template x-for="r in stanceSpread(s)" :key="r.stance">
                   <i :style="`flex:${r.n};background:${stanceColor(r.stance)}`"></i>
                 </template>
               </div>
-              <p class="sv__card-verdict">
-                <b class="sv__lean" :style="leanStyle(s)" x-show="lean(s)" x-text="lean(s)?.label"></b>
-                <span x-text="quorumText(s)"></span>
-                <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
-              </p>
 
-              <!-- What it decided, which is what the reader came for. -->
-              <template x-if="recommendation(s)">
-                <dl class="sv__rec">
-                  <dt>Recommendation</dt>
-                  <template x-if="recommendation(s).kind === 'weights'">
-                    <dd>Target weights <b class="sv__rec-n" x-text="recommendation(s).text"></b></dd>
-                  </template>
-                  <template x-if="recommendation(s).kind === 'text'">
-                    <dd x-text="recommendation(s).text"></dd>
-                  </template>
-                  <template x-if="recommendation(s).kind === 'actions'">
-                    <div>
-                      <template x-for="a in recommendation(s).actions" :key="a.token + a.action">
-                        <dd><b x-text="`${a.action} ${a.token}`"></b><span x-show="a.rationale" x-text="` · ${a.rationale}`"></span></dd>
+              <div class="sv__session-body">
+                <div class="sv__session-consensus">
+                  <p class="sv__session-kicker">Consensus</p>
+                  <div class="sv__card-verdict">
+                    <span class="sv__stance-badge" x-show="lean(s)" :style="leanBadgeStyle(s)">
+                      <i x-show="leanStance(s)" :style="leanDotStyle(s)"></i>
+                      <span x-text="leanLabel(s)"></span>
+                    </span>
+                    <span x-text="quorumText(s)"></span>
+                    <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
+                  </div>
+                </div>
+
+                <div class="sv__session-payload">
+                  <template x-if="recommendation(s)">
+                    <dl class="sv__rec">
+                      <dt>Recommendation</dt>
+                      <template x-if="recommendation(s).kind === 'weights'">
+                        <dd>Target weights <b class="sv__rec-n" x-text="recommendation(s).text"></b></dd>
                       </template>
-                      <dd class="sv__rec-more" x-show="recommendation(s).more"
-                          x-text="`+${recommendation(s).more} more on the session`"></dd>
-                    </div>
+                      <template x-if="recommendation(s).kind === 'text'">
+                        <dd x-text="recommendation(s).text"></dd>
+                      </template>
+                      <template x-if="recommendation(s).kind === 'actions'">
+                        <div>
+                          <template x-for="a in recommendation(s).actions" :key="a.token + a.action">
+                            <dd><b x-text="`${a.action} ${a.token}`"></b><span x-show="a.rationale" x-text="` · ${a.rationale}`"></span></dd>
+                          </template>
+                          <dd class="sv__rec-more" x-show="recommendation(s).more"
+                              x-text="`+${recommendation(s).more} more on the session`"></dd>
+                        </div>
+                      </template>
+                    </dl>
                   </template>
-                </dl>
-              </template>
-              <p class="sv__rec-empty" x-show="!recommendation(s)">No recommendation was published for this session.</p>
+                  <p class="sv__rec-empty" x-show="!recommendation(s)">No recommendation was published for this session.</p>
+                </div>
+              </div>
 
               <div class="sv__session-foot">
                 <button type="button" class="sv__takes-btn" @click="toggleTakes(s)"
@@ -349,12 +349,15 @@
                 <p class="sv__unset" x-show="takesState(s)?.error" x-text="takesState(s)?.error"></p>
                 <template x-for="t in (takesState(s)?.takes || [])" :key="t.id">
                   <div class="sv__take-row">
-                    <a class="sv__take-who" :href="`/swarm/members/${encodeURIComponent(t.memberId)}`" x-text="t.memberName || t.memberId"></a>
-                    <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
-                      <i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="t.stance"></span>
-                    </span>
-                    <span class="sv__take-conf" x-show="Number.isFinite(Number(t.confidence))"
-                          x-text="`${Math.round(Number(t.confidence) * 100)}%`"></span>
+                    <div class="sv__take-head">
+                      <a class="sv__take-who" :href="`/swarm/members/${encodeURIComponent(t.memberId)}`" x-text="t.memberName || t.memberId"></a>
+                      <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
+                        <i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="t.stance"></span>
+                      </span>
+                      <span class="mp-conf" x-show="Number.isFinite(Number(t.confidence))">
+                        confidence <b x-text="fmtPct(t.confidence)"></b>
+                      </span>
+                    </div>
                     <p class="sv__take-line" x-text="takeLine(t)"></p>
                   </div>
                 </template>

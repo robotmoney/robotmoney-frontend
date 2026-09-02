@@ -236,17 +236,15 @@ export function registerSwarmView(Alpine) {
     },
 
     // ── the allocation's own sessions ────────────────────────────────────
-    // The framework subject is deliberately absent from the list below, so its
-    // sessions have to be counted off the unfiltered set (isListedSubject
-    // drops it, and publishedSessions filters through that). The panel's
-    // closing link is the only route to them from this page.
+    // The framework subject is not a portfolio row, but its sessions are in
+    // the feed. The panel count reads the same published set the list does.
     allocationSubject() {
       return Object.values(this.subjectCache).find((s) => s?.source?.type === "framework") || null;
     },
     allocationSessions() {
       const subj = this.allocationSubject();
       if (!subj?.id) return [];
-      return this.allPublishedSessions().filter((s) => s.subjectId === subj.id);
+      return this.publishedSessions().filter((s) => s.subjectId === subj.id);
     },
     // Omitted rather than zeroed. With no allocation subject, or one that has
     // never published, there is no count to state and nowhere to link: never
@@ -263,32 +261,25 @@ export function registerSwarmView(Alpine) {
       if (!subj?.id || !this.allocationSessions().length) return "";
       return `/swarm/subjects/${encodeURIComponent(subj.id)}`;
     },
-    // Sessions this page lists.
-    //
-    // A `framework` subject that folds into a vault is NOT listed.
-    // robotmoney-allocation and robotmoney-vault are two subjects convening on
-    // the same vault — 54 published sessions and 53 — so the feed showed
-    // "Robot Money Vault" twice, a row apart, with different numbers and only a
-    // small qualifier to say why. The vault is canonical: it is the subject
-    // whose recommendation is meant to become the target allocation, and both
-    // manifests already declare `bucket_weights`.
-    //
-    // Nothing is deleted. The allocation's sessions keep their permalinks and
-    // their subject page; they stop competing with the vault in the index.
-    // This filter is the whole of the behaviour: remove it and the split
-    // returns, including the "reviewed two ways" copy on the vault's row and
-    // the per-session qualifier, both of which are derived from foldedInto().
+    // Sessions this page lists: every published session, including the
+    // allocation subject's. They used to be dropped here and only reachable
+    // from the panel link, which hid half the swarm's work behind a filter
+    // the reader could not see. The chips below separate allocation from
+    // the books; the feed itself does not.
+    publishedSessions() {
+      return this.sessions.filter((s) => s.state === "published");
+    },
+    // A framework subject that folds into a vault is not a fourth BOOK. It
+    // still has its own sessions, listed above; it does not get a row in
+    // Portfolios. Same rule parentFor() uses, applied to the count.
     isListedSubject(id) {
       const meta = this.subjectCache[id];
       if (meta?.source?.type !== "framework") return true;
-      return this.parentFor(id) === id; // stands alone: no vault absorbed it
+      return this.parentFor(id) === id;
     },
-    publishedSessions() {
-      return this.sessions.filter((s) => s.state === "published" && this.isListedSubject(s.subjectId));
-    },
-    // Every published session, including the ones the index does not list.
-    // The archive count is a fact about the swarm, not about this page.
-    allPublishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
+    // Same set as publishedSessions(). Kept so older call sites cannot drift
+    // onto a filtered list by accident.
+    allPublishedSessions() { return this.publishedSessions(); },
 
     // The one session the swarm is working on right now, or null. Newest first,
     // because a subject may convene more than once a day.
@@ -391,7 +382,10 @@ export function registerSwarmView(Alpine) {
       if (!this.foldedInto(this.parentFor(s.subjectId))) return "";
       return meta.source?.type === "framework" ? "target allocation" : "holdings";
     },
-    portfolioName(id) { return this.subjectCache[id]?.name || id; },
+    sessionSubjectName(s) {
+      const meta = this.subjectCache[s?.subjectId];
+      return meta?.name || s?.subjectName || s?.subjectId || "";
+    },
     // Two glyphs, from a fixed switch and never from data, so x-html here can
     // never carry anything a subject supplied. A neutral square said "this is
     // an identity" and nothing else, which is true of every row and therefore
@@ -426,26 +420,20 @@ export function registerSwarmView(Alpine) {
       const noun = n === 1 ? "wallet" : "wallets";
       return chains.length ? `${n} ${noun} on ${chains.join(", ")}` : `${n} ${noun}`;
     },
-    nftLine(p) {
-      const n = p?.nftContracts?.length || 0;
-      if (!n) return "";
-      const chains = this.chainsOf(p.nftContracts);
-      const noun = n === 1 ? "NFT contract" : "NFT contracts";
-      return chains.length ? `${n} ${noun} on ${chains.join(", ")}` : `${n} ${noun}`;
-    },
     blurbOf(p) { return rowBlurb(p); },
-    // Counted rather than written. Stage 5 of this redesign turns three books
-    // into two by making a subject inactive, and a hardcoded "Three" is the
-    // one line that would go quietly wrong when it does.
+    // Counted rather than written. Stage 5 of this redesign turns three
+    // portfolios into two by making a subject inactive, and a hardcoded
+    // "Three" is the one line that would go quietly wrong when it does.
     portfolioLede() {
       const n = this.portfolios().length;
       const word = ["No", "One", "Two", "Three", "Four", "Five"][n] ?? String(n);
-      const noun = n === 1 ? "book" : "books";
-      return `${word} ${noun} of holdings. One is reviewed per session, and each review ends in a verdict, not an allocation.`;
+      const noun = n === 1 ? "portfolio" : "portfolios";
+      return `${word} ${noun}. One is reviewed per session, and each review ends in a verdict or a recommendation.`;
     },
     portfolios() {
       const map = new Map();
       for (const s of this.publishedSessions()) {
+        if (!this.isListedSubject(s.subjectId)) continue;
         const id = this.portfolioIdOf(s);
         if (!id) continue;
         const meta = this.subjectCache[id] || {};
@@ -460,7 +448,6 @@ export function registerSwarmView(Alpine) {
           // holdings, which is the one distinction the row never drew.
           isFramework: meta.source?.type === "framework",
           wallets: Array.isArray(meta.wallets) ? meta.wallets : [],
-          nftContracts: Array.isArray(meta.nftContracts) ? meta.nftContracts : [],
           count: 0,
           latest: null,
         };
@@ -497,19 +484,35 @@ export function registerSwarmView(Alpine) {
     // different conventions for the same data.
     subjectFilter: null,
 
-    // A grouped session wears its portfolio's colour, so one symbol is one
-    // colour everywhere rather than the vault showing two.
+    // Filter chips: the allocation subject first, then each portfolio.
+    // Filtering is by the session's own subjectId, so the vault chip is
+    // holdings and the allocation chip is targets. Skip a portfolio whose
+    // id is the allocation's: a framework that did not fold would otherwise
+    // appear twice.
+    sessionFilters() {
+      const alloc = this.allocationSubject();
+      const rows = [];
+      if (alloc?.id) {
+        const count = this.publishedSessions().filter((s) => s.subjectId === alloc.id).length;
+        if (count) rows.push({ id: alloc.id, name: alloc.name, count });
+      }
+      for (const p of this.portfolios()) {
+        if (alloc?.id && p.id === alloc.id) continue;
+        rows.push({ id: p.id, name: p.name, count: p.count });
+      }
+      return rows;
+    },
     filterBy(id) { this.subjectFilter = this.subjectFilter === id ? null : id; this.shown = SESSIONS_SHOWN_STEP; },
     visibleSessions() {
       const rows = this.publishedSessions();
       const filtered = this.subjectFilter
-        ? rows.filter((s) => this.portfolioIdOf(s) === this.subjectFilter)
+        ? rows.filter((s) => s.subjectId === this.subjectFilter)
         : rows;
       return filtered.slice(0, this.shown);
     },
     matchingCount() {
       const rows = this.publishedSessions();
-      return this.subjectFilter ? rows.filter((s) => this.portfolioIdOf(s) === this.subjectFilter).length : rows.length;
+      return this.subjectFilter ? rows.filter((s) => s.subjectId === this.subjectFilter).length : rows.length;
     },
     hasMore() { return this.shown < this.matchingCount(); },
     showMore() { this.shown += SESSIONS_SHOWN_STEP; },
@@ -594,11 +597,17 @@ export function registerSwarmView(Alpine) {
       if (!rows.length) return null;
       const max = Math.max(...rows.map((r) => r.n));
       const top = rows.filter((r) => r.n === max);
-      return top.length > 1 ? { stance: null, label: "split" } : { stance: top[0].stance, label: `${top[0].stance} lean` };
+      return top.length > 1 ? { stance: null, label: "split" } : { stance: top[0].stance, label: top[0].stance };
     },
-    leanStyle(s) {
-      const st = this.lean(s)?.stance;
-      return st ? `color:${stanceColor(st)}` : "";
+    leanStance(s) { return this.lean(s)?.stance || ""; },
+    leanLabel(s) { return this.lean(s)?.label || ""; },
+    leanBadgeStyle(s) {
+      const st = this.leanStance(s);
+      return st ? stanceStyle(st) : "";
+    },
+    leanDotStyle(s) {
+      const st = this.leanStance(s);
+      return st ? `background:${stanceColor(st)}` : "";
     },
     meanConfidenceText(s) {
       const c = s?.swarmRecommendation?.meanConfidence;
@@ -606,6 +615,10 @@ export function registerSwarmView(Alpine) {
     },
     closedAgo(s) { return timeAgo(s?.windowClosesAt, this.now); },
     closedAbsolute(s) { return absoluteUtc(s?.windowClosesAt); },
+    fmtPct(value) {
+      const n = Number(value);
+      return Number.isFinite(n) ? `${Math.round(n * 100)}%` : "";
+    },
 
     // What the session DECIDED. The card printed the synthesis paragraph here,
     // which is the reasoning: five lines of it, identical in shape on every

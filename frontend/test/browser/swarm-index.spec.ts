@@ -201,11 +201,18 @@ test("a published session's card states its recommendation, its lean and who too
 
   // The recommendation, which is the thing a reader came for.
   await expect(card.locator(".sv__rec")).toContainText("rotate USDC", { ignoreCase: true });
+  await expect(card.locator(".sv__session-title")).toHaveText("Woon");
+  await expect(card.locator(".sv__date")).toHaveText("Jul 15, 2026");
+  await expect(card).not.toContainText("window closed");
 
   // The spread as a segment per stance, not a mark per take: the tally this
   // replaced grew with the roster and was unreadable well before 20 seats.
   await expect(card.locator(".sv__spread i")).toHaveCount(3);
-  await expect(card.locator(".sv__lean")).toHaveText("cautious lean");
+  // Same pill the takes use. The card used to paint the lean as coloured
+  // text ("cautious lean"); the word is the stance, so it wears the badge.
+  await expect(card.locator(".sv__card-verdict .sv__stance-badge")).toHaveText("cautious");
+  await expect(card.locator(".sv__session-kicker")).toHaveText("Consensus");
+  await expect(card.locator(".sv__session-body")).toHaveCSS("grid-template-columns", /.+ .+/);
   // .sv__card-verdict, not .sv__verdict: that name already belonged to
   // session.html's verdict block, and sharing it made the later rule repaint
   // the session page's container. One name, one component.
@@ -260,6 +267,7 @@ test("expanding a session card loads that session's takes in place", async ({ pa
   await card.locator(".sv__takes-btn").click();
   await expect(card.locator(".sv__take-row")).toHaveCount(1);
   await expect(card.locator(".sv__take-who")).toHaveText("Athena");
+  await expect(card.locator(".mp-conf")).toHaveText("confidence 55%");
 
   // The excerpt skips the bullet that only restates the stance and confidence
   // the row already prints beside it.
@@ -270,6 +278,74 @@ test("expanding a session card loads that session's takes in place", async ({ pa
 
   await card.locator(".sv__takes-btn").click();
   await expect(card.locator(".sv__take-row")).toHaveCount(0);
+});
+
+
+// Allocation sessions used to be dropped from this list and only reachable
+// from the panel link. They belong here: the chips separate targets from
+// holdings, the feed itself does not.
+test("allocation sessions are listed, and the chips keep them off the vault", async ({ page }) => {
+  const session = (id: string, subjectId: string, subjectName: string) => ({
+    id,
+    date: "2026-08-29",
+    subjectId,
+    subjectName,
+    state: "published",
+    windowClosesAt: "2026-08-29T12:00:00Z",
+    publishedAt: "2026-08-29T12:00:00Z",
+    regimeSummary: null,
+    swarmRecommendation: SESSION_REC,
+    socialDraftId: null,
+    generatedAt: "2026-08-29T11:00:00Z",
+  });
+  await page.route("**/api/swarm/members*", (route) =>
+    route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));
+  await page.route("**/api/swarm/sessions*", (route) =>
+    route.fulfill(json({
+      sessions: [
+        session("sess-alloc", "robotmoney-allocation", "Robot Money Allocation"),
+        session("sess-vault", "robotmoney-vault", "Robot Money Vault"),
+      ],
+      nextCursor: null,
+    })));
+  await page.route("**/api/swarm/subjects/robotmoney-allocation", (route) =>
+    route.fulfill(json({
+      id: "robotmoney-allocation",
+      name: "Robot Money Allocation",
+      operator: "Robot Money",
+      source: { type: "framework" },
+    })));
+  await page.route("**/api/swarm/subjects/robotmoney-vault", (route) =>
+    route.fulfill(json({
+      id: "robotmoney-vault",
+      name: "Robot Money Vault",
+      operator: "Robot Money",
+      source: { type: "vault_tvl" },
+    })));
+
+  await page.goto("/swarm");
+
+  await expect(page.locator(".sv__session-count")).toHaveText("2 listed");
+  await expect(page.locator(".sv__session-title")).toHaveText([
+    "Robot Money Allocation",
+    "Robot Money Vault",
+  ]);
+
+  const chips = page.locator(".mp-filter .mp-chip");
+  await expect(chips).toHaveCount(3);
+  await expect(chips.nth(0)).toContainText("All");
+  await expect(chips.nth(1)).toContainText("Robot Money Allocation");
+  await expect(chips.nth(2)).toContainText("Robot Money Vault");
+
+  // Folded framework sessions are not a fourth portfolio, and they do not
+  // inflate the vault's holdings count.
+  await expect(page.locator(".sv__cov-r")).toHaveCount(1);
+  await expect(page.locator(".sv__cov-r .sv__row-title")).toHaveText("Robot Money Vault");
+  await expect(page.locator(".sv__cov-r .sv__cov-m")).toContainText("1 session");
+
+  await chips.nth(1).click();
+  await expect(page.locator(".sv__session-card")).toHaveCount(1);
+  await expect(page.locator(".sv__session-title")).toHaveText("Robot Money Allocation");
 });
 
 
