@@ -44,7 +44,7 @@ Record the first SHA as `RC_SHA`. Tag and push per the RC cycle.
 
 | Area | Release effect | Operator decision |
 | --- | --- | --- |
-| Swarm consensus judge | Adds optional `judged` state, a mutable DB-backed judge switch, append-only judgement history, and immutable consensus receipts. | Leave judge **off** at cutover; run a bounded shadow soak before considering `enforce`. |
+| Swarm consensus judge | Adds optional `judged` state, a mutable DB-backed judge switch, append-only judgement history, immutable consensus receipts, and the judge role graduation (`0043`) that lets an existing swarm member author judgements. | Leave judge **off** at cutover; run a bounded shadow soak before considering `enforce`. |
 | Swarm scheduling | The production host driver gains the judge step. `SWARM_SCHEDULES_ENABLED=0` is required for a static-port production boot, so the host driver—not backend crons—orders judge between aggregate and publish. | Export `SWARM_SCHEDULES_ENABLED=0` explicitly in production configuration. |
 | Public UI and tooling | `/vault` replaces the depositor-facing allocation page; `/allocation` and `/allocation2` resolve to it. “demo” commands, compose file, state file, and `RM_ENV` are renamed “smoke.” | Update automation and operator aliases before deployment; do not keep invoking removed `demo:*` commands. |
 
@@ -70,19 +70,14 @@ git diff --name-status v0.3.0 "$RC_SHA" -- backend/migrations/
 ```
 
 Maps to `release-runbooks.md` §4.2 (pre-upgrade baseline) and §4.3 (backup/restore
-smoke test). The forward-only runner keys migrations by **filename**, not checksum.
-
-The only edit to pre-existing `0033_wallet_backfill.sql` changes comments and does
-not rerun on production. Verify that fact from the pinned RC; do not delete or edit
-`schema_migrations` to force a rerun.
-
-Expected new files (additive migrations per R1):
+smoke test). Expected new files (additive migrations per R1):
 
 ```text
 0039_swarm_judge.sql
 0040_swarm_judgements_append_only.sql
 0041_swarm_judgement_soak_record.sql
 0042_swarm_consensus_receipts.sql
+0043_swarm_member_judges.sql
 ```
 
 Before any write, use the read-only replica procedure from `rollout-procedure.md`
@@ -91,9 +86,8 @@ Before any write, use the read-only replica procedure from `rollout-procedure.md
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -c "
 SELECT name, applied_at FROM schema_migrations
- WHERE name LIKE ANY (ARRAY['0039_%','0040_%','0041_%','0042_%']) ORDER BY name;
+ WHERE name LIKE ANY (ARRAY['0039_%','0040_%','0041_%','0042_%','0043_%']) ORDER BY name;
 SELECT state, count(*) FROM swarm_sessions GROUP BY state ORDER BY state;
-```
 ```
 
 On a direct v0.3.0 upgrade the migration query returns no rows and `judged`
@@ -150,14 +144,15 @@ bun scripts/upgrades/0.3.0-to-0.4.0/stage-rehearsal.ts "$RM_BACKUP_DIR" --emit-r
 ```
 
 The restore check validates the v0.3.0 starting state. The rehearsal applies
-the four migrations to the restored smoke-twin, boots real services, and
+the five migrations to the restored smoke-twin, boots real services, and
 executes the release postflight before teardown. It proves conformance to the
 release acceptance criteria — §4.4 gate.
 
-1. All four full migration filenames appear once in `schema_migrations` — §4.4
+1. All five full migration filenames appear once in `schema_migrations` — §4.4
    criterion.
 2. `swarm_sessions_state_check` admits `judged`; `swarm_judge_config` contains
-   exactly `id=1, mode='off'`; and the new history tables are empty initially.
+   exactly `id=1, mode='off'` with a positive `min_takes` and `model=NULL`; and
+   the new history tables are empty initially.
 3. Statement- and row-level append-only triggers are `ENABLE ALWAYS` on both
    history tables; the receipt table also has its two UPDATE-refusing triggers.
    `rm_worker` lacks INSERT, UPDATE, and DELETE on the protected/config tables.
@@ -189,7 +184,7 @@ bun scripts/upgrades/0.3.0-to-0.4.0/preflight.ts --emit-receipt
 3. Deploy in provider order: database migration, API and every worker lane,
    then static frontend. Do not publish the new SPA before its API — R4 (deploy
    provider before consumer).
-4. Confirm the migration log names all four new files exactly once — per R1
+4. Confirm the migration log names all five new files exactly once — per R1
    (additive only).
 5. Do **not** enable the judge during cutover. Verify its config after the API
    is serving:

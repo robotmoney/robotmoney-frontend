@@ -13,6 +13,7 @@ describe("v0.3.0 to v0.4.0 upgrade checks", () => {
       "0040_swarm_judgements_append_only.sql",
       "0041_swarm_judgement_soak_record.sql",
       "0042_swarm_consensus_receipts.sql",
+      "0043_swarm_member_judges.sql",
     ]);
     for (const migration of THIS_RELEASE_MIGRATIONS) {
       expect(existsSync(join(root, "backend/migrations", migration))).toBe(true);
