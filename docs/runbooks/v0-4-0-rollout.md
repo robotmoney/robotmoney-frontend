@@ -8,6 +8,15 @@
 **Scope:** This runbook contains release-*specific* steps for the v0.4.0 upgrade.
 The foundational release-runbook policy is in [`release-runbooks.md`](../../technical/release-runbooks.md). This document references that policy for generic gates (§4.1–4.9) and only describes what is special about v0.3.0→v0.4.0.
 
+> **Frontend scope corrected 2026-09-02.** An earlier draft of this document
+> described `/vault` as replacing the depositor-facing allocation page. That was
+> reverted on `main` in #834, which returned `/allocation` and `/performance` to
+> the nav and pinned `/vault` to not-found, and #840 then rewrote the copy on
+> both pages. `frontend/public/assets/js/app/routes.js` on `main` is the
+> authority: `/allocation` and `/performance` have their own views, `/allocation2`
+> maps to the performance view, and `/vault` maps to the not-found view. Re-check
+> that file when the RC is cut rather than trusting this paragraph.
+
 The runbook is organized as:
 - **Generic policy references** — map to `release-runbooks.md` §4 gates; these steps must not be altered without updating the policy first.
 - **0.4.0-specific instructions** — the migration, config, and smoke-details unique to this release.
@@ -46,7 +55,7 @@ Record the first SHA as `RC_SHA`. Tag and push per the RC cycle.
 | --- | --- | --- |
 | Swarm consensus judge | Adds optional `judged` state, a mutable DB-backed judge switch, append-only judgement history, and immutable consensus receipts. | Leave judge **off** at cutover; run a bounded shadow soak before considering `enforce`. |
 | Swarm scheduling | The production host driver gains the judge step. `SWARM_SCHEDULES_ENABLED=0` is required for a static-port production boot, so the host driver—not backend crons—orders judge between aggregate and publish. | Export `SWARM_SCHEDULES_ENABLED=0` explicitly in production configuration. |
-| Public UI and tooling | `/vault` replaces the depositor-facing allocation page; `/allocation` and `/allocation2` resolve to it. “demo” commands, compose file, state file, and `RM_ENV` are renamed “smoke.” | Update automation and operator aliases before deployment; do not keep invoking removed `demo:*` commands. |
+| Public UI and tooling | `/allocation` and `/performance` are the depositor-facing pages and both are in the nav. `/vault` resolves to not-found by an explicit route entry, and `/allocation2` is a legacy redirect to `/performance`. “demo” commands, compose file, state file, and `RM_ENV` are renamed “smoke.” | Update automation and operator aliases before deployment; do not keep invoking removed `demo:*` commands. Do not smoke-test `/vault` as a live page. |
 
 The judge is explanatory only: allocation weights remain derived from the frozen
 take set. A default database starts with `swarm_judge_config.mode = 'off'` and
@@ -161,9 +170,10 @@ release acceptance criteria — §4.4 gate.
 3. Statement- and row-level append-only triggers are `ENABLE ALWAYS` on both
    history tables; the receipt table also has its two UPDATE-refusing triggers.
    `rm_worker` lacks INSERT, UPDATE, and DELETE on the protected/config tables.
-4. `/vault`, `/allocation`, and `/allocation2` render the vault factsheet;
-   `/performance` remains its own route. Exercise changed swarm admin routes
-   only with an authenticated token.
+4. `/allocation` renders the depositor-facing allocation page and `/performance`
+   renders the protocol wallets. `/allocation2` redirects to `/performance`, and
+   `/vault` renders not-found: that is the expected result, not a deploy fault.
+   Exercise changed swarm admin routes only with an authenticated token.
 5. `bun run --cwd backend swarm-judge:replay -- --limit 10` exits zero. A
    historical tie-break report is informational; a vector mismatch or replay
    write is a failure.
@@ -214,9 +224,10 @@ bun scripts/upgrades/0.3.0-to-0.4.0/postflight.ts --emit-receipt=P8.postflight-p
 bun run --cwd backend swarm-judge:replay -- --limit 10
 ```
 
-Verify `/vault`, `/allocation`, `/allocation2`, `/performance`, swarm archive
-and session pages, and the authenticated judge endpoint from the deployed
-origin. Confirm production automation invokes no `demo:*` script — R3 corollary.
+Verify `/allocation`, `/performance`, `/allocation2` (redirects to
+`/performance`), swarm archive and session pages, and the authenticated judge
+endpoint from the deployed origin. `/vault` must return not-found. Confirm
+production automation invokes no `demo:*` script — R3 corollary.
 
 Judge activation is separate and reversible:
 
