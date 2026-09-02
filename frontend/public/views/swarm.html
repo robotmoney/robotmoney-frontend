@@ -148,113 +148,100 @@
           <a class="btn-primary btn-primary--sm" href="/swarm/apply">Apply for a seat</a>
         </div>
 
+        <!-- ALLOCATION FIRST, THEN THE BOOKS.
+             The panel below used to render inside the vault's row, in an
+             x-if="p.isVault" nested in the x-for over portfolios: a policy
+             presented as a property of one line in a list, in the row whose
+             title, link and blurb were all the vault. No rewording undoes
+             that, so the policy gets a section and a book gets a row. One
+             container per kind of thing. RM-114. -->
+        <div class="sv__sec">
+          <div>
+            <h2 class="sv__sec-h">Allocation</h2>
+          </div>
+        </div>
+        <div class="sv__alloc">
+          <p class="sv__alloc-h">
+            <span class="sv__cov-mark" aria-hidden="true" x-html="portfolioMark('framework')"></span>
+            <span>Flagship product</span>
+          </p>
+          <p class="sv__alloc-t">Robot Money Allocation</p>
+          <p class="sv__alloc-d">
+            The swarm recomendation publishes a target allocation and answers to the questions:
+          </br>
+            - are the sleeve weights right for this regime? 
+          </br>
+            - are the right constituents weighted correctly within each sleeve?
+            </p>
+          <p class="sv__alloc-m" x-show="allocationMeta()" x-text="allocationMeta()"></p>
+          <template x-if="allocationTargets().length">
+            <div class="sv__alloc-reg">
+              <p class="sv__alloc-label">
+                <span x-show="allocationAsOf()">Unchanged since <span x-text="allocationAsOf()"></span></span>
+                <span x-show="!allocationAsOf()">Target weights</span>
+              </p>
+              <div class="sv__sleeves">
+                <div class="sv__sleeve sv__sleeve--head" aria-hidden="true">
+                  <span>Sleeve</span>
+                  <span>Target</span>
+                </div>
+                <template x-for="t in allocationTargets()" :key="t.label">
+                  <div class="sv__sleeve">
+                    <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
+                    <!-- The track is drawn for a published zero and absent for
+                         a null, so an empty track can only mean 0% and never
+                         "no target published". The empty span keeps the third
+                         column in place when there is no track. -->
+                    <template x-if="sleeveBar(t) !== null">
+                      <span class="sv__sleeve-track"><i :style="`width:${sleeveBar(t)}%`"></i></span>
+                    </template>
+                    <template x-if="sleeveBar(t) === null"><span></span></template>
+                    <span class="sv__sleeve-v" x-text="t.pct === null ? '—' : `${t.pct}%`"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+          <p class="sv__sleeve-note" x-show="allocationNote()" x-text="allocationNote()"></p>
+          <a class="sv__cov-lnk" x-show="allocationHref()" :href="allocationHref()">See every allocation session &rarr;</a>
+        </div>
+
         <div class="sv__sec">
           <div>
             <h2 class="sv__sec-h">Portfolios</h2>
-            <p class="sv__sec-sub">The swarm reviews one portfolio per session. One signed take per member, until the session window closes.</p>
+            <p class="sv__sec-sub" x-text="portfolioLede()"></p>
           </div>
         </div>
         <div class="sv__cov">
           <template x-for="p in portfolios()" :key="p.id">
             <div class="sv__cov-r" :class="{ 'sv__cov-r--ours': p.isVault }">
-              <span class="sv__cov-n">
-                <span class="sv__cov-mark" aria-hidden="true" x-html="portfolioMark(p.isFramework ? 'framework' : 'wallets')"></span>
-                <a class="sv__row-title" :href="`/swarm/subjects/${p.id}`" x-text="p.name"></a>
-                <span class="sv__cov-op" x-show="p.operator">
-                  <span x-text="p.operator"></span><template x-if="p.isVault"><span></span></template>
+              <!-- Column 1 is the identity stack: name, operator, then the
+                   address line. Column 2 is the blurb, the whole of it, not a
+                   truncated first line with the book facts underneath. -->
+              <div class="sv__cov-id">
+                <span class="sv__cov-n">
+                  <span class="sv__cov-mark" aria-hidden="true" x-html="portfolioMark(p.isFramework ? 'framework' : 'wallets')"></span>
+                  <a class="sv__row-title" :href="`/swarm/subjects/${p.id}`" x-text="p.name"></a>
                 </span>
-              </span>
-              <span class="sv__cov-m"><b x-text="p.count"></b> sessions · latest <span x-text="formatDate(p.latest)"></span></span>
-              <!-- What the swarm is actually looking at. Three of these are
-                   real addresses on real chains and the fourth has none,
-                   because it is the recipe the vault is measured against
-                   rather than a book of holdings. That is the biggest
-                   difference between the rows and it was not on the page. -->
-              <p class="sv__cov-points">
-                <template x-if="!p.isFramework">
-                  <span>
-                    <span x-show="walletsLine(p)" x-text="walletsLine(p)"></span>
-                    <span x-show="nftLine(p)"> &middot; <span x-text="nftLine(p)"></span></span>
-                    <!-- The allocation is not a fourth row: it folds into the
-                         vault it is the recipe for (parentFor). Saying so here
-                         is the difference between a fold and a row that looks
-                         like it is missing something. -->
-                    <span x-show="foldedInto(p.id)"> &middot; <span>reviewed two ways</span></span>
-                    <span class="sv__unset" x-show="!walletsLine(p) && !nftLine(p)">No addresses on record</span>
-                  </span>
-                </template>
-                <template x-if="p.isFramework">
-                  <span>No wallets. This is the target recipe, not a book of holdings.</span>
-                </template>
-              </p>
-              <template x-if="p.thesisBlurb">
-                <div class="sv__cov-thesis">
-                  <p class="sv__cov-d" :class="{ 'is-open': thesisOpen(p.id) }" x-text="p.thesisBlurb"></p>
-                  <button type="button" class="sv__cov-more" @click="toggleThesis(p.id)"
-                          :aria-expanded="thesisOpen(p.id) ? 'true' : 'false'"
-                          x-text="thesisOpen(p.id) ? 'Less' : 'More'"></button>
-                </div>
-              </template>
-              <!-- The vault is not another portfolio the swarm has opinions
-                   about. It is the one whose review becomes a real allocation,
-                   and the row said so in a sentence a reader had no reason to
-                   believe. Showing the weights actually in force is the
-                   evidence for the claim. -->
-              <template x-if="p.isVault">
-              <div class="sv__vault">
-                <p class="sv__vault-h">Flagship product</p>
-                <p class="sv__vault-t">Allocation targets.</p>
-                <p class="sv__vault-d">The swarm reads the vault's book each session. The target weights it settles on are the proposed allocation; applying them is gated by the admin multisig.</p>
-                <!-- The feed below lists this portfolio twice, because the two
-                     reviews are two subjects in the backend with their own
-                     sessions, takes and quorum. Saying so here is what stops
-                     that reading as the same session listed by mistake. -->
-                <p class="sv__vault-d" x-show="foldedInto(p.id)">It is reviewed <b>two ways</b>: its
-                  <b>holdings</b>, position by position, and the <b>target allocation</b> those holdings
-                  are measured against. Each is its own session in the feed below.</p>
-                <template x-if="allocationTargets().length">
-                  <div class="sv__vault-alloc">
-                    <p class="sv__vault-label">
-                      Target in force<span x-show="allocationAsOf()"> &middot; since <span x-text="allocationAsOf()"></span></span>
-                    </p>
-                    <!-- Target always; current and drift only when every token
-                         in the book lands in a bucket. See showsCurrent(). -->
-                    <div class="sv__sleeves" :class="{ 'sv__sleeves--wide': showsCurrent() }">
-                      <div class="sv__sleeve sv__sleeve--head" aria-hidden="true">
-                        <span>Sleeve</span>
-                        <span>Target</span>
-                        <template x-if="showsCurrent()"><span>Current</span></template>
-                        <template x-if="showsCurrent()"><span>Drift</span></template>
-                      </div>
-                      <template x-for="t in sleeves()" :key="t.label">
-                        <div class="sv__sleeve">
-                          <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
-                          <span class="sv__sleeve-v" x-text="t.pct === null ? '—' : `${t.pct}%`"></span>
-                          <template x-if="showsCurrent()">
-                            <span class="sv__sleeve-v" x-text="t.current === null ? '—' : `${t.current.toFixed(1)}%`"></span>
-                          </template>
-                          <template x-if="showsCurrent()">
-                            <span class="sv__sleeve-v sv__sleeve-drift"
-                                  :class="{ 'is-off': t.drift !== null && Math.abs(t.drift) >= 0.05 }"
-                                  x-text="driftLabel(t.drift)"></span>
-                          </template>
-                        </div>
-                      </template>
-                    </div>
-                    <!-- Said once, plainly, rather than drawing a comparison the
-                         data cannot support. -->
-                    <p class="sv__sleeve-note" x-show="!showsCurrent()">
-                      Current weights are not shown: part of the book holds tokens the published
-                      framework does not assign to a sleeve, so the four shares would not add up to it.
-                    </p>
-                    <p class="sv__sleeve-note" x-show="showsCurrent() && sleeveAsOf()">
-                      Current as of <span x-text="sleeveAsOf()"></span>.
-                    </p>
-                  </div>
-                </template>
-                <a class="sv__cov-lnk" href="/swarm/subjects/robotmoney-vault">See the vault &rarr;</a>
+                <span class="sv__cov-op" x-show="p.operator" x-text="p.operator"></span>
+                <p class="sv__cov-points">
+                  <template x-if="!p.isFramework">
+                    <span>
+                      <span x-show="walletsLine(p)" x-text="walletsLine(p)"></span>
+                      <span x-show="nftLine(p)"> &middot; <span x-text="nftLine(p)"></span></span>
+                      <span class="sv__unset" x-show="!walletsLine(p) && !nftLine(p)">No addresses</span>
+                    </span>
+                  </template>
+                  <template x-if="p.isFramework">
+                    <span>No wallets. This is the target recipe, not a book of holdings.</span>
+                  </template>
+                </p>
               </div>
-              </template>
+              <p class="sv__cov-d" x-show="blurbOf(p)" x-text="blurbOf(p)"></p>
+              <span class="sv__cov-m">
+                <span><b x-text="p.count"></b> <span x-text="p.count === 1 ? 'session' : 'sessions'"></span></span>
+                <span x-show="p.latest">latest <span x-text="formatDate(p.latest)"></span></span>
+              </span>
             </div>
           </template>
         </div>
