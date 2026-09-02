@@ -124,7 +124,10 @@ beforeAll(() => {
   put("P4.postflight-dryrun", { repo_sha: emptyTreeCommit() });   // -> invalid (code drift)
   // Every other step gets no receipt at all -> missing ("no receipt").
 
-  const run = Bun.spawnSync(["bun", PROBE, "--json", "--backup-dir", fixture], {
+  // Pin the release this golden was written for: runbook.ts auto-selects the
+  // LATEST upgrade dir by string sort, so the v0.3.0 golden would silently
+  // drift to the v0.4.0 step table the moment 0.3.0-to-0.4.0 lands.
+  const run = Bun.spawnSync(["bun", PROBE, "--version", "0.2.2-to-0.3.0", "--json", "--backup-dir", fixture], {
     cwd: join(repoRoot, "backend"),
     env: { ...process.env, ROLLOUT_RECEIPTS_DIR: join(fixture, "receipts") },
   });
