@@ -97,12 +97,41 @@ export function registerRegimeView(Alpine) {
     provenanceLabel(s) {
       return { live: "Live data", hermetic: "Demo data (hermetic)", fixture: "Test fixture data", seed: "Reference snapshot (seed)" }[s] || s;
     },
-    // Per-indicator +1/−1 sign explanation (the panel-table hover tooltip).
+    // The panel-table row tooltip. It used to be the sign convention and
+    // NOTHING else — every row explained percentile flipping and no row said
+    // what the indicator was, which is the one thing a reader hovering an
+    // unfamiliar name wants. The prose has always existed on the analytics
+    // indicator universe as `description`; it just was not serialised into the
+    // snapshot payload until now. Snapshots persisted before that carry no
+    // description and are never rewritten, so the sign-only text stays as the
+    // fallback rather than leaving those rows with an empty bubble.
+    indicatorTooltip(ind) {
+      if (!ind || !ind.description) return this.signTooltip(ind?.sign, ind?.name ?? "this indicator");
+      return `${ind.description} ${this.signClause(ind.sign)}`;
+    },
+    // An indicator name, split so the info glyph cannot be orphaned on a line
+    // of its own. CSS puts a soft wrap opportunity on both sides of an atomic
+    // inline (which the glyph is) whatever characters sit next to it — a word
+    // joiner does not close it, and `white-space: nowrap` on the link would
+    // stop the name wrapping at all, in a 110px column. So everything up to the
+    // last space wraps normally, and the last word rides with the glyph in a
+    // nowrap box. Head keeps its trailing space; a one-word name has no head.
+    nameHead(name) { const s = String(name ?? ""); const i = s.lastIndexOf(" "); return i < 0 ? "" : s.slice(0, i + 1); },
+    nameTail(name) { const s = String(name ?? ""); const i = s.lastIndexOf(" "); return i < 0 ? s : s.slice(i + 1); },
+    // Orientation in one clause. The full account of what sign-aligning does
+    // belongs to the "Risk-on" column header tip, where it is read once,
+    // instead of being restated in all 26 rows.
+    signClause(sign) {
+      return sign == null || sign >= 0
+        ? "Sign +1: a rising value reads as risk-on."
+        : "Sign −1: a rising value reads as risk-off, so its rank is flipped.";
+    },
+    // Fallback for pre-`description` snapshots (see indicatorTooltip).
     signTooltip(sign, name) {
       if (sign == null || sign >= 0) {
-        return `Sign +1 — rising ${name} reads as risk-on, so the percentile is used as-is. "Signed" column has the same orientation as "high = risk-on" across every indicator.`;
+        return `Sign +1 — rising ${name} reads as risk-on, so the percentile is used as-is. The "Risk-on" column has the same orientation — high = risk-on — across every indicator.`;
       }
-      return `Sign −1 — rising ${name} reads as risk-off, so we flip the percentile (1 − pctile) before averaging. That keeps "Signed" oriented "high = risk-on" across every indicator.`;
+      return `Sign −1 — rising ${name} reads as risk-off, so we flip the percentile (1 − pctile) before averaging. That keeps the "Risk-on" column oriented high = risk-on across every indicator.`;
     },
     // Component methodology footer: bucket thresholds as integer percentiles.
     bucketPct(key) { const t = this.latest?.bucketThresholds; return t && t[key] != null ? (t[key] * 100).toFixed(0) : "—"; },
@@ -136,7 +165,12 @@ export function registerRegimeView(Alpine) {
       const vals = Array.isArray(values) ? values : [];
       const finite = vals.filter((v) => typeof v === "number" && isFinite(v));
       if (finite.length < 2) return '<span class="rv__spark-empty">—</span>';
-      const W = 80, H = 22, pad = 1, n = vals.length;
+      // 68 rather than 80: the sparkline column is the only fixed width in a
+      // panel table, and the table has to fit its card at three across (see the
+      // fit assertion in regime-visual.spec.ts). 24 monthly points still read
+      // at 2.8px apart, and the column stopped being the reason the Weight
+      // column had nowhere to go.
+      const W = 68, H = 22, pad = 1, n = vals.length;
       const xAt = (i) => pad + (i / (n - 1)) * (W - 2 * pad);
       const yAt = (v) => pad + (1 - v) * (H - 2 * pad);
       let last = null;

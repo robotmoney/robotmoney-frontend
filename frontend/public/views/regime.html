@@ -18,7 +18,28 @@
   </div>
 
   <div class="rv__body">
-    <p class="rv__loading" x-show="loading">Loading regime…</p>
+    <!-- A skeleton, not a sentence. "Loading regime…" was one line tall and
+         the dashboard that replaces it is several screens, so the methodology
+         block, the disclaimer and the footer all dropped by a viewport the
+         moment the fetch landed. /swarm had the same bug and measured CLS
+         0.4974, where 0.25 is already "poor". This holds the dashboard's
+         running order and more than a screen of height, so nothing a reader
+         is looking at moves when the content arrives. The boxes are decoration
+         and say so; the status line is what a screen reader gets. -->
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading the regime dashboard</p>
+    <div class="rv__skel" x-show="loading" aria-hidden="true">
+      <div class="rv__skel-head"></div>
+      <div class="rv__skel-cards">
+        <div class="rv__skel-card"></div><div class="rv__skel-card"></div>
+        <div class="rv__skel-card"></div><div class="rv__skel-card"></div>
+      </div>
+      <div class="rv__skel-chart"></div>
+      <div class="rv__skel-panels">
+        <div class="rv__skel-panel"></div><div class="rv__skel-panel"></div><div class="rv__skel-panel"></div>
+      </div>
+      <div class="rv__skel-wide"></div>
+      <div class="rv__skel-bt"></div><div class="rv__skel-bt"></div>
+    </div>
     <p class="rv__error" x-show="error" x-text="error" x-cloak></p>
 
     <!-- Loud staleness banner: the analytics pipeline forward-fills to today on every
@@ -97,7 +118,9 @@
         </div>
 
         <!-- Per-panel indicator tables -->
-        <div class="rv__panels" :class="panelsList().length >= 3 ? 'rv--cols3' : 'rv--cols2'">
+        <!-- No column-count class: the grid auto-fits as many ~396px tracks as the
+             page can hold, so the panel count no longer has to be spelled out here. -->
+        <div class="rv__panels">
           <template x-for="p in panelsList()" :key="p">
             <div class="rv__panel-card">
               <div class="rv__panel-card-head">
@@ -105,15 +128,31 @@
               </div>
               <table class="rv__table">
                 <thead>
-                  <tr><th>Indicator</th><th>24mo</th><th class="rv__num">Last</th><th class="rv__num">Signed</th><th class="rv__num">Wt</th></tr>
+                  <!-- "Signed" and "Wt" were shop vocabulary: the first is a
+                       percentile that has been sign-aligned, the second a panel
+                       weight, and the header said neither. Both now say what the
+                       number is, and carry the .rm-tip explainer for the part a
+                       one-word header cannot hold. The sparkline plots the
+                       SAME series as the Risk-on column, so its "this is a
+                       percentile, not a price" caveat lives in that tip rather
+                       than a third trigger in an 80px column. -->
+                  <tr><th>Indicator</th><th>2 years</th><th class="rv__num">Last</th><th class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Risk-on</button><span class="rm-tip__bub" role="tooltip">Where this indicator sits in its own trailing 3-year range, <b>0</b> to <b>100</b>. Ranks are flipped where needed, so high means risk-on in every row. The 2 years column plots the same number, monthly.</span></span></th><th class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Weight</button><span class="rm-tip__bub" role="tooltip">Share of the panel index this indicator carries. The more a reading echoes the rest of the panel, the less it counts. Each panel sums to 100%.</span></span></th></tr>
                 </thead>
                 <tbody>
                   <template x-for="ind in indicatorsIn(p)" :key="ind.id">
                     <tr>
                       <td class="rv__ind-cell">
                         <span class="rv__ind-tipwrap">
-                          <span class="rv__ind-name" x-text="ind.name"></span><a class="rv__ind-info" :href="`/regime/indicators#${ind.id}`" :title="'What is this indicator?'" :aria-label="`Read about ${ind.name}`"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.5v3.5M8 5.5v.01" stroke-linecap="round"/></svg></a>
-                          <span class="rv__tip" role="tooltip" x-text="signTooltip(ind.sign, ind.name)"></span>
+                          <!-- ONE anchor over the name AND the icon: the glossary
+                               link used to hang off the 11px icon alone while the
+                               name sat inert under `cursor: help`, so the row read
+                               as a tooltip term and nobody found the page behind
+                               it. Wrapping both keeps the icon as the cue that
+                               there is more to read while giving the link a target
+                               worth aiming at — and one tab stop, not two to the
+                               same href. -->
+                          <a class="rv__ind-name" :href="`/regime/indicators#${ind.id}`"><span class="rv__ind-label" x-text="nameHead(ind.name)"></span><span class="rv__ind-tail"><span class="rv__ind-label" x-text="nameTail(ind.name)"></span><span class="rv__ind-info" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.5v3.5M8 5.5v.01" stroke-linecap="round"/></svg></span></span></a>
+                          <span class="rv__tip" role="tooltip" x-text="indicatorTooltip(ind)"></span>
                         </span>
                         <span class="rv__ind-src">
                           <template x-if="ind.source_url"><a :href="ind.source_url" target="_blank" rel="noopener" x-text="sourceLabel(ind.source)"></a></template>
@@ -201,7 +240,7 @@
                 <tbody>
                   <template x-for="row in backtestRows(bt)" :key="row.key">
                     <tr :class="{ 'rv__bt-baseline': row.baseline }">
-                      <td class="rv__ind-cell"><span class="rv__ind-name rv__ind-name--plain" x-text="row.label"></span><span class="rv__ind-src" x-text="row.desc"></span></td>
+                      <td class="rv__ind-cell"><span class="rv__ind-name" x-text="row.label"></span><span class="rv__ind-src" x-text="row.desc"></span></td>
                       <td class="rv__num" x-text="fmtNum2(row.s.final_value)"></td>
                       <td class="rv__num" x-text="fmtPctSigned(row.s.cagr)"></td>
                       <td class="rv__num rv__muted" x-text="fmtPctSigned(row.s.cagr_in_sample)"></td>

@@ -56,7 +56,11 @@ export function placeTip(tip) {
     bub.removeAttribute("data-below");
   }
 
-  const host = tip.closest(".sv__body, .container, .cv, main, body") || document.body;
+  // .rv__body is the regime dashboard's own 1280px gutter box, added when the
+  // panel tables grew header tips: without it the nearest match is <main>, and
+  // clamping to <main> lets a bubble on the rightmost panel card sit out in the
+  // 1.5rem gutter — the exact "on screen but still sliced" case above.
+  const host = tip.closest(".sv__body, .rv__body, .container, .cv, main, body") || document.body;
   const box = host.getBoundingClientRect();
   const r = bub.getBoundingClientRect();
   const pad = 8;

@@ -45,6 +45,55 @@
 .rv__body { max-width: 1280px; margin: 0 auto; padding: 2.2rem 1.5rem 0; }
 @media (min-width: 1024px) { .rv__body { padding-left: 2rem; padding-right: 2rem; } }
 .rv__dash { display: flex; flex-direction: column; gap: 1.1rem; }
+
+/* Loading skeleton. /swarm shipped one of these for exactly this reason and
+   had measured CLS 0.4974 without it, where 0.25 is already "poor": a one-line
+   "Loading…" is replaced by a full page of content and everything under it
+   drops by a screen. This page is far taller and busier than /swarm, so the
+   skeleton follows ITS running order (a row of summary cards, the tall
+   full-history chart, the panel grid, the wide correlations card, then the
+   backtests) and holds well over a viewport, which is the part that matters:
+   whatever height it still gets wrong lands below the fold, where a shift
+   costs nothing. The card counts are the real ones where the page fixes them
+   (four summary cards, three panels) and a sample where it does not (the
+   backtests are one card per market, up to three, and by then we are two
+   screens down).
+   Same treatment as .sv__skel further down this sheet: flat surfaces, square
+   corners, and a slow opacity breath rather than the sweeping highlight every
+   skeleton library ships, which is a moving gradient and this system does not
+   have gradients. It borrows that block's @keyframes sv-skel rather than
+   declaring a second identical one; if that block ever goes this degrades to a
+   still skeleton, which is the harmless direction. */
+.rv__skel { display: flex; flex-direction: column; gap: 1.1rem; }
+/* The heading bar is deliberately NOT in the group below: it is the one piece
+   that takes --color-surface-light, and listing it in both blocks made the
+   group's background dead on arrival (caught by the duplicate-selector lint). */
+.rv__skel-head {
+  height: 2.25rem; width: min(20rem, 60%);
+  background: var(--color-surface-light); animation: sv-skel 1.8s ease-in-out infinite;
+}
+.rv__skel-card, .rv__skel-chart, .rv__skel-panel, .rv__skel-wide, .rv__skel-bt {
+  background: var(--color-surface); animation: sv-skel 1.8s ease-in-out infinite;
+}
+/* The two grids repeat .rv__cards and .rv__panels rather than approximating
+   them, breakpoints included, so the skeleton drops to two and then one column
+   at the same widths the content will. A skeleton that reflows differently
+   from what replaces it moves the page a second time on the way out. */
+.rv__skel-cards { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
+@media (min-width: 768px) { .rv__skel-cards { grid-template-columns: repeat(4, 1fr); } }
+.rv__skel-card { height: 8rem; }
+.rv__skel-chart { height: 24rem; }
+.rv__skel-panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
+@media (min-width: 860px) { .rv__skel-panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1264px) { .rv__skel-panels { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.rv__skel-panel { height: 22rem; }
+.rv__skel-wide { height: 15rem; }
+.rv__skel-bt { height: 26rem; }
+@media (prefers-reduced-motion: reduce) {
+  .rv__skel-head, .rv__skel-card, .rv__skel-chart, .rv__skel-panel,
+  .rv__skel-wide, .rv__skel-bt { animation: none; }
+}
+
 /* section head/title/as-of promoted to components.css
    (.rm-section-head / .rm-section-title / .rm-asof). */
 
@@ -64,24 +113,77 @@
    .rm-chip / .rm-legend / .rm-legend-item / .rm-legend-swatch). */
 
 /* panel + generic tables */
-.rv__panels { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
-.rv__panel-card, .rv__corr-card, .rv__bt-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden; }
+/* Column count is chosen where a panel table actually fits, which the old rule
+   did not do: it went three-across at 768px and stayed there, putting a ~390px
+   table in a 230px card, and the card's `overflow: hidden` then quietly ate the
+   Weight column rather than showing anything was missing. Every laptop under
+   about 1250px had been reading a four-column table.
+   Three across needs 3 × 392px + 2 gaps inside the 1216px content box, which
+   arrives at a 1264px viewport; two across needs 2 × 396px, which arrives at
+   860px. `minmax(0, 1fr)` rather than `1fr` so a track is exactly its share and
+   a wide table can never widen the grid past the page (the clip used to be what
+   prevented that — see .rv__panel-card). Breakpoints, not auto-fit: auto-fit
+   picks its own count from the same numbers, and one stray pixel of padding
+   would silently drop the page from three columns to two. */
+.rv__panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
+@media (min-width: 860px) { .rv__panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1264px) { .rv__panels { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.rv__corr-card, .rv__bt-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden; }
+/* Not `overflow: hidden`, unlike its two siblings: this card is the only one
+   holding tooltips, and both kinds are absolutely positioned — the header
+   .rm-tip bubbles open UPWARD over the card head, and the last row's .rv__tip
+   opens downward past the card foot. Clipping is what made the bottom-row
+   tooltip a sliver. The radius the clip used to enforce is on the head.
+   `min-width: 0` comes with it: `overflow: hidden` was also, silently, what
+   kept the three grid columns even, because a scroll container contributes no
+   min-content to its track. Dropping the clip without this let the widest
+   panel table set its own column, and the 3-across grid grew past the 1280px
+   page. The panel table is trimmed below to fit the track it is given. */
+.rv__panel-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: visible; min-width: 0; }
+.rv__panel-card > .rv__panel-card-head { border-radius: var(--radius) var(--radius) 0 0; }
+/* Buying back the ~20px the panel table needs to fit its track at three across:
+   inner cells give up 1.6px a side (the 1rem card gutter on the outer edges is
+   untouched), and the mono provenance line may break mid-token — "Blockchain.com"
+   as one unbreakable 84px word was setting the whole first column's floor.
+   Guarded by the panel-fit assertion in regime-visual.spec.ts. */
+.rv__panel-card .rv__table td, .rv__panel-card .rv__table th { padding-left: 0.35rem; padding-right: 0.35rem; }
+.rv__panel-card .rv__table td:first-child, .rv__panel-card .rv__table th:first-child { padding-left: 0.75rem; }
+.rv__panel-card .rv__table td:last-child, .rv__panel-card .rv__table th:last-child { padding-right: 0.75rem; }
+/* `anywhere`, not `break-word`: only the former lowers the cell's min-content
+   width, which is what the table's column sizing actually reads. It does not
+   make text break mid-word in normal conditions — it makes a too-narrow column
+   possible instead of impossible, so the table can always be made to fit the
+   card and the last columns stop being the ones that silently disappear. */
+.rv__ind-label, .rv__ind-src { overflow-wrap: anywhere; }
+/* Below one full track the table cannot be made to fit, so it scrolls instead
+   of being clipped. Only safe under 700px, which is exactly where .rm-tip__bub
+   switches to `position: fixed` and stops caring about scroll containers. */
+@media (max-width: 699px) { .rv__panel-card { overflow-x: auto; } }
 .rv__panel-card-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; padding: 0.72rem 1rem; border-bottom: 1px solid var(--color-border); background: rgba(16, 20, 28, 0.4); }
 .rv__panel-card-title { font-size: 0.9rem; font-weight: 500; margin: 0; }
 .rv__panel-card-meta { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); }
 /* table shell + cells (.rm-table-scroll / .rm-table / .rm-num / .rm-muted)
    promoted to components.css; regime-only cell styles stay below. */
 .rv__ind-cell { display: flex; flex-direction: column; gap: 0.1rem; }
-.rv__ind-name {
-  font-size: 0.85rem; color: var(--color-text); cursor: help;
+/* The panel-table indicator name is a LINK to its glossary entry, so it takes
+   the pointer — `cursor: help` here was the tell that sent readers hunting for
+   a tooltip instead of clicking through. The dotted rule moves to the inner
+   label so it underlines the words and not the info glyph beside them. */
+.rv__ind-name { font-size: 0.85rem; color: var(--color-text); }
+a.rv__ind-name { text-decoration: none; }
+/* The last word of the name plus the glyph, travelling as one word. */
+.rv__ind-tail { white-space: nowrap; }
+.rv__ind-label {
   text-decoration: underline; text-decoration-style: dotted;
   text-decoration-color: var(--color-text-dim); text-underline-offset: 4px;
 }
-.rv__ind-name--plain { text-decoration: none; cursor: default; }
+a.rv__ind-name:hover { color: var(--color-accent); }
+a.rv__ind-name:hover .rv__ind-label { text-decoration-color: var(--color-accent); }
+a.rv__ind-name:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 /* name + info-icon + hover tooltip wrapper (source PanelTable "group") */
 .rv__ind-tipwrap { position: relative; display: inline; }
-.rv__ind-info { margin-left: 0.35rem; display: inline-block; color: var(--color-text-dim); vertical-align: baseline; transition: color 0.15s; }
-.rv__ind-info:hover { color: var(--color-accent); }
+.rv__ind-info { margin-left: 0.25rem; display: inline-block; color: var(--color-text-dim); vertical-align: baseline; transition: color 0.15s; }
+a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .rv__ind-info svg { display: inline-block; vertical-align: baseline; }
 .rv__tip {
   pointer-events: none; position: absolute; left: 0; top: 100%; z-index: 20;
@@ -95,7 +197,7 @@
 .rv__ind-src { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); margin-top: 0.15rem; }
 .rv__ind-src a { color: var(--color-text-dim); text-decoration: none; }
 .rv__ind-src a:hover { color: var(--color-accent); }
-.rv__spark { width: 90px; }
+.rv__spark { width: 78px; }
 .rv__spark-svg { display: block; }
 .rv__spark-empty { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); }
 
@@ -911,9 +1013,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   /* .rv__cards base 4-col grid promoted to components.css (.rm-cards). */
   .rv__cards.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
   .rv__cards.rv--cols4 { grid-template-columns: repeat(4, 1fr); }
-  .rv__panels { grid-template-columns: repeat(3, 1fr); }
-  .rv__panels.rv--cols2 { grid-template-columns: repeat(2, 1fr); }
-  .rv__panels.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
   .sv__rail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sv__backdrop-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   /* .sv__discussion stays single-column at every width. Consensus and

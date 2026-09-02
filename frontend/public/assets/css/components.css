@@ -297,7 +297,7 @@
 .rm-eyebrow--quiet, .sv__eyebrow--quiet { color: var(--color-text-muted); }
 
 /* loading / error states */
-.rm-loading, .rv__loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
+.rm-loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
 .rm-error, .rv__error, .sv__error { color: var(--color-warn); font-family: var(--font-mono); }
 
 /* section head + title + as-of */
@@ -389,6 +389,23 @@
   color: var(--color-text-muted); font-family: var(--font-mono); font-size: 8px; line-height: 1;
   cursor: default; transition: color 0.14s ease, border-color 0.14s ease; }
 .rm-tip__btn:hover, .rm-tip__btn[aria-expanded="true"] { color: var(--color-text); border-color: var(--color-text); }
+/* A trigger that IS the label, rather than a glyph standing next to one.
+   Column headers in a dense table have no width to give away: the regime
+   dashboard's three panel tables sit at 397px apiece inside a 1280px page, and
+   measuring showed a 13px circle beside two of the five headers pushed the grid
+   past its own container. A header word carrying a dotted rule says "there is a
+   definition here" for free, and keeps the touch, Escape and edge-clamping
+   behaviour that a bare CSS :hover tooltip does not have. The cursor is left
+   alone: a question mark riding the pointer across a table header is more
+   distracting than the dotted rule is informative. */
+.rm-tip--label { margin-left: 0; }
+.rm-tip__btn--text { width: auto; height: auto; display: inline; border: 0; border-radius: 0;
+  font-family: inherit; font-size: inherit; line-height: inherit; letter-spacing: inherit;
+  text-transform: inherit; color: inherit; cursor: inherit;
+  text-decoration: underline; text-decoration-style: dotted;
+  text-decoration-color: var(--color-text-dim); text-underline-offset: 3px; }
+.rm-tip__btn--text:hover, .rm-tip__btn--text[aria-expanded="true"] {
+  color: var(--color-text); text-decoration-color: var(--color-text); }
 .rm-tip__bub { position: absolute; left: 50%; bottom: calc(100% + 8px);
   transform: translate(calc(-50% + var(--rm-tip-nudge, 0px)), 3px);
   width: min(17rem, 72vw); max-width: min(17rem, calc(100vw - 2rem));
@@ -410,11 +427,28 @@
 /* Flipped below its icon when there is no room above it. Set by placeTip() in
    lib/tooltip.js, which is where the measuring has to happen. */
 .rm-tip__bub[data-below] { bottom: auto; top: calc(100% + 8px); }
+/* Right-anchored instead of centred, for a tip that sits in the last column of
+   something. placeTip() clamps a bubble back inside the page, but only on
+   pointer, focus or resize — and a bubble is `visibility: hidden` AT REST,
+   which still lays out and still counts toward the document's scroll width. So
+   a centred bubble hanging off the rightmost table header gave the whole page
+   a horizontal scrollbar before anyone hovered anything. Opening leftward from
+   the trigger's right edge means it can never stick out to begin with; the
+   clamp still runs and still nudges. */
+.rm-tip--end .rm-tip__bub { left: auto; right: 0; transform: translate(var(--rm-tip-nudge, 0px), 3px); }
+.rm-tip--end:hover .rm-tip__bub, .rm-tip--end .rm-tip__btn:focus-visible + .rm-tip__bub,
+.rm-tip--end .rm-tip__bub[data-open="1"] { transform: translate(var(--rm-tip-nudge, 0px), 0); }
 @media (max-width: 699px) {
   .rm-tip__bub { position: fixed; left: 12px; right: 12px; bottom: auto; width: auto; max-width: none;
     transform: translateY(3px); }
   .rm-tip:hover .rm-tip__bub, .rm-tip__btn:focus-visible + .rm-tip__bub, .rm-tip__bub[data-open="1"] {
     transform: translateY(0); }
+  /* The phone sheet is pinned to both edges, so end-anchoring has nothing to
+     say here — and it out-specifies the rule above, so it has to stand down
+     explicitly rather than by source order. */
+  .rm-tip--end .rm-tip__bub { left: 12px; right: 12px; transform: translateY(3px); }
+  .rm-tip--end:hover .rm-tip__bub, .rm-tip--end .rm-tip__btn:focus-visible + .rm-tip__bub,
+  .rm-tip--end .rm-tip__bub[data-open="1"] { transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) { .rm-tip__bub { transition: opacity 0.01s; } }
 
