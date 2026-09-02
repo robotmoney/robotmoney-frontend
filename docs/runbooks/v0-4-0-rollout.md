@@ -5,46 +5,40 @@
 > target SHA and command output when an RC is cut; this document is not
 > authority for a moving branch.
 
-This runbook implements the shared policy in
-[release-runbooks.md](../technical/release-runbooks.md) and uses the shared
-backup, smoke-twin, credential, and deployment procedures in
-[rollout-procedure.md](./rollout-procedure.md) and
-[deployment.md](./deployment.md). Those documents own the mechanics; this one
-identifies what is special about this release.
+**Scope:** This runbook contains release-*specific* steps for the v0.4.0 upgrade.
+The foundational release-runbook policy is in [`release-runbooks.md`](../../technical/release-runbooks.md). This document references that policy for generic gates (§4.1–4.9) and only describes what is special about v0.3.0→v0.4.0.
+
+The runbook is organized as:
+- **Generic policy references** — map to `release-runbooks.md` §4 gates; these steps must not be altered without updating the policy first.
+- **0.4.0-specific instructions** — the migration, config, and smoke-details unique to this release.
 
 ## 0. Release prerequisites
 
-Do not start preflight until all of these are true:
+Maps to `release-runbooks.md` §4.1 (code-readiness gate). Do not start preflight until all of these are true:
 
 1. A `release:v0.4.0` tracking issue exists, its scope is frozen, and its
-   Phases tasklist is complete.
+   Phases tasklist is complete — §4.1 requirement.
 2. `releases-0.4.x` has been cut from the agreed main SHA and the release
-   candidate is tagged there, not on `main`.
-3. Required checks for that candidate pass.
+   candidate is tagged there, not on `main` — §2 branch rule.
+3. Required checks for that candidate pass — CI gating per policy.
 
 ## 1. Release identity
+
+Maps to `release-runbooks.md` §3 (version tags and release candidates). The RC
+cycle and branch placement follow the policy:
+
+- Cut RC tags on `releases-0.4.x`, never on `main` — §2.
+- `v0.4.0` tag lands on the release branch after postflight passes, at the same
+  commit as production — §3, consequence 1.
+- RC numbering: `v0.4.0-rc.N` with N counting from 0 — §3.
 
 ```bash
 git fetch origin --tags
 git switch releases-0.4.x
 git rev-parse HEAD
-git merge-base --is-ancestor v0.3.0 HEAD
-git rev-list --count v0.3.0..HEAD
-git log --oneline v0.3.0..HEAD
-git diff --check v0.3.0..HEAD
 ```
 
-Record the first SHA as `RC_SHA`. Pick the next unused candidate number, then
-tag that exact SHA. Never deploy a branch tip that moves after the tag.
-
-```bash
-git tag -l 'v0.4.0-rc.*'
-git tag -a v0.4.0-rc.<N> "$RC_SHA" -m 'v0.4.0 release candidate <N>'
-git push origin v0.4.0-rc.<N>
-```
-
-`v0.4.0` is created only after production postflight passes, at the same commit
-as the deployed final RC.
+Record the first SHA as `RC_SHA`. Tag and push per the RC cycle.
 
 ## 2. What changes
 
@@ -75,7 +69,14 @@ git diff --word-diff=plain v0.3.0 "$RC_SHA" -- backend/migrations/0033_wallet_ba
 git diff --name-status v0.3.0 "$RC_SHA" -- backend/migrations/
 ```
 
-The expected new files are exactly:
+Maps to `release-runbooks.md` §4.2 (pre-upgrade baseline) and §4.3 (backup/restore
+smoke test). The forward-only runner keys migrations by **filename**, not checksum.
+
+The only edit to pre-existing `0033_wallet_backfill.sql` changes comments and does
+not rerun on production. Verify that fact from the pinned RC; do not delete or edit
+`schema_migrations` to force a rerun.
+
+Expected new files (additive migrations per R1):
 
 ```text
 0039_swarm_judge.sql
@@ -84,15 +85,15 @@ The expected new files are exactly:
 0042_swarm_consensus_receipts.sql
 ```
 
-Before any write, use the read-only replica procedure from rollout-procedure
-§§3–5 and save this baseline beside the encrypted dump and manifest:
+Before any write, use the read-only replica procedure from `rollout-procedure.md`
+§§3–5 and save this baseline beside the encrypted dump and manifest — §4.2 requirement.
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -c "
 SELECT name, applied_at FROM schema_migrations
  WHERE name LIKE ANY (ARRAY['0039_%','0040_%','0041_%','0042_%']) ORDER BY name;
 SELECT state, count(*) FROM swarm_sessions GROUP BY state ORDER BY state;
-"
+```
 ```
 
 On a direct v0.3.0 upgrade the migration query returns no rows and `judged`
@@ -100,6 +101,9 @@ cannot appear. Any pre-existing judge state means this is not a clean v0.3.0
 starting point: stop and record why before proceeding.
 
 ## 4. Configuration and deployment preparation
+
+Maps to `release-runbooks.md` §4.4 (foundational release workflow — config prep) and
+§8 compatibility contract (R1 additive migrations, R4 deploy order).
 
 Update the deployment configuration before the backend rollout:
 
@@ -113,11 +117,11 @@ SWARM_SCHEDULES_ENABLED=0
 # Optional only if a later model-backed shadow soak is planned.
 # SWARM_JUDGE_BASE_URL=https://opencode.ai/zen/v1
 # SWARM_JUDGE_TIMEOUT_MS=60000
-```
 
-Do not add `SWARM_JUDGE_MODEL`: model selection is stored in the judge-config
-row and changed through the privileged API. Confirm `OPENCODE_API_KEY` is
-available only if a model-backed soak is planned.
+# Per R1 (additive only): do not add SWARM_JUDGE_MODEL — model selection is
+# stored in the judge-config row and changed through the privileged API.
+# Confirm OPENCODE_API_KEY is available only if a model-backed soak is planned.
+```
 
 | Before v0.4.0 | v0.4.0 |
 | --- | --- |
@@ -129,12 +133,15 @@ available only if a model-backed soak is planned.
 
 Check CI/deployment scripts, service units, and operator documentation for old
 names. A stale command is a release blocker because the old package scripts no
-longer exist.
+longer exist. Per R3 (API responses only gain fields), consumers must not send
+new request fields until the API is deployed.
 
 ## 5. Stage rehearsal
 
-Run on the dedicated staging host, with the same RC that will be deployed. Use
-the shared data-path names rather than constructing a database URL manually.
+Maps to `release-runbooks.md` §4.3 (backup/restore smoke test) and §4.4
+(digital-smoke-twin rehearsal). Run on the dedicated staging host, with the same
+RC that will be deployed. Use the shared data-path names rather than constructing
+a database URL manually.
 
 ```bash
 bun run smoke:capture
@@ -144,9 +151,11 @@ bun scripts/upgrades/0.3.0-to-0.4.0/stage-rehearsal.ts "$RM_BACKUP_DIR" --emit-r
 
 The restore check validates the v0.3.0 starting state. The rehearsal applies
 the four migrations to the restored smoke-twin, boots real services, and
-executes the release postflight before teardown. It proves:
+executes the release postflight before teardown. It proves conformance to the
+release acceptance criteria — §4.4 gate.
 
-1. All four full migration filenames appear once in `schema_migrations`.
+1. All four full migration filenames appear once in `schema_migrations` — §4.4
+   criterion.
 2. `swarm_sessions_state_check` admits `judged`; `swarm_judge_config` contains
    exactly `id=1, mode='off'`; and the new history tables are empty initially.
 3. Statement- and row-level append-only triggers are `ENABLE ALWAYS` on both
@@ -161,12 +170,14 @@ executes the release postflight before teardown. It proves:
 
 Rehearse rollback: restore the pre-upgrade dump into a fresh local smoke-twin
 and prove v0.3.0 services boot against the v0.4.0 schema. Record duration,
-migration output, and every non-empty judge/receipt observation in the report.
+migration output, and every non-empty judge/receipt observation in the report —
+§4.4 requirement.
 
 ## 6. Production cutover
 
-**IRREVERSIBLE FORWARD MIGRATION:** `migrate.ts` has no down path. Do not start
-without a verified backup, completed rehearsal, and written rollback authority.
+Maps to `release-runbooks.md` §4.7 (production execution). **IRREVERSIBLE FORWARD
+MIGRATION:** `migrate.ts` has no down path. Do not start without a verified backup,
+completed rehearsal, and written rollback authority — §4.7 requirement.
 
 1. Reconfirm RC SHA, deployment configuration, and production DB identity.
 2. Re-run release preflight against the live replica and compare its baseline:
@@ -176,8 +187,10 @@ bun scripts/upgrades/0.3.0-to-0.4.0/preflight.ts --emit-receipt
 ```
 
 3. Deploy in provider order: database migration, API and every worker lane,
-   then static frontend. Do not publish the new SPA before its API.
-4. Confirm the migration log names all four new files exactly once.
+   then static frontend. Do not publish the new SPA before its API — R4 (deploy
+   provider before consumer).
+4. Confirm the migration log names all four new files exactly once — per R1
+   (additive only).
 5. Do **not** enable the judge during cutover. Verify its config after the API
    is serving:
 
@@ -186,13 +199,15 @@ curl --fail-with-body -H "X-Admin-Token: $ADMIN_TOKEN" \
   "$RM_PUBLIC_BASE_URL/api/swarm/admin/judge"
 ```
 
-Expected initial state is `mode: "off"`, a positive `minTakes`, and `model:
-null`. If it is anything else, set it to off and investigate the prior state;
-do not assume a pre-existing value is safe.
+Expected initial state is `mode: "off"`, a positive `minTakes`, and `model: null`.
+If it is anything else, set it to off and investigate the prior state; do not
+assume a pre-existing value is safe. Per R1, the DB can always be safely ahead
+of the code.
 
 ## 7. Postflight and controlled enablement
 
-Run these SELECT-only checks after deployment:
+Maps to `release-runbooks.md` §4.9 (production rollout report). Run these
+SELECT-only checks after deployment:
 
 ```bash
 bun scripts/upgrades/0.3.0-to-0.4.0/postflight.ts --emit-receipt=P8.postflight-prod
@@ -201,7 +216,7 @@ bun run --cwd backend swarm-judge:replay -- --limit 10
 
 Verify `/vault`, `/allocation`, `/allocation2`, `/performance`, swarm archive
 and session pages, and the authenticated judge endpoint from the deployed
-origin. Confirm production automation invokes no `demo:*` script.
+origin. Confirm production automation invokes no `demo:*` script — R3 corollary.
 
 Judge activation is separate and reversible:
 
@@ -217,17 +232,20 @@ Judge activation is separate and reversible:
 
 Consensus receipts are not mass-published at release time. Before publishing
 one for a terminal session, verify its judgement and canonical bytes. A receipt
-is immutable: a correction requires a new session, never UPDATE or DELETE.
+is immutable: a correction requires a new session, never UPDATE or DELETE — R1.
 
 ## 8. Failure, rollback, and close
 
+Maps to `release-runbooks.md` §4.8 (rollback) and §4.9 (production rollout report).
+
 For a failed migration, boot, invariant, replay, or route check, stop and
 preserve logs, receipts, and baseline. Default response is the rehearsed restore
-of the encrypted pre-upgrade dump. Do not delete history rows to “clean up” a
+of the encrypted pre-upgrade dump. Do not delete history rows to "clean up" a
 failed attempt.
 
 For judge-only degradation, set the DB-backed mode to `off` first. That is the
-narrow reversible mitigation; full restore is for a failed release invariant.
+narrow reversible mitigation; full restore is for a failed release invariant —
+§4.8 default, overridable per §4.9 with second sign-off.
 
 After clean production postflight, tag the deployed commit and file the report:
 
@@ -238,4 +256,5 @@ git push origin v0.4.0
 
 Include RC/tag, SHA, backup manifest, rehearsal and production receipts,
 migration timing, judge mode, route checks, shadow-soak decision, and operator
-sign-off.
+sign-off — §4.9 requirement. The release tracking issue is closed only after
+this report is filed and the final tag exists on the release branch.
