@@ -853,11 +853,15 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__takes-panel { margin-top: 0.9rem; border-top: 1px solid var(--color-border); }
 .sv__take-row { padding: 0.85rem 0; border-bottom: 1px solid var(--color-border); }
 .sv__take-row:last-of-type { border-bottom: none; }
-.sv__take-head { display: flex; align-items: baseline; gap: 0.7rem 1rem; flex-wrap: wrap; min-width: 0; }
-.sv__take-who { color: var(--color-text); font-weight: 500; font-size: 0.95rem; text-decoration: none; }
-.sv__take-who:hover, .sv__take-who:focus-visible {
-  text-decoration: underline; text-decoration-color: var(--color-accent);
-  text-decoration-thickness: 1px; text-underline-offset: 4px; }
+/* The feed's take row, not the take CARD on /swarm/sessions/:id. That card
+   keeps .sv__take-head at the top of this file: it centres its children and
+   reserves 1.6rem on the right for the verify badge, neither of which this
+   row wants. Two components, two names. */
+.sv__take-row-head { display: flex; align-items: baseline; gap: 0.7rem 1rem; flex-wrap: wrap; min-width: 0; }
+/* Type only. The underline behaviour is the shared "title that is a link" group
+   further up this file, which already lists .sv__take-who; restating it here
+   was the same rule written twice, and the later copy silently won. */
+.sv__take-name { color: var(--color-text); font-weight: 500; font-size: 0.95rem; }
 /* Same figure as .mp-take on the member page: the word, then a mono number.
    Hue stays on the pill. A bare "72%" after a gap used to look like a third
    unexplained column. */

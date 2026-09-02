@@ -349,8 +349,8 @@
                 <p class="sv__unset" x-show="takesState(s)?.error" x-text="takesState(s)?.error"></p>
                 <template x-for="t in (takesState(s)?.takes || [])" :key="t.id">
                   <div class="sv__take-row">
-                    <div class="sv__take-head">
-                      <a class="sv__take-who" :href="`/swarm/members/${encodeURIComponent(t.memberId)}`" x-text="t.memberName || t.memberId"></a>
+                    <div class="sv__take-row-head">
+                      <a class="sv__take-who sv__take-name" :href="`/swarm/members/${encodeURIComponent(t.memberId)}`" x-text="t.memberName || t.memberId"></a>
                       <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
                         <i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="t.stance"></span>
                       </span>

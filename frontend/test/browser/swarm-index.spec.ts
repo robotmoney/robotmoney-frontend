@@ -178,6 +178,18 @@ test("a session's regimeSummary reaches the screen on the session page", async (
 test("a published session's card states its recommendation, its lean and who took part", async ({ page }) => {
   await page.route("**/api/swarm/members*", (route) =>
     route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));
+  // The card titles a session from the SUBJECT RECORD (sessionSubjectName reads
+  // subjectCache first), not from the session's denormalised subjectName, so a
+  // subject the test does not stub resolves against whatever the preview server
+  // serves and the assertion below drifts with the goldens. Stub it, the same
+  // way the allocation and vault subjects are stubbed further down this file.
+  await page.route("**/api/swarm/subjects/woon", (route) =>
+    route.fulfill(json({
+      id: "woon",
+      name: "Woon",
+      operator: "peaq",
+      source: { type: "rpc" },
+    })));
   await page.route("**/api/swarm/sessions*", (route) =>
     route.fulfill(json({
       sessions: [{
