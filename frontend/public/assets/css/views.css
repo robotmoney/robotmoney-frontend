@@ -45,6 +45,55 @@
 .rv__body { max-width: 1280px; margin: 0 auto; padding: 2.2rem 1.5rem 0; }
 @media (min-width: 1024px) { .rv__body { padding-left: 2rem; padding-right: 2rem; } }
 .rv__dash { display: flex; flex-direction: column; gap: 1.1rem; }
+
+/* Loading skeleton. /swarm shipped one of these for exactly this reason and
+   had measured CLS 0.4974 without it, where 0.25 is already "poor": a one-line
+   "Loading…" is replaced by a full page of content and everything under it
+   drops by a screen. This page is far taller and busier than /swarm, so the
+   skeleton follows ITS running order (a row of summary cards, the tall
+   full-history chart, the panel grid, the wide correlations card, then the
+   backtests) and holds well over a viewport, which is the part that matters:
+   whatever height it still gets wrong lands below the fold, where a shift
+   costs nothing. The card counts are the real ones where the page fixes them
+   (four summary cards, three panels) and a sample where it does not (the
+   backtests are one card per market, up to three, and by then we are two
+   screens down).
+   Same treatment as .sv__skel further down this sheet: flat surfaces, square
+   corners, and a slow opacity breath rather than the sweeping highlight every
+   skeleton library ships, which is a moving gradient and this system does not
+   have gradients. It borrows that block's @keyframes sv-skel rather than
+   declaring a second identical one; if that block ever goes this degrades to a
+   still skeleton, which is the harmless direction. */
+.rv__skel { display: flex; flex-direction: column; gap: 1.1rem; }
+/* The heading bar is deliberately NOT in the group below: it is the one piece
+   that takes --color-surface-light, and listing it in both blocks made the
+   group's background dead on arrival (caught by the duplicate-selector lint). */
+.rv__skel-head {
+  height: 2.25rem; width: min(20rem, 60%);
+  background: var(--color-surface-light); animation: sv-skel 1.8s ease-in-out infinite;
+}
+.rv__skel-card, .rv__skel-chart, .rv__skel-panel, .rv__skel-wide, .rv__skel-bt {
+  background: var(--color-surface); animation: sv-skel 1.8s ease-in-out infinite;
+}
+/* The two grids repeat .rv__cards and .rv__panels rather than approximating
+   them, breakpoints included, so the skeleton drops to two and then one column
+   at the same widths the content will. A skeleton that reflows differently
+   from what replaces it moves the page a second time on the way out. */
+.rv__skel-cards { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
+@media (min-width: 768px) { .rv__skel-cards { grid-template-columns: repeat(4, 1fr); } }
+.rv__skel-card { height: 8rem; }
+.rv__skel-chart { height: 24rem; }
+.rv__skel-panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
+@media (min-width: 860px) { .rv__skel-panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1264px) { .rv__skel-panels { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.rv__skel-panel { height: 22rem; }
+.rv__skel-wide { height: 15rem; }
+.rv__skel-bt { height: 26rem; }
+@media (prefers-reduced-motion: reduce) {
+  .rv__skel-head, .rv__skel-card, .rv__skel-chart, .rv__skel-panel,
+  .rv__skel-wide, .rv__skel-bt { animation: none; }
+}
+
 /* section head/title/as-of promoted to components.css
    (.rm-section-head / .rm-section-title / .rm-asof). */
 
@@ -55,8 +104,13 @@
 .rv__card-regime { font-size: 1.9rem; font-weight: 500; margin-top: 0.35rem; }
 .rv__posbar { position: relative; height: 6px; background: var(--color-border); border-radius: var(--radius); overflow: hidden; margin-top: 0.85rem; }
 .rv__posbar-fill { height: 100%; background: var(--color-accent); border-radius: var(--radius); }
-.rv__posbar-tick { position: absolute; top: 0; bottom: 0; width: 1px; left: 50%; background: var(--color-text-dim); }
-.rv__posbar-labels { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); margin-top: 0.25rem; }
+/* The neutral midpoint, as a reference hairline rather than anything a reader
+   reads, so it takes a border token instead of a rung of the text ramp.
+   border-light and not border: the tick has to stay legible on the
+   border-coloured track while the fill is short of the middle, and it reads as
+   a dark seam against the cyan fill once the fill runs past it. */
+.rv__posbar-tick { position: absolute; top: 0; bottom: 0; width: 1px; left: 50%; background: var(--color-border-light); }
+.rv__posbar-labels { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); margin-top: 0.25rem; }
 
 /* full-history chart card — shell + head + title-group + title + chart +
    chips + legend promoted to components.css (.rm-chartcard / .rm-chartcard-head
@@ -64,24 +118,77 @@
    .rm-chip / .rm-legend / .rm-legend-item / .rm-legend-swatch). */
 
 /* panel + generic tables */
-.rv__panels { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
-.rv__panel-card, .rv__corr-card, .rv__bt-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden; }
+/* Column count is chosen where a panel table actually fits, which the old rule
+   did not do: it went three-across at 768px and stayed there, putting a ~390px
+   table in a 230px card, and the card's `overflow: hidden` then quietly ate the
+   Weight column rather than showing anything was missing. Every laptop under
+   about 1250px had been reading a four-column table.
+   Three across needs 3 × 392px + 2 gaps inside the 1216px content box, which
+   arrives at a 1264px viewport; two across needs 2 × 396px, which arrives at
+   860px. `minmax(0, 1fr)` rather than `1fr` so a track is exactly its share and
+   a wide table can never widen the grid past the page (the clip used to be what
+   prevented that — see .rv__panel-card). Breakpoints, not auto-fit: auto-fit
+   picks its own count from the same numbers, and one stray pixel of padding
+   would silently drop the page from three columns to two. */
+.rv__panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
+@media (min-width: 860px) { .rv__panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1264px) { .rv__panels { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.rv__corr-card, .rv__bt-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden; }
+/* Not `overflow: hidden`, unlike its two siblings: this card is the only one
+   holding tooltips, and both kinds are absolutely positioned — the header
+   .rm-tip bubbles open UPWARD over the card head, and the last row's .rv__tip
+   opens downward past the card foot. Clipping is what made the bottom-row
+   tooltip a sliver. The radius the clip used to enforce is on the head.
+   `min-width: 0` comes with it: `overflow: hidden` was also, silently, what
+   kept the three grid columns even, because a scroll container contributes no
+   min-content to its track. Dropping the clip without this let the widest
+   panel table set its own column, and the 3-across grid grew past the 1280px
+   page. The panel table is trimmed below to fit the track it is given. */
+.rv__panel-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: visible; min-width: 0; }
+.rv__panel-card > .rv__panel-card-head { border-radius: var(--radius) var(--radius) 0 0; }
+/* Buying back the ~20px the panel table needs to fit its track at three across:
+   inner cells give up 1.6px a side (the 1rem card gutter on the outer edges is
+   untouched), and the mono provenance line may break mid-token — "Blockchain.com"
+   as one unbreakable 84px word was setting the whole first column's floor.
+   Guarded by the panel-fit assertion in regime-visual.spec.ts. */
+.rv__panel-card .rv__table td, .rv__panel-card .rv__table th { padding-left: 0.35rem; padding-right: 0.35rem; }
+.rv__panel-card .rv__table td:first-child, .rv__panel-card .rv__table th:first-child { padding-left: 0.75rem; }
+.rv__panel-card .rv__table td:last-child, .rv__panel-card .rv__table th:last-child { padding-right: 0.75rem; }
+/* `anywhere`, not `break-word`: only the former lowers the cell's min-content
+   width, which is what the table's column sizing actually reads. It does not
+   make text break mid-word in normal conditions — it makes a too-narrow column
+   possible instead of impossible, so the table can always be made to fit the
+   card and the last columns stop being the ones that silently disappear. */
+.rv__ind-label, .rv__ind-src { overflow-wrap: anywhere; }
+/* Below one full track the table cannot be made to fit, so it scrolls instead
+   of being clipped. Only safe under 700px, which is exactly where .rm-tip__bub
+   switches to `position: fixed` and stops caring about scroll containers. */
+@media (max-width: 699px) { .rv__panel-card { overflow-x: auto; } }
 .rv__panel-card-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; padding: 0.72rem 1rem; border-bottom: 1px solid var(--color-border); background: rgba(16, 20, 28, 0.4); }
 .rv__panel-card-title { font-size: 0.9rem; font-weight: 500; margin: 0; }
-.rv__panel-card-meta { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); }
+.rv__panel-card-meta { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); }
 /* table shell + cells (.rm-table-scroll / .rm-table / .rm-num / .rm-muted)
    promoted to components.css; regime-only cell styles stay below. */
 .rv__ind-cell { display: flex; flex-direction: column; gap: 0.1rem; }
-.rv__ind-name {
-  font-size: 0.85rem; color: var(--color-text); cursor: help;
+/* The panel-table indicator name is a LINK to its glossary entry, so it takes
+   the pointer — `cursor: help` here was the tell that sent readers hunting for
+   a tooltip instead of clicking through. The dotted rule moves to the inner
+   label so it underlines the words and not the info glyph beside them. */
+.rv__ind-name { font-size: 0.85rem; color: var(--color-text); }
+a.rv__ind-name { text-decoration: none; }
+/* The last word of the name plus the glyph, travelling as one word. */
+.rv__ind-tail { white-space: nowrap; }
+.rv__ind-label {
   text-decoration: underline; text-decoration-style: dotted;
-  text-decoration-color: var(--color-text-dim); text-underline-offset: 4px;
+  text-decoration-color: var(--color-text-muted); text-underline-offset: 4px;
 }
-.rv__ind-name--plain { text-decoration: none; cursor: default; }
+a.rv__ind-name:hover { color: var(--color-accent); }
+a.rv__ind-name:hover .rv__ind-label { text-decoration-color: var(--color-accent); }
+a.rv__ind-name:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 /* name + info-icon + hover tooltip wrapper (source PanelTable "group") */
 .rv__ind-tipwrap { position: relative; display: inline; }
-.rv__ind-info { margin-left: 0.35rem; display: inline-block; color: var(--color-text-dim); vertical-align: baseline; transition: color 0.15s; }
-.rv__ind-info:hover { color: var(--color-accent); }
+.rv__ind-info { margin-left: 0.25rem; display: inline-block; color: var(--color-text-muted); vertical-align: baseline; transition: color 0.15s; }
+a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .rv__ind-info svg { display: inline-block; vertical-align: baseline; }
 .rv__tip {
   pointer-events: none; position: absolute; left: 0; top: 100%; z-index: 20;
@@ -92,12 +199,12 @@
   opacity: 0; transition: opacity 0.15s;
 }
 .rv__ind-tipwrap:hover .rv__tip { opacity: 1; }
-.rv__ind-src { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); margin-top: 0.15rem; }
-.rv__ind-src a { color: var(--color-text-dim); text-decoration: none; }
+.rv__ind-src { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); margin-top: 0.15rem; }
+.rv__ind-src a { color: var(--color-text-muted); text-decoration: none; }
 .rv__ind-src a:hover { color: var(--color-accent); }
-.rv__spark { width: 90px; }
+.rv__spark { width: 78px; }
 .rv__spark-svg { display: block; }
-.rv__spark-empty { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); }
+.rv__spark-empty { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); }
 
 /* backtest cards */
 .rv__bt-weights { display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.6rem 1rem; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--color-text-muted); }
@@ -112,7 +219,7 @@
 /* card foot note (.rm-foot) promoted to components.css. */
 
 /* component methodology footer (bucket thresholds) */
-.rv__component-foot { padding-top: 0.4rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--color-text-dim); }
+.rv__component-foot { padding-top: 0.4rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--color-text-muted); }
 .rv__component-foot p { margin: 0; }
 
 /* page-level methodology */
@@ -142,7 +249,7 @@
    the chip's own — the doubled frame that read as broken. */
 .sv__fact { display: inline-flex; align-items: center; gap: 0.45rem;
   border: 1px solid var(--color-border); border-radius: var(--radius); padding: 0.34rem 0.6rem; }
-.sv__fact em { font-style: normal; color: var(--color-text-dim); }
+.sv__fact em { font-style: normal; color: var(--color-text-muted); }
 .sv__fact b { font-weight: 500; color: var(--color-text); letter-spacing: 0.1em; font-variant-numeric: tabular-nums; }
 /* Form carries the category, hue carries the value. Across the swarm tree a
    ROUND dot means a reading (stance, verdict, regime) and a SQUARE one means an
@@ -156,7 +263,7 @@
 .sv__member-hero { display: flex; gap: 1.25rem; align-items: center; }
 .sv__metadata-grid { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
 .sv__metadata-grid div { border-top: 1px solid var(--color-border); padding-top: 0.65rem; }
-.sv__metadata-grid span { display: block; color: var(--color-text-dim); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; }
+.sv__metadata-grid span { display: block; color: var(--color-text-muted); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; }
 .sv__metadata-grid b { display: block; margin-top: 0.25rem; color: var(--color-text); font-family: var(--font-mono); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
 /* Swarm verdict. Replaces the .sv__aggregate box whose largest element was
    "3/5" — turnout, not a finding. The call leads, the proportional bar shows
@@ -177,7 +284,7 @@
 .sv__verdict-meta { display: flex; flex-wrap: wrap; gap: 1.75rem; margin: 1.25rem 0 0;
   padding-top: 0.9rem; border-top: 1px solid var(--color-border); }
 .sv__verdict-meta div { min-width: 0; }
-.sv__verdict-meta dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-dim); }
+.sv__verdict-meta dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
 .sv__verdict-meta dd { margin: 0.3rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; color: var(--color-text-muted); overflow-wrap: anywhere; }
 
 .sv__takes { display: flex; flex-direction: column; gap: 1rem; }
@@ -197,14 +304,17 @@
   border: 1px solid var(--color-border); border-radius: var(--radius);
   font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em; cursor: pointer;
   transition: color .16s ease, border-color .16s ease, background .16s ease; }
-.mp-chip:hover { color: var(--color-text); border-color: var(--color-text-dim); }
+/* The hover lift is a border, not type, so it steps along the border tokens:
+   border to border-light, while the label goes to full text. The same pair
+   .sv__more:hover already uses further down this sheet. */
+.mp-chip:hover { color: var(--color-text); border-color: var(--color-border-light); }
 /* Selected: a filled plane edged in cyan. Cyan is the house interface line by
    covenant, so it says "this control is active" without competing with the dot,
    which says "which subject" — two jobs, two roles, no ambiguity. The × makes
    it obvious the filter clears by clicking again. */
 .mp-chip.is-on { color: var(--color-text); border-color: var(--color-accent); background: var(--color-surface); }
 .mp-chip__x { color: var(--color-accent); font-size: 0.78rem; line-height: 1; margin-left: 0.05rem; }
-.mp-chip__n { font-variant-numeric: tabular-nums; color: var(--color-text-dim); }
+.mp-chip__n { font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
 .mp-chip.is-on .mp-chip__n { color: var(--color-text-muted); }
 .mp-chip:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 
@@ -371,10 +481,10 @@
 a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   text-decoration: underline; text-decoration-color: var(--color-accent);
   text-decoration-thickness: 1px; text-underline-offset: 4px; }
-.sv__tag { display: inline-flex; align-items: center; border: 1px solid var(--color-border); padding: 0.12rem 0.38rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
+.sv__tag { display: inline-flex; align-items: center; border: 1px solid var(--color-border); padding: 0.12rem 0.38rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); }
 .sv__row-copy, .sv__session-copy, .sv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; max-width: 78ch; }
 .sv__mini-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem; }
-.sv__mini-tags span { background: rgba(255,255,255,0.04); color: var(--color-text-dim); font-family: var(--font-mono); font-size: 0.58rem; padding: 0.15rem 0.38rem; }
+.sv__mini-tags span { background: rgba(255,255,255,0.04); color: var(--color-text-muted); font-family: var(--font-mono); font-size: 0.58rem; padding: 0.15rem 0.38rem; }
 
 /* Loading skeleton. Its only job is to occupy the height the content will,
    so the page below it does not jump — see the note in swarm.html. Flat
@@ -457,7 +567,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    an identity without saying anything about which. These two say what kind of
    thing the row is: a card that holds addresses, or a set of weights. Line
    art in currentColor, so it inherits rather than spending a hue. */
-.sv__cov-mark { display: inline-flex; flex: 0 0 auto; color: var(--color-text-dim); }
+.sv__cov-mark { display: inline-flex; flex: 0 0 auto; color: var(--color-text-muted); }
 .sv__cov-mark .rm-pmark { width: 14px; height: 14px; display: block; }
 
 /* Where the portfolio actually points. Mono because it is chains and counts,
@@ -501,7 +611,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__vault-d b { color: var(--color-text); font-weight: 500; }
 .sv__vault-alloc { margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--color-border); }
 .sv__vault-label { margin: 0 0 0.6rem; font-family: var(--font-mono); font-size: 0.62rem;
-  text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-dim); }
+  text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
 /* The four sleeves as a register: a column per fact, so target and current sit
    under each other and drift is read rather than computed. Figures, not bars —
    two sleeves are at 0% and a bar would draw one long block beside two
@@ -512,7 +622,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   align-items: baseline; padding: 0.38rem 0; border-bottom: 1px solid var(--color-border); }
 .sv__sleeve:last-child { border-bottom: 0; }
 .sv__sleeve--head { font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
-  letter-spacing: 0.16em; color: var(--color-text-dim); padding-bottom: 0.45rem; }
+  letter-spacing: 0.16em; color: var(--color-text-muted); padding-bottom: 0.45rem; }
 .sv__sleeve--head > :not(:first-child), .sv__sleeve-v { text-align: right; }
 .sv__sleeve-n { display: flex; align-items: center; gap: 0.5rem; min-width: 0;
   font-size: 0.82rem; color: var(--color-text-soft); }
@@ -520,7 +630,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   font-variant-numeric: tabular-nums; color: var(--color-text); }
 /* Drift is the only figure here that is a judgement, so it is the only one
    that changes colour, and only when it is off. */
-.sv__sleeve-drift { color: var(--color-text-dim); }
+.sv__sleeve-drift { color: var(--color-text-muted); }
 .sv__sleeve-drift.is-off { color: var(--color-warm); }
 .sv__sleeve-note { margin: 0.75rem 0 0; font-size: 0.78rem; line-height: 1.55;
   color: var(--color-text-muted); max-width: 62ch; }
@@ -588,7 +698,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    louder than the operators it sat between; a dash says the same and lets the
    filled cells be what the eye lands on. Same metrics as .sv__operator so the
    column reads as one ruler. */
-.sv__unset { color: var(--color-text-dim); font-family: var(--font-mono);
+.sv__unset { color: var(--color-text-muted); font-family: var(--font-mono);
   font-size: 0.7rem; letter-spacing: 0.1em; }
 .sv__operator { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
   letter-spacing: 0.1em; color: var(--color-text-muted); }
@@ -607,7 +717,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    the link convention cannot afford to be ambiguous about. */
 .sv__qualifier { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-muted); white-space: nowrap; }
-.sv__qualifier::before { content: "·"; margin-right: 0.5rem; color: var(--color-text-dim); }
+.sv__qualifier::before { content: "·"; margin-right: 0.5rem; color: var(--color-text-muted); }
 
 .sv__more { display: block; width: 100%; margin-top: 0.75rem; padding: 0.75rem; cursor: pointer;
   background: none; border: 1px solid var(--color-border); border-radius: var(--radius);
@@ -616,7 +726,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__more:hover { border-color: var(--color-border-light); color: var(--color-text-soft); }
 .sv__more[disabled] { opacity: 0.5; cursor: default; }
 .sv__sessions-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0 0 1rem; }
-.sv__session-count, .sv__date, .sv__session-meta { font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-dim); }
+.sv__session-count, .sv__date, .sv__session-meta { font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-muted); }
 .sv__session-list { display: grid; gap: 0.75rem; }
 .sv__session-list--compact { gap: 0.55rem; }
 .sv__session-card { position: relative; display: block; border: 1px solid var(--color-border); padding: 1.25rem; color: inherit; text-decoration: none; transition: border-color 0.16s ease, background 0.16s ease; }
@@ -660,15 +770,15 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 
 .sv__rec { margin: 1rem 0 0; display: grid; gap: 0.3rem; }
 .sv__rec dt { font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
-  letter-spacing: 0.16em; color: var(--color-text-dim); }
+  letter-spacing: 0.16em; color: var(--color-text-muted); }
 .sv__rec dd { margin: 0; color: var(--color-text-soft); font-size: 0.875rem; line-height: 1.55; max-width: 68ch; }
 .sv__rec dd b { color: var(--color-text); font-weight: 500; text-transform: uppercase;
   font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; }
 .sv__rec-n { font-variant-numeric: tabular-nums; }
-.sv__rec-more { color: var(--color-text-dim); font-size: 0.8rem; }
+.sv__rec-more { color: var(--color-text-muted); font-size: 0.8rem; }
 /* Its own class, not a .sv__rec modifier: a selector that matches both the
    recommendation and the notice that there isn't one cannot be asserted on. */
-.sv__rec-empty { margin: 1rem 0 0; color: var(--color-text-dim); font-size: 0.8rem; }
+.sv__rec-empty { margin: 1rem 0 0; color: var(--color-text-muted); font-size: 0.8rem; }
 
 .sv__session-foot { display: flex; align-items: center; justify-content: space-between;
   gap: 1rem; margin-top: 1rem; }
@@ -677,7 +787,9 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   border: 1px solid var(--color-border); border-radius: var(--radius);
   font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-muted); }
-.sv__takes-btn:hover:not([disabled]) { border-color: var(--color-text-dim); color: var(--color-text); }
+/* Border, not type: the same border to border-light hover step as .mp-chip and
+   .sv__more. */
+.sv__takes-btn:hover:not([disabled]) { border-color: var(--color-border-light); color: var(--color-text); }
 .sv__takes-btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 .sv__takes-btn[disabled] { opacity: 0.45; cursor: default; }
 .sv__takes-caret { display: inline-block; transition: transform 0.16s ease; font-size: 0.9rem; line-height: 1; }
@@ -698,7 +810,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__take-line { grid-column: 1 / -1; margin: 0; font-size: 0.85rem; line-height: 1.6;
   color: var(--color-text-muted); max-width: 72ch; }
 .sv__take-absent { margin: 0.85rem 0 0; font-family: var(--font-mono); font-size: 0.68rem;
-  text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-dim); }
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); }
 @media (max-width: 560px) {
   .sv__take-row { grid-template-columns: 1fr auto; }
   .sv__take-conf { margin-right: 0; }
@@ -708,7 +820,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__detail-head { margin: 1.5rem 0 2.5rem; }
 /* Type comes from the site headline rule in components.css. */
 .sv__detail-title { margin: 0.35rem 0 0; }
-.sv__fact-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.15rem; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
+.sv__fact-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.15rem; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); }
 .sv__meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.45rem 1.4rem; margin: 0.9rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; }
 .sv__meta-grid dt { color: var(--color-text-muted); }
 .sv__meta-grid dd { margin: 0; color: var(--color-text); overflow-wrap: anywhere; }
@@ -718,7 +830,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__meta-grid dd a:hover { text-decoration: underline; }
 .sv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; max-width: 82ch; }
 .sv__bullet-list li { color: var(--color-text-muted); font-size: 0.88rem; }
-.sv__bullet-list li::before { content: "· "; color: var(--color-text-dim); }
+.sv__bullet-list li::before { content: "· "; color: var(--color-text-muted); }
 .sv__discussion { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 1.5rem 0 2rem; }
 /* Market backdrop. One panel, not two: the old "Brief" half held a single
    derived sentence restating the <h1> and a backdrop chip. A note says what
@@ -767,10 +879,10 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__donut-row i { width: 2.1rem; height: 2.1rem; border-radius: 50%; background: conic-gradient(var(--c) calc(var(--p) * 1%), rgba(255,255,255,0.06) 0); border: 1px solid var(--color-border); position: relative; }
 .sv__donut-row i::after { content: ""; position: absolute; inset: 0.42rem; border-radius: 50%; background: var(--color-void); }
 .sv__donut-row span { color: var(--color-text); }
-.sv__donut-row b { color: var(--color-text-dim); font-weight: 500; }
+.sv__donut-row b { color: var(--color-text-muted); font-weight: 500; }
 .sv__table-wrap { overflow-x: auto; }
 .sv__data-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.72rem; }
-.sv__data-table th { color: var(--color-text-dim); text-align: left; font-weight: 400; padding: 0.35rem 0.55rem; border-bottom: 1px solid var(--color-border); }
+.sv__data-table th { color: var(--color-text-muted); text-align: left; font-weight: 400; padding: 0.35rem 0.55rem; border-bottom: 1px solid var(--color-border); }
 .sv__data-table td { padding: 0.45rem 0.55rem; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--color-text-muted); text-align: left; }
 .sv__data-table td:first-child { color: var(--color-text); }
 .sv__num { text-align: right !important; }
@@ -784,7 +896,12 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__bars-key span { color: var(--color-text-muted); }
 .sv__bars-key__swatch { width: 0.7rem; height: 0.4rem; flex: none; }
 .sv__bars-key__swatch.is-target { border: 1px solid var(--color-text-muted); }
-.sv__bars-key__swatch.is-actual { background: var(--color-text-dim); opacity: 0.9; }
+/* Not type but a SAMPLE of the actual bar, so its job is to composite to what
+   that bar composites to. bucketWeightsBars() in static-views.js now draws that
+   bar as --color-text-muted at fill-opacity 0.45, so the swatch carries the
+   same pair; left at 0.9 it would have been brighter than the series it names,
+   which is the one thing a key may not be. */
+.sv__bars-key__swatch.is-actual { background: var(--color-text-muted); opacity: 0.45; }
 .sv__bars-key__swatch.is-recommended { background: var(--color-accent); }
 .sv__bars-key li:last-child span { color: var(--color-accent); }
 /* The bucket table repeats the bars as numbers. Sits directly under the figure
@@ -815,7 +932,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* The stance chip. nowrap so it cannot break mid-label and pull the view
    column out of alignment on a narrow panel. */
 .sv__dis-stance { display: inline-flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
-.sv__dis-nostance { color: var(--color-text-dim); font-style: italic; }
+.sv__dis-nostance { color: var(--color-text-muted); font-style: italic; }
 .sv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
   color: var(--color-accent) !important; text-transform: none !important; }
 .sv__disagreements { display: grid; gap: 1.6rem; margin-top: 1rem; }
@@ -839,7 +956,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* "Settles when" is the resolution condition, not body copy — set it off from
    the positions above it so it reads as the disagreement's footer. */
 .sv__disagreement p { margin: 0.8rem 0 0; padding-top: 0.7rem;
-  border-top: 1px solid var(--color-border); color: var(--color-text-dim);
+  border-top: 1px solid var(--color-border); color: var(--color-text-muted);
   font-size: 0.78rem; line-height: 1.55; }
 .sv__disagreement p em { font-style: normal; font-family: var(--font-mono);
   font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em;
@@ -849,13 +966,13 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__take--ported { background: transparent; padding: 1.35rem; --vfy-inset: 1.35rem; }
 .sv__take-member { display: flex; align-items: center; gap: 0.8rem; }
 .sv__member-link { color: var(--color-text); font-family: var(--font-sans); font-weight: 700; font-size: 1.15rem; }
-.sv__take-lens { margin-top: 0.15rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
+.sv__take-lens { margin-top: 0.15rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); }
 .sv__stance-badge { display: inline-flex; align-items: center; gap: 0.42rem; border: 1px solid; padding: 0.18rem 0.5rem; font-family: var(--font-mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.1em; }
 .sv__take-body { margin: 1rem 0 0; color: var(--color-text); line-height: 1.7; font-size: 0.9rem; max-width: 82ch; }
 .sv__take-body p { margin: 0 0 0.9rem; }
 .sv__take-body ul { margin: 0.25rem 0 1rem; padding-left: 1.2rem; }
 .sv__take-body li { margin: 0.25rem 0; }
-.sv__take-body li::marker { color: var(--color-text-dim); }
+.sv__take-body li::marker { color: var(--color-text-muted); }
 /* Section heading inside a rendered take ("REGIME", "ALLOCATION", "SUBJECT").
    A label, not a title: mono, small, tracked — so it separates the sections
    without competing with the page's own headings. Global, because take bodies
@@ -911,9 +1028,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   /* .rv__cards base 4-col grid promoted to components.css (.rm-cards). */
   .rv__cards.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
   .rv__cards.rv--cols4 { grid-template-columns: repeat(4, 1fr); }
-  .rv__panels { grid-template-columns: repeat(3, 1fr); }
-  .rv__panels.rv--cols2 { grid-template-columns: repeat(2, 1fr); }
-  .rv__panels.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
   .sv__rail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sv__backdrop-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   /* .sv__discussion stays single-column at every width. Consensus and
@@ -956,14 +1070,28 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rs__h2 { font-size: 1.25rem; margin: 2.5rem 0 1rem; }
 .rs__series-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
 .rs__series-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 0.75rem 1rem 1rem; }
-.rs__series-label { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); margin-bottom: 0.5rem; }
+.rs__series-label { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); margin-bottom: 0.5rem; }
 .rs__series-canvas { height: 120px; }
 @media (min-width: 768px) { .rs__gauges { grid-template-columns: repeat(2, 1fr); } .rs__series-grid { grid-template-columns: repeat(2, 1fr); } }
 
-/* The /allocation .alloc-* residue is gone with the page (RM-105): /allocation
-   now resolves to /vault, whose styles are page-local to views/vault.html. The
-   .alloc-* rules that survive do so inside views/allocation.html's own <style>
-   block, which the shared sheet never owned. */
+/* allocation (/allocation) residue — the page is built almost entirely from the
+   shared .rm-* components (see components.css) + the regime hero shell; these
+   few page-local rules cover content shapes the shared library doesn't: the
+   two-up chart grid, standalone category-legend spacing, section/chart ledes,
+   the stacked value-over-quantity numeric cell, the accent total column, table
+   header swatches, and the footer link/margin. */
+.alloc-charts { display: grid; grid-template-columns: 1fr; gap: 1.5rem; margin-bottom: 2.5rem; }
+.alloc-legend { flex-wrap: wrap; gap: 0.75rem 1.25rem; margin-bottom: 1.5rem; }
+.alloc-lede { font-size: 0.875rem; color: var(--color-text-muted); margin: 0.75rem 0 0; max-width: 42rem; }
+.alloc-chart-sub { font-size: 0.75rem; color: var(--color-text-muted); margin: 0.25rem 0 0; }
+.alloc-num span { display: block; }
+.alloc-num i { display: block; font-style: normal; font-size: 0.6rem; color: var(--color-text-muted); margin-top: 1px; }
+.alloc-total { color: var(--color-green); font-weight: 700; }
+.alloc-table th .rm-legend-swatch { margin-right: 0.4rem; }
+.alloc-foot { margin-top: 2.5rem; }
+.alloc-foot a { color: var(--color-accent); text-decoration: none; }
+.alloc-foot a:hover { text-decoration: underline; }
+@media (min-width: 768px) { .alloc-charts { grid-template-columns: 1fr 1fr; } }
 
 /* ── Admin task-queue dashboard (/admin) ─────────────────────────────────────
    A password-gated operator view over the Postgres task queue. Reuses the shared
@@ -975,7 +1103,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .adm-title { font-size: 2.25rem; letter-spacing: -0.02em; margin: 0.5rem 0 0; }
 .adm-lede { color: var(--color-text-muted); font-size: 0.9rem; margin: 0.75rem 0 0; max-width: 44rem; line-height: 1.6; }
 .adm-lede code { font-family: var(--font-mono); color: var(--color-accent); }
-.adm-dim { color: var(--color-text-dim); }
+.adm-dim { color: var(--color-text-muted); }
 .adm-msg { margin-top: 0.75rem; }
 
 /* Login card */
@@ -1135,7 +1263,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__within { margin-top: 1rem; }
 .sv__within-bucket { margin-top: 0.75rem; }
 .sv__within-name { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
-                   text-transform: uppercase; color: var(--color-text-dim); margin: 0 0 0.35rem; }
+                   text-transform: uppercase; color: var(--color-text-muted); margin: 0 0 0.35rem; }
 .sv__within-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px;
                    background: var(--color-border); border: 1px solid var(--color-border); }
 .sv__within-list li { display: flex; justify-content: space-between; align-items: baseline;

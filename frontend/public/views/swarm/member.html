@@ -259,7 +259,7 @@
     </template>
 
     <!-- #687: neither the live API nor the static-archive fallback resolved
-         this ref — render the committee roster in place, at the URL the
+         this ref, so render the swarm roster in place, at the URL the
          visitor actually requested, rather than a blank profile or a
          redirect that would misrepresent a reference that never resolved as
          one that "moved". The route already answered 404; this is what that
@@ -271,7 +271,7 @@
       <div>
         <section class="sv__panel">
           <div class="sv__panel-head">
-            <p class="sv__panel-label">Committee members (<span x-text="members.length"></span>)</p>
+            <p class="sv__panel-label">Swarm members (<span x-text="members.length"></span>)</p>
           </div>
           <p class="sv__body-copy">
             No member matches &ldquo;<span x-text="attemptedRef"></span>&rdquo;. Every current member is reachable below.
@@ -325,7 +325,11 @@
        card. A native `title` was doing this job with the browser's own delay
        and chrome, which is the one tooltip on the page that looked foreign. */
     .mp-when { position: relative; display: inline-flex; cursor: default; }
-    .mp-when__tip { right: auto; left: 0; border-top-color: var(--color-text-dim); }
+    /* The seam is the bubble's one hairline and not type, so it takes a border
+       token rather than a text colour. Border-light keeps it a shade clearer
+       than the box's other three edges, which is the only reason the top
+       colour is named separately at all. */
+    .mp-when__tip { right: auto; left: 0; border-top-color: var(--color-border-light); }
     .mp-when:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 3px; }
     /* A 272px bubble cannot hang off an element that starts 232px into a 390px
        screen. Narrow, it stops measuring from the date and measures from the
@@ -345,7 +349,7 @@
     .mp-controls .mp-filter { margin: 0; }
     .mp-sort { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
     .mp-sort__label { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.16em;
-                      text-transform: uppercase; color: var(--color-text-dim); margin-right: 0.15rem; }
+                      text-transform: uppercase; color: var(--color-text-muted); margin-right: 0.15rem; }
 
     /* No cyan rail. Same reason as .rm-stats: a fixed accent line on a fixed
        block reports nothing, and cyan is interface state here. */

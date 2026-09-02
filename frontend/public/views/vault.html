@@ -1,4 +1,26 @@
-<!-- /vault — the depositor-capital factsheet (RM-105, design RM-104).
+<!-- UNREACHABLE. NO ROUTE RESOLVES TO THIS FRAGMENT.
+     routes.js pins /vault to NOT_FOUND_VIEW, and /allocation and /allocation2
+     resolve to views/allocation.html again. Nothing below this line is served
+     to a visitor.
+
+     The pin is load-bearing, and deleting the route was NOT enough on its own:
+     viewFor()'s catch-all maps any unknown path to `/views/<path>.html`, so
+     with the entry merely removed, /vault went on rendering this file in full.
+     Caught on stage before review. If this fragment is ever moved or renamed,
+     the pin can go with it; while it sits here, the pin is what retires it.
+
+     Why it is kept rather than deleted: RM-104's information architecture is
+     being reworked against the recommendation-receipt model settled on
+     2026-08-31, and most of what is below survives that rework. Deleting it
+     would mean re-landing it from history in a few weeks.
+
+     Its Playwright spec was removed with the route, the same way
+     allocation-view.spec.ts was removed when /allocation lost its own. The
+     last shipped state of this page, including the allocation rail and the
+     live NAV per share, is on branch david/vault-ia-polish. TREAT EVERYTHING
+     BELOW AS UNTESTED AND UNSHIPPED.
+
+/vault — the depositor-capital factsheet (RM-105, design RM-104).
      Merges what /allocation and /performance said about the ERC-4626 vault
      into one page, and drops what they said about the house book.
 
@@ -547,7 +569,7 @@
 }
 .vp__stat-sub {
   display: block; margin-top: 0.45rem; font-family: var(--font-mono); font-size: 0.62rem;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* provenance badges */
@@ -607,7 +629,7 @@
 .vp__chart { position: relative; border: 1px solid var(--color-border); background: var(--color-deep); padding: 0.9rem; }
 .vp__chart svg { display: block; width: 100%; height: auto; }
 .vp__chart .grid { stroke: rgba(34, 42, 56, 0.75); stroke-width: 1; }
-.vp__chart .axtxt { font-family: var(--font-mono); font-size: 10px; fill: var(--color-text-dim); }
+.vp__chart .axtxt { font-family: var(--font-mono); font-size: 10px; fill: var(--color-text-muted); }
 .vp__chart .endlbl { font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
 .vp__legend {
   display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem; margin-top: 0.8rem;
@@ -696,7 +718,7 @@
 .vp__const-bar i { position: absolute; inset: 0 auto 0 0; background: var(--color-green); }
 .vp__const-bar i.tgt { background: var(--color-border-light); }
 .vp__const-val { text-align: right; color: var(--color-text); }
-.vp__const-val.dim { color: var(--color-text-dim); }
+.vp__const-val.dim { color: var(--color-text-muted); }
 
 /* risk cells */
 .vp__risk {

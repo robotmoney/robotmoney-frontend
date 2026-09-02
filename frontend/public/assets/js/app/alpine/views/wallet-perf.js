@@ -6,6 +6,15 @@ import { assetDot } from "./shared.js";
 
 export function registerWalletPerfView(Alpine) {
   // ── Wallet performance (allocation2) ──────────────────────────────────────
+  // WHOSE MONEY: the Robot Money protocol wallets, and only those. This factory
+  // reads GET /api/dashboards/wallet-balances and NOTHING else: never
+  // vault-economics, never vault TVL. The page it drives calls the figures
+  // "protocol wallets", not "AUM": depositor capital is not in this series, and
+  // "AUM" read as if it were. The internal names below (`totalAum`, the
+  // `x-ref="aum"` canvas, `_series("aum")`) are deliberately unchanged.
+  // Renaming them buys nothing a reader can see and would break the issue #614
+  // gap specs, which query canvas[x-ref="aum"] directly.
+  //
   // LIVE daily series per asset (issue #84): fetched on init from
   // GET /api/dashboards/wallet-balances, replacing the baked 99-snapshot literal
   // that used to be frozen here (Mar 18–Jun 26 2026). Eight stacked-area series

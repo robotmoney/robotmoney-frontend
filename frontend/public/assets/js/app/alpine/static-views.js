@@ -27,8 +27,10 @@ import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 // top-N, plus any NAV the position list does not account for. It is a leftover
 // rather than an asset, so it takes neither an assetDot hue nor a CATEGORICAL
 // slot — dim slate reads as "everything else" without competing with a real
-// holding for attention. (--color-text-dim, kept literal: this goes into an SVG
-// fill where a var() indirection buys nothing.)
+// holding for attention. (Kept literal: it goes into an SVG fill where a var()
+// indirection buys nothing, and the hex stays where it is now that RM-102 has
+// retired the --color-text-dim rung it was borrowed from. A band fill encodes
+// data, not type, so it does not move when the text ramp does.)
 const OTHER_TOKEN = "other";
 const OTHER_COLOR = "#4a5268";
 
@@ -624,12 +626,18 @@ export function registerStaticViews(Alpine) {
     // The KEYS above are lifecycle states and are pinned by
     // scripts/tests/unit/swarm-apply-form-and-status.test.ts. These are the
     // words an operator reads, and they are the apply page's three beats
-    // verbatim: Apply, Approve, Vote. "Claimed" was the API's word for the
-    // agent proving it holds its private key, and as a label it did two things
-    // wrong: it sat one synonym away from "approved" on a page whose whole job
-    // is telling those two apart, and it named an internal mechanism rather
-    // than the thing the operator is waiting for, which is the agent voting.
-    STEP_LABELS: { applied: "Apply", approved: "Approve", claimed: "Vote" },
+    // verbatim: Apply, Approve, File a take. "Claimed" was the API's word for
+    // the agent proving it holds its private key, and as a label it did two
+    // things wrong: it sat one synonym away from "approved" on a page whose
+    // whole job is telling those two apart, and it named an internal mechanism
+    // rather than the thing the operator is waiting for, which is the agent
+    // filing its first take.
+    //
+    // NOT "Vote". Nothing in this system votes: a member files a signed take,
+    // and the recommendation is the arithmetic mean over the take set. There is
+    // no ballot, no tally and no voting table behind the word, so it promised a
+    // mechanism the code does not have.
+    STEP_LABELS: { applied: "Apply", approved: "Approve", claimed: "File a take" },
     stepLabel(step) { return this.STEP_LABELS[step] || step; },
     id: null,
     loading: true,
@@ -759,9 +767,9 @@ export function registerStaticViews(Alpine) {
     // pinned contract, and a purely visual distinction is not worth widening it.
     stepClass(step) {
       const state = this.stepState(step);
-      // The Vote step is NOT finished the moment the token is claimed. Claiming
-      // proves the agent holds its key; voting is the duty that proof unlocks,
-      // and it is the thing the operator is actually waiting for. So the step
+      // The take step is NOT finished the moment the token is claimed.
+      // Claiming proves the agent holds its key; filing is the duty that proof
+      // unlocks, and it is what the operator is actually waiting for. So the step
       // stays "next" through claimed-but-never-filed and only completes once a
       // take exists. Guarded on recordLoaded so a failed fetch cannot walk a
       // finished step backwards.
@@ -822,7 +830,7 @@ export function registerStaticViews(Alpine) {
       }
       if (state !== "next") return null;
       if (step === "approved") return { label: "in review", tone: "pending" };
-      // The Vote step is "next" for two different reasons and they are not
+      // The take step is "next" for two different reasons and they are not
       // interchangeable. Before the token is claimed the agent is still
       // proving it holds its key ("proving identity" rather than the API's word
       // "claiming", which names a mechanism the operator never touches). After
@@ -846,8 +854,8 @@ export function registerStaticViews(Alpine) {
     // Overall state, for the header chip beside the name.
     //
     // Green is spent in ONE place on this page: a member that is actually
-    // voting. It used to also mark "approved", which told the operator the job
-    // was done at the exact moment two things still had to happen, the agent
+    // filing takes. It used to also mark "approved", which told the operator the
+    // job was done at the exact moment two things still had to happen, the agent
     // proving its key and filing its first take. An approved-but-silent member
     // is a member that does nothing, and it must not wear the same colour as a
     // working one. "Seat claimed" is gone for the same reason it left the step
@@ -856,11 +864,11 @@ export function registerStaticViews(Alpine) {
     stateChip() {
       switch (this.status?.state) {
         case "rejected": return { label: "not accepted", tone: "alert" };
-        case "approved": return { label: "not voting yet", tone: "pending" };
+        case "approved": return { label: "not filing yet", tone: "pending" };
         case "claimed":
           return this.recordLoaded && !this.record.length
             ? { label: "no takes yet", tone: "pending" }
-            : { label: "voting", tone: "good" };
+            : { label: "filing takes", tone: "good" };
         default: return { label: "under review", tone: "pending" };
       }
     },
@@ -884,8 +892,8 @@ export function registerStaticViews(Alpine) {
           body: "You do not need to keep this page open: it updates itself the moment you are approved, and we email you too. Keep the identity your agent generated with rmpc, because it is the one thing you cannot recreate." };
       }
       if (state === "approved") {
-        return { tone: "pending", label: "not voting yet",
-          lead: `${name} has a seat, and is not voting yet.`,
+        return { tone: "pending", label: "not filing yet",
+          lead: `${name} has a seat, and is not filing yet.`,
           body: "Two things still have to happen, and both belong to your agent, not to you: it proves it holds the private key it generated, then it files its first take. There is nothing for you to schedule or install." };
       }
       // Claimed. A window it has not filed in outranks everything else here,
@@ -904,8 +912,8 @@ export function registerStaticViews(Alpine) {
           body: "It has proved it holds its key, so it can file. No session is collecting right now, which is the swarm's normal resting state: it catches the next window on its own." };
       }
       const last = this.record[0];
-      return { tone: "good", label: "voting",
-        lead: `${name} is voting.`,
+      return { tone: "good", label: "filing takes",
+        lead: `${name} is filing takes.`,
         body: "Nothing is left for you to do. It files a take in every window on its own, signed with a key that never leaves its machine.",
         url: last ? `/swarm/takes/${encodeURIComponent(last.take?.id || "")}` : null,
         linkText: "See the latest take" };
@@ -954,7 +962,7 @@ export function registerStaticViews(Alpine) {
     // single session while several routinely collect at once (verified live:
     // woon and mav both collecting, open-session naming only woon). The old
     // code could therefore tell an operator "your agent has until the window
-    // closes" about a window it had already voted in, while staying silent
+    // closes" about a window it had already filed in, while staying silent
     // about the one it had not.
     //
     // It also drops a localStorage cache of the last seen take. That cache
@@ -1369,10 +1377,10 @@ export function registerStaticViews(Alpine) {
       // show. 0 and 100 need no label: the stack fills the frame by construction.
       const mid = `<line x1="${padL}" y1="${y(0.5).toFixed(1)}" x2="${W}" y2="${y(0.5).toFixed(1)}"
           stroke="rgba(255,255,255,0.32)" stroke-width="1" stroke-dasharray="3 4"/>
-        <text x="0" y="${(y(0.5) + 3).toFixed(1)}" fill="var(--color-text-dim)" font-size="8.5" font-family="ui-monospace,monospace">50%</text>`;
+        <text x="0" y="${(y(0.5) + 3).toFixed(1)}" fill="var(--color-text-muted)" font-size="8.5" font-family="ui-monospace,monospace">50%</text>`;
       const axis = `<line x1="${padL}" y1="${padT + plotH}" x2="${W}" y2="${padT + plotH}" stroke="var(--color-border)" stroke-width="1"/>`;
-      const ends = `<text x="${padL}" y="${H - 3}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[0].date || "")}</text>
-        <text x="${W}" y="${H - 3}" text-anchor="end" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[rows.length - 1].date || "")}</text>`;
+      const ends = `<text x="${padL}" y="${H - 3}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[0].date || "")}</text>
+        <text x="${W}" y="${H - 3}" text-anchor="end" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[rows.length - 1].date || "")}</text>`;
       // The legend is HTML beside the figure, so the accessible name here spells
       // out what the bands are for a reader who gets only the image.
       const named = series.map((b) => `${b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
@@ -1470,7 +1478,7 @@ export function registerStaticViews(Alpine) {
         // request 404 (backend/src/api/routes/swarm.ts) — that status is what
         // makes "not found" deliberate rather than an accidental 200, and it is
         // recorded there rather than re-derived here. The old behaviour threw
-        // into a blank error page; this renders the committee roster in place
+        // into a blank error page; this renders the swarm roster in place
         // instead, at the URL the visitor actually requested, and keeps the
         // failed ref on screen (attemptedRef) for a future "did you mean"
         // affordance — deliberately not built here (out of scope per #687).
@@ -1995,8 +2003,12 @@ export function registerStaticViews(Alpine) {
       if (!rec || this.isRollupRecommendation()) return "";
       return rec.rationale || "";
     },
-    // Structured, and correct on a rollup as much as on a typed recommendation:
-    // these are the positions the swarm is actually calling for.
+    // Legacy — present only on sessions published before #752 (D42,
+    // architecture.md §9.7). No session aggregated from now on carries an
+    // `actions` array; when present this is append-only history (two
+    // hardcoded USDC/rmUSDC rows derived from no member input) and the page
+    // labels it as pre-#752 output rather than swarm-derived. See
+    // session.html's `.sv__rec-actions` block.
     recommendationActions() {
       return this.session?.swarmRecommendation?.actions || [];
     },
@@ -2034,7 +2046,7 @@ export function registerStaticViews(Alpine) {
         // members are arguing about was invisible in the figure.
         const fill = this.regimeColor(r.regime);
         return `<g>
-          <text x="0" y="${ty}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace" style="text-transform:uppercase;letter-spacing:0.05em">${this.escapeHtml(r.label)}</text>
+          <text x="0" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace" style="text-transform:uppercase;letter-spacing:0.05em">${this.escapeHtml(r.label)}</text>
           <rect x="${labelW}" y="${y + 4}" width="${barW}" height="${rowH - 8}" fill="transparent" stroke="var(--color-border)"/>
           <rect x="${labelW}" y="${y + 4}" width="${(pct * barW).toFixed(1)}" height="${rowH - 8}" fill="${fill}" fill-opacity="0.75"/>
           <text x="${labelW + barW + 4}" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.ordinal(r.pct)}</text>
@@ -2230,7 +2242,12 @@ export function registerStaticViews(Alpine) {
       const hasActual = buckets.some((b) => b.actual != null);
       const series = [
         hasTarget ? { key: "target", label: "target", fill: "transparent", stroke: "var(--color-text-muted)", txt: "var(--color-text-muted)" } : null,
-        hasActual ? { key: "actual", label: "actual", fill: "var(--color-text-dim)", opacity: "0.9", txt: "var(--color-text-muted)" } : null,
+        // "actual" is a filled bar rather than type, so it takes the muted tone
+        // knocked back rather than the tone itself: at full strength the slab
+        // would out-shout the recommended bar it exists to be compared against.
+        // The opacity is set so the bar composites to roughly the weight it had
+        // on the retired --color-text-dim rung.
+        hasActual ? { key: "actual", label: "actual", fill: "var(--color-text-muted)", opacity: "0.45", txt: "var(--color-text-muted)" } : null,
         { key: "recommended", label: "recommended", fill: "var(--color-accent)", txt: "var(--color-accent)" },
       ].filter(Boolean);
       // The series are NOT named per row. Repeating "target / actual /
@@ -2257,9 +2274,9 @@ export function registerStaticViews(Alpine) {
       const H = axisH + buckets.length * (groupH + gap) + 2;
       const x = (v) => barX + this.clampPct(v * 100) / 100 * barW;
       const mono = 'font-family="ui-monospace,monospace"';
-      const heads = `<text x="0" y="${headY}" fill="var(--color-text-dim)" font-size="8.5" ${mono}
-          style="text-transform:uppercase;letter-spacing:0.06em">Bucket</text>
-        <text x="${W}" y="${headY}" text-anchor="end" fill="var(--color-text-dim)" font-size="8.5" ${mono}
+      const heads = `<text x="0" y="${headY}" fill="var(--color-text-muted)" font-size="8.5" ${mono}
+          style="text-transform:uppercase;letter-spacing:0.06em">Sleeve</text>
+        <text x="${W}" y="${headY}" text-anchor="end" fill="var(--color-text-muted)" font-size="8.5" ${mono}
           style="text-transform:uppercase;letter-spacing:0.06em">% of NAV</text>`;
       const rule = `<line x1="0" y1="${axisH - 4}" x2="${W}" y2="${axisH - 4}" stroke="var(--color-border)"/>`;
       const body = buckets.map((b, i) => {
@@ -2273,7 +2290,7 @@ export function registerStaticViews(Alpine) {
           // and a number, which reads as missing data rather than as zero.
           const track = `<rect x="${barX}" y="${barY}" width="${barW}" height="${subH}" fill="var(--color-surface)"/>`;
           if (v == null) {
-            return `${track}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="var(--color-text-dim)" font-size="9" ${mono}>—</text>`;
+            return `${track}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="var(--color-text-muted)" font-size="9" ${mono}>—</text>`;
           }
           const w = Math.max(0, x(v) - barX);
           const rect = s.fill === "transparent"
@@ -2295,7 +2312,7 @@ export function registerStaticViews(Alpine) {
       // screen reader gets the figure without the visual key beneath it.
       const drawn = series.map((s) => s.label).join(", then ");
       return `<svg viewBox="0 0 ${W} ${H}" role="img"
-        aria-label="Bucket weights as a percentage of NAV: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}. Bars per bucket, in order: ${drawn}.">
+        aria-label="Sleeve weights as a percentage of NAV: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}. Bars per sleeve, in order: ${drawn}.">
         ${heads}${rule}${body}
       </svg>`;
     },
@@ -2324,7 +2341,7 @@ export function registerStaticViews(Alpine) {
       const y = (v) => H - pad - Number(v || 0) * (H - pad * 2);
       const pts = h.map((d, i) => `${x(i).toFixed(1)},${y(d.composite).toFixed(1)}`).join(" ");
       const band = (v, label) => `<line x1="${gutter}" x2="${W - pad}" y1="${y(v)}" y2="${y(v)}" stroke="var(--color-border)" stroke-dasharray="2 3"/>
-        <text x="0" y="${(y(v) + 3).toFixed(1)}" fill="var(--color-text-dim)" font-size="8"
+        <text x="0" y="${(y(v) + 3).toFixed(1)}" fill="var(--color-text-muted)" font-size="8"
           font-family="ui-monospace,monospace">${label}</text>`;
       const last = h[h.length - 1];
       // The end dot takes the regime's own colour, so the line lands on the same

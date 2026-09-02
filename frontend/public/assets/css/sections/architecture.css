@@ -151,7 +151,7 @@
 .architecture__depositors-sub {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* ── Arrows ── */
@@ -217,7 +217,7 @@
 .architecture__tag {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
   padding: 0.125rem 0.5rem;       /* py-0.5 px-2 */
 }
@@ -232,21 +232,15 @@
   .architecture__buckets { grid-template-columns: repeat(3, 1fr); } /* md:grid-cols-3 */
 }
 
+/* One card, one treatment. The three volatility-tier modifiers that used to
+   live here tinted by --color-accent (cyan), --color-warn and a raw #facc15,
+   over a fill roughly 250x390px. Three problems at once: cyan is a line and
+   never a fill at that size, warm is a point capped around 12px, and #facc15
+   was a fourth saturated accent with no token behind it. The tier was also
+   this file's opinion, since the allocation feed carries no risk field. */
 .architecture__bucket {
-  border: 1px solid;
+  border: 1px solid var(--color-border);
   padding: 1.5rem;                /* p-6 */
-}
-.architecture__bucket--low {
-  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
-  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
-}
-.architecture__bucket--high {
-  border-color: color-mix(in srgb, var(--color-warn) 40%, transparent);
-  background: color-mix(in srgb, var(--color-warn) 5%, transparent);
-}
-.architecture__bucket--medium {
-  border-color: color-mix(in srgb, #facc15 40%, transparent);  /* yellow-400 */
-  background: color-mix(in srgb, #facc15 5%, transparent);
 }
 .architecture__bucket-head {
   display: flex;
@@ -308,7 +302,7 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.1em;          /* tracking-widest */
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 .architecture__bucket-risk {
   font-family: var(--font-mono);
@@ -316,13 +310,10 @@
   font-weight: 700;
   text-transform: uppercase;
 }
-.architecture__bucket-risk--low { color: var(--color-accent); }
-.architecture__bucket-risk--high { color: var(--color-warn); }
-.architecture__bucket-risk--medium { color: #facc15; } /* yellow-400 */
 .architecture__bucket-assets {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin: 0.5rem 0 0;             /* mt-2 */
 }
 
@@ -338,7 +329,7 @@
 .architecture__fee-text {
   font-family: var(--font-mono);
   font-size: 0.75rem;             /* text-xs */
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 .architecture__fee-sweep {
   display: flex;
@@ -412,7 +403,7 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin-left: 0.5rem;            /* ml-2 */
 }
 .architecture__terminal-code {
@@ -500,7 +491,7 @@
 .architecture__skill-note {
   font-family: var(--font-mono);
   font-size: 0.75rem;             /* text-xs */
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin: 0;
 }
 .architecture__skill-warn {

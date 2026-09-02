@@ -180,7 +180,7 @@ export function registerProjectsView(Alpine) {
     },
     pctText(v) { return v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(2) + "%"; },
     pctColor(v) {
-      if (v == null) return "var(--color-text-dim)";
+      if (v == null) return "var(--color-text-muted)";
       return v > 0 ? "var(--color-accent)" : v < 0 ? "var(--color-warn)" : "var(--color-text-muted)";
     },
     facetPills(p) {

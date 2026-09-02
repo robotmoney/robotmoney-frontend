@@ -31,14 +31,24 @@
      single tone --color-text. The missing rung is why controls reached for cyan
      to separate themselves from body copy, which is how cyan ended up as 26% of
      the type on the application status page.
-     --color-text-soft is not a new colour: it is #aeb6c6, the value the apply
-     page had already forked privately as `--ap-lede`, promoted so there is one
-     copy. 9.8:1 on Void, 9.1:1 on Surface. --color-text-dim stays below AA and
-     remains decoration-only. */
-  --color-text: #e2e4ec;
-  --color-text-soft: #aeb6c6;
-  --color-text-muted: #7e889e;
-  --color-text-dim: #4a5268;
+     --color-text-soft began as #aeb6c6, the value the apply page had already
+     forked privately as `--ap-lede`, promoted so there is one copy.
+
+     RM-102 lifted all three rungs and retired a fourth. --color-text-dim was
+     #4a5268: 2.4:1 on Surface, which fails AA for normal text, large text and
+     UI components alike, so there was no size at which it was safe for
+     anything a reader needs. The comment that used to sit here called it
+     "decoration-only", and it was not: it carried section eyebrows, table
+     labels, chip text, timestamps and figure captions across 51 files. It is
+     gone rather than brightened, because a rung nobody may use for content is
+     a rung that gets used for content anyway. Anything genuinely decorative
+     takes a border colour or an opacity, never an unreadable text colour.
+
+     Ratios below are against --color-surface (#10141c), the darkest ground
+     any of them is painted on. */
+  --color-text: #f2f4f9;        /* 16.8:1 */
+  --color-text-soft: #c2c9d8;   /* 11.1:1 */
+  --color-text-muted: #8f9ab0;  /*  6.5:1 */
   --color-accent: #00e5ff;
   --color-accent-dim: #00b8d4;
   --color-accent-glow: rgba(0, 229, 255, 0.12);

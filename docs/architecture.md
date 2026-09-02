@@ -1198,7 +1198,11 @@ that history is append-only and is not rewritten — recomputing a published
 recommendation is a worse defect than the one being fixed. The consequence is a
 hard constraint on the receipt assembler: **a receipt must never read
 `swarm_recommendation.actions`.** The field is legacy data on old rows and absent
-on new ones.
+on new ones (`contract/src/swarm.d.ts` marks it as such in prose and
+declaration). The public session page renders any legacy array with an explicit
+pre-#752 label — "not swarm-derived" — rather than as current swarm output
+(D42, `frontend/public/views/swarm/session.html` +
+`frontend/public/assets/js/app/alpine/static-views.js:recommendationActions()`).
 
 **The switch is a database row, not an environment variable.** The swarm is live
 and producing real takes on a cadence, so an operator must be able to take the

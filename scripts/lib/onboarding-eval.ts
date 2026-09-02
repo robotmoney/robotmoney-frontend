@@ -343,14 +343,15 @@ async function findMemberIdByContact(backendUrl: string, automationToken: string
 interface ApplyStatusObservation {
   state: ApplyState;
   claimedAt: string | null;
+  role: "member" | "judge";
 }
 
 async function fetchApplyStatus(backendUrl: string, memberId: string): Promise<ApplyStatusObservation | null> {
   const p = routePath(ROUTES.swarm.applyStatus, { id: memberId });
   const res = await fetch(`${backendUrl}${p}`);
   if (!res.ok) throw new Error(`GET ${p} -> ${res.status}`);
-  const body = (await res.json()) as { state: ApplyState; claimedAt?: string | null };
-  return { state: body.state, claimedAt: body.claimedAt ?? null };
+  const body = (await res.json()) as { state: ApplyState; claimedAt?: string | null; role?: "member" | "judge" };
+  return { state: body.state, claimedAt: body.claimedAt ?? null, role: body.role ?? "member" };
 }
 
 async function isOnActiveRoster(backendUrl: string, memberId: string): Promise<boolean> {

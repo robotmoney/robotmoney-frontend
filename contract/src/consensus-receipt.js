@@ -151,6 +151,14 @@ function requiredSpecField(spec, key, fn) {
 // implementation is obliged to reproduce, so it is refused rather than emitted.
 function assertIntegers(node, path) {
   if (typeof node === "number") {
+    // JSON.stringify(-0) silently emits "0". That would let two producers
+    // disagree about the value they signed while this canonicalizer launders
+    // the distinction away, so reject negative zero wherever an integer occurs.
+    if (Object.is(node, -0)) {
+      throw new ReceiptCanonicalizationError(
+        `canonicalizeReceipt: "${path}" is negative zero — schema 1.0 integers must have one canonical representation`,
+      );
+    }
     if (!Number.isSafeInteger(node)) {
       throw new ReceiptCanonicalizationError(
         `canonicalizeReceipt: "${path}" is ${node} — every number in schema 1.0 is a safe integer`,
@@ -399,10 +407,9 @@ const SHARE_SUM_TOLERANCE = 1e-6;
  * leftover bps out one at a time to the largest fractional remainders, TIES
  * BROKEN BY CANONICAL BUCKET ORDER.
  *
- * WHY IT IS EXPORTED. Three places need this rule — the producer (`toBps()` in
- * backend/src/swarm/consensus-receipt.ts), a verifier's weights recomputation,
- * and the published spec's `bps_conversion` prose — and a rule spelled three
- * times is three rules.
+ * WHY IT IS EXPORTED. Three places need this rule — the receipt producer, a
+ * verifier's weights recomputation, and the published spec's `bps_conversion`
+ * prose — and a rule spelled three times is three rules.
  *
  * WHAT REPLACED WHAT, AND WHY (issue #798, robotmoney-core#1290). The rule used
  * to round the first three canonical buckets to the nearest bps and SETTLE THE

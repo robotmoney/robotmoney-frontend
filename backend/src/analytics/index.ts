@@ -534,6 +534,16 @@ function buildRichIndicators(
       name: ind.name,
       panel: ind.panel,
       source: ind.source,
+      // The upstream permalink and the one-line "what it is" have been carried
+      // on every INDICATORS entry all along, and the dashboard has read both
+      // for as long — /regime's source label is wrapped in `x-if="ind.source_url"`
+      // and its row tooltip wants the prose. Neither was ever serialised here,
+      // so the source label rendered as inert text and the tooltip had nothing
+      // to say but the sign convention. The vendored eq-snapshot fixture DOES
+      // carry them, which is why the Playwright baseline showed a linked "FRED"
+      // production never had.
+      source_url: ind.source_url ?? null,
+      description: ind.description ?? null,
       sign: ind.sign,
       transform: ind.transform,
       unit: ind.unit ?? null,

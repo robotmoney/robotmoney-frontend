@@ -1,10 +1,12 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
-// /vault (RM-105) — the depositor-capital factsheet that /allocation and
-// /performance were split across. It reads vault-economics and allocation
-// ONLY; the three prop wallets (the house book) move to the token page under
-// RM-103, which is also what keeps /performance on its own view below.
-export const VAULT_VIEW = `${VIEW_DIR}/vault.html`;
+export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
+// There is deliberately no VAULT_VIEW. views/vault.html stays in the tree but
+// UNREACHABLE: no route resolves to it, the same way views/allocation.html was
+// kept while /vault owned the content. RM-104's information architecture is
+// being reworked against the recommendation-receipt model and the page comes
+// back through that work, not through this table. Its last shipped state is on
+// branch david/vault-ia-polish.
 export const PERFORMANCE_VIEW = `${VIEW_DIR}/performance.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
 export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
@@ -152,17 +154,17 @@ const ROUTES = {
   // /blog already lists both research pieces as cards, so a second listing would
   // just be /blog again under another address. Falling through to the catch-all
   // (→ views/research.html, absent → not-found) is the honest answer.
-  "/vault": VAULT_VIEW,
-  // Both legacy addresses resolve to the page that now owns the content, the
-  // same treatment /allocation2 already had. seo.js's LEGACY_ALIASES names
-  // /vault as the canonical for both, so neither is a duplicate URL.
-  "/allocation": VAULT_VIEW,
-  "/allocation2": VAULT_VIEW,
-  // NOT redirected, and not until RM-103 lands. /performance is the only
-  // maintained historical series for the house book (the three prop wallets);
-  // pointing it at /vault before the token page absorbs that book takes it
-  // offline rather than moving it.
+  "/allocation": ALLOCATION_VIEW,
   "/performance": PERFORMANCE_VIEW,
+  "/allocation2": PERFORMANCE_VIEW, // legacy redirect
+  // /vault resolves to NOT FOUND, explicitly. Deleting the ROUTE is not enough
+  // to retire a page: the catch-all at the bottom of viewFor() maps any unknown
+  // path to `/views/<path>.html`, so leaving views/vault.html in the tree with
+  // no entry here left /vault rendering the full page exactly as before. That
+  // is how views/allocation.html stayed genuinely unreachable while /vault
+  // owned the content — /allocation had an explicit entry pointing elsewhere,
+  // so the catch-all never ran for it. This is the same trick, pointed at 404.
+  "/vault": NOT_FOUND_VIEW,
   "/projects": PROJECTS_VIEW,
   // Legacy article URL, still live on robotmoney.network and still linked from the
   // synthesis prose of twenty archived swarm sessions (they cite

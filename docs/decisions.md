@@ -3018,6 +3018,25 @@ two-take session into looking well supported.
   deleting them.** Rejected. They were derived from no member input; there is no
   configuration under which publishing them is correct.
 
+### Amendment (issue #770) — legacy `actions` are labeled, not rendered as current output
+
+#752 deleted the two hardcoded USDC/rmUSDC `position_actions` literals, so no
+session aggregated from now on carries an `actions` array. Already-published
+sessions still store that two-row array in
+`swarm_recommendation.actions`; that history is append-only and is not
+rewritten. The public session page
+(`frontend/public/views/swarm/session.html` +
+`frontend/public/assets/js/app/alpine/static-views.js:recommendationActions()`)
+previously rendered a legacy `actions` array indistinguishably from
+swarm-derived output, while this decision states "there is no configuration
+under which publishing them is correct". The page now labels any present
+`actions` array as **pre-#752 legacy output — not swarm-derived** (D42,
+`docs/architecture.md` §9.7), so a reader is told what they are looking at.
+The alternative — stop rendering the array — was also acceptable per #770;
+labeling was chosen to keep append-only history visible while making its
+provenance explicit. `contract/src/swarm.d.ts` marks `actions` as legacy in
+both the prose and the declaration. See `docs/architecture.md` §9.7.
+
 ### Amendment (issue #806) — the soak must not report success it cannot verify
 
 #767 made the shadow soak operable. Three independent gates on PR #797 then said
@@ -3205,3 +3224,25 @@ unchanged. The events are then graded by EXECUTING the real emitter, the real
 ORDER pinned separately by source-text graders over `runSession` itself, each
 with a red control. The alternative — asserting that a judgement row exists —
 would have proved nothing about what a viewer sees, which is the entire defect.
+
+### Amendment (issue #812) — a judge is a graduated member, never a second identity
+
+The consensus judge uses the existing `swarm_members` identity, Ed25519 key,
+bearer token and rotation/revocation paths. An administrator may approve an
+application directly as `judge` or change an active member between `member`
+and `judge` through the existing admin-members surface; neither operation issues
+or changes a credential. The change is versioned and audited.
+
+Judges are separated from proposers as a standing duty, not per session: a
+judge is excluded from new take rosters and `submitRecommendation()` refuses
+its bearer token. A member who already has a take in a session is also refused
+if it attempts to judge that session. This keeps the quorum denominator and
+the author of the judge prose free of a market view. A role revocation is read
+inside the judgement write transaction, so it takes effect without a redeploy
+and cannot leave a newly written judgement after revocation.
+
+Every `swarm_session_judgements` row records `judged_by`: either the immutable
+member id or `robotmoney-in-house` for the built-in worker. The member id is
+also foreign-keyed, so an attribution cannot name an identity that never
+existed. The later third-party transport/rollout flag remains #796's concern;
+this decision supplies only the identity and fail-closed authorization seam.

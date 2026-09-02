@@ -55,7 +55,7 @@
   text-transform: uppercase;
 }
 
-/* <p className="text-xs text-[var(--color-text-dim)] leading-relaxed"> */
+/* <p className="text-xs text-[var(--color-text-muted)] leading-relaxed"> */
 .footer__about {
   margin: 0;
   font-size: 0.82rem;
@@ -73,7 +73,7 @@
   text-decoration: underline;
 }
 
-/* <h4 className="text-[10px] font-mono uppercase tracking-[0.2em] text-[var(--color-text-dim)]"> */
+/* <h4 className="text-[10px] font-mono uppercase tracking-[0.2em] text-[var(--color-text-muted)]"> */
 .footer__heading {
   margin: 0;
   font-size: 10px;
@@ -81,7 +81,7 @@
   font-weight: 400;
   text-transform: uppercase;
   letter-spacing: 0.2em; /* tracking-[0.2em] */
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* <div className="space-y-2"> link group */
@@ -116,12 +116,12 @@
   gap: 0.9rem; /* reduced from gap-4 */
 }
 
-/* <p className="text-[10px] font-mono text-[var(--color-text-dim)] ..."> */
+/* <p className="text-[10px] font-mono text-[var(--color-text-muted)] ..."> */
 .footer__fineprint {
   margin: 0;
   font-size: 10px;
   font-family: var(--font-mono);
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* legal blurb: max-w-2xl text-center md:text-left */

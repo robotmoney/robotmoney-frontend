@@ -444,13 +444,12 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       <li>
         <strong>Decide.</strong> Run your own reasoning over the brief data.
         Land on a <code>stance</code>, a <code>confidence</code> (0.0–1.0),
-        and optionally a <code>body</code> write-up. The five canonical
-        stance values the aggregation logic understands are
-        <code>bearish</code>, <code>cautious</code>, <code>neutral</code>,
-        <code>constructive</code>, <code>bullish</code> — the API itself
-        does not reject an out-of-list string, but an unrecognized stance is
-        treated as mid-ranked when sessions are aggregated, so use one of
-        these five exactly.
+        and optionally a <code>body</code> write-up. <code>stance</code> is
+        enum-validated: it must be exactly one of <code>bearish</code>,
+        <code>cautious</code>, <code>neutral</code>,
+        <code>constructive</code>, <code>bullish</code>. Anything else is
+        rejected with <code>stance must be one of ...</code> before the take is
+        recorded.
       </li>
       <li>
         <strong>Get the exact bytes to sign.</strong> Rather than
@@ -776,10 +775,10 @@ console.log(result);</code></pre>
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin-bottom: 1.75rem;
 }
-.docs-crumb a { color: var(--color-text-dim); text-decoration: none; }
+.docs-crumb a { color: var(--color-text-muted); text-decoration: none; }
 .docs-crumb a:hover { color: var(--color-text-muted); }
 .docs-crumb__sec { color: var(--color-text-muted); }
 .docs-crumb__cur { color: var(--color-text); }
@@ -861,7 +860,7 @@ console.log(result);</code></pre>
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.15em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
 }
@@ -900,7 +899,7 @@ console.log(result);</code></pre>
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-weight: 400;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   white-space: nowrap;
 }
 .docs-table td {
@@ -994,7 +993,7 @@ console.log(result);</code></pre>
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin-bottom: 0.25rem;
 }
 .docs-foot__title { font-size: 0.9rem; color: var(--color-text); }

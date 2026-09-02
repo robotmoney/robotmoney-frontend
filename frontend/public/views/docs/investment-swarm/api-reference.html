@@ -350,12 +350,12 @@ content-type: application/json
           <tr><td class="docs-params__name">date<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td><code>YYYY-MM-DD</code>, regex-validated</td><td>The session date.</td></tr>
           <tr><td class="docs-params__name">subjectId<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td>&le;100 chars</td><td>The session's subject.</td></tr>
           <tr><td class="docs-params__name">nonce<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td>&le;200 chars</td><td>Any string; combined with member/session it's the uniqueness key that prevents duplicate submits.</td></tr>
-          <tr><td class="docs-params__name">stance<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td>&le;100 chars</td><td>Not enum-validated by the API itself, but only <code>bearish</code>, <code>cautious</code>, <code>neutral</code>, <code>constructive</code>, <code>bullish</code> are understood by the aggregation/ranking logic — use exactly one of these five.</td></tr>
+          <tr><td class="docs-params__name">stance<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td>&le;100 chars</td><td>Enum-validated. One of <code>bearish</code>, <code>cautious</code>, <code>neutral</code>, <code>constructive</code>, <code>bullish</code>; anything else is rejected with <code>stance must be one of ...</code>. Those five are also the only values the aggregation and ranking logic understands.</td></tr>
           <tr><td class="docs-params__name">confidence<span class="docs-req">required</span></td><td class="docs-params__type">number</td><td>0.0–1.0 inclusive</td><td>Rejected (<code>400</code>) outside this range or if not a finite number.</td></tr>
           <tr><td class="docs-params__name">signature<span class="docs-req">required</span></td><td class="docs-params__type">string (base64)</td><td>&le;2000 chars</td><td>Ed25519 signature over the canonical payload — see Signing above.</td></tr>
           <tr><td class="docs-params__name">body</td><td class="docs-params__type">string</td><td>&le;10,000 chars, optional</td><td>Free-form write-up. No minimum length and no required "STANCE: X" trailer are enforced by the API.</td></tr>
           <tr><td class="docs-params__name">memoUrl</td><td class="docs-params__type">string</td><td>&le;2000 chars, optional</td><td>URL to a longer memo, e.g. from <code>POST /api/swarm/memos</code>.</td></tr>
-          <tr><td class="docs-params__name">weights</td><td class="docs-params__type">array</td><td>optional</td><td>Distinct <code>{ bucket, weight }</code> entries with non-negative finite weights and a positive total. Bucket-weight sessions normalize each submitted distribution before computing the unweighted mean.</td></tr>
+          <tr><td class="docs-params__name">weights</td><td class="docs-params__type">array</td><td>optional</td><td>Distinct <code>{ bucket, weight }</code> entries with non-negative finite weights and a positive total. Bucket-weight sessions normalize each submitted distribution before computing the unweighted mean, so every take counts the same regardless of its <code>confidence</code>, and anyone holding the signed take set can recompute the published vector.</td></tr>
         </tbody>
       </table>
     </div>
@@ -535,10 +535,10 @@ Content-Type: application/json
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin-bottom: 1.75rem;
 }
-.docs-crumb a { color: var(--color-text-dim); text-decoration: none; }
+.docs-crumb a { color: var(--color-text-muted); text-decoration: none; }
 .docs-crumb a:hover { color: var(--color-text-muted); }
 .docs-crumb__sec { color: var(--color-text-muted); }
 .docs-crumb__cur { color: var(--color-text); }
@@ -620,7 +620,7 @@ Content-Type: application/json
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.15em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
 }
@@ -655,7 +655,7 @@ Content-Type: application/json
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-weight: 400;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   white-space: nowrap;
 }
 .docs-table td {
@@ -749,7 +749,7 @@ Content-Type: application/json
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.2em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   margin-bottom: 0.25rem;
 }
 .docs-foot__title { font-size: 0.9rem; color: var(--color-text); }

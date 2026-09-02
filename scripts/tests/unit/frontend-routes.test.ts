@@ -49,8 +49,11 @@ afterAll(() => {
 describe("frontend route resolution", () => {
   test("resolves static routes to matching fragments", () => {
     expect(viewFor("/")).toBe("/views/home.html");
-    expect(viewFor("/vault")).toBe("/views/vault.html");
-    expect(viewFor("/allocation")).toBe("/views/vault.html");
+    expect(viewFor("/allocation")).toBe("/views/allocation.html");
+    // views/vault.html is still in the tree, so without an explicit entry the
+    // catch-all would resolve /vault straight back to it. The pin is the only
+    // thing retiring the page.
+    expect(viewFor("/vault")).toBe("/views/not-found.html");
     expect(viewFor("/research/channel-divergence")).toBe("/views/research/channel-divergence.html");
   });
 

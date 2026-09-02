@@ -164,7 +164,7 @@
 .hero__stats { display: flex; gap: 2rem; padding-top: 1rem; }
 .stat { display: flex; flex-direction: column; gap: 0.25rem; }
 .stat__value { font-size: 1.25rem; font-family: var(--font-mono); font-weight: 700; color: var(--color-text); }
-.stat__label { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.2em; color: var(--color-text-dim); }
+.stat__label { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.2em; color: var(--color-text-muted); }
 .hero__cta { display: flex; flex-wrap: wrap; gap: 1rem; padding-top: 1rem; }
 
 .hero__terminal { width: 100%; }
@@ -181,7 +181,7 @@
 .dot--warn { background: var(--color-warn); }
 .dot--amber { background: #eab308; }
 .dot--accent { background: var(--color-accent); }
-.terminal__title { font-size: 10px; font-family: var(--font-mono); color: var(--color-text-dim); margin-left: 0.5rem; }
+.terminal__title { font-size: 10px; font-family: var(--font-mono); color: var(--color-text-muted); margin-left: 0.5rem; }
 .terminal__body { padding: 1.25rem; font-family: var(--font-mono); font-size: 13px; line-height: 1.625; min-height: 340px; }
 
 /* Boot reveal. Each row carries its own --d (accumulated in buildTerminalLines),
@@ -219,8 +219,12 @@
   position: absolute; bottom: 2rem; left: 50%; transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 0.5rem; opacity: 0.4;
 }
-.hero__scroll-label { font-size: 9px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-dim); }
-.hero__scroll-line { width: 1px; height: 2rem; background: linear-gradient(to bottom, var(--color-text-dim), transparent); }
+.hero__scroll-label { font-size: 9px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
+/* The line under the scroll hint is a 1px rule, not type, so it takes a border
+   colour rather than a text one. The whole .hero__scroll group already sits at
+   0.4 opacity, which makes this a whisper either way; the label above it is
+   what actually carries the message. */
+.hero__scroll-line { width: 1px; height: 2rem; background: linear-gradient(to bottom, var(--color-border-light), transparent); }
 
 @media (min-width: 768px) {
   .hero__title { font-size: 3.75rem; }
@@ -255,15 +259,15 @@
 .comments { border-top: 1px solid var(--color-border); padding: 4rem 1.5rem; }
 .comments__inner { max-width: 48rem; margin-inline: auto; }
 .comments__title { font-family: var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text); margin: 0 0 0.25rem; }
-.comments__sub { font-size: 0.875rem; color: var(--color-text-dim); margin: 0 0 2rem; }
-.comments__state { font-family: var(--font-mono); font-size: 0.875rem; color: var(--color-text-dim); }
+.comments__sub { font-size: 0.875rem; color: var(--color-text-muted); margin: 0 0 2rem; }
+.comments__state { font-family: var(--font-mono); font-size: 0.875rem; color: var(--color-text-muted); }
 .comments__state--err { color: var(--color-warn); }
 .comments__list { list-style: none; margin: 0 0 2rem; padding: 0; display: flex; flex-direction: column; gap: 1rem; }
-.comments__empty { font-size: 0.875rem; color: var(--color-text-dim); }
+.comments__empty { font-size: 0.875rem; color: var(--color-text-muted); }
 .comment { border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface); padding: 1rem 1.25rem; }
 .comment__head { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 0.4rem; }
 .comment__author { font-family: var(--font-mono); font-size: 0.875rem; color: var(--color-accent); }
-.comment__when { font-size: 0.75rem; color: var(--color-text-dim); }
+.comment__when { font-size: 0.75rem; color: var(--color-text-muted); }
 .comment__body { margin: 0; color: var(--color-text); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .comments__form { display: flex; flex-direction: column; gap: 0.75rem; }
 .comments__input, .comments__textarea {
@@ -297,13 +301,13 @@
 .rm-eyebrow--quiet, .sv__eyebrow--quiet { color: var(--color-text-muted); }
 
 /* loading / error states */
-.rm-loading, .rv__loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
+.rm-loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
 .rm-error, .rv__error, .sv__error { color: var(--color-warn); font-family: var(--font-mono); }
 
 /* section head + title + as-of */
 .rm-section-head, .rv__dash-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
 .rm-section-title, .rv__dash-title { font-size: 1.6rem; font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; margin: 0.35rem 0 0; }
-.rm-asof, .rv__asof { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); }
+.rm-asof, .rv__asof { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-muted); }
 
 /* /regime row-level provenance badge (issue #397): which data source wrote the
    served snapshot. Stacks under the as-of label, right-aligned to match. 'live'
@@ -314,7 +318,7 @@
 .rv__prov {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: 0.15em; padding: 0.2rem 0.5rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border); color: var(--color-text-dim);
+  border: 1px solid var(--color-border); color: var(--color-text-muted);
 }
 .rv__prov--hermetic, .rv__prov--fixture, .rv__prov--seed {
   color: var(--color-warn); border-color: rgba(232, 166, 64, 0.4); background: rgba(232, 166, 64, 0.08);
@@ -328,7 +332,7 @@
 }
 .rm-card-eyebrow, .rv__card-eyebrow { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
 .rm-card-val, .rv__card-val { font-size: 1.9rem; font-weight: 500; margin-top: 0.35rem; color: var(--color-text); font-family: var(--font-mono); }
-.rm-card-foot, .rv__card-foot { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); margin-top: 0.55rem; }
+.rm-card-foot, .rv__card-foot { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-muted); margin-top: 0.55rem; }
 
 /* chart card shell */
 .rm-chartcard, .rv__chart-card { border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1rem; background: rgba(16, 20, 28, 0.4); }
@@ -389,6 +393,23 @@
   color: var(--color-text-muted); font-family: var(--font-mono); font-size: 8px; line-height: 1;
   cursor: default; transition: color 0.14s ease, border-color 0.14s ease; }
 .rm-tip__btn:hover, .rm-tip__btn[aria-expanded="true"] { color: var(--color-text); border-color: var(--color-text); }
+/* A trigger that IS the label, rather than a glyph standing next to one.
+   Column headers in a dense table have no width to give away: the regime
+   dashboard's three panel tables sit at 397px apiece inside a 1280px page, and
+   measuring showed a 13px circle beside two of the five headers pushed the grid
+   past its own container. A header word carrying a dotted rule says "there is a
+   definition here" for free, and keeps the touch, Escape and edge-clamping
+   behaviour that a bare CSS :hover tooltip does not have. The cursor is left
+   alone: a question mark riding the pointer across a table header is more
+   distracting than the dotted rule is informative. */
+.rm-tip--label { margin-left: 0; }
+.rm-tip__btn--text { width: auto; height: auto; display: inline; border: 0; border-radius: 0;
+  font-family: inherit; font-size: inherit; line-height: inherit; letter-spacing: inherit;
+  text-transform: inherit; color: inherit; cursor: inherit;
+  text-decoration: underline; text-decoration-style: dotted;
+  text-decoration-color: var(--color-text-muted); text-underline-offset: 3px; }
+.rm-tip__btn--text:hover, .rm-tip__btn--text[aria-expanded="true"] {
+  color: var(--color-text); text-decoration-color: var(--color-text); }
 .rm-tip__bub { position: absolute; left: 50%; bottom: calc(100% + 8px);
   transform: translate(calc(-50% + var(--rm-tip-nudge, 0px)), 3px);
   width: min(17rem, 72vw); max-width: min(17rem, calc(100vw - 2rem));
@@ -410,11 +431,28 @@
 /* Flipped below its icon when there is no room above it. Set by placeTip() in
    lib/tooltip.js, which is where the measuring has to happen. */
 .rm-tip__bub[data-below] { bottom: auto; top: calc(100% + 8px); }
+/* Right-anchored instead of centred, for a tip that sits in the last column of
+   something. placeTip() clamps a bubble back inside the page, but only on
+   pointer, focus or resize — and a bubble is `visibility: hidden` AT REST,
+   which still lays out and still counts toward the document's scroll width. So
+   a centred bubble hanging off the rightmost table header gave the whole page
+   a horizontal scrollbar before anyone hovered anything. Opening leftward from
+   the trigger's right edge means it can never stick out to begin with; the
+   clamp still runs and still nudges. */
+.rm-tip--end .rm-tip__bub { left: auto; right: 0; transform: translate(var(--rm-tip-nudge, 0px), 3px); }
+.rm-tip--end:hover .rm-tip__bub, .rm-tip--end .rm-tip__btn:focus-visible + .rm-tip__bub,
+.rm-tip--end .rm-tip__bub[data-open="1"] { transform: translate(var(--rm-tip-nudge, 0px), 0); }
 @media (max-width: 699px) {
   .rm-tip__bub { position: fixed; left: 12px; right: 12px; bottom: auto; width: auto; max-width: none;
     transform: translateY(3px); }
   .rm-tip:hover .rm-tip__bub, .rm-tip__btn:focus-visible + .rm-tip__bub, .rm-tip__bub[data-open="1"] {
     transform: translateY(0); }
+  /* The phone sheet is pinned to both edges, so end-anchoring has nothing to
+     say here — and it out-specifies the rule above, so it has to stand down
+     explicitly rather than by source order. */
+  .rm-tip--end .rm-tip__bub { left: 12px; right: 12px; transform: translateY(3px); }
+  .rm-tip--end:hover .rm-tip__bub, .rm-tip--end .rm-tip__btn:focus-visible + .rm-tip__bub,
+  .rm-tip--end .rm-tip__bub[data-open="1"] { transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) { .rm-tip__bub { transition: opacity 0.01s; } }
 
@@ -497,7 +535,12 @@
    invent a fourth meaning for the same square. */
 .rm-mark { flex: 0 0 auto; display: inline-block; }
 .rm-mark--reading { width: 0.42rem; height: 0.42rem; border-radius: 50%; }
-.rm-mark--identity { width: 0.42rem; height: 0.42rem; background: var(--color-text-dim); }
+/* The neutral here is --color-text-muted, not a border colour. A border tone is
+   the usual pick for a non-textual glyph, but this square is under 7px on
+   Surface, and at that size a border tone is a smudge rather than a mark: an
+   identity mark nobody can see says nothing at all. Hueless is the part that
+   carries the meaning, and it stays hueless. */
+.rm-mark--identity { width: 0.42rem; height: 0.42rem; background: var(--color-text-muted); }
 
 .rm-visually-hidden {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -527,8 +570,11 @@
 .rm-status__dot { width: 7px; height: 7px; flex: 0 0 auto; }
 
 /* Waiting on somebody. Deliberately neutral: nothing is wrong, and colouring
-   an ordinary wait as though it were an alert is how a UI cries wolf. */
-.rm-status--pending .rm-status__dot { background: var(--color-text-dim); }
+   an ordinary wait as though it were an alert is how a UI cries wolf. Neutral
+   now means --color-text-muted, the chip label's own tone: a 7px dot painted a
+   border colour vanishes inside the bordered chip it sits in, and a state
+   indicator that cannot be seen is not indicating a state. */
+.rm-status--pending .rm-status__dot { background: var(--color-text-muted); }
 
 /* Value gained, and loss or attention. Both tones brighten the LABEL and let
    the 7px dot carry the hue; neither tints its border.
@@ -688,7 +734,7 @@
 /* data table */
 .rm-table-scroll, .rv__table-scroll { overflow-x: auto; }
 .rm-table, .rv__table { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.26; }
-.rm-table thead th, .rv__table thead th { font-family: var(--font-mono); font-weight: 400; color: var(--color-text-dim); text-align: left; padding: 0.44rem 0.5rem; white-space: nowrap; }
+.rm-table thead th, .rv__table thead th { font-family: var(--font-mono); font-weight: 400; color: var(--color-text-muted); text-align: left; padding: 0.44rem 0.5rem; white-space: nowrap; }
 .rm-table thead th:first-child, .rv__table thead th:first-child { padding-left: 1rem; }
 .rm-table thead th:last-child, .rv__table thead th:last-child { padding-right: 1rem; }
 .rm-table td, .rv__table td { padding: 0.44rem 0.5rem; border-top: 1px solid var(--color-border); vertical-align: middle; }
@@ -698,7 +744,7 @@
 .rm-muted, .rv__muted { color: var(--color-text-muted); }
 
 /* card / section foot note */
-.rm-foot, .rv__foot { padding: 0.85rem 1rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); line-height: 1.6; }
+.rm-foot, .rv__foot { padding: 0.85rem 1rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); line-height: 1.6; }
 .rm-foot p, .rv__foot p { margin: 0 0 0.4rem; }
 .rm-foot p:last-child, .rv__foot p:last-child { margin-bottom: 0; }
 .rm-foot strong, .rv__foot strong { color: var(--color-text-muted); }

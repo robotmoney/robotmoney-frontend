@@ -97,12 +97,41 @@ export function registerRegimeView(Alpine) {
     provenanceLabel(s) {
       return { live: "Live data", hermetic: "Demo data (hermetic)", fixture: "Test fixture data", seed: "Reference snapshot (seed)" }[s] || s;
     },
-    // Per-indicator +1/−1 sign explanation (the panel-table hover tooltip).
+    // The panel-table row tooltip. It used to be the sign convention and
+    // NOTHING else — every row explained percentile flipping and no row said
+    // what the indicator was, which is the one thing a reader hovering an
+    // unfamiliar name wants. The prose has always existed on the analytics
+    // indicator universe as `description`; it just was not serialised into the
+    // snapshot payload until now. Snapshots persisted before that carry no
+    // description and are never rewritten, so the sign-only text stays as the
+    // fallback rather than leaving those rows with an empty bubble.
+    indicatorTooltip(ind) {
+      if (!ind || !ind.description) return this.signTooltip(ind?.sign, ind?.name ?? "this indicator");
+      return `${ind.description} ${this.signClause(ind.sign)}`;
+    },
+    // An indicator name, split so the info glyph cannot be orphaned on a line
+    // of its own. CSS puts a soft wrap opportunity on both sides of an atomic
+    // inline (which the glyph is) whatever characters sit next to it — a word
+    // joiner does not close it, and `white-space: nowrap` on the link would
+    // stop the name wrapping at all, in a 110px column. So everything up to the
+    // last space wraps normally, and the last word rides with the glyph in a
+    // nowrap box. Head keeps its trailing space; a one-word name has no head.
+    nameHead(name) { const s = String(name ?? ""); const i = s.lastIndexOf(" "); return i < 0 ? "" : s.slice(0, i + 1); },
+    nameTail(name) { const s = String(name ?? ""); const i = s.lastIndexOf(" "); return i < 0 ? s : s.slice(i + 1); },
+    // Orientation in one clause. The full account of what sign-aligning does
+    // belongs to the "Risk-on" column header tip, where it is read once,
+    // instead of being restated in all 26 rows.
+    signClause(sign) {
+      return sign == null || sign >= 0
+        ? "Sign +1: a rising value reads as risk-on."
+        : "Sign −1: a rising value reads as risk-off, so its rank is flipped.";
+    },
+    // Fallback for pre-`description` snapshots (see indicatorTooltip).
     signTooltip(sign, name) {
       if (sign == null || sign >= 0) {
-        return `Sign +1 — rising ${name} reads as risk-on, so the percentile is used as-is. "Signed" column has the same orientation as "high = risk-on" across every indicator.`;
+        return `Sign +1 — rising ${name} reads as risk-on, so the percentile is used as-is. The "Risk-on" column has the same orientation — high = risk-on — across every indicator.`;
       }
-      return `Sign −1 — rising ${name} reads as risk-off, so we flip the percentile (1 − pctile) before averaging. That keeps "Signed" oriented "high = risk-on" across every indicator.`;
+      return `Sign −1 — rising ${name} reads as risk-off, so we flip the percentile (1 − pctile) before averaging. That keeps the "Risk-on" column oriented high = risk-on across every indicator.`;
     },
     // Component methodology footer: bucket thresholds as integer percentiles.
     bucketPct(key) { const t = this.latest?.bucketThresholds; return t && t[key] != null ? (t[key] * 100).toFixed(0) : "—"; },
@@ -128,7 +157,7 @@ export function registerRegimeView(Alpine) {
       return v.toFixed(2);
     },
     fmtSigned(v) { return v == null ? "—" : Math.round(v * 100).toString(); },
-    signedColor(v) { return v == null ? PALETTE.textDim : v >= 0.5 ? PALETTE.accent : PALETTE.warn; },
+    signedColor(v) { return v == null ? PALETTE.textMuted : v >= 0.5 ? PALETTE.accent : PALETTE.warn; },
 
     // Inline-SVG sparkline (percentiles in [0,1]); stroke cyan when the last
     // point is risk-on (>=0.5), amber otherwise. Mid-line reference at 0.5.
@@ -136,7 +165,12 @@ export function registerRegimeView(Alpine) {
       const vals = Array.isArray(values) ? values : [];
       const finite = vals.filter((v) => typeof v === "number" && isFinite(v));
       if (finite.length < 2) return '<span class="rv__spark-empty">—</span>';
-      const W = 80, H = 22, pad = 1, n = vals.length;
+      // 68 rather than 80: the sparkline column is the only fixed width in a
+      // panel table, and the table has to fit its card at three across (see the
+      // fit assertion in regime-visual.spec.ts). 24 monthly points still read
+      // at 2.8px apart, and the column stopped being the reason the Weight
+      // column had nowhere to go.
+      const W = 68, H = 22, pad = 1, n = vals.length;
       const xAt = (i) => pad + (i / (n - 1)) * (W - 2 * pad);
       const yAt = (v) => pad + (1 - v) * (H - 2 * pad);
       let last = null;
@@ -165,7 +199,7 @@ export function registerRegimeView(Alpine) {
     fwdCell(idx, col) { return this.latest?.correlations?.forward?.[idx]?.[col]; },
     conCell(idx, col) { return this.latest?.correlations?.concurrent?.[idx]?.[col]; },
     rhoText(cell) { if (!cell || cell.rho == null) return "—"; return (cell.rho >= 0 ? "+" : "") + cell.rho.toFixed(2); },
-    rhoColor(cell) { if (!cell || cell.rho == null) return PALETTE.textDim; const r = cell.rho; if (Math.abs(r) < 0.15) return PALETTE.textMuted; return r > 0 ? PALETTE.accent : PALETTE.warn; },
+    rhoColor(cell) { if (!cell || cell.rho == null) return PALETTE.textMuted; const r = cell.rho; if (Math.abs(r) < 0.15) return PALETTE.textMuted; return r > 0 ? PALETTE.accent : PALETTE.warn; },
     rhoTitle(cell) { return cell && cell.n != null ? "n = " + cell.n + " paired observations" : ""; },
     corrSampleMeta() {
       const c = this.latest?.correlations;
@@ -184,7 +218,7 @@ export function registerRegimeView(Alpine) {
     fmtNum2(v) { return v == null ? "—" : (+v).toFixed(2); },
     fmtPctSigned(v) { return v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%"; },
     fmtPctUnsigned(v) { return v == null ? "—" : (v * 100).toFixed(1) + "%"; },
-    ddColor(v) { return v == null ? PALETTE.textDim : v < -0.5 ? PALETTE.warn : PALETTE.textMuted; },
+    ddColor(v) { return v == null ? PALETTE.textMuted : v < -0.5 ? PALETTE.warn : PALETTE.textMuted; },
     tradesText(row) { return row.baseline ? "—" : (row.s.transitions ?? "—"); },
     describeWeights(w) { return Object.keys(ASSET_COLOR).filter((a) => w[a]).map((a) => Math.round(w[a] * 100) + "% " + ASSET_LABEL[a]).join(" / "); },
     // Allocation pie glyph (inline SVG) for a per-regime weight map.
@@ -278,7 +312,7 @@ export function registerRegimeView(Alpine) {
           scales: {
             x: monoAxis({ ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } }),
             y: { min: 0, max: 1, ...monoAxis({ ticks: { stepSize: 0.25 } }) },
-            yPrice: { type: "logarithmic", display: !!(showSpx || showEth), position: "right", ticks: { color: PALETTE.textDim, font: MONO_FONT }, grid: { drawOnChartArea: false } },
+            yPrice: { type: "logarithmic", display: !!(showSpx || showEth), position: "right", ticks: { color: PALETTE.textMuted, font: MONO_FONT }, grid: { drawOnChartArea: false } },
           },
         },
         plugins: [regimeBandsPlugin],

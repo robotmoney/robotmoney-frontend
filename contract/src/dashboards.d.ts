@@ -199,6 +199,13 @@ export interface RegimeIndicator {
   name: string;
   panel: "macro" | "onchain" | "factor";
   source?: string;
+  // Upstream permalink for `source` (FRED/Yahoo/DefiLlama/…) and the one-line
+  // "what it is". Both are authored per-indicator in the analytics indicator
+  // universe; the dashboard renders the first as the row's source link and the
+  // second as its hover tooltip. Optional because snapshots persisted before
+  // these were serialised carry neither, and a stored row is never rewritten.
+  source_url?: string | null;
+  description?: string | null;
   sign?: number;
   transform?: string;
   unit?: string | null;

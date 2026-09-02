@@ -135,7 +135,9 @@ export async function handleSwarmAdmin(
       if (segs[2] === "review") {
         const decision = requiredString(b, "decision", 20);
         if (decision !== "approve" && decision !== "reject") return { status: 400, body: { error: "decision must be approve|reject" } };
-        return fromResult(await admin.reviewApplicationAdmin(id, decision, "admin"));
+        const role = b.role === undefined ? "member" : b.role;
+        if (role !== "member" && role !== "judge") return { status: 400, body: { error: "role must be member|judge" } };
+        return fromResult(await admin.reviewApplicationAdmin(id, decision, "admin", role));
       }
       if (segs[2] === "update") {
         const expectedVersion = parseExpectedVersion(b);
@@ -169,6 +171,12 @@ export async function handleSwarmAdmin(
           return { status: 400, body: { error: PUBLIC_KEY_REFUSAL } };
         }
         return fromResult(await admin.rotateMemberKeyAdmin(id, { publicKey }));
+      }
+      if (segs[2] === "role") {
+        const expectedVersion = parseExpectedVersion(b);
+        if (expectedVersion == null) return { status: 400, body: { error: "expectedVersion (integer >= 1) required" } };
+        if (b.role !== "member" && b.role !== "judge") return { status: 400, body: { error: "role must be member|judge" } };
+        return fromResult(await admin.setMemberRoleAdmin(id, expectedVersion, b.role));
       }
     }
     return { status: 404, body: { error: "unknown members admin route" } };

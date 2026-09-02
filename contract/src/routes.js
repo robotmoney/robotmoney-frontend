@@ -196,6 +196,7 @@ export const ROUTES = {
       memberDeactivate: "/api/swarm/admin/members/:id/deactivate", // POST — versioned
       memberReactivate: "/api/swarm/admin/members/:id/reactivate", // POST — versioned, mints a fresh credential
       memberRotateKey: "/api/swarm/admin/members/:id/rotate-key", // POST — one-time credential in the response only
+      memberRole: "/api/swarm/admin/members/:id/role", // POST — versioned { role: member|judge }, no credential change
       // POST — issue #626: raw image bytes as the body (Content-Type is the
       // upload's mime type, not application/json). Stores the file and points
       // avatar.path at it, which is all member-mark.js's precedence check
