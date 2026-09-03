@@ -354,26 +354,9 @@ tagged and `releases-A.B.x` stops being the active release line — it is a
 concern for whoever picks up work on `main` next, not for the agent executing
 the rollout.
 
-Fixes discovered directly on the `releases-A.B.x` branch during rollout —
-during preflight dry-runs or the cutover itself — get merged back to `main`.
-This is not a new rule invented for releases: it is the same standing
-project convention that any code improvement lands on `main` and only what a
-release specifically needs is carried onto its release branch (see §2) —
-applied in the direction that matters once a fix is made *on* the branch
-instead of on `main` first. A fix discovered on `releases-A.B.x` is exactly
-the kind of "nit" §2 already expects the branch to accumulate; backporting it
-is what keeps that branch's fixes from being silently lost the moment the
-branch is done being the active release line.
-
-The outstanding backport debt is a command, never a sentence in a document:
-
-```bash
-git log --oneline origin/main..origin/releases-A.B.x
-```
-
-Empty means the branch is a strict subset of `main` and nothing is owed.
-Every commit listed is a fix that exists only on the release branch and must
-be carried back to `main`.
+Any fix discovered on the `releases-A.B.x` branch during rollout is carried
+back to `main` outside this runbook's flow, by whoever picks up work on
+`main` next — this document prescribes nothing more about it.
 
 ---
 
