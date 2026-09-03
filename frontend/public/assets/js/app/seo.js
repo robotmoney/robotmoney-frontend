@@ -57,6 +57,16 @@ const META = {
     // "recommendation" with none of the page's own disclaimer around them.
     description: "Robot Money's AI Investment Swarm analyzes agent portfolios daily on Base — multiple lenses, one portfolio per session, one signed take per member. Auto-generated content, not financial advice.",
   },
+  // Linked from the footer of every page ("Apply to Swarm") and the entry point
+  // to the whole external-member funnel, yet it had no entry here and none in
+  // sitemap.xml, so it was neither prerendered nor indexed. Adding it is not
+  // cosmetic: since scripts/prerender.ts began inlining view fragments, a route
+  // missing from the sitemap falls back to the HOME shell, which now carries the
+  // home page's content. An unlisted /swarm/apply would serve the front page.
+  "/swarm/apply": {
+    title: "Apply to the Investment Swarm | Robot Money",
+    description: "Bring your agent to the Robot Money Investment Swarm. Generate an Ed25519 identity locally, submit a signed application, and file signed takes over the REST API.",
+  },
   "/projects": {
     title: "Agentic Economy Ecosystem — Robot Money",
     description: "Track market cap, FDV, revenue, and wallet balances across onchain AI agent projects and Zero Human Companies in the agent economy on Base.",

@@ -180,10 +180,12 @@ describe("prerendered routes", () => {
   });
 
   test("the noscript block is closed and sits outside the view mount", () => {
-    // Inside the mount it would be wiped by static.ts's docs inlining and by the
-    // client router; outside it, both keep working.
+    // Inside the mount the client router would wipe it on first render. Compared
+    // against the CLOSING tag, because since the prerender began inlining view
+    // fragments the mount is never empty, and comparing against the empty-mount
+    // literal would silently pass on indexOf's -1 forever.
     const html = readFileSync(join(dir, "allocation/index.html"), "utf8");
-    expect(html.indexOf("<noscript>")).toBeGreaterThan(html.indexOf('<main id="view"></main>'));
+    expect(html.indexOf("<noscript>")).toBeGreaterThan(html.lastIndexOf("</main>"));
     expect(html.split("<noscript>").length - 1).toBe(html.split("</noscript>").length - 1);
   });
 
@@ -193,9 +195,15 @@ describe("prerendered routes", () => {
     expect(html).toContain(`${ORIGIN}/llms.txt`);
   });
 
-  test("every prerendered route keeps exactly one docs view mount", () => {
+  test("a prerendered docs page leaves nothing for static.ts to inline again", () => {
+    // backend/src/api/static.ts's docsShell inlines a docs fragment at request
+    // time by replacing the empty view mount. Now that the prerender fills that
+    // mount at build time, docsShell finds no match and its replace is a no-op,
+    // which is what keeps the two mechanisms from stacking and serving the docs
+    // body twice. Asserting the absence of the empty mount IS the guard.
     const html = readFileSync(join(dir, "docs/skill/index.html"), "utf8");
-    expect(html.split('<main id="view"></main>').length - 1).toBe(1);
+    expect(html.includes('<main id="view"></main>')).toBe(false);
+    expect(html).toContain("Robot Money Skill");
     rmSync(dir, { recursive: true, force: true });
   });
 });

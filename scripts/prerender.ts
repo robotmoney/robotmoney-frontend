@@ -1,4 +1,5 @@
 import { metaFor } from "../frontend/public/assets/js/app/seo.js";
+import { viewFor } from "../frontend/public/assets/js/app/routes.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { ORIGIN as API_ORIGIN, endpointsForRoute, openApiPath } from "./lib/agent-endpoints.ts";
@@ -97,6 +98,59 @@ function routeDataBlock(route: string): string {
   ].join("\n");
 }
 
+// The mount the client router injects a view into. Filling it here is the
+// difference between a crawler seeing a page and seeing our footer.
+const VIEW_MOUNT = '<main id="view"></main>';
+
+// Inline the route's own view fragment into the shell.
+//
+// This is the whole reason a prerender is worth running. Without it a
+// non-browser reader gets nav, footer and legal boilerplate on every route: 788
+// characters on /allocation, 772 on /regime, not a single figure, and the two
+// pages indistinguishable apart from the <title>. 27 of the 37 routes in
+// sitemap.xml were in that state, including the home page and every blog post.
+// Only /docs read correctly, because backend/src/api/static.ts's docsShell
+// already does this one thing at request time for that one subtree. This
+// generalises it to every route and moves it to build time.
+//
+// `viewFor` is the client router's own resolver (assets/js/app/routes.js),
+// imported rather than reimplemented: a second copy of that table would drift,
+// and the failure mode of drift is a page prerendered with someone else's
+// content. It is pure string logic with no DOM dependency, same as `metaFor`.
+//
+// Safe to inline because the fragments are, by house convention, script-free
+// and carry no <html>/<body>/<!doctype>. Verified over all 37 sitemap routes;
+// prerenderView throws rather than silently shipping a shell if that changes.
+// The docs fragments do contain <main>, which nests, but that is exactly what
+// docsShell already ships in production today, so it is not a new condition.
+async function prerenderView(html: string, route: string): Promise<string> {
+  const viewPath = viewFor(route);
+  const fragment = Bun.file(join(siteDir, viewPath.replace(/^\//, "")));
+  if (!(await fragment.exists())) {
+    throw new Error(`prerender: ${route} resolves to ${viewPath}, which is not in the assembly`);
+  }
+  // Comments are dropped from the BUILT copy only; the source fragment keeps
+  // them. Three reasons, in order of weight: the house-style banners in these
+  // files ("NO <script>, NO custom Alpine factories, NO gradients") are internal
+  // engineering notes with no business in a published page; they are 4.4% of the
+  // fragment bytes now shipped on every route; and several of them QUOTE tags
+  // ("inline <style>"), which a naive text extractor pairs with the real closing
+  // tag further down and swallows the whole page between. A real HTML parser is
+  // untroubled by that, but plenty of the readers this change exists to serve
+  // are not real HTML parsers. No conditional comments exist in views/.
+  const body = (await fragment.text()).replace(/<!--[\s\S]*?-->/g, "").trim();
+  if (/<script[\s>]/i.test(body)) {
+    // An inlined <script> would run during initial parse, before main.js
+    // registers the Alpine factories it may depend on. Refuse rather than ship
+    // a page that breaks only in a real browser.
+    throw new Error(`prerender: ${viewPath} contains a <script>; inlining it would execute before the app boots`);
+  }
+  if (!html.includes(VIEW_MOUNT)) throw new Error(`prerender: ${route} shell has no view mount`);
+  // A function replacer, never a string: fragments are full of "$ROBOTMONEY"
+  // and String.replace reads $-sequences in a string replacement.
+  return html.replace(VIEW_MOUNT, () => `<main id="view">${body}</main>`);
+}
+
 let count = 0;
 for (const route of routes) {
   const normalizedRoute = !route || route === "/" ? "/" : route.replace(/\/+$/, "") || "/";
@@ -112,10 +166,12 @@ for (const route of routes) {
     .replace(/(<meta property="og:url" content=")[^"]*(")/, `$1${url}$2`)
     .replace(/(<meta name="twitter:title" content=")[^"]*(")/, `$1${escapeAttr(m.title)}$2`)
     .replace(/(<meta name="twitter:description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
-    .replace("<!--AGENT-DATA-->", routeDataBlock(normalizedRoute));
+    .replace("<!--AGENT-DATA-->", () => routeDataBlock(normalizedRoute));
+
+  html = await prerenderView(html, normalizedRoute);
 
   const dataLinks = routeDataLinks(normalizedRoute);
-  if (dataLinks) html = html.replace("  </head>", `${dataLinks}\n  </head>`);
+  if (dataLinks) html = html.replace("  </head>", () => `${dataLinks}\n  </head>`);
 
   const targetPath = normalizedRoute === "/"
     ? shellPath
