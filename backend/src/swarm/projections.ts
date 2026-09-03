@@ -1,5 +1,6 @@
 import type {
   SwarmBrief,
+  SwarmBriefResearchSignalRef,
   SwarmMember,
   SwarmSession,
   SwarmSessionListItem,
@@ -8,6 +9,7 @@ import type {
   RegimeSummaryListItem,
   SubjectSnapshot,
 } from "@robotmoney/contract";
+import { path as routePath, ROUTES } from "@robotmoney/contract";
 import { verifyStoredSubmissionSignature } from "../lib/signing.ts";
 import { isV0ArchiveNonce } from "./v0-archive.ts";
 
@@ -213,6 +215,32 @@ export function toBrief(row: Row): SwarmBrief {
     body: row.body ?? null,
     createdAt: instant(row.created_at) ?? "",
   };
+}
+
+// A brief's `body.researchSignals` embeds each research payload whole — as of
+// issue #869, up to ~980 KB of a brief that a member actually reasons over in
+// under 3 KB. This is a READ-time projection (not a write-time one): the
+// payloads are embedded at publishBrief() and persisted into swarm_briefs.body
+// exactly as they were on the day they were written, so projecting here also
+// shrinks every EXISTING brief, needs no backfill, and leaves what
+// judge-session.ts reads (straight off the row, never through this function)
+// untouched. `?include=researchSignals` restores the legacy embedded shape for
+// a caller that genuinely wants it inline.
+export function projectBriefResearchSignals(brief: SwarmBrief, includeFull: boolean): SwarmBrief {
+  const body = brief.body;
+  if (includeFull || !body) return brief;
+  const signals = body.researchSignals as unknown;
+  if (!Array.isArray(signals)) return brief;
+  const refs: SwarmBriefResearchSignalRef[] = signals.map((s) => {
+    const row = s as { signal_key?: unknown; date?: unknown };
+    const signalKey = String(row.signal_key ?? "");
+    return {
+      signalKey,
+      date: typeof row.date === "string" ? row.date : String(row.date ?? ""),
+      href: routePath(ROUTES.dashboards.researchSignal, { key: signalKey }),
+    };
+  });
+  return { ...brief, body: { ...body, researchSignals: refs } };
 }
 
 export function toSnapshot(row: Row): SubjectSnapshot {

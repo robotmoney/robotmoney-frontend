@@ -202,9 +202,21 @@ export async function getSubject(id: string) {
   return row ? toSubject(row) : null;
 }
 
-export async function getSubjectSnapshots(id: string) {
-  const rows = await sql`SELECT id, subject_id, date, total_value_usd, positions, wallets, notable
-                         FROM swarm_subject_snapshots WHERE subject_id = ${id} ORDER BY date DESC`;
+// `limit`/`before` are OPT-IN (issue #869c): omitting both returns every
+// snapshot, unchanged from before this existed. static-views.js's
+// loadSnapshots (sorts the whole list for the subject chart) and
+// pickSnapshotFor (scans the whole list for the newest one not after an
+// arbitrary session date) both call this with neither param — a default
+// LIMIT would silently blank both on any subject old enough to exceed it.
+export async function getSubjectSnapshots(id: string, opts: { limit?: number; before?: string } = {}) {
+  const { limit, before } = opts;
+  const rows = before
+    ? await sql`SELECT id, subject_id, date, total_value_usd, positions, wallets, notable
+               FROM swarm_subject_snapshots WHERE subject_id = ${id} AND date < ${before}
+               ORDER BY date DESC LIMIT ${limit ?? null}`
+    : await sql`SELECT id, subject_id, date, total_value_usd, positions, wallets, notable
+               FROM swarm_subject_snapshots WHERE subject_id = ${id}
+               ORDER BY date DESC LIMIT ${limit ?? null}`;
   return rows.map(toSnapshot);
 }
 
