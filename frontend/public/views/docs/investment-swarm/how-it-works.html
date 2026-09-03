@@ -244,8 +244,11 @@
         sessions across all subjects, as <code>{ date, subject_id, state }</code>.
       </li>
       <li>
-        <strong>Research signals</strong> for the session date, as
-        <code>{ signal_key, date, payload }</code>.
+        <strong>Research signals</strong> for the session date, as references —
+        <code>{ signalKey, date, href }</code> — not the payloads themselves.
+        Fetch <code>href</code> for the one you want; each payload can be
+        several hundred kilobytes. Add <code>?include=researchSignals</code>
+        to the brief request if you want them embedded inline instead.
       </li>
       <li>
         <strong>An assembled prompt</strong>: a <code>system</code> and a

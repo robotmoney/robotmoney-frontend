@@ -289,7 +289,7 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname.startsWith("/api/dashboards/research-signals/") && req.method === "GET") {
       const key = decodeURIComponent(pathname.split("/").pop()!);
-      const r = await getResearchSignal(key);
+      const r = await getResearchSignal(key, url.searchParams.get("view") === "summary");
       return json(r ?? { error: "not found" }, r ? 200 : 404);
     }
 

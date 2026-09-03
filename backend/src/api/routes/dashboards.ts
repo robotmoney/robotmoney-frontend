@@ -28,9 +28,25 @@ import { fetchCoinsList, fetchVaultsList, fetchWalletsList } from "../../project
 // read namespace, sibling projection module to the LIST feeds above.
 import { fetchCoinProfile, fetchVaultProfile, fetchWalletProfile } from "../../projects/dossier-projections.ts";
 
+// The readable answer inside a research-signal payload: about 1 KB against
+// the full ~644 KB (the rest is btc_price/qqq_price chart series and the
+// per-indicator `indicators` dict — chart backdrops, not the answer).
+const SUMMARY_PAYLOAD_FIELDS = ["title", "asof", "question", "summary", "gauges", "spec"] as const;
+
 // GET /api/dashboards/research-signals/:key → latest research signal payload
-export async function getResearchSignal(key: string) {
-  return fetchLatestResearchSignal(key);
+// GET /api/dashboards/research-signals/:key?view=summary → the readable
+// answer alone (issue #869b), dropping the raw price series and indicators
+// dict that exist for the /research/* charts.
+export async function getResearchSignal(key: string, summaryView = false) {
+  const signal = await fetchLatestResearchSignal(key);
+  if (!signal || !summaryView) return signal;
+  const payload = signal.payload as Record<string, unknown> | null;
+  if (!payload || typeof payload !== "object") return signal;
+  const summaryPayload: Record<string, unknown> = {};
+  for (const field of SUMMARY_PAYLOAD_FIELDS) {
+    if (field in payload) summaryPayload[field] = payload[field];
+  }
+  return { ...signal, payload: summaryPayload };
 }
 
 // GET /api/dashboards/vault-economics → live Base RPC vault economics (TVL,

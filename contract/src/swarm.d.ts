@@ -369,12 +369,23 @@ export interface SwarmBrief {
   createdAt: string;
 }
 
+// issue #869: a reference to a research-signal payload, not the payload
+// itself — `href` is fetchable at GET /api/dashboards/research-signals/:key.
+// This is the DEFAULT shape of SwarmBriefBody.researchSignals; a caller that
+// passes ?include=researchSignals on GET /api/swarm/brief gets the legacy
+// embedded shape instead ({ signal_key, date, payload }[], raw column names).
+export interface SwarmBriefResearchSignalRef {
+  signalKey: string;
+  date: string;
+  href: string;
+}
+
 export interface SwarmBriefBody {
   regime: unknown;
   subject: SwarmSubject | null;
   recentSessions: unknown[];
   previousSession?: { outcome: string };
-  researchSignals: unknown[];
+  researchSignals: SwarmBriefResearchSignalRef[];
   prompt: { system: string; user: string };
   takeSchema: {
     stance: { type: "string"; enum: Stance[] };
