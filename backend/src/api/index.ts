@@ -95,7 +95,7 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const { pathname } = url;
 
-    if (req.method === "OPTIONS") return corsPreflightResponse(req);
+    if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
 
     // Client ip for rate limiting. X-Forwarded-For is client-controlled and only
     // trustworthy behind a known proxy, so we use it ONLY when TRUST_PROXY=1
@@ -109,13 +109,13 @@ const server = Bun.serve({
     }
 
     try {
-      return withCors(await route(req, url, pathname, clientIp), req);
+      return withCors(await route(req, url, pathname, clientIp), req, pathname);
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
-      if (err instanceof URIError) return withCors(json({ error: "bad request" }, 400), req);
+      if (err instanceof URIError) return withCors(json({ error: "bad request" }, 400), req, pathname);
       console.error("api error:", err);
-      return withCors(json({ error: "internal error" }, 500), req);
+      return withCors(json({ error: "internal error" }, 500), req, pathname);
     }
   },
 });
