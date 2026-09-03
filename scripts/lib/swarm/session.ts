@@ -1036,6 +1036,54 @@ export async function setMemberRole(
   if (!r.ok) throw new Error(`POST ${p} {role:${role}} -> ${r.status}: ${await r.text()}`);
 }
 
+/**
+ * Grants `memberId` the judge role, flips `swarm_judge_config.mode` to
+ * `shadow`, runs `runJudgedSession` (expected to be a single `runSession`
+ * call whose roster already treats `memberId` as absent — a judge-role member
+ * cannot submit a take, so it must not be a participant of the session being
+ * judged), asserts a real row landed in `swarm_session_judgements` for the
+ * resulting session, then restores BOTH the mode and the role in `finally` —
+ * shared by every `bun smoke` variant that wants this coverage (issue #845),
+ * so the grant/flip/assert/restore sequence exists in exactly one place
+ * rather than being re-derived per caller.
+ */
+export async function runJudgeRoleCoverage(
+  memberId: string,
+  automationToken: string | undefined,
+  runJudgedSession: () => Promise<{ sessionId: string | number }>,
+): Promise<void> {
+  await setMemberRole(memberId, "judge", automationToken);
+  console.log(`  ${memberId}: granted judge role via ${ROUTES.swarm.admin.memberRole} (issue #845)`);
+  const shippedJudgeMode = await readJudgeMode(automationToken);
+  const restoreJudgeMode: "off" | "shadow" | "enforce" =
+    shippedJudgeMode === "shadow" || shippedJudgeMode === "enforce" ? shippedJudgeMode : "off";
+  await setJudgeMode("shadow", automationToken);
+  console.log(`  judge mode: ${shippedJudgeMode ?? "unreadable"} -> shadow for this session only (issue #845)`);
+  try {
+    const judged = await runJudgedSession();
+    // AC: assert a REAL judgement row landed in swarm_session_judgements —
+    // not just `judged: false` (issue #845). runJudgeStep inside runSession
+    // already waited for the `judged` state transition because mode is now
+    // `shadow`; this reads the append-only record itself rather than
+    // trusting that wait's opinion.
+    const judgementCount = await countJudgements(judged.sessionId, automationToken);
+    if (!judgementCount || judgementCount < 1) {
+      throw new Error(
+        `session ${judged.sessionId}: judge mode=shadow but zero rows landed in swarm_session_judgements — ` +
+          "the judge/validator flow produced no live coverage (issue #845)",
+      );
+    }
+    console.log(
+      `  session ${judged.sessionId}: ${judgementCount} judgement row(s) recorded in swarm_session_judgements ` +
+        "(mode=shadow, issue #845)",
+    );
+  } finally {
+    await setJudgeMode(restoreJudgeMode, automationToken);
+    await setMemberRole(memberId, "member", automationToken);
+    console.log(`  judge mode restored to ${restoreJudgeMode}; ${memberId} role restored to member (issue #845)`);
+  }
+}
+
 // The member-container rail (issue #361 Phase 2): every present member runs in
 // its OWN container via the shared runMemberAgent() primitive; this driver
 // only drives the session lifecycle and observes. `rail` carries the compose
@@ -1414,23 +1462,16 @@ async function main() {
   // ── Judge role + judge mode live-stack coverage (issue #845) ──────────────
   // Session 1 above ran with the shipped `off` default untouched — that
   // matters, because `off` is the one behavior existing smoke assertions may
-  // already be relying on. Session 2 is where this coverage lives: grant
-  // `draco` (already enrolled as session 1's designed no-show — see DEMO_
-  // MEMBERS/absent handling in runSession — so granting it the judge role
-  // touches no take-submission path at all) the `judge` role via the admin
-  // route, flip `swarm_judge_config.mode` off -> `shadow` for exactly this
-  // session, then restore BOTH in `finally` so neither leaks into anything
-  // that runs after this file's main() — including a persistent `--db
-  // smoke-twin` database across repeated runs.
-  const JUDGE_MEMBER_ID = "draco";
-  await setMemberRole(JUDGE_MEMBER_ID, "judge", rail.automationToken);
-  console.log(`  ${JUDGE_MEMBER_ID}: granted judge role via ${ROUTES.swarm.admin.memberRole} (issue #845)`);
-  const shippedJudgeMode = await readJudgeMode(rail.automationToken);
-  const restoreJudgeMode: "off" | "shadow" | "enforce" =
-    shippedJudgeMode === "shadow" || shippedJudgeMode === "enforce" ? shippedJudgeMode : "off";
-  await setJudgeMode("shadow", rail.automationToken);
-  console.log(`  judge mode: ${shippedJudgeMode ?? "unreadable"} -> shadow for session 2 only (issue #845)`);
-
+  // already be relying on. Session 2 is where this coverage lives:
+  // runJudgeRoleCoverage grants `draco` (already enrolled as session 1's
+  // designed no-show — see DEMO_MEMBERS/absent handling in runSession — so
+  // granting it the judge role touches no take-submission path at all) the
+  // `judge` role via the admin route, flips `swarm_judge_config.mode` off ->
+  // `shadow` for exactly this session, asserts a real judgement row landed,
+  // then restores BOTH in `finally` so neither leaks into anything that runs
+  // after this file's main() — including a persistent `--db smoke-twin`
+  // database across repeated runs.
+  //
   // Session 2: a SECOND sitting, different subject (smokenstrates rotation +
   // cross-session awareness). Eos (added to the roster mid-run above) enrolls and
   // participates in its own container alongside the original members.
@@ -1442,30 +1483,8 @@ async function main() {
   // 0022 the DATABASE dates a session, so two sittings on one day are simply two
   // rows with different convened_at rather than one row relabelled to a day that
   // has not happened. The rotation this proves is the real one.
-  try {
-    const s2 = await runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members, initializer: "simulation", cadence });
-
-    // AC: assert a REAL judgement row landed in swarm_session_judgements for
-    // this session — not just `judged: false` (issue #845). runJudgeStep
-    // inside runSession already waited for the `judged` state transition
-    // above (see JUDGE_WAIT_MS) because mode is now `shadow`; this reads the
-    // append-only record itself rather than trusting that wait's opinion.
-    const judgementCount = await countJudgements(s2.sessionId, rail.automationToken);
-    if (!judgementCount || judgementCount < 1) {
-      throw new Error(
-        `session ${s2.sessionId}: judge mode=shadow but zero rows landed in swarm_session_judgements — ` +
-          "the judge/validator flow produced no live coverage (issue #845)",
-      );
-    }
-    console.log(
-      `  session ${s2.sessionId}: ${judgementCount} judgement row(s) recorded in swarm_session_judgements ` +
-        "(mode=shadow, issue #845)",
-    );
-  } finally {
-    await setJudgeMode(restoreJudgeMode, rail.automationToken);
-    await setMemberRole(JUDGE_MEMBER_ID, "member", rail.automationToken);
-    console.log(`  judge mode restored to ${restoreJudgeMode}; ${JUDGE_MEMBER_ID} role restored to member (issue #845)`);
-  }
+  await runJudgeRoleCoverage("draco", rail.automationToken, () =>
+    runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members, initializer: "simulation", cadence }));
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`).then((r) => r.json());

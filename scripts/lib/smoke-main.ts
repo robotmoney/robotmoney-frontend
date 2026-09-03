@@ -35,6 +35,8 @@ import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./smoke-
 import {
   SMOKE_MEMBERS,
   adoptRestoredRoster,
+  judgeCoverageCandidate,
+  withMemberAbsent,
   bootstrapStepNames,
   isSmokeMode,
   scenarioPlan,
@@ -1194,7 +1196,17 @@ async function main(): Promise<void> {
       onboardedHomes: new Map<string, OnboardedMemberHome>(),
       automationToken,
     };
-    await session.runSession(scenario.subjects[0]!, 1, { rail, members, initializer: scenario.initializer, cadence });
+
+    // Judge role + judge mode live-stack coverage (issue #845): this CI SMOKE
+    // block is the ONLY thing `--db smoke-twin` runs (it REQUIRES `--smoke`),
+    // a different path from `!smokeMode` below, so session.ts `main()`'s own
+    // coverage never reaches it — see smoke-mode.ts's judgeCoverageCandidate/
+    // withMemberAbsent for why and how the candidate is chosen.
+    const judgeCandidate = judgeCoverageCandidate(roster);
+    await session.runJudgeRoleCoverage(judgeCandidate.id, automationToken, () =>
+      session.runSession(scenario.subjects[0]!, 1, {
+        rail, members: withMemberAbsent(members, judgeCandidate.id), initializer: scenario.initializer, cadence,
+      }));
 
     console.log("[smoke] smoke: asserting restored subjects, personas, live take and archival history…");
     await run(["bun", "run", "scripts/smoke-e2e-assert.ts"], repoRoot,
