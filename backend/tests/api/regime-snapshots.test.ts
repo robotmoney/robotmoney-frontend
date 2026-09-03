@@ -195,6 +195,38 @@ test("staleness is derived from the NEWEST row even when `range` clamps history 
   expect(r.staleness.asof).toBe(today());
 });
 
+// ── ?include=backtest (issue #866b): off by default, opt-in ────────────────
+test("GET regime-snapshots: latest.backtest is null by default, present with ?include=backtest", async () => {
+  const backtest = { risk_parity: { spx: { cagr: 0.1, max_dd: -0.2 } } };
+  await saveRegimeSnapshots([{ ...snapRow(today()), backtest }]);
+
+  const withoutInclude = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=1`);
+  const bodyWithout = JSON.parse(JSON.stringify(await getRegimeSnapshots(withoutInclude)));
+  expect(bodyWithout.latest.backtest).toBeNull();
+
+  const withInclude = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=1&include=backtest`);
+  const bodyWith = JSON.parse(JSON.stringify(await getRegimeSnapshots(withInclude)));
+  expect(bodyWith.latest.backtest).toEqual(backtest);
+});
+
+test("GET regime-snapshots: ?include=backtest doesn't leak other asof-only fields, and other fields on latest are unaffected either way", async () => {
+  const backtest = { risk_parity: {} };
+  await saveRegimeSnapshots([{ ...snapRow(today()), backtest }]);
+  const url = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=1`);
+  const body = JSON.parse(JSON.stringify(await getRegimeSnapshots(url)));
+  expect(body.latest.composite).toBe(0.42);
+  expect(body.latest.regime).toBe("neutral");
+  expect(body.latest.date).toBe(today());
+});
+
+test("GET regime-snapshots: a comma-separated ?include= with backtest among other values still includes it", async () => {
+  const backtest = { risk_parity: { spx: { cagr: 0.1 } } };
+  await saveRegimeSnapshots([{ ...snapRow(today()), backtest }]);
+  const url = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=1&include=researchSignals,backtest`);
+  const body = JSON.parse(JSON.stringify(await getRegimeSnapshots(url)));
+  expect(body.latest.backtest).toEqual(backtest);
+});
+
 // ── GET /api/dashboards/regime-snapshots (route handler → response body) ────
 test("GET regime-snapshots response body carries a staleness object with asof, ageDays, stale, thresholdDays, panelObservationDates", async () => {
   await saveRegimeSnapshots([snapRow(today())]);

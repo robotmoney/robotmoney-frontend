@@ -40,7 +40,10 @@ export function registerRegimeView(Alpine) {
       try {
         // The dashboard blobs (backtest/correlations/extras) ride on the asof
         // `latest` row; history is the full daily series for the charts.
-        const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 4000 });
+        // `latest.backtest` (~126 KB) is off by default on the backend
+        // (issue #866b) — this page is the one place that reads it, so ask
+        // for it explicitly rather than falling back to a blank panel.
+        const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 4000, include: "backtest" });
         this.latest = data.latest;
         this.history = data.history || [];
         this.staleness = data.staleness || null;

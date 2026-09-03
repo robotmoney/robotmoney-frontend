@@ -71,8 +71,13 @@ export async function fetchLatestResearchSignal(key: string) {
 // forward-fills that column to today on every run regardless of whether the
 // underlying sources actually refreshed, so it can't detect a frozen source
 // (issue #398). See computeRegimeSnapshotStaleness.
+// `includeBacktest` (issue #866b): `latest.backtest` is ~126 KB and only
+// /regime's backtest panel reads it. Off by default; the caller opts in with
+// ?include=backtest. Do-not-ship-alone: regime.js has to start asking for it
+// explicitly in the SAME release, or its backtest panel goes blank.
 export async function fetchRegimeSnapshots(
   range: number,
+  includeBacktest = false,
 ): Promise<{ latest: RegimeSnapshot | null; history: RegimeHistoryPoint[]; staleness: RegimeStaleness }> {
   const today = new Date().toISOString().slice(0, 10);
   const rows = await sql`
@@ -82,11 +87,13 @@ export async function fetchRegimeSnapshots(
     LIMIT ${range}
   `;
   const full = rows.map(rowToSnapshot).reverse(); // chronological
-  const latest = full.length ? full[full.length - 1] : null;
-  const staleness = computeRegimeSnapshotStaleness(latest?.indicators ?? null, today);
-  // `latest` keeps every field; history rows are projected via forHistory
-  // (issue #866a), which also ends the double-serialization the old
-  // `history[-1] === latest` aliasing caused — they're now separate objects,
-  // one full and one projected, rather than the same object twice.
+  const latestFull = full.length ? full[full.length - 1] : null;
+  const staleness = computeRegimeSnapshotStaleness(latestFull?.indicators ?? null, today);
+  // `latest` keeps every field except backtest, opt-in via includeBacktest
+  // (issue #866b); history rows are projected via forHistory (issue #866a),
+  // which also ends the double-serialization the old `history[-1] === latest`
+  // aliasing caused — they're now separate objects, one full (minus backtest
+  // unless asked for) and one projected, rather than the same object twice.
+  const latest = latestFull && !includeBacktest ? { ...latestFull, backtest: null } : latestFull;
   return { latest, history: full.map(forHistory), staleness };
 }
