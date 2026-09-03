@@ -59,7 +59,7 @@
       "get": {
         "operationId": "getVaultEconomics",
         "summary": "rmUSDC vault TVL, share price, APY and per-adapter split",
-        "description": "The ERC-4626 vault on Base: total value locked in USD, share price, deposit cap, and the per-adapter breakdown across Morpho, Aave and Compound. `asOf` is when the values were read onchain and `stale` says whether that read is older than the refresh interval, so a caller can decide for itself whether to quote the number.\n\nResponse size: about 1 KB.\n\nResponse type: `VaultEconomics` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "ROBOT MONEY'S OWN rmUSDC vault: the ERC-4626 vault on Base, its total value locked in USD, share price, deposit cap, and the per-adapter breakdown across Morpho, Aave and Compound. This is the number to quote for \"Robot Money vault TVL\"; the `vaultTvlUsd` on the overview endpoint is a different dataset entirely. `asOf` is when the values were read onchain and `stale` says whether that read is older than the refresh interval, so a caller can decide for itself whether to quote the number.\n\nResponse size: about 1 KB.\n\nResponse type: `VaultEconomics` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -953,15 +953,15 @@
     "/api/dashboards/overview": {
       "get": {
         "operationId": "getMarketOverview",
-        "summary": "Tracked-market summary counts and leaders",
-        "description": "Entity counts across agents, coins, vaults and wallets, the tracked vault TVL, the current leaders and the $ROBOTMONEY row.\n\nResponse size: about 1 KB.\n\nResponse type: `MarketOverview` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "summary": "Summary of the THIRD-PARTY agent economy Robot Money tracks",
+        "description": "Counts, leaders and totals for the outside agent economy this project tracks as an analytics dataset. NOT Robot Money's own treasury. In particular `vaultTvlUsd` sums the tracked third-party vaults and has nothing to do with the rmUSDC vault: for Robot Money's own vault use vault-economics, whose `tvlUsd` is a different and much smaller number. Reading this field as ours is the single easiest way to publish a wrong figure about Robot Money.\n\nResponse size: about 1 KB.\n\nResponse type: `MarketOverview` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
         "x-contract-type": "MarketOverview",
         "responses": {
           "200": {
-            "description": "Tracked-market summary counts and leaders",
+            "description": "Summary of the THIRD-PARTY agent economy Robot Money tracks",
             "content": {
               "application/json": {
                 "schema": {
@@ -977,15 +977,15 @@
     "/api/dashboards/entities": {
       "get": {
         "operationId": "listEntities",
-        "summary": "Unified agent / coin / vault / wallet table",
-        "description": "One row per tracked entity across all four facets, as the /list table renders them.\n\nResponse size: about 5 KB.\n\nResponse type: `EntitiesResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "summary": "Unified directory of the third-party agents, coins, vaults and wallets tracked",
+        "description": "One row per tracked outside entity across all four facets. These are third parties Robot Money observes, not Robot Money's own holdings.\n\nResponse size: about 5 KB.\n\nResponse type: `EntitiesResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
         "x-contract-type": "EntitiesResponse",
         "responses": {
           "200": {
-            "description": "Unified agent / coin / vault / wallet table",
+            "description": "Unified directory of the third-party agents, coins, vaults and wallets tracked",
             "content": {
               "application/json": {
                 "schema": {
@@ -1001,7 +1001,7 @@
     "/api/dashboards/leaderboard": {
       "get": {
         "operationId": "getLeaderboard",
-        "summary": "Money-agent leaderboard with evidence",
+        "summary": "Leaderboard of third-party money agents, with evidence",
         "description": "Ranked money agents with, for each one, the evidence behind the ranking and an explicit evidence status (verified, partial, missing) plus a confidence label. Read the evidence status before quoting a rank.\n\nResponse size: about 3 KB.\n\nResponse type: `LeaderboardResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
@@ -1009,7 +1009,7 @@
         "x-contract-type": "LeaderboardResponse",
         "responses": {
           "200": {
-            "description": "Money-agent leaderboard with evidence",
+            "description": "Leaderboard of third-party money agents, with evidence",
             "content": {
               "application/json": {
                 "schema": {
@@ -1025,15 +1025,15 @@
     "/api/dashboards/agents": {
       "get": {
         "operationId": "listAgents",
-        "summary": "Tracked agent directory",
-        "description": "The tracked-agent directory rows plus a summary.\n\nResponse size: about 1 KB.\n\nResponse type: `AgentsDirectoryResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "summary": "Directory of third-party agents tracked",
+        "description": "Outside agents Robot Money observes as an analytics dataset, plus a summary. Not Robot Money itself.\n\nResponse size: about 1 KB.\n\nResponse type: `AgentsDirectoryResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
         "x-contract-type": "AgentsDirectoryResponse",
         "responses": {
           "200": {
-            "description": "Tracked agent directory",
+            "description": "Directory of third-party agents tracked",
             "content": {
               "application/json": {
                 "schema": {
@@ -1094,15 +1094,15 @@
     "/api/dashboards/coins": {
       "get": {
         "operationId": "listCoins",
-        "summary": "Tracked coin directory",
-        "description": "Tracked coins with price and market data.\n\nResponse size: under 1 KB.\n\nResponse type: `CoinsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "summary": "Directory of third-party coins tracked",
+        "description": "Outside coins Robot Money observes, with price and market data. Distinct from the seven agent-basket tokens a deposit buys, which are documented at /docs/skill/agent-basket.\n\nResponse size: under 1 KB.\n\nResponse type: `CoinsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
         "x-contract-type": "CoinsListResponse",
         "responses": {
           "200": {
-            "description": "Tracked coin directory",
+            "description": "Directory of third-party coins tracked",
             "content": {
               "application/json": {
                 "schema": {
@@ -1163,15 +1163,15 @@
     "/api/dashboards/vaults": {
       "get": {
         "operationId": "listVaults",
-        "summary": "Agent-managed vault directory",
-        "description": "Tracked agent-managed vaults, their strategy type and size.\n\nResponse size: under 1 KB.\n\nResponse type: `VaultsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "summary": "Directory of third-party agent-managed vaults tracked",
+        "description": "Outside agent-managed vaults Robot Money observes, their strategy type and size. The rmUSDC vault is not in here; it is vault-economics.\n\nResponse size: under 1 KB.\n\nResponse type: `VaultsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
         "x-contract-type": "VaultsListResponse",
         "responses": {
           "200": {
-            "description": "Agent-managed vault directory",
+            "description": "Directory of third-party agent-managed vaults tracked",
             "content": {
               "application/json": {
                 "schema": {
@@ -1232,15 +1232,15 @@
     "/api/dashboards/wallets": {
       "get": {
         "operationId": "listWallets",
-        "summary": "Tracked wallet directory",
-        "description": "Tracked and agent-derived wallets with balances.\n\nResponse size: about 1 KB.\n\nResponse type: `WalletsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "summary": "Directory of third-party wallets tracked",
+        "description": "Outside wallets Robot Money observes, with balances. Robot Money's own protocol wallets are wallet-balances and wallet-sleeves.\n\nResponse size: about 1 KB.\n\nResponse type: `WalletsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
         "x-contract-type": "WalletsListResponse",
         "responses": {
           "200": {
-            "description": "Tracked wallet directory",
+            "description": "Directory of third-party wallets tracked",
             "content": {
               "application/json": {
                 "schema": {
@@ -1301,15 +1301,15 @@
     "/api/projects": {
       "get": {
         "operationId": "listProjects",
-        "summary": "Project directory",
-        "description": "The aggregated projects directory: one row per tracked project with its coin, wallet and vault facets.\n\nResponse size: about 4 KB.\n\nResponse type: `ProjectsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "summary": "Directory of third-party projects tracked",
+        "description": "One row per tracked outside project with its coin, wallet and vault facets. An observed dataset, not Robot Money's own holdings.\n\nResponse size: about 4 KB.\n\nResponse type: `ProjectsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
         "x-contract-type": "ProjectsResponse",
         "responses": {
           "200": {
-            "description": "Project directory",
+            "description": "Directory of third-party projects tracked",
             "content": {
               "application/json": {
                 "schema": {

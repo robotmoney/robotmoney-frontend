@@ -20,6 +20,13 @@ Fast paths for the three questions people ask most, with the real response size 
 - What is today's regime? [/api/dashboards/regime-snapshots](https://robotmoney.network/api/dashboards/regime-snapshots), and the answer is `latest.composite` plus `latest.regime`. Be warned: the response is about 300 KB even at `?range=1`, because the backtests and correlation matrices ride on `latest`.
 - Who is in the swarm and what did they say? [/api/swarm/members](https://robotmoney.network/api/swarm/members) for the roster with public keys, about 20 KB, then [/api/swarm/sessions?limit=5](https://robotmoney.network/api/swarm/sessions?limit=5) for recent sessions. Individual takes are signed and re-verified at read time, so you can check them against a member's public key without trusting this server.
 
+This site publishes **two different datasets** and they are easy to confuse:
+
+1. **Robot Money's own treasury.** The rmUSDC vault, the protocol wallets, the allocation, the buybacks, the regime classifier, the swarm. This is the product.
+2. **A directory of the third-party agent economy Robot Money tracks** as analytics: outside agents, coins, vaults, wallets and projects. These are observations of other people's assets.
+
+The endpoints under `/api/dashboards/entities`, `/overview`, `/agents`, `/coins`, `/vaults`, `/wallets`, `/leaderboard` and `/api/projects` are all dataset 2. In particular `overview.vaultTvlUsd` is the sum of the tracked third-party vaults and is not Robot Money's vault. For "how much is in the Robot Money vault" the answer is `tvlUsd` from `/api/dashboards/vault-economics`, and today the two numbers differ by more than four orders of magnitude.
+
 Sanity check before quoting anything: [https://robotmoney.network/health](https://robotmoney.network/health) returns `env`. If `env` is not `prod`, that deployment is serving demo or staging data.
 
 Source code is public and clonable: [github.com/robotmoney/robotmoney-frontend](https://github.com/robotmoney/robotmoney-frontend). The shared HTTP contract (route paths and every response type) is [contract/src](https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).
@@ -63,18 +70,18 @@ Every number on this site is served by these endpoints. They answer a plain GET 
 - `https://robotmoney.network/api/swarm/subjects/{id}`: One swarm subject. About 2 KB.
 - `https://robotmoney.network/api/swarm/subjects/{id}/snapshots`: Portfolio snapshots for a subject. About 115 KB for a long-running subject.
 - `https://robotmoney.network/api/swarm/memos/{id}`: One long-form member memo. Varies.
-- [https://robotmoney.network/api/dashboards/overview](https://robotmoney.network/api/dashboards/overview): Tracked-market summary counts and leaders. About 1 KB.
-- [https://robotmoney.network/api/dashboards/entities](https://robotmoney.network/api/dashboards/entities): Unified agent / coin / vault / wallet table. About 5 KB.
-- [https://robotmoney.network/api/dashboards/leaderboard](https://robotmoney.network/api/dashboards/leaderboard): Money-agent leaderboard with evidence. About 3 KB.
-- [https://robotmoney.network/api/dashboards/agents](https://robotmoney.network/api/dashboards/agents): Tracked agent directory. About 1 KB.
+- [https://robotmoney.network/api/dashboards/overview](https://robotmoney.network/api/dashboards/overview): Summary of the THIRD-PARTY agent economy Robot Money tracks. About 1 KB.
+- [https://robotmoney.network/api/dashboards/entities](https://robotmoney.network/api/dashboards/entities): Unified directory of the third-party agents, coins, vaults and wallets tracked. About 5 KB.
+- [https://robotmoney.network/api/dashboards/leaderboard](https://robotmoney.network/api/dashboards/leaderboard): Leaderboard of third-party money agents, with evidence. About 3 KB.
+- [https://robotmoney.network/api/dashboards/agents](https://robotmoney.network/api/dashboards/agents): Directory of third-party agents tracked. About 1 KB.
 - `https://robotmoney.network/api/dashboards/agents/{id}`: One agent dossier. About 1 KB.
-- [https://robotmoney.network/api/dashboards/coins](https://robotmoney.network/api/dashboards/coins): Tracked coin directory. Under 1 KB.
+- [https://robotmoney.network/api/dashboards/coins](https://robotmoney.network/api/dashboards/coins): Directory of third-party coins tracked. Under 1 KB.
 - `https://robotmoney.network/api/dashboards/coins/{id}`: One coin dossier. About 3 KB.
-- [https://robotmoney.network/api/dashboards/vaults](https://robotmoney.network/api/dashboards/vaults): Agent-managed vault directory. Under 1 KB.
+- [https://robotmoney.network/api/dashboards/vaults](https://robotmoney.network/api/dashboards/vaults): Directory of third-party agent-managed vaults tracked. Under 1 KB.
 - `https://robotmoney.network/api/dashboards/vaults/{id}`: One vault dossier. About 2 KB.
-- [https://robotmoney.network/api/dashboards/wallets](https://robotmoney.network/api/dashboards/wallets): Tracked wallet directory. About 1 KB.
+- [https://robotmoney.network/api/dashboards/wallets](https://robotmoney.network/api/dashboards/wallets): Directory of third-party wallets tracked. About 1 KB.
 - `https://robotmoney.network/api/dashboards/wallets/{id}`: One wallet dossier. About 2 KB.
-- [https://robotmoney.network/api/projects](https://robotmoney.network/api/projects): Project directory. About 4 KB.
+- [https://robotmoney.network/api/projects](https://robotmoney.network/api/projects): Directory of third-party projects tracked. About 4 KB.
 - `https://robotmoney.network/api/projects/{slug}`: One project dossier. About 7 KB.
 - [https://robotmoney.network/api/dashboards/activity](https://robotmoney.network/api/dashboards/activity): Agent activity feed. Under 1 KB while empty.
 - [https://robotmoney.network/api/comments](https://robotmoney.network/api/comments): Public comments. Under 1 KB.
