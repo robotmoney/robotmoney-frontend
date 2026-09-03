@@ -3246,3 +3246,59 @@ member id or `robotmoney-in-house` for the built-in worker. The member id is
 also foreign-keyed, so an attribution cannot name an identity that never
 existed. The later third-party transport/rollout flag remains #796's concern;
 this decision supplies only the identity and fail-closed authorization seam.
+
+---
+
+## D43 — CORS, not same-origin, for the eventual frontend/backend repo split (refines D10, D11, D13; issue #871)
+
+**Decision.** `backend/` grows opt-in CORS support
+(`backend/src/api/cors.ts`, `CORS_ALLOWED_ORIGINS`) rather than continuing to
+require same-origin once `frontend/` splits into its own repo and deploy. The
+split frontend will run as its **own container on the same DO infrastructure**
+the api already runs on — not Cloudflare Pages or another managed host — on
+its own port, with its own Cloudflare DNS record pointing at the same droplet
+IP, the same pattern D18 used for the now-retired MCP subdomain. `contract/`
+(route paths + DTO types) remains the only shared seam between the two repos,
+published/versioned per D10's original plan.
+
+**Why.** D10 designed the split to be mechanical (`git filter-repo`, no source
+edits) but never addressed *deployment*: D29 bakes the frontend's prerendered
+static assets into the same deploy artifact and same container the api ships,
+so today a frontend change cannot ship without an api deploy — the opposite of
+the goal (frontend ships many times a day, api ships slowly, each versioned
+independently). Splitting the repo without also splitting the deploy pipeline
+would just move the same coupling into two git histories.
+
+CORS was chosen over reusing Cloudflare Pages (already half-built for preview,
+D19/D20) because Lucas wants the split deploy to stay maximally flexible —
+another container on infrastructure already owned and operated, not a new
+managed-hosting dependency. CORS was chosen over relaxing D11/D13's "no
+reverse proxy, no routing software" stance because splitting by hostname/port
+on the existing droplet(s), with Cloudflare doing DNS only, preserves that
+constraint; only the same-origin *consequence* of D11/D13 is given up, and only
+for surfaces that opt in via `CORS_ALLOWED_ORIGINS`.
+
+**Why this is safe with existing auth.** Auth is header-token based
+(`Authorization`, `X-Admin-Token`, `X-Automation-Token` — grep confirms no
+`Set-Cookie` anywhere in `backend/src`), so there is no SameSite-cookie
+cross-site problem to solve. `frontend/public/assets/js/app/lib/api.js` already
+issues every request with `credentials: "include"`, and
+`backend/src/api/routes/admin-webauthn.ts` already reads
+`WEBAUTHN_ORIGIN`/`WEBAUTHN_RP_ID` from the environment instead of hardcoding
+same-origin (issue #617) — both were already prepared for a non-same-origin
+caller before this decision.
+
+**Mechanics.** `config.corsAllowedOrigins` (`CORS_ALLOWED_ORIGINS`, comma-
+separated) defaults to empty, so the single-box same-origin deployment gets no
+CORS headers at all — `withCors()`/`corsPreflightResponse()` are no-ops until
+an origin is explicitly allow-listed. `backend/src/api/index.ts`'s `fetch`
+handler answers `OPTIONS` via `corsPreflightResponse()` and wraps every other
+response (success, thrown-error 400/500) via `withCors()`, so the allow-list
+check lives in exactly one place rather than being duplicated per route.
+
+**Not yet done (tracked in issue #871).** `WEBAUTHN_ORIGIN`/`WEBAUTHN_RP_ID`
+still need to be pointed at the frontend's real deployed domain once it is no
+longer same-origin; `contract/` still needs to actually be published as a
+versioned package; the frontend's sibling container, its DO placement, and its
+DNS record are still design, not shipped; and the `git filter-repo` split
+itself has not been executed.

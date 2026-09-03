@@ -15,6 +15,7 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { serveStatic } from "./static.ts";
+import { corsPreflightResponse, withCors } from "./cors.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -94,7 +95,7 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const { pathname } = url;
 
-    if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+    if (req.method === "OPTIONS") return corsPreflightResponse(req);
 
     // Client ip for rate limiting. X-Forwarded-For is client-controlled and only
     // trustworthy behind a known proxy, so we use it ONLY when TRUST_PROXY=1
@@ -108,13 +109,13 @@ const server = Bun.serve({
     }
 
     try {
-      return await route(req, url, pathname, clientIp);
+      return withCors(await route(req, url, pathname, clientIp), req);
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
-      if (err instanceof URIError) return json({ error: "bad request" }, 400);
+      if (err instanceof URIError) return withCors(json({ error: "bad request" }, 400), req);
       console.error("api error:", err);
-      return json({ error: "internal error" }, 500);
+      return withCors(json({ error: "internal error" }, 500), req);
     }
   },
 });

@@ -108,6 +108,12 @@ On the eventual split, `contract/` is published (private npm registry / GitHub
 Packages) or vendored via git submodule; both repos pin a version. Bumping the
 contract is the explicit, reviewable coupling point.
 
+The split frontend deploys as its own container on the same DO infrastructure
+the api runs on (not Cloudflare Pages), reachable cross-origin via CORS rather
+than same-origin — D43 covers why (D29's static-assembly coupling means the
+repo split alone wouldn't decouple deploys) and what's implemented so far
+(`backend/src/api/cors.ts`, `CORS_ALLOWED_ORIGINS`).
+
 ### Test, eval, and tooling layout
 
 Status: target layout (D23). Two rules govern where things go.
