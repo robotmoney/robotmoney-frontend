@@ -12,6 +12,7 @@ import { bearer, hasAnalyticsProviderRole, isPrivileged, hasAutomationRole } fro
 import { jsonValue, sql } from "../../db/client.ts";
 import {
   CONTACT_EMAIL_RE,
+  isIsoDate,
   parseApply,
   parseRegisterMember,
   parsePositiveNumber,
@@ -152,10 +153,19 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     // published member client and doc — it resolves to the LATEST session of
     // that day, matching GET /api/swarm/sessions/:date/:subject.
     const session = url.searchParams.get("session");
-    if (session) return { status: 200, body: await ic.getBriefBySession(decodeURIComponent(session)) };
+    if (session) {
+      const brief = await ic.getBriefBySession(decodeURIComponent(session));
+      return { status: brief ? 200 : 404, body: brief ?? { error: "no brief for that session" } };
+    }
     const date = url.searchParams.get("date") ?? "";
     const subject = url.searchParams.get("subject") ?? "";
-    return { status: 200, body: await ic.getBrief(date, subject) };
+    // date/subject reach a `date` column cast in ic.getBrief; an invalid date
+    // used to raise there and surface as a 500 (issue #868).
+    if (!isIsoDate(date) || !subject) {
+      return { status: 400, body: { error: "session, or date (YYYY-MM-DD) and subject, required" } };
+    }
+    const brief = await ic.getBrief(date, subject);
+    return { status: brief ? 200 : 404, body: brief ?? { error: "no brief for that day and subject" } };
   }
 
   // get_signing_payload: return the exact canonical bytes the member must sign.

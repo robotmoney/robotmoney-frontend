@@ -1091,9 +1091,21 @@ test("two sessions for one subject on one day: BOTH briefs survive, each keeping
   expect(byDate?.status).toBe(200);
   expect((byDate?.body as { sessionId: string }).sessionId).toBe(second.id);
 
-  // Unknown / unparseable handles are "no brief", never a 500 out of Postgres.
-  expect((await get(`${ROUTES.swarm.brief}?session=${crypto.randomUUID()}`))?.body).toBeNull();
-  expect((await get(`${ROUTES.swarm.brief}?session=not-a-uuid`))?.body).toBeNull();
+  // Unknown / unparseable handles are a 404, never a 500 out of Postgres, and
+  // never a 200 with a null body (issue #868).
+  const byUnknownSession = await get(`${ROUTES.swarm.brief}?session=${crypto.randomUUID()}`);
+  expect(byUnknownSession?.status).toBe(404);
+  const byBadSession = await get(`${ROUTES.swarm.brief}?session=not-a-uuid`);
+  expect(byBadSession?.status).toBe(404);
+
+  // A malformed date used to reach the date-cast and 500; now a 400.
+  const byBadDate = await get(`${ROUTES.swarm.brief}?date=notadate&subject=${subj}`);
+  expect(byBadDate?.status).toBe(400);
+  const byEmptyDate = await get(`${ROUTES.swarm.brief}?date=&subject=`);
+  expect(byEmptyDate?.status).toBe(400);
+  // A well-formed date/subject pair that matches nothing is a 404, not a 200 null.
+  const byUnknownSubject = await get(`${ROUTES.swarm.brief}?date=${date}&subject=${rid("no-such-subject")}`);
+  expect(byUnknownSubject?.status).toBe(404);
 });
 
 // ── Joining is idempotent by member id ──────────────────────────────────────

@@ -280,7 +280,12 @@ async function participate(): Promise<void> {
 
   // Read context over REST — this member's OWN fetch, not the harness's.
   const regime = (await restJson<{ latest?: any }>(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).body?.latest ?? {};
-  await restJson(`${ROUTES.swarm.brief}?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subjectId)}`);
+  // Result unused (this member reasons from the regime read above); this is a
+  // liveness check. No brief yet is a legitimate 404 (issue #868), not a
+  // reason to abort the session.
+  await restJson(`${ROUTES.swarm.brief}?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subjectId)}`, undefined, {
+    allowStatuses: [404],
+  });
   const composite = Number(regime?.composite ?? 0.5);
   const regimeCtx: RegimeContext = {
     composite,
