@@ -32,15 +32,19 @@ test("preflight: allow-listed origin gets the full CORS header set", () => {
   expect(res.headers.get("Vary")).toBe("Origin");
 });
 
-test("preflight: origin not on the allow-list gets a bare 204, no CORS headers", () => {
+test("preflight: origin not on the allow-list gets a 204 with no CORS headers, but Vary: Origin", () => {
   const res = corsPreflightResponse(reqWithOrigin("https://evil.example"));
   expect(res.status).toBe(204);
   expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  // A cache that stored this disallowed-origin response without varying on
+  // Origin would later serve it — with no ACAO — to an allow-listed caller.
+  expect(res.headers.get("Vary")).toBe("Origin");
 });
 
-test("preflight: no Origin header (same-origin) gets a bare 204", () => {
+test("preflight: no Origin header (same-origin) gets a bare 204, still Vary: Origin once CORS is enabled", () => {
   const res = corsPreflightResponse(reqWithOrigin(null));
   expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  expect(res.headers.get("Vary")).toBe("Origin");
 });
 
 test("withCors: allow-listed origin gets the response echoed with CORS headers added", async () => {
@@ -52,10 +56,18 @@ test("withCors: allow-listed origin gets the response echoed with CORS headers a
   await expect(res.json()).resolves.toEqual({ ok: true });
 });
 
-test("withCors: non-allow-listed origin returns the response unchanged", () => {
+test("withCors: non-allow-listed origin gets no ACAO, but gains Vary: Origin", () => {
   const inner = new Response(null, { status: 404 });
   const res = withCors(inner, reqWithOrigin("https://evil.example"));
-  expect(res).toBe(inner);
+  expect(res.status).toBe(404);
+  expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  expect(res.headers.get("Vary")).toBe("Origin");
+});
+
+test("withCors: preserves an existing Vary header instead of duplicating Origin onto it", () => {
+  const inner = new Response(null, { status: 200, headers: { Vary: "Accept-Encoding" } });
+  const res = withCors(inner, reqWithOrigin(ALLOWED));
+  expect(res.headers.get("Vary")).toBe("Accept-Encoding, Origin");
 });
 
 test("withCors: no allow-listed origins configured (default) is a total no-op", () => {
