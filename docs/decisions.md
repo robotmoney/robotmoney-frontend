@@ -3290,11 +3290,23 @@ caller before this decision.
 
 **Mechanics.** `config.corsAllowedOrigins` (`CORS_ALLOWED_ORIGINS`, comma-
 separated) defaults to empty, so the single-box same-origin deployment gets no
-CORS headers at all — `withCors()`/`corsPreflightResponse()` are no-ops until
-an origin is explicitly allow-listed. `backend/src/api/index.ts`'s `fetch`
-handler answers `OPTIONS` via `corsPreflightResponse()` and wraps every other
-response (success, thrown-error 400/500) via `withCors()`, so the allow-list
-check lives in exactly one place rather than being duplicated per route.
+CORS headers at all for this half — the credentialed-origin branch of
+`withCors()`/`corsPreflightResponse()` is a no-op until an origin is
+explicitly allow-listed. `backend/src/api/index.ts`'s `fetch` handler answers
+`OPTIONS` via `corsPreflightResponse()` and wraps every other response
+(success, thrown-error 400/500) via `withCors()`, so the allow-list check
+lives in exactly one place rather than being duplicated per route.
+
+**Amendment (issue #867).** A second, independent policy is layered onto the
+same two functions: any GET/HEAD to a route that answers identically for
+every caller (public dashboards/swarm reads — see `isPublicRead()` in
+`cors.ts` for the exact test) gets `Access-Control-Allow-Origin: *`, no
+credentials flag, regardless of `CORS_ALLOWED_ORIGINS`. This is unrelated to
+the frontend/backend split above: it lets a third-party browser context (a
+Claude artifact, a dashboard someone else builds on this data) read the same
+public JSON a `curl` already can, which same-origin-only CORS otherwise
+blocks silently. The allow-listed credentialed origin is checked first and
+wins when it matches; the wildcard is the fallback for everyone else.
 
 **Not yet done (tracked in issue #871).** `WEBAUTHN_ORIGIN`/`WEBAUTHN_RP_ID`
 still need to be pointed at the frontend's real deployed domain once it is no
