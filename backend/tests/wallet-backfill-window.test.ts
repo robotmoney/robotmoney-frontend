@@ -384,6 +384,133 @@ test("the resolver's SHARED head-block failure charges no day", async () => {
   expect(rows.every((r) => r.attempts === 0)).toBe(true);
 });
 
+// ── The shared-leg circuit breaker (issue #761) ──────────────────────────────
+//
+// The tests above pin the TRANSIENT case: a shared leg that fails and is
+// retried moments later — by the queue's own backoff, or by a test loop that
+// never advances `now` — must never charge a day's attempt, and (per
+// "repeated shared failures never exhaust a day" above) must not reach any
+// terminal state either. What was missing is the PERMANENT case: a leg that
+// fails identically on every genuinely separate, scheduled run must eventually
+// stop being re-selected — while a corrected leg must heal its days again with
+// no hand-written SQL. `now` is advanced explicitly between calls below
+// (rather than left fixed, as the transient tests do) specifically to
+// simulate separate scheduled dispatcher runs rather than one queue-retry
+// burst — see bumpDeferStreak()'s debounce comment in wallet-backfill.ts.
+
+test("issue #761 — a permanently refusing shared leg reaches BLOCKED after consecutive SEPARATE runs, still charging no attempt", async () => {
+  const { deps } = countingDeps({ loadPrices: pricesExcept("BNKR") });
+
+  // Three genuinely separate scheduled runs (well past the debounce window),
+  // simulating a mistyped pin that refuses identically every time.
+  let now = NOW;
+  for (let i = 0; i < 3; i++) {
+    await backfillWalletWindow(sql, [D1, D2, D3], deps, now);
+    now = new Date(now.getTime() + 6 * 60_000);
+  }
+
+  const rows = await sql<
+    { sample_date: string; status: string; attempts: number; defer_leg: string | null; defer_streak: number }[]
+  >`
+    SELECT sample_date::text AS sample_date, status, attempts, defer_leg, defer_streak
+      FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
+  `;
+  expect(rows.length).toBe(3);
+  expect(rows.every((r) => r.status === "blocked")).toBe(true);
+  expect(rows.every((r) => r.attempts === 0)).toBe(true);
+  expect(rows.every((r) => r.defer_leg === "price-pool:BNKR")).toBe(true);
+  expect(rows.every((r) => r.defer_streak === 3)).toBe(true);
+
+  // Still a disclosed gap: reaching the terminal state never writes the day.
+  const [written] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
+  `;
+  expect(written!.n).toBe(0);
+});
+
+test("issue #761 — retries inside the debounce window count as ONE incident, never reaching blocked", async () => {
+  const { deps } = countingDeps({ loadPrices: pricesExcept("BNKR") });
+
+  // Five calls five seconds apart — the shape of the queue's own backoff burst
+  // (worker/loop.ts), not five separate scheduled runs.
+  let now = NOW;
+  for (let i = 0; i < 5; i++) {
+    await backfillWalletWindow(sql, [D1, D2, D3], deps, now);
+    now = new Date(now.getTime() + 5_000);
+  }
+
+  const rows = await sql<{ status: string; attempts: number; defer_streak: number }[]>`
+    SELECT status, attempts, defer_streak FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
+  `;
+  expect(rows.every((r) => r.status === "failed")).toBe(true);
+  expect(rows.every((r) => r.attempts === 0)).toBe(true);
+  expect(rows.every((r) => r.defer_streak === 1)).toBe(true);
+});
+
+test("issue #761 — a DIFFERENT shared leg resets the streak rather than inheriting it", async () => {
+  const { deps: priceBroken } = countingDeps({ loadPrices: pricesExcept("BNKR") });
+  let now = NOW;
+  await backfillWalletWindow(sql, [D1, D2, D3], priceBroken, now);
+  now = new Date(now.getTime() + 6 * 60_000);
+  await backfillWalletWindow(sql, [D1, D2, D3], priceBroken, now);
+
+  // Two consecutive price-pool refusals — one short of the threshold.
+  let row = (
+    await sql<{ defer_leg: string | null; defer_streak: number; status: string }[]>`
+      SELECT defer_leg, defer_streak, status FROM wallet_backfill_state WHERE sample_date = ${D1}
+    `
+  )[0]!;
+  expect(row.defer_leg).toBe("price-pool:BNKR");
+  expect(row.defer_streak).toBe(2);
+  expect(row.status).toBe("failed");
+
+  // A DIFFERENT leg fails next — a different symptom, not a continuation.
+  now = new Date(now.getTime() + 6 * 60_000);
+  const base = countingDeps();
+  const chainBroken: WalletBackfillDeps = {
+    ...base.deps,
+    async readChainAmountsAtBlocks() {
+      throw new Error("simulated transport outage");
+    },
+  };
+  await backfillWalletWindow(sql, [D1, D2, D3], chainBroken, now);
+
+  row = (
+    await sql<{ defer_leg: string | null; defer_streak: number; status: string }[]>`
+      SELECT defer_leg, defer_streak, status FROM wallet_backfill_state WHERE sample_date = ${D1}
+    `
+  )[0]!;
+  expect(row.defer_leg).toBe("chain-read-window");
+  expect(row.defer_streak).toBe(1); // NOT 3 — the old price-pool streak does not carry over
+  expect(row.status).toBe("failed");
+});
+
+test("issue #761 — a BLOCKED day heals itself the moment the leg is fixed, no hand-written SQL", async () => {
+  const { deps: broken } = countingDeps({ loadPrices: pricesExcept("BNKR") });
+  let now = NOW;
+  for (let i = 0; i < 3; i++) {
+    await backfillWalletWindow(sql, [D1, D2, D3], broken, now);
+    now = new Date(now.getTime() + 6 * 60_000);
+  }
+  const [before] = await sql<{ status: string }[]>`SELECT status FROM wallet_backfill_state WHERE sample_date = ${D1}`;
+  expect(before!.status).toBe("blocked");
+
+  // The pin is corrected: BNKR prices again. This stands in for the automatic
+  // cooldown-elapsed retry planWalletBackfill() issues once
+  // WALLET_BACKFILL_LEG_RETRY_COOLDOWN_MINUTES has passed — no operator, no SQL.
+  const { deps: fixed } = countingDeps();
+  const out = await backfillWalletWindow(sql, [D1, D2, D3], fixed, now);
+  expect(out.every((r) => r.status === "filled")).toBe(true);
+
+  const rows = await sql<{ status: string; defer_leg: string | null; defer_streak: number; attempts: number }[]>`
+    SELECT status, defer_leg, defer_streak, attempts FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
+  `;
+  expect(rows.every((r) => r.status === "filled")).toBe(true);
+  expect(rows.every((r) => r.defer_leg === null)).toBe(true);
+  expect(rows.every((r) => r.defer_streak === 0)).toBe(true);
+  expect(rows.every((r) => r.attempts === 0)).toBe(true);
+});
+
 // ── Per-day durability survives the batching ─────────────────────────────────
 
 test("each day commits its OWN checkpoint row, so an interruption loses at most one day", async () => {

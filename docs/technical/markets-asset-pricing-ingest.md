@@ -408,12 +408,13 @@ Order of operations for a window:
 
 ### 5.3 Failure accounting
 
-Three outcomes, and the distinction between them is load-bearing.
+Four outcomes, and the distinction between them is load-bearing.
 
 | Outcome | When | Attempt charged? | Re-planned? |
 |---|---|---|---|
 | `failDay` | attributable to **that day** — its block unreadable, its legs unreadable, its own assets unpriced | yes; `exhausted` at `WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY` (default 3) | until exhausted |
-| `deferDay` | a **shared leg** failed and took the window with it — the price load, the whole-window chain read, a pool-level refusal | **no** | always |
+| `deferDay` | a **shared leg** failed and took the window with it — the price load, the whole-window chain read, a pool-level refusal, block resolution's head probe | **no** | always, unless it crosses the leg breaker below |
+| `blocked` | the same shared leg refused **`WALLET_BACKFILL_LEG_TERMINAL_THRESHOLD` (default 3) consecutive, separate** times | **no** | after `WALLET_BACKFILL_LEG_RETRY_COOLDOWN_MINUTES` (default 60) |
 | `skipDay` | the day is not this executor's to write | no | n/a |
 
 The `deferDay` distinction exists because once the window became the unit, three
@@ -431,13 +432,34 @@ window permanently and fixing the pin no longer repairs it.
 **An `exhausted` day is still a gap.** What has stopped is the spending, not the
 disclosure; it remains reported by `GET /api/admin/gaps`.
 
-> `deferDay` never advancing the attempt counter is correct for a *transient*
-> shared leg and wrong for a *permanent* one. See §8.
+**Issue #761 — the shared-leg circuit breaker.** `deferDay` never advancing the
+attempt counter is correct for a *transient* shared leg and was wrong for a
+*permanent* one: with no counter at all, a mistyped pin or a delisted pool
+refused identically on every retry, and the planner takes the oldest missing
+days first, so the same days were re-selected on every scheduled run forever —
+at #749's five-minute cadence, twelve wasted runs an hour rather than one, and
+every other missing day starved behind them. `wallet_backfill_state` now
+carries `defer_leg` (a stable identity for which shared leg failed — not the
+raw error text, so a 429 one run and a timeout the next still count as the same
+leg misbehaving), `defer_streak` (consecutive, *separate* refusals of that
+leg), and `defer_leg_at`. Two defers of the same leg landing within
+`WALLET_BACKFILL_LEG_DEBOUNCE_MS` (default 60s — well above the queue's own
+retry burst, well below the dispatcher's cadence) count as ONE incident, so the
+existing transient protection is unchanged. Crossing the threshold moves the
+day to `blocked`: still a disclosed gap (`GET /api/admin/gaps` derives from the
+sample tables, never from this ledger), excluded from `selectBackfillDays()`
+like `exhausted`, but — unlike `exhausted` — retried automatically once its
+cooldown elapses, and any day-specific outcome (a fill, a skip, or a `failDay`
+attributable to that day alone) clears the streak outright. That is what makes
+a corrected pin repair its days again with no hand-written SQL. The dispatcher
+(`repair.ts::repairGaps`) names every currently-blocked day and its leg on
+every run, not just the run that tripped it.
 
 > **D41 retires the price-side third of this table.** A pool-level refusal stops
 > being a shared leg of the *holdings* window once prices are their own series;
 > what remains is block resolution and the multicall pass, which are genuinely
-> shared across a window and still need `deferDay`. See §5.6.
+> shared across a window and still need `deferDay` (and the breaker above). See
+> §5.6.
 
 ### 5.4 Evidence-preserving replacement
 
@@ -734,14 +756,6 @@ left as prose with no owner.
   (§5.6) — which is a third fact about a third series. None substitutes for
   another: one is "the contract did not exist yet", one is "we were not tracking
   it yet", and one is "the pool had not traded yet".
-- **`deferDay` on a permanent shared leg — filed as #761.** A shared leg that is
-  permanently broken — not transient — never advances the attempt counter, so
-  the same days are re-selected indefinitely; at #749's `*/5` cadence that is
-  twelve wasted runs an hour rather than one. The transient case is right; the
-  permanent case needs a distinct terminal state. D41 retires the price-side
-  third of this — a pool refusal stops being a shared leg of the holdings
-  window — but block resolution and the multicall pass remain shared, so the
-  gap survives the split.
 - **A versioned point-in-time expected-key manifest (§4.2) — declined, and here
   is the reason.** Since #749 the detector resolves `expectedKeys` per slot and
   filters by `TrackedAsset.deployedAt`, so the operational symptom this item was
