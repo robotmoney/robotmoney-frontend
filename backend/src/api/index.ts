@@ -15,6 +15,7 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { serveStatic } from "./static.ts";
+import { preflightResponse, withPublicReadCors } from "./cors.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -94,7 +95,9 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const { pathname } = url;
 
-    if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+    // Preflight. Answered with the permissive headers only when the request it
+    // is asking about is a credential-free public read (see ./cors.ts).
+    if (req.method === "OPTIONS") return preflightResponse(req, pathname);
 
     // Client ip for rate limiting. X-Forwarded-For is client-controlled and only
     // trustworthy behind a known proxy, so we use it ONLY when TRUST_PROXY=1
@@ -108,7 +111,10 @@ const server = Bun.serve({
     }
 
     try {
-      return await route(req, url, pathname, clientIp);
+      // Cross-origin readability is decided in one place on the way out, so a
+      // route added later cannot forget to opt in and cannot accidentally opt a
+      // credentialed response in.
+      return withPublicReadCors(req, pathname, await route(req, url, pathname, clientIp));
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
