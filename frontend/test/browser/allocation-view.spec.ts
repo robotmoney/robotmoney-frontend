@@ -27,6 +27,19 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { navigate } from "./navigation.ts";
 
+// lib/chart-theme.js CATEGORICAL, as the browser reports it. Written out
+// rather than imported so a silent edit to the palette shows up here as a
+// failing render rather than as two files agreeing with each other.
+const CATEGORICAL_RGB = [
+  "rgb(16, 185, 129)",  // emerald — Pool, the value anchor
+  "rgb(0, 229, 255)",   // cyan    — Beam
+  "rgb(232, 166, 64)",  // sand
+  "rgb(126, 136, 158)", // slate   — neutral secondary
+  "rgb(255, 122, 41)",  // beacon
+  "rgb(95, 179, 161)",  // teal
+  "rgb(156, 255, 210)", // mint
+];
+
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
     "node_modules/alpinejs/dist/cdn.min.js",
@@ -179,32 +192,50 @@ test("the product sheet never requests the house book (RM-115, RM-103)", async (
 
 // ── the live bindings ───────────────────────────────────────────────────────
 
-test("the vault section binds every adapter row to the vault-economics golden and reconciles to TVL", async ({ page }) => {
+// The holdings table moved out of #vault and into the sleeve that owns it,
+// merged with the policy it is measured against. Two tables made the reader
+// join four identical row labels by eye; #vault keeps the facts that belong to
+// the contract rather than to any one venue.
+test("the sleeve's vault table binds every adapter to the golden, and reconciles to TVL", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   const vault = goldenVault();
-  await stubEnvironment(page, { vault });
+  const framework = goldenFramework();
+  await stubEnvironment(page, { vault, framework });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  const rows = page.locator("#vault table.alp__tbl tbody tr");
-  // three adapters + idle USDC + the total row
-  await expect(rows).toHaveCount(vault.adapters.length + 2);
+  const card = page.locator(".alp__card").first();
+  await card.locator("details.alp__hold > summary").click();
+  const rows = card.locator("details.alp__hold tbody tr");
+  // One row per POLICY constituent, held or not, plus the total. Sky is in the
+  // policy and not in the vault, and its row is the largest drift on the page:
+  // dropping it would hide the finding.
+  await expect(rows).toHaveCount(framework.buckets[0].items.length + 1);
 
-  // Rows render in feed order. They are matched by position rather than by the
-  // protocol name because the page NAMES the position rather than the protocol:
-  // Morpho's is a specific curated vault, and "Gauntlet USDC Prime" is the
-  // difference between "three lending venues" and "two pooled markets and a
-  // vault somebody else sets the caps on".
-  for (const [i, adapter] of vault.adapters.entries()) {
+  // Rows follow the POLICY's order, not the feed's, so the table reads in the
+  // same order as the bar above it and the colours line up. The golden serves
+  // Morpho first and the policy lists Aave first, so this is a real assertion
+  // rather than a coincidence of two lists agreeing.
+  for (const [i, item] of framework.buckets[0].items.entries()) {
+    const adapter = vault.adapters.find((a) => a.name.toLowerCase() === item.label.toLowerCase());
     const row = rows.nth(i);
+    if (!adapter) {
+      // A policy name the vault does not hold keeps its row, with dashes where
+      // a balance would be. It is the largest drift on the page.
+      await expect(row).toContainText(item.label);
+      await expect(row).toContainText("not held");
+      await expect(row.locator("a")).toHaveCount(0);
+      continue;
+    }
     await expect(row).toContainText(usd2(adapter.balanceUsd));
     await expect(row).toContainText("$1.0000");
     await expect(row.locator("a")).toHaveAttribute("href", `https://basescan.org/address/${adapter.address}`);
   }
-  // The golden's first adapter is Morpho, and the page names the POSITION, not
-  // the protocol.
-  await expect(rows.nth(0)).toContainText("Gauntlet USDC Prime");
-  await expect(page.locator("#vault tr.tot")).toContainText(usd2(vault.tvlUsd));
+  // The page names the POSITION, not the protocol: Morpho's is a specific
+  // curated vault, and that is the difference between "three lending venues"
+  // and "two pooled markets and a vault somebody else sets the caps on".
+  await expect(rows).toContainText([/Aave V3 USDC/, /Gauntlet USDC Prime/, /Compound III USDC/, /Sky/, /Vault TVL/]);
+  await expect(card.locator("tr.tot")).toContainText(usd2(vault.tvlUsd));
 
   // The rail's live figure comes from the same payload.
   await expect(page.locator(".alp__stat", { hasText: "Vault TVL" }).locator("dd"))
@@ -212,7 +243,63 @@ test("the vault section binds every adapter row to the vault-economics golden an
   await expectNoBrowserErrors(errors);
 });
 
-test("the hero donut draws one arc per funded sleeve, on a Pool ramp, not normalised to its own sum", async ({ page }) => {
+// The subtraction the section exists for. Every number is derived from the two
+// feeds: nothing here may be a copywritten constant, because the day Sky is
+// wired up these all have to move on their own.
+test("drift is computed from the two feeds, and names what is missing", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const vault = goldenVault();
+  const framework = goldenFramework();
+  await stubEnvironment(page, { vault, framework });
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+
+  const items = framework.buckets[0].items;
+  const tvl = Number(vault.tvlUsd);
+  const expected = items.map((item) => {
+    const adapter = vault.adapters.find(
+      (a) => a.name.toLowerCase() === item.label.toLowerCase() && a.configured !== false,
+    );
+    const held = adapter?.balanceUsd == null ? 0 : Number(adapter.balanceUsd);
+    return { label: item.label, policy: Number(item.targetPct), actual: (held / tvl) * 100 };
+  });
+  // Half the sum of absolute deviations: the standard reading of how far a
+  // book sits from its policy.
+  const te = expected.reduce((sum, r) => sum + Math.abs(r.actual - r.policy), 0) / 2;
+
+  const card = page.locator(".alp__card").first();
+  // The headline rides on the summary, so the finding is legible without
+  // opening anything.
+  await expect(card.locator("details.alp__hold > summary"))
+    .toContainText(`${te.toFixed(2)} pts off target`);
+  await card.locator("details.alp__hold > summary").click();
+
+  // By index, not by label: the row NAMES the position rather than the
+  // protocol, so "Morpho" appears in the policy and "Gauntlet USDC Prime" in
+  // the row, and matching on text would quietly find nothing.
+  for (const [i, row] of expected.entries()) {
+    const drift = row.actual - row.policy;
+    const tr = card.locator("details.alp__hold tbody tr").nth(i);
+    await expect(tr).toContainText(`${row.policy.toFixed(2)}%`);
+    await expect(tr).toContainText(`${row.actual.toFixed(2)}%`);
+    await expect(tr).toContainText(`${drift > 0 ? "+" : "−"}${Math.abs(drift).toFixed(2)}`);
+  }
+  // The verdict NAMES the reason rather than restating the number, and the
+  // reason is derived: whichever policy names the vault does not hold.
+  const missing = expected.filter((r) => r.actual === 0).map((r) => r.label);
+  await expect(card.locator(".alp__vd")).toContainText(missing[0]);
+  await expect(card.locator(".alp__vd")).toContainText("not in the vault");
+
+  // A sleeve with no contract says so, and offers no comparison and no
+  // invented receipt symbol for an address nobody has deployed.
+  const agent = page.locator(".alp__card").nth(1);
+  await expect(agent.locator(".alp__vchip")).toContainText("Vault pending");
+  await expect(agent.locator("details.alp__hold")).toHaveCount(0);
+  await expect(agent).not.toContainText("rm");
+  await expectNoBrowserErrors(errors);
+});
+
+test("the donut draws one arc per funded sleeve, on the categorical palette, not normalised to its own sum", async ({ page }) => {
   const framework = goldenFramework();
   await stubEnvironment(page, { framework });
   await page.goto("/index.html");
@@ -227,69 +314,96 @@ test("the hero donut draws one arc per funded sleeve, on a Pool ramp, not normal
   const funded = framework.strategy.filter((row) => row.targetPct > 0);
   await expect(donut.locator("path")).toHaveCount(funded.length);
 
-  // Buckets are a green LUMINANCE ramp, not a hue set: every slice is Pool and
-  // only its lightness moves, so no slice may carry another hue.
+  // Slices come from lib/chart-theme.js CATEGORICAL, separated by HUE. This
+  // page drew a green LUMINANCE ramp until it was measured: four green steps
+  // separate at CVD dE 7.1 against 18.2 for these four, and a normal-vision
+  // floor below 15 means full-colour readers cannot tell the pair apart
+  // either. The palette's own comment names that mistake as the reason it
+  // exists.
   const fills = await donut.locator("path").evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).fill));
-  for (const fill of fills) {
-    const [r, g, b] = fill.match(/\d+/g)!.map(Number);
-    expect(g, `${fill} should be green-dominant`).toBeGreaterThan(r);
-    expect(g, `${fill} should be green-dominant`).toBeGreaterThan(b);
-  }
-  expect(new Set(fills).size, "adjacent slices must be distinguishable").toBe(fills.length);
+  for (const fill of fills) expect(CATEGORICAL_RGB).toContain(fill);
+  // Keyed on POSITION, so a sleeve keeps its hue when another one's weight
+  // changes. Colour follows the entity, never its rank.
+  expect(fills).toEqual(CATEGORICAL_RGB.slice(0, funded.length));
 
   // The ring underneath is the full 360, so a policy that does not add to 100
   // shows the remainder rather than being rescaled to look complete.
   await expect(donut.locator("circle")).toHaveCount(1);
 
-  // The legend keys every sleeve, funded or not, and states which is which.
+  // The hole carries the state of the POLICY. "1 USDC / DEPOSIT" answered a
+  // question nobody was asking and framed a policy as a transaction.
+  await expect(donut).toContainText("UNCHANGED SINCE");
+
+  // The legend keys every sleeve, funded or not, and a sleeve at zero keeps
+  // its hue: it holds nothing, which is not the same as having no identity.
   const legend = page.locator(".alp__legend-list li");
   await expect(legend).toHaveCount(framework.strategy.length);
   await expect(legend.first()).toContainText(framework.strategy[0].label);
-  await expect(legend.first()).toContainText("holding");
-  await expect(legend.nth(2)).toContainText("held at zero");
-  // A sleeve with no target gets an outlined swatch, not a filled one: there is
-  // no slice for a fill to key to.
+  await expect(legend.first()).toContainText("vault live");
+  await expect(legend.nth(2)).toContainText("vault pending");
   const swatchFill = await legend.nth(2).locator(".alp__swatch")
     .evaluate((el) => getComputedStyle(el).backgroundColor);
-  expect(swatchFill).toBe("rgba(0, 0, 0, 0)");
+  expect(CATEGORICAL_RGB).toContain(swatchFill);
 });
 
-test("sleeve weights, held weights and drift are derived from the two feeds, not baked", async ({ page }) => {
-  const errors = failOnBrowserErrors(page);
-  const vault = goldenVault();
+// Constituents restart at the front of the palette inside their own sleeve,
+// keyed on their position in the POLICY. The vault table keys on the same
+// index, which is what makes a venue one colour wherever it appears: colouring
+// by the holdings feed's order would let the API repaint it.
+test("a constituent keeps one hue in its sleeve's bar and in its vault row", async ({ page }) => {
   const framework = goldenFramework();
-  await stubEnvironment(page, { vault, framework });
+  await stubEnvironment(page, { framework });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  const bullets = page.locator(".alp__bullet");
-  await expect(bullets).toHaveCount(framework.buckets.length);
+  const card = page.locator(".alp__card").first();
+  const items = framework.buckets[0].items;
+  const segments = card.locator(".alp__stk > span");
+  await expect(segments).toHaveCount(items.length);
+  const barFills = await segments.evaluateAll((els) =>
+    els.map((el) => getComputedStyle(el).backgroundColor));
+  expect(barFills).toEqual(CATEGORICAL_RGB.slice(0, items.length));
 
-  // The vault's assets are its funded adapters, so everything it holds sits in
-  // the yield sleeve. Held is computed from the balances, which is what makes
-  // "held at zero" a reading rather than a copy decision.
-  const funded = vault.adapters.filter((a) => a.configured !== false && a.balanceUsd != null);
-  const adapterTotal = funded.reduce((sum, a) => sum + Number(a.balanceUsd), 0);
-  const heldPct = (adapterTotal / Number(vault.tvlUsd)) * 100;
+  await card.locator("details.alp__hold > summary").click();
+  const rowDots = card.locator("details.alp__hold tbody tr .alp__dot");
+  const rowFills = await rowDots.evaluateAll((els) =>
+    els.map((el) => getComputedStyle(el).backgroundColor));
+  expect(rowFills).toEqual(barFills);
+});
 
-  const yieldSleeve = bullets.first();
-  await expect(yieldSleeve).toContainText(framework.buckets[0].label);
-  await expect(yieldSleeve).toContainText(`held ${heldPct.toFixed(1)}%`);
-  await expect(yieldSleeve).toContainText(`target ${String(framework.strategy[0].targetPct)}%`);
-  const drift = heldPct - Number(framework.strategy[0].targetPct);
-  await expect(yieldSleeve).toContainText(`${drift >= 0 ? "+" : "−"}${Math.abs(drift).toFixed(1)}pp`);
+// The section that replaced the bullet bars. Every row reads flat today, and
+// that is the finding rather than a reason to hide the table: the baseline is
+// the row in force, because `allocation_framework` holds exactly one.
+test("the change ledger reports was, now and a flat move for every sleeve", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const framework = goldenFramework();
+  await stubEnvironment(page, { framework });
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
 
-  // A sleeve with a target and nothing held reads held at zero, with its drift
-  // spelled out rather than hidden.
-  const agentSleeve = bullets.nth(1);
-  await expect(agentSleeve).toContainText("held 0.0%");
-  await expect(agentSleeve).toContainText(`target ${String(framework.strategy[1].targetPct)}%`);
+  const rows = page.locator(".alp__tbl--led tbody tr");
+  await expect(rows).toHaveCount(framework.strategy.length);
+  for (const [i, sleeve] of framework.strategy.entries()) {
+    const row = rows.nth(i);
+    await expect(row).toContainText(sleeve.label);
+    // Was and now are the same row today, and the page says so in the copy
+    // rather than implying it read two versions.
+    const cells = await row.locator("td").allTextContents();
+    expect(cells[1].trim()).toBe(cells[2].trim());
+    await expect(row.locator(".alp__mv")).toHaveText("—");
+    await expect(row.locator(".alp__mv")).toHaveClass(/flat/);
+  }
+  // A flat move is muted, never coloured: green on a change that did not
+  // happen would be a claim.
+  const flatColour = await rows.first().locator(".alp__mv")
+    .evaluate((el) => getComputedStyle(el).color);
+  expect(flatColour).toBe("rgb(143, 154, 176)");
 
-  // A constituent held at zero is DRAWN, not hidden (RM-115).
-  const yieldPanel = page.locator(".alp__sleeve").first();
-  await expect(yieldPanel.locator(".alp__const-row")).toHaveCount(framework.buckets[0].items.length);
-  await expect(yieldPanel).toContainText("Sky");
+  // The swarm's reading sits under the numbers it explains, with the id kept
+  // so /allocation#latest-recommendation still lands.
+  await expect(page.locator("#latest-recommendation")).toBeVisible();
+  await expect(page.locator("#what-changed")).toContainText("position_actions");
   await expectNoBrowserErrors(errors);
 });
 
@@ -308,9 +422,13 @@ test("the latest recommendation is the session's rationale, and the page says wh
   await expect(block.locator(".alp__latest-line")).toHaveText("rotate USDC");
   await expect(block.locator(".alp__latest-why")).toHaveText(session.swarmRecommendation.rationale);
   await expect(block).toContainText("no weight change");
-  await expect(block.locator("a"))
+  await expect(block.locator("a").first())
     .toHaveAttribute("href", `/swarm/sessions/${session.id}`);
-  await expect(page.locator("#latest-recommendation")).toContainText("position_actions");
+  // The two links the section owes a reader who wants the reasoning behind a
+  // move: how the regime is read, and every session that reviewed this.
+  await expect(block.locator('a[href="/regime"]')).toBeVisible();
+  await expect(block.locator('a[href="/allocation/history"]')).toBeVisible();
+  await expect(page.locator("#what-changed")).toContainText("position_actions");
   await expectNoBrowserErrors(errors);
 });
 
@@ -356,8 +474,11 @@ test("a stale vault feed is flagged, and every degraded row names its observatio
   await navigate(page, "/allocation");
   await expect(page.locator(".alp-vault-stale")).toBeVisible();
   // "stale" as a DATE, not as an adjective: the carried-over sleeveStaleLabel().
-  const badges = page.locator("#vault .alp__cell-badge");
-  await expect(badges.first()).toContainText(/^stale \(/);
+  // The rows moved into the sleeve that owns them, so the badge moved with
+  // them; degrading a row is exactly the thing that must survive a redesign.
+  await page.locator(".alp__card details.alp__hold > summary").first().click();
+  const badges = page.locator(".alp__card .alp__cell-badge", { hasText: /^stale \(/ });
+  await expect(badges.first()).toBeVisible();
   await expect(page.locator(".alp__stat", { hasText: "Vault TVL" })).toContainText("(stale)");
 });
 
@@ -372,7 +493,8 @@ test("a scheduler catch-up is flagged as backfilled, distinct from stale and fro
   await expect(page.locator(".alp-vault-backfilled")).toContainText("caught up late");
   await expect(page.locator(".alp-vault-stale")).toBeHidden();
   await expect(page.locator(".alp-vault-nonlive")).toBeHidden();
-  await expect(page.locator("#vault .alp__cell-badge", { hasText: "caught up late" })).toBeVisible();
+  await page.locator(".alp__card details.alp__hold > summary").first().click();
+  await expect(page.locator(".alp__card .alp__cell-badge", { hasText: "caught up late" })).toBeVisible();
 });
 
 // The chip is the one place on this page it would be easy to lie, so it gets
@@ -467,7 +589,7 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
   await navigate(page, "/allocation");
   await expect(page.locator("#vault")).toBeVisible();
 
-  const findings = await page.evaluate(() => {
+  const findings = await page.evaluate((CATEGORICAL: string[]) => {
     const CYAN = ["rgb(0, 229, 255)", "rgb(0, 184, 212)"];
     const BEACON = "rgb(255, 122, 41)";
     const out: string[] = [];
@@ -506,6 +628,22 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
       if (cs.color === BEACON && own.length > 2) {
         out.push(`beacon as type on ${tag}: "${own.slice(0, 40)}"`);
       }
+      // A SERIES MARK is a data encoding, not interface chrome, and the two
+      // rules below do not apply to it: lib/chart-theme.js spends Beam and
+      // Beacon as slice hues on purpose, so that seven categories stay
+      // tellable apart, and the mini bucket pies on this site already do it.
+      // The exemption is not a hole, because it is paired with the STRONGER
+      // assertion underneath: a mark that opts out of the geometry rules must
+      // be painted from the sanctioned palette and nothing else. An element
+      // cannot use data-mark to smuggle in a hue of its own.
+      if (el.getAttribute("data-mark") === "series") {
+        const fill = cs.backgroundColor === "rgba(0, 0, 0, 0)" ? cs.fill : cs.backgroundColor;
+        if (!CATEGORICAL.includes(fill)) {
+          out.push(`series mark off-palette on ${tag}: ${fill}`);
+        }
+        continue;
+      }
+
       // Cyan is a LINE, never a mass. Anything cyan-filled bigger than a rule.
       if (CYAN.includes(cs.backgroundColor) && box.width * box.height > 200) {
         out.push(`cyan mass on ${tag}: ${Math.round(box.width)}x${Math.round(box.height)}`);
@@ -513,6 +651,12 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
       // Beacon is a POINT, capped about 12px.
       if (cs.backgroundColor === BEACON && (box.width > 12 || box.height > 12)) {
         out.push(`beacon larger than a point on ${tag}: ${Math.round(box.width)}x${Math.round(box.height)}`);
+      }
+      // SVG fills were never checked, which is how a cyan donut slice would
+      // have walked past this whole test. They are checked now, and a slice
+      // that is not declared a series mark has no business carrying the hue.
+      if (cs.fill && (CYAN.includes(cs.fill) || cs.fill === BEACON) && box.width * box.height > 200) {
+        out.push(`undeclared cyan/beacon fill on ${tag}: ${cs.fill}`);
       }
     }
 
@@ -526,9 +670,24 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
       if (size === 0) out.push("pending marker renders at 0px");
     }
     return out;
-  });
+  }, CATEGORICAL_RGB);
 
   expect(findings).toEqual([]);
+});
+
+// The exemption above is only sound if the marks it exempts actually exist and
+// actually opt in, so this pins both: the donut's slices and the sleeve bars
+// declare themselves, and every declared mark is on-palette.
+test("every categorical fill on the page declares itself a series mark", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+  await expect(page.locator("#vault")).toBeVisible();
+
+  const marks = page.locator('section.alp [data-mark="series"]');
+  expect(await marks.count()).toBeGreaterThan(8);
+  await expect(page.locator('.alp__donut svg path[data-mark="series"]')).toHaveCount(2);
+  await expect(page.locator('.alp__stk > span:not([data-mark="series"])')).toHaveCount(0);
 });
 
 test("the page carries no em dash in its own copy", async ({ page }) => {

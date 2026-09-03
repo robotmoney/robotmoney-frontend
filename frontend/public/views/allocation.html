@@ -12,9 +12,13 @@
      under one heading is what made a $229 vault 0.4% of a "Total AUM" figure
      printed under a heading about the vault.
 
-     Sections, in the order RM-115 fixes them: hero (weights in force, asOf,
-     state chip, stat rail) · Allocation · Inside each sleeve · What it pays ·
-     Vault · Latest recommendation · Exposure.
+     Sections: hero (weights in force, asOf, state chip, stat rail, the donut)
+     · What changed · Inside each sleeve · What it pays · Vault · Exposure.
+     "What changed" comes before the breakdown because the two questions a
+     returning reader has are what the allocation is and whether it moved, and
+     both are cheaper to answer than the detail underneath them. The old
+     "Latest recommendation" section is inside it: the swarm's reading is the
+     WHY of a change and belongs beside the numbers it explains.
 
      id="allocation" and id="vault" are load-bearing: RM-115 names both as
      citable anchors, and /allocation#vault is the address the swarm's vault
@@ -48,8 +52,11 @@
     </div>
   </header>
 
-  <!-- Weights in force, with the state of the policy that set them. -->
-  <div class="alp__force">
+  <!-- ── § ALLOCATION ─────────────────────────────────────────────────────
+       id="allocation" is load-bearing: RM-115 names it as a citable anchor,
+       and it belongs on the weights themselves rather than on a comparison
+       table about them. -->
+  <div class="alp__force" id="allocation">
     <div class="alp__force-head">
       <p class="alp__eyebrow">Weights in force</p>
       <span class="alp__chip" :class="isSwarmManaged() ? 'alp__chip--live' : ''" x-text="stateChip()">seeded</span>
@@ -62,21 +69,30 @@
          "what is the recipe". The ring underneath is the full 360, so a policy
          whose weights do not add to 100 leaves the remainder unfilled instead
          of being rescaled to look complete. -->
-    <div class="alp__split" x-show="hasTargets()" x-cloak>
+    <div class="alp__split" x-show="hasTargets()" x-cloak x-ref="allocFig">
       <div class="alp__donut">
-        <svg x-ref="donut" viewBox="0 0 240 240" role="img" aria-label="One USDC deposit allocated across the target sleeves"></svg>
+        <svg x-ref="donut" viewBox="0 0 240 240" role="img" aria-label="Target allocation across the sleeves"></svg>
       </div>
+      <!-- The hover legend the mini pies on this page have always had, kept
+           and pointed at the sleeves. Pointer only: every figure it shows is
+           in the legend row beside it, so focusable slices would add tab stops
+           that reach nothing new. Each slice keeps its <title> for readers. -->
       <ul class="alp__legend-list">
         <template x-for="s in sleeves()" :key="s.key">
-          <li :class="s.target === 0 ? 'dim' : ''">
-            <i class="alp__swatch" :style="sleeveSwatch(s)"></i>
+          <li :class="[s.target === 0 ? 'dim' : '', hotKey === s.key ? 'hot' : '']"
+              @pointerenter="hoverSleeve(s, $event)"
+              @pointermove="showTip(s, $event)"
+              @pointerleave="leaveSleeve()">
+            <i class="alp__swatch" data-mark="series" :style="sleeveSwatch(s)"></i>
             <div>
               <b x-text="s.name"></b>
               <span x-text="sleeveLegendLine(s)"></span>
             </div>
+            <span class="alp__legend-pct" x-text="fmtPctTrim(s.target)"></span>
           </li>
         </template>
       </ul>
+      <div class="alp__tip alp__tip--alloc" x-ref="allocTip" aria-hidden="true"></div>
     </div>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
@@ -133,65 +149,111 @@
     </div>
   </div>
 
-  <!-- ── § ALLOCATION ─────────────────────────────────────────────────── -->
-  <section class="alp__sec" id="allocation">
+  <!-- ── § WHAT CHANGED ───────────────────────────────────────────────────
+       Was, now, and the move between them. It absorbs the old "Latest
+       recommendation" section: the swarm's reading is the WHY of a change, and
+       reading it three sections away from the numbers it explains meant the
+       page stated the same "no session has moved these weights" fact twice
+       without ever putting it next to the weights. -->
+  <section class="alp__sec" id="what-changed">
     <div class="alp__sec-head">
-      <h2 class="alp__h2">Allocation</h2>
+      <h2 class="alp__h2">What changed</h2>
+      <a class="alp__ref-badge alp__ref-badge--link" :href="historyHref">Every session &rarr;</a>
     </div>
     <p class="alp__sub">
-      <b>Allocation</b> is the weight each sleeve is meant to carry.
-      <b>Held</b> is what the vault carries today, computed from its live
-      adapter balances. <b>Drift</b> is the gap, and closing it is a
-      <b>rebalance</b>. The vault is the only book this policy has, so the
-      agent-token sleeve reads held at zero: that basket is bought at deposit
-      time by the skill and lands in the depositor's own wallet, never in the
-      vault. <sup>3</sup>
+      Every session reviews these weights and either moves them or leaves them.
+      This is the state of the last review; what sits inside each sleeve is the
+      section below. The <b>was</b> column is not a second reading:
+      <code>allocation_framework</code> holds one row, so the baseline is the
+      row in force and every change reads flat until a session can write a
+      second one. <sup>7</sup>
     </p>
 
-    <p class="alp__empty" x-show="!loading && !sleeves().length" x-cloak>
-      Target weights are unavailable right now.
+    <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
+      Target weights are unavailable right now, so there is nothing to compare.
     </p>
 
-    <div class="alp__bullets" x-show="hasTargets()" x-cloak>
-      <template x-for="s in sleeves()" :key="s.key">
-        <div class="alp__bullet">
-          <div class="alp__bullet-top">
-            <span class="alp__bullet-name" x-text="s.name"></span>
-            <span class="alp__bullet-nums" x-show="s.holding || s.target > 0">
-              held <b x-text="fmtPct1(s.held)"></b> · target <span x-text="fmtPctTrim(s.target)"></span>
-              · drift <span class="drift" x-text="fmtPp1(s.drift)"></span>
-            </span>
-            <span class="alp__bullet-nums" x-show="!s.holding && s.target === 0">
-              held at zero · target <span x-text="fmtPctTrim(s.target)"></span>
-            </span>
-          </div>
-          <!-- A DASHED track means "no target at all". A sleeve WITH a target
-               that holds nothing is a solid track at 0% fill against its target
-               marker: the drift is the point, and a pattern would hide it.
-               Dashed rather than hatched because a hatch is a gradient, and the
-               covenant does not spend one on a track. -->
-          <div class="alp__track" :class="s.target === 0 ? 'alp__track--none' : ''">
-            <div class="alp__fill" x-show="s.target > 0"
-                 :style="`width:${Math.max(0, Math.min(100, s.held ?? 0))}%`"></div>
-            <div class="alp__target" x-show="s.target > 0" :style="`left:${Math.min(100, s.target)}%`"></div>
-          </div>
-        </div>
-      </template>
+    <p class="alp__scrollhint" aria-hidden="true" x-show="hasTargets()" x-cloak>Scroll the table sideways for the full row.</p>
+    <div class="alp__tblwrap" x-show="hasTargets()" x-cloak>
+      <table class="alp__tbl alp__tbl--led">
+        <thead>
+          <tr><th>Sleeve</th><th>Was</th><th>Now</th><th>Change</th><th>Note</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="r in changeRows()" :key="r.key">
+            <tr>
+              <td>
+                <i class="alp__dot" data-mark="series" :style="`background:${r.colour}`"></i><span x-text="r.name"></span>
+              </td>
+              <td class="q" x-text="fmtPctTrim(r.was)"></td>
+              <td x-text="fmtPctTrim(r.now)"></td>
+              <!-- Direction is the GLYPH first and the colour second, so the
+                   column still reads in greyscale, in forced-colors and to a
+                   colourblind reader. Beacon appears here as one arrow at type
+                   size, which is the point the covenant allows it. -->
+              <td>
+                <span class="alp__mv" :class="changeClass(r.delta)">
+                  <i x-text="changeGlyph(r.delta)" aria-hidden="true"></i><span x-text="changeLabel(r.delta)"></span>
+                </span>
+              </td>
+              <td class="note" x-text="r.note"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
     </div>
+
+    <!-- The swarm's reading, under the numbers it explains. id kept so
+         /allocation#latest-recommendation still lands on it. -->
+    <div class="alp__latest" id="latest-recommendation" x-show="!loading" x-cloak>
+      <p class="alp__eyebrow">Why</p>
+      <p class="alp__why-lead" x-text="unchangedLine()"></p>
+      <div class="alp__latest-meta">
+        <span class="alp__latest-date" x-text="latestDate()">—</span>
+        <span x-show="latestQuorum()" x-text="latestQuorum()"></span>
+        <span x-show="latestConfidence()" x-text="latestConfidence()"></span>
+        <span class="alp__latest-flag">no weight change</span>
+      </div>
+      <template x-if="latestLine()">
+        <p class="alp__latest-line" x-text="latestLine()"></p>
+      </template>
+      <template x-if="latestRationale()">
+        <p class="alp__latest-why" x-text="latestRationale()"></p>
+      </template>
+      <template x-if="!latestLine()">
+        <p class="alp__latest-line alp__latest-line--pend" x-text="latestFallback()"></p>
+      </template>
+      <p class="alp__why-links">
+        <a class="alp__link" x-show="latest" :href="latestHref()">Read this session in full</a>
+        <a class="alp__link" href="/regime">How the regime is read</a>
+        <a class="alp__link" :href="historyHref">Every session that reviewed this</a>
+      </p>
+    </div>
+
+    <p class="alp__sub alp__sub--after">
+      This portfolio is typed <code>position_actions</code>, so a session
+      publishes a rationale and a set of actions rather than a weight vector.
+      The signed consensus receipt is not readable yet: its public route returns
+      an error on every published session. <sup>8</sup>
+    </p>
   </section>
 
-  <!-- ── § INSIDE EACH SLEEVE ─────────────────────────────────────────── -->
+  <!-- ── § INSIDE EACH SLEEVE ─────────────────────────────────────────────
+       One card per sleeve: the policy, then the vault that implements it if
+       one exists. The policy bar is drawn to the SLEEVE's own hundred, not to
+       its share of the book, so a 5% sleeve holding seven names is as readable
+       as a 95% one. Inside a single ring those seven would be a 2.6 degree
+       wedge each. -->
   <section class="alp__sec" id="inside-each-sleeve">
     <div class="alp__sec-head">
       <h2 class="alp__h2">Inside each sleeve</h2>
     </div>
     <p class="alp__sub">
-      The constituents of each sleeve, by target weight. Solid bars are held;
-      pale bars are a target held at zero. A constituent at zero is drawn, not
-      hidden. The yield sleeve runs in equal thirds rather than quarters
-      because <b>Sky is not yet connected</b>: a target holding nothing. The
-      Agent Tokens list is the one the allocation publishes, which is not the
-      list the deposit skill buys. <sup>9</sup>
+      Each sleeve's split, drawn to its own hundred. Where a vault exists,
+      everything about it sits one click away: what it holds, and how far that
+      has drifted from the policy above it. The Agent Tokens list is the one
+      the allocation publishes, which is not the list the deposit skill
+      buys. <sup>9</sup>
     </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
@@ -199,22 +261,149 @@
       list.
     </p>
 
-    <div class="alp__sleeves" x-show="hasTargets()" x-cloak>
+    <div class="alp__cards" x-show="hasTargets()" x-cloak>
       <template x-for="s in sleeves()" :key="s.key">
-        <div class="alp__sleeve">
-          <div class="alp__sleeve-head">
-            <span class="alp__sleeve-name" x-text="s.name"></span>
-            <span class="alp__sleeve-w" :class="s.holding ? '' : 'held0'" x-text="sleeveWeightLabel(s)"></span>
+        <div class="alp__card">
+          <div class="alp__card-top">
+            <span class="alp__card-name">
+              <i :style="sleeveSwatch(s)"></i><b x-text="s.name"></b>
+            </span>
+            <span class="alp__card-w">
+              <b x-text="fmtPctTrim(s.target)"></b><small>of the book</small>
+            </span>
           </div>
-          <div class="alp__const">
-            <template x-for="c in constituents(s.key)" :key="c.label">
-              <div class="alp__const-row">
-                <span x-text="c.label"></span>
-                <span class="alp__const-bar">
-                  <i :class="c.holding ? '' : 'tgt'" :style="`width:${Math.min(100, c.holding ? c.held : c.target)}%`"></i>
+          <div class="alp__card-body">
+            <!-- Constituents restart at the front of the palette inside their
+                 own sleeve, keyed on their position in the policy. The vault
+                 table below keys on the same index, so a venue is one colour
+                 wherever it appears and the holdings feed cannot repaint it. -->
+            <div class="alp__stk" :class="s.target > 0 ? '' : 'zero'">
+              <template x-for="(c, ci) in constituents(s.key)" :key="c.label">
+                <span data-mark="series" :style="`width:${Math.max(0, Math.min(100, c.target))}%;background:${constituentColour(ci)}`"
+                      :title="`${c.label}: ${fmtPct(c.target)} of this sleeve`"></span>
+              </template>
+            </div>
+            <div class="alp__names">
+              <template x-for="(c, ci) in constituents(s.key)" :key="c.label">
+                <span>
+                  <i data-mark="series" :style="`background:${constituentColour(ci)}`"></i><span x-text="c.label"></span>
+                  <b x-text="fmtPctTrim(c.target)"></b>
                 </span>
-                <span class="alp__const-val" :class="c.holding ? '' : 'dim'" x-text="constituentValue(c)"></span>
-              </div>
+              </template>
+            </div>
+
+            <!-- The vault rail: chain, yield and size, or the fact that there
+                 is no contract yet. A sleeve without a vault gets NO receipt
+                 symbol: naming a token for an address nobody has deployed is
+                 the kind of fabrication a reader would act on. -->
+            <div class="alp__vrail">
+              <span class="alp__vchip" :class="sleeveHasVault(s.key) ? '' : 'pending'">
+                <i></i><span x-text="sleeveHasVault(s.key) ? 'Vault live' : 'Vault pending'"></span>
+              </span>
+              <template x-if="sleeveHasVault(s.key)">
+                <code x-text="vaultToken()"></code>
+              </template>
+              <span class="alp__vstat">Chain<b x-text="vaultChain()"></b></span>
+              <template x-if="sleeveHasVault(s.key)">
+                <span class="alp__vstat">APY · 7-day<b x-text="vaultApyLabel()"></b></span>
+              </template>
+              <template x-if="sleeveHasVault(s.key)">
+                <span class="alp__vstat">TVL<b x-text="fmtUsd2(tvlUsd())"></b></span>
+              </template>
+              <template x-if="!sleeveHasVault(s.key)">
+                <span class="alp__vstat">Status<b>Not deployed</b></span>
+              </template>
+            </div>
+
+            <template x-if="sleeveHasVault(s.key)">
+              <details class="alp__hold">
+                <summary>
+                  <span x-text="`Vault holdings · ${sleeveVaultRows(s.key).filter((r) => r.inVault).length} positions`"></span>
+                  <span class="alp__off">
+                    <span x-text="trackingErrorLabel(s.key)"></span><i aria-hidden="true">⌄</i>
+                  </span>
+                </summary>
+                <div class="alp__hold-body">
+                  <p class="alp__scrollhint" aria-hidden="true">Scroll the table sideways for the full row.</p>
+                  <div class="alp__tblwrap">
+                    <table class="alp__tbl alp__tbl--wide">
+                      <thead>
+                        <tr>
+                          <th>Name</th><th>Balance</th><th>Price</th><th>Value</th>
+                          <th>Policy</th><th>In vault</th><th>Drift</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <template x-for="r in sleeveVaultRows(s.key)" :key="r.label">
+                          <tr :class="r.inVault ? '' : 'out'">
+                            <td>
+                              <i class="alp__dot" data-mark="series" x-show="r.colour" :style="`background:${r.colour}`"></i>
+                              <template x-if="r.adapter && adapterHref(r.adapter)">
+                                <a class="alp__link" :href="adapterHref(r.adapter)" target="_blank" rel="noopener" x-text="r.label"></a>
+                              </template>
+                              <template x-if="!(r.adapter && adapterHref(r.adapter))">
+                                <span x-text="r.label"></span>
+                              </template>
+                              <!-- x-if, not x-show: a badge that is present but
+                                   hidden still reads as "stale" to anything
+                                   holding the row's text, and a row's
+                                   provenance must not be ambiguous. -->
+                              <template x-if="r.adapter && sleeveStaleLabel(r.adapter)">
+                                <span class="alp__cell-badge" x-text="sleeveStaleLabel(r.adapter)"></span>
+                              </template>
+                              <template x-if="r.adapter && r.adapter.provenance === 'backfilled'">
+                                <span class="alp__cell-badge">caught up late</span>
+                              </template>
+                              <template x-if="!r.inVault">
+                                <span class="alp__cell-badge">not held</span>
+                              </template>
+                            </td>
+                            <td x-text="vaultRowBalance(r)"></td>
+                            <td x-text="vaultRowPrice(r)"></td>
+                            <td x-text="vaultRowValue(r)"></td>
+                            <td class="q" x-text="vaultRowPolicy(r)"></td>
+                            <td x-text="vaultRowActual(r)"></td>
+                            <!-- Drift is a DEVIATION, not a gain: eight points
+                                 over is exactly as wrong as eight under. The
+                                 glyph carries direction and the ink stays a
+                                 reading grey; the colour is spent once, on the
+                                 verdict line below. -->
+                            <td>
+                              <span class="alp__dft">
+                                <i x-text="vaultRowDriftGlyph(r)" aria-hidden="true"></i><span x-text="vaultRowDrift(r)"></span>
+                              </span>
+                            </td>
+                          </tr>
+                        </template>
+                        <tr class="tot">
+                          <td>Vault TVL</td><td>—</td><td>—</td>
+                          <td x-text="fmtUsd2(tvlUsd())"></td>
+                          <td>—</td>
+                          <td x-text="tvlUsd() == null ? '—' : '100.00%'"></td>
+                          <td>—</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="alp__hold-foot">
+                    <span x-text="sharesLabel()">—</span>
+                    <span x-text="asOfLabel()">—</span>
+                  </div>
+                  <p class="alp__vd" :class="onTarget(s.key) ? 'on' : 'off'">
+                    <i></i>
+                    <span>
+                      <b x-text="onTarget(s.key) ? 'On target.' : trackingErrorLabel(s.key) + '.'"></b>
+                      <span x-text="trackingErrorLine(s.key)"></span>
+                    </span>
+                  </p>
+                </div>
+              </details>
+            </template>
+            <template x-if="!sleeveHasVault(s.key)">
+              <p class="alp__vd none">
+                <i></i>
+                <span><b>No vault yet.</b> Nothing is held, so there is nothing to compare the policy against.</span>
+              </p>
             </template>
           </div>
         </div>
@@ -306,75 +495,22 @@
       </a>
     </div>
     <p class="alp__sub">
-      The vault is how the allocation is implemented today: an ERC-4626 contract
-      on Base holding USDC across three lending venues. The 5% agent-token
-      sleeve is bought at deposit time by the skill and lands in the depositor's
-      wallet, so it never appears in these rows. Balance and price are shown
-      alongside value, so a row can be checked rather than taken on trust, and
-      the rows add up to vault TVL.
+      The contract behind the fixed-income sleeve: an ERC-4626 vault on Base
+      holding USDC across three lending venues. Its holdings are shown where
+      they can be compared to something, under the sleeve above; what is left
+      here is what belongs to the contract rather than to any one venue. The 5%
+      agent-token sleeve is bought at deposit time by the skill and lands in the
+      depositor's wallet, so the vault never holds it.
     </p>
 
-    <p class="alp__scrollhint" aria-hidden="true">Scroll the table sideways for the full row.</p>
-    <div class="alp__tblwrap">
-      <table class="alp__tbl">
-        <thead>
-          <tr><th>Position</th><th>Type</th><th>Balance</th><th>Price</th><th>Value</th><th>Weight</th></tr>
-        </thead>
-        <tbody>
-          <template x-if="loading">
-            <tr>
-              <td>Loading…</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
-            </tr>
-          </template>
-          <template x-for="a in adapters()" :key="a.address || a.name">
-            <tr>
-              <td>
-                <template x-if="adapterHref(a)">
-                  <a class="alp__link" :href="adapterHref(a)" target="_blank" rel="noopener" x-text="adapterLabel(a)"></a>
-                </template>
-                <template x-if="!adapterHref(a)">
-                  <span x-text="adapterLabel(a)"></span>
-                </template>
-                <!-- x-if, not x-show: a badge that is present but hidden still
-                     reads as "stale" to anything holding the row's text, and a
-                     row's provenance is exactly the thing that must not be
-                     ambiguous. -->
-                <template x-if="sleeveStaleLabel(a)">
-                  <span class="alp__cell-badge" x-text="sleeveStaleLabel(a)"></span>
-                </template>
-                <template x-if="a.provenance === 'backfilled'">
-                  <span class="alp__cell-badge">caught up late</span>
-                </template>
-              </td>
-              <td x-text="adapterType(a)"></td>
-              <td x-text="adapterBalance(a)"></td>
-              <td x-text="adapterPrice(a)"></td>
-              <td x-text="adapterValue(a)"></td>
-              <td x-text="adapterWeight(a)"></td>
-            </tr>
-          </template>
-          <!-- Idle USDC is not optional: without it the rows never reconcile to
-               totalAssets(). -->
-          <template x-if="!loading">
-          <tr>
-            <td class="idle">Idle USDC</td>
-            <td class="idle">Not deployed</td>
-            <td class="idle" x-text="idleUsdc() == null ? '—' : Number(idleUsdc()).toFixed(2)"></td>
-            <td class="idle" x-text="idleUsdc() == null ? '—' : '$1.0000'"></td>
-            <td class="idle" x-text="fmtUsd2(idleUsdc())"></td>
-            <td class="idle" x-text="idleWeight()"></td>
-          </tr>
-          </template>
-          <template x-if="!loading">
-          <tr class="tot">
-            <td>Vault TVL</td><td>—</td><td>—</td><td>—</td>
-            <td x-text="fmtUsd2(tvlUsd())"></td>
-            <td x-text="tvlUsd() == null ? '—' : '100.0%'"></td>
-          </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
+    <p class="alp__reconcile" x-show="!loading" x-cloak>
+      <span x-text="venueCount()">—</span> lending venues plus idle USDC add up
+      to <b x-text="fmtUsd2(tvlUsd())">—</b>, read
+      <span x-text="asOfLabel()">—</span>. The rows themselves, with each
+      venue's balance and its drift from the policy, are under
+      <a class="alp__link" href="#inside-each-sleeve">Conservative DeFi Yield</a>
+      above, next to the weights they are measured against.
+    </p>
 
     <dl class="alp__facts">
       <div class="alp__fact">
@@ -408,44 +544,6 @@
       The vault is a book of holdings, so it keeps a portfolio page of its own:
       <a class="alp__link" :href="vaultSubjectHref">the swarm's record for the vault</a>
       carries its sessions and its holdings over time.
-    </p>
-  </section>
-
-  <!-- ── § LATEST RECOMMENDATION ──────────────────────────────────────── -->
-  <section class="alp__sec" id="latest-recommendation">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">Latest recommendation</h2>
-      <a class="alp__ref-badge alp__ref-badge--link" :href="historyHref">Every session &rarr;</a>
-    </div>
-    <p class="alp__sub">
-      The swarm reviews this allocation and publishes a recommendation. It is
-      not applied automatically: no code path writes a session's output into the
-      target weights, so the weights above have not moved. <sup>7</sup>
-    </p>
-
-    <div class="alp__latest" x-show="!loading" x-cloak>
-      <div class="alp__latest-meta">
-        <span class="alp__latest-date" x-text="latestDate()">—</span>
-        <span x-show="latestQuorum()" x-text="latestQuorum()"></span>
-        <span x-show="latestConfidence()" x-text="latestConfidence()"></span>
-        <span class="alp__latest-flag">no weight change</span>
-      </div>
-      <template x-if="latestLine()">
-        <p class="alp__latest-line" x-text="latestLine()"></p>
-      </template>
-      <template x-if="latestRationale()">
-        <p class="alp__latest-why" x-text="latestRationale()"></p>
-      </template>
-      <template x-if="!latestLine()">
-        <p class="alp__latest-line alp__latest-line--pend" x-text="latestFallback()"></p>
-      </template>
-      <a class="alp__link" x-show="latest" :href="latestHref()">Read this session in full &rarr;</a>
-    </div>
-    <p class="alp__sub alp__sub--after">
-      This portfolio is typed <code>position_actions</code>, so a session
-      publishes a rationale and a set of actions rather than a weight vector.
-      The signed consensus receipt is not readable yet: its public route returns
-      an error on every published session. <sup>8</sup>
     </p>
   </section>
 
@@ -629,6 +727,21 @@
 .alp__legend-list span { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted); }
 .alp__legend-list li.dim b { color: var(--color-text-muted); }
 .alp__swatch { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; display: block; }
+.alp__legend-list li { padding: 0.3rem 0.4rem; grid-template-columns: 0.7rem 1fr auto; }
+.alp__legend-list li.hot { background: var(--color-surface-light); }
+.alp__legend-pct {
+  font-family: var(--font-mono); font-size: 1.05rem; color: var(--color-text);
+  font-variant-numeric: tabular-nums; align-self: center;
+}
+.alp__legend-list li.dim .alp__legend-pct { color: var(--color-text-muted); }
+.alp__legend-list li.dim .alp__swatch { opacity: 0.45; }
+/* The hovered slice keeps its geometry; the others recede. Lifting the hovered
+   one instead would move the ring under the pointer. */
+.alp__donut svg path { transition: opacity 0.12s linear; }
+.alp__donut svg path.dim { opacity: 0.3; }
+@media (prefers-reduced-motion: reduce) { .alp__donut svg path { transition: none; } }
+.alp__split { position: relative; }
+.alp__tip--alloc { white-space: normal; max-width: 15rem; }
 
 /* stat rail */
 .alp__stats {
@@ -771,62 +884,110 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
   background: var(--color-beacon); margin-top: 0.42rem;
 }
 
-/* bullet bars: held against target, with the drift on one track */
-.alp__bullets { display: grid; gap: 1.05rem; }
-.alp__bullet-top {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
-  flex-wrap: wrap; margin-bottom: 0.4rem;
+/* ── one card per sleeve ───────────────────────────────────────────────── */
+.alp__cards { display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); }
+@media (min-width: 1000px) { .alp__cards { grid-template-columns: 1fr 1fr; } }
+.alp__card { background: var(--color-surface); display: flex; flex-direction: column; }
+.alp__card-top {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem 1.2rem;
+  flex-wrap: wrap; padding: 1rem 1.15rem 0.85rem; border-bottom: 1px solid var(--color-border);
 }
-.alp__bullet-name { font-weight: 700; font-size: 0.92rem; color: var(--color-text); }
-.alp__bullet-nums {
-  font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted);
-  font-variant-numeric: tabular-nums;
+.alp__card-name { display: flex; align-items: baseline; gap: 0.55rem; min-width: 0; }
+.alp__card-name i { flex: 0 0 auto; width: 0.6rem; height: 0.6rem; transform: translateY(-0.05em); }
+.alp__card-name b {
+  font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
+  font-size: 1.05rem; letter-spacing: 0.01em; color: var(--color-text);
 }
-.alp__bullet-nums b { color: var(--color-text); font-weight: 500; }
-/* Drift reads in the ordinary text colour, not in Beacon. Beacon is a POINT in
-   the covenant and never a run of type, and a drift is a gap rather than a
-   loss: +5pp on the yield sleeve is what holding the whole book in one sleeve
-   looks like, not an alarm. */
-.alp__bullet-nums .drift { color: var(--color-text-soft); }
-.alp__track {
-  position: relative; height: 1.15rem; background: var(--color-surface-light);
+.alp__card-w { text-align: right; }
+.alp__card-w b {
+  font-family: var(--font-mono); font-weight: 500; font-size: 1.1rem;
+  color: var(--color-text); font-variant-numeric: tabular-nums;
+}
+.alp__card-w small {
+  display: block; font-family: var(--font-mono); font-size: 0.56rem; text-transform: uppercase;
+  letter-spacing: 0.14em; color: var(--color-text-muted);
+}
+.alp__card-body { padding: 1rem 1.15rem 1.15rem; display: flex; flex-direction: column; flex: 1 1 auto; }
+
+/* The policy bar, drawn to the SLEEVE's own hundred rather than to its share
+   of the book, so a 5% sleeve holding seven names is as readable as a 95% one.
+   The 2px separators are the surface showing through, not a border colour: a
+   stacked bar needs a gap between fills, and a line would read as a rule. */
+.alp__stk {
+  display: flex; height: 1.6rem; background: var(--color-surface-light);
   border: 1px solid var(--color-border);
 }
-.alp__fill { position: absolute; inset: 0 auto 0 0; background: var(--color-green); }
-.alp__track--none { border-style: dashed; background: transparent; }
-/* The tick marks where the target sits on the track. It carried its own
-   percentage above it and that label landed ON the row's figures at every
-   width, desktop and phone: the number is already in "target 95%" one line up,
-   so the mark is just a mark. */
-.alp__target { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--color-text-soft); }
-
-/* small multiples: one panel per sleeve, each with its own baseline */
-.alp__sleeves { display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); }
-@media (min-width: 760px) { .alp__sleeves { grid-template-columns: 1fr 1fr; } }
-.alp__sleeve { background: var(--color-surface); padding: 1.1rem 1.15rem 1.25rem; }
-.alp__sleeve-head {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem;
-  margin-bottom: 0.85rem;
-}
-.alp__sleeve-name {
-  font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
-  letter-spacing: 0.13em; color: var(--color-text);
-}
-.alp__sleeve-w {
-  font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text);
+.alp__stk > span { display: block; height: 100%; }
+.alp__stk > span + span { border-left: 2px solid var(--color-surface); }
+.alp__stk.zero { opacity: 0.45; }
+.alp__names { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; margin-top: 0.7rem; font-size: 0.8rem; }
+.alp__names > span { display: inline-flex; align-items: baseline; gap: 0.4rem; color: var(--color-text-soft); }
+.alp__names i { flex: 0 0 auto; width: 0.45rem; height: 0.45rem; transform: translateY(-0.05em); }
+.alp__names b {
+  font-family: var(--font-mono); font-weight: 400; color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
-.alp__sleeve-w.held0 { color: var(--color-text-muted); }
-.alp__const { display: grid; gap: 0.55rem; }
-.alp__const-row {
-  display: grid; grid-template-columns: 5.5rem 1fr 4.2rem; align-items: center; gap: 0.6rem;
-  font-family: var(--font-mono); font-size: 0.66rem; color: var(--color-text-muted);
+
+/* the vault rail: chain, yield and size, or the absence of a contract */
+.alp__vrail {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem 1.3rem;
+  margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--color-border);
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--color-text-muted);
 }
-.alp__const-bar { position: relative; height: 0.5rem; background: var(--color-surface-light); }
-.alp__const-bar i { position: absolute; inset: 0 auto 0 0; background: var(--color-green); }
-.alp__const-bar i.tgt { background: var(--color-border-light); }
-.alp__const-val { text-align: right; color: var(--color-text); }
-.alp__const-val.dim { color: var(--color-text-muted); }
+.alp__vchip {
+  display: inline-flex; align-items: center; gap: 0.4rem; color: var(--color-text);
+  border: 1px solid var(--color-border-light); border-radius: var(--radius); padding: 0.22rem 0.5rem;
+}
+.alp__vchip i { width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--color-green); }
+.alp__vchip.pending { color: var(--color-text-muted); }
+.alp__vchip.pending i { background: transparent; border: 1px solid var(--color-text-muted); }
+/* An ERC-4626 share symbol is case-carrying: rmUSDC is not RMUSDC. */
+.alp__vrail code {
+  font-family: var(--font-mono); font-size: 0.66rem; text-transform: none; letter-spacing: 0.04em;
+  color: var(--color-text-soft); border: 1px solid var(--color-border); padding: 0.05rem 0.3rem;
+}
+.alp__vstat b {
+  display: block; margin-top: 0.1rem; font-family: var(--font-mono); font-weight: 500;
+  font-size: 0.95rem; text-transform: none; letter-spacing: 0; color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* the verdict line. This is the ONE place the vault comparison spends colour:
+   Beacon as a point for off target, Pool for on it. The drift column itself
+   stays in reading ink, because a deviation has no good direction. */
+.alp__vd {
+  display: flex; gap: 0.55rem; align-items: flex-start; margin: 1rem 0 0;
+  font-size: 0.84rem; color: var(--color-text-muted); line-height: 1.55;
+}
+.alp__vd i { flex: 0 0 auto; width: 0.375rem; height: 0.375rem; border-radius: 50%; margin-top: 0.5rem; }
+.alp__vd.off i { background: var(--color-beacon); }
+.alp__vd.on i { background: var(--color-green); }
+.alp__vd.none i { background: transparent; border: 1px solid var(--color-text-muted); margin-top: 0.44rem; }
+.alp__vd b { color: var(--color-text-soft); font-weight: 500; }
+
+/* the holdings disclosure */
+.alp__hold { margin-top: 1rem; border: 1px solid var(--color-border); }
+.alp__hold > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center;
+  justify-content: space-between; gap: 0.75rem 1rem; flex-wrap: wrap;
+  padding: 0.55rem 0.8rem; background: var(--color-deep);
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-soft);
+}
+.alp__hold > summary::-webkit-details-marker { display: none; }
+.alp__hold > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.alp__off { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--color-text-muted); }
+.alp__hold[open] > summary { border-bottom: 1px solid var(--color-border); }
+.alp__hold[open] .alp__off i { display: inline-block; transform: rotate(180deg); }
+.alp__hold-body { padding: 0.85rem 0.8rem 0.95rem; }
+.alp__hold-foot {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.3rem 1rem;
+  margin-top: 0.7rem; font-family: var(--font-mono); font-size: 0.6rem;
+  color: var(--color-text-muted);
+}
+.alp__reconcile { margin: 0; font-size: 0.86rem; color: var(--color-text-muted); line-height: 1.6; }
+.alp__reconcile b { color: var(--color-text-soft); font-weight: 500; }
 
 /* the vault's three facts */
 .alp__facts {
@@ -847,6 +1008,7 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 
 /* the latest recommendation */
 .alp__latest {
+  margin-top: 1.4rem;
   border: 1px solid var(--color-border); border-left: 2px solid var(--color-accent-line);
   background: var(--color-surface); padding: 1rem 1.15rem 1.15rem;
 }
@@ -858,6 +1020,13 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 .alp__latest-flag { color: var(--color-text-soft); }
 .alp__latest-line { margin: 0.7rem 0 0.9rem; color: var(--color-text-soft); font-size: 0.9rem; line-height: 1.6; }
 .alp__latest-line--pend { color: var(--color-text-muted); }
+.alp__latest .alp__eyebrow { margin-bottom: 0.5rem; }
+.alp__why-lead { margin: 0 0 0.85rem; color: var(--color-text); font-size: 0.95rem; line-height: 1.6; }
+.alp__why-links {
+  display: flex; flex-wrap: wrap; gap: 0.35rem 1.4rem; margin: 0.9rem 0 0;
+  padding-top: 0.75rem; border-top: 1px solid var(--color-border);
+  font-family: var(--font-mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.1em;
+}
 /* The aggregator's sentence, under the actions it explains. */
 .alp__latest-why {
   margin: -0.5rem 0 0.9rem; color: var(--color-text-muted); font-size: 0.82rem;
@@ -898,6 +1067,33 @@ table.alp__tbl .idle { color: var(--color-text-muted); }
 /* After tr.tot, and more specific than it: the vault-vs-Aave column stays green
    on the total row too, which is the row a reader checks first. */
 table.alp__tbl td.alp__gain, table.alp__tbl tr.tot td.alp__gain { color: var(--color-green); }
+/* The change ledger and the vault table both live in .alp__tbl. `q` is the
+   quiet column a figure is measured against; `note` is prose and must be
+   allowed to wrap, which the mono default forbids. */
+table.alp__tbl td.q { color: var(--color-text-muted); }
+table.alp__tbl td.note {
+  font-family: var(--font-sans); font-size: 0.78rem; white-space: normal;
+  color: var(--color-text-muted); font-variant-numeric: normal;
+}
+table.alp__tbl--led { min-width: 34rem; }
+table.alp__tbl--wide { min-width: 48rem; }
+table.alp__tbl tr.out td { color: var(--color-text-muted); }
+table.alp__tbl tr.out .alp__dot { opacity: 0.4; }
+.alp__dot {
+  display: inline-block; width: 0.45rem; height: 0.45rem; margin-right: 0.5rem;
+  vertical-align: 0.05em;
+}
+/* Direction is the GLYPH first and the colour second, so the column survives
+   greyscale, forced-colors and colourblindness. Beacon appears here as one
+   arrow at type size, which is the point size the covenant allows it. */
+.alp__mv { display: inline-flex; align-items: baseline; gap: 0.35rem; justify-content: flex-end; }
+.alp__mv i { font-style: normal; font-size: 0.78em; line-height: 1; }
+.alp__mv.up { color: var(--color-green); }
+.alp__mv.down { color: var(--color-beacon); }
+.alp__mv.flat { color: var(--color-text-muted); }
+/* Drift is a deviation, not a gain, so it keeps the glyph and stays in ink. */
+.alp__dft { display: inline-flex; align-items: baseline; gap: 0.35rem; justify-content: flex-end; color: var(--color-text-soft); }
+.alp__dft i { font-style: normal; font-size: 0.78em; line-height: 1; }
 
 /* exposure */
 .alp__cta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem 1.6rem; }

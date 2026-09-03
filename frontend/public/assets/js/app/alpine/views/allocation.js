@@ -45,7 +45,7 @@
 //     session publishes weights. The line shows the aggregator's rationale
 //     instead of inventing a vector.
 import { api, ROUTES } from "../../lib/api.js";
-import { PALETTE, SERIES } from "../../lib/chart-theme.js";
+import { PALETTE, SERIES, CATEGORICAL } from "../../lib/chart-theme.js";
 import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID, isPublishedAllocationSession } from "../../lib/allocation-subject.js";
 
 // ── the reference dataset ───────────────────────────────────────────────────
@@ -81,6 +81,12 @@ const VAULT_ADDRESS = "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd";
 // everything it holds sits in the fixed-income sleeve. Keyed on the
 // framework's own bucket key.
 const FIXED_INCOME_KEY = "defi-yield";
+
+// The one vault that exists. Its receipt token and chain are product facts,
+// not a feed. The other three sleeves get no symbol at all: naming a token for
+// a contract nobody has deployed is a fabrication a reader would act on.
+const VAULT_TOKEN = "rmUSDC";
+const VAULT_CHAIN = "Base";
 
 // Adapter display names and venue types. vault-economics serves the protocol
 // name only ("Morpho"), but Morpho's position is a specific curated vault and
@@ -156,30 +162,25 @@ function shortDay(iso) {
   return `${Number(parts[2])} ${MONTHS[Number(parts[1]) - 1]}`;
 }
 
-// ── the sleeve ramp ─────────────────────────────────────────────────────────
-// Buckets are a GREEN LUMINANCE RAMP, not a hue set (brand sheet, and
-// .impeccable.md's Pool row says it in those words). A donut slice is a mass
-// and the mass is money, so every slice is Pool; only its luminance moves.
+// ── the palette ────────────────────────────────────────────────────────────
+// CATEGORICAL from lib/chart-theme.js, whose own comment is the argument: pie
+// and donut slices are DISTINCT ENTITIES, separated by HUE and never by
+// lightness, because "a green luminance ramp reads as one indistinct blob the
+// moment the slices are categories rather than one quantity's intensity".
+// This page drew exactly that ramp until it was measured: four green steps
+// separate at CVD dE 7.1 against 18.2 for the categorical front four, and a
+// normal-vision floor below 15 means full-colour readers cannot tell the pair
+// apart either.
 //
-// Keyed on the sleeve's POSITION, not on its weight. A ramp keyed on magnitude
-// is the right encoding for one quantity measured repeatedly, and the wrong one
-// here: at 25/25/25/25 every slice would resolve to the same green and the
-// donut would read as one undivided ring. Position always separates them.
-//
-// Generated from the two Pool tokens rather than typed, so a fifth sleeve gets
-// a fifth step instead of falling off the end of a hardcoded list.
-const RAMP_FROM = [16, 185, 129];  // --color-green, Pool
-const RAMP_TO = [156, 255, 210];   // SERIES.mint
-
-/** n stops from Pool to mint. The first sleeve is Pool itself. */
-function greenRamp(n) {
-  if (n <= 1) return [`rgb(${RAMP_FROM.join(",")})`];
-  return Array.from({ length: n }, (_, i) => {
-    const t = i / (n - 1);
-    const c = RAMP_FROM.map((from, k) => Math.round(from + (RAMP_TO[k] - from) * t));
-    return `rgb(${c.join(",")})`;
-  });
-}
+// Sleeves take CATEGORICAL by POSITION, all four of them, so a sleeve keeps
+// its hue whether or not it is funded and the legend row for a 0% sleeve is
+// keyed to the colour its slice would have. Constituents restart at the front
+// inside their own sleeve, which is what the mini bucket pies already do, and
+// the vault table reuses the constituent's hue keyed by its position in the
+// POLICY — never by the order the holdings feed happens to return, which would
+// let the API repaint a venue.
+const sleeveColour = (i) => CATEGORICAL[i % CATEGORICAL.length];
+const itemColour = (i) => CATEGORICAL[i % CATEGORICAL.length];
 
 /** One donut segment, as a path. Angles in degrees, clockwise from 12 o'clock. */
 function donutArc(cx, cy, outer, inner, a0, a1) {
@@ -220,6 +221,8 @@ export function registerAllocationView(Alpine) {
     latest: null,       // newest published session on the allocation subject
     sessionsFailed: false,
     loading: true,
+    // The sleeve under the pointer, so the donut and its legend light together.
+    hotKey: null,
 
     // Exposed so the view renders the dataset's own dates and length instead
     // of a copywritten "162 days" that stops being true.
@@ -495,27 +498,36 @@ export function registerAllocationView(Alpine) {
       if (s.held == null) return "—";
       return s.holding ? "holding" : "held at zero";
     },
+    // What the legend row says under the sleeve name. It answers the two
+    // questions the donut cannot: how many names are inside, and whether
+    // anything is actually holding this weight.
     sleeveLegendLine(s) {
-      return `${this.fmtPctTrim(s.target)} target · ${this.sleeveState(s)}`;
+      const names = this.constituents(s.key).length;
+      const count = `${names} name${names === 1 ? "" : "s"}`;
+      if (!this.sleeveHasVault(s.key)) return `${count} · vault pending`;
+      const te = this.sleeveTrackingError(s.key);
+      return te == null
+        ? `${count} · vault live`
+        : `${count} · vault live · ${te.toFixed(2)} pts off`;
     },
-    // The legend swatch. A sleeve with a target carries its slice's colour; a
-    // sleeve with none carries an outline, because there is no slice to key it
-    // to and a filled swatch would imply one.
+    // The legend swatch. Every sleeve carries its hue, funded or not: the
+    // colour identifies the sleeve, and a sleeve at zero is still the same
+    // sleeve. Its row is dimmed by the view instead, which says "holds
+    // nothing" without also saying "has no identity".
     sleeveSwatch(s) {
-      const colour = this.sleeveColours()[s.key];
-      if (!colour) return "background:transparent;border:1px solid var(--color-border-light)";
-      return `background:${colour}`;
+      return `background:${this.sleeveColours()[s.key] || "var(--color-border-light)"}`;
     },
-    // The ramp spans the sleeves that actually draw an arc, not all four.
-    // Spread over four stops, the two funded sleeves of a 95/5/0/0 policy sat a
-    // third of the ramp apart and read as the same green; the two unfunded ones
-    // were spending range on slices that do not exist. Over the funded set they
-    // take the full distance from Pool to mint.
+    // Keyed on POSITION in the published order, so a sleeve keeps its hue when
+    // another one's weight changes. Colour follows the entity, never its rank.
     sleeveColours() {
-      const funded = this.sleeves().filter((row) => row.target > 0);
-      const ramp = greenRamp(funded.length);
-      return Object.fromEntries(funded.map((row, i) => [row.key, ramp[i]]));
+      return Object.fromEntries(this.sleeves().map((row, i) => [row.key, sleeveColour(i)]));
     },
+    // Constituents restart at the front of the palette inside their own
+    // sleeve. Keyed on the constituent's index in the POLICY, which is also
+    // what the vault table below keys on, so a venue is one colour on the page
+    // however the holdings feed orders itself.
+    constituentColour(i) { return itemColour(i); },
+
     sleeveWeightLabel(s) {
       if (s.held == null) return "—";
       if (s.holding) return `${this.fmtPct1(s.held)} held`;
@@ -545,6 +557,215 @@ export function registerAllocationView(Alpine) {
     },
     constituentValue(c) {
       return c.holding ? this.fmtPct1(c.held) : `0% / ${this.fmtPctTrim(c.target)}`;
+    },
+
+    // ── the change ledger ───────────────────────────────────────────────────
+    // Was, now, and the move between them, one row per sleeve. Today every
+    // row is flat and the table says so in four "—"s rather than being hidden:
+    // "28 sessions looked at these weights and left them" is the finding, and
+    // a section that disappears when nothing changed cannot report it.
+    //
+    // `was` is not a second reading. `allocation_framework` has one writer and
+    // one row, so there is no prior version to diff against and the baseline
+    // IS the row in force. The day a session writes a second row, `was` comes
+    // from it and these arrows start moving with no change to the view.
+    changeRows() {
+      return this.sleeves().map((row, i) => ({
+        key: row.key,
+        name: row.name,
+        colour: sleeveColour(i),
+        was: row.target,
+        now: row.target,
+        delta: 0,
+        note: this.changeNote(row),
+      }));
+    },
+    changeNote(row) {
+      if (!(row.target > 0)) return "Never funded.";
+      return this.sleeveHasVault(row.key)
+        ? "In force, and a vault holds it."
+        : "In force. No vault holds it yet.";
+    },
+    // Direction is the GLYPH first and the colour second, so the column
+    // survives colourblindness, greyscale and forced-colors. Up takes Pool
+    // green and down takes Beacon, which is what tokens.css already calls a
+    // point for loss and attention: here it is one arrow at type size.
+    changeGlyph(d) { return d > 0 ? "▲" : d < 0 ? "▼" : ""; },
+    changeLabel(d) {
+      if (d == null || !isFinite(d) || d === 0) return "—";
+      return (d > 0 ? "+" : "−") + Math.abs(Number(d)).toFixed(2);
+    },
+    changeClass(d) {
+      if (d == null || !isFinite(d) || d === 0) return "flat";
+      return d > 0 ? "up" : "down";
+    },
+
+    // ── one vault per sleeve ────────────────────────────────────────────────
+    // Only fixed income has a contract. The other three are written policy
+    // waiting on Lucas's vaults, and the page says "pending" rather than
+    // inventing a receipt-token symbol for an address that does not exist.
+    sleeveHasVault(key) { return key === FIXED_INCOME_KEY && !!this.economics; },
+    vaultChain() { return VAULT_CHAIN; },
+    vaultToken() { return VAULT_TOKEN; },
+    // The 7-day figure the vault reports, and NOT a net one. Every yield on
+    // this page is before the 0.25% exit fee (note 1), so calling this "net"
+    // would be a claim the feed does not make. A sleeve-level net APY needs a
+    // stated window and a stated fee treatment agreed across four vaults, and
+    // today there is one vault to agree with.
+    vaultApyLabel() {
+      return this.economics?.apy7d != null ? this.fmtRate(this.economics.apy7d) : "—";
+    },
+
+    // The merged vault table: the book and the policy it is measured against,
+    // as one set of rows. Splitting them made the reader do the join by eye
+    // across four identical row labels.
+    //
+    // Rows follow the POLICY's order, so the table reads in the same order as
+    // the bar above it and the colours line up. A name the policy holds and
+    // the vault does not stays as a row with dashes: the absence is the
+    // finding, and dropping the row would hide the largest drift on the page.
+    //
+    // "In vault" is a share of TVL, not of the adapters alone, so idle USDC
+    // cannot silently vanish from the denominator and the weights reconcile
+    // to the total underneath them.
+    sleeveVaultRows(key) {
+      if (!this.sleeveHasVault(key)) return [];
+      const bucket = (this.allocationFw?.buckets || []).find((b) => b.key === key);
+      const tvl = this.economics?.tvlUsd;
+      const rows = (bucket?.items || []).map((item, i) => {
+        const adapter = this.adapters().find(
+          (a) => String(a.name).toLowerCase() === String(item.label).toLowerCase(),
+        );
+        const held = adapter && adapter.configured !== false && adapter.balanceUsd != null
+          ? Number(adapter.balanceUsd)
+          : null;
+        const policy = Number(item.targetPct ?? 0);
+        const actual = tvl ? ((held ?? 0) / tvl) * 100 : null;
+        return {
+          label: adapter ? this.adapterLabel(adapter) : item.label,
+          colour: itemColour(i),
+          adapter,
+          inVault: held != null,
+          balance: held,
+          value: held,
+          policy,
+          actual,
+          drift: actual == null ? null : actual - policy,
+        };
+      });
+      // Idle USDC is in the vault and not in the policy, so it is a row with a
+      // zero target rather than a footnote. Without it the weights do not add
+      // to the total printed below them.
+      const idle = this.idleUsdc();
+      if (idle != null && Number(idle) > 0) {
+        const actual = tvl ? (Number(idle) / tvl) * 100 : null;
+        rows.push({
+          label: "Idle USDC", colour: null, adapter: null, idle: true,
+          inVault: true, balance: Number(idle), value: Number(idle),
+          policy: 0, actual, drift: actual,
+        });
+      }
+      return rows;
+    },
+    // Half the sum of absolute deviations: the standard reading of how far a
+    // book sits from its policy, in points.
+    sleeveTrackingError(key) {
+      const rows = this.sleeveVaultRows(key);
+      if (!rows.length || rows.some((r) => r.drift == null)) return null;
+      return rows.reduce((sum, r) => sum + Math.abs(r.drift), 0) / 2;
+    },
+    trackingErrorLabel(key) {
+      const te = this.sleeveTrackingError(key);
+      return te == null ? "—" : `${te.toFixed(2)} pts off target`;
+    },
+    onTarget(key) {
+      const te = this.sleeveTrackingError(key);
+      return te != null && te < 0.5;
+    },
+    // The sentence under the table. It names the reason rather than restating
+    // the number, and the reason is computed: whichever policy names the vault
+    // does not hold are the ones carrying the gap.
+    trackingErrorLine(key) {
+      const te = this.sleeveTrackingError(key);
+      if (te == null) return "The vault holdings could not be read, so there is nothing to compare.";
+      if (te < 0.5) return "The vault holds the policy.";
+      const missing = this.sleeveVaultRows(key)
+        .filter((r) => !r.idle && !r.inVault && r.policy > 0)
+        .map((r) => r.label);
+      if (!missing.length) return "The venues the vault holds are not at their target weights.";
+      const names = missing.length === 1
+        ? missing[0]
+        : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`;
+      const isAre = missing.length === 1 ? "is" : "are";
+      return `${names} ${isAre} in the policy and not in the vault, so the rest carry the difference.`;
+    },
+    vaultRowBalance(r) {
+      return r.balance == null ? "—" : Number(r.balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    },
+    vaultRowPrice(r) { return r.balance == null ? "—" : "$1.0000"; },
+    vaultRowValue(r) { return r.balance == null ? "—" : this.fmtUsd2(r.value); },
+    vaultRowPolicy(r) { return r.idle ? "—" : this.fmtPct(r.policy); },
+    vaultRowActual(r) { return r.actual == null ? "—" : this.fmtPct(r.actual); },
+    // Drift is a DEVIATION, not a gain: eight points over is exactly as wrong
+    // as eight points under. So it carries the glyph for direction and stays
+    // in reading ink, and the colour is spent once, on the verdict line. The
+    // change ledger is the opposite case and is coloured, because there up
+    // genuinely means the swarm raised a target.
+    vaultRowDrift(r) {
+      if (r.drift == null) return "—";
+      if (Math.abs(r.drift) < 0.005) return "—";
+      return (r.drift > 0 ? "+" : "−") + Math.abs(r.drift).toFixed(2);
+    },
+    vaultRowDriftGlyph(r) {
+      if (r.drift == null || Math.abs(r.drift) < 0.005) return "";
+      return r.drift > 0 ? "▲" : "▼";
+    },
+
+    // ── the donut's hover layer ─────────────────────────────────────────────
+    // Pointer only, and deliberately. Every figure the tooltip shows is
+    // already on the page as text in the legend beside it, so making four
+    // slices focusable would add tab stops that reach nothing new. The slices
+    // keep their <title>, which is what a screen reader reads.
+    tipHtml(row) {
+      const parts = [
+        `<b>${row.name}</b>`,
+        `<span><i style="background:${this.sleeveColours()[row.key]}"></i>Target ${this.fmtPctTrim(row.target)}</span>`,
+      ];
+      const items = this.constituents(row.key);
+      if (items.length) parts.push(`<span class="alp__tip-soft">${items.length} names</span>`);
+      parts.push(this.sleeveHasVault(row.key)
+        ? `<span class="alp__tip-soft">Vault live · ${this.trackingErrorLabel(row.key)}</span>`
+        : '<span class="alp__tip-soft">Vault pending</span>');
+      return parts.join("");
+    },
+    hoverSleeve(row, ev) { this.showTip(row, ev); this.dimTo(row.key); },
+    leaveSleeve() { this.hideTip(); this.dimTo(null); },
+    showTip(row, ev) {
+      const tip = this.$refs.allocTip;
+      const host = this.$refs.allocFig;
+      if (!tip || !host) return;
+      tip.innerHTML = this.tipHtml(row);
+      tip.style.opacity = "1";
+      const rect = host.getBoundingClientRect();
+      const x = ev && ev.clientX != null ? ev.clientX - rect.left : rect.width / 2;
+      const y = ev && ev.clientY != null ? ev.clientY - rect.top : rect.height / 2;
+      tip.style.left = Math.min(Math.max(x + 14, 8), Math.max(8, rect.width - 190)) + "px";
+      tip.style.top = Math.max(8, y - 10) + "px";
+      this.hotKey = row.key;
+    },
+    hideTip() {
+      const tip = this.$refs.allocTip;
+      if (tip) tip.style.opacity = "0";
+      this.hotKey = null;
+    },
+    // Applied to the paths directly: they are built in JS, so there is no
+    // Alpine binding to hang a class on.
+    dimTo(key) {
+      const host = this.$refs.donut;
+      if (!host) return;
+      host.querySelectorAll("path[data-sleeve]").forEach((node) => {
+        node.classList.toggle("dim", !!key && node.dataset.sleeve !== key);
+      });
     },
 
     // ── the vault: how the allocation is implemented today ──────────────────
@@ -699,22 +920,46 @@ export function registerAllocationView(Alpine) {
         const a1 = cursor + sweep - gap / 2;
         cursor += sweep;
         if (a1 <= a0) return;
-        const path = svg("path", { d: donutArc(CX, CY, OUTER, INNER, a0, a1), fill: colours[row.key] });
+        // data-mark declares this a SERIES mark, which is what lets the
+        // covenant spec assert the strong rule (its fill is a CATEGORICAL hue)
+        // instead of the blunt one (nothing on the page is ever cyan-filled).
+        // Beam and Beacon are slices in that palette by design: chart-theme.js
+        // spends them there so seven categories stay tellable apart, and the
+        // covenant governs interface chrome and figures, not data encodings.
+        const path = svg("path", {
+          d: donutArc(CX, CY, OUTER, INNER, a0, a1), fill: colours[row.key], "data-mark": "series",
+        });
         path.appendChild(label(document.createElementNS(SVG_NS, "title"),
           `${row.name}: ${this.fmtPctTrim(row.target)} target, ${this.sleeveState(row)}`));
+        // The hover layer the pie charts on the old page had, kept. Dimming
+        // the others rather than lifting the hovered one, so the ring keeps
+        // its geometry and only its emphasis moves.
+        path.addEventListener("pointerenter", (ev) => { this.showTip(row, ev); this.dimTo(row.key); });
+        path.addEventListener("pointermove", (ev) => this.showTip(row, ev));
+        path.addEventListener("pointerleave", () => { this.hideTip(); this.dimTo(null); });
+        path.dataset.sleeve = row.key;
         host.appendChild(path);
       });
 
+      // The hole carries the state of the POLICY, not a deposit. This page is
+      // the recipe, and the first question a returning reader has is whether
+      // it moved since they last looked; "1 USDC / DEPOSIT" answered a
+      // question nobody was asking and framed a policy as a transaction.
+      const asOf = this.allocationAsOf();
       host.appendChild(label(svg("text", {
-        x: CX, y: CY - 2, "text-anchor": "middle", fill: PALETTE.text,
-        "font-family": "'JetBrains Mono',monospace", "font-size": 19, "font-weight": 700,
-      }), "1 USDC"));
+        x: CX, y: CY - 12, "text-anchor": "middle", fill: PALETTE.textMuted,
+        "font-family": "'JetBrains Mono',monospace", "font-size": 9, "letter-spacing": "0.18em",
+      }), asOf ? "UNCHANGED SINCE" : "IN FORCE"));
       host.appendChild(label(svg("text", {
-        x: CX, y: CY + 18, "text-anchor": "middle", fill: PALETTE.textMuted,
-        "font-family": "'JetBrains Mono',monospace", "font-size": 10, "letter-spacing": "0.18em",
-      }), "DEPOSIT"));
+        x: CX, y: CY + 8, "text-anchor": "middle", fill: PALETTE.text,
+        "font-family": "'JetBrains Mono',monospace", "font-size": 15, "font-weight": 700,
+      }), asOf ? shortDay(asOf) : "—"));
+      host.appendChild(label(svg("text", {
+        x: CX, y: CY + 24, "text-anchor": "middle", fill: PALETTE.textMuted,
+        "font-family": "'JetBrains Mono',monospace", "font-size": 9,
+      }), asOf ? asOf.slice(0, 4) : ""));
 
-      host.setAttribute("aria-label", "One USDC deposit allocated across "
+      host.setAttribute("aria-label", "Target allocation, "
         + rows.map((s) => `${s.name} at a ${this.fmtPctTrim(s.target)} target, ${this.sleeveState(s)}`).join("; ")
         + ".");
     },
