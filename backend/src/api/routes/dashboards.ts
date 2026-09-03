@@ -2,7 +2,7 @@
 // the analytics report stage (analytics/report/projections.ts); these handlers
 // only parse/clamp request params and forward. API paths, DTOs, and response
 // shapes are unchanged.
-import { fetchRegimeSnapshots, fetchLatestResearchSignal } from "../../analytics/report/projections.ts";
+import { fetchRegimeSnapshots, fetchLatestResearchSignal, toRegimeSummary } from "../../analytics/report/projections.ts";
 import { fetchVaultEconomics } from "../../chain/vault-economics.ts";
 import { fetchPersistedWalletBalances } from "../../chain/wallet-balances.ts";
 // Live-data contract (#50 honesty): each chain/db module owns its own short-TTL
@@ -54,6 +54,19 @@ export async function getRegimeSnapshots(url: URL) {
   const n = Math.trunc(Number(url.searchParams.get("range") ?? 180));
   const range = Number.isFinite(n) ? Math.min(3650, Math.max(1, n)) : 180;
   return fetchRegimeSnapshots(range);
+}
+
+// GET /api/dashboards/regime-snapshots?view=summary → today's classifier read
+// alone (~500 bytes against ~500 KB): composite, the three panel indices,
+// their labels, and staleness. A separate function (rather than a branch
+// inside getRegimeSnapshots) so that function's return type stays the single
+// { latest, history, staleness } shape every existing caller already expects
+// (issue #866c). Ignores `range`: `latest` is always history's last row
+// regardless of range, so this queries range=1 rather than paying for history
+// it would only discard.
+export async function getRegimeSnapshotsSummary() {
+  const full = await fetchRegimeSnapshots(1);
+  return { summary: toRegimeSummary(full.latest, full.staleness) };
 }
 
 // GET /api/dashboards/buybacks → token buyback history (ROBOTMONEY Transfer logs

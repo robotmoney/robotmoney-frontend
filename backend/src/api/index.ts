@@ -7,7 +7,7 @@ import { sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { createComment, listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
 import { getProjectDetail, getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleSwarm } from "./routes/swarm.ts";
@@ -156,7 +156,11 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     }
 
     if (pathname === ROUTES.dashboards.regimeSnapshots && req.method === "GET") {
-      return json(await getRegimeSnapshots(url));
+      return json(
+        url.searchParams.get("view") === "summary"
+          ? await getRegimeSnapshotsSummary()
+          : await getRegimeSnapshots(url),
+      );
     }
 
     if (pathname === ROUTES.dashboards.vaultEconomics && req.method === "GET") {

@@ -8,6 +8,41 @@ import type { RegimeSnapshot } from "@robotmoney/contract";
 // eq-snapshot mapper can reuse the EXACT same projection (see regime-projection.ts).
 import { rowToSnapshot, computeRegimeSnapshotStaleness, type RegimeStaleness } from "./regime-projection.ts";
 
+// The read an agent actually makes: today's classifier read without the ~500
+// KB of backtests/correlations/indicators/percentiles that ride along on the
+// full response (issue #866c). Purely additive — a new response shape behind
+// a new query param, nothing existing changes.
+export interface RegimeSummary {
+  date: string;
+  composite: number | null;
+  compositePercentile: number | null;
+  regime: string | null;
+  macroIndex: number | null;
+  onchainIndex: number | null;
+  factorIndex: number | null;
+  macroRegime: string | null;
+  onchainRegime: string | null;
+  factorRegime: string | null;
+  staleness: RegimeStaleness;
+}
+
+export function toRegimeSummary(latest: RegimeSnapshot | null, staleness: RegimeStaleness): RegimeSummary | null {
+  if (!latest) return null;
+  return {
+    date: latest.date,
+    composite: latest.composite,
+    compositePercentile: latest.compositePercentile,
+    regime: latest.regime,
+    macroIndex: latest.macroIndex ?? null,
+    onchainIndex: latest.onchainIndex ?? null,
+    factorIndex: latest.factorIndex ?? null,
+    macroRegime: latest.macroRegime,
+    onchainRegime: latest.onchainRegime,
+    factorRegime: latest.factorRegime,
+    staleness,
+  };
+}
+
 // Latest research-signal payload for a key (or null).
 export async function fetchLatestResearchSignal(key: string) {
   const rows = await sql`SELECT signal_key, date, payload FROM research_signals WHERE signal_key = ${key} ORDER BY date DESC LIMIT 1`;

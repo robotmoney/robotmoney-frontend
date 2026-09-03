@@ -896,7 +896,10 @@ The independent producer runs regime and research on **distinct timers**:
 settled end-of-day) and `research` (both research signals, never the regime
 tool) daily at **23:00 UTC**. These timers live in `analytics-producer`, not
 `job_schedules` or worker lanes. The API exposes regime at `/api/dashboards/regime-snapshots?range=`
-and each research signal at `/api/dashboards/research-signals/:key`; the frontend
+(`?view=summary` returns only today's composite/panel read — date, composite,
+compositePercentile, regime, the three panel indices and labels, and
+staleness — instead of the full `{ latest, history, staleness }` body, issue
+#866c) and each research signal at `/api/dashboards/research-signals/:key`; the frontend
 renders `/regime` (including the backtest + predictive-correlations panels) and the
 `/research/*` views (mirroring the original site's surfaces). The regime DTO also
 carries an explicit **staleness block** — `{ asof, serverDate, ageDays, stale,
