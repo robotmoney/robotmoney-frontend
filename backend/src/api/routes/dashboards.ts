@@ -69,7 +69,9 @@ export async function getWalletBalances() {
 export async function getRegimeSnapshots(url: URL) {
   const n = Math.trunc(Number(url.searchParams.get("range") ?? 180));
   const range = Number.isFinite(n) ? Math.min(3650, Math.max(1, n)) : 180;
-  return fetchRegimeSnapshots(range);
+  const includeBacktest = (url.searchParams.get("include") ?? "")
+    .split(",").map((s) => s.trim()).includes("backtest");
+  return fetchRegimeSnapshots(range, includeBacktest);
 }
 
 // GET /api/dashboards/regime-snapshots?view=summary → today's classifier read
