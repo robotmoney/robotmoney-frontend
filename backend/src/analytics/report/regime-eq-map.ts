@@ -10,11 +10,11 @@
 // live ONLY on the asof/latest row; history rows stay blob-free. Blob contents keep
 // their original snake_case (pass-through), matching the indicators[].panel_weight
 // convention.
-import type { RegimeSnapshot } from "@robotmoney/contract";
+import type { RegimeHistoryPoint, RegimeSnapshot } from "@robotmoney/contract";
 // Import the row type from the pure projection module (NOT the store) so this
 // mapper — shared with the root-scoped Playwright stub — never transitively
 // reaches the Postgres client. Keeps the module genuinely I/O-free.
-import { rowToSnapshot, type RegimeSnapshotRow } from "./regime-projection.ts";
+import { rowToSnapshot, forHistory, type RegimeSnapshotRow } from "./regime-projection.ts";
 
 // One enriched per-indicator object in the canonical snapshot.
 interface EqIndicator {
@@ -163,14 +163,16 @@ function toDbRow(r: RegimeSnapshotRow): Record<string, unknown> {
 // as ON CONFLICT(date) does in the store), chronological ascending, latest = last.
 export function mapEqSnapshotToDto(snap: EqSnapshot): {
   latest: RegimeSnapshot | null;
-  history: RegimeSnapshot[];
+  history: RegimeHistoryPoint[];
 } {
   const byDate = new Map<string, RegimeSnapshotRow>();
   for (const row of eqSnapshotToRows(snap)) byDate.set(row.date, row);
   const chronological = [...byDate.values()].sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
   );
-  const history = chronological.map((r) => rowToSnapshot(toDbRow(r)));
-  const latest = history.length ? history[history.length - 1] : null;
-  return { latest, history };
+  const full = chronological.map((r) => rowToSnapshot(toDbRow(r)));
+  const latest = full.length ? full[full.length - 1] : null;
+  // Same forHistory projection the live endpoint applies (issue #866a) — the
+  // parity this file's header promises, shared by construction.
+  return { latest, history: full.map(forHistory) };
 }

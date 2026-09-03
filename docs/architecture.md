@@ -905,7 +905,10 @@ tool) daily at **23:00 UTC**. These timers live in `analytics-producer`, not
 (`?view=summary` returns only today's composite/panel read — date, composite,
 compositePercentile, regime, the three panel indices and labels, and
 staleness — instead of the full `{ latest, history, staleness }` body, issue
-#866c) and each research signal at `/api/dashboards/research-signals/:key`
+#866c; each `history[]` row also drops `backtest`/`correlations`/`indicators`/
+`percentiles` — meaningful only on `latest` — via the shared `forHistory`
+projection in `regime-projection.ts`, issue #866a) and each research signal at
+`/api/dashboards/research-signals/:key`
 (`?view=summary` returns only title/asof/question/summary/gauges/spec, dropping
 the raw price series and indicators dict, issue #869b); the frontend
 renders `/regime` (including the backtest + predictive-correlations panels) and the
