@@ -3,7 +3,7 @@
 import { sessionPhase, isLiveState } from "../../lib/session-phase.js";
 import { timeAgo, absoluteUtc } from "../../lib/relative-time.js";
 import { stanceColor, stanceClass, stanceStyle } from "../../lib/stance.js";
-import { operatorName, isHouseOperator } from "../../lib/operator.js";
+import { operatorName } from "../../lib/operator.js";
 // typechecked .ts file (scripts/tests/unit/swarm-synthesis-preview.test.ts),
 // which pulls the whole file into the root TS program transitively and
 // surfaces a pile of pre-existing implicit-any errors unrelated to this
@@ -19,7 +19,6 @@ import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
-import { loadAllocationFramework } from "../static-views.js";
 
 // Every seat proposes today. There is no role field on the projection yet, and
 // the second role (validator) ships with its first holder, so this is a named
@@ -56,6 +55,20 @@ const SESSION_PAGE_SIZE = 100;
 const MAX_SESSION_PAGES = 12;
 const SESSIONS_SHOWN_STEP = 20;
 
+// Short row copy, keyed on the served name so an admin rename drops the
+// override in one line. The API blurbs reprint the 95/5/0/0 weights, the
+// vault address, and a paragraph of flywheel; this page has a chart and a
+// link for those. Nothing else here depends on the map.
+const ROW_BLURBS = {
+  "Robot Money Vault": "Depositor capital in the ERC-4626 vault on Base. One implementation of the allocation above.",
+  "RM Protocol Labs Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
+  "RM Protocol Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
+  "Robot Money protocol wallets": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
+  "Woon Treasury": "peaq's tokenized agent. Earnings go to $WOON buybacks, $PEAQ, and the Robot Money vault.",
+  "Woon Treasury Allocation": "peaq's tokenized agent. Earnings go to $WOON buybacks, $PEAQ, and the Robot Money vault.",
+};
+const rowBlurb = (p) => ROW_BLURBS[String(p?.name || "").trim()] || p?.thesisBlurb || "";
+
 export function registerSwarmView(Alpine) {
   // ── Investment Swarm ──────────────────────────────────────────────────
   Alpine.data("swarmView", () => ({
@@ -77,15 +90,10 @@ export function registerSwarmView(Alpine) {
     liveTakes: null,
     // sessionId -> { loading, error, takes } for the cards a reader expanded.
     openTakes: {},
-    // The vault's target allocation, as published. Guarded: the vault row
-    // degrades to its wallet line if this route is unreachable.
+    // The published allocation: four sleeves and the weight each is held to.
+    // Guarded, and the panel degrades by omission — it keeps its claim and
+    // drops its register rather than printing a dash where a weight would be.
     allocationFw: null,
-    // The published manifest (token -> bucket) and the vault's latest holdings.
-    // "Current" is derived from the two together and cannot be read off either.
-    allocationManifest: null,
-    vaultSnapshot: null,
-    // Rows whose thesis the reader has opened.
-    openTheses: {},
     destroy() {
       if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
     },
@@ -157,90 +165,30 @@ export function registerSwarmView(Alpine) {
         this.liveTakes = Array.isArray(d?.takes) ? d.takes.length : null;
       } catch (_) { this.liveTakes = null; }
     },
+    // One request. The panel states a policy, and the policy is this route.
+    // It also used to fetch the bucket manifest and the vault's snapshots, to
+    // derive a CURRENT column beside the target; both went with the panel's
+    // move out of the vault's row. Measuring one contract's holdings against
+    // the policy is the conflation this section now exists to undo.
     async loadAllocation() {
-      const vault = this.portfolios().find((p) => p.isVault);
-      const [fw, manifest, snaps] = await Promise.all([
-        api.get(ROUTES.dashboards.allocation).catch(() => null),
-        loadAllocationFramework().catch(() => null),
-        vault ? api.get(path(ROUTES.swarm.subjectSnapshots, { id: vault.id })).catch(() => null) : null,
-      ]);
-      this.allocationFw = fw;
-      this.allocationManifest = manifest;
-      // The list is not date-ordered, so take the newest rather than the last.
-      const list = (snaps?.snapshots || snaps || []).filter(Boolean);
-      this.vaultSnapshot = list.length
-        ? list.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || ""))).pop()
-        : null;
+      this.allocationFw = await api.get(ROUTES.dashboards.allocation).catch(() => null);
     },
 
-    // ── the vault's four sleeves ─────────────────────────────────────────
-    // Target comes from the published framework. CURRENT is derived: each
-    // bucket's share of NAV, summed from the positions whose token the
-    // manifest assigns to it — the same computation the session page's bucket
-    // chart runs, from the same manifest.
-    sleeveActuals() {
-      const buckets = this.allocationManifest?.buckets || [];
-      const positions = this.vaultSnapshot?.positions || [];
-      const total = Number(this.vaultSnapshot?.totalValueUsd ?? this.vaultSnapshot?.total_value_usd ?? 0);
-      const out = { byName: new Map(), covered: 0, total };
-      if (!buckets.length || !positions.length || !(total > 0)) return out;
-      for (const b of buckets) {
-        const held = positions
-          .filter((p) => b.tokens.includes(String(p.token || "").toUpperCase()))
-          .reduce((sum, p) => sum + Number(p.value_usd || 0), 0);
-        out.byName.set(this.normBucket(b.name || b.id), held / total);
-        out.covered += held;
-      }
-      return out;
-    },
-    normBucket(v) { return String(v || "").toLowerCase().replace(/[^a-z0-9]/g, ""); },
-
-    // Whether "current" is worth drawing at all. Every token in the book has to
-    // land in a bucket for the four shares to be a picture of the whole vault;
-    // when they do not, the missing value silently reads as a bucket being
-    // UNDERWEIGHT, which is a claim about the swarm rather than about a gap in
-    // the token map. Today ROBOT is 50% of NAV and is in no bucket, so this is
-    // false and the panel shows targets alone.
-    sleeveCoverage() {
-      const a = this.sleeveActuals();
-      return a.total > 0 ? a.covered / a.total : 0;
-    },
-    showsCurrent() { return this.sleeveCoverage() >= 0.995; },
-    sleeveAsOf() {
-      const d = this.vaultSnapshot?.date;
-      return d ? this.formatDate(d) : "";
-    },
-    sleeves() {
-      const targets = this.allocationTargets();
-      if (!targets.length) return [];
-      const actuals = this.sleeveActuals();
-      const show = this.showsCurrent();
-      return targets.map((t) => {
-        const cur = show ? actuals.byName.get(this.normBucket(t.label)) : null;
-        const current = Number.isFinite(cur) ? cur * 100 : null;
-        return {
-          ...t,
-          current,
-          drift: current === null || t.pct === null ? null : Math.round((current - t.pct) * 10) / 10,
-        };
-      });
-    },
-    driftLabel(d) {
-      if (d === null) return "";
-      if (Math.abs(d) < 0.05) return "on target";
-      return `${d > 0 ? "+" : "\u2212"}${Math.abs(d).toFixed(1)}`;
-    },
-
-    thesisOpen(id) { return !!this.openTheses[id]; },
-    toggleThesis(id) {
-      if (this.openTheses[id]) { const { [id]: _d, ...rest } = this.openTheses; this.openTheses = rest; return; }
-      this.openTheses = { ...this.openTheses, [id]: true };
-    },
-    // The four buckets and the weight each is held to. Two of the four sit at
-    // 0% today, which is why this is figures and not a bar: a bar would draw
-    // one long block and two segments too thin to see, and call it a chart.
-    // Hues are chart-theme's CATEGORICAL, in order, so a bucket is the same
-    // colour here as in the pies on /allocation.
+    // ── the published allocation ─────────────────────────────────────────
+    // The four sleeves and the weight each is held to. Hues are chart-theme's
+    // CATEGORICAL, in order, so a sleeve is the same colour here as in the
+    // pies on /allocation.
+    //
+    // This block used to argue that figures beat a bar, because at 95/5/0/0 a
+    // bar draws one long block beside two segments too thin to see. That is
+    // true of a STACKED bar and only of one. Each sleeve now gets its own
+    // full-width track on a shared 0-to-100 scale, where 5% is a short bar
+    // rather than a sliver and 0% is an empty track.
+    //
+    // The CURRENT and DRIFT columns that stood here are gone. Kept alive, a
+    // book that crossed their 99.5% coverage test would have silently sprouted
+    // columns measuring a contract against a policy, inside the block built to
+    // separate the two.
     allocationTargets() {
       const rows = this.allocationFw?.strategy;
       if (!Array.isArray(rows) || !rows.length) return [];
@@ -252,36 +200,86 @@ export function registerSwarmView(Alpine) {
         hue: CATEGORICAL[i % CATEGORICAL.length],
       }));
     },
+    // Bar width, clamped to the scale. A framework whose weights do not sum to
+    // 100 draws tracks that do not fill; it is never normalised to its own
+    // sum, which would rescale an incomplete policy to look complete.
+    //
+    // null is not 0. A published zero gets an empty track and a muted figure;
+    // an absent target gets no track and an em dash. The two must not look
+    // alike, so the track is what separates them.
+    sleeveBar(t) {
+      const pct = Number(t?.pct);
+      if (t?.pct === null || !Number.isFinite(pct)) return null;
+      return Math.max(0, Math.min(100, pct));
+    },
     allocationAsOf() {
       const d = this.allocationFw?.asOf;
       return d ? this.formatDate(d) : "";
     },
-    // Sessions this page lists.
+    // The note carries what the register cannot, and nothing it cannot back.
     //
-    // A `framework` subject that folds into a vault is NOT listed.
-    // robotmoney-allocation and robotmoney-vault are two subjects convening on
-    // the same vault — 54 published sessions and 53 — so the feed showed
-    // "Robot Money Vault" twice, a row apart, with different numbers and only a
-    // small qualifier to say why. The vault is canonical: it is the subject
-    // whose recommendation is meant to become the target allocation, and both
-    // manifests already declare `bucket_weights`.
-    //
-    // Nothing is deleted. The allocation's sessions keep their permalinks and
-    // their subject page; they stop competing with the vault in the index.
-    // This filter is the whole of the behaviour: remove it and the split
-    // returns, including the "reviewed two ways" copy on the vault's row and
-    // the per-session qualifier, both of which are derived from foldedInto().
+    // "No session has changed these weights yet" is read from the code rather
+    // than from the feed: `allocation_framework` has exactly one writer, the
+    // seed, and this row has not moved since it was written. When a real
+    // writer lands, this sentence is the whole of the change.
+    allocationNote() {
+      if (!this.allocationFw) return "The published target could not be read.";
+      const zeros = this.allocationTargets().filter((t) => t.pct === 0).length;
+      const head = "No session has changed these weights yet.";
+      if (!zeros) return head;
+      // Counted, not written into the string. The framework is 95/5/0/0 today,
+      // and a hardcoded "two" becomes false the first time a weight is edited.
+      const word = ["", "one", "two", "three", "four"][zeros] || String(zeros);
+      return zeros === 1
+        ? `${head} The ${word} sleeve at zero is a target, not a gap.`
+        : `${head} The ${word} sleeves at zero are targets, not gaps.`;
+    },
+
+    // ── the allocation's own sessions ────────────────────────────────────
+    // The framework subject is not a portfolio row, but its sessions are in
+    // the feed. The panel count reads the same published set the list does.
+    allocationSubject() {
+      return Object.values(this.subjectCache).find((s) => s?.source?.type === "framework") || null;
+    },
+    allocationSessions() {
+      const subj = this.allocationSubject();
+      if (!subj?.id) return [];
+      return this.publishedSessions().filter((s) => s.subjectId === subj.id);
+    },
+    // Omitted rather than zeroed. With no allocation subject, or one that has
+    // never published, there is no count to state and nowhere to link: never
+    // "0 sessions", never a link to /swarm/subjects/undefined.
+    allocationMeta() {
+      const rows = this.allocationSessions();
+      if (!rows.length) return "";
+      const latest = rows.reduce((acc, s) => (String(s.date) > String(acc) ? s.date : acc), rows[0].date);
+      const noun = rows.length === 1 ? "session" : "sessions";
+      return `${rows.length} ${noun} · latest ${this.formatDate(latest)}`;
+    },
+    allocationHref() {
+      const subj = this.allocationSubject();
+      if (!subj?.id || !this.allocationSessions().length) return "";
+      return `/swarm/subjects/${encodeURIComponent(subj.id)}`;
+    },
+    // Sessions this page lists: every published session, including the
+    // allocation subject's. They used to be dropped here and only reachable
+    // from the panel link, which hid half the swarm's work behind a filter
+    // the reader could not see. The chips below separate allocation from
+    // the books; the feed itself does not.
+    publishedSessions() {
+      return this.sessions.filter((s) => s.state === "published");
+    },
+    // A framework subject that folds into a vault is not a fourth BOOK. It
+    // still has its own sessions, listed above; it does not get a row in
+    // Portfolios. Same rule parentFor() uses, applied to the count.
     isListedSubject(id) {
       const meta = this.subjectCache[id];
       if (meta?.source?.type !== "framework") return true;
-      return this.parentFor(id) === id; // stands alone: no vault absorbed it
+      return this.parentFor(id) === id;
     },
-    publishedSessions() {
-      return this.sessions.filter((s) => s.state === "published" && this.isListedSubject(s.subjectId));
-    },
-    // Every published session, including the ones the index does not list.
-    // The archive count is a fact about the swarm, not about this page.
-    allPublishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
+    // Same set as publishedSessions(). Kept so older call sites cannot drift
+    // onto a filtered list by accident.
+    allPublishedSessions() { return this.publishedSessions(); },
 
     // The one session the swarm is working on right now, or null. Newest first,
     // because a subject may convene more than once a day.
@@ -384,7 +382,10 @@ export function registerSwarmView(Alpine) {
       if (!this.foldedInto(this.parentFor(s.subjectId))) return "";
       return meta.source?.type === "framework" ? "target allocation" : "holdings";
     },
-    portfolioName(id) { return this.subjectCache[id]?.name || id; },
+    sessionSubjectName(s) {
+      const meta = this.subjectCache[s?.subjectId];
+      return meta?.name || s?.subjectName || s?.subjectId || "";
+    },
     // Two glyphs, from a fixed switch and never from data, so x-html here can
     // never carry anything a subject supplied. A neutral square said "this is
     // an identity" and nothing else, which is true of every row and therefore
@@ -419,16 +420,20 @@ export function registerSwarmView(Alpine) {
       const noun = n === 1 ? "wallet" : "wallets";
       return chains.length ? `${n} ${noun} on ${chains.join(", ")}` : `${n} ${noun}`;
     },
-    nftLine(p) {
-      const n = p?.nftContracts?.length || 0;
-      if (!n) return "";
-      const chains = this.chainsOf(p.nftContracts);
-      const noun = n === 1 ? "NFT contract" : "NFT contracts";
-      return chains.length ? `${n} ${noun} on ${chains.join(", ")}` : `${n} ${noun}`;
+    blurbOf(p) { return rowBlurb(p); },
+    // Counted rather than written. Stage 5 of this redesign turns three
+    // portfolios into two by making a subject inactive, and a hardcoded
+    // "Three" is the one line that would go quietly wrong when it does.
+    portfolioLede() {
+      const n = this.portfolios().length;
+      const word = ["No", "One", "Two", "Three", "Four", "Five"][n] ?? String(n);
+      const noun = n === 1 ? "portfolio" : "portfolios";
+      return `${word} ${noun}. One is reviewed per session, and each review ends in a verdict or a recommendation.`;
     },
     portfolios() {
       const map = new Map();
       for (const s of this.publishedSessions()) {
+        if (!this.isListedSubject(s.subjectId)) continue;
         const id = this.portfolioIdOf(s);
         if (!id) continue;
         const meta = this.subjectCache[id] || {};
@@ -443,7 +448,6 @@ export function registerSwarmView(Alpine) {
           // holdings, which is the one distinction the row never drew.
           isFramework: meta.source?.type === "framework",
           wallets: Array.isArray(meta.wallets) ? meta.wallets : [],
-          nftContracts: Array.isArray(meta.nftContracts) ? meta.nftContracts : [],
           count: 0,
           latest: null,
         };
@@ -480,19 +484,35 @@ export function registerSwarmView(Alpine) {
     // different conventions for the same data.
     subjectFilter: null,
 
-    // A grouped session wears its portfolio's colour, so one symbol is one
-    // colour everywhere rather than the vault showing two.
+    // Filter chips: the allocation subject first, then each portfolio.
+    // Filtering is by the session's own subjectId, so the vault chip is
+    // holdings and the allocation chip is targets. Skip a portfolio whose
+    // id is the allocation's: a framework that did not fold would otherwise
+    // appear twice.
+    sessionFilters() {
+      const alloc = this.allocationSubject();
+      const rows = [];
+      if (alloc?.id) {
+        const count = this.publishedSessions().filter((s) => s.subjectId === alloc.id).length;
+        if (count) rows.push({ id: alloc.id, name: alloc.name, count });
+      }
+      for (const p of this.portfolios()) {
+        if (alloc?.id && p.id === alloc.id) continue;
+        rows.push({ id: p.id, name: p.name, count: p.count });
+      }
+      return rows;
+    },
     filterBy(id) { this.subjectFilter = this.subjectFilter === id ? null : id; this.shown = SESSIONS_SHOWN_STEP; },
     visibleSessions() {
       const rows = this.publishedSessions();
       const filtered = this.subjectFilter
-        ? rows.filter((s) => this.portfolioIdOf(s) === this.subjectFilter)
+        ? rows.filter((s) => s.subjectId === this.subjectFilter)
         : rows;
       return filtered.slice(0, this.shown);
     },
     matchingCount() {
       const rows = this.publishedSessions();
-      return this.subjectFilter ? rows.filter((s) => this.portfolioIdOf(s) === this.subjectFilter).length : rows.length;
+      return this.subjectFilter ? rows.filter((s) => s.subjectId === this.subjectFilter).length : rows.length;
     },
     hasMore() { return this.shown < this.matchingCount(); },
     showMore() { this.shown += SESSIONS_SHOWN_STEP; },
@@ -577,11 +597,17 @@ export function registerSwarmView(Alpine) {
       if (!rows.length) return null;
       const max = Math.max(...rows.map((r) => r.n));
       const top = rows.filter((r) => r.n === max);
-      return top.length > 1 ? { stance: null, label: "split" } : { stance: top[0].stance, label: `${top[0].stance} lean` };
+      return top.length > 1 ? { stance: null, label: "split" } : { stance: top[0].stance, label: top[0].stance };
     },
-    leanStyle(s) {
-      const st = this.lean(s)?.stance;
-      return st ? `color:${stanceColor(st)}` : "";
+    leanStance(s) { return this.lean(s)?.stance || ""; },
+    leanLabel(s) { return this.lean(s)?.label || ""; },
+    leanBadgeStyle(s) {
+      const st = this.leanStance(s);
+      return st ? stanceStyle(st) : "";
+    },
+    leanDotStyle(s) {
+      const st = this.leanStance(s);
+      return st ? `background:${stanceColor(st)}` : "";
     },
     meanConfidenceText(s) {
       const c = s?.swarmRecommendation?.meanConfidence;
@@ -589,6 +615,10 @@ export function registerSwarmView(Alpine) {
     },
     closedAgo(s) { return timeAgo(s?.windowClosesAt, this.now); },
     closedAbsolute(s) { return absoluteUtc(s?.windowClosesAt); },
+    fmtPct(value) {
+      const n = Number(value);
+      return Number.isFinite(n) ? `${Math.round(n * 100)}%` : "";
+    },
 
     // What the session DECIDED. The card printed the synthesis paragraph here,
     // which is the reasoning: five lines of it, identical in shape on every
@@ -669,6 +699,24 @@ export function registerSwarmView(Alpine) {
         return !(stance && low.includes(stance) && low.includes("confidence"));
       }) || bullets[0] || "";
       return clean.length > 190 ? `${clean.slice(0, 187).trimEnd()}...` : clean;
+    },
+    // The public roster is status=active only, so a member deactivated after
+    // this session is missing from `members` and we still print the id rather
+    // than drop them. A link to that id still resolves: the member route
+    // matches handle or id.
+    memberById(id) {
+      return this.members.find((m) => m.id === id || m.handle === id) || null;
+    },
+    memberHref(id) {
+      const m = this.memberById(id);
+      return `/swarm/members/${encodeURIComponent(m?.handle || id)}`;
+    },
+    absentOf(s) {
+      return (s?.swarmRecommendation?.absent || []).filter(Boolean).map((id) => ({
+        id,
+        name: this.memberById(id)?.name || id,
+        href: this.memberHref(id),
+      }));
     },
     quorumText(s) {
       const q = s.swarmRecommendation?.quorum;

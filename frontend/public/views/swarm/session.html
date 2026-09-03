@@ -190,7 +190,12 @@
                   <dt>mean confidence</dt><dd x-text="fmtPct(session.swarmRecommendation.meanConfidence)"></dd>
                 </div>
                 <div x-show="absentNames().length">
-                  <dt>absent</dt><dd x-text="absentNames().join(', ')"></dd>
+                  <dt>absent</dt>
+                  <dd>
+                    <template x-for="id in (session.swarmRecommendation.absent || [])" :key="id">
+                      <a class="sv__take-absent-who" :href="memberHref(id)" x-text="memberById(id)?.name || id"></a>
+                    </template>
+                  </dd>
                 </div>
               </dl>
             </div>
