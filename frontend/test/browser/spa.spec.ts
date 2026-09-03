@@ -65,9 +65,9 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await page.goto("/");
   await navigate(page, "/allocation");
   await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
-  // The allocationView factory draws the mandate fan and the yield comparison
-  // as hand-authored inline SVG (RM-115 replaced the Chart.js pies with it).
-  await expect(page.locator("svg[aria-label^='One USDC deposit']")).toBeVisible();
+  // The allocationView factory draws the allocation donut and the yield
+  // comparison as hand-authored inline SVG (RM-115 replaced the Chart.js pies).
+  await expect(page.locator(".alp__donut svg path").first()).toBeVisible();
 
   // RM-115: the page reads the VAULT and the allocation framework, and the
   // house book is gone from it entirely. Vault TVL is derived from the same

@@ -56,28 +56,27 @@
     </div>
     <p class="alp__force-line" x-show="!loading" x-cloak x-text="unchangedLine()"></p>
 
-    <!-- The fan: one deposit splitting into the sleeves, drawn as mechanism
-         rather than as weight. Under 640px the SVG's labels would render at
-         about 6px, so the CSS hides it and shows the same rows as a list. -->
-    <div class="alp__fan" x-show="hasTargets()" x-cloak>
-      <svg x-ref="fan" viewBox="0 0 728 292" role="img" aria-label="One USDC deposit allocated across the target sleeves"></svg>
-      <p class="alp__fan-dep">One deposit, allocated across</p>
-      <ul class="alp__fan-list">
+    <!-- One deposit, split into the sleeves it is allocated to. A donut, not
+         the fan this page carried while it was framed vault-first: the section
+         below now carries target against held, so this only has to answer
+         "what is the recipe". The ring underneath is the full 360, so a policy
+         whose weights do not add to 100 leaves the remainder unfilled instead
+         of being rescaled to look complete. -->
+    <div class="alp__split" x-show="hasTargets()" x-cloak>
+      <div class="alp__donut">
+        <svg x-ref="donut" viewBox="0 0 240 240" role="img" aria-label="One USDC deposit allocated across the target sleeves"></svg>
+      </div>
+      <ul class="alp__legend-list">
         <template x-for="s in sleeves()" :key="s.key">
           <li :class="s.target === 0 ? 'dim' : ''">
-            <i :class="s.holding ? 'alp__mark--held' : (s.target === 0 ? 'alp__mark--none' : 'alp__mark--zero')"></i>
+            <i class="alp__swatch" :style="sleeveSwatch(s)"></i>
             <div>
               <b x-text="s.name"></b>
-              <span x-text="sleeveFanLine(s)"></span>
+              <span x-text="sleeveLegendLine(s)"></span>
             </div>
           </li>
         </template>
       </ul>
-      <div class="alp__fan-key">
-        <span><i class="alp__mark--held"></i>Holding</span>
-        <span><i class="alp__mark--zero"></i>Held at zero</span>
-        <span><i class="alp__mark--none"></i>No target</span>
-      </div>
     </div>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
@@ -601,7 +600,7 @@
 /* ── weights in force ──────────────────────────────────────────────────── */
 .alp__force { border-bottom: 1px solid var(--color-border); padding-bottom: 1.8rem; }
 .alp__force-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.alp__force-line { margin: 0.5rem 0 0; color: var(--color-text-soft); font-size: 0.9rem; max-width: 60ch; }
+.alp__force-line { margin: 0.5rem 0 0; color: var(--color-text-soft); font-size: 0.9rem; }
 .alp__chip {
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.12em; padding: 0.24rem 0.5rem; border-radius: var(--radius);
@@ -613,37 +612,23 @@
    and the chip reads "seeded". */
 .alp__chip--live { border-color: var(--color-accent-line); color: var(--color-text-soft); }
 
-/* the fan — the product story, drawn as mechanism not weight */
-.alp__fan { margin: 1.6rem 0 0; border: 1px solid var(--color-border); background: var(--color-deep); padding: 1rem 0.9rem; }
-.alp__fan svg { display: block; width: 100%; height: auto; }
-.alp__fan-key {
-  display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; margin-top: 0.7rem; padding-top: 0.7rem;
-  border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 0.6rem;
-  text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted);
+/* the donut and its legend. Side by side where there is room, stacked on a
+   phone; the donut scales rather than being swapped for a list, which is what
+   the fan needed because its 16px in-diagram labels rendered at about 6px. */
+.alp__split {
+  margin: 1.6rem 0 0; border: 1px solid var(--color-border); background: var(--color-deep);
+  padding: 1.4rem 1.2rem; display: grid; gap: 1.4rem 2rem; align-items: center;
+  grid-template-columns: 1fr;
 }
-.alp__fan-key i { display: inline-block; width: 0.55rem; height: 0.55rem; margin-right: 0.4rem; vertical-align: middle; }
-.alp__fan-empty { margin: 0; font-size: 0.85rem; color: var(--color-text-muted); }
-/* Under 640px the fan's 16px labels render at about 6px, so the diagram is
-   replaced by the same rows as a list rather than shrunk past legibility. */
-.alp__fan-dep {
-  margin: 0 0 0.9rem; font-family: var(--font-mono); font-size: 0.66rem;
-  text-transform: uppercase; letter-spacing: 0.13em; color: var(--color-text-muted);
-}
-.alp__fan-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.8rem; }
-.alp__fan-list li { display: grid; grid-template-columns: 0.6rem 1fr; gap: 0.75rem; align-items: start; }
-.alp__fan-list li > i { width: 0.6rem; height: 0.6rem; margin-top: 0.42rem; }
-.alp__fan-list b { display: block; font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
-.alp__fan-list span { font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted); }
-.alp__fan-list li.dim b { color: var(--color-text-muted); }
-@media (min-width: 641px) { .alp__fan-dep, .alp__fan-list { display: none; } }
-@media (max-width: 640px) { .alp__fan > svg { display: none; } }
-
-/* the three sleeve marks. Colour carries state, and only state:
-   green = money actually held, slate = a target holding nothing,
-   border = no target at all. */
-.alp__mark--held { background: var(--color-green); }
-.alp__mark--zero { background: var(--color-text-muted); }
-.alp__mark--none { background: var(--color-border-light); }
+@media (min-width: 680px) { .alp__split { grid-template-columns: 240px 1fr; } }
+.alp__donut { justify-self: center; width: 100%; max-width: 240px; }
+.alp__donut svg { display: block; width: 100%; height: auto; }
+.alp__legend-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.85rem; }
+.alp__legend-list li { display: grid; grid-template-columns: 0.7rem 1fr; gap: 0.8rem; align-items: start; }
+.alp__legend-list b { display: block; font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
+.alp__legend-list span { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted); }
+.alp__legend-list li.dim b { color: var(--color-text-muted); }
+.alp__swatch { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; display: block; }
 
 /* stat rail */
 .alp__stats {
@@ -699,7 +684,10 @@
   font-size: clamp(1.4rem, 3vw, 1.9rem); line-height: 1.05; letter-spacing: -0.01em;
   margin: 0; color: var(--color-text);
 }
-.alp__sub { margin: 0 0 1.2rem; color: var(--color-text-muted); font-size: 0.86rem; max-width: 64ch; line-height: 1.6; }
+/* No max-width. A section description runs the width of the section it
+   describes: a measure-capped paragraph in a full-width band leaves a hole
+   on the right that reads as an unfinished layout rather than as a choice. */
+.alp__sub { margin: 0 0 1.2rem; color: var(--color-text-muted); font-size: 0.86rem; line-height: 1.6; }
 .alp__sub b { color: var(--color-text-soft); font-weight: 500; }
 .alp__sub code {
   font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
@@ -868,12 +856,12 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 }
 .alp__latest-date { color: var(--color-text); }
 .alp__latest-flag { color: var(--color-text-soft); }
-.alp__latest-line { margin: 0.7rem 0 0.9rem; color: var(--color-text-soft); font-size: 0.9rem; line-height: 1.6; max-width: 72ch; }
+.alp__latest-line { margin: 0.7rem 0 0.9rem; color: var(--color-text-soft); font-size: 0.9rem; line-height: 1.6; }
 .alp__latest-line--pend { color: var(--color-text-muted); }
 /* The aggregator's sentence, under the actions it explains. */
 .alp__latest-why {
   margin: -0.5rem 0 0.9rem; color: var(--color-text-muted); font-size: 0.82rem;
-  line-height: 1.6; max-width: 72ch;
+  line-height: 1.6;
 }
 
 /* tables */
@@ -929,7 +917,7 @@ table.alp__tbl td.alp__gain, table.alp__tbl tr.tot td.alp__gain { color: var(--c
 .alp__foot { margin-top: 2.5rem; padding-top: 1.2rem; border-top: 1px solid var(--color-border); }
 .alp__eyebrow--foot { margin-bottom: 0.9rem; }
 .alp__foot ol { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.5rem; }
-.alp__foot li { font-size: 0.78rem; color: var(--color-text-muted); line-height: 1.55; max-width: 78ch; }
+.alp__foot li { font-size: 0.78rem; color: var(--color-text-muted); line-height: 1.55; }
 .alp__foot li::marker { font-family: var(--font-mono); font-size: 0.7rem; }
 .alp__foot strong { color: var(--color-text-soft); font-weight: 500; }
 .alp__foot code {

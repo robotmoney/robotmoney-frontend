@@ -216,7 +216,7 @@
 
 .alh__head { border-bottom: 1px solid var(--color-border); padding-bottom: 1.6rem; }
 .alh__title { margin: 0.5rem 0 0; color: var(--color-text); }
-.alh__lede { max-width: 62ch; margin: 0.9rem 0 0; color: var(--color-text-soft); font-size: 1rem; line-height: 1.65; }
+.alh__lede { margin: 0.9rem 0 0; color: var(--color-text-soft); font-size: 1rem; line-height: 1.65; }
 .alh__count {
   margin: 0.8rem 0 0; font-family: var(--font-mono); font-size: 0.65rem;
   text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted);
@@ -228,7 +228,7 @@
   border: 1px solid var(--color-border); border-left: 2px solid var(--color-accent-line);
   background: var(--color-surface); padding: 0.85rem 1rem;
 }
-.alh__state p { margin: 0; color: var(--color-text-soft); font-size: 0.88rem; line-height: 1.6; max-width: 74ch; }
+.alh__state p { margin: 0; color: var(--color-text-soft); font-size: 0.88rem; line-height: 1.6; }
 .alh__state-flag {
   flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-muted); border: 1px solid var(--color-border-light);
@@ -250,12 +250,14 @@
   font-size: clamp(1.4rem, 3vw, 1.9rem); line-height: 1.05; letter-spacing: -0.01em;
   margin: 0; color: var(--color-text);
 }
-.alh__sub { margin: 0 0 1.2rem; color: var(--color-text-muted); font-size: 0.86rem; max-width: 68ch; line-height: 1.6; }
+/* No max-width. A section description runs the width of the section it
+   describes; see the note on .alp__sub. */
+.alh__sub { margin: 0 0 1.2rem; color: var(--color-text-muted); font-size: 0.86rem; line-height: 1.6; }
 .alh__sub code, .alh__pending code, .alh__foot code {
   font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
   background: var(--color-surface); padding: 0.05rem 0.28rem;
 }
-.alh__empty { color: var(--color-text-muted); font-size: 0.86rem; margin: 0 0 1.2rem; max-width: 68ch; line-height: 1.6; }
+.alh__empty { color: var(--color-text-muted); font-size: 0.86rem; margin: 0 0 1.2rem; line-height: 1.6; }
 .alh__ref-badge {
   font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-muted);
@@ -348,7 +350,7 @@ table.alh__tbl th.alh__col-rec, table.alh__tbl td.alh__col-rec {
   display: flex; gap: 0.9rem; align-items: flex-start;
   border: 1px solid var(--color-border); background: var(--color-surface); padding: 0.95rem 1.1rem;
 }
-.alh__pending p { margin: 0; font-size: 0.85rem; color: var(--color-text-muted); line-height: 1.6; max-width: 74ch; }
+.alh__pending p { margin: 0; font-size: 0.85rem; color: var(--color-text-muted); line-height: 1.6; }
 /* Beacon marks the thing that is missing, as a POINT and nothing more. */
 .alh__pending-flag {
   flex: 0 0 auto; display: flex; align-items: center; gap: 0.45rem;
@@ -364,7 +366,7 @@ table.alh__tbl th.alh__col-rec, table.alh__tbl td.alh__col-rec {
 .alh__foot { margin-top: 2.5rem; padding-top: 1.2rem; border-top: 1px solid var(--color-border); }
 .alh__eyebrow--foot { margin-bottom: 0.9rem; }
 .alh__foot ol { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.5rem; }
-.alh__foot li { font-size: 0.78rem; color: var(--color-text-muted); line-height: 1.55; max-width: 78ch; }
+.alh__foot li { font-size: 0.78rem; color: var(--color-text-muted); line-height: 1.55; }
 .alh__foot li::marker { font-family: var(--font-mono); font-size: 0.7rem; }
 
 @media (max-width: 640px) {

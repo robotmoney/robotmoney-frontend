@@ -156,6 +156,47 @@ function shortDay(iso) {
   return `${Number(parts[2])} ${MONTHS[Number(parts[1]) - 1]}`;
 }
 
+// ── the sleeve ramp ─────────────────────────────────────────────────────────
+// Buckets are a GREEN LUMINANCE RAMP, not a hue set (brand sheet, and
+// .impeccable.md's Pool row says it in those words). A donut slice is a mass
+// and the mass is money, so every slice is Pool; only its luminance moves.
+//
+// Keyed on the sleeve's POSITION, not on its weight. A ramp keyed on magnitude
+// is the right encoding for one quantity measured repeatedly, and the wrong one
+// here: at 25/25/25/25 every slice would resolve to the same green and the
+// donut would read as one undivided ring. Position always separates them.
+//
+// Generated from the two Pool tokens rather than typed, so a fifth sleeve gets
+// a fifth step instead of falling off the end of a hardcoded list.
+const RAMP_FROM = [16, 185, 129];  // --color-green, Pool
+const RAMP_TO = [156, 255, 210];   // SERIES.mint
+
+/** n stops from Pool to mint. The first sleeve is Pool itself. */
+function greenRamp(n) {
+  if (n <= 1) return [`rgb(${RAMP_FROM.join(",")})`];
+  return Array.from({ length: n }, (_, i) => {
+    const t = i / (n - 1);
+    const c = RAMP_FROM.map((from, k) => Math.round(from + (RAMP_TO[k] - from) * t));
+    return `rgb(${c.join(",")})`;
+  });
+}
+
+/** One donut segment, as a path. Angles in degrees, clockwise from 12 o'clock. */
+function donutArc(cx, cy, outer, inner, a0, a1) {
+  const rad = (a) => ((a - 90) * Math.PI) / 180;
+  const pt = (r, a) => [cx + r * Math.cos(rad(a)), cy + r * Math.sin(rad(a))];
+  const large = a1 - a0 > 180 ? 1 : 0;
+  const [x0, y0] = pt(outer, a0);
+  const [x1, y1] = pt(outer, a1);
+  const [x2, y2] = pt(inner, a1);
+  const [x3, y3] = pt(inner, a0);
+  return `M${x0.toFixed(2)},${y0.toFixed(2)}`
+    + ` A${outer},${outer} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`
+    + ` L${x2.toFixed(2)},${y2.toFixed(2)}`
+    + ` A${inner},${inner} 0 ${large} 0 ${x3.toFixed(2)},${y3.toFixed(2)}`
+    + " Z";
+}
+
 const DATES = referenceDates();
 const RAW_BLEND = REFERENCE.venues.aave.map(
   (a, i) => (a + REFERENCE.venues.morpho[i] + REFERENCE.venues.compound[i]) / 3,
@@ -454,8 +495,26 @@ export function registerAllocationView(Alpine) {
       if (s.held == null) return "—";
       return s.holding ? "holding" : "held at zero";
     },
-    sleeveFanLine(s) {
+    sleeveLegendLine(s) {
       return `${this.fmtPctTrim(s.target)} target · ${this.sleeveState(s)}`;
+    },
+    // The legend swatch. A sleeve with a target carries its slice's colour; a
+    // sleeve with none carries an outline, because there is no slice to key it
+    // to and a filled swatch would imply one.
+    sleeveSwatch(s) {
+      const colour = this.sleeveColours()[s.key];
+      if (!colour) return "background:transparent;border:1px solid var(--color-border-light)";
+      return `background:${colour}`;
+    },
+    // The ramp spans the sleeves that actually draw an arc, not all four.
+    // Spread over four stops, the two funded sleeves of a 95/5/0/0 policy sat a
+    // third of the ramp apart and read as the same green; the two unfunded ones
+    // were spending range on slices that do not exist. Over the funded set they
+    // take the full distance from Pool to mint.
+    sleeveColours() {
+      const funded = this.sleeves().filter((row) => row.target > 0);
+      const ramp = greenRamp(funded.length);
+      return Object.fromEntries(funded.map((row, i) => [row.key, ramp[i]]));
     },
     sleeveWeightLabel(s) {
       if (s.held == null) return "—";
@@ -596,60 +655,65 @@ export function registerAllocationView(Alpine) {
       return "This session published no recommendation.";
     },
 
-    // ── the hero fan (hand-authored inline SVG; no chart dependency) ─────────
-    draw() { this.drawFan(); this.drawYield(); },
+    // ── the hero donut (hand-authored inline SVG; no chart dependency) ──────
+    draw() { this.drawDonut(); this.drawYield(); },
 
-    // One deposit splitting into the sleeves. Drawn as MECHANISM, not as
-    // weight: a donut of today's 95/5/0/0 is one slice and an 18-degree
-    // sliver, which would undercut the story on sight and break again every
-    // time the mandate moves. Under 640px the labels would render at ~6px, so
-    // the CSS hides this and shows the same rows as a list instead.
-    drawFan() {
-      const host = this.$refs.fan;
+    // One deposit, split into the sleeves it is allocated to.
+    //
+    // The page this replaced drew a FAN instead, on the argument that a donut
+    // of 95/5/0/0 is one slice and an 18-degree sliver. That argument was made
+    // when the page was framed vault-first and the diagram had to carry the
+    // whole product story. It does not have to any more: the section below it
+    // carries target against held on bullet bars, so this only has to answer
+    // "what is the recipe", and for that a donut is the plainer instrument.
+    // The 18-degree sliver is the truth about this allocation.
+    //
+    // NOT NORMALISED to its own sum. The ring underneath is the full 360, so a
+    // policy whose weights do not add to 100 leaves the remainder visibly
+    // unfilled rather than being rescaled to look complete. Same rule as
+    // swarm.js's sleeveBar().
+    drawDonut() {
+      const host = this.$refs.donut;
       if (!host) return;
       host.replaceChildren();
       const rows = this.sleeves();
       if (!rows.length) return;
 
-      const X0 = 196, X1 = 404, CY = 150;
-      const step = 72;
-      const top = CY - ((rows.length - 1) * step) / 2;
+      const CX = 120, CY = 120, OUTER = 104, INNER = 66, GAP = 1.6;
+      const colours = this.sleeveColours();
 
-      host.appendChild(svg("rect", {
-        x: 18, y: CY - 33, width: 178, height: 66,
-        fill: PALETTE.surface, stroke: PALETTE.borderLight, "stroke-width": 1,
+      // The unallocated remainder, and the track every slice sits on.
+      host.appendChild(svg("circle", {
+        cx: CX, cy: CY, r: (OUTER + INNER) / 2, fill: "none",
+        stroke: PALETTE.surfaceLight, "stroke-width": OUTER - INNER,
       }));
-      host.appendChild(svg("rect", { x: 18, y: CY - 33, width: 3, height: 66, fill: SERIES.emerald }));
+
+      const funded = rows.filter((r) => r.target > 0);
+      let cursor = 0;
+      rows.forEach((row) => {
+        if (!(row.target > 0)) return;
+        const sweep = (Math.min(100, row.target) / 100) * 360;
+        // A gap only where there is a neighbour to separate from.
+        const gap = funded.length > 1 ? GAP : 0;
+        const a0 = cursor + gap / 2;
+        const a1 = cursor + sweep - gap / 2;
+        cursor += sweep;
+        if (a1 <= a0) return;
+        const path = svg("path", { d: donutArc(CX, CY, OUTER, INNER, a0, a1), fill: colours[row.key] });
+        path.appendChild(label(document.createElementNS(SVG_NS, "title"),
+          `${row.name}: ${this.fmtPctTrim(row.target)} target, ${this.sleeveState(row)}`));
+        host.appendChild(path);
+      });
+
       host.appendChild(label(svg("text", {
-        x: 40, y: CY - 6, fill: PALETTE.text,
-        "font-family": "'JetBrains Mono',monospace", "font-size": 15, "font-weight": 700,
+        x: CX, y: CY - 2, "text-anchor": "middle", fill: PALETTE.text,
+        "font-family": "'JetBrains Mono',monospace", "font-size": 19, "font-weight": 700,
       }), "1 USDC"));
       host.appendChild(label(svg("text", {
-        x: 40, y: CY + 16, fill: PALETTE.textMuted,
-        "font-family": "'JetBrains Mono',monospace", "font-size": 11, "letter-spacing": "0.1em",
+        x: CX, y: CY + 18, "text-anchor": "middle", fill: PALETTE.textMuted,
+        "font-family": "'JetBrains Mono',monospace", "font-size": 10, "letter-spacing": "0.18em",
       }), "DEPOSIT"));
 
-      rows.forEach((s, i) => {
-        const y = top + i * step;
-        const dimmed = s.target === 0;
-        const stroke = s.holding ? SERIES.emerald : (dimmed ? PALETTE.borderLight : PALETTE.textMuted);
-        const path = svg("path", {
-          d: `M${X0},${CY} C${X0 + 104},${CY} ${X1 - 104},${y} ${X1},${y}`,
-          fill: "none", stroke, "stroke-width": 2,
-        });
-        if (dimmed) path.setAttribute("stroke-dasharray", "5 4");
-        host.appendChild(path);
-        host.appendChild(svg("rect", { x: X1, y: y - 5, width: 10, height: 10, fill: stroke }));
-        host.appendChild(label(svg("text", {
-          x: X1 + 24, y: y - 1, fill: dimmed ? PALETTE.textMuted : PALETTE.text,
-          "font-family": "'Space Grotesk',sans-serif", "font-size": 16, "font-weight": 700,
-        }), s.name));
-        host.appendChild(label(svg("text", {
-          x: X1 + 24, y: y + 18, fill: PALETTE.textMuted,
-          "font-family": "'JetBrains Mono',monospace", "font-size": 11.5,
-        }), this.sleeveFanLine(s)));
-      });
-      host.setAttribute("viewBox", `0 0 728 ${top * 2 + (rows.length - 1) * step}`);
       host.setAttribute("aria-label", "One USDC deposit allocated across "
         + rows.map((s) => `${s.name} at a ${this.fmtPctTrim(s.target)} target, ${this.sleeveState(s)}`).join("; ")
         + ".");

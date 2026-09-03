@@ -212,6 +212,49 @@ test("the vault section binds every adapter row to the vault-economics golden an
   await expectNoBrowserErrors(errors);
 });
 
+test("the hero donut draws one arc per funded sleeve, on a Pool ramp, not normalised to its own sum", async ({ page }) => {
+  const framework = goldenFramework();
+  await stubEnvironment(page, { framework });
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+
+  const donut = page.locator(".alp__donut svg");
+  await expect(donut).toBeVisible();
+
+  // One arc per sleeve with a target above zero, and none for a sleeve without
+  // one: 95/5/0/0 is two arcs, and the sliver is the truth about this
+  // allocation rather than something to round away.
+  const funded = framework.strategy.filter((row) => row.targetPct > 0);
+  await expect(donut.locator("path")).toHaveCount(funded.length);
+
+  // Buckets are a green LUMINANCE ramp, not a hue set: every slice is Pool and
+  // only its lightness moves, so no slice may carry another hue.
+  const fills = await donut.locator("path").evaluateAll((els) =>
+    els.map((el) => getComputedStyle(el).fill));
+  for (const fill of fills) {
+    const [r, g, b] = fill.match(/\d+/g)!.map(Number);
+    expect(g, `${fill} should be green-dominant`).toBeGreaterThan(r);
+    expect(g, `${fill} should be green-dominant`).toBeGreaterThan(b);
+  }
+  expect(new Set(fills).size, "adjacent slices must be distinguishable").toBe(fills.length);
+
+  // The ring underneath is the full 360, so a policy that does not add to 100
+  // shows the remainder rather than being rescaled to look complete.
+  await expect(donut.locator("circle")).toHaveCount(1);
+
+  // The legend keys every sleeve, funded or not, and states which is which.
+  const legend = page.locator(".alp__legend-list li");
+  await expect(legend).toHaveCount(framework.strategy.length);
+  await expect(legend.first()).toContainText(framework.strategy[0].label);
+  await expect(legend.first()).toContainText("holding");
+  await expect(legend.nth(2)).toContainText("held at zero");
+  // A sleeve with no target gets an outlined swatch, not a filled one: there is
+  // no slice for a fill to key to.
+  const swatchFill = await legend.nth(2).locator(".alp__swatch")
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(swatchFill).toBe("rgba(0, 0, 0, 0)");
+});
+
 test("sleeve weights, held weights and drift are derived from the two feeds, not baked", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   const vault = goldenVault();
@@ -522,10 +565,14 @@ test("on a phone the fan becomes a list and nothing scrolls the page sideways", 
   await navigate(page, "/allocation");
   await expect(page.locator("#vault")).toBeVisible();
 
-  // Under 640px the SVG's 16px labels would render at about 6px, so the same
-  // rows render as a list instead.
-  await expect(page.locator(".alp__fan > svg")).toBeHidden();
-  await expect(page.locator(".alp__fan-list li")).toHaveCount(4);
+  // The donut scales rather than being swapped for a list, which is what the
+  // fan it replaced had to do: its 16px in-diagram labels rendered at ~6px.
+  const donut = page.locator(".alp__donut svg");
+  await expect(donut).toBeVisible();
+  const donutBox = await donut.boundingBox();
+  expect(donutBox!.width).toBeGreaterThan(120);
+  expect(donutBox!.width).toBeLessThanOrEqual(390);
+  await expect(page.locator(".alp__legend-list li")).toHaveCount(4);
 
   // Wide content scrolls inside its own container, never the body.
   const overflow = await page.evaluate(() =>
