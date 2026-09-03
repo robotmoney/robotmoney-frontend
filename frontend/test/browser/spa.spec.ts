@@ -45,38 +45,49 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await page.goto("/");
   await navigate(page, "/allocation");
   await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
-  // The allocationView factory draws the strategy/vault/wallet pie canvases.
-  await expect(page.locator("canvas").first()).toBeVisible();
-  // The hero reports the two pools SEPARATELY (RM-102b): the Robot Money
-  // protocol wallets (GET /api/dashboards/wallet-balances) and vault TVL
-  // (vault-economics), both served by the in-CI deterministic Base RPC stub
-  // (issue #48) with ZERO live Base mainnet calls. It used to print their sum
-  // as one "Total AUM". Derive both expectations from the same endpoints the
-  // page reads so this stays correct as the stub fixtures evolve.
+  // The allocationView factory draws the mandate fan and the yield comparison
+  // as hand-authored inline SVG (RM-115 replaced the Chart.js pies with it).
+  await expect(page.locator("svg[aria-label^='One USDC deposit']")).toBeVisible();
+
+  // RM-115: the page reads the VAULT and the allocation framework, and the
+  // house book is gone from it entirely. Vault TVL is derived from the same
+  // endpoint the page reads so this stays correct as the in-CI Base RPC stub's
+  // fixtures evolve (issue #48; zero live Base mainnet calls).
   const expected = await page.evaluate(async () => {
-    const [w, v] = await Promise.all([
-      fetch("/api/dashboards/wallet-balances").then((r) => r.json()),
-      fetch("/api/dashboards/vault-economics").then((r) => r.json()),
-    ]);
-    // Mirrors allocationView.fmtUsd INCLUDING its null branch. A documented
+    const v = await fetch("/api/dashboards/vault-economics").then((r) => r.json());
+    // Mirrors allocationView.fmtUsd2 INCLUDING its null branch. A documented
     // #120 degrade (a null tvlUsd, say) has to surface here as a text diff
     // against the rendered "—", not as an opaque TypeError inside evaluate().
-    const usd = (n: number | null) =>
-      n == null ? "—" : "$" + n.toLocaleString("en-US", { maximumFractionDigits: Math.abs(n) < 1000 ? 2 : 0 });
-    const bothLive = w.totalUsd != null && v.tvlUsd != null;
-    return { wallets: usd(w.totalUsd), vault: usd(v.tvlUsd), sum: bothLive ? usd(w.totalUsd + v.tvlUsd) : null };
+    const usd2 = (n: number | null) =>
+      n == null ? "—" : "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return { vault: usd2(v.tvlUsd) };
   });
-  await expect(page.locator(".alloc-aum__value--wallets")).toHaveText(expected.wallets);
-  await expect(page.locator(".alloc-aum__value--vault")).toHaveText(expected.vault);
-  await expect(page.locator(".alloc-aum__value--wallets")).not.toHaveText("—");
-  // Depositor capital is never added to the house book under one heading.
-  // Asserted only when the sum is its own string. A vault under 50 cents beside
-  // a five-figure wallet total rounds the sum back onto the wallet figure, and
-  // that figure is legitimately on the card, so the check would go red for the
-  // wrong reason rather than catching a re-merged total.
-  if (expected.sum && expected.sum !== expected.wallets && expected.sum !== expected.vault) {
-    await expect(page.locator(".alloc-aum")).not.toContainText(expected.sum);
-  }
+  const tvlTile = page.locator(".alp__stat", { hasText: "Vault TVL" }).locator("dd");
+  await expect(tvlTile).toHaveText(expected.vault);
+
+  // THE CONSTRAINT A REVIEWER CHECKS FIRST (RM-115): depositor capital and the
+  // protocol's own wallets are different money, and this page reads only the
+  // first. Asserted as the absence of the REQUEST, not of a number: a page that
+  // fetched the house book and merely declined to print it would still be one
+  // edit away from printing it again.
+  const houseBookHits: string[] = [];
+  await page.route("**/api/dashboards/wallet-*", (route) => {
+    houseBookHits.push(route.request().url());
+    return route.continue();
+  });
+  await navigate(page, "/");
+  await navigate(page, "/allocation");
+  await expect(page.locator(".alp__stat", { hasText: "Vault TVL" })).toBeVisible();
+  expect(houseBookHits).toEqual([]);
+  await page.unroute("**/api/dashboards/wallet-*");
+
+  // The two figures with no route behind them say so rather than borrowing a
+  // number from the spot share price.
+  await expect(page.locator(".alp__stat dd.pend")).toHaveCount(2);
+
+  // #vault is the anchor RM-115 fixes for the implementation section.
+  await expect(page.locator("#vault")).toBeVisible();
+  await expect(page.locator("#allocation")).toBeVisible();
 
   // Test performance page with Wallet Performance heading
   await navigate(page, "/performance");
@@ -315,16 +326,20 @@ for (const { path, title } of NOINDEX_STUB_ROUTES) {
   });
 }
 
-test("/vault renders not-found, not the retired page still sitting in views/", async ({ page }) => {
+test("/vault renders the allocation page and declares it canonical", async ({ page }) => {
   await page.goto("/");
   await navigate(page, "/vault");
-  // Removing the ROUTE does not retire a page: the catch-all maps any unknown
-  // path to /views/<path>.html, and views/vault.html is deliberately kept in
-  // the tree. routes.js pins /vault to NOT_FOUND_VIEW for exactly this reason,
-  // and this asserts the pin rather than the absence of an entry.
-  await expect(page.locator("section.vp")).toHaveCount(0);
+  // RM-115 retired views/vault.html into /allocation's `#vault` section, and
+  // /vault now resolves to the allocation view rather than to not-found. It is
+  // still an EXPLICIT entry, not an absence: the catch-all maps any unknown
+  // path to /views/<path>.html, so a bare deletion would 404 a live address.
+  await expect(page.locator("section.alp")).toHaveCount(1);
   await expect(page.locator("h1.vp__title")).toHaveCount(0);
-  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex, follow");
+  // Two addresses, one page: seo.js names /allocation canonical for both so
+  // they do not compete as duplicates, and the page stays indexable.
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href", "https://robotmoney.network/allocation");
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /^index, follow/);
 });
 
 test("the noindex override does not leak onto the next route", async ({ page }) => {
