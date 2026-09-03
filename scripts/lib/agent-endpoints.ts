@@ -175,7 +175,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.researchSignal,
     summary: "One named research signal series",
     description:
-      "A single research signal by key, with its full point series and gauge. Keys are the ones named on the research pages: late-cycle-signals and channel-divergence. Returns 404 for an unknown key. Large: these carry every historical point, with no way to trim.",
+      "A single research signal by key, with its full point series and gauges. Keys are the ones named on the research pages: late-cycle-signals and channel-divergence. Returns 404 for an unknown key. Large, and there is no way to trim it: `payload.indicators` plus the raw `btc_price` and `qqq_price` series (3,168 points each) are most of the weight, while the readable answer is in `payload.summary` and `payload.gauges` at under 1 KB.",
     backs: ["/research/late-cycle-signals", "/research/channel-divergence"],
     params: [{ name: "key", in: "path", required: true, description: "Signal key.", example: "late-cycle-signals" }],
     contractType: "ResearchSignal",
@@ -223,7 +223,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.sessions,
     summary: "Swarm session index, paginated",
     description:
-      "Light index rows for every session with an opaque `nextCursor` (null when exhausted). Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.",
+      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.",
     backs: ["/swarm"],
     params: [
       { name: "state", in: "query", description: "Filter by lifecycle state, for example published.", example: "published" },
@@ -232,7 +232,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       { name: "full", in: "query", description: "Set to 1 to return every field rather than the light index projection.", example: "1" },
     ],
     contractType: "SwarmSessionListResponse",
-    sizeHint: "about 80 KB unpaginated, so pass limit",
+    sizeHint: "about 80 KB for the default page of 20 rows; pass limit to shrink it",
   },
   {
     id: "getSwarmSessionById",
@@ -301,7 +301,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.brief,
     summary: "The brief a session published",
     description:
-      "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to the most recent session that day THAT HAS PUBLISHED A BRIEF, which is not always the newest session, because a session convenes as scheduled and its brief follows on a separate job. The `body` field is the whole brief as prose and is by far the largest single field on this API.",
+      "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to the most recent session that day THAT HAS PUBLISHED A BRIEF, which is not always the newest session, because a session convenes as scheduled and its brief follows on a separate job. Almost all of the response is `body.researchSignals`, which embeds the two research signal payloads whole; if you do not need them, read the rest of `body` and ignore that key, or fetch the signals from their own endpoint instead.",
     backs: ["/swarm"],
     params: [
       { name: "session", in: "query", description: "Session id. Preferred." },
@@ -309,7 +309,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       { name: "subject", in: "query", description: "Subject id. Use with date.", example: "robotmoney-treasury" },
     ],
     contractType: "SwarmBrief",
-    sizeHint: "about 1 MB, nearly all of it the body field",
+    sizeHint: "about 980 KB, of which 976 KB is body.researchSignals",
   },
   {
     id: "getSwarmSubject",
@@ -511,7 +511,7 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.comments.create]: "write; anonymous POST, rate limited, no reason to advertise to crawlers",
   [ROUTES.dashboards.submissions]: "write; anonymous intake moderated from /admin",
   [ROUTES.projects.adminUpdate]: "admin write",
-  [ROUTES.dashboards.list2]: "work in progress; /list2 is noindex in seo.js and the endpoint answers 500 in production",
+  [ROUTES.dashboards.list2]: "work in progress; /list2 is noindex in seo.js and the endpoint answers an intermittent 500 in production, so it is not stable enough to publish",
   [ROUTES.swarm.waitlist]: "write; interest capture",
   [ROUTES.swarm.apply]: "write; onboarding flow, documented at /docs/investment-swarm/participation",
   [ROUTES.swarm.applyStatus]: "status probe for one applicant's own id; not a browsable resource",

@@ -267,7 +267,7 @@
       "get": {
         "operationId": "getResearchSignal",
         "summary": "One named research signal series",
-        "description": "A single research signal by key, with its full point series and gauge. Keys are the ones named on the research pages: late-cycle-signals and channel-divergence. Returns 404 for an unknown key. Large: these carry every historical point, with no way to trim.\n\nResponse size: 330 KB to 650 KB depending on the key.\n\nResponse type: `ResearchSignal` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "A single research signal by key, with its full point series and gauges. Keys are the ones named on the research pages: late-cycle-signals and channel-divergence. Returns 404 for an unknown key. Large, and there is no way to trim it: `payload.indicators` plus the raw `btc_price` and `qqq_price` series (3,168 points each) are most of the weight, while the readable answer is in `payload.summary` and `payload.gauges` at under 1 KB.\n\nResponse size: 330 KB to 650 KB depending on the key.\n\nResponse type: `ResearchSignal` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -452,7 +452,7 @@
       "get": {
         "operationId": "listSwarmSessions",
         "summary": "Swarm session index, paginated",
-        "description": "Light index rows for every session with an opaque `nextCursor` (null when exhausted). Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nResponse size: about 80 KB unpaginated, so pass limit.\n\nResponse type: `SwarmSessionListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nResponse size: about 80 KB for the default page of 20 rows; pass limit to shrink it.\n\nResponse type: `SwarmSessionListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -750,7 +750,7 @@
       "get": {
         "operationId": "getSwarmBrief",
         "summary": "The brief a session published",
-        "description": "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to the most recent session that day THAT HAS PUBLISHED A BRIEF, which is not always the newest session, because a session convenes as scheduled and its brief follows on a separate job. The `body` field is the whole brief as prose and is by far the largest single field on this API.\n\nResponse size: about 1 MB, nearly all of it the body field.\n\nResponse type: `SwarmBrief` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to the most recent session that day THAT HAS PUBLISHED A BRIEF, which is not always the newest session, because a session convenes as scheduled and its brief follows on a separate job. Almost all of the response is `body.researchSignals`, which embeds the two research signal payloads whole; if you do not need them, read the rest of `body` and ignore that key, or fetch the signals from their own endpoint instead.\n\nResponse size: about 980 KB, of which 976 KB is body.researchSignals.\n\nResponse type: `SwarmBrief` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
