@@ -260,7 +260,10 @@ test("the latest recommendation is the session's rationale, and the page says wh
   const block = page.locator(".alp__latest");
   await expect(block).toContainText("1 Sep 2026");
   await expect(block).toContainText("4 of 5 took part");
-  await expect(block).toContainText(session.swarmRecommendation.rationale);
+  // The ACTIONS lead: they are what the session recommended. The aggregator's
+  // rationale follows as the supporting sentence.
+  await expect(block.locator(".alp__latest-line")).toHaveText("rotate USDC");
+  await expect(block.locator(".alp__latest-why")).toHaveText(session.swarmRecommendation.rationale);
   await expect(block).toContainText("no weight change");
   await expect(block.locator("a"))
     .toHaveAttribute("href", `/swarm/sessions/${session.id}`);

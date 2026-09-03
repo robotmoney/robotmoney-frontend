@@ -564,14 +564,29 @@ export function registerAllocationView(Alpine) {
     },
     // No vector, and the page says why rather than printing a blank. The
     // subject is typed `position_actions`, so meanTakeWeights() never runs for
-    // it: what a session publishes is a rationale and a set of actions.
+    // it: what a session publishes is a set of actions and a rationale.
+    //
+    // The ACTIONS are the recommendation and lead. The rationale follows them
+    // as the supporting sentence rather than standing in for them: the
+    // aggregator generates it, and it restates the stance split, the quorum
+    // and the percentile, two of which are already on the line above it.
     latestLine() {
       const rec = this.latest?.swarmRecommendation;
       if (!rec) return "";
-      if (rec.rationale) return String(rec.rationale);
       const acts = (Array.isArray(rec.actions) ? rec.actions : []).filter((a) => a && a.action);
       if (acts.length) return acts.map((a) => `${a.action} ${a.token}`).join(" · ");
-      return "";
+      return rec.rationale ? String(rec.rationale) : "";
+    },
+    // Rendered under the line, and only when it is not already the line.
+    latestRationale() {
+      const rec = this.latest?.swarmRecommendation;
+      if (!rec?.rationale) return "";
+      const text = String(rec.rationale);
+      return text === this.latestLine() ? "" : text;
+    },
+    latestConfidence() {
+      const c = this.latest?.swarmRecommendation?.meanConfidence;
+      return Number.isFinite(Number(c)) ? `${Math.round(Number(c) * 100)}% mean confidence` : "";
     },
     // What the page can say about a missing line, without guessing which of
     // the two reasons applies.

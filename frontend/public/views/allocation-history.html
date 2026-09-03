@@ -78,10 +78,11 @@
       </span>
     </div>
     <p class="alh__sub">
-      Date, the regime read the members worked from, how many of them took part,
-      what the session recommended, and the allocation in force afterwards. The
-      recommendation is a rationale rather than a weight vector: this portfolio
-      is typed <code>position_actions</code>, so no session publishes one. <sup>1</sup>
+      Date, the regime read the members worked from, how many of them took part
+      and at what mean confidence, what the session recommended, and the
+      allocation in force afterwards. The recommendation is a set of position
+      actions rather than a weight vector: this portfolio is typed
+      <code>position_actions</code>, so no session publishes one. <sup>1</sup>
     </p>
 
     <p class="alh__scrollhint" aria-hidden="true">Scroll the table sideways for the full row.</p>
@@ -98,7 +99,7 @@
           <tr>
             <th>Date</th>
             <th>Regime</th>
-            <th>Quorum</th>
+            <th>Quorum · conf</th>
             <th class="alh__col-rec">Recommended</th>
             <th>Resulting allocation</th>
             <th>Change</th>
@@ -114,7 +115,10 @@
                 <span x-text="regimeLabel(s)"></span>
                 <span class="alh__pct" x-show="percentileLabel(s)" x-text="percentileLabel(s)"></span>
               </td>
-              <td x-text="quorumLabel(s)"></td>
+              <td>
+                <span x-text="quorumLabel(s)"></span>
+                <span class="alh__pct" x-show="confidenceLabel(s)" x-text="confidenceLabel(s)"></span>
+              </td>
               <td class="alh__col-rec">
                 <template x-if="proposedLine(s)">
                   <span class="alh__rec" :class="proposedIsWeights(s) ? 'alh__rec--weights' : ''"

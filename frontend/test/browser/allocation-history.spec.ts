@@ -58,6 +58,7 @@ function session(over: Record<string, unknown> = {}) {
       type: "position_actions",
       quorum: { absent: 1, active: 5, submitted: 4, participation: 0.8 },
       stances: { bullish: 1, neutral: 1, cautious: 2 },
+      meanConfidence: 0.575,
       actions: [{ token: "USDC", action: "rotate", rationale: "Route the next tranche into rmUSDC." }],
       rationale: "Swarm holds 95/5/0/0 with composite at the 62nd percentile; no tilt is licensed.",
     },
@@ -171,7 +172,13 @@ test("a row carries date, regime with its percentile, quorum, the rationale, the
   await expect(row).toContainText("risk-on");
   await expect(row).toContainText("62nd pct");
   await expect(row).toContainText("4 / 5");
-  await expect(row).toContainText("no tilt is licensed");
+  // Actions, not the aggregator's rationale: that sentence restates the stance
+  // split, the quorum and the percentile, and this row already has two of the
+  // three as columns of their own.
+  await expect(row.locator(".alh__rec")).toHaveText("rotate USDC");
+  await expect(row).not.toContainText("no tilt is licensed");
+  // Mean confidence is the one thing the rationale carried that no column did.
+  await expect(row).toContainText("57%");
   // The resulting allocation is the seeded row, the same on every session
   // because there is only one row.
   const resulting = framework.strategy.map((s) => String(s.targetPct)).join(" / ");
@@ -470,7 +477,20 @@ test("the page carries no em dash in its own copy", async ({ page }) => {
 test("on a phone the log scrolls inside its own container, not the page", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await stubEnvironment(page);
+  // A session with no actions, so the cell falls back to the long rationale:
+  // that is the value the wrap and the clamp exist for.
+  await stubEnvironment(page, {
+    sessions: [session({
+      swarmRecommendation: {
+        type: "position_actions",
+        quorum: { absent: 1, active: 5, submitted: 4, participation: 0.8 },
+        meanConfidence: 0.575,
+        rationale: "Majority stance is constructive (3 of 5 submitted takes), mean confidence "
+          + "0.57, regime composite at the 66th percentile on Robot Money Allocation, and the "
+          + "load-bearing action is routing the next stable tranche into rmUSDC.",
+      },
+    })],
+  });
   await page.goto("/index.html");
   await navigate(page, "/allocation/history");
   await expect(page.locator("table.alh__tbl")).toBeVisible();
