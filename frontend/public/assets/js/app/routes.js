@@ -1,19 +1,12 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
-// /allocation/history — the allocation's decision log (RM-115). The fragment is
-// `allocation-history.html`, NOT `allocation/history.html`: the catch-all at the
-// bottom of viewFor() would resolve the nested path to a nested file, and the
-// smoke frontend check reads the flat name.
-export const ALLOCATION_HISTORY_VIEW = `${VIEW_DIR}/allocation-history.html`;
-// There is still no VAULT_VIEW, and now there is no views/vault.html either.
-// It was kept UNREACHABLE in the tree while RM-104's information architecture
-// was reworked, on the note that "the page comes back through that work". This
-// is that work: RM-115 supersedes the /vault page shape, and the vault is now
-// the implementation SECTION of /allocation (`#vault`) rather than a page of
-// its own. Its content, the venue-rate reference dataset included, moved into
-// views/allocation.html and alpine/views/allocation.js; the deleted file is in
-// history and on branch david/vault-ia-polish.
+// There is deliberately no VAULT_VIEW. views/vault.html stays in the tree but
+// UNREACHABLE: no route resolves to it, the same way views/allocation.html was
+// kept while /vault owned the content. RM-104's information architecture is
+// being reworked against the recommendation-receipt model and the page comes
+// back through that work, not through this table. Its last shipped state is on
+// branch david/vault-ia-polish.
 export const PERFORMANCE_VIEW = `${VIEW_DIR}/performance.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
 export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
@@ -162,19 +155,16 @@ const ROUTES = {
   // just be /blog again under another address. Falling through to the catch-all
   // (→ views/research.html, absent → not-found) is the honest answer.
   "/allocation": ALLOCATION_VIEW,
-  "/allocation/history": ALLOCATION_HISTORY_VIEW,
   "/performance": PERFORMANCE_VIEW,
   "/allocation2": PERFORMANCE_VIEW, // legacy redirect
-  // /vault renders /allocation (RM-115's URL table). It was pinned to
-  // NOT_FOUND while views/vault.html sat unreachable in the tree, because the
-  // catch-all at the bottom of viewFor() maps any unknown path to
-  // `/views/<path>.html` and removing the entry alone would have gone on
-  // serving the retired page in full. The fragment is deleted now and its
-  // content is a section of /allocation, so the entry points there: an address
-  // people already hold is worth more resolving to the page that answers it
-  // than 404ing. seo.js's LEGACY_ALIASES names /allocation canonical for it,
-  // so the two addresses do not compete as duplicates.
-  "/vault": ALLOCATION_VIEW,
+  // /vault resolves to NOT FOUND, explicitly. Deleting the ROUTE is not enough
+  // to retire a page: the catch-all at the bottom of viewFor() maps any unknown
+  // path to `/views/<path>.html`, so leaving views/vault.html in the tree with
+  // no entry here left /vault rendering the full page exactly as before. That
+  // is how views/allocation.html stayed genuinely unreachable while /vault
+  // owned the content — /allocation had an explicit entry pointing elsewhere,
+  // so the catch-all never ran for it. This is the same trick, pointed at 404.
+  "/vault": NOT_FOUND_VIEW,
   "/projects": PROJECTS_VIEW,
   // Legacy article URL, still live on robotmoney.network and still linked from the
   // synthesis prose of twenty archived swarm sessions (they cite
@@ -194,44 +184,6 @@ const ROUTES = {
   // /admin section first, so the standalone page was dropped as a duplicate
   // (see PR #172).
 };
-
-/**
- * Paths that MOVE, as opposed to paths that are merely rewritten.
- *
- * routes.js's other legacy handling (the /committee tree, /allocation2) is a
- * REWRITE: the old address keeps rendering, serving the new page's fragment
- * under the old URL, and seo.js declares the new address canonical so the
- * duplicate does not compete in search. That is right for a rename nobody
- * needs to notice.
- *
- * This is different. /swarm/subjects/robotmoney-allocation is a portfolio
- * profile for a subject that has no portfolio: `source: {type: "framework"}`,
- * `wallets: []`, and a structural note reading "no portfolio to scrape". A
- * reader who lands there should end up somewhere that answers the question
- * they arrived with, at an address they can copy, so the router rewrites the
- * URL and renders the destination rather than serving it under the old name
- * (RM-115).
- *
- * `render()` in router.js consults this before anything else and replaces the
- * history entry, so the old address never stays in the bar and never becomes
- * a back-button trap. seo.js's LEGACY_ALIASES carries the same pair, for the
- * prerenderer and the api process's shell fallback, which have no router.
- *
- * @type {Record<string, string>}
- */
-const REDIRECTS = {
-  "/swarm/subjects/robotmoney-allocation": "/allocation/history",
-};
-
-/**
- * The path a request should be MOVED to, or null to render `pathname` itself.
- * @param {string} pathname
- * @returns {string | null}
- */
-export function redirectFor(pathname) {
-  const clean = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
-  return REDIRECTS[clean] || null;
-}
 
 /** @param {string} pathname */
 export function viewFor(pathname) {

@@ -1,552 +1,454 @@
-<!-- /allocation — the product sheet (RM-115; container rule RM-114).
-     The allocation is a POLICY and gets a page of its own. A portfolio is a
-     book of holdings and gets a row on /swarm plus its own subject page. This
-     page is the policy as it stands now; /allocation/history is how it has
-     changed.
+<!-- Asset Allocation
+     Buildless port of robotmoney-site/src/app/allocation/page.tsx — now fully
+     data-driven, no baked DATA literals. Every pie is a Chart.js pie drawn by
+     the boot-registered allocationView() factory (alpine/views.js) from live
+     endpoints:
+       • Strategy pie + 4 mini bucket pies + bucket target weights ←
+         GET /api/dashboards/allocation (admin/swarm-managed target weights).
+       • Vault pie / holdings table / TVL / 7-Day APY ←
+         GET /api/dashboards/vault-economics (Base JSON-RPC, short-TTL cache;
+         degrades to `stale`/null, never a fabricated number).
+       • Wallet pie + aggregate holdings table ← GET /api/dashboards/wallet-balances.
+       • Per-wallet sleeve tables ← GET /api/dashboards/wallet-sleeves.
+       • Buyback total + table ← GET /api/dashboards/buybacks (ROBOTMONEY
+         Transfer logs into the primary prop wallet; 10 seeded historical rows).
+     Slice/legend COLOURS are presentation-only (client-side); the numbers are
+     never baked. Each feed degrades independently (loading → "—"/empty state)
+     so one stale endpoint never blanks the page. The hero reports the two pools
+     of money SEPARATELY: the Robot Money protocol wallets (wallet-balances) and
+     vault TVL (vault-economics). They are never summed; see the hero comment.
+     Shares the a2-* design system with performance.html.
+-->
 
-     THE CONSTRAINT A REVIEWER SHOULD CHECK FIRST: this page binds
-     GET /api/dashboards/allocation, GET /api/dashboards/vault-economics and
-     GET /api/swarm/sessions, and nothing else. wallet-balances and
-     wallet-sleeves are the three protocol-owned prop wallets, a different pot
-     of money that moves to the token page under RM-103. Adding them together
-     under one heading is what made a $229 vault 0.4% of a "Total AUM" figure
-     printed under a heading about the vault.
+<section class="a2 container" x-data="allocationView()">
 
-     Sections, in the order RM-115 fixes them: hero (weights in force, asOf,
-     state chip, stat rail) · Allocation · Inside each sleeve · What it pays ·
-     Vault · Latest recommendation · Exposure.
-
-     id="allocation" and id="vault" are load-bearing: RM-115 names both as
-     citable anchors, and /allocation#vault is the address the swarm's vault
-     row and the deposit skill point at.
-
-     Every figure is live except the venue-rate comparison behind "What it
-     pays", which is a dated reference dataset carrying a non-live badge and a
-     seam banner, and NAV per share and period returns, which render "not yet
-     published" because no route serves vault_share_price_history yet. See
-     alpine/views/allocation.js. -->
-
-<section class="alp" x-data="allocationView()">
-
-  <!-- ── HERO ─────────────────────────────────────────────────────────────
-       .a2-hero / .a2-hero__inner / .a2-hero__title are the SHARED hero
-       component (assets/css/components.css pins their offset, size and
-       typeface with !important so every nav page's headline lands in the same
-       place). The old two-figure money card that used to sit beside the
-       headline is gone with the house book; the stat rail below carries the
-       figures now, which is also what retires the 8px headline drift that
-       card's centring caused. -->
-  <header class="a2-hero">
+  <!-- ── HERO ────────────────────────────────────────────────────────────── -->
+  <header class="a2-hero alloc-hero">
     <div class="a2-hero__viz" x-data="meshHero()" aria-hidden="true"></div>
-    <div class="a2-hero__inner">
-      <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
-      <p class="a2-hero__lede">
-        One USDC deposit, allocated across the sleeves below and withdrawable
-        at NAV. This is the recipe, not a book of holdings. It covers depositor
-        capital only: the protocol's own wallets are reported separately.
-      </p>
+    <div class="a2-hero__inner alloc-hero__inner">
+      <div class="alloc-hero__text">
+        <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
+        <p class="a2-hero__lede">
+          Vault TVL and target sleeves, plus the holdings and buyback history of
+          the Robot Money protocol wallets. Two separate pools of money,
+          reported separately.
+        </p>
+      </div>
+      <!-- TWO POOLS, TWO FIGURES. This card used to print one "Total AUM": the
+           Robot Money protocol wallets PLUS vault TVL, added together under a
+           page heading about the vault. On 2026-09-02 the protocol wallets held
+           $59.2k and the vault held $229, so the vault was 0.4% of a number a
+           reader took for the vault. The two are different money with different
+           owners: the vault holds depositor capital, the protocol wallets hold
+           the house's own book, and backend config.ts throws at boot if a prop
+           wallet is ever configured as the vault ("would double-count vault
+           TVL"). Each half now shows its own value, its own timestamp and its
+           own provenance state, and nothing is summed across the two.
+           Wallet half ← GET /api/dashboards/wallet-balances (wallet.totalUsd).
+           Vault half  ← GET /api/dashboards/vault-economics (economics.tvlUsd).
+           The alloc-aum* class names are kept so the hero layout rules and the
+           browser specs keep resolving; only the labels and the split changed. -->
+      <div class="alloc-aum">
+        <div class="alloc-aum__stat">
+          <span class="alloc-aum__label">Robot Money protocol wallets</span>
+          <span class="alloc-aum__value alloc-aum__value--wallets" x-text="fmtUsd(wallet?.totalUsd)">—</span>
+          <span class="alloc-aum__sub" x-text="walletAsOfLabel()">—</span>
+          <span class="alloc-aum__prov alloc-wallet-nonlive" x-show="walletNonLive()" x-cloak>
+            Wallet feed: non-live (stub) data
+          </span>
+          <span class="alloc-aum__prov alloc-wallet-stale" x-show="walletStale()" x-cloak>
+            Wallet feed: stale (last-persisted) data
+          </span>
+          <span class="alloc-aum__prov alloc-wallet-backfilled" x-show="walletBackfilled()" x-cloak>
+            Wallet feed: caught up late (still a live read)
+          </span>
+        </div>
+        <div class="alloc-aum__stat">
+          <span class="alloc-aum__label">Vault TVL</span>
+          <span class="alloc-aum__value alloc-aum__value--vault" x-text="fmtUsd(economics?.tvlUsd)">—</span>
+          <span class="alloc-aum__sub" x-text="asOfLabel()">—</span>
+        </div>
+        <p class="alloc-aum__note">
+          Two separate pools. The vault holds depositor capital; the protocol
+          wallets are Robot Money's own book. They are not added together.
+        </p>
+        <span class="alloc-aum__prov alloc-aum-partial" x-show="aumPartial()" x-cloak>
+          One of the two feeds has not resolved; the figure it fills is blank.
+        </span>
+      </div>
     </div>
   </header>
 
-  <!-- Weights in force, with the state of the policy that set them. -->
-  <div class="alp__force">
-    <div class="alp__force-head">
-      <p class="alp__eyebrow">Weights in force</p>
-      <span class="alp__chip" :class="isSwarmManaged() ? 'alp__chip--live' : ''" x-text="stateChip()">seeded</span>
-    </div>
-    <p class="alp__force-line" x-show="!loading" x-cloak x-text="unchangedLine()"></p>
-
-    <!-- The fan: one deposit splitting into the sleeves, drawn as mechanism
-         rather than as weight. Under 640px the SVG's labels would render at
-         about 6px, so the CSS hides it and shows the same rows as a list. -->
-    <div class="alp__fan" x-show="hasTargets()" x-cloak>
-      <svg x-ref="fan" viewBox="0 0 728 292" role="img" aria-label="One USDC deposit allocated across the target sleeves"></svg>
-      <p class="alp__fan-dep">One deposit, allocated across</p>
-      <ul class="alp__fan-list">
-        <template x-for="s in sleeves()" :key="s.key">
-          <li :class="s.target === 0 ? 'dim' : ''">
-            <i :class="s.holding ? 'alp__mark--held' : (s.target === 0 ? 'alp__mark--none' : 'alp__mark--zero')"></i>
-            <div>
-              <b x-text="s.name"></b>
-              <span x-text="sleeveFanLine(s)"></span>
-            </div>
-          </li>
-        </template>
-      </ul>
-      <div class="alp__fan-key">
-        <span><i class="alp__mark--held"></i>Holding</span>
-        <span><i class="alp__mark--zero"></i>Held at zero</span>
-        <span><i class="alp__mark--none"></i>No target</span>
-      </div>
-    </div>
-
-    <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      The published target weights could not be read, so there are no sleeves to
-      show. Everything below that does not depend on them still stands.
-    </p>
-
-    <!-- Stat rail. Yield and vault TVL are live; the two on the right have no
-         route behind them yet and say so rather than borrowing a number. -->
-    <dl class="alp__stats">
-      <div class="alp__stat">
-        <dt>Yield · 7-day</dt>
-        <dd class="pos" x-text="economics?.apy7d != null ? fmtRate(economics.apy7d) : fmtPct(blendNow())">—</dd>
-        <span class="alp__stat-sub">
-          before fees <sup>1</sup><span x-show="economics?.apy7d == null" x-cloak> · reference series <sup>4</sup></span>
-        </span>
-      </div>
-      <div class="alp__stat">
-        <dt>Vault TVL</dt>
-        <dd x-text="fmtUsd2(tvlUsd())">—</dd>
-        <span class="alp__stat-sub">deposits held · <span x-text="asOfLabel()">—</span></span>
-      </div>
-      <div class="alp__stat">
-        <dt>NAV / share</dt>
-        <dd class="pend">not yet published</dd>
-        <span class="alp__stat-sub">no route over the recorded series <sup>6</sup></span>
-      </div>
-      <div class="alp__stat">
-        <dt>Since inception</dt>
-        <dd class="pend">not yet published</dd>
-        <span class="alp__stat-sub">needs NAV per share <sup>6</sup></span>
-      </div>
-    </dl>
-
-    <!-- Degradation states, carried over in full from the pages this one
-         replaces. A page about money that silently assumes fresh data is a
-         regression, so each one renders rather than warning to a console. -->
-    <div class="alp__prov" x-show="!loading" x-cloak>
-      <span class="alp__badge alp__badge--nonlive alp-vault-nonlive" x-show="vaultNonLive()" x-cloak>
-        Vault feed: non-live (stub) data
-      </span>
-      <span class="alp__badge alp__badge--stale alp-vault-stale" x-show="vaultStale()" x-cloak>
-        Vault feed: stale (last-persisted) data
-      </span>
-      <span class="alp__badge alp__badge--backfilled alp-vault-backfilled" x-show="vaultBackfilled()" x-cloak>
-        Vault feed: caught up late (still a live read)
-      </span>
-      <span class="alp__badge alp__badge--stale" x-show="!economics" x-cloak>
-        Vault feed unavailable
-      </span>
-      <span class="alp__badge alp__badge--stale" x-show="!allocationFw" x-cloak>
-        Target weights unavailable
-      </span>
-    </div>
-  </div>
-
-  <!-- ── § ALLOCATION ─────────────────────────────────────────────────── -->
-  <section class="alp__sec" id="allocation">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">Allocation</h2>
-    </div>
-    <p class="alp__sub">
-      <b>Allocation</b> is the weight each sleeve is meant to carry.
-      <b>Held</b> is what the vault carries today, computed from its live
-      adapter balances. <b>Drift</b> is the gap, and closing it is a
-      <b>rebalance</b>. The vault is the only book this policy has, so the
-      agent-token sleeve reads held at zero: that basket is bought at deposit
-      time by the skill and lands in the depositor's own wallet, never in the
-      vault. <sup>3</sup>
-    </p>
-
-    <p class="alp__empty" x-show="!loading && !sleeves().length" x-cloak>
-      Target weights are unavailable right now.
-    </p>
-
-    <div class="alp__bullets" x-show="hasTargets()" x-cloak>
-      <template x-for="s in sleeves()" :key="s.key">
-        <div class="alp__bullet">
-          <div class="alp__bullet-top">
-            <span class="alp__bullet-name" x-text="s.name"></span>
-            <span class="alp__bullet-nums" x-show="s.holding || s.target > 0">
-              held <b x-text="fmtPct1(s.held)"></b> · target <span x-text="fmtPctTrim(s.target)"></span>
-              · drift <span class="drift" x-text="fmtPp1(s.drift)"></span>
-            </span>
-            <span class="alp__bullet-nums" x-show="!s.holding && s.target === 0">
-              held at zero · target <span x-text="fmtPctTrim(s.target)"></span>
-            </span>
-          </div>
-          <!-- A DASHED track means "no target at all". A sleeve WITH a target
-               that holds nothing is a solid track at 0% fill against its target
-               marker: the drift is the point, and a pattern would hide it.
-               Dashed rather than hatched because a hatch is a gradient, and the
-               covenant does not spend one on a track. -->
-          <div class="alp__track" :class="s.target === 0 ? 'alp__track--none' : ''">
-            <div class="alp__fill" x-show="s.target > 0"
-                 :style="`width:${Math.max(0, Math.min(100, s.held ?? 0))}%`"></div>
-            <div class="alp__target" x-show="s.target > 0" :style="`left:${Math.min(100, s.target)}%`"></div>
-          </div>
-        </div>
-      </template>
-    </div>
-  </section>
-
-  <!-- ── § INSIDE EACH SLEEVE ─────────────────────────────────────────── -->
-  <section class="alp__sec" id="inside-each-sleeve">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">Inside each sleeve</h2>
-    </div>
-    <p class="alp__sub">
-      The constituents of each sleeve, by target weight. Solid bars are held;
-      pale bars are a target held at zero. A constituent at zero is drawn, not
-      hidden. The yield sleeve runs in equal thirds rather than quarters
-      because <b>Sky is not yet connected</b>: a target holding nothing. The
-      Agent Tokens list is the one the allocation publishes, which is not the
-      list the deposit skill buys. <sup>9</sup>
-    </p>
-
-    <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      Target weights are unavailable right now, so there are no constituents to
-      list.
-    </p>
-
-    <div class="alp__sleeves" x-show="hasTargets()" x-cloak>
-      <template x-for="s in sleeves()" :key="s.key">
-        <div class="alp__sleeve">
-          <div class="alp__sleeve-head">
-            <span class="alp__sleeve-name" x-text="s.name"></span>
-            <span class="alp__sleeve-w" :class="s.holding ? '' : 'held0'" x-text="sleeveWeightLabel(s)"></span>
-          </div>
-          <div class="alp__const">
-            <template x-for="c in constituents(s.key)" :key="c.label">
-              <div class="alp__const-row">
-                <span x-text="c.label"></span>
-                <span class="alp__const-bar">
-                  <i :class="c.holding ? '' : 'tgt'" :style="`width:${Math.min(100, c.holding ? c.held : c.target)}%`"></i>
-                </span>
-                <span class="alp__const-val" :class="c.holding ? '' : 'dim'" x-text="constituentValue(c)"></span>
-              </div>
-            </template>
-          </div>
-        </div>
-      </template>
-    </div>
-  </section>
-
-  <!-- ── § WHAT IT PAYS ───────────────────────────────────────────────── -->
-  <section class="alp__sec" id="what-it-pays">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">What it pays</h2>
-      <span class="alp__ref-badge">
-        Reference series · not live · to <span x-text="reference.asOf"></span>
-      </span>
-    </div>
-    <p class="alp__sub">
-      The yield sleeve is spread equally across three lending venues, so it pays
-      their blend. The shaded band is <b>what each venue paid on its own</b>.
-      The blend sits inside it, never above it.
-    </p>
-
-    <div class="alp__answer">
-      <div class="alp__answer-fig"><small>The vault · before fees</small><span x-text="fmtPct(blendNow())"></span></div>
-      <div class="alp__answer-fig net"><small>After the withdrawal fee</small><span x-text="fmtPct(blendNetNow())"></span></div>
-      <div class="alp__answer-fig ref"><small>Aave V3 USDC on its own</small><span x-text="fmtPct(aaveNow())"></span></div>
-      <p class="alp__answer-copy">
-        Ahead of Aave on <strong><span x-text="daysAheadOfAave()"></span> of <span x-text="trackRecordDays"></span> days</strong>,
-        behind Morpho on <span x-text="daysBehindMorpho()"></span> of them. The vault does not try to pick the venue that
-        will pay most. It holds all three so that no single one can take everything. <sup>3</sup>
+  <!-- ── 01 / STRATEGY — Vault Allocation ────────────────────────────────── -->
+  <section class="a2-section">
+    <div class="a2-section__head">
+      <span class="a2-eyebrow">01 / Strategy</span>
+      <h2 class="a2-h2">Vault <span class="a2-grad">Allocation</span></h2>
+      <!-- No voting table, route or job exists. What runs today: swarm members
+           file signed takes, the recommendation is the arithmetic mean over the
+           take set, and applying a proposed allocation is gated by the admin
+           multisig. Tokenholder governance of allocation policy is planned, and
+           has to read as planned. The four sleeves are targets: the vault holds
+           USDC across Morpho, Aave and Compound, and the sleeves do not exist
+           on chain. Weights are bound live below (stratPct), never typed here. -->
+      <p class="a2-section__lede">
+        These are the four target sleeves, not holdings. The vault itself holds
+        USDC across Morpho, Aave and Compound. The swarm proposes changes to
+        these targets; applying one is gated by the admin multisig. Tokenholder
+        voting on allocation policy is planned, not built: no voting contract,
+        route or table exists today.
       </p>
     </div>
 
-    <div class="alp__chart">
-      <svg x-ref="yield" viewBox="0 0 900 280" role="img" aria-label="Vault blended yield against its three venues"></svg>
-      <div class="alp__tip" x-ref="yieldTip"></div>
-    </div>
-    <div class="alp__legend">
-      <span><i class="alp__rule--vault"></i>Vault · equal-weight blend</span>
-      <span><i class="alp__rule--aave"></i>Aave V3 USDC · benchmark</span>
-      <span><i class="band"></i>Range of the three venues</span>
-      <span>7-day trailing mean <sup>4</sup></span>
-    </div>
+    <div class="alloc-grid3">
+      <!-- Big strategy pie -->
+      <div class="a2-card alloc-pie-card">
+        <div class="alloc-pie rm-chart"><canvas x-ref="strategy"></canvas></div>
+      </div>
 
-    <!-- issue #614 AC5: the window between the reference series and today is
-         disclosed, never smoothed over. -->
-    <div class="alp__seam" x-show="seamMessage()" x-cloak role="note">
-      <i class="alp__seam-ico" aria-hidden="true"></i>
-      <span x-text="seamMessage()"></span>
-    </div>
+      <!-- 2x2 bucket cards -->
+      <div class="alloc-buckets">
+        <!-- Card 1 -->
+        <div class="a2-card alloc-bucket">
+          <div class="alloc-bucket__top">
+            <div class="alloc-bucket__info">
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#10b981;"></span><span x-text="stratPct(0)">—</span></div>
+              <h4 class="alloc-bucket__title">Conservative DeFi Yield</h4>
+              <p class="alloc-bucket__desc">Aave, Compound, Morpho, Sky on Base. The lowest-volatility sleeve, aimed at capital preservation.</p>
+            </div>
+            <div class="alloc-bucket__pie"><canvas x-ref="mini1"></canvas></div>
+          </div>
+          <div class="alloc-legend">
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#10b981;"></span>Aave</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#00e5ff;"></span>Morpho</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#e8a640;"></span>Compound</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#7e889e;"></span>Sky</span>
+          </div>
+        </div>
 
-    <p class="alp__scrollhint" aria-hidden="true">Scroll the table sideways for the full row.</p>
-    <div class="alp__tblwrap alp__tblwrap--spaced">
-      <table class="alp__tbl">
-        <thead>
-          <tr>
-            <th>Average APY <sup>5</sup></th><th>Vault</th><th>Aave</th>
-            <th>Morpho</th><th>Compound</th><th>Vault vs Aave</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="row in periodRows()" :key="row.label">
-            <tr :class="row.total ? 'tot' : ''">
-              <td x-text="row.label"></td>
-              <td x-text="fmtPct(row.vault)"></td>
-              <td x-text="fmtPct(row.aave)"></td>
-              <td x-text="fmtPct(row.morpho)"></td>
-              <td x-text="fmtPct(row.compound)"></td>
-              <td class="alp__gain" x-text="fmtPp(row.vsAave)"></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
+        <!-- Card 2 -->
+        <div class="a2-card alloc-bucket">
+          <div class="alloc-bucket__top">
+            <div class="alloc-bucket__info">
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#00e5ff;"></span><span x-text="stratPct(1)">—</span></div>
+              <h4 class="alloc-bucket__title">Agent Tokens</h4>
+              <p class="alloc-bucket__desc">Tokens of agents that hold $ROBOTMONEY. The list is admin-managed today; tokenholder selection is planned.</p>
+            </div>
+            <div class="alloc-bucket__pie"><canvas x-ref="mini2"></canvas></div>
+          </div>
+          <div class="alloc-legend">
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#10b981;"></span>RobotMoney</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#00e5ff;"></span>Juno</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#e8a640;"></span>Woon</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#7e889e;"></span>Peaq</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#ff7a29;"></span>Zyfai</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#5fb3a1;"></span>Giza</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#9cffd2;"></span>DEUS</span>
+          </div>
+        </div>
+
+        <!-- Card 3 -->
+        <div class="a2-card alloc-bucket">
+          <div class="alloc-bucket__top">
+            <div class="alloc-bucket__info">
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#e8a640;"></span><span x-text="stratPct(2)">—</span></div>
+              <h4 class="alloc-bucket__title">Protocol Tokens</h4>
+              <p class="alloc-bucket__desc">Large-cap crypto and DeFi digital assets. BTC, ETH, HYPE.</p>
+            </div>
+            <div class="alloc-bucket__pie"><canvas x-ref="mini3"></canvas></div>
+          </div>
+          <div class="alloc-legend">
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#10b981;"></span>BTC</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#00e5ff;"></span>ETH</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#e8a640;"></span>HYPE</span>
+          </div>
+        </div>
+
+        <!-- Card 4 -->
+        <div class="a2-card alloc-bucket">
+          <div class="alloc-bucket__top">
+            <div class="alloc-bucket__info">
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#7e889e;"></span><span x-text="stratPct(3)">—</span></div>
+              <h4 class="alloc-bucket__title">Real World Assets</h4>
+              <p class="alloc-bucket__desc">Traditional instruments. Exposure to the S&amp;P 500 or commodities.</p>
+            </div>
+            <div class="alloc-bucket__pie"><canvas x-ref="mini4"></canvas></div>
+          </div>
+          <div class="alloc-legend">
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#10b981;"></span>SPY</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#00e5ff;"></span>Gold</span>
+          </div>
+        </div>
+      </div>
     </div>
-    <p class="alp__sub alp__sub--after">
-      These are average venue rates over each window, not returns a depositor
-      received. True period returns need NAV per share, which is not published
-      yet. <sup>6</sup>
-    </p>
   </section>
 
-  <!-- ── § VAULT ──────────────────────────────────────────────────────────
-       id="vault" is load-bearing: /allocation#vault is the anchor RM-115 fixes
-       for the implementation section. -->
-  <section class="alp__sec" id="vault">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">Vault</h2>
-      <a class="alp__ref-badge alp__ref-badge--link alp__ref-badge--addr" :href="vaultHref()" target="_blank" rel="noopener">
-        <span x-text="shortAddress()"></span> on BaseScan
-      </a>
+  <!-- ── Vault TVL ───────────────────────────────────────────────────────── -->
+  <section class="a2-section alloc-section--bordered">
+    <div class="a2-section__head">
+      <h2 class="a2-h2">Vault <span class="a2-grad">TVL</span></h2>
+      <div class="alloc-chip">
+        <span class="alloc-chip__label">7-Day APY</span>
+        <span class="alloc-chip__value" x-text="fmtPct(economics?.apy7d)">—</span>
+      </div>
+      <p class="alloc-stale" x-show="economics?.stale" x-cloak>
+        Live chain data unavailable — showing last known values.
+      </p>
+      <!-- Non-live indicator (issue #50): the vault-economics payload carries
+           source:'stub' when the backend runs against the hermetic demo/CI RPC
+           stub — canned fixture numbers must never be presented as live
+           chain data. -->
+      <p class="alloc-nonlive" x-show="economics?.source === 'stub'" x-cloak>
+        Demo data — hermetic stub, not live chain data.
+      </p>
     </div>
-    <p class="alp__sub">
-      The vault is how the allocation is implemented today: an ERC-4626 contract
-      on Base holding USDC across three lending venues. The 5% agent-token
-      sleeve is bought at deposit time by the skill and lands in the depositor's
-      wallet, so it never appears in these rows. Balance and price are shown
-      alongside value, so a row can be checked rather than taken on trust, and
-      the rows add up to vault TVL.
-    </p>
 
-    <p class="alp__scrollhint" aria-hidden="true">Scroll the table sideways for the full row.</p>
-    <div class="alp__tblwrap">
-      <table class="alp__tbl">
-        <thead>
-          <tr><th>Position</th><th>Type</th><th>Balance</th><th>Price</th><th>Value</th><th>Weight</th></tr>
-        </thead>
-        <tbody>
-          <template x-if="loading">
+    <div class="alloc-grid3">
+      <!-- Vault pie -->
+      <div class="a2-card alloc-pie-card">
+        <div class="alloc-pie rm-chart"><canvas x-ref="vault"></canvas></div>
+      </div>
+
+      <!-- Vault holdings table — live per-adapter balances from
+           GET /api/dashboards/vault-economics (issue #40), matching the
+           original site's Protocol/Balance/Price/Value column structure
+           (robotmoney-site src/app/allocation/page.tsx Vault TVL table). The
+           endpoint only carries {name, address, balanceUsd} per adapter — no
+           separate on-chain quantity/price breakdown — but every adapter is a
+           USDC-denominated lending position (chain/vault-economics.ts toUsd()
+           reads totalAssets() as pure USDC units), so Balance and the $1.00
+           peg Price are derivable from balanceUsd without inventing data; the
+           protocol name links to its BaseScan address. -->
+      <div class="a2-card alloc-tablecard">
+        <table class="alloc-table">
+          <thead>
             <tr>
-              <td>Loading…</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+              <th class="alloc-l">Protocol</th>
+              <th class="alloc-r">Balance</th>
+              <th class="alloc-r">Price</th>
+              <th class="alloc-r">Value</th>
             </tr>
-          </template>
-          <template x-for="a in adapters()" :key="a.address || a.name">
+          </thead>
+          <tbody>
+            <template x-for="a in (economics?.adapters ?? [])" :key="a.address">
+              <tr>
+                <td class="alloc-sym">
+                  <span class="alloc-dot" style="background:#10b981;"></span>
+                  <a class="alloc-link" target="_blank" rel="noopener" :href="`https://basescan.org/address/${a.address}`" x-text="a.name.toUpperCase()"></a>
+                </td>
+                <td class="alloc-r" x-text="adapterBalance(a)"></td>
+                <td class="alloc-r" x-text="adapterPrice(a)"></td>
+                <!-- issue #50: adapters still at placeholder addresses come back
+                     configured:false + balanceUsd:null — shown as an explicit
+                     unconfigured state, never a live-looking $0. -->
+                <td class="alloc-r alloc-val" :class="a.configured === false ? 'alloc-val--unconfigured' : ''" x-text="adapterValue(a)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <div class="alloc-tfoot">
+          <div class="alloc-tfoot__row">
+            <span class="alloc-tfoot__label">Total Vault Assets</span>
+            <span class="alloc-tfoot__value" x-text="fmtUsd(economics?.tvlUsd)">—</span>
+          </div>
+          <div class="alloc-tfoot__row alloc-tfoot__row--sub">
+            <span x-text="sharesLabel()">—</span>
+            <span x-text="asOfLabel()">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 02 / WALLET — Agent Wallet ──────────────────────────────────────── -->
+  <section class="a2-section alloc-section--bordered">
+    <div class="a2-section__head">
+      <span class="a2-eyebrow">02 / Wallet</span>
+      <h2 class="a2-h2">Agent <span class="a2-grad">Wallet</span></h2>
+    </div>
+
+    <div class="alloc-grid3">
+      <!-- Wallet pie -->
+      <div class="a2-card alloc-pie-card">
+        <div class="alloc-pie rm-chart"><canvas x-ref="wallet"></canvas></div>
+      </div>
+
+      <!-- Aggregate holdings table -->
+      <div class="a2-card alloc-tablecard">
+        <table class="alloc-table">
+          <thead>
             <tr>
-              <td>
-                <template x-if="adapterHref(a)">
-                  <a class="alp__link" :href="adapterHref(a)" target="_blank" rel="noopener" x-text="adapterLabel(a)"></a>
-                </template>
-                <template x-if="!adapterHref(a)">
-                  <span x-text="adapterLabel(a)"></span>
-                </template>
-                <!-- x-if, not x-show: a badge that is present but hidden still
-                     reads as "stale" to anything holding the row's text, and a
-                     row's provenance is exactly the thing that must not be
-                     ambiguous. -->
-                <template x-if="sleeveStaleLabel(a)">
-                  <span class="alp__cell-badge" x-text="sleeveStaleLabel(a)"></span>
-                </template>
-                <template x-if="a.provenance === 'backfilled'">
-                  <span class="alp__cell-badge">caught up late</span>
-                </template>
-              </td>
-              <td x-text="adapterType(a)"></td>
-              <td x-text="adapterBalance(a)"></td>
-              <td x-text="adapterPrice(a)"></td>
-              <td x-text="adapterValue(a)"></td>
-              <td x-text="adapterWeight(a)"></td>
+              <th class="alloc-l">Asset</th>
+              <th class="alloc-r">Balance</th>
+              <th class="alloc-r">Price</th>
+              <th class="alloc-r">Value</th>
             </tr>
-          </template>
-          <!-- Idle USDC is not optional: without it the rows never reconcile to
-               totalAssets(). -->
-          <template x-if="!loading">
-          <tr>
-            <td class="idle">Idle USDC</td>
-            <td class="idle">Not deployed</td>
-            <td class="idle" x-text="idleUsdc() == null ? '—' : Number(idleUsdc()).toFixed(2)"></td>
-            <td class="idle" x-text="idleUsdc() == null ? '—' : '$1.0000'"></td>
-            <td class="idle" x-text="fmtUsd2(idleUsdc())"></td>
-            <td class="idle" x-text="idleWeight()"></td>
-          </tr>
-          </template>
-          <template x-if="!loading">
-          <tr class="tot">
-            <td>Vault TVL</td><td>—</td><td>—</td><td>—</td>
-            <td x-text="fmtUsd2(tvlUsd())"></td>
-            <td x-text="tvlUsd() == null ? '—' : '100.0%'"></td>
-          </tr>
-          </template>
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            <!-- Live per-asset legs from GET /api/dashboards/wallet-balances
+                 (holdings[]); dot colour + amount/price/value are all served,
+                 never baked. Loading → a single placeholder row; a null leg
+                 renders "—" rather than a fabricated figure. -->
+            <tr x-show="loading">
+              <td class="alloc-sym">Loading…</td><td class="alloc-r">—</td><td class="alloc-r">—</td><td class="alloc-r alloc-val">—</td>
+            </tr>
+            <template x-for="h in (wallet?.holdings ?? [])" :key="h.symbol">
+              <tr>
+                <td class="alloc-sym"><span class="alloc-dot" :style="`background:${h.color || dotColor(h.symbol)};`"></span><span x-text="h.symbol"></span></td>
+                <td class="alloc-r" x-text="fmtAmount(h.amount)"></td>
+                <td class="alloc-r" x-text="fmtPrice(h.priceUsd)"></td>
+                <td class="alloc-r alloc-val" x-text="fmtUsd(h.valueUsd)"></td>
+              </tr>
+            </template>
+            <tr x-show="!loading && !(wallet?.holdings || []).length">
+              <td class="alloc-sym" colspan="4">No live wallet data available.</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="alloc-tfoot">
+          <div class="alloc-tfoot__row">
+            <span class="alloc-tfoot__label">Total</span>
+            <span class="alloc-tfoot__value" x-text="fmtUsd(wallet?.totalUsd)">—</span>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <dl class="alp__facts">
-      <div class="alp__fact">
-        <dt>Share price · spot</dt>
-        <dd x-text="sharesLabel()">—</dd>
-        <p>
-          One read, taken <span x-text="asOfLabel()">—</span>. The recorded
-          series behind NAV per share is not served yet. <sup>6</sup>
-        </p>
-      </div>
-      <div class="alp__fact">
-        <dt>Largest single venue</dt>
-        <dd x-text="fmtPct1(largestVenuePct())">—</dd>
-        <p>
-          Spread across <span x-text="venueCount()">—</span> venues. One failing
-          costs whatever share it holds; holding one alone would cost all of it.
-        </p>
-      </div>
-      <div class="alp__fact">
-        <dt>Fees and caps</dt>
-        <dd>0.25% on exit</dd>
-        <p>
-          There is no management fee. Deposits are capped while the vault is
-          young: <span x-text="capsLine()"></span>. The figure above is small
-          because of the cap, not because the vault is closed.
-        </p>
-      </div>
-    </dl>
+    <!-- Wallet Holdings (Sleeves) -->
+    <h3 class="alloc-sleeves__head">Wallet Holdings (Sleeves)</h3>
 
-    <p class="alp__sub alp__sub--after">
-      The vault is a book of holdings, so it keeps a portfolio page of its own:
-      <a class="alp__link" :href="vaultSubjectHref">the swarm's record for the vault</a>
-      carries its sessions and its holdings over time.
+    <!-- Per-wallet sleeves — live from GET /api/dashboards/wallet-sleeves. Each
+         wallet's name / type / total and its per-holding balance/price/value are
+         served (dot colour is presentation-only, keyed by symbol). Loading and
+         empty states are explicit; a null leg renders "—", never a baked figure. -->
+    <div class="a2-card alloc-tablecard alloc-sleeve" x-show="loading">
+      <div class="alloc-sleeve__head"><span class="alloc-sleeve__name">Loading sleeves…</span></div>
+    </div>
+    <template x-for="w in sleeveWallets()" :key="w.address">
+      <div class="a2-card alloc-tablecard alloc-sleeve">
+        <div class="alloc-sleeve__head">
+          <span class="alloc-sleeve__name" x-text="w.name"></span>
+          <span class="alloc-sleeve__totalwrap">
+            <span class="alloc-sleeve__stale badge badge--stale" x-show="w.stale" x-text="sleeveStaleLabel(w)">stale</span>
+            <span class="alloc-sleeve__total" x-text="fmtUsd(w.totalUsd)"></span>
+            <span class="alloc-sleeve__type" x-text="w.type"></span>
+          </span>
+        </div>
+        <table class="alloc-table">
+          <thead>
+            <tr><th class="alloc-l">Asset</th><th class="alloc-r">Balance</th><th class="alloc-r">Price</th><th class="alloc-r">Value</th></tr>
+          </thead>
+          <tbody>
+            <template x-for="h in (w.holdings ?? [])" :key="h.symbol">
+              <tr>
+                <td class="alloc-sym"><span class="alloc-dot" :style="`background:${dotColor(h.symbol)};`"></span><span x-text="h.symbol"></span></td>
+                <td class="alloc-r" x-text="fmtAmount(h.amount)"></td>
+                <td class="alloc-r" x-text="fmtPrice(h.priceUsd)"></td>
+                <td class="alloc-r alloc-val" x-text="fmtUsd(h.valueUsd)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </template>
+    <div class="a2-card alloc-tablecard alloc-sleeve" x-show="!loading && !walletCount()">
+      <div class="alloc-sleeve__head"><span class="alloc-sleeve__name">No live sleeve data available.</span></div>
+    </div>
+
+    <p class="alloc-caption" x-show="walletCount()" x-cloak>
+      Aggregate view across <span x-text="walletCount()"></span> wallets. Each wallet displays its individual positions.
     </p>
   </section>
 
-  <!-- ── § LATEST RECOMMENDATION ──────────────────────────────────────── -->
-  <section class="alp__sec" id="latest-recommendation">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">Latest recommendation</h2>
-      <a class="alp__ref-badge alp__ref-badge--link" :href="historyHref">Every session &rarr;</a>
+  <!-- ── 03 / BUYBACKS — Token Buybacks ──────────────────────────────────── -->
+  <section class="a2-section alloc-section--bordered">
+    <div class="a2-section__head">
+      <span class="a2-eyebrow">03 / Buybacks</span>
+      <h2 class="a2-h2">Token <span class="a2-grad">Buybacks</span></h2>
+      <p class="a2-section__lede">
+        Historical buyback transactions where WETH was swapped for $ROBOTMONEY.
+      </p>
     </div>
-    <p class="alp__sub">
-      The swarm reviews this allocation and publishes a recommendation. It is
-      not applied automatically: no code path writes a session's output into the
-      target weights, so the weights above have not moved. <sup>7</sup>
-    </p>
 
-    <div class="alp__latest" x-show="!loading" x-cloak>
-      <div class="alp__latest-meta">
-        <span class="alp__latest-date" x-text="latestDate()">—</span>
-        <span x-show="latestQuorum()" x-text="latestQuorum()"></span>
-        <span class="alp__latest-flag">no weight change</span>
+    <!-- Total + rows are live from GET /api/dashboards/buybacks (ROBOTMONEY
+         Transfer logs into the primary prop wallet; the 10 historical 2026-03-23
+         rows are the seeded backfill). Nothing is baked; a stub feed is flagged. -->
+    <div class="alloc-spent">
+      <span class="alloc-spent__label">Total Spent on Buybacks</span>
+      <span class="alloc-spent__value" x-text="fmtWethLabel(buybacks?.totals?.wethSpent)">—</span>
+      <span class="alloc-buyback-nonlive" x-show="buybackNonLive()" x-cloak>Demo data — hermetic stub, not live chain data.</span>
+    </div>
+
+    <div class="a2-card alloc-tablecard">
+      <div class="alloc-table__scroll">
+        <table class="alloc-table alloc-table--buyback">
+          <thead>
+            <tr>
+              <th class="alloc-l">Date</th>
+              <th class="alloc-r">WETH Spent</th>
+              <th class="alloc-r">Value (USD)</th>
+              <th class="alloc-r">$ROBOTMONEY Received</th>
+              <th class="alloc-r">Transaction</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr x-show="loading">
+              <td>Loading…</td><td class="alloc-r">—</td><td class="alloc-r">—</td><td class="alloc-r alloc-val">—</td><td class="alloc-r">—</td>
+            </tr>
+            <template x-for="b in buybackRows()" :key="b.txHash">
+              <tr>
+                <td x-text="b.date"></td>
+                <td class="alloc-r alloc-warn" x-text="fmtWeth(b.wethSpent)"></td>
+                <td class="alloc-r" x-text="fmtUsd2(b.valueUsd)"></td>
+                <td class="alloc-r alloc-val" x-text="fmtRmoney(b.robotmoneyReceived)"></td>
+                <td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" :href="txUrl(b.txHash)" x-text="shortHash(b.txHash)"></a></td>
+              </tr>
+            </template>
+            <tr x-show="!loading && !buybackRows().length">
+              <td colspan="5">No live buyback data available.</td>
+            </tr>
+          </tbody>
+          <tfoot x-show="buybackRows().length" x-cloak>
+            <tr class="alloc-table__total">
+              <td>TOTAL</td>
+              <td class="alloc-r alloc-warn" x-text="fmtWethLabel(buybacks?.totals?.wethSpent)"></td>
+              <td class="alloc-r alloc-val" x-text="fmtUsd2(buybacks?.totals?.valueUsd)"></td>
+              <td class="alloc-r alloc-val" x-text="fmtRmoney(buybacks?.totals?.robotmoneyReceived)"></td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
-      <template x-if="latestLine()">
-        <p class="alp__latest-line" x-text="latestLine()"></p>
-      </template>
-      <template x-if="!latestLine()">
-        <p class="alp__latest-line alp__latest-line--pend" x-text="latestFallback()"></p>
-      </template>
-      <a class="alp__link" x-show="latest" :href="latestHref()">Read this session in full &rarr;</a>
-    </div>
-    <p class="alp__sub alp__sub--after">
-      This portfolio is typed <code>position_actions</code>, so a session
-      publishes a rationale and a set of actions rather than a weight vector.
-      The signed consensus receipt is not readable yet: its public route returns
-      an error on every published session. <sup>8</sup>
-    </p>
-  </section>
-
-  <!-- ── § EXPOSURE ───────────────────────────────────────────────────── -->
-  <section class="alp__sec" id="exposure">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">Exposure</h2>
-    </div>
-    <p class="alp__sub">
-      To put an agent's idle USDC behind this allocation, install the Robot
-      Money skill. It approves and deposits into the contract above, and buys
-      the agent-token sleeve into the agent's own wallet.
-    </p>
-    <div class="alp__cta">
-      <a class="alp__cta-btn" href="/skills">Get the skill</a>
-      <a class="alp__link" href="/smart-contract-risks">How DeFi vaults get exploited</a>
-      <a class="alp__link" href="/disclaimer">Disclaimers</a>
     </div>
   </section>
-
-  <!-- ── NOTES ───────────────────────────────────────────────────────── -->
-  <div class="alp__foot">
-    <p class="alp__eyebrow alp__eyebrow--foot">Notes</p>
-    <ol>
-      <li>
-        Yields are shown before fees. There is no management fee. The only fee
-        is <strong>0.25% when you withdraw</strong>, charged once.
-      </li>
-      <li>
-        Net figures assume a year of holding. The fee is charged once and the
-        advantage accrues per year, so the break-even is
-        <strong><span x-text="breakEvenMonths() == null ? '—' : breakEvenMonths().toFixed(1)"></span> months</strong>.
-        Withdraw sooner and Aave on its own would have done better.
-      </li>
-      <li>
-        Since inception the blend trailed Morpho and Compound individually and
-        beat Aave. Spreading equally is a decision made without knowing which
-        venue will pay most, not a claim to beat all of them.
-      </li>
-      <li>
-        The venue comparison is a dated reference dataset, fixed to
-        <span x-text="reference.asOf"></span>, read by hand from each protocol's
-        public rates. No collector serves it. Smoothed over 7 days because venue
-        rates spike: Aave touched 13.05% for a single day in March. The period
-        table is unsmoothed.
-      </li>
-      <li>
-        These are <strong>average APYs over each window</strong>, not returns
-        received. The track record is <span x-text="trackRecordDays"></span>
-        days. Nothing here is projected forward.
-      </li>
-      <li>
-        NAV per share, period returns and drawdown are not published. Share
-        price has been recorded hourly since March in
-        <code>vault_share_price_history</code>, and no GET route serves the
-        series yet. The spot share price in the Vault section is a single read,
-        not a series.
-      </li>
-      <li>
-        Target weights are seeded and cannot yet be changed through the product:
-        <code>allocation_framework</code> has one writer, the database seed.
-        Drift is reported; rebalancing is not automatic, and no session has
-        moved the weights.
-      </li>
-      <li>
-        The constituents listed under Agent Tokens are the ones the allocation
-        PUBLISHES. They are not the seven the deposit skill buys: the framework
-        seed and the skill's <code>constants.ts</code> are two different lists
-        that overlap on three names. Correcting the seed is a backend change,
-        and until it lands this page renders what the API serves rather than the
-        list it wishes were there.
-      </li>
-      <li>
-        The consensus receipt is assembled and signed per judged session, and
-        its public route currently returns an error for every published session.
-        Until it is fixed, the session page is the readable record.
-      </li>
-    </ol>
-  </div>
 </section>
 
 <style>
-/* /allocation — page-local styles. `alp__` is this page; `a2-hero*` above is
-   the shared hero component, whose offset, size and typeface are pinned in
-   assets/css/components.css. No hex is introduced here that is not already a
-   token in tokens.css. */
-
-.alp {
-  max-width: 1180px;
+.a2 {
+  max-width: 80rem;
   margin: 0 auto;
-  padding: 0 1.5rem 6rem;
+  padding: 0 1.5rem 5rem;
   color: var(--color-text);
 }
 
-.alp__eyebrow {
-  font-family: var(--font-mono); font-size: 0.62rem; font-weight: 500;
-  text-transform: uppercase; letter-spacing: 0.18em;
-  color: var(--color-text-muted); margin: 0;
+.a2-eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
 }
 
-/* ── shared hero component ─────────────────────────────────────────────── */
-/* Full-bleed: breaks out of the .alp content band. The offset, size and
-   typeface of .a2-hero__title come from components.css and are deliberately
-   not restated here. */
+.a2-grad {
+  color: var(--color-text);
+  font-style: normal;
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+
+/* Hero — full-bleed (breaks out of the 1400px .a2 content band) */
 .a2-hero {
   position: relative;
   width: 100vw;
@@ -556,6 +458,8 @@
   display: flex;
   align-items: center;
   overflow: hidden;
+  border: none;
+  border-radius: 0;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-void);
   margin-bottom: 3rem;
@@ -569,362 +473,446 @@
   padding: 2.5rem 1.5rem;
 }
 .a2-hero__viz { position: absolute; inset: 0; z-index: 0; }
-.a2-hero__viz canvas { display: block; width: 100%; height: 100%; }
-/* Hero legibility. The lede sits over a live mesh, and a bright node passing
-   behind a glyph is worse than the average contrast suggests. A FLAT veil, not
-   the bottom-fade gradient this page used to carry: the covenant does not
-   spend a gradient on a scrim, and a uniform one reads the same everywhere. */
 .a2-hero__viz::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: rgba(6, 8, 12, 0.45);
+  background: linear-gradient(to top, var(--color-void), transparent 60%);
+}
+.a2-hero__viz canvas { display: block; width: 100%; height: 100%; }
+.a2-hero__title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 2.5rem;
+  line-height: 1.05;
+  margin: 0 0 1rem;
 }
 .a2-hero__lede {
   color: var(--color-text-muted);
   font-size: 1rem;
   line-height: 1.6;
-  margin: 1rem 0 0;
-  max-width: 44rem;
+  margin: 0;
+  max-width: 34rem;
 }
-.a2-grad {
+
+/* Hero: allocation two-column inner (title/lede at left, the two money
+   figures at right) */
+.alloc-hero__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  width: 100%;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.alloc-hero__text { max-width: 40rem; }
+
+.alloc-aum {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.75rem 1.25rem;
+}
+.alloc-aum__label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-text-muted);
+}
+/* Cyan is the interface hue and never touches a figure: it is a line, not a
+   number. The site's other large mono readout, .rs__gauge-val on /regime,
+   already uses --color-text. These two were the last cyan money figures, and
+   splitting one tile into two would have doubled the violation. */
+.alloc-aum__value {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 700;
   color: var(--color-text);
-  font-style: normal;
+}
+.alloc-aum__sub {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-muted);
+}
+
+/* Two pools, two figures: the protocol-wallet total and vault TVL stack inside
+   the one hero card, each with its own value, timestamp and provenance chips.
+   Stacked rather than side by side on purpose: a row would squeeze the h1 at
+   the 768px breakpoint, and the drift invariant below pins that headline. */
+.alloc-aum__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.alloc-aum__stat + .alloc-aum__stat {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--color-border);
+}
+.alloc-aum__note {
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  margin: 0.85rem 0 0;
+  max-width: 20rem;
+}
+
+/* Section */
+.a2-section { padding-top: 1rem; margin-bottom: 3.5rem; }
+.a2-section__head { margin-bottom: 2rem; }
+.alloc-section--bordered {
+  border-top: 1px solid var(--color-border);
+  padding-top: 3rem;
+}
+.a2-h2 {
   font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 1.75rem;
+  margin: 0.25rem 0 0;
+}
+.a2-section__lede {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  margin: 0.75rem 0 0;
+  max-width: 46rem;
+  line-height: 1.6;
+}
+
+/* Chip (7-day APY) */
+.alloc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  background: var(--color-void);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.375rem 0.75rem;
+}
+.alloc-chip__label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-text-muted);
+}
+.alloc-chip__value {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+/* Stale badge — live vault-economics fetch failed; last-known/null values are
+   shown instead (issue #40, never a fabricated number). */
+.alloc-stale {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-warn);
+  margin: 0.5rem 0 0;
+}
+
+/* Non-live badge — the payload is served by the hermetic demo/CI RPC stub
+   (source:'stub', issue #50); stub numbers are flagged, never shown as live. */
+.alloc-nonlive,
+.alloc-buyback-nonlive {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-warn);
+  margin: 0.5rem 0 0;
+}
+
+/* Hero protocol-wallet feed provenance badges (issue #84): the wallet figure is
+   non-live (stub) or degraded (stale). Distinct classes from the vault badges
+   above so each surface is asserted independently. */
+.alloc-aum__prov {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-warn);
+  margin: 0.35rem 0 0;
+}
+
+/* Unconfigured adapter value — placeholder address, no live balance (issue #50). */
+.alloc-val--unconfigured {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Card + grid */
+.a2-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+.alloc-grid3 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  align-items: stretch;
+}
+.alloc-buckets {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+
+/* Pie card */
+.alloc-pie-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+}
+.alloc-pie {
+  position: relative;
+  width: 100%;
+  height: 280px;
+}
+.alloc-pie canvas { width: 100% !important; height: 100% !important; }
+
+/* Bucket card */
+.alloc-bucket { display: flex; flex-direction: column; gap: 1rem; }
+.alloc-bucket__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.alloc-bucket__info { min-width: 0; }
+.alloc-bucket__pct {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-sans);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-accent);
+  line-height: 1;
+}
+.alloc-bucket__title {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  color: var(--color-text);
+  margin: 0.85rem 0 0.4rem;
+}
+.alloc-bucket__desc {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.alloc-bucket__pie {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+}
+.alloc-bucket__pie canvas { width: 96px !important; height: 96px !important; }
+
+/* Dots */
+.alloc-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.alloc-dot--sm { width: 6px; height: 6px; }
+
+/* Mini legend */
+.alloc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.85rem;
+}
+.alloc-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-muted);
+}
+
+/* Tables */
+.alloc-tablecard { padding: 0; overflow: hidden; }
+.alloc-table__scroll { overflow-x: auto; }
+.alloc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.alloc-table thead tr {
+  background: var(--color-surface-light);
+  border-bottom: 1px solid var(--color-border);
+}
+.alloc-table th {
+  padding: 0.85rem 1.25rem;
+  font-weight: 500;
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-text-muted);
+}
+.alloc-table th.alloc-l, .alloc-table td.alloc-sym, .alloc-table tbody td:first-child { text-align: left; }
+.alloc-table th.alloc-r, .alloc-table td.alloc-r { text-align: right; }
+.alloc-table tbody td {
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.alloc-table tbody tr:first-child td { border-top: none; }
+.alloc-sym { display: flex; align-items: center; gap: 0.5rem; }
+.alloc-table td.alloc-val { color: var(--color-accent); }
+.alloc-table td.alloc-warn { color: var(--color-warn); }
+.alloc-link { color: var(--color-accent); text-decoration: none; }
+.alloc-link:hover { text-decoration: underline; }
+
+/* Table footer band */
+.alloc-tfoot {
+  background: var(--color-void);
+  border-top: 1px solid var(--color-border);
+  padding: 0.85rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.alloc-tfoot__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.alloc-tfoot__label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-text-muted);
+}
+.alloc-tfoot__value {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+.alloc-tfoot__row--sub span {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-muted);
+}
+
+/* Buyback total row */
+.alloc-table--buyback tfoot .alloc-table__total td {
+  border-top: 2px solid var(--color-border);
+  background: var(--color-void);
   font-weight: 700;
 }
 
-/* ── weights in force ──────────────────────────────────────────────────── */
-.alp__force { border-bottom: 1px solid var(--color-border); padding-bottom: 1.8rem; }
-.alp__force-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.alp__force-line { margin: 0.5rem 0 0; color: var(--color-text-soft); font-size: 0.9rem; max-width: 60ch; }
-.alp__chip {
-  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.12em; padding: 0.24rem 0.5rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border-light); color: var(--color-text-muted);
+/* Sleeves */
+.alloc-sleeves__head {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-muted);
+  margin: 2.5rem 0 1rem;
 }
-/* A swarm-managed policy would be marked by a Beam RULE, not by a cyan figure:
-   the chip's text stays a reading grey and only its edge carries the hue.
-   Nothing writes the provenance the chip reads yet, so today it never applies
-   and the chip reads "seeded". */
-.alp__chip--live { border-color: var(--color-accent-line); color: var(--color-text-soft); }
-
-/* the fan — the product story, drawn as mechanism not weight */
-.alp__fan { margin: 1.6rem 0 0; border: 1px solid var(--color-border); background: var(--color-deep); padding: 1rem 0.9rem; }
-.alp__fan svg { display: block; width: 100%; height: auto; }
-.alp__fan-key {
-  display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; margin-top: 0.7rem; padding-top: 0.7rem;
-  border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 0.6rem;
-  text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted);
+.alloc-sleeve { margin-bottom: 1rem; }
+.alloc-sleeve__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
 }
-.alp__fan-key i { display: inline-block; width: 0.55rem; height: 0.55rem; margin-right: 0.4rem; vertical-align: middle; }
-.alp__fan-empty { margin: 0; font-size: 0.85rem; color: var(--color-text-muted); }
-/* Under 640px the fan's 16px labels render at about 6px, so the diagram is
-   replaced by the same rows as a list rather than shrunk past legibility. */
-.alp__fan-dep {
-  margin: 0 0 0.9rem; font-family: var(--font-mono); font-size: 0.66rem;
-  text-transform: uppercase; letter-spacing: 0.13em; color: var(--color-text-muted);
+.alloc-sleeve__name {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--color-text);
 }
-.alp__fan-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.8rem; }
-.alp__fan-list li { display: grid; grid-template-columns: 0.6rem 1fr; gap: 0.75rem; align-items: start; }
-.alp__fan-list li > i { width: 0.6rem; height: 0.6rem; margin-top: 0.42rem; }
-.alp__fan-list b { display: block; font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
-.alp__fan-list span { font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted); }
-.alp__fan-list li.dim b { color: var(--color-text-muted); }
-@media (min-width: 641px) { .alp__fan-dep, .alp__fan-list { display: none; } }
-@media (max-width: 640px) { .alp__fan > svg { display: none; } }
-
-/* the three sleeve marks. Colour carries state, and only state:
-   green = money actually held, slate = a target holding nothing,
-   border = no target at all. */
-.alp__mark--held { background: var(--color-green); }
-.alp__mark--zero { background: var(--color-text-muted); }
-.alp__mark--none { background: var(--color-border-light); }
-
-/* stat rail */
-.alp__stats {
-  display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border);
-  grid-template-columns: repeat(2, 1fr); margin: 1.6rem 0 0;
+.alloc-sleeve__totalwrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
 }
-@media (min-width: 720px) { .alp__stats { grid-template-columns: repeat(4, 1fr); } }
-.alp__stat { background: var(--color-surface); padding: 1rem 1.05rem 1.1rem; }
-.alp__stat dt {
-  font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
-  letter-spacing: 0.14em; color: var(--color-text-muted);
+.alloc-sleeve__total {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-accent);
 }
-.alp__stat dd {
-  margin: 0.55rem 0 0; font-family: var(--font-display); font-size: 1.85rem;
-  line-height: 1; color: var(--color-text); font-variant-numeric: tabular-nums;
+.alloc-sleeve__type {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-muted);
 }
-.alp__stat dd.pos { color: var(--color-green); }
-.alp__stat dd.pend {
-  color: var(--color-text-muted); font-size: 1.05rem; display: flex; align-items: center; gap: 0.45rem;
-}
-/* Beacon is a POINT and nothing else: 6px, marking the two figures that are
-   not there yet. */
-.alp__stat dd.pend::before {
-  content: ""; width: 0.375rem; height: 0.375rem; border-radius: 50%;
-  background: var(--color-beacon); flex: 0 0 auto;
-}
-.alp__stat-sub {
-  display: block; margin-top: 0.45rem; font-family: var(--font-mono); font-size: 0.62rem;
-  color: var(--color-text-muted); line-height: 1.5;
+.alloc-caption {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin: 1.25rem 0 0;
 }
 
-/* provenance badges */
-.alp__prov { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
-.alp__badge {
-  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.12em; padding: 0.28rem 0.5rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border-light); color: var(--color-text-muted);
-}
-.alp__badge--stale, .alp__badge--backfilled { color: var(--color-warm); border-color: var(--color-warm); }
-.alp__cell-badge {
-  display: inline-block; margin-left: 0.5rem; font-size: 0.58rem; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--color-warm);
-}
-
-/* ── sections ──────────────────────────────────────────────────────────── */
-.alp__sec { margin-top: 3rem; }
-.alp__sec-head {
-  display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
-  gap: 0.6rem 1rem; margin-bottom: 0.35rem;
-}
-.alp__h2 {
-  font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
-  font-size: clamp(1.4rem, 3vw, 1.9rem); line-height: 1.05; letter-spacing: -0.01em;
-  margin: 0; color: var(--color-text);
-}
-.alp__sub { margin: 0 0 1.2rem; color: var(--color-text-muted); font-size: 0.86rem; max-width: 64ch; line-height: 1.6; }
-.alp__sub b { color: var(--color-text-soft); font-weight: 500; }
-.alp__sub code {
-  font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
-  background: var(--color-surface); padding: 0.05rem 0.28rem;
-}
-.alp__sub--after { margin: 1.2rem 0 0; }
-.alp__empty { color: var(--color-text-muted); font-size: 0.86rem; margin: 0 0 1.2rem; }
-.alp__ref-badge {
-  font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted);
-  border: 1px solid var(--color-border-light); border-radius: var(--radius); padding: 0.25rem 0.5rem;
-}
-a.alp__ref-badge--link { text-decoration: none; }
-/* An address is case-sensitive (EIP-55 checksums live in its capitalisation),
-   so this badge keeps the characters it was handed. */
-.alp__ref-badge--addr { text-transform: none; letter-spacing: 0.04em; }
-a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--color-text-muted); }
-.alp__link { color: var(--color-accent); text-decoration: none; border-bottom: 1px solid var(--color-accent-line); }
-.alp__link:hover { border-bottom-color: var(--color-accent); }
-
-/* the answer strip: the figures a section exists to give */
-.alp__answer {
-  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 1.6rem 2.75rem;
-  border-left: 2px solid var(--color-green); padding: 0.2rem 0 0.2rem 1.1rem; margin: 0 0 1.4rem;
-}
-.alp__answer-fig {
-  font-family: var(--font-display); font-size: 3.1rem; line-height: 0.9; color: var(--color-green);
-  font-variant-numeric: tabular-nums;
-}
-.alp__answer-fig small {
-  display: block; font-family: var(--font-mono); font-size: 0.6rem; line-height: 1.4;
-  text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); margin-bottom: 0.4rem;
-}
-.alp__answer-fig.ref { color: var(--color-text-soft); font-size: 2.2rem; }
-/* What a depositor keeps is money, so it is Pool green like the figure beside
-   it. It was warm, which is a second saturated accent doing work the label
-   already does. */
-.alp__answer-fig.net { font-size: 2.2rem; }
-.alp__answer-copy { flex: 1 1 19rem; min-width: 0; color: var(--color-text-soft); font-size: 0.9rem; margin: 0; line-height: 1.6; }
-
-/* charts */
-.alp__chart { position: relative; border: 1px solid var(--color-border); background: var(--color-deep); padding: 0.9rem; }
-.alp__chart svg { display: block; width: 100%; height: auto; }
-.alp__chart .grid { stroke: rgba(34, 42, 56, 0.75); stroke-width: 1; }
-.alp__chart .axtxt { font-family: var(--font-mono); font-size: 10px; fill: var(--color-text-muted); }
-.alp__chart .endlbl { font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
-.alp__legend {
-  display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem; margin-top: 0.8rem;
-  font-family: var(--font-mono); font-size: 0.62rem; color: var(--color-text-muted);
-}
-.alp__legend i {
-  display: inline-block; width: 1.1rem; height: 0; border-top-width: 2px;
-  border-top-style: solid; margin-right: 0.45rem; vertical-align: 0.25em;
-}
-.alp__legend i.alp__rule--vault { border-top-color: var(--color-green); }
-.alp__legend i.alp__rule--aave { border-top-color: var(--color-text-muted); border-top-style: dashed; }
-.alp__legend i.band { height: 0.6rem; border: 0; background: rgba(126, 136, 158, 0.28); vertical-align: -1px; }
-.alp__tip {
-  position: absolute; pointer-events: none; opacity: 0; transition: opacity 0.1s;
-  background: var(--color-surface); border: 1px solid var(--color-border-light);
-  padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.65rem;
-  color: var(--color-text); white-space: nowrap; z-index: 2;
-}
-.alp__tip b {
-  display: block; color: var(--color-text-muted); font-weight: 500; margin-bottom: 0.3rem;
-  text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.58rem;
-}
-.alp__tip span { display: block; }
-.alp__tip .alp__tip-soft { color: var(--color-text-soft); }
-.alp__tip i { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.4rem; }
-
-/* the seam banner — the window between the reference series and today */
-.alp__seam {
-  display: flex; gap: 0.6rem; align-items: flex-start; margin-top: 0.9rem; padding: 0.6rem 0.75rem;
-  border: 1px solid var(--color-border-light); background: var(--color-surface);
-  font-size: 0.8rem; color: var(--color-text-soft); line-height: 1.55;
-}
-/* Beacon, as a POINT: a 6px mark, not a glyph set at type size. */
-.alp__seam-ico {
-  flex: 0 0 auto; width: 0.375rem; height: 0.375rem; border-radius: 50%;
-  background: var(--color-beacon); margin-top: 0.42rem;
-}
-
-/* bullet bars: held against target, with the drift on one track */
-.alp__bullets { display: grid; gap: 1.05rem; }
-.alp__bullet-top {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
-  flex-wrap: wrap; margin-bottom: 0.4rem;
-}
-.alp__bullet-name { font-weight: 700; font-size: 0.92rem; color: var(--color-text); }
-.alp__bullet-nums {
-  font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted);
-  font-variant-numeric: tabular-nums;
-}
-.alp__bullet-nums b { color: var(--color-text); font-weight: 500; }
-/* Drift reads in the ordinary text colour, not in Beacon. Beacon is a POINT in
-   the covenant and never a run of type, and a drift is a gap rather than a
-   loss: +5pp on the yield sleeve is what holding the whole book in one sleeve
-   looks like, not an alarm. */
-.alp__bullet-nums .drift { color: var(--color-text-soft); }
-.alp__track {
-  position: relative; height: 1.15rem; background: var(--color-surface-light);
+/* Buyback total-spent chip */
+.alloc-spent {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--color-void);
   border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.75rem;
 }
-.alp__fill { position: absolute; inset: 0 auto 0 0; background: var(--color-green); }
-.alp__track--none { border-style: dashed; background: transparent; }
-/* The tick marks where the target sits on the track. It carried its own
-   percentage above it and that label landed ON the row's figures at every
-   width, desktop and phone: the number is already in "target 95%" one line up,
-   so the mark is just a mark. */
-.alp__target { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--color-text-soft); }
+.alloc-spent__label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-muted);
+}
+.alloc-spent__value {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
 
-/* small multiples: one panel per sleeve, each with its own baseline */
-.alp__sleeves { display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); }
-@media (min-width: 760px) { .alp__sleeves { grid-template-columns: 1fr 1fr; } }
-.alp__sleeve { background: var(--color-surface); padding: 1.1rem 1.15rem 1.25rem; }
-.alp__sleeve-head {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem;
-  margin-bottom: 0.85rem;
+@media (min-width: 768px) {
+  .a2 { padding: 0 2rem 5rem; }
+  .a2-hero__inner { padding: 2.5rem 2rem; }
+  .a2-hero__title { font-size: 3.25rem; }
+  .a2-h2 { font-size: 2rem; }
+  .alloc-buckets { grid-template-columns: 1fr 1fr; }
+  /* flex-start, not center: centring made the taller money card push the
+     headline 8px down, so /allocation's h1 sat at 168px while every other hero
+     sat at 160 — the drift spa.spec's "one size, one typeface and one offset"
+     invariant exists to catch. It has failed on this page since that test
+     landed (#405, 2026-07-31) against a layout from #61 (2026-07-07). The card
+     keeps its centred look via align-self below; only the headline is pinned. */
+  .alloc-hero__inner { flex-direction: row; align-items: flex-start; }
+  .alloc-aum { align-self: center; }
 }
-.alp__sleeve-name {
-  font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
-  letter-spacing: 0.13em; color: var(--color-text);
-}
-.alp__sleeve-w {
-  font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text);
-  font-variant-numeric: tabular-nums;
-}
-.alp__sleeve-w.held0 { color: var(--color-text-muted); }
-.alp__const { display: grid; gap: 0.55rem; }
-.alp__const-row {
-  display: grid; grid-template-columns: 5.5rem 1fr 4.2rem; align-items: center; gap: 0.6rem;
-  font-family: var(--font-mono); font-size: 0.66rem; color: var(--color-text-muted);
-}
-.alp__const-bar { position: relative; height: 0.5rem; background: var(--color-surface-light); }
-.alp__const-bar i { position: absolute; inset: 0 auto 0 0; background: var(--color-green); }
-.alp__const-bar i.tgt { background: var(--color-border-light); }
-.alp__const-val { text-align: right; color: var(--color-text); }
-.alp__const-val.dim { color: var(--color-text-muted); }
 
-/* the vault's three facts */
-.alp__facts {
-  display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border);
-  margin: 1.4rem 0 0;
-}
-@media (min-width: 760px) { .alp__facts { grid-template-columns: repeat(3, 1fr); } }
-.alp__fact { background: var(--color-surface); padding: 1.05rem 1.1rem 1.2rem; }
-.alp__fact dt {
-  font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
-  letter-spacing: 0.14em; color: var(--color-text-muted);
-}
-.alp__fact dd {
-  margin: 0.5rem 0 0; font-family: var(--font-display); font-size: 1.35rem; line-height: 1.15;
-  color: var(--color-text); font-variant-numeric: tabular-nums;
-}
-.alp__fact p { margin: 0.6rem 0 0; font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.55; }
-
-/* the latest recommendation */
-.alp__latest {
-  border: 1px solid var(--color-border); border-left: 2px solid var(--color-accent-line);
-  background: var(--color-surface); padding: 1rem 1.15rem 1.15rem;
-}
-.alp__latest-meta {
-  display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; font-family: var(--font-mono);
-  font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted);
-}
-.alp__latest-date { color: var(--color-text); }
-.alp__latest-flag { color: var(--color-text-soft); }
-.alp__latest-line { margin: 0.7rem 0 0.9rem; color: var(--color-text-soft); font-size: 0.9rem; line-height: 1.6; max-width: 72ch; }
-.alp__latest-line--pend { color: var(--color-text-muted); }
-
-/* tables */
-/* Six and seven columns do not fit a phone. They scroll inside their own
-   container rather than the page, and the hint says so instead of leaving it
-   to be discovered. */
-.alp__scrollhint { display: none; }
-@media (max-width: 900px) {
-  .alp__scrollhint {
-    display: block; margin: 0 0 0.6rem; font-family: var(--font-mono);
-    font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em;
-    color: var(--color-text-muted);
-  }
-}
-.alp__tblwrap { overflow-x: auto; border: 1px solid var(--color-border); }
-.alp__tblwrap--spaced { margin-top: 1.4rem; }
-table.alp__tbl {
-  width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.7rem;
-  min-width: 40rem; font-variant-numeric: tabular-nums;
-}
-table.alp__tbl th {
-  text-align: right; font-size: 0.58rem; font-weight: 500; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted); padding: 0.7rem 0.9rem;
-  border-bottom: 1px solid var(--color-border-light); background: var(--color-surface);
-}
-table.alp__tbl th:first-child, table.alp__tbl td:first-child { text-align: left; }
-table.alp__tbl td {
-  text-align: right; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--color-border);
-  color: var(--color-text-soft);
-}
-table.alp__tbl tbody tr:last-child td { border-bottom: 0; }
-table.alp__tbl tr.tot td { color: var(--color-text); border-top: 1px solid var(--color-border-light); font-weight: 500; }
-table.alp__tbl .idle { color: var(--color-text-muted); }
-/* After tr.tot, and more specific than it: the vault-vs-Aave column stays green
-   on the total row too, which is the row a reader checks first. */
-table.alp__tbl td.alp__gain, table.alp__tbl tr.tot td.alp__gain { color: var(--color-green); }
-
-/* exposure */
-.alp__cta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem 1.6rem; }
-/* The same shape as /skills' own .sk__cta, which is where this button goes:
-   Beam as a LINE (the border) and as label type, never as a filled mass, and
-   never over a figure. The site's shared .btn-primary is a filled cyan block;
-   this page does not add another one. */
-.alp__cta-btn {
-  font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.15em;
-  color: var(--color-accent); background: transparent; border: 1px solid var(--color-accent);
-  border-radius: var(--radius); padding: 0.8rem 1.6rem; text-decoration: none;
-  transition: background-color 0.25s, color 0.25s;
-}
-.alp__cta-btn:hover { background: var(--color-accent); color: var(--color-void); }
-
-/* notes */
-.alp__foot { margin-top: 2.5rem; padding-top: 1.2rem; border-top: 1px solid var(--color-border); }
-.alp__eyebrow--foot { margin-bottom: 0.9rem; }
-.alp__foot ol { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.5rem; }
-.alp__foot li { font-size: 0.78rem; color: var(--color-text-muted); line-height: 1.55; max-width: 78ch; }
-.alp__foot li::marker { font-family: var(--font-mono); font-size: 0.7rem; }
-.alp__foot strong { color: var(--color-text-soft); font-weight: 500; }
-.alp__foot code {
-  font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
-  background: var(--color-surface); padding: 0.05rem 0.28rem;
+@media (min-width: 1024px) {
+  .a2 { padding: 0 2rem 6rem; }
+  .a2-hero__title { font-size: 3.75rem; }
+  .alloc-grid3 { grid-template-columns: 1fr 2fr; }
 }
 </style>

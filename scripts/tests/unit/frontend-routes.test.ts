@@ -50,12 +50,10 @@ describe("frontend route resolution", () => {
   test("resolves static routes to matching fragments", () => {
     expect(viewFor("/")).toBe("/views/home.html");
     expect(viewFor("/allocation")).toBe("/views/allocation.html");
-    // RM-115 retired views/vault.html into /allocation's `#vault` section, so
-    // /vault resolves to the allocation view. It stays an EXPLICIT entry rather
-    // than an absence: the catch-all maps any unknown path to
-    // `/views/<path>.html`, so a bare deletion would 404 a live address.
-    expect(viewFor("/vault")).toBe("/views/allocation.html");
-    expect(viewFor("/allocation/history")).toBe("/views/allocation-history.html");
+    // views/vault.html is still in the tree, so without an explicit entry the
+    // catch-all would resolve /vault straight back to it. The pin is the only
+    // thing retiring the page.
+    expect(viewFor("/vault")).toBe("/views/not-found.html");
     expect(viewFor("/research/channel-divergence")).toBe("/views/research/channel-divergence.html");
   });
 
