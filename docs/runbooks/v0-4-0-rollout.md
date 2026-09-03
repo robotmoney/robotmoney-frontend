@@ -1,9 +1,9 @@
 # v0.4.0 production rollout
 
 > Operator procedure for upgrading production from **v0.3.0** to **v0.4.0**.
-> It was prepared against `main` at **`a7a7bd90`** on 2026-09-01. Re-resolve the
-> target SHA and command output when an RC is cut; this document is not
-> authority for a moving branch.
+> Executed against the **`v0.4.0-rc.1`** candidate on the `releases-0.4.x`
+> branch (the SHA and command output were re-resolved at that RC's cut per
+> §3); this document is not authority for a moving branch.
 
 **Scope:** This runbook contains release-*specific* steps for the v0.4.0 upgrade.
 The foundational release-runbook policy is in [`release-runbooks.md`](../../technical/release-runbooks.md). This document references that policy for generic gates (§4.1–4.9) and only describes what is special about v0.3.0→v0.4.0.
@@ -148,8 +148,8 @@ a database URL manually.
 
 ```bash
 bun run smoke:capture
-bun scripts/upgrades/0.3.0-to-0.4.0/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt
-bun scripts/upgrades/0.3.0-to-0.4.0/stage-rehearsal.ts "$RM_BACKUP_DIR" --emit-receipt
+bun backend/scripts/upgrades/0.3.0-to-0.4.0/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt
+bun backend/scripts/upgrades/0.3.0-to-0.4.0/stage-rehearsal.ts "$RM_BACKUP_DIR" --emit-receipt
 ```
 
 The restore check validates the v0.3.0 starting state. The rehearsal applies
@@ -188,7 +188,7 @@ completed rehearsal, and written rollback authority — §4.7 requirement.
 2. Re-run release preflight against the live replica and compare its baseline:
 
 ```bash
-bun scripts/upgrades/0.3.0-to-0.4.0/preflight.ts --emit-receipt
+bun backend/scripts/upgrades/0.3.0-to-0.4.0/preflight.ts --emit-receipt
 ```
 
 3. Deploy in provider order: database migration, API and every worker lane,
@@ -215,7 +215,7 @@ Maps to `release-runbooks.md` §4.9 (production rollout report). Run these
 SELECT-only checks after deployment:
 
 ```bash
-bun scripts/upgrades/0.3.0-to-0.4.0/postflight.ts --emit-receipt=P8.postflight-prod
+bun backend/scripts/upgrades/0.3.0-to-0.4.0/postflight.ts --emit-receipt=P8.postflight-prod
 bun run --cwd backend swarm-judge:replay -- --limit 10
 ```
 
