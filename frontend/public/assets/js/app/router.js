@@ -6,7 +6,7 @@
 // Known routes map a pathname to a view file. Unknown same-origin paths fall
 // back to the home view so internal links never 404 during early development.
 
-import { NOT_FOUND_VIEW, routeMetaFor, viewFor } from "./routes.js";
+import { NOT_FOUND_VIEW, redirectFor, routeMetaFor, viewFor } from "./routes.js";
 import { applyRouteMeta } from "./seo.js";
 
 const viewEl = () => document.getElementById("view");
@@ -55,6 +55,16 @@ let activeRender = null;
 async function render(pathname) {
   const host = viewEl();
   if (!host) return;
+  // A MOVED path is resolved before anything else, and the address bar is
+  // corrected with it (routes.js's REDIRECTS). `replaceState` rather than
+  // `pushState`: the old address is not somewhere the reader chose to be, so
+  // it must not become a back-button trap that bounces them forward again.
+  // Search and hash ride along so a deep link keeps whatever it carried.
+  const moved = redirectFor(pathname);
+  if (moved) {
+    history.replaceState({}, "", moved + location.search + location.hash);
+    return render(moved);
+  }
   activeRender?.abort();
   const controller = new AbortController();
   activeRender = controller;

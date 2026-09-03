@@ -131,23 +131,57 @@ test("public subject profile renders holdings, wallets, NFT contracts, and struc
   await expectNoBrowserErrors(errors);
 });
 
-test("public subject profile hides the structural-notes panel for a subject with none declared", async ({ page }) => {
+// The optional panels gate on .length rather than rendering an empty section.
+// This used to be asserted against robotmoney-allocation, whose archive
+// manifest is the only one carrying `wallets: []` with no `nft_contracts` key
+// — and RM-115 redirected that address to /allocation/history, because the
+// allocation is a framework rather than a book and this template had nothing
+// to show for it. The two gates are covered separately now: the NFT one off
+// the archive, which is the fixture that has it, and the wallets one off a
+// stubbed API subject, which is the path production actually takes.
+test("public subject profile hides the NFT panel for an archived subject with none declared", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
   await page.route("**/api/swarm/**", (route) =>
     route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
   );
 
-  // robotmoney-allocation's manifest has wallets: [] and no nft_contracts key
-  // at all — structuralNotes()/nftContracts()/trackedWallets() must all gate
-  // their panel on .length rather than rendering an empty section.
-  await page.goto("/swarm/subjects/robotmoney-allocation");
+  // robotmoney-vault's manifest declares one wallet, four structural notes and
+  // no nft_contracts key at all.
+  await page.goto("/swarm/subjects/robotmoney-vault");
 
-  await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Allocation");
+  await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Vault");
   await expect(page.locator(".sv__panel", { hasText: "NFT contracts" })).toHaveCount(0);
+  await expect(page.locator(".sv__panel", { hasText: "Tracked wallets" })).toBeVisible();
+  await expect(page.locator(".sv__panel", { hasText: "Structural notes" })).toBeVisible();
+
+  await expectNoBrowserErrors(errors);
+});
+
+test("public subject profile hides the wallets panel for a subject serving an empty wallet list", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+
+  await page.route("**/api/swarm/**", (route) => {
+    if (/\/api\/swarm\/subjects\/mav$/.test(new URL(route.request().url()).pathname)) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "mav", name: "Mav Treasury", thesis_blurb: "",
+          wallets: [], nft_contracts: [], structural_notes: ["One note."],
+        }),
+      });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  // `mav` has no archive manifest, so nothing can merge wallets back in behind
+  // the served payload.
+  await page.goto("/swarm/subjects/mav");
+
+  await expect(page.locator(".sv__detail-title")).toHaveText("Mav Treasury");
   await expect(page.locator(".sv__panel", { hasText: "Tracked wallets" })).toHaveCount(0);
-  // robotmoney-allocation's manifest DOES declare structural notes, so that
-  // panel should still render — this subject isolates the wallets/NFT gate.
+  await expect(page.locator(".sv__panel", { hasText: "NFT contracts" })).toHaveCount(0);
   await expect(page.locator(".sv__panel", { hasText: "Structural notes" })).toBeVisible();
 
   await expectNoBrowserErrors(errors);
