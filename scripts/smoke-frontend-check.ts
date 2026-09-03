@@ -105,19 +105,10 @@ async function main() {
   ]);
   await checkView("/views/allocation.html", [
     "x-data=\"allocationView()\"",
-    "alp__tbl",                    // vault holdings table (rows reconcile to TVL)
-    "alp__stat",                   // stat rail: 7d yield, vault TVL, and the two pending figures
-    "sleeveStaleLabel(a)",         // per-row stale provenance, carried over from the page this replaced
-    "vaultBackfilled()",           // scheduler catch-up badge (issue #614 AC4)
-    "id=\"vault\"",                // the anchor RM-115 fixes for the implementation section
-  ]);
-  // The allocation's decision log (RM-115). An index over published sessions on
-  // the allocation subject; /swarm/sessions/<uuid> still owns the full receipt.
-  await checkView("/views/allocation-history.html", [
-    "x-data=\"allocationHistoryView()\"",
-    "alh__tbl",     // one row per published session
-    "alh__flag",    // the changed / unchanged column
-    "alh__pending", // NAV over time, which has no route yet
+    "alloc-tablecard",             // vault/wallet holdings table card
+    "alloc-aum__value",            // hero Total AUM (live vault-economics binding, issue #40)
+    "alloc-chip__value",           // 7-day APY chip (live vault-economics binding, issue #40)
+    "walletNonLive()",             // live prop-wallet feed provenance badge (issue #84)
   ]);
   // The wallet-performance charts (walletPerfView(), formerly embedded in
   // allocation.html) live on their own page under the

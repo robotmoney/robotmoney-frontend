@@ -256,19 +256,10 @@ export function registerSwarmView(Alpine) {
       const noun = rows.length === 1 ? "session" : "sessions";
       return `${rows.length} ${noun} · latest ${this.formatDate(latest)}`;
     },
-    // The allocation's decision log lives in the product section, not the
-    // swarm's (RM-115). This used to point at /swarm/subjects/<id>, a
-    // PORTFOLIO profile — concentration over time, a holdings table, tracked
-    // wallets — for a subject with no portfolio at all; that address now
-    // redirects here anyway (routes.js's REDIRECTS).
-    //
-    // Unconditional, where the old form returned "" without a subject or
-    // without sessions. That guard existed to avoid linking to
-    // /swarm/subjects/undefined, and a fixed destination cannot be undefined:
-    // the page exists whether or not this view resolved the subject, and it
-    // renders its own empty state when nothing has published.
     allocationHref() {
-      return "/allocation/history";
+      const subj = this.allocationSubject();
+      if (!subj?.id || !this.allocationSessions().length) return "";
+      return `/swarm/subjects/${encodeURIComponent(subj.id)}`;
     },
     // Sessions this page lists: every published session, including the
     // allocation subject's. They used to be dropped here and only reachable
