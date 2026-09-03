@@ -238,12 +238,12 @@ let backendUrl = "";
 // created it instead of being unreapable on a host shared by the stage smoke,
 // the CI runner and local evals.
 const stackEnvironment = resolveStackEnvironment(process.env);
-// Pin the compose project name when DEMO_PROJECT is set (re-runs reuse/tear down the
+// Pin the compose project name when SMOKE_PROJECT is set (re-runs reuse/tear down the
 // same containers); otherwise the environment-scoped default, e.g.
 // `rm_smoke_stack_9f2a1c4b7d` locally or `rm_ci_stack_…` under Actions.
-// dockerEnv sets DEMO_PROJECT=project either way, so the compose label stays
+// dockerEnv sets SMOKE_PROJECT=project either way, so the compose label stays
 // consistent.
-const project = process.env.DEMO_PROJECT?.trim() || stackProjectName("stack", stackEnvironment);
+const project = process.env.SMOKE_PROJECT?.trim() || stackProjectName("stack", stackEnvironment);
 // A smoke-twin is restored HERE: after `project` (its container and volume carry that
 // project's labels, so smoke:down and smoke:clean scope to them like anything else
 // this boot created) and before `database` below, which needs its URL. The
@@ -430,7 +430,7 @@ const dockerEnv: Record<string, string> = {
   ...smokeEnv.composeEnv,
   COMPOSE_PROJECT_NAME: project,
   COMPOSE_FILE: composeFilesRun,
-  DEMO_PROJECT: project,
+  SMOKE_PROJECT: project,
   // Environment labels (scripts/stack/naming.ts) — docker-compose.smoke.yml
   // stamps these on every service and on the pgdata volume so a reaper can
   // select by label instead of by name substring. Set here as well as in
@@ -592,13 +592,13 @@ function unpatchConsole(): void {
 }
 
 // One line naming the run's identity: the compose project (annotated "(fixed)"
-// when DEMO_PROJECT overrode the environment-scoped default) and the
+// when SMOKE_PROJECT overrode the environment-scoped default) and the
 // environment class + hash that every container label carries. The host ports
 // are DELIBERATELY absent here — they do not exist yet; applyHostPorts() logs
 // them the moment the daemon reports them.
 const fx = (isFixed: boolean) => (isFixed ? " (fixed)" : "");
 log(
-  `project=${project}${fx(Boolean(process.env.DEMO_PROJECT?.trim()))}  ` +
+  `project=${project}${fx(Boolean(process.env.SMOKE_PROJECT?.trim()))}  ` +
     `env=${stackEnvironment.class}/${stackEnvironment.hash}  ` +
     `host ports=(assigned by Docker at start${staticPortMode ? "; api PINNED to :" + STAGE_WEB_PORT + " by --stage" : ""})`,
 );
