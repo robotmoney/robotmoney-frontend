@@ -605,7 +605,32 @@ export function registerAllocationView(Alpine) {
     // waiting on Lucas's vaults, and the page says "pending" rather than
     // inventing a receipt-token symbol for an address that does not exist.
     sleeveHasVault(key) { return key === FIXED_INCOME_KEY && !!this.economics; },
+    // /allocation#vault is a citable anchor: the deposit skill and the swarm's
+    // vault row both point at it. The section it used to name is gone, because
+    // the vault's holdings now sit in the sleeve they implement, so the anchor
+    // moves onto that card rather than being retired out from under two
+    // callers. Keyed on the sleeve, NOT on sleeveHasVault: a dead economics
+    // feed must not take the anchor down with it.
+    sleeveAnchor(key) { return key === FIXED_INCOME_KEY ? "vault" : null; },
     vaultChain() { return VAULT_CHAIN; },
+    // The meta rail, which replaced a four-tile stat block. Two of those tiles
+    // were "not yet published" set in display type, which spent the top of the
+    // page on figures that do not exist; they are one footnote now.
+    vaultsLiveLabel() {
+      const rows = this.sleeves();
+      if (!rows.length) return "—";
+      return `${rows.filter((row) => this.sleeveHasVault(row.key)).length} of ${rows.length}`;
+    },
+    deployedLabel() { return this.fmtUsd2(this.tvlUsd()); },
+    // Concentration, carried over from the retired Vault section. It belongs
+    // beside the holdings it is computed from rather than in a section of its
+    // own two screens below them.
+    concentrationLine() {
+      const pct = this.largestVenuePct();
+      if (pct == null) return "";
+      return `Largest single venue ${this.fmtPct1(pct)}, across ${this.venueCount()} venues. `
+        + "One failing costs whatever share it holds; holding one alone would cost all of it.";
+    },
     vaultToken() { return VAULT_TOKEN; },
     // The 7-day figure the vault reports, and NOT a net one. Every yield on
     // this page is before the 0.25% exit fee (note 1), so calling this "net"

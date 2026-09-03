@@ -12,8 +12,17 @@
      under one heading is what made a $229 vault 0.4% of a "Total AUM" figure
      printed under a heading about the vault.
 
-     Sections: hero (weights in force, asOf, state chip, stat rail, the donut)
-     · What changed · Inside each sleeve · What it pays · Vault · Exposure.
+     Sections: hero (weights in force, asOf, state chip, meta rail, the donut)
+     · What changed · Inside each sleeve · What it pays · Exposure.
+
+     There is no longer a Vault SECTION. Its holdings moved into the sleeve
+     they implement, where they can be compared to the policy instead of read
+     on their own two screens away, and its remaining facts went with them:
+     concentration and the portfolio link into the same disclosure, the address
+     onto the meta rail, fees and caps into Exposure where a reader is actually
+     deciding to deposit. id="vault" moved onto that sleeve's card, because
+     /allocation#vault is cited by the deposit skill and by the swarm's vault
+     row and must keep landing on the vault.
      "What changed" comes before the breakdown because the two questions a
      returning reader has are what the allocation is and whether it moved, and
      both are cheaper to answer than the detail underneath them. The old
@@ -22,7 +31,8 @@
 
      id="allocation" and id="vault" are load-bearing: RM-115 names both as
      citable anchors, and /allocation#vault is the address the swarm's vault
-     row and the deposit skill point at.
+     row and the deposit skill point at. Both still resolve: "allocation" on
+     the weights themselves, "vault" on the sleeve card the vault implements.
 
      Every figure is live except the venue-rate comparison behind "What it
      pays", which is a dated reference dataset carrying a non-live badge and a
@@ -45,9 +55,10 @@
     <div class="a2-hero__inner">
       <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
       <p class="a2-hero__lede">
-        One USDC deposit, allocated across the sleeves below and withdrawable
-        at NAV. This is the recipe, not a book of holdings. It covers depositor
-        capital only: the protocol's own wallets are reported separately.
+        The target weights the swarm holds the book to, what sits inside each
+        sleeve, and how far the vault holding it has drifted from them. This is
+        the recipe, not a book of holdings. It covers depositor capital only:
+        the protocol's own wallets are reported separately.
       </p>
     </div>
   </header>
@@ -62,6 +73,21 @@
       <span class="alp__chip" :class="isSwarmManaged() ? 'alp__chip--live' : ''" x-text="stateChip()">seeded</span>
     </div>
     <p class="alp__force-line" x-show="!loading" x-cloak x-text="unchangedLine()"></p>
+
+    <!-- The meta rail. It replaced a four-tile stat block whose two right-hand
+         tiles read "not yet published" in display type: a figure that does not
+         exist does not earn the top of a page, and it is one footnote below
+         instead. The yield moved to the vault rail on the sleeve it belongs
+         to, which is the only sleeve that has one. -->
+    <div class="alp__meta" x-show="!loading" x-cloak>
+      <span>In force since <b x-text="allocationAsOfLabel()">—</b></span>
+      <span>Vaults live <b x-text="vaultsLiveLabel()">—</b></span>
+      <span>Deployed <b x-text="deployedLabel()">—</b></span>
+      <span>Chain <b x-text="vaultChain()">—</b></span>
+      <a class="alp__meta-addr" :href="vaultHref()" target="_blank" rel="noopener">
+        <span x-text="shortAddress()"></span> on BaseScan
+      </a>
+    </div>
 
     <!-- One deposit, split into the sleeves it is allocated to. A donut, not
          the fan this page carried while it was framed vault-first: the section
@@ -100,32 +126,17 @@
       show. Everything below that does not depend on them still stands.
     </p>
 
-    <!-- Stat rail. Yield and vault TVL are live; the two on the right have no
-         route behind them yet and say so rather than borrowing a number. -->
-    <dl class="alp__stats">
-      <div class="alp__stat">
-        <dt>Yield · 7-day</dt>
-        <dd class="pos" x-text="economics?.apy7d != null ? fmtRate(economics.apy7d) : fmtPct(blendNow())">—</dd>
-        <span class="alp__stat-sub">
-          before fees <sup>1</sup><span x-show="economics?.apy7d == null" x-cloak> · reference series <sup>4</sup></span>
-        </span>
-      </div>
-      <div class="alp__stat">
-        <dt>Vault TVL</dt>
-        <dd x-text="fmtUsd2(tvlUsd())">—</dd>
-        <span class="alp__stat-sub">deposits held · <span x-text="asOfLabel()">—</span></span>
-      </div>
-      <div class="alp__stat">
-        <dt>NAV / share</dt>
-        <dd class="pend">not yet published</dd>
-        <span class="alp__stat-sub">no route over the recorded series <sup>6</sup></span>
-      </div>
-      <div class="alp__stat">
-        <dt>Since inception</dt>
-        <dd class="pend">not yet published</dd>
-        <span class="alp__stat-sub">needs NAV per share <sup>6</sup></span>
-      </div>
-    </dl>
+    <!-- The two figures with no route behind them. They were two tiles set in
+         display type; one line is the honest weight for a number that is not
+         there. Beacon marks it, as a point. -->
+    <p class="alp__pending" x-show="!loading" x-cloak>
+      <i></i>
+      <span>
+        NAV per share and period returns are <b>not yet published</b>: no route
+        serves the recorded share-price series. The share price in the vault's
+        holdings below is a single spot read, not a series. <sup>6</sup>
+      </span>
+    </p>
 
     <!-- Degradation states, carried over in full from the pages this one
          replaces. A page about money that silently assumes fresh data is a
@@ -263,7 +274,7 @@
 
     <div class="alp__cards" x-show="hasTargets()" x-cloak>
       <template x-for="s in sleeves()" :key="s.key">
-        <div class="alp__card">
+        <div class="alp__card" :id="sleeveAnchor(s.key)">
           <div class="alp__card-top">
             <span class="alp__card-name">
               <i :style="sleeveSwatch(s)"></i><b x-text="s.name"></b>
@@ -389,12 +400,22 @@
                     <span x-text="sharesLabel()">—</span>
                     <span x-text="asOfLabel()">—</span>
                   </div>
+                  <!-- Concentration, carried over from the retired Vault
+                       section. It is computed from the balances in the table
+                       directly above it, which is where it belongs: it was two
+                       screens away from them. -->
+                  <p class="alp__hold-note" x-show="concentrationLine()" x-cloak x-text="concentrationLine()"></p>
                   <p class="alp__vd" :class="onTarget(s.key) ? 'on' : 'off'">
                     <i></i>
                     <span>
                       <b x-text="onTarget(s.key) ? 'On target.' : trackingErrorLabel(s.key) + '.'"></b>
                       <span x-text="trackingErrorLine(s.key)"></span>
                     </span>
+                  </p>
+                  <p class="alp__hold-note">
+                    The vault is a book of holdings, so it keeps a portfolio page of its own:
+                    <a class="alp__link" :href="vaultSubjectHref">the swarm's record for the vault</a>
+                    carries its sessions and its holdings over time.
                   </p>
                 </div>
               </details>
@@ -484,69 +505,6 @@
     </p>
   </section>
 
-  <!-- ── § VAULT ──────────────────────────────────────────────────────────
-       id="vault" is load-bearing: /allocation#vault is the anchor RM-115 fixes
-       for the implementation section. -->
-  <section class="alp__sec" id="vault">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">Vault</h2>
-      <a class="alp__ref-badge alp__ref-badge--link alp__ref-badge--addr" :href="vaultHref()" target="_blank" rel="noopener">
-        <span x-text="shortAddress()"></span> on BaseScan
-      </a>
-    </div>
-    <p class="alp__sub">
-      The contract behind the fixed-income sleeve: an ERC-4626 vault on Base
-      holding USDC across three lending venues. Its holdings are shown where
-      they can be compared to something, under the sleeve above; what is left
-      here is what belongs to the contract rather than to any one venue. The 5%
-      agent-token sleeve is bought at deposit time by the skill and lands in the
-      depositor's wallet, so the vault never holds it.
-    </p>
-
-    <p class="alp__reconcile" x-show="!loading" x-cloak>
-      <span x-text="venueCount()">—</span> lending venues plus idle USDC add up
-      to <b x-text="fmtUsd2(tvlUsd())">—</b>, read
-      <span x-text="asOfLabel()">—</span>. The rows themselves, with each
-      venue's balance and its drift from the policy, are under
-      <a class="alp__link" href="#inside-each-sleeve">Conservative DeFi Yield</a>
-      above, next to the weights they are measured against.
-    </p>
-
-    <dl class="alp__facts">
-      <div class="alp__fact">
-        <dt>Share price · spot</dt>
-        <dd x-text="sharesLabel()">—</dd>
-        <p>
-          One read, taken <span x-text="asOfLabel()">—</span>. The recorded
-          series behind NAV per share is not served yet. <sup>6</sup>
-        </p>
-      </div>
-      <div class="alp__fact">
-        <dt>Largest single venue</dt>
-        <dd x-text="fmtPct1(largestVenuePct())">—</dd>
-        <p>
-          Spread across <span x-text="venueCount()">—</span> venues. One failing
-          costs whatever share it holds; holding one alone would cost all of it.
-        </p>
-      </div>
-      <div class="alp__fact">
-        <dt>Fees and caps</dt>
-        <dd>0.25% on exit</dd>
-        <p>
-          There is no management fee. Deposits are capped while the vault is
-          young: <span x-text="capsLine()"></span>. The figure above is small
-          because of the cap, not because the vault is closed.
-        </p>
-      </div>
-    </dl>
-
-    <p class="alp__sub alp__sub--after">
-      The vault is a book of holdings, so it keeps a portfolio page of its own:
-      <a class="alp__link" :href="vaultSubjectHref">the swarm's record for the vault</a>
-      carries its sessions and its holdings over time.
-    </p>
-  </section>
-
   <!-- ── § EXPOSURE ───────────────────────────────────────────────────── -->
   <section class="alp__sec" id="exposure">
     <div class="alp__sec-head">
@@ -554,8 +512,11 @@
     </div>
     <p class="alp__sub">
       To put an agent's idle USDC behind this allocation, install the Robot
-      Money skill. It approves and deposits into the contract above, and buys
-      the agent-token sleeve into the agent's own wallet.
+      Money skill. It approves and deposits into the vault above, and buys the
+      agent-token sleeve into the agent's own wallet. There is no management
+      fee and <b>0.25% is charged on the way out</b>, once. Deposits are capped
+      while the vault is young: <span x-text="capsLine()"></span>. The size
+      above is small because of the cap, not because the vault is closed.
     </p>
     <div class="alp__cta">
       <a class="alp__cta-btn" href="/skills">Get the skill</a>
@@ -718,8 +679,15 @@
   padding: 1.4rem 1.2rem; display: grid; gap: 1.4rem 2rem; align-items: center;
   grid-template-columns: 1fr;
 }
-@media (min-width: 680px) { .alp__split { grid-template-columns: 240px 1fr; } }
-.alp__donut { justify-self: center; width: 100%; max-width: 240px; }
+/* The legend is a FIGURE legend, not prose, and it is tracked to the donut it
+   keys: let it take the full width of a wide viewport and the percentage ends
+   up a thousand pixels from the name it belongs to, which is a lookup rather
+   than a reading. The figure gets the proportions it was designed at and the
+   band ends where the figure ends. */
+@media (min-width: 680px) {
+  .alp__split { grid-template-columns: 300px minmax(0, 42rem); justify-content: start; }
+}
+.alp__donut { justify-self: center; width: 100%; max-width: 300px; }
 .alp__donut svg { display: block; width: 100%; height: auto; }
 .alp__legend-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.85rem; }
 .alp__legend-list li { display: grid; grid-template-columns: 0.7rem 1fr; gap: 0.8rem; align-items: start; }
@@ -743,35 +711,32 @@
 .alp__split { position: relative; }
 .alp__tip--alloc { white-space: normal; max-width: 15rem; }
 
-/* stat rail */
-.alp__stats {
-  display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border);
-  grid-template-columns: repeat(2, 1fr); margin: 1.6rem 0 0;
+/* The meta rail that replaced it: one line of facts, none of which is a
+   figure that does not exist yet. */
+.alp__meta {
+  display: flex; flex-wrap: wrap; gap: 0.45rem 2rem; margin: 1.1rem 0 0;
+  font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted);
 }
-@media (min-width: 720px) { .alp__stats { grid-template-columns: repeat(4, 1fr); } }
-.alp__stat { background: var(--color-surface); padding: 1rem 1.05rem 1.1rem; }
-.alp__stat dt {
-  font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
-  letter-spacing: 0.14em; color: var(--color-text-muted);
+.alp__meta b { color: var(--color-text); font-weight: 500; text-transform: none; letter-spacing: 0.02em; }
+/* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
+a.alp__meta-addr {
+  color: var(--color-text-muted); text-decoration: none; text-transform: none;
+  letter-spacing: 0.04em; border-bottom: 1px solid var(--color-border-light);
 }
-.alp__stat dd {
-  margin: 0.55rem 0 0; font-family: var(--font-display); font-size: 1.85rem;
-  line-height: 1; color: var(--color-text); font-variant-numeric: tabular-nums;
+a.alp__meta-addr:hover { color: var(--color-text); border-bottom-color: var(--color-text-muted); }
+
+/* The two figures with no route behind them, as one line rather than two
+   tiles. Beacon marks it, as a POINT and nothing else. */
+.alp__pending {
+  display: flex; gap: 0.6rem; align-items: flex-start; margin: 1.2rem 0 0;
+  font-size: 0.82rem; color: var(--color-text-muted); line-height: 1.55;
 }
-.alp__stat dd.pos { color: var(--color-green); }
-.alp__stat dd.pend {
-  color: var(--color-text-muted); font-size: 1.05rem; display: flex; align-items: center; gap: 0.45rem;
+.alp__pending i {
+  flex: 0 0 auto; width: 0.375rem; height: 0.375rem; border-radius: 50%;
+  background: var(--color-beacon); margin-top: 0.45rem;
 }
-/* Beacon is a POINT and nothing else: 6px, marking the two figures that are
-   not there yet. */
-.alp__stat dd.pend::before {
-  content: ""; width: 0.375rem; height: 0.375rem; border-radius: 50%;
-  background: var(--color-beacon); flex: 0 0 auto;
-}
-.alp__stat-sub {
-  display: block; margin-top: 0.45rem; font-family: var(--font-mono); font-size: 0.62rem;
-  color: var(--color-text-muted); line-height: 1.5;
-}
+.alp__pending b { color: var(--color-text-soft); font-weight: 500; }
 
 /* provenance badges */
 .alp__prov { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
@@ -814,9 +779,6 @@
   border: 1px solid var(--color-border-light); border-radius: var(--radius); padding: 0.25rem 0.5rem;
 }
 a.alp__ref-badge--link { text-decoration: none; }
-/* An address is case-sensitive (EIP-55 checksums live in its capitalisation),
-   so this badge keeps the characters it was handed. */
-.alp__ref-badge--addr { text-transform: none; letter-spacing: 0.04em; }
 a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--color-text-muted); }
 .alp__link { color: var(--color-accent); text-decoration: none; border-bottom: 1px solid var(--color-accent-line); }
 .alp__link:hover { border-bottom-color: var(--color-accent); }
@@ -981,30 +943,15 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 .alp__hold[open] > summary { border-bottom: 1px solid var(--color-border); }
 .alp__hold[open] .alp__off i { display: inline-block; transform: rotate(180deg); }
 .alp__hold-body { padding: 0.85rem 0.8rem 0.95rem; }
+.alp__hold-note {
+  margin: 0.8rem 0 0; padding-top: 0.7rem; border-top: 1px solid var(--color-border);
+  font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.55;
+}
 .alp__hold-foot {
   display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.3rem 1rem;
   margin-top: 0.7rem; font-family: var(--font-mono); font-size: 0.6rem;
   color: var(--color-text-muted);
 }
-.alp__reconcile { margin: 0; font-size: 0.86rem; color: var(--color-text-muted); line-height: 1.6; }
-.alp__reconcile b { color: var(--color-text-soft); font-weight: 500; }
-
-/* the vault's three facts */
-.alp__facts {
-  display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border);
-  margin: 1.4rem 0 0;
-}
-@media (min-width: 760px) { .alp__facts { grid-template-columns: repeat(3, 1fr); } }
-.alp__fact { background: var(--color-surface); padding: 1.05rem 1.1rem 1.2rem; }
-.alp__fact dt {
-  font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
-  letter-spacing: 0.14em; color: var(--color-text-muted);
-}
-.alp__fact dd {
-  margin: 0.5rem 0 0; font-family: var(--font-display); font-size: 1.35rem; line-height: 1.15;
-  color: var(--color-text); font-variant-numeric: tabular-nums;
-}
-.alp__fact p { margin: 0.6rem 0 0; font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.55; }
 
 /* the latest recommendation */
 .alp__latest {

@@ -192,10 +192,11 @@ test("the product sheet never requests the house book (RM-115, RM-103)", async (
 
 // ── the live bindings ───────────────────────────────────────────────────────
 
-// The holdings table moved out of #vault and into the sleeve that owns it,
-// merged with the policy it is measured against. Two tables made the reader
-// join four identical row labels by eye; #vault keeps the facts that belong to
-// the contract rather than to any one venue.
+// The holdings table moved out of a Vault SECTION and into the sleeve that
+// owns it, merged with the policy it is measured against. Two tables made the
+// reader join four identical row labels by eye, two screens apart. The section
+// is gone and id="vault" moved onto that card, because /allocation#vault is
+// cited by the deposit skill and by the swarm's vault row.
 test("the sleeve's vault table binds every adapter to the golden, and reconciles to TVL", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   const vault = goldenVault();
@@ -237,9 +238,8 @@ test("the sleeve's vault table binds every adapter to the golden, and reconciles
   await expect(rows).toContainText([/Aave V3 USDC/, /Gauntlet USDC Prime/, /Compound III USDC/, /Sky/, /Vault TVL/]);
   await expect(card.locator("tr.tot")).toContainText(usd2(vault.tvlUsd));
 
-  // The rail's live figure comes from the same payload.
-  await expect(page.locator(".alp__stat", { hasText: "Vault TVL" }).locator("dd"))
-    .toHaveText(usd2(vault.tvlUsd));
+  // The meta rail's live figure comes from the same payload.
+  await expect(page.locator(".alp__meta")).toContainText(`Deployed ${usd2(vault.tvlUsd)}`);
   await expectNoBrowserErrors(errors);
 });
 
@@ -438,15 +438,26 @@ test("the two figures with no route behind them render an explicit pending state
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  const pending = page.locator(".alp__stat dd.pend");
-  await expect(pending).toHaveCount(2);
-  await expect(pending.first()).toHaveText("not yet published");
-  await expect(page.locator(".alp__stat", { hasText: "NAV / share" })).toContainText("recorded series");
-  await expect(page.locator(".alp__stat", { hasText: "Since inception" })).toContainText("needs NAV per share");
+  // One line, not two tiles set in display type. A figure that does not exist
+  // does not earn the top of a page, and the Beacon point is what marks it.
+  const pending = page.locator(".alp__pending");
+  await expect(pending).toHaveCount(1);
+  await expect(pending).toContainText("not yet published");
+  await expect(pending).toContainText("no route serves the recorded share-price series");
+  const dot = await pending.locator("i").evaluate((el) => ({
+    bg: getComputedStyle(el).backgroundColor,
+    size: Math.max(el.getBoundingClientRect().width, el.getBoundingClientRect().height),
+  }));
+  expect(dot.bg).toBe("rgb(255, 122, 41)");
+  expect(dot.size).toBeGreaterThan(0);
+  expect(dot.size, "Beacon is a POINT, capped about 12px").toBeLessThanOrEqual(12);
+
   // The spot share price IS served, and is shown as a spot read rather than
-  // stretched into the series it is not.
+  // stretched into the series it is not. It sits with the holdings it belongs
+  // to now, not in a facts panel of its own.
   const vault = goldenVault();
-  await expect(page.locator(".alp__fact", { hasText: "Share price" }))
+  await page.locator(".alp__card details.alp__hold > summary").first().click();
+  await expect(page.locator(".alp__hold-foot").first())
     .toContainText(`$${Number(vault.sharePrice).toFixed(4)}`);
   await expectNoBrowserErrors(errors);
 });
@@ -479,7 +490,7 @@ test("a stale vault feed is flagged, and every degraded row names its observatio
   await page.locator(".alp__card details.alp__hold > summary").first().click();
   const badges = page.locator(".alp__card .alp__cell-badge", { hasText: /^stale \(/ });
   await expect(badges.first()).toBeVisible();
-  await expect(page.locator(".alp__stat", { hasText: "Vault TVL" })).toContainText("(stale)");
+  await expect(page.locator(".alp__hold-foot").first()).toContainText("(stale)");
 });
 
 test("a scheduler catch-up is flagged as backfilled, distinct from stale and from stub (issue #614 AC4)", async ({ page }) => {
@@ -557,13 +568,13 @@ for (const { feed, stub } of ABSENT_FEEDS) {
 
     // The headline and every section still render.
     await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
-    for (const id of ["#allocation", "#inside-each-sleeve", "#what-it-pays", "#vault", "#latest-recommendation", "#exposure"]) {
+    for (const id of ["#allocation", "#what-changed", "#inside-each-sleeve", "#what-it-pays", "#latest-recommendation", "#exposure"]) {
       await expect(page.locator(id)).toBeVisible();
     }
 
     if (feed === "vault") {
       await expect(page.locator(".alp__badge", { hasText: "Vault feed unavailable" })).toBeVisible();
-      await expect(page.locator(".alp__stat", { hasText: "Vault TVL" }).locator("dd")).toHaveText("—");
+      await expect(page.locator(".alp__meta")).toContainText("Deployed —");
     }
     if (feed === "framework") {
       await expect(page.locator(".alp__badge", { hasText: "Target weights unavailable" })).toBeVisible();
@@ -660,15 +671,6 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
       }
     }
 
-    // The ::before markers on the two pending tiles are Beacon points and are
-    // measured separately, because a pseudo-element has no element to query.
-    for (const el of Array.from(root.querySelectorAll<HTMLElement>(".alp__stat dd.pend"))) {
-      const cs = getComputedStyle(el, "::before");
-      const size = Math.max(parseFloat(cs.width) || 0, parseFloat(cs.height) || 0);
-      if (cs.backgroundColor === BEACON && size > 12) out.push(`beacon point ${size}px`);
-      if (cs.backgroundColor !== BEACON) out.push(`pending marker is not beacon: ${cs.backgroundColor}`);
-      if (size === 0) out.push("pending marker renders at 0px");
-    }
     return out;
   }, CATEGORICAL_RGB);
 
