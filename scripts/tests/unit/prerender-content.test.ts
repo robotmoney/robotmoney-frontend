@@ -22,6 +22,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { viewFor } from "../../../frontend/public/assets/js/app/routes.js";
+import { publishableFragment } from "../../lib/prerender-view.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const publicDir = join(repoRoot, "frontend/public");
@@ -76,16 +77,18 @@ describe("prerendered routes carry their own content", () => {
     }
   });
 
-  test("each route inlines its OWN fragment, exactly once", () => {
+  test("each route inlines its OWN fragment, exactly once", async () => {
     // Exactly once matters in both directions: zero means the route regressed to
     // a shell, twice means the reader (and any LLM indexing us) sees the page
-    // duplicated. Comparing against the real fragment body, resolved through the
-    // client router's own viewFor(), also catches a route being prerendered with
-    // some other page's content.
+    // duplicated. Resolving the fragment through the client router's own
+    // viewFor() also catches a route being prerendered with another page's
+    // content, which is the failure mode of ever reimplementing that table.
+    //
+    // Compared against publishableFragment() imported from the module the
+    // prerender itself uses, so the published-form contract lives in one place.
+    // What that transform DOES is asserted separately below, on outcomes.
     for (const route of ROUTES) {
-      const body = readFileSync(join(publicDir, viewFor(route).replace(/^\//, "")), "utf8")
-        .replace(/<!--[\s\S]*?-->/g, "")
-        .trim();
+      const body = await publishableFragment(readFileSync(join(publicDir, viewFor(route).replace(/^\//, "")), "utf8"));
       const html = htmlFor(route);
       expect(html.split(body).length - 1, `${route} does not inline ${viewFor(route)} exactly once`).toBe(1);
     }
@@ -134,6 +137,19 @@ describe("what gets inlined is safe to inline", () => {
       const inlined = html.slice(html.indexOf('<main id="view">'), html.indexOf("</main>"));
       expect(inlined.includes("<!--"), `${route} published a source comment`).toBe(false);
     }
+  });
+
+  test("hydration-only elements are not published as page content", () => {
+    // /regime carries a staleness banner behind `x-show="isStale()" x-cloak`, and
+    // /regime's loading line behind `x-show="loading"`. Both were reaching
+    // crawlers as page text: an LLM reading us on a healthy day was told the
+    // regime data may be stale. An element the app marks as invisible-until-
+    // evaluated is not content for a reader that never evaluates it.
+    const regime = htmlFor("/regime");
+    expect(regime).not.toContain("Regime data may be stale");
+    expect(regime).not.toContain("Loading the regime dashboard");
+    // ...and the page it belongs to is still substantially there.
+    expect(readableChars(regime)).toBeGreaterThan(5000);
   });
 
   test("no page grows a second <html>, <body> or doctype from its fragment", () => {

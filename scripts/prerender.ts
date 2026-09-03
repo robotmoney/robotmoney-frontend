@@ -3,6 +3,7 @@ import { viewFor } from "../frontend/public/assets/js/app/routes.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { ORIGIN as API_ORIGIN, endpointsForRoute, openApiPath } from "./lib/agent-endpoints.ts";
+import { publishableFragment } from "./lib/prerender-view.ts";
 
 const ORIGIN = "https://robotmoney.network";
 
@@ -107,7 +108,7 @@ const VIEW_MOUNT = '<main id="view"></main>';
 // This is the whole reason a prerender is worth running. Without it a
 // non-browser reader gets nav, footer and legal boilerplate on every route: 788
 // characters on /allocation, 772 on /regime, not a single figure, and the two
-// pages indistinguishable apart from the <title>. 27 of the 37 routes in
+// pages indistinguishable apart from the <title>. 28 of the 38 routes in
 // sitemap.xml were in that state, including the home page and every blog post.
 // Only /docs read correctly, because backend/src/api/static.ts's docsShell
 // already does this one thing at request time for that one subtree. This
@@ -119,7 +120,7 @@ const VIEW_MOUNT = '<main id="view"></main>';
 // content. It is pure string logic with no DOM dependency, same as `metaFor`.
 //
 // Safe to inline because the fragments are, by house convention, script-free
-// and carry no <html>/<body>/<!doctype>. Verified over all 37 sitemap routes;
+// and carry no <html>/<body>/<!doctype>. Verified over every sitemap route;
 // prerenderView throws rather than silently shipping a shell if that changes.
 // The docs fragments do contain <main>, which nests, but that is exactly what
 // docsShell already ships in production today, so it is not a new condition.
@@ -129,16 +130,10 @@ async function prerenderView(html: string, route: string): Promise<string> {
   if (!(await fragment.exists())) {
     throw new Error(`prerender: ${route} resolves to ${viewPath}, which is not in the assembly`);
   }
-  // Comments are dropped from the BUILT copy only; the source fragment keeps
-  // them. Three reasons, in order of weight: the house-style banners in these
-  // files ("NO <script>, NO custom Alpine factories, NO gradients") are internal
-  // engineering notes with no business in a published page; they are 4.4% of the
-  // fragment bytes now shipped on every route; and several of them QUOTE tags
-  // ("inline <style>"), which a naive text extractor pairs with the real closing
-  // tag further down and swallows the whole page between. A real HTML parser is
-  // untroubled by that, but plenty of the readers this change exists to serve
-  // are not real HTML parsers. No conditional comments exist in views/.
-  const body = (await fragment.text()).replace(/<!--[\s\S]*?-->/g, "").trim();
+  // See scripts/lib/prerender-view.ts for what this drops and why: source
+  // comments, and the elements the codebase itself marks as not-content-until-
+  // hydrated.
+  const body = await publishableFragment(await fragment.text());
   if (/<script[\s>]/i.test(body)) {
     // An inlined <script> would run during initial parse, before main.js
     // registers the Alpine factories it may depend on. Refuse rather than ship
