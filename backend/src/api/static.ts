@@ -45,12 +45,24 @@ function shellResponse(body: BodyInit, contentType?: string): Response {
 // Telegram, Discord) read the RAW response and never run seo.js, so answering
 // them with the home-page shell made every shared link unfurl as the home page
 // — with og:url pointing at https://robotmoney.net/ rather than the page
-// (issue #480). The home-page shell stays the fallback for client routes that
-// are not in the sitemap and for an un-assembled STATIC_DIR, so nothing 404s
-// that used to resolve.
+// (issue #480).
+//
+// The fallback for a client route that has no prerendered file of its own
+// (a dynamic id route, or one genuinely outside the sitemap) is `_shell.html`,
+// not `index.html`: since the prerender began inlining each route's view
+// fragment at build time, `index.html` carries the HOME PAGE's own body, so
+// falling back to it would answer e.g. /swarm/members/<id> with the front
+// page at 200 (issue #870). `_shell.html` is the same shell with an empty
+// view mount, which is what the client router expects to hydrate into. An
+// un-assembled STATIC_DIR has no `_shell.html`; there `index.html` is still
+// the un-inlined source shell, so the old fallback is correct for it.
 function routeShell(staticDir: string, safePath: string): Promise<ReturnType<typeof Bun.file>> {
   const prerendered = Bun.file(join(staticDir, safePath, "index.html"));
-  return prerendered.exists().then((ok) => (ok ? prerendered : Bun.file(join(staticDir, "index.html"))));
+  return prerendered.exists().then(async (ok) => {
+    if (ok) return prerendered;
+    const bare = Bun.file(join(staticDir, "_shell.html"));
+    return (await bare.exists()) ? bare : Bun.file(join(staticDir, "index.html"));
+  });
 }
 
 // Docs are authored as SPA fragments, but they are also a published entrypoint
