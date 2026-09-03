@@ -3,7 +3,7 @@
 // every release archive.
 //
 // `frontend/public/skills/swarm-onboarding/SKILL.md` is served over the public
-// web (https://robotmoney.net/skills/swarm-onboarding/SKILL.md) to people whose
+// web (https://robotmoney.network/skills/swarm-onboarding/SKILL.md) to people whose
 // very next step is to generate, with the binary they just installed, the
 // signing key their member's entire public record rests on. It used to say
 // `curl -fsSL <url> | tar xz && install -m 755 rmpc ...`: nothing between the
