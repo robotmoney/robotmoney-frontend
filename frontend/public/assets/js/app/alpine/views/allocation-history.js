@@ -189,6 +189,13 @@ export function registerAllocationHistoryView(Alpine) {
       if (!Number.isFinite(submitted) || !Number.isFinite(active)) return "—";
       return `${submitted} / ${active}`;
     },
+    // The one thing the aggregator's rationale carries that no other column
+    // does. It rides on the quorum cell as a figure rather than inside a
+    // sentence that restates the rest of the row.
+    confidenceLabel(s) {
+      const c = s?.swarmRecommendation?.meanConfidence;
+      return Number.isFinite(Number(c)) ? `${Math.round(Number(c) * 100)}%` : "";
+    },
 
     // The weight vector a session published, or null. `robotmoney-allocation`
     // is typed `position_actions`, so meanTakeWeights() never runs for it and
@@ -206,19 +213,27 @@ export function registerAllocationHistoryView(Alpine) {
       return vals.length ? vals.map((v) => Math.round(v)).join(" / ") : null;
     },
 
-    // What the session recommended, in one cell. A vector where there is one,
-    // otherwise the aggregator's own rationale, otherwise the load-bearing
-    // actions, and an explicit blank state where a session published none of
-    // the three. Never a fabricated vector.
+    // What the session recommended, in one cell: a vector where there is one,
+    // otherwise the load-bearing ACTIONS, otherwise the aggregator's rationale,
+    // and an explicit blank state where a session published none of the three.
+    // Never a fabricated vector.
+    //
+    // Actions before rationale, the same precedence swarm.js's
+    // recommendation() uses, because on this portfolio the rationale is
+    // generated boilerplate that restates the row it sits in: "Majority stance
+    // is constructive (3 of 5 submitted takes), mean confidence 0.57, regime
+    // composite at the 66th percentile". Stance, quorum and percentile are all
+    // already columns, so a log keyed on it printed fifty near-identical cells
+    // and buried the one thing that differs. Every published session on file
+    // carries actions; the rationale is the fallback for one that does not.
     proposedLine(s) {
       const weights = this.sessionWeights(s);
       if (weights) return weights;
       const rec = s?.swarmRecommendation;
       if (!rec) return "";
-      if (rec.rationale) return String(rec.rationale);
       const acts = (Array.isArray(rec.actions) ? rec.actions : []).filter((a) => a && a.action);
       if (acts.length) return acts.map((a) => `${a.action} ${a.token}`).join(" · ");
-      return "";
+      return rec.rationale ? String(rec.rationale) : "";
     },
     proposedIsWeights(s) { return this.sessionWeights(s) != null; },
 

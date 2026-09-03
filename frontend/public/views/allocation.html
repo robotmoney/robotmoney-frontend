@@ -428,10 +428,14 @@
       <div class="alp__latest-meta">
         <span class="alp__latest-date" x-text="latestDate()">—</span>
         <span x-show="latestQuorum()" x-text="latestQuorum()"></span>
+        <span x-show="latestConfidence()" x-text="latestConfidence()"></span>
         <span class="alp__latest-flag">no weight change</span>
       </div>
       <template x-if="latestLine()">
         <p class="alp__latest-line" x-text="latestLine()"></p>
+      </template>
+      <template x-if="latestRationale()">
+        <p class="alp__latest-why" x-text="latestRationale()"></p>
       </template>
       <template x-if="!latestLine()">
         <p class="alp__latest-line alp__latest-line--pend" x-text="latestFallback()"></p>
@@ -866,6 +870,11 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 .alp__latest-flag { color: var(--color-text-soft); }
 .alp__latest-line { margin: 0.7rem 0 0.9rem; color: var(--color-text-soft); font-size: 0.9rem; line-height: 1.6; max-width: 72ch; }
 .alp__latest-line--pend { color: var(--color-text-muted); }
+/* The aggregator's sentence, under the actions it explains. */
+.alp__latest-why {
+  margin: -0.5rem 0 0.9rem; color: var(--color-text-muted); font-size: 0.82rem;
+  line-height: 1.6; max-width: 72ch;
+}
 
 /* tables */
 /* Six and seven columns do not fit a phone. They scroll inside their own
