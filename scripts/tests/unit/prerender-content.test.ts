@@ -144,8 +144,22 @@ describe("_shell.html, the fallback for routes that cannot be prerendered", () =
     expect(html).not.toContain("<!--AGENT-DATA-->");
   });
 
-  test("robots.txt keeps it out of the index", () => {
-    expect(readFileSync(join(publicDir, "robots.txt"), "utf8")).toContain("Disallow: /_shell.html");
+  test("robots.txt keeps it out of the index, under User-agent: *", () => {
+    // A Disallow only binds the group it appears under. Assert the line sits
+    // in the * group specifically, not merely that the literal string exists
+    // somewhere in the file (it could sit under a single crawler's group and
+    // bind nothing else).
+    const robotsTxt = readFileSync(join(publicDir, "robots.txt"), "utf8");
+    const starGroup = robotsTxt.split(/^User-agent: /m).find((block) => block.startsWith("*"));
+    expect(starGroup).toBeDefined();
+    expect(starGroup).toContain("Disallow: /_shell.html");
+  });
+
+  test("carries a noindex meta of its own, on top of robots.txt", () => {
+    // It is directly fetchable at /_shell.html regardless of robots.txt, so a
+    // crawler that already has the URL needs the page itself to say no.
+    const html = readFileSync(shellPath, "utf8");
+    expect(html).toContain('<meta name="robots" content="noindex"');
   });
 });
 

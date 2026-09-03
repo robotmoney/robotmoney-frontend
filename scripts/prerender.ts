@@ -180,8 +180,15 @@ function shellFor(route: string): string {
 // neither half is broken on its own.
 //
 // Home's metadata, because a fallback has no route of its own and canonical
-// pointing at / is what consolidates these URLs today.
-const bareShell = shellFor("/");
+// pointing at / is what consolidates these URLs today. Stamped noindex on top
+// of robots.txt's Disallow, not instead of it: it is reachable directly at
+// /_shell.html (static.ts serves any dotted path as an ordinary file), and a
+// crawler that already fetched the URL reads the meta tag regardless of the
+// Disallow that kept it from being queued in the first place.
+const bareShell = shellFor("/").replace(
+  /<meta name="robots" content="[^"]*"/,
+  `<meta name="robots" content="noindex"`,
+);
 await Bun.write(join(siteDir, "_shell.html"), bareShell);
 
 let count = 0;
