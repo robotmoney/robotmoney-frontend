@@ -205,6 +205,33 @@ export function adoptRestoredRoster(
   return [...seated.map((m) => ({ ...m })), ...adopted];
 }
 
+// ── Judge role live-stack coverage on a `--smoke` boot (issue #845) ─────────
+// `--db smoke-twin` requires `--smoke`, so smoke-main.ts's `process.env.CI &&
+// smokeMode` branch — not scripts/lib/swarm/session.ts's `main()` — is what a
+// twin boot actually runs. `noop-analyst` is one of the three restored
+// personas (SMOKE_MEMBERS), selected by its stable HANDLE (never by roster
+// position, which the DB query does not promise).
+
+/** The persona granted the judge role for issue #845's smoke-twin coverage. */
+export const JUDGE_COVERAGE_HANDLE = "noop-analyst";
+
+/** The restored persona to grant the judge role to; throws on a stale/mismatched restore rather than silently skipping. */
+export function judgeCoverageCandidate(roster: readonly RosterMember[]): RosterMember {
+  const found = roster.find((m) => m.handle === JUDGE_COVERAGE_HANDLE);
+  if (!found) {
+    throw new Error(
+      `smoke initializer restored no '${JUDGE_COVERAGE_HANDLE}' persona to grant the judge role to (issue #845) — ` +
+        `roster handles: ${roster.map((m) => m.handle).join(", ")}`,
+    );
+  }
+  return found;
+}
+
+/** `members` with `candidateId` marked absent — a local copy; never mutates the shared array. */
+export function withMemberAbsent(members: readonly ScenarioMember[], candidateId: string): ScenarioMember[] {
+  return members.map((m) => (m.memberId === candidateId ? { ...m, present: false } : m));
+}
+
 export interface ScenarioLifecycleHooks<Context, SessionResult> {
   up(plan: ScenarioPlan, initialize: () => Promise<void>): Promise<Context>;
   initialize(plan: ScenarioPlan): Promise<void>;

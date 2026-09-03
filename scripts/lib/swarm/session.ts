@@ -980,6 +980,110 @@ export async function runRegimeClassify(
   );
 }
 
+// ── Judge role + judge mode live-stack coverage (issue #845) ────────────────
+// `swarm_judge_config.mode` ships `off`, and nothing in `bun smoke` ever
+// granted the per-member `judge` role or flipped the switch — the
+// validator/judge flow (D42 / D42-amendment) had unit and DB-integration
+// coverage only, never a booted live stack. These two admin-route wrappers
+// let `main()` below grant the role and flip the mode for exactly one
+// session, then restore both.
+
+/** `POST /api/swarm/admin/judge` — the runtime switch (mode ∈ off|shadow|enforce). */
+export async function setJudgeMode(
+  mode: "off" | "shadow" | "enforce",
+  automationToken?: string,
+): Promise<void> {
+  const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    body: JSON.stringify({ mode }),
+  });
+  if (!r.ok) {
+    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {mode:${mode}} -> ${r.status}: ${await r.text()}`);
+  }
+}
+
+/**
+ * `POST /api/swarm/admin/members/:id/role` — versioned, so the current
+ * version is read fresh off the admin roster immediately before the call
+ * (issue #845: this must work whether the member row is brand new on an
+ * ephemeral database or has accumulated version bumps on a persistent twin
+ * one). No-ops if the member already holds `role`. The member must already be
+ * `active` (`setMemberRoleAdmin` refuses otherwise) — every caller here
+ * targets a member `enroll()` has already registered.
+ */
+export async function setMemberRole(
+  memberId: string,
+  role: "member" | "judge",
+  automationToken?: string,
+): Promise<void> {
+  const membersRes = await fetch(`${backendUrl()}${ROUTES.swarm.admin.members}`, {
+    headers: getAutomationHeaders(automationToken),
+  });
+  if (!membersRes.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${membersRes.status}`);
+  const body = await responseJson<{ members?: Array<{ id?: string; version?: number; role?: string }> }>(membersRes);
+  const member = body.members?.find((m) => m.id === memberId);
+  if (!member) {
+    throw new Error(`setMemberRole: member ${memberId} not found on the admin roster — enroll it before setting a role`);
+  }
+  if (member.role === role) return; // already set — idempotent across re-runs
+  const p = routePath(ROUTES.swarm.admin.memberRole, { id: memberId });
+  const r = await fetch(`${backendUrl()}${p}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    body: JSON.stringify({ expectedVersion: member.version, role }),
+  });
+  if (!r.ok) throw new Error(`POST ${p} {role:${role}} -> ${r.status}: ${await r.text()}`);
+}
+
+/**
+ * Grants `memberId` the judge role, flips `swarm_judge_config.mode` to
+ * `shadow`, runs `runJudgedSession` (expected to be a single `runSession`
+ * call whose roster already treats `memberId` as absent — a judge-role member
+ * cannot submit a take, so it must not be a participant of the session being
+ * judged), asserts a real row landed in `swarm_session_judgements` for the
+ * resulting session, then restores BOTH the mode and the role in `finally` —
+ * shared by every `bun smoke` variant that wants this coverage (issue #845),
+ * so the grant/flip/assert/restore sequence exists in exactly one place
+ * rather than being re-derived per caller.
+ */
+export async function runJudgeRoleCoverage(
+  memberId: string,
+  automationToken: string | undefined,
+  runJudgedSession: () => Promise<{ sessionId: string | number }>,
+): Promise<void> {
+  await setMemberRole(memberId, "judge", automationToken);
+  console.log(`  ${memberId}: granted judge role via ${ROUTES.swarm.admin.memberRole} (issue #845)`);
+  const shippedJudgeMode = await readJudgeMode(automationToken);
+  const restoreJudgeMode: "off" | "shadow" | "enforce" =
+    shippedJudgeMode === "shadow" || shippedJudgeMode === "enforce" ? shippedJudgeMode : "off";
+  await setJudgeMode("shadow", automationToken);
+  console.log(`  judge mode: ${shippedJudgeMode ?? "unreadable"} -> shadow for this session only (issue #845)`);
+  try {
+    const judged = await runJudgedSession();
+    // AC: assert a REAL judgement row landed in swarm_session_judgements —
+    // not just `judged: false` (issue #845). runJudgeStep inside runSession
+    // already waited for the `judged` state transition because mode is now
+    // `shadow`; this reads the append-only record itself rather than
+    // trusting that wait's opinion.
+    const judgementCount = await countJudgements(judged.sessionId, automationToken);
+    if (!judgementCount || judgementCount < 1) {
+      throw new Error(
+        `session ${judged.sessionId}: judge mode=shadow but zero rows landed in swarm_session_judgements — ` +
+          "the judge/validator flow produced no live coverage (issue #845)",
+      );
+    }
+    console.log(
+      `  session ${judged.sessionId}: ${judgementCount} judgement row(s) recorded in swarm_session_judgements ` +
+        "(mode=shadow, issue #845)",
+    );
+  } finally {
+    await setJudgeMode(restoreJudgeMode, automationToken);
+    await setMemberRole(memberId, "member", automationToken);
+    console.log(`  judge mode restored to ${restoreJudgeMode}; ${memberId} role restored to member (issue #845)`);
+  }
+}
+
 // The member-container rail (issue #361 Phase 2): every present member runs in
 // its OWN container via the shared runMemberAgent() primitive; this driver
 // only drives the session lifecycle and observes. `rail` carries the compose
@@ -1355,6 +1459,19 @@ async function main() {
   });
   console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
+  // ── Judge role + judge mode live-stack coverage (issue #845) ──────────────
+  // Session 1 above ran with the shipped `off` default untouched — that
+  // matters, because `off` is the one behavior existing smoke assertions may
+  // already be relying on. Session 2 is where this coverage lives:
+  // runJudgeRoleCoverage grants `draco` (already enrolled as session 1's
+  // designed no-show — see DEMO_MEMBERS/absent handling in runSession — so
+  // granting it the judge role touches no take-submission path at all) the
+  // `judge` role via the admin route, flips `swarm_judge_config.mode` off ->
+  // `shadow` for exactly this session, asserts a real judgement row landed,
+  // then restores BOTH in `finally` so neither leaks into anything that runs
+  // after this file's main() — including a persistent `--db smoke-twin`
+  // database across repeated runs.
+  //
   // Session 2: a SECOND sitting, different subject (smokenstrates rotation +
   // cross-session awareness). Eos (added to the roster mid-run above) enrolls and
   // participates in its own container alongside the original members.
@@ -1366,7 +1483,8 @@ async function main() {
   // 0022 the DATABASE dates a session, so two sittings on one day are simply two
   // rows with different convened_at rather than one row relabelled to a day that
   // has not happened. The rotation this proves is the real one.
-  await runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members, initializer: "simulation", cadence });
+  await runJudgeRoleCoverage("draco", rail.automationToken, () =>
+    runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members, initializer: "simulation", cadence }));
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`).then((r) => r.json());

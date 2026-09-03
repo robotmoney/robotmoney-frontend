@@ -84,6 +84,7 @@ export const ROUTES: {
       memberDeactivate: string;
       memberReactivate: string;
       memberRotateKey: string;
+      memberRole: string;
       memberAvatar: string;
       sessionCreate: string;
       sessionRoster: string;
