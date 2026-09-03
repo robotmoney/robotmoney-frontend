@@ -146,13 +146,12 @@ async function prerenderView(html: string, route: string): Promise<string> {
   return html.replace(VIEW_MOUNT, () => `<main id="view">${body}</main>`);
 }
 
-let count = 0;
-for (const route of routes) {
-  const normalizedRoute = !route || route === "/" ? "/" : route.replace(/\/+$/, "") || "/";
-  const m = metaFor(normalizedRoute);
-  const url = ORIGIN + (normalizedRoute === "/" ? "/" : normalizedRoute);
-
-  let html = shell
+/** The shell with one route's metadata substituted in. The view mount is still
+ *  empty at this point; prerenderView fills it. */
+function shellFor(route: string): string {
+  const m = metaFor(route);
+  const url = ORIGIN + (route === "/" ? "/" : route);
+  return shell
     .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(m.title)}</title>`)
     .replace(/(<meta name="description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
     .replace(/(<link rel="canonical" href=")[^"]*(")/, `$1${url}$2`)
@@ -161,9 +160,35 @@ for (const route of routes) {
     .replace(/(<meta property="og:url" content=")[^"]*(")/, `$1${url}$2`)
     .replace(/(<meta name="twitter:title" content=")[^"]*(")/, `$1${escapeAttr(m.title)}$2`)
     .replace(/(<meta name="twitter:description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
-    .replace("<!--AGENT-DATA-->", () => routeDataBlock(normalizedRoute));
+    .replace("<!--AGENT-DATA-->", () => routeDataBlock(route));
+}
 
-  html = await prerenderView(html, normalizedRoute);
+// The shell to answer an UNKNOWN client route with, written for
+// backend/src/api/static.ts (issue #870).
+//
+// Its fallback is index.html, which was harmless while index.html was an empty
+// shell and is not any more: this prerender fills the view mount, so index.html
+// now carries the HOME PAGE'S BODY. Falling back to it answers
+// /swarm/members/<id> and /swarm/takes/<id> with the front page, at 200. Those
+// are real addresses the client router resolves; they simply cannot be
+// prerendered, because the id is not known at build time.
+//
+// So the assembly also carries the shell with an EMPTY mount, which is what the
+// client router expects to hydrate into. Emitted now rather than after #870
+// merges, deliberately: static.ts's proposed change falls back to index.html
+// when this file is absent, so the two sides can land in either order and
+// neither half is broken on its own.
+//
+// Home's metadata, because a fallback has no route of its own and canonical
+// pointing at / is what consolidates these URLs today.
+const bareShell = shellFor("/");
+await Bun.write(join(siteDir, "_shell.html"), bareShell);
+
+let count = 0;
+for (const route of routes) {
+  const normalizedRoute = !route || route === "/" ? "/" : route.replace(/\/+$/, "") || "/";
+
+  let html = await prerenderView(shellFor(normalizedRoute), normalizedRoute);
 
   const dataLinks = routeDataLinks(normalizedRoute);
   if (dataLinks) html = html.replace("  </head>", () => `${dataLinks}\n  </head>`);
@@ -177,4 +202,4 @@ for (const route of routes) {
   count++;
 }
 
-console.log(`Successfully prerendered ${count} routes into ${siteDir}/`);
+console.log(`Successfully prerendered ${count} routes into ${siteDir}/ (plus _shell.html for unknown routes)`);

@@ -114,6 +114,41 @@ describe("prerendered routes carry their own content", () => {
   });
 });
 
+describe("_shell.html, the fallback for routes that cannot be prerendered", () => {
+  // backend/src/api/static.ts answers an unknown client route by serving
+  // index.html, which since the inlining above carries the HOME PAGE'S BODY.
+  // Falling back to it would answer /swarm/members/<id> with the front page.
+  // This file is the shell with an empty mount, for static.ts to use instead
+  // (issue #870). Emitted ahead of that change on purpose: its fallback is
+  // index.html when this file is absent, so either side can land first.
+  const shellPath = join(dir, "_shell.html");
+
+  test("it exists and keeps an EMPTY view mount", () => {
+    const html = readFileSync(shellPath, "utf8");
+    // The one property that matters, and the exact inverse of what is asserted
+    // for every real route above.
+    expect(html.split('<main id="view"></main>').length - 1).toBe(1);
+  });
+
+  test("it carries no page body", () => {
+    // If a fragment ever leaks in here, the bug this file exists to prevent
+    // comes back wearing a different filename.
+    expect(readableChars(readFileSync(shellPath, "utf8"))).toBeLessThan(BOILERPLATE_CHARS * 1.5);
+  });
+
+  test("it points at the home canonical and resolves its own markers", () => {
+    const html = readFileSync(shellPath, "utf8");
+    expect(html).toContain('<link rel="canonical" href="https://robotmoney.network/"');
+    // An unsubstituted build marker shipping to readers would be a bug in its
+    // own right, and this file skips the per-route path that fills them.
+    expect(html).not.toContain("<!--AGENT-DATA-->");
+  });
+
+  test("robots.txt keeps it out of the index", () => {
+    expect(readFileSync(join(publicDir, "robots.txt"), "utf8")).toContain("Disallow: /_shell.html");
+  });
+});
+
 describe("what gets inlined is safe to inline", () => {
   test("no <script> reaches a prerendered page body", () => {
     // An inlined <script> would execute during initial parse, before main.js

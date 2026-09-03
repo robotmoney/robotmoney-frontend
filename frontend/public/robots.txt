@@ -21,6 +21,10 @@ Allow: /
 User-agent: Google-Extended
 Allow: /
 
+# The SPA fallback shell backend/src/api/static.ts serves for client routes it
+# cannot prerender. No content of its own; not a page.
+Disallow: /_shell.html
+
 # This site renders client-side, so fetching a page returns the shell and none
 # of the data. The two files below are where the content actually is:
 #   /llms.txt      site index plus every public JSON endpoint, absolute URLs
