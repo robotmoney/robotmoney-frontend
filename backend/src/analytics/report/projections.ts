@@ -3,10 +3,10 @@
 // thin adapter (parse/clamp `range`, call here). MCP and frontend stay consumers
 // over the HTTP boundary; this is the single backend projection layer.
 import { sql } from "../../db/client.ts";
-import type { RegimeSnapshot } from "@robotmoney/contract";
+import type { RegimeHistoryPoint, RegimeSnapshot } from "@robotmoney/contract";
 // The row→DTO projection lives in a pure, DB-free module so the offline
 // eq-snapshot mapper can reuse the EXACT same projection (see regime-projection.ts).
-import { rowToSnapshot, computeRegimeSnapshotStaleness, type RegimeStaleness } from "./regime-projection.ts";
+import { rowToSnapshot, forHistory, computeRegimeSnapshotStaleness, type RegimeStaleness } from "./regime-projection.ts";
 
 // The read an agent actually makes: today's classifier read without the ~500
 // KB of backtests/correlations/indicators/percentiles that ride along on the
@@ -73,7 +73,7 @@ export async function fetchLatestResearchSignal(key: string) {
 // (issue #398). See computeRegimeSnapshotStaleness.
 export async function fetchRegimeSnapshots(
   range: number,
-): Promise<{ latest: RegimeSnapshot | null; history: RegimeSnapshot[]; staleness: RegimeStaleness }> {
+): Promise<{ latest: RegimeSnapshot | null; history: RegimeHistoryPoint[]; staleness: RegimeStaleness }> {
   const today = new Date().toISOString().slice(0, 10);
   const rows = await sql`
     SELECT * FROM regime_snapshots
@@ -81,8 +81,12 @@ export async function fetchRegimeSnapshots(
     ORDER BY date DESC
     LIMIT ${range}
   `;
-  const history = rows.map(rowToSnapshot).reverse(); // chronological
-  const latest = history.length ? history[history.length - 1] : null;
+  const full = rows.map(rowToSnapshot).reverse(); // chronological
+  const latest = full.length ? full[full.length - 1] : null;
   const staleness = computeRegimeSnapshotStaleness(latest?.indicators ?? null, today);
-  return { latest, history, staleness };
+  // `latest` keeps every field; history rows are projected via forHistory
+  // (issue #866a), which also ends the double-serialization the old
+  // `history[-1] === latest` aliasing caused — they're now separate objects,
+  // one full and one projected, rather than the same object twice.
+  return { latest, history: full.map(forHistory), staleness };
 }

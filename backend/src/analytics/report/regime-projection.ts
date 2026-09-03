@@ -4,7 +4,7 @@
 // EXACT same projection — guaranteeing the Playwright stub payload equals what
 // GET /api/dashboards/regime-snapshots returns, without dragging in the DB client
 // (which requires DATABASE_URL at import time).
-import type { RegimeSnapshot } from "@robotmoney/contract";
+import type { RegimeHistoryPoint, RegimeSnapshot } from "@robotmoney/contract";
 
 // A JSON-serializable value. Declared here rather than imported from `postgres`
 // so `RegimeSnapshotRow` — and every module that imports only the row TYPE (the
@@ -95,6 +95,27 @@ export function rowToSnapshot(r: any): RegimeSnapshot {
     correlations: r.correlations ?? null,
     extras: r.extras ?? null,
   };
+}
+
+// A history row does not need the fields that only ever carry data on the
+// asof/latest row (`backtest`, `correlations`, `indicators` — the DB columns
+// behind all three are NULL on every non-asof row, so this is a type-safety
+// and wire-cleanliness fix more than a byte one) plus one that IS genuinely
+// per-row but that no consumer reads off a history entry (`percentiles`, the
+// real weight: ~510 bytes/row). Verified against every history-row field
+// access in frontend/, scripts/, mcp/, evals/ and backend/.
+// `computeRegimeSnapshotStaleness` reads `latest.indicators`, never a
+// history row's, so dropping `indicators` here cannot affect staleness
+// either way (issue #866a).
+//
+// Shared by BOTH producers of this DTO (fetchRegimeSnapshots over Postgres
+// rows, and regime-eq-map.ts's mapEqSnapshotToDto over eq-snapshot rows) so
+// the live endpoint and the Playwright stub project history identically —
+// the parity this file's header promises, enforced by construction rather
+// than by two call sites staying in sync by hand.
+export function forHistory(s: RegimeSnapshot): RegimeHistoryPoint {
+  const { backtest: _backtest, correlations: _correlations, indicators: _indicators, percentiles: _percentiles, ...rest } = s;
+  return rest;
 }
 
 // ─── Freshness / staleness ───────────────────────────────────────────────────
