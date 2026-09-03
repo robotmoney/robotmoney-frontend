@@ -21,4 +21,11 @@ Allow: /
 User-agent: Google-Extended
 Allow: /
 
+# This site renders client-side, so fetching a page returns the shell and none
+# of the data. The two files below are where the content actually is:
+#   /llms.txt      site index plus every public JSON endpoint, absolute URLs
+#   /openapi.json  the callable description of that API, no key required
+# Comments are not a crawl directive, they are a signpost for whoever reads this
+# file looking for a way in.
+
 Sitemap: https://robotmoney.network/sitemap.xml

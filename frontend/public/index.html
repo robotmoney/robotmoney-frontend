@@ -40,6 +40,18 @@
     <link rel="apple-touch-icon" href="/assets/icon-512.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
 
+    <!-- Machine-readable entry points. This site renders client-side, so a
+         reader that does not execute JS gets the shell and none of the data.
+         These two links are how such a reader finds the surface that does hold
+         it: `service-desc` is the registered relation for an API description,
+         and llms.txt is the site index written for LLM consumers. Both are
+         absolute, because several agent fetch tools refuse to open a URL they
+         have not already read in a document. scripts/prerender.ts adds a third
+         set below: the per-route `alternate` links naming the exact endpoints
+         that fill THIS page. -->
+    <link rel="service-desc" type="application/json" href="https://robotmoney.network/openapi.json" title="Robot Money public API" />
+    <link rel="alternate" type="text/plain" href="https://robotmoney.network/llms.txt" title="llms.txt" />
+
     <!-- Structured data (Organization + WebSite + the agent Skill) -->
     <script type="application/ld+json">
     {
@@ -168,6 +180,14 @@
     <!-- Route views are fetched and injected here by the client router. -->
     <main id="view"></main>
 
+    <!-- scripts/prerender.ts replaces this marker with the route's no-script
+         data block: the absolute API URLs that fill this page. It sits AFTER
+         the closing tag on purpose: backend/src/api/static.ts matches the
+         empty view mount above as an exact string in order to inline docs
+         fragments, so anything placed INSIDE the mount would silently stop
+         docs pages server-rendering. Do not repeat that literal here. -->
+    <!--AGENT-DATA-->
+
     <!-- ── Footer (site-wide; rendered once by the shell) ── -->
     <footer class="footer">
       <!-- Links & Info -->
@@ -250,6 +270,8 @@
                 <a href="/changelog" class="footer__link">Changelog</a>
                 <a href="/smart-contract-risks" class="footer__link">Smart Contract Risks</a>
                 <a href="/visualizations" class="footer__link">Visualizations</a>
+                <a href="/openapi.json" class="footer__link">API (OpenAPI)</a>
+                <a href="/llms.txt" class="footer__link">llms.txt</a>
               </div>
             </div>
 

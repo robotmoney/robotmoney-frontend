@@ -7,6 +7,8 @@
     "postinstall": "bun install --cwd backend",
     "sync-contract": "bun scripts/sync-contract.ts",
     "check-contract": "bun scripts/sync-contract.ts --check",
+    "build:agent-surface": "bun scripts/build-agent-surface.ts",
+    "check:agent-surface": "bun scripts/build-agent-surface.ts --check",
     "check-docs": "bash scripts/check-docs-analytics.sh",
     "check:contribution": "bun scripts/check-contribution.ts",
     "bootstrap": "bun run --cwd backend prod-bootstrap",
