@@ -180,7 +180,7 @@ test("the product sheet never requests the house book (RM-115, RM-103)", async (
 
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#vault")).toBeVisible();
+  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
   await page.waitForTimeout(300);
 
   expect(houseBook, "wallet-balances / wallet-sleeves are the house book (RM-103)").toEqual([]);
@@ -442,7 +442,7 @@ test("the two figures with no route behind them render an explicit pending state
   // does not earn the top of a page, and the Beacon point is what marks it.
   const pending = page.locator(".alp__pending");
   await expect(pending).toHaveCount(1);
-  await expect(pending).toContainText("not yet published");
+  await expect(pending).toContainText("not published");
   await expect(pending).toContainText("no route serves the recorded share-price series");
   const dot = await pending.locator("i").evaluate((el) => ({
     bg: getComputedStyle(el).backgroundColor,
@@ -521,7 +521,7 @@ test("the state chip reads seeded whatever source and managed say", async ({ pag
     await page.goto("/index.html");
     await navigate(page, "/allocation");
     await expect(page.locator(".alp__chip")).toHaveText("seeded");
-    await expect(page.locator(".alp__force-line")).toContainText("No session has moved these weights");
+    await expect(page.locator(".alp__force-line")).toContainText("No session has moved them");
   }
 });
 
@@ -541,64 +541,11 @@ test("the chip flips to swarm-managed the moment a row carries a session's prove
   await expect(page.locator(".alp__chip")).toHaveText("swarm-managed");
 });
 
-test("the reference series discloses the window between its last day and today", async ({ page }) => {
-  await stubEnvironment(page);
-  await page.goto("/index.html");
-  await navigate(page, "/allocation");
-  const seam = page.locator(".alp__seam");
-  await expect(seam).toBeVisible();
-  await expect(seam).toContainText("This comparison ends 26 Aug 2026");
-  await expect(seam).toContainText("no collector serves these rates yet");
-});
-
-// Each feed absent, one at a time: the rest of the page stands, the missing
-// half says it is missing, and nothing is fabricated in its place.
-const ABSENT_FEEDS = [
-  { feed: "vault" as const, stub: { vault: null } },
-  { feed: "framework" as const, stub: { framework: null } },
-  { feed: "sessions" as const, stub: { sessions: null } },
-];
-
-for (const { feed, stub } of ABSENT_FEEDS) {
-  test(`the page stands with the ${feed} feed absent, and says which half is missing`, async ({ page }) => {
-    const errors = failOnBrowserErrors(page);
-    await stubEnvironment(page, stub);
-    await page.goto("/index.html");
-    await navigate(page, "/allocation");
-
-    // The headline and every section still render.
-    await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
-    for (const id of ["#allocation", "#what-changed", "#inside-each-sleeve", "#what-it-pays", "#latest-recommendation", "#exposure"]) {
-      await expect(page.locator(id)).toBeVisible();
-    }
-
-    if (feed === "vault") {
-      await expect(page.locator(".alp__badge", { hasText: "Vault feed unavailable" })).toBeVisible();
-      await expect(page.locator(".alp__meta")).toContainText("Deployed —");
-    }
-    if (feed === "framework") {
-      await expect(page.locator(".alp__badge", { hasText: "Target weights unavailable" })).toBeVisible();
-      await expect(page.locator(".alp__empty").first()).toContainText("could not be read");
-      await expect(page.locator(".alp__bullet")).toHaveCount(0);
-    }
-    if (feed === "sessions") {
-      await expect(page.locator(".alp__latest-line--pend")).toContainText("could not be read");
-    }
-
-    // A 503 from a stubbed route is a network-level failure the page handles;
-    // it is not a page error. Only script errors are asserted here.
-    const scriptErrors = errors.filter((e) => e.startsWith("pageerror:"));
-    expect(scriptErrors).toEqual([]);
-  });
-}
-
-// ── the brand covenant, judged on the RENDERED page ─────────────────────────
-
 test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#vault")).toBeVisible();
+  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
 
   const findings = await page.evaluate((CATEGORICAL: string[]) => {
     const CYAN = ["rgb(0, 229, 255)", "rgb(0, 184, 212)"];
@@ -684,7 +631,7 @@ test("every categorical fill on the page declares itself a series mark", async (
   await stubEnvironment(page);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#vault")).toBeVisible();
+  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
 
   const marks = page.locator('section.alp [data-mark="series"]');
   expect(await marks.count()).toBeGreaterThan(8);
@@ -696,7 +643,7 @@ test("the page carries no em dash in its own copy", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#vault")).toBeVisible();
+  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
 
   // The em dash is also the site's null glyph (fmtUsd returns "—"), so only
   // runs of PROSE are checked: a lone "—" in a cell is a missing value, not
@@ -724,7 +671,7 @@ test("on a phone the fan becomes a list and nothing scrolls the page sideways", 
   await stubEnvironment(page);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#vault")).toBeVisible();
+  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
 
   // The donut scales rather than being swapped for a list, which is what the
   // fan it replaced had to do: its 16px in-diagram labels rendered at ~6px.

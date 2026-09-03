@@ -12,8 +12,11 @@
      under one heading is what made a $229 vault 0.4% of a "Total AUM" figure
      printed under a heading about the vault.
 
-     Sections: hero (weights in force, asOf, state chip, meta rail, the donut)
-     · What changed · Inside each sleeve · What it pays · Exposure.
+     Sections: Allocation (weights in force, the donut) · What changed ·
+     Inside each sleeve. The yield comparison and the deposit CTA came off:
+     neither is the allocation, and the reference series behind the first one
+     was the last non-live dataset on the page. Its seam disclosure went with
+     it, because there is no longer a seam to disclose.
 
      There is no longer a Vault SECTION. Its holdings moved into the sleeve
      they implement, where they can be compared to the policy instead of read
@@ -55,9 +58,8 @@
     <div class="a2-hero__inner">
       <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
       <p class="a2-hero__lede">
-        The target weights the swarm holds the book to, what sits inside each
-        sleeve, and how far the vault holding it has drifted from them. This is
-        the recipe, not a book of holdings. It covers depositor capital only:
+        The weights the swarm holds the book to, what sits inside each sleeve,
+        and how far the vault has drifted from them. Depositor capital only:
         the protocol's own wallets are reported separately.
       </p>
     </div>
@@ -122,8 +124,7 @@
     </div>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      The published target weights could not be read, so there are no sleeves to
-      show. Everything below that does not depend on them still stands.
+      Target weights could not be read, so there are no sleeves to show.
     </p>
 
     <!-- The two figures with no route behind them. They were two tiles set in
@@ -132,9 +133,9 @@
     <p class="alp__pending" x-show="!loading" x-cloak>
       <i></i>
       <span>
-        NAV per share and period returns are <b>not yet published</b>: no route
-        serves the recorded share-price series. The share price in the vault's
-        holdings below is a single spot read, not a series. <sup>6</sup>
+        NAV per share and period returns are <b>not published</b>: no route
+        serves the recorded share-price series. The share price below is one
+        spot read.
       </span>
     </p>
 
@@ -173,22 +174,20 @@
     </div>
     <p class="alp__sub">
       Every session reviews these weights and either moves them or leaves them.
-      This is the state of the last review; what sits inside each sleeve is the
-      section below. The <b>was</b> column is not a second reading:
-      <code>allocation_framework</code> holds one row, so the baseline is the
-      row in force and every change reads flat until a session can write a
-      second one. <sup>7</sup>
+      <code>allocation_framework</code> holds one row, so <b>was</b> is the row
+      in force rather than a second reading, and every change reads flat until
+      a session can write a second row.
     </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      Target weights are unavailable right now, so there is nothing to compare.
+      Target weights are unavailable, so there is nothing to compare.
     </p>
 
     <p class="alp__scrollhint" aria-hidden="true" x-show="hasTargets()" x-cloak>Scroll the table sideways for the full row.</p>
     <div class="alp__tblwrap" x-show="hasTargets()" x-cloak>
       <table class="alp__tbl alp__tbl--led">
         <thead>
-          <tr><th>Sleeve</th><th>Was</th><th>Now</th><th>Change</th><th>Note</th></tr>
+          <tr><th>Sleeve</th><th>Was</th><th>Now</th><th>Change</th><th class="note">Note</th></tr>
         </thead>
         <tbody>
           <template x-for="r in changeRows()" :key="r.key">
@@ -217,8 +216,7 @@
     <!-- The swarm's reading, under the numbers it explains. id kept so
          /allocation#latest-recommendation still lands on it. -->
     <div class="alp__latest" id="latest-recommendation" x-show="!loading" x-cloak>
-      <p class="alp__eyebrow">Why</p>
-      <p class="alp__why-lead" x-text="unchangedLine()"></p>
+      <p class="alp__eyebrow">The last review</p>
       <div class="alp__latest-meta">
         <span class="alp__latest-date" x-text="latestDate()">—</span>
         <span x-show="latestQuorum()" x-text="latestQuorum()"></span>
@@ -242,10 +240,9 @@
     </div>
 
     <p class="alp__sub alp__sub--after">
-      This portfolio is typed <code>position_actions</code>, so a session
-      publishes a rationale and a set of actions rather than a weight vector.
-      The signed consensus receipt is not readable yet: its public route returns
-      an error on every published session. <sup>8</sup>
+      Typed <code>position_actions</code>, so a session publishes actions and a
+      rationale, not a weight vector. The signed consensus receipt is not
+      readable: its public route errors on every published session.
     </p>
   </section>
 
@@ -260,16 +257,14 @@
       <h2 class="alp__h2">Inside each sleeve</h2>
     </div>
     <p class="alp__sub">
-      Each sleeve's split, drawn to its own hundred. Where a vault exists,
-      everything about it sits one click away: what it holds, and how far that
-      has drifted from the policy above it. The Agent Tokens list is the one
-      the allocation publishes, which is not the list the deposit skill
-      buys. <sup>9</sup>
+      Each sleeve's split, drawn to its own hundred. Where a vault exists, what
+      it holds and how far it has drifted sit one click away. Agent Tokens
+      lists what the allocation publishes, which is not what the deposit skill
+      buys.
     </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      Target weights are unavailable right now, so there are no constituents to
-      list.
+      Target weights are unavailable, so there are no constituents to list.
     </p>
 
     <div class="alp__cards" x-show="hasTargets()" x-cloak>
@@ -413,9 +408,8 @@
                     </span>
                   </p>
                   <p class="alp__hold-note">
-                    The vault is a book of holdings, so it keeps a portfolio page of its own:
-                    <a class="alp__link" :href="vaultSubjectHref">the swarm's record for the vault</a>
-                    carries its sessions and its holdings over time.
+                    <a class="alp__link" :href="vaultSubjectHref">The swarm's record for the vault</a>
+                    carries its sessions and holdings over time.
                   </p>
                 </div>
               </details>
@@ -423,7 +417,7 @@
             <template x-if="!sleeveHasVault(s.key)">
               <p class="alp__vd none">
                 <i></i>
-                <span><b>No vault yet.</b> Nothing is held, so there is nothing to compare the policy against.</span>
+                <span><b>No vault yet</b>, so there is nothing to compare.</span>
               </p>
             </template>
           </div>
@@ -432,158 +426,6 @@
     </div>
   </section>
 
-  <!-- ── § WHAT IT PAYS ───────────────────────────────────────────────── -->
-  <section class="alp__sec" id="what-it-pays">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">What it pays</h2>
-      <span class="alp__ref-badge">
-        Reference series · not live · to <span x-text="reference.asOf"></span>
-      </span>
-    </div>
-    <p class="alp__sub">
-      The yield sleeve is spread equally across three lending venues, so it pays
-      their blend. The shaded band is <b>what each venue paid on its own</b>.
-      The blend sits inside it, never above it.
-    </p>
-
-    <div class="alp__answer">
-      <div class="alp__answer-fig"><small>The vault · before fees</small><span x-text="fmtPct(blendNow())"></span></div>
-      <div class="alp__answer-fig net"><small>After the withdrawal fee</small><span x-text="fmtPct(blendNetNow())"></span></div>
-      <div class="alp__answer-fig ref"><small>Aave V3 USDC on its own</small><span x-text="fmtPct(aaveNow())"></span></div>
-      <p class="alp__answer-copy">
-        Ahead of Aave on <strong><span x-text="daysAheadOfAave()"></span> of <span x-text="trackRecordDays"></span> days</strong>,
-        behind Morpho on <span x-text="daysBehindMorpho()"></span> of them. The vault does not try to pick the venue that
-        will pay most. It holds all three so that no single one can take everything. <sup>3</sup>
-      </p>
-    </div>
-
-    <div class="alp__chart">
-      <svg x-ref="yield" viewBox="0 0 900 280" role="img" aria-label="Vault blended yield against its three venues"></svg>
-      <div class="alp__tip" x-ref="yieldTip"></div>
-    </div>
-    <div class="alp__legend">
-      <span><i class="alp__rule--vault"></i>Vault · equal-weight blend</span>
-      <span><i class="alp__rule--aave"></i>Aave V3 USDC · benchmark</span>
-      <span><i class="band"></i>Range of the three venues</span>
-      <span>7-day trailing mean <sup>4</sup></span>
-    </div>
-
-    <!-- issue #614 AC5: the window between the reference series and today is
-         disclosed, never smoothed over. -->
-    <div class="alp__seam" x-show="seamMessage()" x-cloak role="note">
-      <i class="alp__seam-ico" aria-hidden="true"></i>
-      <span x-text="seamMessage()"></span>
-    </div>
-
-    <p class="alp__scrollhint" aria-hidden="true">Scroll the table sideways for the full row.</p>
-    <div class="alp__tblwrap alp__tblwrap--spaced">
-      <table class="alp__tbl">
-        <thead>
-          <tr>
-            <th>Average APY <sup>5</sup></th><th>Vault</th><th>Aave</th>
-            <th>Morpho</th><th>Compound</th><th>Vault vs Aave</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="row in periodRows()" :key="row.label">
-            <tr :class="row.total ? 'tot' : ''">
-              <td x-text="row.label"></td>
-              <td x-text="fmtPct(row.vault)"></td>
-              <td x-text="fmtPct(row.aave)"></td>
-              <td x-text="fmtPct(row.morpho)"></td>
-              <td x-text="fmtPct(row.compound)"></td>
-              <td class="alp__gain" x-text="fmtPp(row.vsAave)"></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-    <p class="alp__sub alp__sub--after">
-      These are average venue rates over each window, not returns a depositor
-      received. True period returns need NAV per share, which is not published
-      yet. <sup>6</sup>
-    </p>
-  </section>
-
-  <!-- ── § EXPOSURE ───────────────────────────────────────────────────── -->
-  <section class="alp__sec" id="exposure">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">Exposure</h2>
-    </div>
-    <p class="alp__sub">
-      To put an agent's idle USDC behind this allocation, install the Robot
-      Money skill. It approves and deposits into the vault above, and buys the
-      agent-token sleeve into the agent's own wallet. There is no management
-      fee and <b>0.25% is charged on the way out</b>, once. Deposits are capped
-      while the vault is young: <span x-text="capsLine()"></span>. The size
-      above is small because of the cap, not because the vault is closed.
-    </p>
-    <div class="alp__cta">
-      <a class="alp__cta-btn" href="/skills">Get the skill</a>
-      <a class="alp__link" href="/smart-contract-risks">How DeFi vaults get exploited</a>
-      <a class="alp__link" href="/disclaimer">Disclaimers</a>
-    </div>
-  </section>
-
-  <!-- ── NOTES ───────────────────────────────────────────────────────── -->
-  <div class="alp__foot">
-    <p class="alp__eyebrow alp__eyebrow--foot">Notes</p>
-    <ol>
-      <li>
-        Yields are shown before fees. There is no management fee. The only fee
-        is <strong>0.25% when you withdraw</strong>, charged once.
-      </li>
-      <li>
-        Net figures assume a year of holding. The fee is charged once and the
-        advantage accrues per year, so the break-even is
-        <strong><span x-text="breakEvenMonths() == null ? '—' : breakEvenMonths().toFixed(1)"></span> months</strong>.
-        Withdraw sooner and Aave on its own would have done better.
-      </li>
-      <li>
-        Since inception the blend trailed Morpho and Compound individually and
-        beat Aave. Spreading equally is a decision made without knowing which
-        venue will pay most, not a claim to beat all of them.
-      </li>
-      <li>
-        The venue comparison is a dated reference dataset, fixed to
-        <span x-text="reference.asOf"></span>, read by hand from each protocol's
-        public rates. No collector serves it. Smoothed over 7 days because venue
-        rates spike: Aave touched 13.05% for a single day in March. The period
-        table is unsmoothed.
-      </li>
-      <li>
-        These are <strong>average APYs over each window</strong>, not returns
-        received. The track record is <span x-text="trackRecordDays"></span>
-        days. Nothing here is projected forward.
-      </li>
-      <li>
-        NAV per share, period returns and drawdown are not published. Share
-        price has been recorded hourly since March in
-        <code>vault_share_price_history</code>, and no GET route serves the
-        series yet. The spot share price in the Vault section is a single read,
-        not a series.
-      </li>
-      <li>
-        Target weights are seeded and cannot yet be changed through the product:
-        <code>allocation_framework</code> has one writer, the database seed.
-        Drift is reported; rebalancing is not automatic, and no session has
-        moved the weights.
-      </li>
-      <li>
-        The constituents listed under Agent Tokens are the ones the allocation
-        PUBLISHES. They are not the seven the deposit skill buys: the framework
-        seed and the skill's <code>constants.ts</code> are two different lists
-        that overlap on three names. Correcting the seed is a backend change,
-        and until it lands this page renders what the API serves rather than the
-        list it wishes were there.
-      </li>
-      <li>
-        The consensus receipt is assembled and signed per judged session, and
-        its public route currently returns an error for every published session.
-        Until it is fixed, the session page is the readable record.
-      </li>
-    </ol>
-  </div>
 </section>
 
 <style>
@@ -688,7 +530,10 @@
   .alp__split { grid-template-columns: 300px minmax(0, 42rem); justify-content: start; }
 }
 .alp__donut { justify-self: center; width: 100%; max-width: 300px; }
-.alp__donut svg { display: block; width: 100%; height: auto; }
+/* An SVG root inherits fill:black, so anything drawn without an explicit one
+   would paint black on a dark ground and vanish. Every shape here sets its
+   own; this makes the default a reading colour rather than a trap. */
+.alp__donut svg { display: block; width: 100%; height: auto; fill: var(--color-text); }
 .alp__legend-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.85rem; }
 .alp__legend-list li { display: grid; grid-template-columns: 0.7rem 1fr; gap: 0.8rem; align-items: start; }
 .alp__legend-list b { display: block; font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
@@ -784,42 +629,10 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 .alp__link:hover { border-bottom-color: var(--color-accent); }
 
 /* the answer strip: the figures a section exists to give */
-.alp__answer {
-  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 1.6rem 2.75rem;
-  border-left: 2px solid var(--color-green); padding: 0.2rem 0 0.2rem 1.1rem; margin: 0 0 1.4rem;
-}
-.alp__answer-fig {
-  font-family: var(--font-display); font-size: 3.1rem; line-height: 0.9; color: var(--color-green);
-  font-variant-numeric: tabular-nums;
-}
-.alp__answer-fig small {
-  display: block; font-family: var(--font-mono); font-size: 0.6rem; line-height: 1.4;
-  text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); margin-bottom: 0.4rem;
-}
-.alp__answer-fig.ref { color: var(--color-text-soft); font-size: 2.2rem; }
 /* What a depositor keeps is money, so it is Pool green like the figure beside
    it. It was warm, which is a second saturated accent doing work the label
    already does. */
-.alp__answer-fig.net { font-size: 2.2rem; }
-.alp__answer-copy { flex: 1 1 19rem; min-width: 0; color: var(--color-text-soft); font-size: 0.9rem; margin: 0; line-height: 1.6; }
-
 /* charts */
-.alp__chart { position: relative; border: 1px solid var(--color-border); background: var(--color-deep); padding: 0.9rem; }
-.alp__chart svg { display: block; width: 100%; height: auto; }
-.alp__chart .grid { stroke: rgba(34, 42, 56, 0.75); stroke-width: 1; }
-.alp__chart .axtxt { font-family: var(--font-mono); font-size: 10px; fill: var(--color-text-muted); }
-.alp__chart .endlbl { font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
-.alp__legend {
-  display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem; margin-top: 0.8rem;
-  font-family: var(--font-mono); font-size: 0.62rem; color: var(--color-text-muted);
-}
-.alp__legend i {
-  display: inline-block; width: 1.1rem; height: 0; border-top-width: 2px;
-  border-top-style: solid; margin-right: 0.45rem; vertical-align: 0.25em;
-}
-.alp__legend i.alp__rule--vault { border-top-color: var(--color-green); }
-.alp__legend i.alp__rule--aave { border-top-color: var(--color-text-muted); border-top-style: dashed; }
-.alp__legend i.band { height: 0.6rem; border: 0; background: rgba(126, 136, 158, 0.28); vertical-align: -1px; }
 .alp__tip {
   position: absolute; pointer-events: none; opacity: 0; transition: opacity 0.1s;
   background: var(--color-surface); border: 1px solid var(--color-border-light);
@@ -835,17 +648,7 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 .alp__tip i { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.4rem; }
 
 /* the seam banner — the window between the reference series and today */
-.alp__seam {
-  display: flex; gap: 0.6rem; align-items: flex-start; margin-top: 0.9rem; padding: 0.6rem 0.75rem;
-  border: 1px solid var(--color-border-light); background: var(--color-surface);
-  font-size: 0.8rem; color: var(--color-text-soft); line-height: 1.55;
-}
 /* Beacon, as a POINT: a 6px mark, not a glyph set at type size. */
-.alp__seam-ico {
-  flex: 0 0 auto; width: 0.375rem; height: 0.375rem; border-radius: 50%;
-  background: var(--color-beacon); margin-top: 0.42rem;
-}
-
 /* ── one card per sleeve ───────────────────────────────────────────────── */
 .alp__cards { display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); }
 @media (min-width: 1000px) { .alp__cards { grid-template-columns: 1fr 1fr; } }
@@ -968,7 +771,6 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 .alp__latest-line { margin: 0.7rem 0 0.9rem; color: var(--color-text-soft); font-size: 0.9rem; line-height: 1.6; }
 .alp__latest-line--pend { color: var(--color-text-muted); }
 .alp__latest .alp__eyebrow { margin-bottom: 0.5rem; }
-.alp__why-lead { margin: 0 0 0.85rem; color: var(--color-text); font-size: 0.95rem; line-height: 1.6; }
 .alp__why-links {
   display: flex; flex-wrap: wrap; gap: 0.35rem 1.4rem; margin: 0.9rem 0 0;
   padding-top: 0.75rem; border-top: 1px solid var(--color-border);
@@ -993,7 +795,6 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
   }
 }
 .alp__tblwrap { overflow-x: auto; border: 1px solid var(--color-border); }
-.alp__tblwrap--spaced { margin-top: 1.4rem; }
 table.alp__tbl {
   width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.7rem;
   min-width: 40rem; font-variant-numeric: tabular-nums;
@@ -1018,9 +819,12 @@ table.alp__tbl td.alp__gain, table.alp__tbl tr.tot td.alp__gain { color: var(--c
    quiet column a figure is measured against; `note` is prose and must be
    allowed to wrap, which the mono default forbids. */
 table.alp__tbl td.q { color: var(--color-text-muted); }
+/* Prose in a numeric table reads left to right; the header keeps the mono
+   treatment every other column header has. */
+table.alp__tbl th.note { text-align: left; }
 table.alp__tbl td.note {
-  font-family: var(--font-sans); font-size: 0.78rem; white-space: normal;
-  color: var(--color-text-muted); font-variant-numeric: normal;
+  text-align: left; font-family: var(--font-sans); font-size: 0.78rem;
+  white-space: normal; color: var(--color-text-muted); font-variant-numeric: normal;
 }
 table.alp__tbl--led { min-width: 34rem; }
 table.alp__tbl--wide { min-width: 48rem; }
@@ -1043,28 +847,8 @@ table.alp__tbl tr.out .alp__dot { opacity: 0.4; }
 .alp__dft i { font-style: normal; font-size: 0.78em; line-height: 1; }
 
 /* exposure */
-.alp__cta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem 1.6rem; }
 /* The same shape as /skills' own .sk__cta, which is where this button goes:
    Beam as a LINE (the border) and as label type, never as a filled mass, and
    never over a figure. The site's shared .btn-primary is a filled cyan block;
    this page does not add another one. */
-.alp__cta-btn {
-  font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.15em;
-  color: var(--color-accent); background: transparent; border: 1px solid var(--color-accent);
-  border-radius: var(--radius); padding: 0.8rem 1.6rem; text-decoration: none;
-  transition: background-color 0.25s, color 0.25s;
-}
-.alp__cta-btn:hover { background: var(--color-accent); color: var(--color-void); }
-
-/* notes */
-.alp__foot { margin-top: 2.5rem; padding-top: 1.2rem; border-top: 1px solid var(--color-border); }
-.alp__eyebrow--foot { margin-bottom: 0.9rem; }
-.alp__foot ol { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.5rem; }
-.alp__foot li { font-size: 0.78rem; color: var(--color-text-muted); line-height: 1.55; }
-.alp__foot li::marker { font-family: var(--font-mono); font-size: 0.7rem; }
-.alp__foot strong { color: var(--color-text-soft); font-weight: 500; }
-.alp__foot code {
-  font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
-  background: var(--color-surface); padding: 0.05rem 0.28rem;
-}
-</style>
+/* notes */</style>
