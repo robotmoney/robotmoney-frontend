@@ -119,6 +119,16 @@ export async function repairGaps(): Promise<unknown> {
   // un-retryable — the exact opposite of self-healing. Duplicate work is
   // prevented by skipping days a live job already covers, and the executor is
   // idempotent regardless (it never writes a non-empty day).
+  // Shared-leg circuit breaker (issue #761): a day whose window keeps
+  // deferring for the SAME shared leg is now excluded from `plan.days` once
+  // it goes 'blocked', so it stops eating the whole run's cap while it is
+  // known to be broken. Named here EVERY run, not just the run that tripped
+  // it, so a permanently refusing pool/resolver/multicall pass is visible
+  // without reading wallet_backfill_state by hand.
+  for (const b of plan.blockedDetail) {
+    console.warn(`wallet-backfill: ${b.date} remains BLOCKED on shared leg '${b.leg}' — ${b.detail ?? "no detail"}`);
+  }
+
   const [liveWindow] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n
       FROM jobs
@@ -155,6 +165,13 @@ export async function repairGaps(): Promise<unknown> {
     // that exhausted them: a cap that silences itself reads as "covered
     // everything" when it did not.
     exhaustedDays: plan.exhausted,
+    // Days at the shared-leg circuit breaker's terminal state (#761): still a
+    // disclosed gap, no longer re-selected every run, and named with WHICH
+    // leg tripped and why — reported EVERY run for the same reason
+    // exhaustedDays is, and self-clearing once the leg is fixed (unlike
+    // exhaustedDays, which needs an operator).
+    blockedDays: plan.blocked,
+    blockedLegs: plan.blockedDetail,
     perRunCap: maxDaysPerRun(),
     unhandled: {
       // Named, not omitted — an undispatched class must be as visible as an
@@ -221,6 +238,10 @@ export async function backfillWalletWindow(payload: Record<string, unknown> = {}
     skipped: results.filter((r) => r.status === "skipped").length,
     failed: failed.length,
     exhausted: results.filter((r) => r.status === "exhausted").length,
+    // Shared-leg circuit breaker terminal state (#761) — see repairGaps()'s
+    // blockedDays/blockedLegs for the leg identity and reason, reported on
+    // every dispatcher run regardless of whether this particular window ran.
+    blocked: results.filter((r) => r.status === "blocked").length,
     results,
     // worker/loop.ts's degrade path reads `error` for the job_runs text, so the
     // reason a window is degraded is durable and greppable rather than only in

@@ -110,6 +110,45 @@ export function maxAttemptsPerDay(): number {
   return intEnv("WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY", 3, 1);
 }
 
+// ── The shared-leg circuit breaker (issue #761) ──────────────────────────────
+//
+// deferDay() is right to never charge a day's attempt counter for a shared-leg
+// refusal — that is what stops a ten-second provider blip from retiring ten
+// days permanently (see deferDay's doc comment below). It never distinguished
+// a TRANSIENT shared-leg refusal from a PERMANENT one, though: a mistyped pin
+// or a delisted pool refuses identically on every retry, so with no counter at
+// all the same days were re-selected on every scheduled run forever, spending
+// the whole per-run budget re-earning the same refusal instead of making room
+// for other, repairable gaps.
+//
+// How many CONSECUTIVE, SEPARATE refusals of the same leg move a day to the
+// terminal 'blocked' status (bumpDeferStreak() below).
+export function legTerminalThreshold(): number {
+  return intEnv("WALLET_BACKFILL_LEG_TERMINAL_THRESHOLD", 3, 1);
+}
+
+/** How close together two defers of the SAME leg must land to be treated as
+ *  ONE incident rather than two. Sized well above the queue's own retry burst
+ *  (worker/loop.ts backs off 2^attempts seconds, capped at 3600s, so a job's
+ *  own retries land within tens of seconds) and well below the dispatcher's
+ *  five-minute scheduled cadence (#749) — so a single transient provider
+ *  blip retried three times by the queue in ten seconds still counts as ONE
+ *  refusal, exactly as it does today, while three genuinely separate
+ *  SCHEDULED runs that all hit the same wall do not. */
+export function legDebounceMs(): number {
+  return intEnv("WALLET_BACKFILL_LEG_DEBOUNCE_MS", 60_000, 1);
+}
+
+/** How long a 'blocked' day is excluded from replanning before one more
+ *  attempt is let through — the mechanism that makes AC4 true: correcting the
+ *  underlying cause (the pin, the RPC config) repairs the day automatically on
+ *  the next elapsed cooldown, with no hand-written SQL. Deliberately far above
+ *  the dispatcher cadence so a permanently broken leg costs roughly one probe
+ *  an hour instead of twelve. */
+export function legRetryCooldownMs(): number {
+  return intEnv("WALLET_BACKFILL_LEG_RETRY_COOLDOWN_MINUTES", 60, 1) * 60_000;
+}
+
 // ── The RPC budget precondition (PD6) ────────────────────────────────────────
 
 /**
@@ -169,6 +208,17 @@ export interface WalletBackfillPlan {
   retrying: number;
   /** Days that hit the attempt ceiling: still gaps, no longer retried. */
   exhausted: string[];
+  /** Days at the shared-leg circuit breaker's terminal state (issue #761):
+   *  still a disclosed gap, no longer re-selected every run, retried
+   *  automatically once WALLET_BACKFILL_LEG_RETRY_COOLDOWN_MINUTES has passed
+   *  since the leg's last refusal. Unlike `exhausted`, this clears itself the
+   *  moment the underlying leg is fixed — no hand-written SQL required. */
+  blocked: string[];
+  /** Same days as `blocked`, naming which leg tripped and why — what the
+   *  dispatcher output (repair.ts::repairGaps) surfaces on EVERY run, not just
+   *  the run that tripped it. Populated by planWalletBackfill, which has the
+   *  raw rows selectBackfillDays()'s pure signature does not. */
+  blockedDetail: { date: string; leg: string; detail: string | null }[];
 }
 
 /**
@@ -189,13 +239,36 @@ export async function planWalletBackfill(db: Db, now: Date = new Date()): Promis
     for (const day of missingDaysFromReport(await detectGaps(def, db, now), cutoff)) missing.add(day);
   }
   const ordered = [...missing].sort();
-  if (ordered.length === 0) return { days: [], totalMissing: 0, deferred: 0, retrying: 0, exhausted: [] };
+  if (ordered.length === 0) {
+    return { days: [], totalMissing: 0, deferred: 0, retrying: 0, exhausted: [], blocked: [], blockedDetail: [] };
+  }
 
-  const rows = await db<{ sample_date: Date; status: string }[]>`
-    SELECT sample_date, status FROM wallet_backfill_state
+  const rows = await db<
+    { sample_date: Date; status: string; defer_leg: string | null; defer_leg_at: Date | null; detail: string | null }[]
+  >`
+    SELECT sample_date, status, defer_leg, defer_leg_at, detail FROM wallet_backfill_state
   `;
   const byStatus = new Map(rows.map((r) => [isoDay(new Date(r.sample_date).getTime()), r.status]));
-  return selectBackfillDays(ordered, byStatus, maxDaysPerRun());
+  // A 'blocked' day is let back into candidates only once its cooldown has
+  // elapsed since the leg's last refusal — the one automatic probe per
+  // cooldown window that lets a corrected leg heal its days without an
+  // operator running SQL by hand.
+  const cooldownMs = legRetryCooldownMs();
+  const retryEligible = new Set(
+    rows
+      .filter(
+        (r) =>
+          r.status === "blocked" &&
+          (r.defer_leg_at == null || now.getTime() - new Date(r.defer_leg_at).getTime() >= cooldownMs),
+      )
+      .map((r) => isoDay(new Date(r.sample_date).getTime())),
+  );
+  const plan = selectBackfillDays(ordered, byStatus, maxDaysPerRun(), retryEligible);
+  const blockedSet = new Set(plan.blocked);
+  const blockedDetail = rows
+    .filter((r) => blockedSet.has(isoDay(new Date(r.sample_date).getTime())))
+    .map((r) => ({ date: isoDay(new Date(r.sample_date).getTime()), leg: r.defer_leg ?? "unknown", detail: r.detail }));
+  return { ...plan, blockedDetail };
 }
 
 /** The days one gap report says are missing and CLOSED. Pure, so the date
@@ -234,14 +307,25 @@ export function selectBackfillDays(
   orderedMissing: string[],
   byStatus: Map<string, string>,
   cap: number,
+  /** Blocked days whose cooldown has elapsed — let back into candidates for
+   *  one more attempt. Defaults to empty so every existing caller (and every
+   *  status other than 'blocked') is unaffected. */
+  retryEligibleBlocked: ReadonlySet<string> = new Set(),
 ): WalletBackfillPlan {
-  const candidates = orderedMissing.filter((d) => byStatus.get(d) !== "exhausted");
+  const candidates = orderedMissing.filter((d) => {
+    const status = byStatus.get(d);
+    if (status === "exhausted") return false;
+    if (status === "blocked" && !retryEligibleBlocked.has(d)) return false;
+    return true;
+  });
   return {
     days: candidates.slice(0, cap),
     totalMissing: candidates.length,
     deferred: Math.max(0, candidates.length - cap),
     retrying: candidates.filter((d) => byStatus.has(d)).length,
     exhausted: orderedMissing.filter((d) => byStatus.get(d) === "exhausted"),
+    blocked: orderedMissing.filter((d) => byStatus.get(d) === "blocked"),
+    blockedDetail: [],
   };
 }
 
@@ -306,7 +390,7 @@ export function dayBlockCache(db: Db): DayBlockCache {
 
 // ── The per-day executor ─────────────────────────────────────────────────────
 
-export type BackfillDayStatus = "filled" | "skipped" | "failed" | "exhausted";
+export type BackfillDayStatus = "filled" | "skipped" | "failed" | "exhausted" | "blocked";
 
 export interface BackfillDayResult {
   ok: boolean;
@@ -487,16 +571,96 @@ async function failDay(
  *  left alone (recordState treats null as "leave the counter"), and the day
  *  stays re-plannable on the next sweep. The gap is still a gap and still
  *  reported by GET /api/admin/gaps either way — what differs is whether the
- *  system will ever try again. */
+ *  system will ever try again.
+ *
+ *  ISSUE #761 — never charging an attempt is right for a TRANSIENT shared leg
+ *  and wrong for a PERMANENT one: a mistyped pin or a delisted pool refuses
+ *  IDENTICALLY on every retry, so with no counter at all the same days were
+ *  re-selected on every scheduled run forever. `leg` names which shared leg is
+ *  to blame (a stable identity — "price-load", "price-pool:<symbols>",
+ *  "block-resolve-head", "chain-read-window", "snapshot-write" — not the raw
+ *  error text, so a 429 one run and a timeout the next still count as the SAME
+ *  leg misbehaving). bumpDeferStreak() below counts consecutive, SEPARATE
+ *  refusals of that leg; crossing legTerminalThreshold() moves the day to the
+ *  terminal 'blocked' status instead of another 'failed' — still disclosed,
+ *  no longer re-selected every run, and retried automatically once its
+ *  cooldown elapses (planWalletBackfill), which is what makes a corrected leg
+ *  heal its days without hand-written SQL. */
 async function deferDay(
   db: Db,
   date: string,
   detail: string,
+  leg: string,
+  now: Date,
   blockNumber: number | null = null,
 ): Promise<BackfillDayResult> {
-  await recordState(db, date, "failed", blockNumber, 0, 0, detail, null);
-  console.warn(`wallet-backfill: ${date} deferred (shared leg, attempt not charged) — ${detail}`);
-  return { ok: false, sampleDate: date, status: "failed", blockNumber, balanceRows: 0, sleeveRows: 0, detail, error: detail };
+  const streak = await bumpDeferStreak(db, date, leg, now);
+  const blocked = streak >= legTerminalThreshold();
+  const status: BackfillDayStatus = blocked ? "blocked" : "failed";
+  const fullDetail = blocked
+    ? `${detail} — BLOCKED: shared leg '${leg}' refused ${streak} consecutive times; retried automatically ` +
+      `once ${Math.round(legRetryCooldownMs() / 60_000)}m have passed since the last refusal, no SQL needed`
+    : detail;
+  await db`
+    UPDATE wallet_backfill_state
+       SET status = ${status}, block_number = ${blockNumber}, detail = ${fullDetail}, attempted_at = now()
+     WHERE sample_date = ${date}
+  `;
+  console.warn(
+    `wallet-backfill: ${date} ${blocked ? "BLOCKED" : "deferred"} (shared leg '${leg}', attempt not charged, streak ${streak}) — ${detail}`,
+  );
+  // A blocked day, like an exhausted one, returns ok:true so the queue stops
+  // marking the run degraded over a state that is already known and disclosed
+  // — what has paused is the spending, not the reporting.
+  return blocked
+    ? { ok: true, sampleDate: date, status, blockNumber, balanceRows: 0, sleeveRows: 0, detail: fullDetail }
+    : { ok: false, sampleDate: date, status, blockNumber, balanceRows: 0, sleeveRows: 0, detail: fullDetail, error: fullDetail };
+}
+
+/**
+ * Advance (or start) the per-day, per-leg consecutive-refusal streak, and
+ * return the resulting count.
+ *
+ * DEBOUNCED, DELIBERATELY. The queue retries a degraded job with its own
+ * exponential backoff (worker/loop.ts, 2^attempts seconds, capped at 3600) —
+ * so a single transient provider blip can call deferDay() for the SAME leg
+ * two or three times within about ten seconds, exactly the burst deferDay
+ * exists to absorb without spending a day's attempt ceiling. Without a
+ * debounce, that one blip would ALSO trip the leg breaker on its own. Two
+ * calls for the same leg less than legDebounceMs() apart are therefore folded
+ * into the SAME streak entry (the streak does not advance, and the streak
+ * clock does not reset either — otherwise a burst faster than the debounce
+ * window could starve the counter indefinitely); calls further apart than
+ * that — in practice, on separate scheduled dispatcher runs — count as
+ * genuinely separate refusals.
+ *
+ * A leg change resets the streak to 1: a different symptom is a different
+ * incident, not a continuation of the old one.
+ */
+async function bumpDeferStreak(db: Db, date: string, leg: string, now: Date): Promise<number> {
+  const debounceMs = legDebounceMs();
+  const [row] = await db<{ defer_streak: number }[]>`
+    INSERT INTO wallet_backfill_state (sample_date, status, defer_leg, defer_streak, defer_leg_at)
+    VALUES (${date}, 'failed', ${leg}, 1, ${now})
+    ON CONFLICT (sample_date) DO UPDATE SET
+      defer_streak = CASE
+        WHEN wallet_backfill_state.defer_leg IS DISTINCT FROM ${leg} THEN 1
+        WHEN wallet_backfill_state.defer_leg_at IS NOT NULL
+             AND wallet_backfill_state.defer_leg_at > ${now}::timestamptz - (${debounceMs}::text || ' milliseconds')::interval
+          THEN wallet_backfill_state.defer_streak
+        ELSE wallet_backfill_state.defer_streak + 1
+      END,
+      defer_leg = ${leg},
+      defer_leg_at = CASE
+        WHEN wallet_backfill_state.defer_leg IS DISTINCT FROM ${leg} THEN ${now}::timestamptz
+        WHEN wallet_backfill_state.defer_leg_at IS NOT NULL
+             AND wallet_backfill_state.defer_leg_at > ${now}::timestamptz - (${debounceMs}::text || ' milliseconds')::interval
+          THEN wallet_backfill_state.defer_leg_at
+        ELSE ${now}::timestamptz
+      END
+    RETURNING defer_streak
+  `;
+  return row!.defer_streak;
 }
 
 async function skipDay(
@@ -615,7 +779,10 @@ export async function backfillWalletWindow(
       // A day whose OWN search failed earns an attempt; one that only lost the
       // window's shared head read does not (DayBlockOutcome.shared).
       const detail = `block resolution failed: ${r ? r.error : "no outcome"}`;
-      out.set(date, r && !r.ok && r.shared ? await deferDay(db, date, detail) : await failDay(db, date, detail));
+      out.set(
+        date,
+        r && !r.ok && r.shared ? await deferDay(db, date, detail, "block-resolve-head", now) : await failDay(db, date, detail),
+      );
       continue;
     }
     readable.push({ date, resolved: r.resolved });
@@ -637,7 +804,7 @@ export async function backfillWalletWindow(
     // Shared leg: one load covers every day in the window, so its failure is not
     // any one day's fault and charges none of them an attempt. See deferDay().
     for (const { date, resolved } of readable) {
-      out.set(date, await deferDay(db, date, `historical price load failed: ${String(err)}`, resolved.blockNumber));
+      out.set(date, await deferDay(db, date, `historical price load failed: ${String(err)}`, "price-load", now, resolved.blockNumber));
     }
     return settle();
   }
@@ -663,7 +830,10 @@ export async function backfillWalletWindow(
       // refusal each day would have made alone, made once. Made once, it is
       // also charged once: no day's attempt counter moves. See deferDay().
       for (const { date, resolved } of readable) {
-        out.set(date, await deferDay(db, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, resolved.blockNumber));
+        out.set(
+          date,
+          await deferDay(db, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, "chain-read-window", now, resolved.blockNumber),
+        );
       }
       return settle();
     }
@@ -671,7 +841,7 @@ export async function backfillWalletWindow(
 
   for (const { date, resolved } of readable) {
     const pre = amountsByTag?.get(toBlockTag(resolved.blockNumber)) ?? null;
-    out.set(date, await repairResolvedDay(db, date, resolved, prices, wallets, assets, deps, pre));
+    out.set(date, await repairResolvedDay(db, date, resolved, prices, wallets, assets, deps, pre, now));
   }
   return settle();
 }
@@ -763,6 +933,11 @@ async function repairResolvedDay(
    *  when the caller had no multi-block reader, in which case this day reads
    *  its own block on its own — the pre-batch behaviour, unchanged. */
   preRead: Map<string, ChainAmount> | null = null,
+  /** Threaded down purely so the shared-leg circuit breaker (issue #761) can
+   *  compare against a deterministic, injectable clock rather than the real
+   *  wall clock — every other timestamp decision in this module already takes
+   *  `now` explicitly for the same reason. */
+  now: Date = new Date(),
 ): Promise<BackfillDayResult> {
   const fail = (detail: string, blockNumber: number | null = null): Promise<BackfillDayResult> =>
     failDay(db, date, detail, blockNumber);
@@ -834,6 +1009,8 @@ async function repairResolvedDay(
         db,
         date,
         `no price source for ${refused.join(", ")} — the pool refused to price it for the whole window`,
+        `price-pool:${[...refused].sort().join(",")}`,
+        now,
         resolved.blockNumber,
       );
     }
@@ -972,19 +1149,24 @@ async function repairResolvedDay(
       }
 
       // `filled` is written only after both active key sets passed validation,
-      // and it commits with the evidence and replacement rows.
+      // and it commits with the evidence and replacement rows. A successful
+      // write clears any shared-leg streak this date was carrying — whatever
+      // leg it was, it was not the reason this attempt succeeded.
       await tx`
         INSERT INTO wallet_backfill_state
-          (sample_date, status, block_number, balance_rows, sleeve_rows, detail, attempted_at)
+          (sample_date, status, block_number, balance_rows, sleeve_rows, detail, attempted_at, defer_leg, defer_streak, defer_leg_at)
         VALUES
-          (${date}, ${status}, ${resolved.blockNumber}, ${balanceRows}, ${sleeveRows}, ${detail}, now())
+          (${date}, ${status}, ${resolved.blockNumber}, ${balanceRows}, ${sleeveRows}, ${detail}, now(), NULL, 0, NULL)
         ON CONFLICT (sample_date) DO UPDATE SET
           status       = EXCLUDED.status,
           block_number = EXCLUDED.block_number,
           balance_rows = EXCLUDED.balance_rows,
           sleeve_rows  = EXCLUDED.sleeve_rows,
           detail       = EXCLUDED.detail,
-          attempted_at = EXCLUDED.attempted_at
+          attempted_at = EXCLUDED.attempted_at,
+          defer_leg    = NULL,
+          defer_streak = 0,
+          defer_leg_at = NULL
       `;
     });
   } catch (err) {
@@ -992,6 +1174,8 @@ async function repairResolvedDay(
       db,
       date,
       `transactional snapshot write failed: ${err instanceof Error ? err.message : String(err)}`,
+      "snapshot-write",
+      now,
       resolved.blockNumber,
     );
   }
@@ -1019,6 +1203,12 @@ async function bumpAttempts(db: Db, date: string): Promise<number> {
 // transaction above because there is no transaction in those paths — the day
 // failed or was skipped before any write was attempted. `attempts` of null
 // leaves the existing counter alone (a skip is not a failed attempt).
+//
+// Every caller of this function (failDay, skipDay) writes a DAY-SPECIFIC
+// outcome, never a shared-leg one, so it always clears the shared-leg streak
+// (issue #761): whatever leg a prior run blamed, this day's own problem is a
+// different incident, and a day that just succeeded or was skipped is not
+// mid-streak with anything.
 async function recordState(
   db: Db,
   date: string,
@@ -1031,9 +1221,9 @@ async function recordState(
 ): Promise<void> {
   await db`
     INSERT INTO wallet_backfill_state
-      (sample_date, status, block_number, balance_rows, sleeve_rows, attempts, detail, attempted_at)
+      (sample_date, status, block_number, balance_rows, sleeve_rows, attempts, detail, attempted_at, defer_leg, defer_streak, defer_leg_at)
     VALUES
-      (${date}, ${status}, ${blockNumber}, ${balanceRows}, ${sleeveRows}, ${attempts ?? 0}, ${detail}, now())
+      (${date}, ${status}, ${blockNumber}, ${balanceRows}, ${sleeveRows}, ${attempts ?? 0}, ${detail}, now(), NULL, 0, NULL)
     ON CONFLICT (sample_date) DO UPDATE SET
       status       = EXCLUDED.status,
       block_number = EXCLUDED.block_number,
@@ -1041,6 +1231,9 @@ async function recordState(
       sleeve_rows  = EXCLUDED.sleeve_rows,
       attempts     = COALESCE(${attempts}, wallet_backfill_state.attempts),
       detail       = EXCLUDED.detail,
-      attempted_at = EXCLUDED.attempted_at
+      attempted_at = EXCLUDED.attempted_at,
+      defer_leg    = NULL,
+      defer_streak = 0,
+      defer_leg_at = NULL
   `;
 }
