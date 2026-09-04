@@ -709,6 +709,15 @@ export const config = {
   // If set, the API process also serves this static directory (the built
   // frontend) — a single-box deployment with no reverse proxy.
   staticDir: process.env.STATIC_DIR || null,
+  // Origins allowed to call this API cross-origin (issue #871): a split-repo
+  // frontend deployed as its own container is no longer same-origin, so it
+  // needs CORS. Empty by default — the single-box same-origin deployment
+  // (D11/D13) needs no CORS headers at all, and api.ts's withCors()/
+  // corsPreflightResponse() are no-ops when a request's Origin isn't listed.
+  corsAllowedOrigins: (process.env.CORS_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean),
   workerId: process.env.WORKER_ID ?? `worker-${process.pid}`,
   // Shared secret guarding privileged endpoints (member onboarding + admin
   // lifecycle). If set, callers must present it as `X-Admin-Token`. If unset,

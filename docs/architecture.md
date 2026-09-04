@@ -108,6 +108,12 @@ On the eventual split, `contract/` is published (private npm registry / GitHub
 Packages) or vendored via git submodule; both repos pin a version. Bumping the
 contract is the explicit, reviewable coupling point.
 
+The split frontend deploys as its own container on the same DO infrastructure
+the api runs on (not Cloudflare Pages), reachable cross-origin via CORS rather
+than same-origin — D43 covers why (D29's static-assembly coupling means the
+repo split alone wouldn't decouple deploys) and what's implemented so far
+(`backend/src/api/cors.ts`, `CORS_ALLOWED_ORIGINS`).
+
 ### Test, eval, and tooling layout
 
 Status: target layout (D23). Two rules govern where things go.
@@ -896,7 +902,15 @@ The independent producer runs regime and research on **distinct timers**:
 settled end-of-day) and `research` (both research signals, never the regime
 tool) daily at **23:00 UTC**. These timers live in `analytics-producer`, not
 `job_schedules` or worker lanes. The API exposes regime at `/api/dashboards/regime-snapshots?range=`
-and each research signal at `/api/dashboards/research-signals/:key`; the frontend
+(`?view=summary` returns only today's composite/panel read — date, composite,
+compositePercentile, regime, the three panel indices and labels, and
+staleness — instead of the full `{ latest, history, staleness }` body, issue
+#866c; each `history[]` row also drops `backtest`/`correlations`/`indicators`/
+`percentiles` — meaningful only on `latest` — via the shared `forHistory`
+projection in `regime-projection.ts`, issue #866a) and each research signal at
+`/api/dashboards/research-signals/:key`
+(`?view=summary` returns only title/asof/question/summary/gauges/spec, dropping
+the raw price series and indicators dict, issue #869b); the frontend
 renders `/regime` (including the backtest + predictive-correlations panels) and the
 `/research/*` views (mirroring the original site's surfaces). The regime DTO also
 carries an explicit **staleness block** — `{ asof, serverDate, ageDays, stale,

@@ -44,6 +44,16 @@ async function get(url: string): Promise<unknown> {
   return res.json();
 }
 
+// A session still scheduled/collecting legitimately has no brief yet (issue
+// #868: the endpoint now 404s rather than answering 200 with a null body), so
+// tolerate that one status here instead of failing the whole capture.
+async function getBriefOrNull(url: string): Promise<unknown> {
+  const res = await fetch(backend + url);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`capture: GET ${url} -> HTTP ${res.status} (cannot freeze a broken route)`);
+  return res.json();
+}
+
 async function main(): Promise<void> {
   console.log(`[goldens] capturing from ${backend} …`);
   const routes: Record<string, unknown> = {};
@@ -85,7 +95,7 @@ async function main(): Promise<void> {
   for (const s of sessions) {
     const p = expand(ROUTES.swarm.session, { date: s.date, subject: s.subjectId });
     routes[p] = await get(p);
-    routes[ROUTES.swarm.brief] = await get(`${ROUTES.swarm.brief}?date=${s.date}&subject=${s.subjectId}`);
+    routes[ROUTES.swarm.brief] = await getBriefOrNull(`${ROUTES.swarm.brief}?date=${s.date}&subject=${s.subjectId}`);
   }
   // Per-subject routes the session detail page fetches for the portfolio donut +
   // thesis (loadApi → subject + snapshots). Discovered from the sessions list.

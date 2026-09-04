@@ -40,6 +40,16 @@ export type ValidationResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string };
 
+// A bare /^\d{4}-\d{2}-\d{2}$/ accepts calendar-impossible strings like
+// 2026-13-45, which still reach a Postgres date cast and surface as a 500
+// rather than the 400 this is meant to produce (issue #868). Round-tripping
+// through Date's UTC parser catches those.
+export function isIsoDate(v: string | null | undefined): v is string {
+  if (!v || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+}
+
 export async function readJsonObject(req: Request): Promise<JsonObject | null> {
   const value = await req.json().catch(() => null);
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -146,7 +156,7 @@ export function validateSubmission(
     }
   }
 
-  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  if (date && !isIsoDate(date)) {
     return { ok: false, error: "date must be YYYY-MM-DD" };
   }
 
@@ -218,7 +228,7 @@ export function validateSigningDraft(
     }
   }
 
-  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  if (date && !isIsoDate(date)) {
     return { ok: false, error: "date must be YYYY-MM-DD" };
   }
 

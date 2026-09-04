@@ -1091,9 +1091,21 @@ test("two sessions for one subject on one day: BOTH briefs survive, each keeping
   expect(byDate?.status).toBe(200);
   expect((byDate?.body as { sessionId: string }).sessionId).toBe(second.id);
 
-  // Unknown / unparseable handles are "no brief", never a 500 out of Postgres.
-  expect((await get(`${ROUTES.swarm.brief}?session=${crypto.randomUUID()}`))?.body).toBeNull();
-  expect((await get(`${ROUTES.swarm.brief}?session=not-a-uuid`))?.body).toBeNull();
+  // Unknown / unparseable handles are a 404, never a 500 out of Postgres, and
+  // never a 200 with a null body (issue #868).
+  const byUnknownSession = await get(`${ROUTES.swarm.brief}?session=${crypto.randomUUID()}`);
+  expect(byUnknownSession?.status).toBe(404);
+  const byBadSession = await get(`${ROUTES.swarm.brief}?session=not-a-uuid`);
+  expect(byBadSession?.status).toBe(404);
+
+  // A malformed date used to reach the date-cast and 500; now a 400.
+  const byBadDate = await get(`${ROUTES.swarm.brief}?date=notadate&subject=${subj}`);
+  expect(byBadDate?.status).toBe(400);
+  const byEmptyDate = await get(`${ROUTES.swarm.brief}?date=&subject=`);
+  expect(byEmptyDate?.status).toBe(400);
+  // A well-formed date/subject pair that matches nothing is a 404, not a 200 null.
+  const byUnknownSubject = await get(`${ROUTES.swarm.brief}?date=${date}&subject=${rid("no-such-subject")}`);
+  expect(byUnknownSubject?.status).toBe(404);
 });
 
 // ── Joining is idempotent by member id ──────────────────────────────────────
@@ -1154,4 +1166,68 @@ test("re-registering an active member does not consume roster capacity", async (
   // A NET-NEW member is still refused at the cap.
   const overflow = await ic.registerMember({ memberId: rid("over"), name: "Overflow", publicKey: `O${"o".repeat(43)}` });
   expect(overflow).not.toHaveProperty("token");
+});
+
+// ── researchSignals projected to references on the public route (issue #869) ─
+test("GET brief projects researchSignals to references by default, and ?include=researchSignals restores the embed", async () => {
+  const subj = rid("briefref");
+  await ic.ensureSubject(subj, "Brief Ref Subject");
+  const session = await ic.openSession(subj);
+  const date = sessionDate(session);
+
+  await sql`INSERT INTO research_signals (signal_key, date, payload)
+            VALUES ('channel-divergence', ${date}, ${sql.json({ title: "Channel Divergence", btc_price: [1, 2, 3] })})
+            ON CONFLICT (signal_key, date) DO UPDATE SET payload = EXCLUDED.payload`;
+  await ic.publishBrief(session.id, 60);
+
+  const get = async (p: string) => await handleSwarm(new Request(`http://test${p}`), new URL(`http://test${p}`));
+
+  const byRef = await get(`${ROUTES.swarm.brief}?session=${session.id}`);
+  expect(byRef?.status).toBe(200);
+  const refBody = byRef?.body as { body: { researchSignals: { signalKey: string; date: string; href: string }[] } };
+  expect(refBody.body.researchSignals).toHaveLength(1);
+  expect(refBody.body.researchSignals[0].signalKey).toBe("channel-divergence");
+  expect(refBody.body.researchSignals[0].href).toBe("/api/dashboards/research-signals/channel-divergence");
+  // The stored date column round-trips through JSON as a full ISO instant
+  // (a postgres.js/Date artifact of the write path, not something this
+  // projection changes) — assert the calendar day it carries, not the format.
+  expect(refBody.body.researchSignals[0].date.slice(0, 10)).toBe(date);
+  // No payload leaks through in reference form.
+  expect(refBody.body.researchSignals[0]).not.toHaveProperty("payload");
+
+  const byFull = await get(`${ROUTES.swarm.brief}?session=${session.id}&include=researchSignals`);
+  const fullBody = byFull?.body as { body: { researchSignals: { payload: { btc_price: number[] } }[] } };
+  expect(fullBody.body.researchSignals[0].payload.btc_price).toEqual([1, 2, 3]);
+
+  // Same behavior through the date/subject form.
+  const byDate = await get(`${ROUTES.swarm.brief}?date=${date}&subject=${subj}`);
+  const dateBody = byDate?.body as { body: { researchSignals: { signalKey: string; href: string }[] } };
+  expect(dateBody.body.researchSignals[0].signalKey).toBe("channel-divergence");
+  expect(dateBody.body.researchSignals[0].href).toBe("/api/dashboards/research-signals/channel-divergence");
+});
+
+// ── subjects/:id/snapshots — limit/before are opt-in (issue #869c) ──────────
+test("GET subject snapshots: omitting limit/before returns everything; both are opt-in pagination", async () => {
+  const subj = rid("snaps");
+  await ic.ensureSubject(subj, "Snapshot Paging Subject");
+  const dates = ["2026-08-01", "2026-08-02", "2026-08-03"];
+  for (const d of dates) {
+    await sql`INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)
+              VALUES (${subj}, ${d}, 100, ${sql.json([])}, ${sql.json([])}, ${sql.json([])})`;
+  }
+
+  const get = async (p: string) => await handleSwarm(new Request(`http://test${p}`), new URL(`http://test${p}`));
+  const all = await get(routePath(ROUTES.swarm.subjectSnapshots, { id: subj }));
+  const allBody = all?.body as { snapshots: { date: string }[] };
+  expect(allBody.snapshots).toHaveLength(3);
+  // Newest first, unchanged ordering.
+  expect(allBody.snapshots.map((s) => s.date)).toEqual(["2026-08-03", "2026-08-02", "2026-08-01"]);
+
+  const limited = await get(`${routePath(ROUTES.swarm.subjectSnapshots, { id: subj })}?limit=1`);
+  const limitedBody = limited?.body as { snapshots: { date: string }[] };
+  expect(limitedBody.snapshots).toEqual([{ date: "2026-08-03" }].map((s) => expect.objectContaining(s)));
+
+  const before = await get(`${routePath(ROUTES.swarm.subjectSnapshots, { id: subj })}?before=2026-08-03`);
+  const beforeBody = before?.body as { snapshots: { date: string }[] };
+  expect(beforeBody.snapshots.map((s) => s.date)).toEqual(["2026-08-02", "2026-08-01"]);
 });

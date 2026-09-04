@@ -3,6 +3,7 @@
 // calls these under the hood). Returns {status, body} for the Bun router to send.
 import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
 import * as ic from "../../swarm/domain.ts";
+import { projectBriefResearchSignals } from "../../swarm/projections.ts";
 import * as swarmAdmin from "../../swarm/admin.ts";
 import { handleSwarmAdmin } from "./swarm-admin.ts";
 import { isRegistrablePublicKey, isValidEd25519PublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
@@ -12,6 +13,7 @@ import { bearer, hasAnalyticsProviderRole, isPrivileged, hasAutomationRole } fro
 import { jsonValue, sql } from "../../db/client.ts";
 import {
   CONTACT_EMAIL_RE,
+  isIsoDate,
   parseApply,
   parseRegisterMember,
   parsePositiveNumber,
@@ -115,7 +117,12 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   }
   if (m === "GET" && RE_SUBJECT_SNAPSHOTS.test(p)) {
     const id = decodeURIComponent(p.split("/")[4] ?? "");
-    return { status: 200, body: { snapshots: await ic.getSubjectSnapshots(id) } };
+    // Both opt-in (issue #869c): omitting them returns every snapshot,
+    // unchanged from before either param existed.
+    const limitRaw = url.searchParams.get("limit");
+    const limit = limitRaw ? Number(limitRaw) : undefined;
+    const before = url.searchParams.get("before") ?? undefined;
+    return { status: 200, body: { snapshots: await ic.getSubjectSnapshots(id, { limit, before }) } };
   }
   if (m === "GET" && RE_SUBJECT.test(p)) {
     const id = decodeURIComponent(p.split("/")[4] ?? "");
@@ -151,11 +158,30 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     // session), and `?date=&subject=` stays supported unchanged for every
     // published member client and doc — it resolves to the LATEST session of
     // that day, matching GET /api/swarm/sessions/:date/:subject.
+    //
+    // researchSignals is projected to references by default (issue #869): the
+    // embed is ~980 KB of a brief a member reasons over in under 3 KB, and
+    // this is a READ-time projection so it also shrinks briefs published
+    // before this shipped, with no backfill. ?include=researchSignals opts
+    // back into the legacy embedded shape.
+    const includeResearchSignals = (url.searchParams.get("include") ?? "")
+      .split(",").map((s) => s.trim()).includes("researchSignals");
     const session = url.searchParams.get("session");
-    if (session) return { status: 200, body: await ic.getBriefBySession(decodeURIComponent(session)) };
+    if (session) {
+      const brief = await ic.getBriefBySession(decodeURIComponent(session));
+      const body = brief && projectBriefResearchSignals(brief, includeResearchSignals);
+      return { status: body ? 200 : 404, body: body ?? { error: "no brief for that session" } };
+    }
     const date = url.searchParams.get("date") ?? "";
     const subject = url.searchParams.get("subject") ?? "";
-    return { status: 200, body: await ic.getBrief(date, subject) };
+    // date/subject reach a `date` column cast in ic.getBrief; an invalid date
+    // used to raise there and surface as a 500 (issue #868).
+    if (!isIsoDate(date) || !subject) {
+      return { status: 400, body: { error: "session, or date (YYYY-MM-DD) and subject, required" } };
+    }
+    const brief = await ic.getBrief(date, subject);
+    const body = brief && projectBriefResearchSignals(brief, includeResearchSignals);
+    return { status: body ? 200 : 404, body: body ?? { error: "no brief for that day and subject" } };
   }
 
   // get_signing_payload: return the exact canonical bytes the member must sign.

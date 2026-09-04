@@ -7,7 +7,7 @@ import { sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { createComment, listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
 import { getProjectDetail, getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleSwarm } from "./routes/swarm.ts";
@@ -15,6 +15,7 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { serveStatic } from "./static.ts";
+import { corsPreflightResponse, withCors } from "./cors.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -94,7 +95,7 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const { pathname } = url;
 
-    if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+    if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
 
     // Client ip for rate limiting. X-Forwarded-For is client-controlled and only
     // trustworthy behind a known proxy, so we use it ONLY when TRUST_PROXY=1
@@ -108,13 +109,13 @@ const server = Bun.serve({
     }
 
     try {
-      return await route(req, url, pathname, clientIp);
+      return withCors(await route(req, url, pathname, clientIp), req, pathname);
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
-      if (err instanceof URIError) return json({ error: "bad request" }, 400);
+      if (err instanceof URIError) return withCors(json({ error: "bad request" }, 400), req, pathname);
       console.error("api error:", err);
-      return json({ error: "internal error" }, 500);
+      return withCors(json({ error: "internal error" }, 500), req, pathname);
     }
   },
 });
@@ -156,7 +157,11 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     }
 
     if (pathname === ROUTES.dashboards.regimeSnapshots && req.method === "GET") {
-      return json(await getRegimeSnapshots(url));
+      return json(
+        url.searchParams.get("view") === "summary"
+          ? await getRegimeSnapshotsSummary()
+          : await getRegimeSnapshots(url),
+      );
     }
 
     if (pathname === ROUTES.dashboards.vaultEconomics && req.method === "GET") {
@@ -284,7 +289,7 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname.startsWith("/api/dashboards/research-signals/") && req.method === "GET") {
       const key = decodeURIComponent(pathname.split("/").pop()!);
-      const r = await getResearchSignal(key);
+      const r = await getResearchSignal(key, url.searchParams.get("view") === "summary");
       return json(r ?? { error: "not found" }, r ? 200 : 404);
     }
 

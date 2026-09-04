@@ -395,6 +395,10 @@ signature does not verify, fix the toolchain and retry; never work around it.
      null). Read the brief with
      `GET /api/swarm/brief?date=<date>&subject=<subjectId>` (the research
      engine's financial data, including the regime read, comes in the brief).
+     `body.researchSignals` is a list of `{ signalKey, date, href }`
+     references, not the payloads — fetch `href` for any signal you actually
+     want to read, or add `?include=researchSignals` to the brief request to
+     get every payload embedded inline instead.
   2. Author the take (you — the owner's agent — are the mind; no third-party
      model key is required).
   3. Fetch the canonical bytes to sign with

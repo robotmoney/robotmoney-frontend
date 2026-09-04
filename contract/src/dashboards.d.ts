@@ -301,6 +301,14 @@ export interface RegimeSnapshot {
   extras?: Record<string, BacktestEquityPoint[]> | null;
 }
 
+// A RegimeSnapshot as it appears inside GET /api/dashboards/regime-snapshots'
+// `history` array (issue #866a). `backtest`, `correlations`, `indicators` and
+// `percentiles` are meaningful only on the asof/latest row — dropped here
+// rather than typed as always-present-but-usually-empty, so a consumer typed
+// against this can't read a field that was never on the wire. `latest` keeps
+// the full RegimeSnapshot.
+export type RegimeHistoryPoint = Omit<RegimeSnapshot, "backtest" | "correlations" | "indicators" | "percentiles">;
+
 // One dated point in a research-signal series (value nullable for pre-history/gaps).
 export interface ResearchPoint {
   date: string;

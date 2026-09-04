@@ -733,6 +733,47 @@ test("a detected gap retries despite filled/skipped metadata; exhausted days rem
   expect(plan.days).toEqual(["d1", "d2", "d4"]);
   expect(plan.retrying).toBe(3);
   expect(plan.exhausted).toEqual(["d3"]);
+  expect(plan.blocked).toEqual([]);
+});
+
+// issue #761: a shared leg's terminal state must stop the same days eating the
+// whole run's budget every time, without needing hand-written SQL to unstick
+// them once the leg is fixed — that second half is what `retryEligibleBlocked`
+// is for.
+test("issue #761 — a BLOCKED day is excluded like exhausted, but disclosed either way", () => {
+  const byStatus = new Map([
+    ["d1", "blocked"],
+    ["d2", "blocked"],
+    ["d3", "failed"],
+  ]);
+  const plan = selectBackfillDays(["d1", "d2", "d3"], byStatus, 10);
+  expect(plan.days).toEqual(["d3"]);
+  expect(plan.blocked).toEqual(["d1", "d2"]);
+  expect(plan.exhausted).toEqual([]);
+});
+
+test("issue #761 — a BLOCKED day whose cooldown elapsed is let back in for one more attempt", () => {
+  const byStatus = new Map([
+    ["d1", "blocked"],
+    ["d2", "blocked"],
+    ["d3", "failed"],
+  ]);
+  // Only d1's cooldown has elapsed — retry-eligibility is per DAY, not a
+  // blanket unblock the moment any one day is due.
+  const plan = selectBackfillDays(["d1", "d2", "d3"], byStatus, 10, new Set(["d1"]));
+  expect(plan.days).toEqual(["d1", "d3"]);
+  // Still disclosed as blocked regardless of whether it is retried this run —
+  // the caller (repairGaps) must be able to name it every run, not just the
+  // run that tripped or cleared it.
+  expect(plan.blocked).toEqual(["d1", "d2"]);
+  expect(plan.retrying).toBe(2); // d1 (eligible) and d3 — d2 stays excluded
+});
+
+test("issue #761 — the per-run cap still applies once blocked days are retry-eligible", () => {
+  const byStatus = new Map([["d1", "blocked"]]);
+  const plan = selectBackfillDays(["d1", "d2", "d3"], byStatus, 2, new Set(["d1"]));
+  expect(plan.days).toEqual(["d1", "d2"]);
+  expect(plan.deferred).toBe(1);
 });
 
 // ── Sanity: the fixture actually exercises the real asset/sleeve layout ──────

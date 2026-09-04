@@ -2,7 +2,7 @@
 // the analytics report stage (analytics/report/projections.ts); these handlers
 // only parse/clamp request params and forward. API paths, DTOs, and response
 // shapes are unchanged.
-import { fetchRegimeSnapshots, fetchLatestResearchSignal } from "../../analytics/report/projections.ts";
+import { fetchRegimeSnapshots, fetchLatestResearchSignal, toRegimeSummary } from "../../analytics/report/projections.ts";
 import { fetchVaultEconomics } from "../../chain/vault-economics.ts";
 import { fetchPersistedWalletBalances } from "../../chain/wallet-balances.ts";
 // Live-data contract (#50 honesty): each chain/db module owns its own short-TTL
@@ -28,9 +28,25 @@ import { fetchCoinsList, fetchVaultsList, fetchWalletsList } from "../../project
 // read namespace, sibling projection module to the LIST feeds above.
 import { fetchCoinProfile, fetchVaultProfile, fetchWalletProfile } from "../../projects/dossier-projections.ts";
 
+// The readable answer inside a research-signal payload: about 1 KB against
+// the full ~644 KB (the rest is btc_price/qqq_price chart series and the
+// per-indicator `indicators` dict — chart backdrops, not the answer).
+const SUMMARY_PAYLOAD_FIELDS = ["title", "asof", "question", "summary", "gauges", "spec"] as const;
+
 // GET /api/dashboards/research-signals/:key → latest research signal payload
-export async function getResearchSignal(key: string) {
-  return fetchLatestResearchSignal(key);
+// GET /api/dashboards/research-signals/:key?view=summary → the readable
+// answer alone (issue #869b), dropping the raw price series and indicators
+// dict that exist for the /research/* charts.
+export async function getResearchSignal(key: string, summaryView = false) {
+  const signal = await fetchLatestResearchSignal(key);
+  if (!signal || !summaryView) return signal;
+  const payload = signal.payload as Record<string, unknown> | null;
+  if (!payload || typeof payload !== "object") return signal;
+  const summaryPayload: Record<string, unknown> = {};
+  for (const field of SUMMARY_PAYLOAD_FIELDS) {
+    if (field in payload) summaryPayload[field] = payload[field];
+  }
+  return { ...signal, payload: summaryPayload };
 }
 
 // GET /api/dashboards/vault-economics → live Base RPC vault economics (TVL,
@@ -53,7 +69,22 @@ export async function getWalletBalances() {
 export async function getRegimeSnapshots(url: URL) {
   const n = Math.trunc(Number(url.searchParams.get("range") ?? 180));
   const range = Number.isFinite(n) ? Math.min(3650, Math.max(1, n)) : 180;
-  return fetchRegimeSnapshots(range);
+  const includeBacktest = (url.searchParams.get("include") ?? "")
+    .split(",").map((s) => s.trim()).includes("backtest");
+  return fetchRegimeSnapshots(range, includeBacktest);
+}
+
+// GET /api/dashboards/regime-snapshots?view=summary → today's classifier read
+// alone (~500 bytes against ~500 KB): composite, the three panel indices,
+// their labels, and staleness. A separate function (rather than a branch
+// inside getRegimeSnapshots) so that function's return type stays the single
+// { latest, history, staleness } shape every existing caller already expects
+// (issue #866c). Ignores `range`: `latest` is always history's last row
+// regardless of range, so this queries range=1 rather than paying for history
+// it would only discard.
+export async function getRegimeSnapshotsSummary() {
+  const full = await fetchRegimeSnapshots(1);
+  return { summary: toRegimeSummary(full.latest, full.staleness) };
 }
 
 // GET /api/dashboards/buybacks → token buyback history (ROBOTMONEY Transfer logs

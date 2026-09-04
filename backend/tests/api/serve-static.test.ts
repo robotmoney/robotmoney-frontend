@@ -104,11 +104,31 @@ test("serveStatic serves the prerendered <route>/index.html for an extensionless
   expect(body).not.toContain("SPA Shell");
 });
 
-test("serveStatic falls back to the home-page shell for an extensionless route with no prerendered file", async () => {
+test("serveStatic falls back to the home-page shell for an extensionless route with no prerendered file, when _shell.html is absent", async () => {
   const res = await serveStatic("/not-in-the-sitemap", tempDir);
   expect(res).not.toBeNull();
   const body = await res!.text();
   expect(body).toContain("SPA Shell");
+});
+
+// Issue #870: once index.html carries the home page's own body (prerender
+// inlining), falling back to it for an unknown/dynamic client route answers
+// with the front page. _shell.html — an empty-mount shell — is preferred when
+// the assembly provides one.
+test("serveStatic prefers _shell.html over index.html for a client route with no prerendered file", async () => {
+  writeFileSync(
+    join(tempDir, "_shell.html"),
+    '<html><head><title>Robot Money</title></head><body><main id="view"></main></body></html>',
+  );
+  try {
+    const res = await serveStatic("/swarm/members/athena", tempDir);
+    expect(res).not.toBeNull();
+    const body = await res!.text();
+    expect(body).not.toContain("SPA Shell");
+    expect(body).toContain('<main id="view"></main>');
+  } finally {
+    rmSync(join(tempDir, "_shell.html"), { force: true });
+  }
 });
 
 test("serveStatic inlines the docs fragment into that docs route's PRERENDERED shell", async () => {

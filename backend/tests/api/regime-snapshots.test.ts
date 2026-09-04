@@ -27,7 +27,7 @@ import { expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
 import { fetchRegimeSnapshots } from "../../src/analytics/report/projections.ts";
-import { getRegimeSnapshots } from "../../src/api/routes/dashboards.ts";
+import { getRegimeSnapshots, getRegimeSnapshotsSummary } from "../../src/api/routes/dashboards.ts";
 import { saveRegimeSnapshots } from "../../src/analytics/store/regime-store.ts";
 import { REGIME_STALE_THRESHOLD_DAYS, type JsonValue } from "../../src/analytics/report/regime-projection.ts";
 import { useCleanDatabasePerTest } from "../support/clean-db.ts";
@@ -195,6 +195,38 @@ test("staleness is derived from the NEWEST row even when `range` clamps history 
   expect(r.staleness.asof).toBe(today());
 });
 
+// ── ?include=backtest (issue #866b): off by default, opt-in ────────────────
+test("GET regime-snapshots: latest.backtest is null by default, present with ?include=backtest", async () => {
+  const backtest = { risk_parity: { spx: { cagr: 0.1, max_dd: -0.2 } } };
+  await saveRegimeSnapshots([{ ...snapRow(today()), backtest }]);
+
+  const withoutInclude = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=1`);
+  const bodyWithout = JSON.parse(JSON.stringify(await getRegimeSnapshots(withoutInclude)));
+  expect(bodyWithout.latest.backtest).toBeNull();
+
+  const withInclude = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=1&include=backtest`);
+  const bodyWith = JSON.parse(JSON.stringify(await getRegimeSnapshots(withInclude)));
+  expect(bodyWith.latest.backtest).toEqual(backtest);
+});
+
+test("GET regime-snapshots: ?include=backtest doesn't leak other asof-only fields, and other fields on latest are unaffected either way", async () => {
+  const backtest = { risk_parity: {} };
+  await saveRegimeSnapshots([{ ...snapRow(today()), backtest }]);
+  const url = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=1`);
+  const body = JSON.parse(JSON.stringify(await getRegimeSnapshots(url)));
+  expect(body.latest.composite).toBe(0.42);
+  expect(body.latest.regime).toBe("neutral");
+  expect(body.latest.date).toBe(today());
+});
+
+test("GET regime-snapshots: a comma-separated ?include= with backtest among other values still includes it", async () => {
+  const backtest = { risk_parity: { spx: { cagr: 0.1 } } };
+  await saveRegimeSnapshots([{ ...snapRow(today()), backtest }]);
+  const url = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=1&include=researchSignals,backtest`);
+  const body = JSON.parse(JSON.stringify(await getRegimeSnapshots(url)));
+  expect(body.latest.backtest).toEqual(backtest);
+});
+
 // ── GET /api/dashboards/regime-snapshots (route handler → response body) ────
 test("GET regime-snapshots response body carries a staleness object with asof, ageDays, stale, thresholdDays, panelObservationDates", async () => {
   await saveRegimeSnapshots([snapRow(today())]);
@@ -230,4 +262,58 @@ test("GET regime-snapshots over an empty table still returns a well-formed stale
   expect(body.staleness.asof).toBeNull();
   expect(body.staleness.ageDays).toBeNull();
   expect(body.staleness.thresholdDays).toBe(REGIME_STALE_THRESHOLD_DAYS);
+});
+
+// ── ?view=summary (issue #866c): the read an agent actually makes ──────────
+test("GET regime-snapshots?view=summary returns only the composite/panel read, not history or the heavy latest fields", async () => {
+  await saveRegimeSnapshots([snapRow(today())]);
+  const body = JSON.parse(JSON.stringify(await getRegimeSnapshotsSummary()));
+  expect(body.history).toBeUndefined();
+  expect(body.latest).toBeUndefined();
+  expect(Object.keys(body)).toEqual(["summary"]);
+  expect(Object.keys(body.summary).sort()).toEqual([
+    "compositePercentile",
+    "composite",
+    "date",
+    "factorIndex",
+    "factorRegime",
+    "macroIndex",
+    "macroRegime",
+    "onchainIndex",
+    "onchainRegime",
+    "regime",
+    "staleness",
+  ].sort());
+  expect(body.summary.date).toBe(today());
+  expect(body.summary.composite).toBe(0.42);
+  expect(body.summary.compositePercentile).toBe(61);
+  expect(body.summary.regime).toBe("neutral");
+  expect(body.summary.macroRegime).toBe("neutral");
+  expect(body.summary.onchainRegime).toBeNull();
+  expect(body.summary.factorRegime).toBeNull();
+  expect(body.summary.macroIndex).toBeNull();
+  expect(body.summary.staleness.stale).toBe(false);
+});
+
+test("GET regime-snapshots?view=summary over an empty table returns { summary: null }, never a 5xx-shaped hole", async () => {
+  const body = JSON.parse(JSON.stringify(await getRegimeSnapshotsSummary()));
+  expect(body).toEqual({ summary: null });
+});
+
+test("GET regime-snapshots?view=summary reads the true latest row regardless of how many rows exist", async () => {
+  await saveRegimeSnapshots([snapRow("2020-01-01"), snapRow(today())]);
+  const body = JSON.parse(JSON.stringify(await getRegimeSnapshotsSummary()));
+  expect(body.summary.date).toBe(today());
+});
+
+// The route wires ?view=summary to a dedicated function BEFORE calling
+// getRegimeSnapshots, so this asserts the dispatch itself, not just the
+// summary function in isolation. api-routes-contract.test.ts covers path
+// registration; this covers the view= branch inside it.
+test("GET regime-snapshots without ?view=summary still returns the full { latest, history, staleness } shape", async () => {
+  await saveRegimeSnapshots([snapRow(today())]);
+  const url = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=1`);
+  const body = JSON.parse(JSON.stringify(await getRegimeSnapshots(url)));
+  expect(body.summary).toBeUndefined();
+  expect(Array.isArray(body.history)).toBe(true);
 });

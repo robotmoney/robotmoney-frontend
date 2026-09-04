@@ -43,6 +43,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0041_swarm_judgement_soak_record.sql",
   "0042_swarm_consensus_receipts.sql",
   "0043_swarm_member_judges.sql",
+  "0044_wallet_backfill_leg_terminal.sql",
 ] as const;
 
 /**
@@ -125,6 +126,13 @@ export const NEW_COLUMNS = [
   { table: "swarm_members", column: "role" },
   { table: "swarm_session_judgements", column: "judged_by" },
   { table: "swarm_session_judgements", column: "judged_by_member_id" },
+  // 0044 (issue #761): the shared-leg circuit breaker's per-day counter, on the
+  // table 0033 creates earlier in this same release — the same
+  // create-then-alter-within-one-release shape as the chain_day_blocks and
+  // swarm_session_judgements rows above.
+  { table: "wallet_backfill_state", column: "defer_leg" },
+  { table: "wallet_backfill_state", column: "defer_streak" },
+  { table: "wallet_backfill_state", column: "defer_leg_at" },
 ] as const;
 
 /** Every table this release creates, alters, locks, or writes: the roster of the

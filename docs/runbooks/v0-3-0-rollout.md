@@ -240,7 +240,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — twelve migrations
+### 2.2 🔴 The database delta — thirteen migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -262,6 +262,7 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0041_swarm_judgement_soak_record.sql` | `ADD COLUMN applied / applied_skipped_reason / dropped_positions / dropped_disagreements` on `swarm_session_judgements`, with three CHECK constraints | Additive columns with constant defaults; **no historical row is rewritten** |
 | `0042_swarm_consensus_receipts.sql` | `CREATE TABLE swarm_consensus_receipts` (one published receipt per session, keyed on `session_id`, with foreign keys to `swarm_sessions` and `swarm_session_judgements`); install the `rm_append_only_guard()` pair on it; install a second `rm_consensus_receipt_immutable()` pair refusing **UPDATE**; `REVOKE INSERT/UPDATE/DELETE` from `rm_worker` | Additive new table, seeded with nothing; **the only table in the set that refuses UPDATE as well as DELETE** |
 | `0043_swarm_member_judges.sql` | Add `swarm_members.role` (`member` or `judge`); add `judged_by` and optional `judged_by_member_id` to `swarm_session_judgements`, with an attribution CHECK and the latter's foreign key to `swarm_members` | Additive role and attribution columns; historical worker judgements explicitly remain `robotmoney-in-house` |
+| `0044_wallet_backfill_leg_terminal.sql` | Widen `wallet_backfill_state.status`'s CHECK to admit `'blocked'` (`DROP CONSTRAINT` + `ADD CONSTRAINT`); `ADD COLUMN defer_leg text`, `defer_streak int NOT NULL DEFAULT 0`, `defer_leg_at timestamptz` | Additive columns with constant defaults **plus a constraint swap on a table this same release creates (`0033`)** |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
@@ -306,6 +307,14 @@ exists only once an operator publishes one, which is a post-cutover action and
 not part of this delta. `0043` then adds the member-role and judgement-attribution
 columns with constant defaults and validates its member foreign key / attribution
 CHECK; it writes no historical identity and takes only the normal brief DDL locks.
+`0044` swaps `wallet_backfill_state`'s status CHECK — the same `DROP`/`ADD
+CONSTRAINT` shape as `0039`'s, so it takes `ACCESS EXCLUSIVE` on that table and
+validates the new predicate against every existing row — then adds three
+columns with constant defaults, catalog-only on PG 11+. On a production database
+upgrading directly from v0.2.2 the table is unpopulated (`0033` ships in this
+same release, see below), so the validation scan is against zero rows; size it
+separately on an rc-upgraded smoke-twin, where the backfill has had rows to
+write.
 **Confirm that on the smoke-twin (§7) rather than trusting it here** — §2.2's timings
 are read off the DDL, not measured.
 
@@ -862,7 +871,7 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  12 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  13 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
@@ -875,6 +884,7 @@ for this release:
          0041_swarm_judgement_soak_record.sql
          0042_swarm_consensus_receipts.sql
          0043_swarm_member_judges.sql
+         0044_wallet_backfill_leg_terminal.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
