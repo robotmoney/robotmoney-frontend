@@ -253,6 +253,10 @@ export function registerAllocationView(Alpine) {
     // changed these weights, because nothing but the seed writes the table.
     // When a real writer lands, this sentence is the whole of the change.
     unchangedLine() {
+      // Silent while the feeds are in flight: "could not be read" is a claim
+      // about a request that has not finished, and the line holds its height
+      // from CSS so nothing moves when the real sentence arrives.
+      if (this.loading) return "";
       if (!this.hasTargets()) return "The published target could not be read.";
       const asOf = this.allocationAsOf();
       const since = asOf ? `Unchanged since ${longDay(asOf)}. ` : "";

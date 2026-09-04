@@ -74,19 +74,19 @@
       <p class="alp__eyebrow">Weights in force</p>
       <span class="alp__chip" :class="isSwarmManaged() ? 'alp__chip--live' : ''" x-text="stateChip()">seeded</span>
     </div>
-    <p class="alp__force-line" x-show="!loading" x-cloak x-text="unchangedLine()"></p>
+    <p class="alp__force-line" x-text="unchangedLine()"></p>
 
     <!-- The meta rail. It replaced a four-tile stat block whose two right-hand
          tiles read "not yet published" in display type: a figure that does not
          exist does not earn the top of a page, and it is one footnote below
          instead. The yield moved to the vault rail on the sleeve it belongs
          to, which is the only sleeve that has one. -->
-    <div class="alp__meta" x-show="!loading" x-cloak>
+    <div class="alp__meta">
       <span>In force since <b x-text="allocationAsOfLabel()">—</b></span>
       <span>Vaults live <b x-text="vaultsLiveLabel()">—</b></span>
       <span>Deployed <b x-text="deployedLabel()">—</b></span>
       <span>Chain <b x-text="vaultChain()">—</b></span>
-      <a class="alp__meta-addr" :href="vaultHref()" target="_blank" rel="noopener">
+      <a class="alp__nav alp__nav--addr" :href="vaultHref()" target="_blank" rel="noopener">
         <span x-text="shortAddress()"></span> on BaseScan
       </a>
     </div>
@@ -97,7 +97,23 @@
          "what is the recipe". The ring underneath is the full 360, so a policy
          whose weights do not add to 100 leaves the remainder unfilled instead
          of being rescaled to look complete. -->
-    <div class="alp__split" x-show="hasTargets()" x-cloak x-ref="allocFig">
+    <!-- The skeleton is not decoration: it is the CLS fix. Everything here was
+         behind x-show="!loading", so the page painted headings over nothing and
+         then shoved them down when three feeds landed. It now holds the shape
+         and the row count from the first paint, and the real content crossfades
+         into it. No shimmer: a pulsing block is a decoration this brand does
+         not spend, and a still one reads as "not here yet" just as clearly. -->
+    <div class="alp__split alp__sk" x-show="loading" x-cloak aria-hidden="true">
+      <div class="alp__skring"></div>
+      <div class="alp__skrows">
+        <div class="alp__skrow"><i class="alp__sk-b"></i><div><b class="alp__sk-b"></b><span class="alp__sk-b"></span></div></div>
+        <div class="alp__skrow"><i class="alp__sk-b"></i><div><b class="alp__sk-b"></b><span class="alp__sk-b"></span></div></div>
+        <div class="alp__skrow"><i class="alp__sk-b"></i><div><b class="alp__sk-b"></b><span class="alp__sk-b"></span></div></div>
+        <div class="alp__skrow"><i class="alp__sk-b"></i><div><b class="alp__sk-b"></b><span class="alp__sk-b"></span></div></div>
+      </div>
+    </div>
+
+    <div class="alp__split alp__fade" x-show="hasTargets()" x-cloak x-ref="allocFig">
       <div class="alp__donut">
         <svg x-ref="donut" viewBox="0 0 240 240" role="img" aria-label="Target allocation across the sleeves"></svg>
       </div>
@@ -130,7 +146,7 @@
     <!-- The two figures with no route behind them. They were two tiles set in
          display type; one line is the honest weight for a number that is not
          there. Beacon marks it, as a point. -->
-    <p class="alp__pending" x-show="!loading" x-cloak>
+    <p class="alp__pending">
       <i></i>
       <span>
         NAV per share and period returns are <b>not published</b>: no route
@@ -170,13 +186,12 @@
   <section class="alp__sec" id="what-changed">
     <div class="alp__sec-head">
       <h2 class="alp__h2">What changed</h2>
-      <a class="alp__ref-badge alp__ref-badge--link" :href="historyHref">Every session &rarr;</a>
+      <a class="alp__nav" :href="historyHref">Every session &rarr;</a>
     </div>
     <p class="alp__sub">
       Every session reviews these weights and either moves them or leaves them.
-      <code>allocation_framework</code> holds one row, so <b>was</b> is the row
-      in force rather than a second reading, and every change reads flat until
-      a session can write a second row.
+      Nothing has moved yet, so <b>was</b> and <b>now</b> are the same reading
+      and every change is flat.
     </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
@@ -184,7 +199,12 @@
     </p>
 
     <p class="alp__scrollhint" aria-hidden="true" x-show="hasTargets()" x-cloak>Scroll the table sideways for the full row.</p>
-    <div class="alp__tblwrap" x-show="hasTargets()" x-cloak>
+    <div class="alp__sk alp__skled" x-show="loading" x-cloak aria-hidden="true">
+      <div class="alp__skline alp__skline--head"></div>
+      <div class="alp__skline"></div><div class="alp__skline"></div>
+      <div class="alp__skline"></div><div class="alp__skline"></div>
+    </div>
+    <div class="alp__tblwrap alp__fade" x-show="hasTargets()" x-cloak>
       <table class="alp__tbl alp__tbl--led">
         <thead>
           <tr><th>Sleeve</th><th>Was</th><th>Now</th><th>Change</th><th class="note">Note</th></tr>
@@ -233,18 +253,13 @@
         <p class="alp__latest-line alp__latest-line--pend" x-text="latestFallback()"></p>
       </template>
       <p class="alp__why-links">
-        <a class="alp__link" x-show="latest" :href="latestHref()">Read this session in full</a>
-        <a class="alp__link" href="/regime">How the regime is read</a>
-        <a class="alp__link" :href="historyHref">Every session that reviewed this</a>
+        <a class="alp__nav" x-show="latest" :href="latestHref()">Read this session in full</a>
+        <a class="alp__nav" href="/regime">How the regime is read</a>
+        <a class="alp__nav" :href="historyHref">Every session that reviewed this</a>
       </p>
     </div>
 
-    <p class="alp__sub alp__sub--after">
-      Typed <code>position_actions</code>, so a session publishes actions and a
-      rationale, not a weight vector. The signed consensus receipt is not
-      readable: its public route errors on every published session.
-    </p>
-  </section>
+</section>
 
   <!-- ── § INSIDE EACH SLEEVE ─────────────────────────────────────────────
        One card per sleeve: the policy, then the vault that implements it if
@@ -259,15 +274,19 @@
     <p class="alp__sub">
       Each sleeve's split, drawn to its own hundred. Where a vault exists, what
       it holds and how far it has drifted sit one click away. Agent Tokens
-      lists what the allocation publishes, which is not what the deposit skill
-      buys.
+      lists the allocation's own names, which are not the ones the deposit
+      skill buys.
     </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
       Target weights are unavailable, so there are no constituents to list.
     </p>
 
-    <div class="alp__cards" x-show="hasTargets()" x-cloak>
+    <div class="alp__sk alp__skcards" x-show="loading" x-cloak aria-hidden="true">
+      <div class="alp__skcard"></div><div class="alp__skcard"></div>
+      <div class="alp__skcard"></div><div class="alp__skcard"></div>
+    </div>
+    <div class="alp__cards alp__fade" x-show="hasTargets()" x-cloak>
       <template x-for="s in sleeves()" :key="s.key">
         <div class="alp__card" :id="sleeveAnchor(s.key)">
           <div class="alp__card-top">
@@ -322,14 +341,25 @@
             </div>
 
             <template x-if="sleeveHasVault(s.key)">
-              <details class="alp__hold">
-                <summary>
+              <!-- Not <details>. Its content renders for the first time already
+                   at full size, so a height transition has no previous value to
+                   leave and the panel snaps however you sequence the toggle.
+                   This one is always in the DOM at 0fr, which makes the
+                   transition ordinary in both directions and keeps the drift
+                   table findable. aria-expanded and inert carry the semantics
+                   <details> was giving us for free. -->
+              <div class="alp__hold" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                <button type="button" class="alp__hold-sum"
+                        :aria-expanded="open ? 'true' : 'false'"
+                        :aria-controls="`vault-holdings-${s.key}`"
+                        @click="open = !open">
                   <span x-text="`Vault holdings · ${sleeveVaultRows(s.key).filter((r) => r.inVault).length} positions`"></span>
                   <span class="alp__off">
                     <span x-text="trackingErrorLabel(s.key)"></span><i aria-hidden="true">⌄</i>
                   </span>
-                </summary>
-                <div class="alp__hold-body">
+                </button>
+                <div class="alp__hold-anim" :id="`vault-holdings-${s.key}`" role="region"
+                     :aria-label="`${s.name} vault holdings`" :inert="!open"><div class="alp__hold-clip"><div class="alp__hold-body">
                   <p class="alp__scrollhint" aria-hidden="true">Scroll the table sideways for the full row.</p>
                   <div class="alp__tblwrap">
                     <table class="alp__tbl alp__tbl--wide">
@@ -411,8 +441,8 @@
                     <a class="alp__link" :href="vaultSubjectHref">The swarm's record for the vault</a>
                     carries its sessions and holdings over time.
                   </p>
-                </div>
-              </details>
+                </div></div></div>
+              </div>
             </template>
             <template x-if="!sleeveHasVault(s.key)">
               <p class="alp__vd none">
@@ -501,7 +531,17 @@
 /* ── weights in force ──────────────────────────────────────────────────── */
 .alp__force { border-bottom: 1px solid var(--color-border); padding-bottom: 1.8rem; }
 .alp__force-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.alp__force-line { margin: 0.5rem 0 0; color: var(--color-text-soft); font-size: 0.9rem; }
+/* Two heights reserved from the first paint, because both of these hold copy
+   that arrives late and both sit ABOVE the figure, so any growth shoves it
+   down. The figure's own reservation covers the skeleton and the real block
+   alike. Values are the measured loaded heights: one line of copy beside a
+   300px donut above 680px, three lines above a stacked donut below it. */
+.alp__force-line { margin: 0.5rem 0 0; min-height: 1.6rem; color: var(--color-text-soft); font-size: 0.9rem; }
+.alp__split { min-height: 21.7rem; }
+@media (max-width: 679px) {
+  .alp__force-line { min-height: 4.7rem; }
+  .alp__split { min-height: 43rem; }
+}
 .alp__chip {
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.12em; padding: 0.24rem 0.5rem; border-radius: var(--radius);
@@ -558,18 +598,28 @@
 
 /* The meta rail that replaced it: one line of facts, none of which is a
    figure that does not exist yet. */
+/* A GRID, not a wrapping flex row. How many lines a flex row wraps to depends
+   on how long its values are, so this rail grew the moment "—" became
+   "$231.51" and shoved the figure below it down: 0.18 of layout shift on a
+   phone, all of it from one line of text getting longer. Fixed tracks make the
+   row count a function of the viewport alone. */
+.alp__meta {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.7rem 1.5rem; margin: 1.1rem 0 0;
+  font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted);
+}
+.alp__meta b { display: block; margin-top: 0.15rem; }
+}
 .alp__meta {
   display: flex; flex-wrap: wrap; gap: 0.45rem 2rem; margin: 1.1rem 0 0;
   font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-muted);
 }
-.alp__meta b { color: var(--color-text); font-weight: 500; text-transform: none; letter-spacing: 0.02em; }
+.alp__meta b { display: block; margin-top: 0.2rem; color: var(--color-text); font-weight: 500; text-transform: none; letter-spacing: 0.02em; font-size: 0.85rem; }
+.alp__meta > a { align-self: end; }
 /* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
-a.alp__meta-addr {
-  color: var(--color-text-muted); text-decoration: none; text-transform: none;
-  letter-spacing: 0.04em; border-bottom: 1px solid var(--color-border-light);
-}
-a.alp__meta-addr:hover { color: var(--color-text); border-bottom-color: var(--color-text-muted); }
+
 
 /* The two figures with no route behind them, as one line rather than two
    tiles. Beacon marks it, as a POINT and nothing else. */
@@ -618,21 +668,99 @@ a.alp__meta-addr:hover { color: var(--color-text); border-bottom-color: var(--co
 }
 .alp__sub--after { margin: 1.2rem 0 0; }
 .alp__empty { color: var(--color-text-muted); font-size: 0.86rem; margin: 0 0 1.2rem; }
-.alp__ref-badge {
-  font-family: var(--font-mono); font-size: 0.58rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted);
-  border: 1px solid var(--color-border-light); border-radius: var(--radius); padding: 0.25rem 0.5rem;
+/* TWO link treatments on this page, and only two.
+   .alp__link  — inline, inside prose or a table row. It inherits the type of
+                 whatever it sits in, so a link in a mono table reads as table
+                 text; only the colour and the Beam-at-rest rule mark it.
+   .alp__nav   — a place to go: the section action, the addresses, the row of
+                 links under the last review. Mono, tracked, quiet until you
+                 reach for it, and Beam arrives on hover as a LINE.
+   Before this there were three, and .alp__link rendered three different ways
+   depending on what its container happened to impose on it. */
+.alp__link {
+  color: var(--color-accent); text-decoration: none;
+  border-bottom: 1px solid var(--color-accent-line);
+  transition: border-color 150ms var(--ease-out-expo);
 }
-a.alp__ref-badge--link { text-decoration: none; }
-a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--color-text-muted); }
-.alp__link { color: var(--color-accent); text-decoration: none; border-bottom: 1px solid var(--color-accent-line); }
 .alp__link:hover { border-bottom-color: var(--color-accent); }
+.alp__nav {
+  font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
+  letter-spacing: 0.13em; color: var(--color-text-soft); text-decoration: none;
+  /* Beam at rest, which is the token's whole reason for existing: a rule that
+     marks a control without shouting. At border-light these read as labels
+     rather than as links. */
+  border-bottom: 1px solid var(--color-accent-line); padding-bottom: 0.15rem;
+  transition: color 150ms var(--ease-out-expo), border-color 150ms var(--ease-out-expo);
+}
+.alp__nav:hover, .alp__nav:focus-visible { color: var(--color-text); border-bottom-color: var(--color-accent); }
+.alp__nav:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+/* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
+.alp__nav--addr { text-transform: none; letter-spacing: 0.04em; }
 
 /* the answer strip: the figures a section exists to give */
 /* What a depositor keeps is money, so it is Pool green like the figure beside
    it. It was warm, which is a second saturated accent doing work the label
    already does. */
 /* charts */
+/* ── motion, and the skeleton that removes the layout shift ─────────────── */
+/* 100/300/500: 150ms for feedback, 300ms for a layout change like the
+   disclosure. Exponential easing, never bounce. Only opacity and
+   grid-template-rows move; nothing here animates width, height or margin. */
+.alp__fade { animation: alp-in 300ms var(--ease-out-expo) both; }
+@keyframes alp-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Placeholder blocks, still and quiet. They carry the row count and the
+   geometry so the page does not resize under the reader when the feeds land.
+   No shimmer: a pulsing block is a decoration this brand does not spend, and a
+   still one reads as "not here yet" just as clearly. */
+.alp__sk { pointer-events: none; }
+.alp__sk-b { display: block; background: var(--color-surface-light); }
+.alp__skring {
+  width: 100%; max-width: 300px; aspect-ratio: 1; margin-inline: auto;
+  border-radius: 50%; border: 33px solid var(--color-surface-light);
+}
+.alp__skrows { display: grid; gap: 0; }
+.alp__skrow {
+  display: grid; grid-template-columns: 0.7rem 1fr; gap: 0 0.8rem; align-items: start;
+  padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--color-border);
+}
+.alp__skrow:first-child { border-top: 1px solid var(--color-border); }
+.alp__skrow i { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; }
+.alp__skrow b { width: 11rem; height: 0.95rem; margin: 0.1rem 0 0.5rem; }
+.alp__skrow span { width: 16rem; height: 0.72rem; margin-bottom: 0.35rem; }
+.alp__skled { border: 1px solid var(--color-border); }
+.alp__skline { height: 2.6rem; border-bottom: 1px solid var(--color-border); }
+.alp__skline:last-child { border-bottom: 0; }
+.alp__skline--head { height: 2.15rem; background: var(--color-surface); border-bottom-color: var(--color-border-light); }
+.alp__skcards { display: grid; gap: 1rem; }
+.alp__skcard { height: 16.6rem; border: 1px solid var(--color-border); background: var(--color-deep); }
+
+/* The vault disclosure. `details` cannot transition on its own — its children
+   start at display:none, so a transition has no value to leave from and the
+   panel snaps open. The toggle is intercepted instead: open first, then run
+   the row from 0fr to 1fr, and on close run it down before the element
+   actually closes. Rows, not height: grid-template-rows is the one height-ish
+   property that does not force a layout pass every frame. */
+.alp__hold-anim {
+  display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows 300ms var(--ease-out-expo);
+}
+.alp__hold.is-open .alp__hold-anim { grid-template-rows: 1fr; }
+/* Three levels, and each one has a job: the grid row animates, the clip hides
+   the overflow, the body carries the padding. Put the padding on the clipped
+   element instead and the row never collapses past it — the panel rests about
+   29px open, which reads as a rendering bug. */
+.alp__hold-clip { overflow: hidden; min-height: 0; }
+.alp__off i { display: inline-block; font-style: normal; transition: transform 300ms var(--ease-out-expo); }
+.alp__hold.is-open .alp__off i { transform: rotate(180deg); }
+.alp__hold > summary { transition: color 150ms var(--ease-out-expo); }
+.alp__hold > summary:hover { color: var(--color-text); }
+
+@media (prefers-reduced-motion: reduce) {
+  .alp__fade { animation: none; }
+  .alp__hold-anim, .alp__off i, .alp__link, .alp__nav, .alp__hold-sum { transition: none !important; }
+}
+
 .alp__tip {
   position: absolute; pointer-events: none; opacity: 0; transition: opacity 0.1s;
   background: var(--color-surface); border: 1px solid var(--color-border-light);
@@ -655,8 +783,11 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
    price, value, policy, in vault, drift. At half width it scrolls sideways
    inside the card, which turns the comparison the section exists for into a
    thing you have to drag to read. Full width, it fits. */
-.alp__cards { display: grid; gap: 1px; background: var(--color-border); border: 1px solid var(--color-border); }
-.alp__card { background: var(--color-surface); display: flex; flex-direction: column; }
+.alp__cards { display: grid; gap: 1rem; }
+.alp__card {
+  background: var(--color-deep); border: 1px solid var(--color-border);
+  display: flex; flex-direction: column;
+}
 .alp__card-top {
   display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem 1.2rem;
   flex-wrap: wrap; padding: 1rem 1.15rem 0.85rem; border-bottom: 1px solid var(--color-border);
@@ -737,18 +868,20 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 
 /* the holdings disclosure */
 .alp__hold { margin-top: 1rem; border: 1px solid var(--color-border); }
-.alp__hold > summary {
-  list-style: none; cursor: pointer; display: flex; align-items: center;
+.alp__hold-sum {
+  width: 100%; cursor: pointer; display: flex; align-items: center;
   justify-content: space-between; gap: 0.75rem 1rem; flex-wrap: wrap;
-  padding: 0.55rem 0.8rem; background: var(--color-deep);
+  padding: 0.6rem 0.8rem; background: var(--color-surface);
+  border: 0; border-bottom: 1px solid transparent; text-align: left;
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-soft);
+  transition: background-color 150ms var(--ease-out-expo), color 150ms var(--ease-out-expo);
 }
-.alp__hold > summary::-webkit-details-marker { display: none; }
-.alp__hold > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.alp__hold-sum:hover { background: var(--color-surface-light); color: var(--color-text); }
+.alp__hold-sum:active { background: var(--color-surface); }
+.alp__hold-sum:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .alp__off { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--color-text-muted); }
-.alp__hold[open] > summary { border-bottom: 1px solid var(--color-border); }
-.alp__hold[open] .alp__off i { display: inline-block; transform: rotate(180deg); }
+.alp__hold.is-open .alp__hold-sum { border-bottom-color: var(--color-border); }
 .alp__hold-body { padding: 0.85rem 0.8rem 0.95rem; }
 .alp__hold-note {
   margin: 0.8rem 0 0; padding-top: 0.7rem; border-top: 1px solid var(--color-border);
@@ -776,9 +909,8 @@ a.alp__ref-badge--link:hover { color: var(--color-text); border-color: var(--col
 .alp__latest-line--pend { color: var(--color-text-muted); }
 .alp__latest .alp__eyebrow { margin-bottom: 0.5rem; }
 .alp__why-links {
-  display: flex; flex-wrap: wrap; gap: 0.35rem 1.4rem; margin: 0.9rem 0 0;
-  padding-top: 0.75rem; border-top: 1px solid var(--color-border);
-  font-family: var(--font-mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.1em;
+  display: flex; flex-wrap: wrap; gap: 0.6rem 1.4rem; margin: 0.9rem 0 0;
+  padding-top: 0.8rem; border-top: 1px solid var(--color-border);
 }
 /* The aggregator's sentence, under the actions it explains. */
 .alp__latest-why {

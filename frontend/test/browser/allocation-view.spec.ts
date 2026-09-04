@@ -206,8 +206,8 @@ test("the sleeve's vault table binds every adapter to the golden, and reconciles
   await navigate(page, "/allocation");
 
   const card = page.locator(".alp__card").first();
-  await card.locator("details.alp__hold > summary").click();
-  const rows = card.locator("details.alp__hold tbody tr");
+  await card.locator(".alp__hold-sum").click();
+  const rows = card.locator(".alp__hold tbody tr");
   // One row per POLICY constituent, held or not, plus the total. Sky is in the
   // policy and not in the vault, and its row is the largest drift on the page:
   // dropping it would hide the finding.
@@ -270,16 +270,16 @@ test("drift is computed from the two feeds, and names what is missing", async ({
   const card = page.locator(".alp__card").first();
   // The headline rides on the summary, so the finding is legible without
   // opening anything.
-  await expect(card.locator("details.alp__hold > summary"))
+  await expect(card.locator(".alp__hold-sum"))
     .toContainText(`${te.toFixed(2)} pts off target`);
-  await card.locator("details.alp__hold > summary").click();
+  await card.locator(".alp__hold-sum").click();
 
   // By index, not by label: the row NAMES the position rather than the
   // protocol, so "Morpho" appears in the policy and "Gauntlet USDC Prime" in
   // the row, and matching on text would quietly find nothing.
   for (const [i, row] of expected.entries()) {
     const drift = row.actual - row.policy;
-    const tr = card.locator("details.alp__hold tbody tr").nth(i);
+    const tr = card.locator(".alp__hold tbody tr").nth(i);
     await expect(tr).toContainText(`${row.policy.toFixed(2)}%`);
     await expect(tr).toContainText(`${row.actual.toFixed(2)}%`);
     await expect(tr).toContainText(`${drift > 0 ? "+" : "−"}${Math.abs(drift).toFixed(2)}`);
@@ -294,7 +294,7 @@ test("drift is computed from the two feeds, and names what is missing", async ({
   // invented receipt symbol for an address nobody has deployed.
   const agent = page.locator(".alp__card").nth(1);
   await expect(agent.locator(".alp__vchip")).toContainText("Vault pending");
-  await expect(agent.locator("details.alp__hold")).toHaveCount(0);
+  await expect(agent.locator(".alp__hold")).toHaveCount(0);
   await expect(agent).not.toContainText("rm");
   await expectNoBrowserErrors(errors);
 });
@@ -365,8 +365,8 @@ test("a constituent keeps one hue in its sleeve's bar and in its vault row", asy
     els.map((el) => getComputedStyle(el).backgroundColor));
   expect(barFills).toEqual(CATEGORICAL_RGB.slice(0, items.length));
 
-  await card.locator("details.alp__hold > summary").click();
-  const rowDots = card.locator("details.alp__hold tbody tr .alp__dot");
+  await card.locator(".alp__hold-sum").click();
+  const rowDots = card.locator(".alp__hold tbody tr .alp__dot");
   const rowFills = await rowDots.evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).backgroundColor));
   expect(rowFills).toEqual(barFills);
@@ -403,7 +403,7 @@ test("the change ledger reports was, now and a flat move for every sleeve", asyn
   // The swarm's reading sits under the numbers it explains, with the id kept
   // so /allocation#latest-recommendation still lands.
   await expect(page.locator("#latest-recommendation")).toBeVisible();
-  await expect(page.locator("#what-changed")).toContainText("position_actions");
+  await expect(page.locator("#what-changed")).toContainText("Nothing has moved yet");
   await expectNoBrowserErrors(errors);
 });
 
@@ -428,7 +428,13 @@ test("the latest recommendation is the session's rationale, and the page says wh
   // move: how the regime is read, and every session that reviewed this.
   await expect(block.locator('a[href="/regime"]')).toBeVisible();
   await expect(block.locator('a[href="/allocation/history"]')).toBeVisible();
-  await expect(page.locator("#what-changed")).toContainText("position_actions");
+  // Schema names, table names and route behaviour are not the reader's
+  // business. The page says what is true about the allocation; how the backend
+  // stores or types it is ours to know.
+  const copy = (await page.locator("section.alp").innerText()).toLowerCase();
+  for (const leak of ["position_actions", "allocation_framework", "vault_share_price_history", "public route"]) {
+    expect(copy, `implementation detail leaked into the page: ${leak}`).not.toContain(leak);
+  }
   await expectNoBrowserErrors(errors);
 });
 
@@ -456,7 +462,7 @@ test("the two figures with no route behind them render an explicit pending state
   // stretched into the series it is not. It sits with the holdings it belongs
   // to now, not in a facts panel of its own.
   const vault = goldenVault();
-  await page.locator(".alp__card details.alp__hold > summary").first().click();
+  await page.locator(".alp__card .alp__hold-sum").first().click();
   await expect(page.locator(".alp__hold-foot").first())
     .toContainText(`$${Number(vault.sharePrice).toFixed(4)}`);
   await expectNoBrowserErrors(errors);
@@ -487,7 +493,7 @@ test("a stale vault feed is flagged, and every degraded row names its observatio
   // "stale" as a DATE, not as an adjective: the carried-over sleeveStaleLabel().
   // The rows moved into the sleeve that owns them, so the badge moved with
   // them; degrading a row is exactly the thing that must survive a redesign.
-  await page.locator(".alp__card details.alp__hold > summary").first().click();
+  await page.locator(".alp__card .alp__hold-sum").first().click();
   const badges = page.locator(".alp__card .alp__cell-badge", { hasText: /^stale \(/ });
   await expect(badges.first()).toBeVisible();
   await expect(page.locator(".alp__hold-foot").first()).toContainText("(stale)");
@@ -504,7 +510,7 @@ test("a scheduler catch-up is flagged as backfilled, distinct from stale and fro
   await expect(page.locator(".alp-vault-backfilled")).toContainText("caught up late");
   await expect(page.locator(".alp-vault-stale")).toBeHidden();
   await expect(page.locator(".alp-vault-nonlive")).toBeHidden();
-  await page.locator(".alp__card details.alp__hold > summary").first().click();
+  await page.locator(".alp__card .alp__hold-sum").first().click();
   await expect(page.locator(".alp__card .alp__cell-badge", { hasText: "caught up late" })).toBeVisible();
 });
 
