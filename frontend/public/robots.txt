@@ -6,6 +6,11 @@ Allow: /
 # Operator dashboards are not for indexing.
 Disallow: /admin
 Disallow: /admin/
+# The SPA fallback shell backend/src/api/static.ts serves for client routes it
+# cannot prerender. No content of its own; not a page. A Disallow only binds
+# the User-agent group it appears under, so this has to sit here rather than
+# after the per-crawler Allow list below.
+Disallow: /_shell.html
 
 # AI / LLM crawlers are welcome — the site content is public and meant to be cited.
 User-agent: GPTBot
@@ -20,5 +25,12 @@ User-agent: PerplexityBot
 Allow: /
 User-agent: Google-Extended
 Allow: /
+
+# This site renders client-side, so fetching a page returns the shell and none
+# of the data. The two files below are where the content actually is:
+#   /llms.txt      site index plus every public JSON endpoint, absolute URLs
+#   /openapi.json  the callable description of that API, no key required
+# Comments are not a crawl directive, they are a signpost for whoever reads this
+# file looking for a way in.
 
 Sitemap: https://robotmoney.network/sitemap.xml
