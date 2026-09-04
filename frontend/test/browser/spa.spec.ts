@@ -82,8 +82,10 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
       n == null ? "—" : "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return { vault: usd2(v.tvlUsd) };
   });
-  const tvlTile = page.locator(".alp__stat", { hasText: "Vault TVL" }).locator("dd");
-  await expect(tvlTile).toHaveText(expected.vault);
+  // The four-tile stat rail became a one-line meta rail: two of those tiles
+  // read "not yet published" in display type, which is not what the top of a
+  // page about money is for.
+  await expect(page.locator(".alp__meta")).toContainText(`Deployed ${expected.vault}`);
 
   // THE CONSTRAINT A REVIEWER CHECKS FIRST (RM-115): depositor capital and the
   // protocol's own wallets are different money, and this page reads only the
@@ -97,16 +99,19 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   });
   await navigate(page, "/");
   await navigate(page, "/allocation");
-  await expect(page.locator(".alp__stat", { hasText: "Vault TVL" })).toBeVisible();
+  await expect(page.locator(".alp__meta")).toContainText("Deployed");
   expect(houseBookHits).toEqual([]);
   await page.unroute("**/api/dashboards/wallet-*");
 
   // The two figures with no route behind them say so rather than borrowing a
-  // number from the spot share price.
-  await expect(page.locator(".alp__stat dd.pend")).toHaveCount(2);
+  // number from the spot share price. One line now, not two display-type tiles.
+  await expect(page.locator(".alp__pending")).toContainText("not published");
 
-  // #vault is the anchor RM-115 fixes for the implementation section.
+  // #vault is still the anchor the deposit skill and the swarm's vault row
+  // point at. The section it named is gone — the vault's holdings moved into
+  // the sleeve they implement — so the anchor moved onto that sleeve's card.
   await expect(page.locator("#vault")).toBeVisible();
+  await expect(page.locator("#vault")).toHaveClass(/alp__card/);
   await expect(page.locator("#allocation")).toBeVisible();
 
   // Test performance page with Wallet Performance heading
