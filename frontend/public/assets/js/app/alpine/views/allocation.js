@@ -602,6 +602,30 @@ export function registerAllocationView(Alpine) {
         : '<span class="alp__tip-soft">Vault pending</span>');
       return parts.join("");
     },
+    // Inside a card: hovering a block lights its name and recedes its
+    // neighbours, and hovering a name does the same to its block. Applied by
+    // hand rather than through Alpine state because the cards come out of an
+    // x-for and a per-card scope for one transient class would cost more than
+    // it explains.
+    hoverItem(ev, index) {
+      const card = ev.currentTarget.closest(".alp__card");
+      if (!card) return;
+      card.querySelectorAll(".alp__stk > span").forEach((node, i) => {
+        node.classList.toggle("dim", i !== index);
+      });
+      card.querySelectorAll(".alp__names > span").forEach((node, i) => {
+        node.classList.toggle("is-hot", i === index);
+        node.classList.toggle("dim", i !== index);
+      });
+    },
+    leaveItem(ev) {
+      const card = ev.currentTarget.closest(".alp__card");
+      if (!card) return;
+      card.querySelectorAll(".alp__stk > span, .alp__names > span").forEach((node) => {
+        node.classList.remove("dim", "is-hot");
+      });
+    },
+
     hoverSleeve(row, ev) { this.showTip(row, ev); this.dimTo(row.key); },
     leaveSleeve() { this.hideTip(); this.dimTo(null); },
     showTip(row, ev) {

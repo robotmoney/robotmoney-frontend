@@ -103,6 +103,7 @@
          and the row count from the first paint, and the real content crossfades
          into it. No shimmer: a pulsing block is a decoration this brand does
          not spend, and a still one reads as "not here yet" just as clearly. -->
+    <div class="alp__figslot">
     <div class="alp__split alp__sk" x-show="loading" x-cloak aria-hidden="true">
       <div class="alp__skring"></div>
       <div class="alp__skrows">
@@ -142,6 +143,7 @@
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
       Target weights could not be read, so there are no sleeves to show.
     </p>
+    </div>
 
     <!-- The two figures with no route behind them. They were two tiles set in
          display type; one line is the honest weight for a number that is not
@@ -302,15 +304,23 @@
                  own sleeve, keyed on their position in the policy. The vault
                  table below keys on the same index, so a venue is one colour
                  wherever it appears and the holdings feed cannot repaint it. -->
-            <div class="alp__stk" :class="s.target > 0 ? '' : 'zero'">
+            <!-- Hovering a block lights its name and recedes the rest, and the
+                 name does the same to the block. That reciprocal highlight is
+                 the whole association a reader needs here, which is why there
+                 is no tooltip: the name and the weight are already three
+                 pixels below, and repeating them would be noise. -->
+            <div class="alp__stk" :class="s.target > 0 ? '' : 'zero'"
+                 @pointerleave="leaveItem($event)">
               <template x-for="(c, ci) in constituents(s.key)" :key="c.label">
-                <span data-mark="series" :style="`width:${Math.max(0, Math.min(100, c.target))}%;background:${constituentColour(ci)}`"
-                      :title="`${c.label}: ${fmtPct(c.target)} of this sleeve`"></span>
+                <span data-mark="series" role="img"
+                      :aria-label="`${c.label}, ${fmtPct(c.target)} of ${s.name}`"
+                      :style="`width:${Math.max(0, Math.min(100, c.target))}%;background:${constituentColour(ci)}`"
+                      @pointerenter="hoverItem($event, ci)"></span>
               </template>
             </div>
-            <div class="alp__names">
+            <div class="alp__names" @pointerleave="leaveItem($event)">
               <template x-for="(c, ci) in constituents(s.key)" :key="c.label">
-                <span>
+                <span @pointerenter="hoverItem($event, ci)">
                   <i data-mark="series" :style="`background:${constituentColour(ci)}`"></i><span x-text="c.label"></span>
                   <b x-text="fmtPctTrim(c.target)"></b>
                 </span>
@@ -537,10 +547,19 @@
    alike. Values are the measured loaded heights: one line of copy beside a
    300px donut above 680px, three lines above a stacked donut below it. */
 .alp__force-line { margin: 0.5rem 0 0; min-height: 1.6rem; color: var(--color-text-soft); font-size: 0.9rem; }
-.alp__split { min-height: 21.7rem; }
+/* The slot, not the figure. Skeleton, figure and empty state are three
+   elements taking turns in the same place, so a reservation on any one of them
+   is gone the moment another is showing — which is exactly when the swap
+   happens and everything below jumps.
+   All three share ONE grid cell, which is what actually removes the shift: the
+   slot is as tall as its tallest child whether that child is showing or not,
+   so the swap changes nothing. The floor only has to cover the case where the
+   skeleton is shorter than the figure, which is the stacked phone layout. */
+.alp__figslot { display: grid; min-height: 21.7rem; }
+.alp__figslot > * { grid-area: 1 / 1; align-self: start; }
 @media (max-width: 679px) {
   .alp__force-line { min-height: 4.7rem; }
-  .alp__split { min-height: 43rem; }
+  .alp__figslot { min-height: 43rem; }
 }
 .alp__chip {
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
@@ -758,7 +777,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .alp__fade { animation: none; }
-  .alp__hold-anim, .alp__off i, .alp__link, .alp__nav, .alp__hold-sum { transition: none !important; }
+  .alp__hold-anim, .alp__off i, .alp__link, .alp__nav, .alp__hold-sum,
+  .alp__card, .alp__stk > span, .alp__names > span { transition: none !important; }
 }
 
 .alp__tip {
@@ -784,10 +804,14 @@
    inside the card, which turns the comparison the section exists for into a
    thing you have to drag to read. Full width, it fits. */
 .alp__cards { display: grid; gap: 1rem; }
+/* One line, brightened. The card is not itself clickable, so it gets an edge
+   that acknowledges the pointer and nothing that implies a click. */
 .alp__card {
   background: var(--color-deep); border: 1px solid var(--color-border);
   display: flex; flex-direction: column;
+  transition: border-color 150ms var(--ease-out-expo);
 }
+.alp__card:hover { border-color: var(--color-border-light); }
 .alp__card-top {
   display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem 1.2rem;
   flex-wrap: wrap; padding: 1rem 1.15rem 0.85rem; border-bottom: 1px solid var(--color-border);
@@ -817,8 +841,16 @@
   display: flex; height: 1.6rem; background: var(--color-surface-light);
   border: 1px solid var(--color-border);
 }
-.alp__stk > span { display: block; height: 100%; }
-.alp__stk > span + span { border-left: 2px solid var(--color-surface); }
+.alp__stk > span {
+  display: block; height: 100%;
+  transition: opacity 150ms var(--ease-out-expo);
+}
+.alp__stk > span + span { border-left: 2px solid var(--color-deep); }
+.alp__stk > span.dim { opacity: 0.32; }
+.alp__names > span { transition: color 150ms var(--ease-out-expo); }
+.alp__names > span.is-hot { color: var(--color-text); }
+.alp__names > span.is-hot b { color: var(--color-text-soft); }
+.alp__names > span.dim { opacity: 0.42; }
 .alp__stk.zero { opacity: 0.45; }
 .alp__names { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; margin-top: 0.7rem; font-size: 0.8rem; }
 .alp__names > span { display: inline-flex; align-items: baseline; gap: 0.4rem; color: var(--color-text-soft); }
