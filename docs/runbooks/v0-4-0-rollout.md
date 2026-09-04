@@ -1,9 +1,9 @@
 # v0.4.0 production rollout
 
 > Operator procedure for upgrading production from **v0.3.0** to **v0.4.0**.
-> It was prepared against `main` at **`a7a7bd90`** on 2026-09-01. Re-resolve the
-> target SHA and command output when an RC is cut; this document is not
-> authority for a moving branch.
+> Executed against the **`v0.4.0-rc.1`** candidate on the `releases-0.4.x`
+> branch (the SHA and command output were re-resolved at that RC's cut per
+> §3); this document is not authority for a moving branch.
 
 **Scope:** This runbook contains release-*specific* steps for the v0.4.0 upgrade.
 The foundational release-runbook policy is in [`release-runbooks.md`](../../technical/release-runbooks.md). This document references that policy for generic gates (§4.1–4.9) and only describes what is special about v0.3.0→v0.4.0.
@@ -45,15 +45,35 @@ cycle and branch placement follow the policy:
 git fetch origin --tags
 git switch releases-0.4.x
 git rev-parse HEAD
+bun install --force            # repo root; "postinstall" reinstalls backend/ too
+bun install --force --cwd backend
 ```
 
 Record the first SHA as `RC_SHA`. Tag and push per the RC cycle.
+
+> 🔴 **`bun install --force` is not optional here, and re-run it after every
+> `git switch`/`git checkout` that moves `<checkout>` onto different code —
+> including a re-cut RC and the rollback checkout in
+> [`rollout-procedure.md` §10](./rollout-procedure.md#10-rollback).**
+> Bun copies `file:` dependencies (`@robotmoney/contract`) into `node_modules`
+> rather than symlinking them, so a checkout that has moved past a commit
+> touching `contract/` keeps serving the OLD copy until install re-runs — no
+> error, just a route or field silently missing wherever the stale copy is
+> read. This is exactly what broke the v0.4.0-rc.3 production cutover:
+> `node_modules/@robotmoney/contract` was still the Aug 25 v0.3.0 copy,
+> `ROUTES.swarm.sessionConsensusReceipt` (#754) was `undefined`, and
+> `scripts/prerender.ts` threw during `static-assembly.sh`, aborting the boot.
+> `scripts/prerender.ts` now calls `assertContractInstallFresh()`
+> (`scripts/lib/contract-freshness.ts`) as a boot-time guard so a stale install
+> fails with this exact diagnosis instead of a `TypeError` three frames deep —
+> but the guard only turns a silent failure into a loud one; running install is
+> still the fix.
 
 ## 2. What changes
 
 | Area | Release effect | Operator decision |
 | --- | --- | --- |
-| Swarm consensus judge | Adds optional `judged` state, a mutable DB-backed judge switch, append-only judgement history, and immutable consensus receipts. | Leave judge **off** at cutover; run a bounded shadow soak before considering `enforce`. |
+| Swarm consensus judge | Adds optional `judged` state, a mutable DB-backed judge switch, append-only judgement history, immutable consensus receipts, and the judge role graduation (`0043`) that lets an existing swarm member author judgements. | Leave judge **off** at cutover; run a bounded shadow soak before considering `enforce`. |
 | Swarm scheduling | The production host driver gains the judge step. `SWARM_SCHEDULES_ENABLED=0` is required for a static-port production boot, so the host driver—not backend crons—orders judge between aggregate and publish. | Export `SWARM_SCHEDULES_ENABLED=0` explicitly in production configuration. |
 | Public UI and tooling | `/allocation` and `/performance` are the depositor-facing pages and both are in the nav. `/vault` resolves to not-found by an explicit route entry, and `/allocation2` is a legacy redirect to `/performance`. “demo” commands, compose file, state file, and `RM_ENV` are renamed “smoke.” | Update automation and operator aliases before deployment; do not keep invoking removed `demo:*` commands. Do not smoke-test `/vault` as a live page. |
 
@@ -79,19 +99,15 @@ git diff --name-status v0.3.0 "$RC_SHA" -- backend/migrations/
 ```
 
 Maps to `release-runbooks.md` §4.2 (pre-upgrade baseline) and §4.3 (backup/restore
-smoke test). The forward-only runner keys migrations by **filename**, not checksum.
-
-The only edit to pre-existing `0033_wallet_backfill.sql` changes comments and does
-not rerun on production. Verify that fact from the pinned RC; do not delete or edit
-`schema_migrations` to force a rerun.
-
-Expected new files (additive migrations per R1):
+smoke test). Expected new files (additive migrations per R1):
 
 ```text
 0039_swarm_judge.sql
 0040_swarm_judgements_append_only.sql
 0041_swarm_judgement_soak_record.sql
 0042_swarm_consensus_receipts.sql
+0043_swarm_member_judges.sql
+0044_wallet_backfill_leg_terminal.sql
 ```
 
 Before any write, use the read-only replica procedure from `rollout-procedure.md`
@@ -100,9 +116,8 @@ Before any write, use the read-only replica procedure from `rollout-procedure.md
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -c "
 SELECT name, applied_at FROM schema_migrations
- WHERE name LIKE ANY (ARRAY['0039_%','0040_%','0041_%','0042_%']) ORDER BY name;
+ WHERE name LIKE ANY (ARRAY['0039_%','0040_%','0041_%','0042_%','0043_%','0044_%']) ORDER BY name;
 SELECT state, count(*) FROM swarm_sessions GROUP BY state ORDER BY state;
-```
 ```
 
 On a direct v0.3.0 upgrade the migration query returns no rows and `judged`
@@ -136,14 +151,17 @@ SWARM_SCHEDULES_ENABLED=0
 | --- | --- |
 | `bun run demo` | `bun run smoke` |
 | `demo:stage`, `demo:down`, `demo:status`, `demo:clean`, `demo:reap` | corresponding `smoke:*` command |
+| `bun run smoke` (v0.3.0's **archive**/production-shaped boot, `"smoke": "bun scripts/demo.ts --smoke"`) | `bun run smoke:archive` — a NEW name, not a rename. The bare `smoke` key was already claimed by the renamed `demo` → `smoke` entry (the simulation boot), so the old `smoke` key's meaning could not carry forward under the same name. Do not assume `bun run smoke` still means what it meant before v0.4.0: it is now the simulation boot, and running it against production data is correctly refused by `db-preflight.ts`. |
 | `docker-compose.demo.yml` | `docker-compose.smoke.yml` |
 | `.agents/demo-state.json` | `.agents/smoke-state.json` |
 | `RM_ENV=demo` | `RM_ENV=smoke` |
 
 Check CI/deployment scripts, service units, and operator documentation for old
 names. A stale command is a release blocker because the old package scripts no
-longer exist. Per R3 (API responses only gain fields), consumers must not send
-new request fields until the API is deployed.
+longer exist, **and the `smoke` name itself is a false friend**: it still
+resolves to a command, just not the one every pre-v0.4.0 operator memory or
+automation script expects. Per R3 (API responses only gain fields), consumers
+must not send new request fields until the API is deployed.
 
 ## 5. Stage rehearsal
 
@@ -154,19 +172,20 @@ a database URL manually.
 
 ```bash
 bun run smoke:capture
-bun scripts/upgrades/0.3.0-to-0.4.0/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt
-bun scripts/upgrades/0.3.0-to-0.4.0/stage-rehearsal.ts "$RM_BACKUP_DIR" --emit-receipt
+bun backend/scripts/upgrades/0.3.0-to-0.4.0/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt
+bun backend/scripts/upgrades/0.3.0-to-0.4.0/stage-rehearsal.ts "$RM_BACKUP_DIR" --emit-receipt
 ```
 
 The restore check validates the v0.3.0 starting state. The rehearsal applies
-the four migrations to the restored smoke-twin, boots real services, and
+the six migrations to the restored smoke-twin, boots real services, and
 executes the release postflight before teardown. It proves conformance to the
 release acceptance criteria — §4.4 gate.
 
-1. All four full migration filenames appear once in `schema_migrations` — §4.4
+1. All six full migration filenames appear once in `schema_migrations` — §4.4
    criterion.
 2. `swarm_sessions_state_check` admits `judged`; `swarm_judge_config` contains
-   exactly `id=1, mode='off'`; and the new history tables are empty initially.
+   exactly `id=1, mode='off'` with a positive `min_takes` and `model=NULL`; and
+   the new history tables are empty initially.
 3. Statement- and row-level append-only triggers are `ENABLE ALWAYS` on both
    history tables; the receipt table also has its two UPDATE-refusing triggers.
    `rm_worker` lacks INSERT, UPDATE, and DELETE on the protected/config tables.
@@ -193,13 +212,13 @@ completed rehearsal, and written rollback authority — §4.7 requirement.
 2. Re-run release preflight against the live replica and compare its baseline:
 
 ```bash
-bun scripts/upgrades/0.3.0-to-0.4.0/preflight.ts --emit-receipt
+bun backend/scripts/upgrades/0.3.0-to-0.4.0/preflight.ts --emit-receipt
 ```
 
 3. Deploy in provider order: database migration, API and every worker lane,
    then static frontend. Do not publish the new SPA before its API — R4 (deploy
    provider before consumer).
-4. Confirm the migration log names all four new files exactly once — per R1
+4. Confirm the migration log names all six new files exactly once — per R1
    (additive only).
 5. Do **not** enable the judge during cutover. Verify its config after the API
    is serving:
@@ -220,7 +239,7 @@ Maps to `release-runbooks.md` §4.9 (production rollout report). Run these
 SELECT-only checks after deployment:
 
 ```bash
-bun scripts/upgrades/0.3.0-to-0.4.0/postflight.ts --emit-receipt=P8.postflight-prod
+bun backend/scripts/upgrades/0.3.0-to-0.4.0/postflight.ts --emit-receipt=P8.postflight-prod
 bun run --cwd backend swarm-judge:replay -- --limit 10
 ```
 

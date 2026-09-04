@@ -94,4 +94,4 @@ carries that workflow's nightly slot as well as its push-to-`main` run):
 3. an always() `smoke:reap --env-class ci --older-than 6h` step clears prior runs'
    orphans, non-blocking.
 
-See `docs/architecture.md` §"Demo Specification" (c) for the normative version.
+See `docs/architecture.md` §"Smoke Specification" (c) for the normative version.

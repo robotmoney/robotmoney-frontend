@@ -13,7 +13,7 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   const migrations = (await db`SELECT name FROM schema_migrations WHERE name = ANY(${THIS_RELEASE_MIGRATIONS})`) as unknown as { name: string }[];
   const got = new Set(migrations.map((r) => r.name));
   const missing = THIS_RELEASE_MIGRATIONS.filter((name) => !got.has(name));
-  record("migrations", missing.length ? "FAIL" : "PASS", missing.length ? `missing: ${missing.join(", ")}` : "all four v0.4.0 migrations recorded");
+  record("migrations", missing.length ? "FAIL" : "PASS", missing.length ? `missing: ${missing.join(", ")}` : "all six v0.4.0 migrations recorded");
   const configs = (await db`SELECT id, mode, min_takes, model FROM swarm_judge_config`) as unknown as { id: number; mode: string; min_takes: number; model: string | null }[];
   const initial = configs.length === 1 && configs[0]?.id === 1 && configs[0]?.mode === "off" && configs[0]?.min_takes >= 1 && configs[0]?.model === null;
   record("judge-config", initial ? "PASS" : "FAIL", initial ? "one seeded, disabled judge config" : `unexpected judge config: ${JSON.stringify(configs)}`);
