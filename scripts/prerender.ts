@@ -3,7 +3,10 @@ import { viewFor } from "../frontend/public/assets/js/app/routes.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { ORIGIN as API_ORIGIN, endpointsForRoute, openApiPath } from "./lib/agent-endpoints.ts";
+import { assertContractInstallFresh } from "./lib/contract-freshness.ts";
 import { publishableFragment } from "./lib/prerender-view.ts";
+
+await assertContractInstallFresh();
 
 const ORIGIN = "https://robotmoney.network";
 

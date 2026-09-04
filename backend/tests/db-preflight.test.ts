@@ -174,7 +174,7 @@ test("the three reports say what will happen, not just what was found", () => {
     appendOnlyProblems: [],
   }).join("\n");
   expect(refuse).toContain("REFUSING a simulation boot");
-  expect(refuse).toContain("bun smoke");
+  expect(refuse).toContain("bun run smoke:archive");
   expect(refuse).toContain("Nothing has been written");
 });
 

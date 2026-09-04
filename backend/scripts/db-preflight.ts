@@ -195,7 +195,7 @@ export function reportLines(target: string, r: PreflightResult): string[] {
       : [
           `[db-preflight] REFUSING a simulation boot: ${target} already has ${r.tables} table(s) in public.`,
           `[db-preflight] Demo/simulation fixtures overwrite by design, so a populated database`,
-          `[db-preflight] can only be adopted by a production-shaped (archive) boot: bun smoke.`,
+          `[db-preflight] can only be adopted by a production-shaped (archive) boot: bun run smoke:archive.`,
           `[db-preflight] Nothing has been written.`,
         ];
   const populated = r.census.filter((s) => s.rows > 0);

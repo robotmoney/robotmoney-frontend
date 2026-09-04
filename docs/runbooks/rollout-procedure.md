@@ -1137,6 +1137,29 @@ smoke-only services and leaves them behind as orphans, which is exactly the
 leftover you came here to clear. `--remove-orphans` covers the gap. See
 deployment.md §2.1, "FIRST: find the project name".
 
+> 🔴 **Teardown across a compose-file rename.** "Naming the same compose files
+> that boot used" assumes those files still exist in `<checkout>`. They do not
+> when the running stack was started under an older checkout and this checkout
+> has since moved past a commit that renamed or removed one of them — v0.4.0's
+> own `docker-compose.demo.yml` → `docker-compose.smoke.yml` rename is exactly
+> this case (see the per-release runbook's rename table). `docker compose -f
+> docker-compose.demo.yml … down` then fails outright with "no such file or
+> directory", the stack is not torn down, and the next boot's `SMOKE_PROJECT`
+> collides with the still-running orphan. Recover the old file at the SHA the
+> running stack actually booted from, run `down` against it, then delete it:
+>
+> ```bash
+> git show <old-sha>:docker-compose.demo.yml > docker-compose.demo.yml
+> docker compose -p <that project> \
+>   -f docker-compose.yml -f docker-compose.demo.yml \
+>   down --remove-orphans
+> rm docker-compose.demo.yml
+> ```
+>
+> Do this BEFORE fast-forwarding `<checkout>` to the new release candidate, not
+> after — once you are on the new commit and about to cut over, tearing down
+> the old stack first avoids ever needing the recovered file at all.
+
 ### 8.2 The invocation
 
 > **Manifest step `P7.cutover`.** The machine-readable block for this step —
@@ -1179,10 +1202,23 @@ deployment.md §2.1, "FIRST: find the project name".
 
 ```bash
 cd <checkout>
-SMOKE_PROJECT=rm_prod bun smoke -- --db external --no-tui
+SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui
 BOOT_STATUS=$?                # capture it HERE — §9.1's check 1 reads this
 echo "boot exit=$BOOT_STATUS" # MUST be 0
 ```
+
+> 🔴 **Use the `smoke:archive` named script, never a bare `bun smoke`/`bun run
+> smoke`.** `bun run smoke` (no flags) is the SIMULATION boot — its fixtures
+> overwrite by design, and `backend/scripts/db-preflight.ts` correctly refuses
+> to run it against a populated database. `bun run smoke:archive` is
+> `package.json`'s name for the production-shaped **archive** boot: it wires
+> `--smoke --static-port --db external` for you (see the flag table below), so
+> the only things left to state on the command line are `SMOKE_PROJECT` and
+> `--no-tui`. `--static-port` is new for v0.4.0 — the per-release runbook's §4
+> config table says why (`SWARM_SCHEDULES_ENABLED=0` for a static-port
+> production boot). A v0.3.0-shaped invocation that only remembered `--db
+> external --no-tui` silently ran the wrong boot: that is exactly the failure
+> observed at the v0.4.0-rc.3 cutover.
 
 ⚠ **Capture the status on the same line-group as the boot.** `$?` holds only the
 *previous* command's status, and §8 opens with two commands of its own
@@ -1190,11 +1226,18 @@ echo "boot exit=$BOOT_STATUS" # MUST be 0
 `$?` reports `smoke:status`, not the boot. `BOOT_STATUS` survives that; `$?` does
 not.
 
-**Each flag, justified:**
+**Each flag `smoke:archive` wires in, justified:**
 
 | Flag / var | Why it is here | What happens without it |
 |---|---|---|
+| `--smoke` | **MANDATORY.** Selects the production-shaped (archive) initializer over the default simulation one (`scripts/lib/smoke-db-mode.ts`'s `SMOKE_FLAG`) — `backend/scripts/db-preflight.ts` classifies the boot as `--initializer=archive` only when this is set, and treats a missing flag as simulation (fail-closed). | The boot runs as a simulation. Against an empty database this looks fine; against populated production data `db-preflight` correctly refuses it — the failure mode observed at the v0.4.0-rc.3 cutover, where `smoke:stage` (no `--smoke`) booted a simulation and was refused. |
+| `--static-port` | **MANDATORY for v0.4.0.** Pins the api's host port instead of letting Docker assign one — required because the production host driver, not backend crons, orders the judge step between aggregate and publish (`SWARM_SCHEDULES_ENABLED=0`, per-release runbook §2/§4). | A randomly assigned port each boot, which the static-port production driver assumption does not hold for. |
 | `--db external` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/smoke-external-pg.ts:288-305`). One enum flag names the data path — `ephemeral \| external \| smoke-twin` — and `external` is the only one that means "a server this boot did not create and cannot reclaim". The older `--external-pg` spelling still works and prints a deprecation notice; runbooks written before the enum use it throughout. | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §2. Since the enum landed an unknown flag is also a hard error rather than a silent default, so a typo'd data path stops the boot instead of quietly picking `ephemeral`. |
+
+**Flags you still state yourself:**
+
+| Flag / var | Why it is here | What happens without it |
+|---|---|---|
 | `SMOKE_PROJECT=rm_prod` | **MANDATORY.** Pins the compose project name (`scripts/lib/smoke-main.ts:261`). Without it the name is `rm_smoke_stack_<random>` per boot (`scripts/stack/naming.ts:138`). | Every restart leaves an orphaned project. `docker compose -p …` commands in deployment.md address the wrong stack. Note: `--db external` does **not** by itself stabilise the project name — only `SMOKE_PROJECT` does. |
 | `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/smoke-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Always pass it.** Needing the per-boot `ADMIN_TOKEN` — the expected unclaimed case (§2) — is *not* a reason to omit it: read the token out of the container instead (§7.4). |
 | **`CI` must be UNSET** | ⛔ With any truthy `CI` the boot runs a bounded scenario and then **tears the whole stack down**. Under smoke the branch taken is `CI && smokeMode` (`scripts/lib/smoke-main.ts:1175`): it runs one live swarm session against production and then `scripts/smoke-e2e-assert.ts` (`:1206`). The swarm-session *driver* at `:1212` is the **other** branch, `CI && !smokeMode`, and never runs here. Either way control reaches `if (process.env.CI)` at `:1390`, which calls `cleanup()` — a full `compose down` (`:697`, `:711-715`) — then `cleanCiVolume()` (`:1393`) and `process.exit(0)` (`:1394`). `cleanCiVolume()` also runs on the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/smoke-volumes.ts:105`). | The volume removal is harmless under `--db external` (no volume exists), but the teardown is not. Success exits `0` (`:1394`) and failure exits `1` (`:1894`) — the exit code still works — yet **either way the stack is torn down**, so the site does not stay up and there is nothing left to inspect or verify in §8. Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |
@@ -1438,10 +1481,21 @@ cd <checkout>
 bun run smoke:down
 git checkout <last-deployed-healthy-tag>   # previous version tag, or vA.B.C-rc.<N-1>
 git rev-parse HEAD                         # MUST print that target's SHA
+bun install --force                        # repo root; "postinstall" reinstalls backend/ too
+bun install --force --cwd backend
 echo "CI=[$CI]"                            # MUST be empty
 SMOKE_PROJECT=rm_prod bun smoke -- --external-pg --no-tui
 BOOT_STATUS=$?; echo "rollback boot exit=$BOOT_STATUS"   # capture it here (§8.2)
 ```
+
+> 🔴 **`bun install --force` after the checkout, always.** `git checkout`
+> moves the tree onto older code; `node_modules/@robotmoney/contract` (a `file:`
+> dependency Bun copies rather than symlinks) does not move with it until
+> install re-runs. Skipping this step boots the rolled-back code against a
+> newer, mismatched contract copy — silently, since nothing about the import
+> fails, only whatever field or route the newer copy added but the older code
+> does not expect. See the per-release runbook's §1 for the same hazard on the
+> way *into* a release.
 
 > ⚠ **`--external-pg` here, not `--db external` — deliberately.** You have just
 > checked out an OLDER tag, and the `--db` enum does not exist in every tag you

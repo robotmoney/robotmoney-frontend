@@ -23,6 +23,7 @@
     "goldens:update": "bun scripts/update-goldens.ts",
     "smoke": "bun scripts/smoke.ts",
     "smoke:stage": "bun scripts/smoke-stage.ts",
+    "smoke:archive": "bun scripts/smoke.ts --smoke --static-port --db external",
     "eval": "cd evals && EVAL_SUITE_RUN_ID=\"${EVAL_SUITE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}\" bun test",
     "onboarding-eval": "bun scripts/onboarding-eval-local.ts",
     "smoke:down": "bun scripts/smoke-down.ts",
