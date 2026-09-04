@@ -45,9 +45,29 @@ cycle and branch placement follow the policy:
 git fetch origin --tags
 git switch releases-0.4.x
 git rev-parse HEAD
+bun install --force            # repo root; "postinstall" reinstalls backend/ too
+bun install --force --cwd backend
 ```
 
 Record the first SHA as `RC_SHA`. Tag and push per the RC cycle.
+
+> 🔴 **`bun install --force` is not optional here, and re-run it after every
+> `git switch`/`git checkout` that moves `<checkout>` onto different code —
+> including a re-cut RC and the rollback checkout in
+> [`rollout-procedure.md` §10](./rollout-procedure.md#10-rollback).**
+> Bun copies `file:` dependencies (`@robotmoney/contract`) into `node_modules`
+> rather than symlinking them, so a checkout that has moved past a commit
+> touching `contract/` keeps serving the OLD copy until install re-runs — no
+> error, just a route or field silently missing wherever the stale copy is
+> read. This is exactly what broke the v0.4.0-rc.3 production cutover:
+> `node_modules/@robotmoney/contract` was still the Aug 25 v0.3.0 copy,
+> `ROUTES.swarm.sessionConsensusReceipt` (#754) was `undefined`, and
+> `scripts/prerender.ts` threw during `static-assembly.sh`, aborting the boot.
+> `scripts/prerender.ts` now calls `assertContractInstallFresh()`
+> (`scripts/lib/contract-freshness.ts`) as a boot-time guard so a stale install
+> fails with this exact diagnosis instead of a `TypeError` three frames deep —
+> but the guard only turns a silent failure into a loud one; running install is
+> still the fix.
 
 ## 2. What changes
 
@@ -87,6 +107,7 @@ smoke test). Expected new files (additive migrations per R1):
 0041_swarm_judgement_soak_record.sql
 0042_swarm_consensus_receipts.sql
 0043_swarm_member_judges.sql
+0044_wallet_backfill_leg_terminal.sql
 ```
 
 Before any write, use the read-only replica procedure from `rollout-procedure.md`
@@ -95,7 +116,7 @@ Before any write, use the read-only replica procedure from `rollout-procedure.md
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -c "
 SELECT name, applied_at FROM schema_migrations
- WHERE name LIKE ANY (ARRAY['0039_%','0040_%','0041_%','0042_%','0043_%']) ORDER BY name;
+ WHERE name LIKE ANY (ARRAY['0039_%','0040_%','0041_%','0042_%','0043_%','0044_%']) ORDER BY name;
 SELECT state, count(*) FROM swarm_sessions GROUP BY state ORDER BY state;
 ```
 
@@ -130,14 +151,17 @@ SWARM_SCHEDULES_ENABLED=0
 | --- | --- |
 | `bun run demo` | `bun run smoke` |
 | `demo:stage`, `demo:down`, `demo:status`, `demo:clean`, `demo:reap` | corresponding `smoke:*` command |
+| `bun run smoke` (v0.3.0's **archive**/production-shaped boot, `"smoke": "bun scripts/demo.ts --smoke"`) | `bun run smoke:archive` — a NEW name, not a rename. The bare `smoke` key was already claimed by the renamed `demo` → `smoke` entry (the simulation boot), so the old `smoke` key's meaning could not carry forward under the same name. Do not assume `bun run smoke` still means what it meant before v0.4.0: it is now the simulation boot, and running it against production data is correctly refused by `db-preflight.ts`. |
 | `docker-compose.demo.yml` | `docker-compose.smoke.yml` |
 | `.agents/demo-state.json` | `.agents/smoke-state.json` |
 | `RM_ENV=demo` | `RM_ENV=smoke` |
 
 Check CI/deployment scripts, service units, and operator documentation for old
 names. A stale command is a release blocker because the old package scripts no
-longer exist. Per R3 (API responses only gain fields), consumers must not send
-new request fields until the API is deployed.
+longer exist, **and the `smoke` name itself is a false friend**: it still
+resolves to a command, just not the one every pre-v0.4.0 operator memory or
+automation script expects. Per R3 (API responses only gain fields), consumers
+must not send new request fields until the API is deployed.
 
 ## 5. Stage rehearsal
 
@@ -153,11 +177,11 @@ bun backend/scripts/upgrades/0.3.0-to-0.4.0/stage-rehearsal.ts "$RM_BACKUP_DIR" 
 ```
 
 The restore check validates the v0.3.0 starting state. The rehearsal applies
-the five migrations to the restored smoke-twin, boots real services, and
+the six migrations to the restored smoke-twin, boots real services, and
 executes the release postflight before teardown. It proves conformance to the
 release acceptance criteria — §4.4 gate.
 
-1. All five full migration filenames appear once in `schema_migrations` — §4.4
+1. All six full migration filenames appear once in `schema_migrations` — §4.4
    criterion.
 2. `swarm_sessions_state_check` admits `judged`; `swarm_judge_config` contains
    exactly `id=1, mode='off'` with a positive `min_takes` and `model=NULL`; and
@@ -194,7 +218,7 @@ bun backend/scripts/upgrades/0.3.0-to-0.4.0/preflight.ts --emit-receipt
 3. Deploy in provider order: database migration, API and every worker lane,
    then static frontend. Do not publish the new SPA before its API — R4 (deploy
    provider before consumer).
-4. Confirm the migration log names all five new files exactly once — per R1
+4. Confirm the migration log names all six new files exactly once — per R1
    (additive only).
 5. Do **not** enable the judge during cutover. Verify its config after the API
    is serving:
