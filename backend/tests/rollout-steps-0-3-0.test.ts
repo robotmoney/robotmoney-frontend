@@ -185,13 +185,13 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // THIS PIN MOVES ONLY UPWARD, AND ONLY WITH A DECLARATION BESIDE IT. It is a
   // tripwire on the roster's terminal entry, so that growing the release is a
   // deliberate act somebody had to write down here as well as in release.ts —
-  // NOT a lever for shrinking scope. 0042 joined via #754, 0043 via #835, and
-  // 0044 via #761: in each case the drift guard below named the landed file as
-  // undeclared, and the fix was to DECLARE it (never to raise the numeric
-  // floor).
-  test("the release inventory includes the shared-leg circuit breaker migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(13);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0044_wallet_backfill_leg_terminal.sql");
+  // NOT a lever for shrinking scope. 0042 joined via #754, 0043 via #835, 0044
+  // via #761, and 0045 via #760: in each case the drift guard below named the
+  // landed file as undeclared, and the fix was to DECLARE it (never to raise
+  // the numeric floor).
+  test("the release inventory includes the earliest-valid-block floor migration", () => {
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(14);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0045_chain_address_floors.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");

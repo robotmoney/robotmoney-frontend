@@ -627,8 +627,23 @@ The rule, and it is not optional:
 - `success === true && returnData === "0x"` is a **hard failure for that day**,
   never a zero.
 - A per-address **earliest-valid-block floor** must skip days preceding a
-  target's deployment rather than failing them repeatedly. *(Specified; not
-  implemented — §8.)*
+  target's deployment rather than failing them repeatedly (issue #760).
+  `chain/address-floor-resolver.ts` binary-searches `eth_getCode` to find the
+  exact block at which an address first has on-chain code — a CHAIN fact,
+  cached forever in `chain_address_floors` (migration 0045) — and
+  `ops/wallet-backfill.ts::backfillWalletWindow` consults it, per tracked
+  address, before either the shared price load or the shared chain read is
+  issued for a day. A day below the floor is written `skipped`, never
+  `failed`, so no attempt is charged; `GET /api/admin/gaps` is unaffected — it
+  derives from the sample tables via `expectedKeys`/`deployedAt`, never from
+  `wallet_backfill_state`, so a genuinely uncovered day still shows as a gap.
+
+  This is distinct from `TrackedAsset.deployedAt` (§4.2, config.ts) — a
+  CONFIGURATION fact, the calendar day an asset was first tracked — and from
+  D41's per-symbol first-priceable day (§5.6) — a fact about when a pool
+  started trading. Three different facts about three different series: one is
+  "the contract did not exist yet", one is "we were not tracking it yet", and
+  one is "the pool had not traded yet". None substitutes for another.
 - **Live-path semantics must not change.** `strictEmptyReturn` is off by default.
 
 ### 6.2 Day-atomicity and per-day checkpointing
@@ -738,24 +753,6 @@ Stated up front so this document is not read as a promise it cannot keep.
 Each item below is either a filed issue or an explicit decline. Nothing here is
 left as prose with no owner.
 
-- **The earliest-valid-block floor (§6.1) — filed as #760.** Days preceding a
-  target's deployment should be *skipped*; today they fail and consume the retry
-  budget, and the planner takes the **oldest first**, so each run can spend its
-  whole budget on a dead prefix.
-
-  #749's per-slot `deployedAt` filtering (§4.2) closed the *expected-key*
-  symptom, not this one. `deployedAt` is a configuration fact — the day an asset
-  was first tracked — and the floor is a chain fact — the block at which a
-  contract first had code. Today every on-chain tracked asset carries
-  `deployedAt: "2026-03-18"`, which is also both wallet series' `seriesStart`,
-  so no configured asset currently predates the window and the gap is **latent
-  rather than closed**: adding a token deployed after that date, or repointing an
-  existing `<SYMBOL>_ADDRESS`, reintroduces it at once.
-
-  D41 adds a *sibling* on the price side — a per-symbol first-priceable day
-  (§5.6) — which is a third fact about a third series. None substitutes for
-  another: one is "the contract did not exist yet", one is "we were not tracking
-  it yet", and one is "the pool had not traded yet".
 - **A versioned point-in-time expected-key manifest (§4.2) — declined, and here
   is the reason.** Since #749 the detector resolves `expectedKeys` per slot and
   filters by `TrackedAsset.deployedAt`, so the operational symptom this item was
