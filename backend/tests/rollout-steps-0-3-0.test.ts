@@ -414,6 +414,34 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     const fromGuard = [...block![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
     expect({ tables: [...APPEND_ONLY_TABLES] as string[] }).toEqual({ tables: fromGuard });
   });
+
+  test("§9 check 6's protected-table count matches APPEND_ONLY_TABLES.length", () => {
+    // #816: the runbook restated this count in English prose ("all fourteen
+    // protected tables") in two places, and #811 fixed only one of them —
+    // both said "fourteen" even after APPEND_ONLY_TABLES grew to fifteen. A
+    // hand-maintained number with two homes drifts silently every time a
+    // table is added; this test gives it one home (APPEND_ONLY_TABLES) and
+    // fails the moment the prose disagrees, the same mechanism as the
+    // migration-roster tests above.
+    const NUMBER_WORDS: Record<string, number> = {
+      ten: 10,
+      eleven: 11,
+      twelve: 12,
+      thirteen: 13,
+      fourteen: 14,
+      fifteen: 15,
+      sixteen: 16,
+      seventeen: 17,
+      eighteen: 18,
+      nineteen: 19,
+      twenty: 20,
+    };
+    const m = runbook.match(/on all (\w+) protected tables/);
+    expect({ found: m !== null }).toEqual({ found: true });
+    const word = m![1]!.toLowerCase();
+    expect({ word, known: word in NUMBER_WORDS }).toEqual({ word, known: true });
+    expect({ runbookCount: NUMBER_WORDS[word] }).toEqual({ runbookCount: APPEND_ONLY_TABLES.length });
+  });
 });
 
 describe("receipt step ids are wired to the scripts that emit them", () => {
