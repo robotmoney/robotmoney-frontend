@@ -55,6 +55,11 @@ import {
   type DayBlockOutcome,
   type ResolvedDayBlock,
 } from "../chain/block-resolver.ts";
+import {
+  resolveAddressFloors,
+  type AddressFloor,
+  type AddressFloorCache,
+} from "../chain/address-floor-resolver.ts";
 import { loadHistoricalPrices, type HistoricalPriceTable } from "../chain/historical-prices.ts";
 import {
   readChainAmountsAtBlocks,
@@ -99,11 +104,15 @@ export function maxDaysPerRun(): number {
 
 /** How many times a day may fail before it stops being retried.
  *
- *  A day can be unrepairable for a permanent reason — most obviously one that
- *  precedes a tracked target's deployment, where the honest read is "no contract
- *  here" and there is no value to write. Retrying such a day on every scheduled
- *  run would spend a metered RPC budget forever to re-learn the same fact. After
- *  the ceiling the day is marked 'exhausted': still an unrepaired gap, still
+ *  A day can be unrepairable for a permanent reason. The most common one — a
+ *  day preceding a tracked address's on-chain deployment — is now caught
+ *  proactively by the earliest-valid-block floor (issue #760, above) and
+ *  routed to 'skipped' before it ever reaches this ceiling, at zero attempt
+ *  cost. This ceiling remains for reasons the floor cannot see in advance: an
+ *  address deployed but permanently unreadable some other way, say. Retrying
+ *  such a day on every scheduled run would spend a metered RPC budget forever
+ *  to re-learn the same fact. After the ceiling the day is marked 'exhausted':
+ *  still an unrepaired gap, still
  *  reported by GET /api/admin/gaps, just no longer retried. Nothing is
  *  interpolated and nothing is marked handled. */
 export function maxAttemptsPerDay(): number {
@@ -388,6 +397,41 @@ export function dayBlockCache(db: Db): DayBlockCache {
   };
 }
 
+// ── The permanent address→floor cache, backed by Postgres (issue #760) ──────
+
+export function addressFloorCache(db: Db): AddressFloorCache {
+  return {
+    async get(address) {
+      const rows = await db<{ floor_block: string }[]>`
+        SELECT floor_block FROM chain_address_floors WHERE address = ${address}
+      `;
+      const row = rows[0];
+      return row ? Number(row.floor_block) : null;
+    },
+    async set(address, floorBlock) {
+      await db`
+        INSERT INTO chain_address_floors (address, floor_block)
+        VALUES (${address}, ${floorBlock})
+        ON CONFLICT (address) DO UPDATE SET
+          floor_block = EXCLUDED.floor_block,
+          resolved_at = now()
+      `;
+    },
+  };
+}
+
+/** Tracked assets whose block-addressed reads use CODE PRESENCE as the
+ *  silent-zero signal (§6.1) — i.e. every leg actually read via a contract
+ *  call at `address`. Excludes 'native' (ETH's balance comes from
+ *  eth_getBalance against a WALLET address, which returns a genuine zero for
+ *  any account, never the "no code here" shape isEmptyReturnData exists to
+ *  catch — `address` on the ETH row is only WETH's PRICING address, not a
+ *  balanceOf target, see config.ts) and assets with no address at all
+ *  (SP500, valuationKind 'config'). */
+function floorEligibleAssets(assets: readonly TrackedAsset[]): (TrackedAsset & { address: string })[] {
+  return assets.filter((a): a is TrackedAsset & { address: string } => a.address !== null && a.valuationKind !== "native");
+}
+
 // ── The per-day executor ─────────────────────────────────────────────────────
 
 export type BackfillDayStatus = "filled" | "skipped" | "failed" | "exhausted" | "blocked";
@@ -429,6 +473,17 @@ export interface WalletBackfillDeps {
     readOpts: ChainReadOptions,
   ): Promise<Map<string, Map<string, ChainAmount>>>;
   loadPrices(assets: TrackedAsset[], fromDate: string, toDate: string): Promise<HistoricalPriceTable>;
+  /** The per-address earliest-valid-block floor (issue #760). Optional so a
+   *  caller injecting only the required deps above — every existing test does
+   *  — still drives the real executor with no floor check at all, exactly the
+   *  prior behaviour: an omitted dep here changes nothing. Production supplies
+   *  the real chain-backed resolver, so a day preceding a tracked address's
+   *  deployment is skipped rather than fought to `exhausted`. */
+  resolveAddressFloors?(
+    addresses: readonly string[],
+    opts: RpcCallOptions,
+    cache: AddressFloorCache,
+  ): Promise<Map<string, AddressFloor>>;
 }
 
 export const defaultWalletBackfillDeps: WalletBackfillDeps = {
@@ -437,6 +492,7 @@ export const defaultWalletBackfillDeps: WalletBackfillDeps = {
   readChainAmounts: readChainAmountsBatched,
   readChainAmountsAtBlocks,
   loadPrices: loadHistoricalPrices,
+  resolveAddressFloors: (addresses, opts, cache) => resolveAddressFloors(addresses, opts, cache),
 };
 
 const AGG = (symbol: string): string => `agg:${symbol}`;
@@ -772,7 +828,7 @@ export async function backfillWalletWindow(
 
   // 1. dates → blocks. Permanent cache, so a re-run over the same window is free.
   const resolvedByDate = await resolveWindowBlocks(db, closed, deps, now);
-  const readable: { date: string; resolved: ResolvedDayBlock }[] = [];
+  let readable: { date: string; resolved: ResolvedDayBlock }[] = [];
   for (const date of closed) {
     const r = resolvedByDate.get(date);
     if (!r || !r.ok) {
@@ -788,6 +844,48 @@ export async function backfillWalletWindow(
     readable.push({ date, resolved: r.resolved });
   }
   if (readable.length === 0) return settle();
+
+  // 1.5. Per-address earliest-valid-block floor (issue #760; markets §6.1,
+  //      §8.1). A day whose resolved block precedes a tracked address's floor
+  //      PREDATES that contract's deployment — not a failure, a certainty —
+  //      so it is skipped, with NO attempt charged, before either the shared
+  //      price load or the shared chain read is issued for it. The floor is a
+  //      CHAIN fact (chain/address-floor-resolver.ts) checked unconditionally
+  //      against every tracked address, independent of that asset's
+  //      configured `deployedAt` — a CONFIGURATION fact that can predate,
+  //      postdate, or (today) coincide with the real deployment block; this is
+  //      exactly the gap #749's deployedAt filtering left open (§8.1). Skipping
+  //      here never silences GET /api/admin/gaps: that endpoint derives from
+  //      the sample tables via expectedKeys/deployedAt, never from
+  //      wallet_backfill_state, so a genuinely uncovered day still shows as a
+  //      gap. `resolveAddressFloors` is optional so a caller injecting only
+  //      the required deps — every existing test does — takes this branch's
+  //      prior (unchanged) behaviour: no floor check at all.
+  if (deps.resolveAddressFloors) {
+    const opts = { rpcUrl: config.baseRpcUrl };
+    const floorAssets = floorEligibleAssets(assets);
+    const addresses = [...new Set(floorAssets.map((a) => a.address))];
+    const floors = addresses.length > 0
+      ? await deps.resolveAddressFloors(addresses, opts, addressFloorCache(db))
+      : new Map<string, AddressFloor>();
+    const stillReadable: { date: string; resolved: ResolvedDayBlock }[] = [];
+    for (const { date, resolved } of readable) {
+      const below = floorAssets.filter((a) => {
+        const floor = floors.get(a.address);
+        return floor !== undefined && resolved.blockNumber < floor.floorBlock;
+      });
+      if (below.length > 0) {
+        const detail = `below earliest-valid-block floor: ${below
+          .map((a) => `${a.symbol} (${a.address}) floors at block ${floors.get(a.address)!.floorBlock}`)
+          .join(", ")}`;
+        out.set(date, await skipDay(db, date, detail, resolved.blockNumber));
+        continue;
+      }
+      stillReadable.push({ date, resolved });
+    }
+    readable = stillReadable;
+    if (readable.length === 0) return settle();
+  }
 
   // 2. Prices for the WHOLE window in ONE load, spanning its first to last day.
   //    A load failure fails every day it covers — the same refusal the per-day

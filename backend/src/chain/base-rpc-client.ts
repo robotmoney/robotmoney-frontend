@@ -939,6 +939,18 @@ export async function ethGetLogs(params: EthGetLogsParams, opts: RpcCallOptions)
   return result;
 }
 
+// A single `eth_getCode`. Used by chain/address-floor-resolver.ts (issue #760;
+// markets §6.1, §8.1) to binary-search an address's earliest-valid-block floor
+// — the first block at which it has on-chain code. `0x` here is the same
+// silent-zero shape isEmptyReturnData names for eth_call's return data, just
+// asked directly of the node rather than inferred from a call's result: "no
+// contract deployed here yet."
+export async function ethGetCode(address: string, blockTag: string, opts: RpcCallOptions): Promise<string> {
+  const result = await rpcRequest<string>("eth_getCode", [address, blockTag], opts);
+  if (typeof result !== "string") throw new Error("Base RPC: missing result");
+  return result;
+}
+
 // Latest block height (`eth_blockNumber`), decoded to a number. Same transport
 // as every other read (chain/buyback-logs.ts uses it to bound a log scan).
 export async function ethBlockNumber(opts: RpcCallOptions): Promise<number> {

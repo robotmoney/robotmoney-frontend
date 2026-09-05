@@ -44,6 +44,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0042_swarm_consensus_receipts.sql",
   "0043_swarm_member_judges.sql",
   "0044_wallet_backfill_leg_terminal.sql",
+  "0045_chain_address_floors.sql",
 ] as const;
 
 /**
@@ -88,6 +89,11 @@ export const NEW_TABLES = [
   // has the table, and postflight's new-tables check requires it present and
   // empty.
   "swarm_consensus_receipts",
+  // 0045 (issue #760): the per-address earliest-valid-block floor cache. Empty
+  // after the migration — populated lazily, one row per tracked address, the
+  // first time the backfill resolves that address's floor — the same shape
+  // `chain_day_blocks` above has for date resolution.
+  "chain_address_floors",
 ] as const;
 export const NEW_COLUMNS = [
   { table: "wallet_balance_samples", column: "strategy_nav_idle_only" },

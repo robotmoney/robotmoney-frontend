@@ -26,6 +26,7 @@ import {
   selectBackfillDays,
   type WalletBackfillDeps,
 } from "../src/ops/wallet-backfill.ts";
+import type { AddressFloor } from "../src/chain/address-floor-resolver.ts";
 import type { ChainAmount, KeyedAssetRead } from "../src/chain/wallet-valuation.ts";
 import {
   lockWalletSnapshotDate,
@@ -684,6 +685,110 @@ test("a LIVE run refuses outright when pacing is explicitly disabled (PD6)", asy
     if (prior === undefined) delete process.env.BASE_RPC_SOURCE;
     else process.env.BASE_RPC_SOURCE = prior;
   }
+});
+
+// ── The earliest-valid-block floor (issue #760) ──────────────────────────────
+//
+// RED CONTROL: before this issue's fix, `resolveAddressFloors` did not exist on
+// WalletBackfillDeps at all, and a below-floor day fell into the DAY-ATOMIC
+// unreadable-leg branch above — `failDay`, an attempt charged, `exhausted`
+// after WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY retries — exactly the "fails,
+// charges an attempt, and reaches exhausted without anything being wrong"
+// symptom the issue names.
+
+test("a day below an address's earliest-valid-block floor is skipped, never even attempting the block-addressed read", async () => {
+  const asset = resolveTrackedAssets().find((a) => a.address !== null && a.valuationKind !== "native")!;
+  const deps = happyDeps({
+    async resolveAddressFloors(addresses: readonly string[]) {
+      return new Map<string, AddressFloor>(
+        addresses.map((a) => [
+          a,
+          { address: a, floorBlock: a === asset.address ? BLOCK + 1 : 0, rpcCalls: 0, cached: true },
+        ]),
+      );
+    },
+    // The floor must be consulted BEFORE either shared leg is issued — proven
+    // by throwing if the executor ever reaches them for a below-floor day.
+    async readChainAmounts() {
+      throw new Error("readChainAmounts must not be called for a day below the floor");
+    },
+    async loadPrices() {
+      throw new Error("loadPrices must not be called for a day below the floor");
+    },
+  });
+
+  const result = await backfillWalletDay(sql, D1, deps, NOW);
+  expect(result.ok).toBe(true);
+  expect(result.status).toBe("skipped");
+  // The reason names the address AND its floor (issue #760's AC).
+  expect(result.detail).toContain(asset.symbol);
+  expect(result.detail).toContain(asset.address!);
+  expect(result.detail).toContain(String(BLOCK + 1));
+
+  const [rows] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${D1}`;
+  expect(rows!.n).toBe(0);
+});
+
+test("the floor skip charges NO attempt, even on top of a prior charged failure", async () => {
+  const asset = resolveTrackedAssets().find((a) => a.address !== null && a.valuationKind !== "native")!;
+  const floorBlock = BLOCK + 1_000;
+
+  // First pass: an ordinary refusal, unrelated to the floor, charges attempt 1.
+  const failing = happyDeps({
+    async readChainAmounts(reads: KeyedAssetRead[]) {
+      return new Map<string, ChainAmount>(reads.map((r) => [r.key, { ok: false } as ChainAmount]));
+    },
+  });
+  const first = await backfillWalletDay(sql, D1, failing, NOW);
+  expect(first.status).toBe("failed");
+  const [afterFail] = await sql<{ attempts: number }[]>`
+    SELECT attempts FROM wallet_backfill_state WHERE sample_date = ${D1}
+  `;
+  expect(afterFail!.attempts).toBe(1);
+
+  // Second pass: the address's floor now covers this day's resolved block —
+  // a certainty, not a failure — so the day is skipped and the PRIOR attempt
+  // must be left exactly where it was.
+  const skipping = happyDeps({
+    async resolveAddressFloors(addresses: readonly string[]) {
+      return new Map<string, AddressFloor>(
+        addresses.map((a) => [
+          a,
+          { address: a, floorBlock: a === asset.address ? floorBlock : 0, rpcCalls: 0, cached: true },
+        ]),
+      );
+    },
+  });
+  const second = await backfillWalletDay(sql, D1, skipping, NOW);
+  expect(second.ok).toBe(true);
+  expect(second.status).toBe("skipped");
+
+  const [state] = await sql<{ status: string; attempts: number }[]>`
+    SELECT status, attempts FROM wallet_backfill_state WHERE sample_date = ${D1}
+  `;
+  expect(state!.status).toBe("skipped");
+  expect(state!.attempts).toBe(1); // unchanged — never charged for a floor skip
+});
+
+test("a floor AT or BELOW the resolved block does not skip the day", async () => {
+  const deps = happyDeps({
+    async resolveAddressFloors(addresses: readonly string[]) {
+      return new Map<string, AddressFloor>(
+        addresses.map((a) => [a, { address: a, floorBlock: BLOCK, rpcCalls: 0, cached: true }]),
+      );
+    },
+  });
+  const result = await backfillWalletDay(sql, D1, deps, NOW);
+  expect(result.ok).toBe(true);
+  expect(result.status).toBe("filled");
+});
+
+test("omitting resolveAddressFloors runs the prior behaviour unchanged (no floor check at all)", async () => {
+  // happyDeps() supplies no resolveAddressFloors override — proving the dep is
+  // truly optional and a caller that never wires it (as every OTHER test in
+  // this file does) is unaffected by this feature's existence.
+  const result = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  expect(result.status).toBe("filled");
 });
 
 // ── Planning ─────────────────────────────────────────────────────────────────
