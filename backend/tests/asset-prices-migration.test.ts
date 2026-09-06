@@ -95,7 +95,7 @@ test("0046 seeds asset_prices from live/seed provenance with an explicit, determ
      ORDER BY price_date, symbol
   `;
 
-  expect(rows).toEqual([
+  expect([...rows]).toEqual([
     { price_date: D_MAJORITY, symbol: "USDC", price_usd: "1", source: "pinned", currency: "USD", time_basis: "utc-daily-close" },
     { price_date: D_MAJORITY, symbol: "WETH", price_usd: "100", source: "geckoterminal", currency: "USD", time_basis: "utc-daily-close" },
     { price_date: D_TIE, symbol: "ROBOTMONEY", price_usd: "5", source: "geckoterminal", currency: "USD", time_basis: "utc-daily-close" },
@@ -117,7 +117,7 @@ test("0046 seeds a proven floor for the three usdc-pinned assets, not for gecko-
   const floors = await sql<{ symbol: string; first_priceable_date: string; proven: boolean }[]>`
     SELECT symbol, first_priceable_date::text, proven FROM asset_price_floors ORDER BY symbol
   `;
-  expect(floors).toEqual([
+  expect([...floors]).toEqual([
     { symbol: "GIZA-SS1", first_priceable_date: "2026-03-18", proven: true },
     { symbol: "USDC", first_priceable_date: "2026-03-18", proven: true },
     { symbol: "ZYFAI-SS1", first_priceable_date: "2026-03-18", proven: true },
