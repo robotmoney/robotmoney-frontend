@@ -20,6 +20,7 @@ import {
   type Provenance,
   type WalletPriceReader,
 } from "./wallet-valuation.ts";
+import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-prices.ts";
 import { ttlCached } from "./ttl-cache.ts";
 
 export type { Provenance };
@@ -89,14 +90,37 @@ async function computeWalletSleeves(
       .map((s) => bySymbol.get(s))
       .filter((a): a is TrackedAsset => a != null && (a.valuationKind === "native" || !isPlaceholderAddress(a.address)));
 
+    // D41 phase 3 (issue #850): a CLOSED day's price is a read-time join
+    // against `asset_prices`; today's own row keeps its fused price/value —
+    // see the extended rationale on wallet-balances.ts::loadHistory, which
+    // this mirrors exactly (same LEFT JOIN, same COALESCE-shaped fallback for
+    // #849's known cleanly-sampled-day gap, same JS-side multiplication so a
+    // covered day reproduces the ORIGINAL value_usd bit-for-bit rather than
+    // Postgres `numeric` arithmetic's differently-rounded product).
     const rows = await sql<
-      { symbol: string; amount: string | null; price_usd: string | null; value_usd: string | null; provenance: string; sampled_at: Date }[]
+      {
+        symbol: string;
+        amount: string | null;
+        price_usd: string | null;
+        value_usd: string | null;
+        provenance: string;
+        sampled_at: Date;
+        asset_price_usd: string | null;
+        is_closed: boolean;
+      }[]
     >`
-      SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, sampled_at
-        FROM wallet_sleeve_samples
-       WHERE lower(wallet_address) = lower(${address})
-         AND provenance <> ${QUARANTINED_PROVENANCE}
-       ORDER BY symbol, sample_date DESC, sampled_at DESC
+      SELECT DISTINCT ON (wss.symbol) wss.symbol, wss.amount, wss.price_usd, wss.value_usd,
+             wss.provenance, wss.sampled_at,
+             ap.price_usd AS asset_price_usd,
+             (wss.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
+        FROM wallet_sleeve_samples wss
+        LEFT JOIN asset_prices ap
+          ON ap.symbol = wss.symbol
+         AND ap.price_date = wss.sample_date
+         AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
+       WHERE lower(wss.wallet_address) = lower(${address})
+         AND wss.provenance <> ${QUARANTINED_PROVENANCE}
+       ORDER BY wss.symbol, wss.sample_date DESC, wss.sampled_at DESC
     `;
     const sampleMap = new Map(rows.map((r) => [r.symbol, r]));
 
@@ -129,11 +153,18 @@ async function computeWalletSleeves(
         sleeveStale = true;
       }
 
+      const amountNum = row.amount == null ? null : Number(row.amount);
+      const useJoin = row.is_closed && row.asset_price_usd != null && amountNum != null;
+      const priceUsd = useJoin ? Number(row.asset_price_usd) : row.price_usd == null ? null : Number(row.price_usd);
+      const valueUsd = useJoin
+        ? amountNum! * Number(row.asset_price_usd)
+        : row.value_usd == null ? null : Number(row.value_usd);
+
       holdings.push({
         symbol: a.symbol,
-        amount: row.amount == null ? null : Number(row.amount),
-        priceUsd: row.price_usd == null ? null : Number(row.price_usd),
-        valueUsd: row.value_usd == null ? null : Number(row.value_usd),
+        amount: amountNum,
+        priceUsd,
+        valueUsd,
         provenance: prov,
         observedAt: row.sampled_at.toISOString(),
       });
