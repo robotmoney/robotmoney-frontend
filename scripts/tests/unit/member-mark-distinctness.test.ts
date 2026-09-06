@@ -25,9 +25,11 @@
 // The seed population is generated from a fixed-seed PRNG rather than
 // crypto.randomUUID(), so a failure is reproducible and a pass is not luck.
 //
-// Runs in the required `unit.yml` job — `bun run test:unit`, and again in that
-// workflow's `bun run test` sweep over scripts/tests. No external resource, no
-// DOM, no network: memberMark() is pure, so there is nothing here to skip on.
+// Runs in the required `unit.yml` job via `bun run test:unit` (issue #819
+// removed that workflow's separate `bun run test` sweep, which used to
+// recurse into the Docker-backed scripts/tests/integration/). No external
+// resource, no DOM, no network: memberMark() is pure, so there is nothing
+// here to skip on.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

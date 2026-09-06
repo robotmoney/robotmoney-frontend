@@ -26,10 +26,12 @@
 // Both halves are driven over planted violations below, so the red direction is
 // asserted in CI rather than smokenstrated by hand once.
 //
-// Runs in the required `unit.yml` job — `bun run test:unit`, and again in that
-// same workflow's `bun run test` sweep over scripts/tests. It is NOT run by
-// integration.yml: #275 moved the root sweep out of it (issue #517 tracks the
-// headers that still claim otherwise).
+// Runs in the required `unit.yml` job via `bun run test:unit` (issue #819
+// removed that workflow's separate `bun run test` sweep — it recursed into
+// the Docker-backed scripts/tests/integration/, so test:unit is now the only
+// selector this file runs under). It is NOT run by integration.yml: #275
+// moved the root sweep out of it (issue #517 tracks the headers that still
+// claim otherwise).
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
