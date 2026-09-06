@@ -116,6 +116,12 @@ describe("the healthcheck command docker-compose.yml declares actually runs", ()
     expect(stdout).toContain("no heartbeat file");
   });
 
+  // Bun kills a test that declares no timeout at its 5000 ms default — well
+  // under the 10_000 ms this test asserts. Left implicit, a run slow enough to
+  // violate the assertion is killed by the runner first, so the assertion's
+  // own failure branch is unreachable (issue #820). 20_000 ms leaves the
+  // assertion, not the runner, to decide the outcome, with room to spare for a
+  // cold shared runner.
   test("the check is cheap enough for its 10s timeout", () => {
     const file = join(dir, "timing");
     writeFileSync(file, JSON.stringify({ ts: Date.now(), staleAfterMs: 60_000, phase: "idle" }));
@@ -127,5 +133,5 @@ describe("the healthcheck command docker-compose.yml declares actually runs", ()
     // check regardless of what the heartbeat says.
     expect(Date.now() - t0).toBeLessThan(10_000);
     rmSync(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 20_000 });
 });
