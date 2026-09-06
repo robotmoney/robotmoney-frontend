@@ -34,6 +34,7 @@ import { getWalletBalances } from "../../src/api/routes/dashboards.ts";
 import { sampleWalletBalances } from "../../src/worker/handlers/wallet.ts";
 import { backfillWalletHistory } from "../../src/db/seed.ts";
 import { _resetTokenPriceCacheForTests } from "../../src/chain/token-prices.ts";
+import { withFrozenClock } from "../support/fixed-clock.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -868,37 +869,22 @@ test("sampler: a slot replayed within TODAY's still-open bucket proceeds and tag
   fx.gecko = { [A.WETH]: 1700, [A.ROBOTMONEY]: 0.00002, [A.BNKR]: 0.001 };
   fx.sp500Price = 4700;
   mockChain(fx);
-  const today = new Date().toISOString().slice(0, 10);
 
-  // Anchor the slot to today's date at 00:01:00 UTC — always in today's
-  // daily bucket, always past REPLAY_SLACK_MS (5 min), and never in the
-  // future (provided the test does not run in the first 6 minutes of a UTC
-  // day). This replaces the old `Date.now() - 6 minutes` approach, which
-  // crossed yesterday's bucket boundary when CI ran in the first 6 minutes
-  // of any UTC day, causing classifySlot to return "past-bucket" and the
-  // sampler to decline rather than proceed.
-  //
-  // Edge case: if the current UTC time is before 00:06, today-at-00:01 is
-  // fewer than 5 minutes in the past, so classifySlot sees it as "on-time"
-  // rather than "same-bucket-catchup" — and the provenance stays "live"
-  // rather than being relabelled "backfilled". This is the correct runtime
-  // behavior (a slot fired 1 minute late IS on-time within REPLAY_SLACK_MS),
-  // but it makes the 'backfilled' assertion wrong. Throw loudly rather than
-  // silently producing a false green, so the failure is clearly time-related
-  // rather than looking like a logic bug.
-  const todayStartMs = new Date(`${today}T00:00:00.000Z`).getTime();
-  const msIntoDay = Date.now() - todayStartMs;
-  if (msIntoDay < 6 * 60_000) {
-    throw new Error(
-      `AC4 precondition unmet: test cannot construct a valid same-bucket slot in the first 6 minutes of a UTC day ` +
-        `(now is ${msIntoDay / 1000 | 0}s past midnight UTC). Re-run after 00:06 UTC.`,
-    );
-  }
-  // today at 00:01:00 UTC — always > 5 min in the past once we're past 00:06,
-  // and always in today's daily bucket regardless of the current hour.
+  // issue #827: this test used to derive "today" from the real clock and then
+  // throw a "re-run after 00:06 UTC" precondition error when the real clock
+  // was too close to midnight to construct a valid same-bucket slot — sampler
+  // and classifySlot() both read `new Date()`/`Date.now()` internally, and a
+  // test-side `new Date()` races that read across whatever instant the two
+  // land on. Freezing the clock removes the race (and the window) instead of
+  // narrowing it: the date below is otherwise arbitrary.
+  const today = "2026-06-15";
+  // 00:01 UTC — in today's daily bucket, and (once the clock below is frozen
+  // 11 minutes later) always past REPLAY_SLACK_MS (5 min), deterministically.
   const sameBucketSlot = `${today}T00:01:00.000Z`;
 
-  const result = (await sampleWalletBalances({ slotAt: sameBucketSlot })) as { sampleDate: string; persisted: number };
+  const result = (await withFrozenClock(`${today}T00:12:00.000Z`, () =>
+    sampleWalletBalances({ slotAt: sameBucketSlot }),
+  )) as { sampleDate: string; persisted: number };
   expect(result.sampleDate).toBe(today);
   expect(result.persisted).toBe(8); // proceeded — not declined
 
