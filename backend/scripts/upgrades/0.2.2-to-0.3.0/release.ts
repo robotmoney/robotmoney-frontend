@@ -45,6 +45,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0043_swarm_member_judges.sql",
   "0044_wallet_backfill_leg_terminal.sql",
   "0045_chain_address_floors.sql",
+  "0046_asset_prices.sql",
 ] as const;
 
 /**
