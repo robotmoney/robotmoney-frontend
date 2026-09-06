@@ -147,8 +147,12 @@ test("no disagreement is reported when the freshly repaired price matches what a
 test("the live sampler never writes to asset_prices — it writes a fused spot row, not a UTC daily close", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
-  const today = new Date().toISOString().slice(0, 10);
-  await sampleWalletBalances({});
+  // issue #827: read the day the sampler actually wrote off its own return
+  // value, rather than recomputing "today" independently — sampleWalletBalances
+  // picks its own `sampleDate` from `new Date()` internally, and a
+  // separately-computed `today` here would race that read across a UTC
+  // midnight straddle.
+  const { sampleDate: today } = (await sampleWalletBalances({})) as { sampleDate: string };
   const [balanceCount] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${today}
   `;
