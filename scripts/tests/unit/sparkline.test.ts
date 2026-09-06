@@ -14,8 +14,9 @@
 // from the dash.css `.a3` tokens they are a hand-copy of. The trend-routing
 // and color-value assertions now run there, anchored on the CSS instead.
 //
-// Runs in the required `unit.yml` job — `bun run test:unit`, and again in that
-// same workflow's `bun run test` sweep over scripts/tests.
+// Runs in the required `unit.yml` job via `bun run test:unit` (issue #819
+// removed that workflow's separate `bun run test` sweep, which used to
+// recurse into the Docker-backed scripts/tests/integration/).
 import { describe, expect, test } from "bun:test";
 import { renderRowSparkline, renderSparkline } from "../../../frontend/public/assets/js/app/alpine/lib/sparkline.js";
 

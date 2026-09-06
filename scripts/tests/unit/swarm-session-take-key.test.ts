@@ -19,8 +19,10 @@
 // future latest-per-member regression LOUD — Alpine raises a duplicate-key
 // error rather than silently doubling a member.
 //
-// Runs in the required `unit.yml` job (`bun run test:unit`, and again in that
-// workflow's `bun run test` sweep over scripts/tests). No DB, no network.
+// Runs in the required `unit.yml` job via `bun run test:unit` (issue #819
+// removed that workflow's separate `bun run test` sweep, which used to
+// recurse into the Docker-backed scripts/tests/integration/). No DB, no
+// network.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

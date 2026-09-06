@@ -24,10 +24,12 @@
 // expected color comes from dash.css, the actual color from a real
 // renderSparkline/renderRowSparkline call. Nothing is compared to itself.
 //
-// Runs in the required `unit.yml` job — `bun run test:unit`, and again in that
-// same workflow's `bun run test` sweep over scripts/tests. It is NOT run by
-// integration.yml: #275 moved the root sweep out of it (the stale headers that
-// still claim otherwise are issue #517).
+// Runs in the required `unit.yml` job via `bun run test:unit` (issue #819
+// removed that workflow's separate `bun run test` sweep — it recursed into
+// the Docker-backed scripts/tests/integration/, so test:unit is now the only
+// selector this file runs under). It is NOT run by integration.yml: #275
+// moved the root sweep out of it (the stale headers that still claim
+// otherwise are issue #517).
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
