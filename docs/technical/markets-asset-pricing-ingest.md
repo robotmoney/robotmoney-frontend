@@ -505,15 +505,21 @@ mechanism.
 ### 5.6 The price series is separate from the holdings series
 
 **Decided in [D41](../decisions.md), filed as #762. Phases 1, 2 and 5 of the
-five-phase cutover below shipped in #849 (EXPAND); phases 3 and 4 (switch the
-read path, stop writing the old column) are not yet built** — every read site
-named in §5.6's Cutover note still reads `price_usd`/`value_usd` off the
-sample row, and `asset_prices` is additive: **nothing described in §5.1–§5.5
-above has changed behaviour.** `wallet_balance_samples.price_usd` remains
-authoritative for every existing reader. It is recorded here because the
-sections above describe machinery whose *reason for existing* this eventually
-supersedes, and a reader needs to know which parts are load-bearing today and
-which are consequences of a shape that is only partway landed.
+five-phase cutover below shipped in #849 (EXPAND); phase 3 (switch the read
+path) shipped in #850 (MIGRATE); phase 4 (stop writing the old column) is not
+yet built** — the three sites named in §5.6's Cutover note now read a CLOSED
+day's price via a join against `asset_prices`, falling back to the sample
+row's own (still-written) `price_usd`/`value_usd` only when `asset_prices` has
+no row yet for that `(date, symbol)` — the known coverage gap #849's own
+development notes recorded (a cleanly-sampled closed day never dual-writes;
+only a day that needed repair does). `wallet_balance_samples.price_usd` is
+still WRITTEN on every sample and every repair (phase 4 has not landed), and
+it is still what every read falls back to during that gap, but it is no
+longer what a closed day's response is derived from when `asset_prices`
+already has the row. It is recorded here because the sections above describe
+machinery whose *reason for existing* this eventually supersedes, and a
+reader needs to know which parts are load-bearing today and which are
+consequences of a shape that is only partway landed.
 
 `wallet_balance_samples` fuses two different kinds of fact on two different
 clocks: `amount` is chain state at one block, and `price_usd` is a sample of a
@@ -547,15 +553,26 @@ and carrying the full quote record §8.1 asks for. Then:
   literal "sample row vs. price row" reading of D41's verify step. Either
   disagreement is logged and folded into the day's `detail` rather than
   silently overwritten with no trace; the freshly-verified repair value still
-  wins the write, since nothing reads this table yet. **The live sampler does
-  not dual-write** — it writes a spot price at a wall-clock instant, and a
-  date-keyed daily-close table holding that value under that date's key would
-  be exactly the substitution this whole document exists to refuse (D41's
-  second trap).
-- **`value_usd` for a closed day** will become a read-time join once phase 3
-  lands. A thin price day is then a disclosed gap in one series rather than a
-  poisoned snapshot in another. Until phase 3, `value_usd`/`price_usd` on the
-  sample row remain what every reader sees.
+  wins the write. This was written when nothing read this table yet
+  (#849/EXPAND); #850/MIGRATE now reads it for closed days (below), so a
+  disagreement here is no longer purely a reconciliation finding for later —
+  it is the value the join reader will pick up on its NEXT read once the
+  write commits. **The live sampler does not dual-write** — it writes a spot
+  price at a wall-clock instant, and a date-keyed daily-close table holding
+  that value under that date's key would be exactly the substitution this
+  whole document exists to refuse (D41's second trap).
+- **`value_usd` for a closed day is a read-time join, shipped in #850.** A
+  thin price day is then a disclosed gap in one series rather than a
+  poisoned snapshot in another. The join is deliberately permissive rather
+  than authoritative-only: `chain/wallet-balances.ts::loadHistory`,
+  `chain/wallet-sleeves.ts::computeWalletSleeves`, and `recentPersistedPrice`
+  (`chain/wallet-valuation.ts`) all fall back to the sample row's own
+  `price_usd`/`value_usd` when `asset_prices` has no row yet for that
+  `(date, symbol)` — the coverage gap noted above, not a live/close
+  substitution: both sides describe the SAME closed day's settled price, and
+  the fallback is read-only, never a write that would re-admit a defect.
+  Today's own row is the one exception on all three sites and always reads
+  its fused sample row, matching D41 exactly.
 
 Four properties have to hold for that to be safe, and each is easy to lose:
 
@@ -638,7 +655,7 @@ read path, stop writing the old column, then simplify the price-side driver —
 with the seed taking `live`/`seed` rows only and an explicit conflict rule.
 [D41](../decisions.md) carries the sequence, the two traps it must avoid, and
 why "clear the gap first, refactor after" is a judgement call rather than a
-dependency. **#849 shipped phases 1, 2 and 5**:
+dependency. **#849 shipped phases 1, 2 and 5; #850 shipped phase 3**:
 
 1. **Create and seed** — migration 0046 creates `asset_prices` and
    `asset_price_floors`, then seeds `asset_prices` from existing
@@ -654,11 +671,29 @@ dependency. **#849 shipped phases 1, 2 and 5**:
    `wallet_balance_samples` row for the same `(date, symbol)`, is reported in
    the day's `detail` and logged, never silently swallowed. The live sampler is
    excluded, exactly as D41 specifies — see the trap it names for why.
-3. **Switch the read path** — not built. `chain/wallet-balances.ts`,
-   `chain/wallet-sleeves.ts`, `recentPersistedPrice`
-   (`chain/wallet-valuation.ts`), and every `value_usd` consumer still read the
-   sample row.
-4. **Stop writing the old column** — not built; depends on phase 3.
+3. **Switch the read path — shipped, #850.** `chain/wallet-balances.ts`
+   (`loadHistory`), `chain/wallet-sleeves.ts` (`computeWalletSleeves`), and
+   `recentPersistedPrice` (`chain/wallet-valuation.ts`) now read a CLOSED
+   day's price via a `LEFT JOIN` against `asset_prices`, keyed on
+   `(symbol, price_date, time_basis)`. Today's own row is excluded from the
+   join on all three sites and always reads its fused sample row (D41: "today's
+   live point keeps its fused row"). The join falls back to the sample row's
+   own (still-written) `price_usd`/`value_usd` whenever `asset_prices` has no
+   row yet for that `(date, symbol)` — the #849 dev-notes gap (a
+   cleanly-sampled closed day never dual-writes) means this fallback is
+   exercised routinely today, not just in theory, and it is what keeps every
+   response byte-identical across the switch. The multiplication that turns a
+   joined price back into a value happens in application code (JS
+   `Number(amount) * Number(price)`), never in SQL: `asset_prices.price_usd`
+   is dual-written/seeded from the exact same JS double that produced the
+   sample row's `value_usd`, so the JS product reproduces it bit-for-bit,
+   where a SQL-side `numeric` recompute could round differently in its last
+   digits. `every value_usd consumer` beyond these three sites was not
+   audited by #850 — its scope was exactly the three named sites plus the
+   byte-identical proof, not a repo-wide `value_usd` reader sweep.
+4. **Stop writing the old column** — not built; depends on phase 3, and on
+   closing the #849 coverage gap first (a closed day the join cannot yet
+   answer must keep a `price_usd` to fall back to).
 5. **Simplify the price-side driver** — `ops/asset-prices.ts::detectAssetPriceGaps`
    ships the per-symbol, no-manifest, no-attempt-accounting shape now, ahead of
    phases 3/4, because it is a pure additive reader with no dependency on the
@@ -839,17 +874,39 @@ left as prose with no owner.
   every day from the registry's `seriesStart` to the database's bootstrap is an
   interior gap on that series until repair reaches it, and the operator gap
   report stays noisy while it does.
+- **`asset_prices` coverage gap for cleanly-sampled closed days — known since
+  #849, load-bearing for #850's read path, not yet closed.** #849's own
+  development notes recorded that `repairResolvedDay`'s dual-write only fires
+  when a day is INCOMPLETE; a day the live sampler closed cleanly (the nominal
+  case) never reaches it, so `asset_prices` has no row for it unless that day
+  also happened to fall inside migration 0046's one-time seed window. #850's
+  read-path join (§5.6 Cutover phase 3) tolerates this by falling back to the
+  sample row's own `price_usd`/`value_usd`, which is why every closed day
+  still serves a correct number today — but the fallback also means a large
+  and growing share of closed days are read from the OLD column, not the join,
+  undermining the "one series, reconcilable" property D41 exists to buy until
+  something actually backfills `asset_prices` for a cleanly-sampled day.
+  Phase 4 (stop writing the old column) cannot land while this gap stays open:
+  the fallback needs `price_usd` to still exist. Closing it is a write-side
+  change (a repair/backfill pass or an ordinary-day dual-write), explicitly
+  out of #850's scope (serving reads only) and not filed as its own issue yet.
 - **One shared quote record (P2) — decided in D41, filed as #762, table shipped
-  by #849 (§5.6), read-path unification not yet built.** Asset identity,
-  observation time / UTC day, currency, value, source, pool or ticker, response
-  identity, and config identity in one record now exist as `asset_prices`. What
-  is NOT yet true: the live and historical read paths still implement the same
-  pricing policy twice, in two files, because phases 3/4 of §5.6's cutover
-  (switch the read path, stop writing the old column) have not landed — a
-  caller asking for a price today still gets it from
-  `chain/token-prices.ts`/`chain/historical-prices.ts` directly, never from a
-  join against `asset_prices`. `response_hash` is also not yet populated (the
-  column exists, nullable, for this reason).
+  by #849, serving-side read path switched by #850 (§5.6), fetch-policy
+  unification not yet built.** Asset identity, observation time / UTC day,
+  currency, value, source, pool or ticker, response identity, and config
+  identity in one record now exist as `asset_prices`, and the three sites that
+  SERVE a closed day's price (`chain/wallet-balances.ts`,
+  `chain/wallet-sleeves.ts`, `recentPersistedPrice`) now join against it
+  rather than reading `price_usd` off the sample row (falling back to the
+  sample row while `asset_prices` still has coverage gaps — see §5.6's
+  Cutover note on phase 3). What is NOT yet true: the live and historical
+  *fetch* paths still implement the same pricing policy twice, in two files —
+  `chain/token-prices.ts` (live spot) and `chain/historical-prices.ts`
+  (daily-close backfill) remain separate vendor-call implementations, because
+  phase 4 of §5.6's cutover (stop writing the old column) has not landed and
+  nothing about #850 touched how a price is FETCHED, only how a closed day's
+  already-persisted price is READ. `response_hash` is also not yet populated
+  (the column exists, nullable, for this reason).
   **Vetted pool policy must be explicit per asset; the WETH pin is repeatability,
   not identity proof.** This record settles the *shape*, not the *policy* —
   which pool is the economically intended market for each asset remains an open
@@ -996,20 +1053,37 @@ loop and guarded by `reads` already excluding `valuationKind ===
 (`worker/handlers/wallet.ts::sampleWalletBalances`) never importing
 `ops/asset-prices.ts` at all.
 
+**Verified in this checkout under issue #850**, by opening the files:
+`chain/wallet-balances.ts::loadHistory`'s `LEFT JOIN asset_prices` (keyed on
+`symbol`/`price_date`/`time_basis`) and its `is_closed`-gated,
+`Number(amount) * Number(price)` recompute in JS rather than SQL;
+`chain/wallet-sleeves.ts::computeWalletSleeves`'s identical join and
+per-holding recompute; `recentPersistedPrice`
+(`chain/wallet-valuation.ts`)'s join, gated the same way; and
+`backend/tests/asset-prices-read-path.test.ts`, which exercises all three
+sites' agreeing-row join, no-row fallback, and today's-row exclusion cases,
+plus a 0038 fixture proving a published snapshot's own constituent row stays
+unchanged after `asset_prices` is repaired underneath it while the general
+history read restates.
+
 **Decided but not fully built** — §5.6 and its supporting notes in §3.2, §4.2,
-§5.3 and §8.1 describe [D41](../decisions.md). Phases 1, 2 and 5 (create/seed,
-dual-write/verify, the price-side gap-detector shape) are now implemented and
-verified above; phases 3 and 4 (switch the read path, stop writing the old
-column) are not. Every claim in §5.6 about *current* read-path behaviour —
-`chain/wallet-balances.ts`, `chain/wallet-sleeves.ts`,
-`recentPersistedPrice`/`chain/wallet-valuation.ts` still serving
-`price_usd`/`value_usd` off the sample row — is a claim about what phase 3
-replaces, and is verified above; every claim about phases 3/4 themselves is
-still a design commitment, not an observation. The four safety properties in
-§5.6 are derivations from this document's own contract (§1) rather than
-measurements, and the request-cost figure — three pool/token keys, roughly ten
-requests a year — follows from the asset table in `config.ts` plus the
-~181-candle window recorded below as inherited and unverified.
+§5.3 and §8.1 describe [D41](../decisions.md). Phases 1, 2, 3 and 5
+(create/seed, dual-write/verify, switch the read path, the price-side
+gap-detector shape) are now implemented and verified above; phase 4 (stop
+writing the old column) is not, and per §8.1 cannot land until the
+cleanly-sampled-closed-day coverage gap is closed on the write side — phase
+3's fallback still depends on `price_usd` existing. Every claim in §5.6 about
+read-path behaviour BEFORE #850 — `chain/wallet-balances.ts`,
+`chain/wallet-sleeves.ts`, `recentPersistedPrice`/`chain/wallet-valuation.ts`
+serving `price_usd`/`value_usd` off the sample row unconditionally — described
+what phase 3 replaced and is now historical; the CURRENT behaviour (the join,
+gated on closed-vs-today and gated again on `asset_prices` coverage) is
+verified above. Every claim about phase 4 is still a design commitment, not an
+observation. The four safety properties in §5.6 are derivations from this
+document's own contract (§1) rather than measurements, and the request-cost
+figure — three pool/token keys, roughly ten requests a year — follows from the
+asset table in `config.ts` plus the ~181-candle window recorded below as
+inherited and unverified.
 
 **A standing warning on method.** Verify deliverables against the tree, never
 against issue status: a ticked acceptance criterion is not evidence that the code

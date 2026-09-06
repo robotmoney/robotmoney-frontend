@@ -29,6 +29,7 @@ import {
   type KeyedAssetRead,
   type Provenance,
 } from "./wallet-valuation.ts";
+import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-prices.ts";
 import { ttlCached } from "./ttl-cache.ts";
 
 // Provenance ('seed' = a pre-launch backfilled history row, never a live chain
@@ -248,15 +249,49 @@ function dominantProvenance(seen: Set<Provenance>): Provenance {
 // them), so the subquery usually removes exactly the days it would anyway; it
 // is written this way for the mixed day the (sample_date, symbol) key permits
 // but the backfill has never produced — one symbol backfilled, another live.
+//
+// D41 phase 3 (issue #850): a CLOSED day's value is a read-time join against
+// `asset_prices` rather than the sample row's own `value_usd`; TODAY's row is
+// the one exception and keeps its fused value (D41: "today's live point keeps
+// its fused row"). The LEFT JOIN is deliberately permissive rather than an
+// INNER JOIN or a hard read-from-asset_prices-only rewrite: issue #849's own
+// dev notes record that a CLEANLY-sampled closed day never dual-writes into
+// `asset_prices` (only a day that needed repair does), so the table is known
+// to still have gaps for ordinary, correctly-sampled history. Falling back to
+// the sample row's own `value_usd` when the join has no row for that
+// (date, symbol) is what keeps every existing response byte-identical during
+// that gap — it is not the live/close COALESCE trap markets §5.6 point 1
+// forbids, because both sides describe the SAME closed day's settled price,
+// never a live spot standing in for one. The multiplication itself happens in
+// JS, not SQL: `asset_prices.price_usd` is dual-written/seeded from the exact
+// same JS double that produced the sample row's `value_usd`
+// (ops/asset-prices.ts::writeAssetPrice, migration 0046's seed step), so
+// `Number(amount) * Number(joinedPrice)` reproduces that IEEE-754 product
+// exactly — a SQL-side `amount * price_usd` would instead run as arbitrary-
+// precision `numeric` arithmetic and could differ in its last digits.
 async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyProvenance: Record<Provenance, number> }> {
-  const rows = await sql<{ sample_date: Date; symbol: string; value_usd: string; provenance: Provenance }[]>`
-    SELECT sample_date, symbol, value_usd, provenance
-      FROM wallet_balance_samples
-     WHERE sample_date NOT IN (
+  const rows = await sql<{
+    sample_date: Date;
+    symbol: string;
+    amount: string | null;
+    value_usd: string;
+    provenance: Provenance;
+    asset_price_usd: string | null;
+    is_closed: boolean;
+  }[]>`
+    SELECT wbs.sample_date, wbs.symbol, wbs.amount, wbs.value_usd, wbs.provenance,
+           ap.price_usd AS asset_price_usd,
+           (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
+      FROM wallet_balance_samples wbs
+      LEFT JOIN asset_prices ap
+        ON ap.symbol = wbs.symbol
+       AND ap.price_date = wbs.sample_date
+       AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
+     WHERE wbs.sample_date NOT IN (
              SELECT sample_date FROM wallet_balance_samples
               WHERE provenance = ${QUARANTINED_PROVENANCE}
            )
-     ORDER BY sample_date ASC, symbol ASC
+     ORDER BY wbs.sample_date ASC, wbs.symbol ASC
   `;
   const byDate = new Map<string, WalletHistoryPoint & { _seen: Set<Provenance> }>();
   for (const r of rows) {
@@ -268,7 +303,9 @@ async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyPr
       point = { date, byAsset: {}, totalUsd: 0, provenance: "stub", _seen: new Set() };
       byDate.set(date, point);
     }
-    const v = Number(r.value_usd);
+    const v = r.is_closed && r.asset_price_usd != null && r.amount != null
+      ? Number(r.amount) * Number(r.asset_price_usd)
+      : Number(r.value_usd);
     point.byAsset[r.symbol] = v;
     point.totalUsd += v;
     point._seen.add(r.provenance);
