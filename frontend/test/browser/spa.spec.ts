@@ -38,9 +38,29 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
   expect(errors).toEqual([]);
 }
 
+// Issue #827: the smoke seed writes the Woon session on ITS OWN clock,
+// strictly before this spec runs (scripts/lib/smoke-main.ts). Recomputing
+// `new Date()` here to build the session URL assumed the two clocks always
+// land on the same calendar day — false once in a while a run straddles
+// 00:00 UTC, when the seed's `today` and this test's `today` disagree and
+// the page 404s with no session to render. Read the date the API actually
+// stored instead of recomputing it.
+async function resolveSeededSessionDate(page: Page, subjectId: string): Promise<string> {
+  const date = await page.evaluate(async (id) => {
+    const res = await fetch(`/api/swarm/sessions?limit=50`);
+    const body = await res.json();
+    const match = (body.sessions as Array<{ subjectId: string; date: string }>).find((s) => s.subjectId === id);
+    return match ? match.date : null;
+  }, subjectId);
+  // Fail loudly rather than falling back to a computed date: a null here
+  // means the seed did not run (or ran for a different subject), which is a
+  // real defect this test must still catch — not paper over.
+  if (!date) throw new Error(`no swarm session found for subject "${subjectId}" — did the seed run?`);
+  return date;
+}
+
 test("renders allocation and dynamic swarm routes through Alpine", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  const today = new Date().toISOString().slice(0, 10);
 
   await page.goto("/");
   await navigate(page, "/allocation");
@@ -86,7 +106,8 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.locator(".profile-name")).toHaveText("Athena");
   await expect(page.locator(".profile-role")).not.toHaveText("");
 
-  await page.goto(`/swarm/${today}/woon`);
+  const woonDate = await resolveSeededSessionDate(page, "woon");
+  await page.goto(`/swarm/${woonDate}/woon`);
   await expect(page.locator(".session-title")).toHaveText("Woon Treasury");
   await expect(page.locator(".session-submissions tbody tr")).toHaveCount(3);
 
