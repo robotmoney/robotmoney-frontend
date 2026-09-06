@@ -76,6 +76,33 @@ describe("unit.yml enforces its own no-Docker, unit-only-selector claim (issue #
     expect(runCommands().some((r) => r.includes("bun run test:unit"))).toBe(true);
   });
 
+  test("the integration-tier boundary guard checks the JUnit report's file attribute, not raw console prose", () => {
+    // A test:unit console-log substring grep for "scripts/tests/integration"
+    // false-positives on scripts/tests/unit/harness-selftest.test.ts, whose
+    // test titles legitimately quote package.json's test:integration selector
+    // string ("bun test scripts/tests/integration") to prove that mechanism —
+    // prose that names the path is not evidence a file under that path ran.
+    // The guard must instead check the JUnit report's `file="..."` attribute,
+    // which is populated from real provenance and can't be spoofed by a
+    // test's own name/description text.
+    const guardStep = steps().find(
+      (s) => typeof s.run === "string" && s.run.includes("tier boundary broke"),
+    );
+    expect(guardStep, "a step checks the integration-tier boundary").toBeDefined();
+    expect(guardStep!.run).toContain('file="scripts/tests/integration');
+    expect(guardStep!.run).toContain(".junit.xml");
+    expect(guardStep!.run).not.toMatch(/grep -q 'scripts\/tests\/integration' \/tmp\/test-unit\.plain/);
+  });
+
+  test("the unit cost class step produces the JUnit report the boundary guard reads", () => {
+    const unitStep = steps().find(
+      (s) => typeof s.run === "string" && s.run.includes("bun run test:unit"),
+    );
+    expect(unitStep, "a step runs bun run test:unit").toBeDefined();
+    expect(unitStep!.run).toContain("--reporter=junit");
+    expect(unitStep!.run).toContain("--reporter-outfile=/tmp/test-unit.junit.xml");
+  });
+
   test("makes the real docker binary unreachable, before the unit-scoped selector runs", () => {
     const all = steps();
     const dockerIdx = all.findIndex((s) => typeof s.run === "string" && s.run.includes("command -v docker"));

@@ -92,17 +92,28 @@ jobs:
       - name: Unit cost class (scripts/tests/unit)
         run: |
           set -o pipefail
-          bun run test:unit 2>&1 | tee /tmp/test-unit.log
+          bun run test:unit -- --reporter=junit --reporter-outfile=/tmp/test-unit.junit.xml 2>&1 | tee /tmp/test-unit.log
           sed -E 's/\x1b\[[0-9;]*m//g' /tmp/test-unit.log > /tmp/test-unit.plain
           grep -qE '^ *[1-9][0-9]* pass$' /tmp/test-unit.plain
           grep -qE '^ *0 fail$' /tmp/test-unit.plain
-      # Test plan (issue #819): prove it from this job's OWN log, not merely
-      # from the selector's directory scoping — a scripts/tests/integration
-      # path must never appear in test:unit's output.
-      - name: No integration-tier file executed here (checked against the log)
+      # Test plan (issue #819): prove it from this job's OWN output, not
+      # merely from the selector's directory scoping — a scripts/tests/
+      # integration file must never actually execute inside test:unit.
+      #
+      # This checks the JUnit report's `file="..."` attributes (each
+      # testsuite/testcase carries the real originating file path), NOT a
+      # grep over the console log's free text. An earlier version of this
+      # guard grepped /tmp/test-unit.plain directly and false-positived on
+      # scripts/tests/unit/harness-selftest.test.ts, whose test titles
+      # legitimately quote package.json's test:integration selector string
+      # ("bun test scripts/tests/integration") to prove that mechanism —
+      # prose that mentions the path is not evidence a file under that path
+      # ran. `file=` is populated from actual provenance, so it can't be
+      # spoofed by a test's own name/description text.
+      - name: No integration-tier file executed here (checked against the JUnit report)
         run: |
-          if grep -q 'scripts/tests/integration' /tmp/test-unit.plain; then
-            echo "a scripts/tests/integration path appeared in the unit job's test:unit output — the tier boundary broke" >&2
+          if grep -q 'file="scripts/tests/integration' /tmp/test-unit.junit.xml; then
+            echo "a scripts/tests/integration file appeared in the unit job's test:unit JUnit report — the tier boundary broke" >&2
             exit 1
           fi
       # Pins fail-red-on-empty-selection: the two selectors above are just
