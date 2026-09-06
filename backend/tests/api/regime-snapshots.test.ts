@@ -31,6 +31,7 @@ import { getRegimeSnapshots, getRegimeSnapshotsSummary } from "../../src/api/rou
 import { saveRegimeSnapshots } from "../../src/analytics/store/regime-store.ts";
 import { REGIME_STALE_THRESHOLD_DAYS, type JsonValue } from "../../src/analytics/report/regime-projection.ts";
 import { useCleanDatabasePerTest } from "../support/clean-db.ts";
+import { useFrozenClock } from "../support/fixed-clock.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
@@ -38,7 +39,16 @@ import { useCleanDatabasePerTest } from "../support/clean-db.ts";
 useCleanDatabasePerTest(import.meta.file);
 
 // fetchRegimeSnapshots measures freshness against the real server clock (UTC
-// today), so seed dates are computed relative to that same clock.
+// today) — projections.ts's `new Date().toISOString().slice(0, 10)` — and
+// `today()`/`daysAgo()` below independently call `new Date()` too, often
+// several times per test (once to seed a row, again to build each expected
+// value). Left alone, that is issue #827's "test disagrees with production
+// clock" race: any two of those reads landing on opposite sides of a real UTC
+// midnight disagree, silently, in the minutes either side of 00:00 UTC. This
+// file has no reason to care what day it really is, so pin one instead of
+// letting every call to `today()` re-read the real clock.
+useFrozenClock("2026-06-15T12:00:00.000Z");
+
 const daysAgo = (n: number): string =>
   new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 const today = () => daysAgo(0);
