@@ -112,6 +112,38 @@ test("0046 seeds asset_prices from live/seed provenance with an explicit, determ
   expect(sp500Count!.n).toBe(0);
 });
 
+test("0046 excludes the still-open UTC day's live row from the seed, but seeds a prior day's", async () => {
+  // Real dates (not the 2018 fixtures above) are required here: the migration
+  // filters on `sample_date < (now() AT TIME ZONE 'UTC')::date`, so the whole
+  // point of this test is to exercise "today" as Postgres sees it right now.
+  // Safe from collision with any other suite because useCleanDatabase() gives
+  // this file its own cloned database (tests/support/clean-db.ts).
+  const [{ today, yesterday }] = await sql<{ today: string; yesterday: string }[]>`
+    SELECT (now() AT TIME ZONE 'UTC')::date::text AS today,
+           ((now() AT TIME ZONE 'UTC')::date - 1)::text AS yesterday
+  `;
+
+  // The wallet balance sampler runs hourly and continuously upserts a `live`
+  // row for the still-open day — this is that row, and it must NOT be
+  // seeded as a fabricated 'utc-daily-close'.
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES (${today}, 'WETH', 1, 111, 111, 'live', now())
+  `;
+  // A prior day that has actually closed IS seeded, same as the 2018 fixtures.
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES (${yesterday}, 'WETH', 1, 222, 222, 'live', ${yesterday + "T23:59:00Z"})
+  `;
+
+  await runMigration();
+
+  const rows = await sql<{ price_date: string }[]>`
+    SELECT price_date::text FROM asset_prices WHERE symbol = 'WETH' AND price_date IN (${today}, ${yesterday})
+  `;
+  expect([...rows]).toEqual([{ price_date: yesterday }]);
+});
+
 test("0046 seeds a proven floor for the three usdc-pinned assets, not for gecko-priced ones", async () => {
   await runMigration();
   const floors = await sql<{ symbol: string; first_priceable_date: string; proven: boolean }[]>`

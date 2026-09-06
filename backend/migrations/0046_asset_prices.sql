@@ -61,6 +61,16 @@ CREATE TABLE asset_price_floors (
 -- SP500 is excluded: it is not priced at all in this series (config-valued,
 -- no chain/vendor read — markets §3.2, §5.6).
 --
+-- STILL-OPEN DAY IS EXCLUDED. The wallet balance sampler runs hourly and
+-- continuously upserts a `live` row for the still-open UTC day this migration
+-- runs on. That row is an intraday spot, not a settled close — seeding it here
+-- under time_basis = 'utc-daily-close' would be exactly the live-spot/close
+-- substitution D41 forbids (docs/decisions.md D41), just reached through this
+-- migration's seed rather than the path D41 names directly. `sample_date <
+-- (now() AT TIME ZONE 'UTC')::date` leaves today to be captured later, once it
+-- has actually closed, via the dual-write path (phase 2) or ordinary repair —
+-- never fabricated here from a mid-day sample.
+--
 -- CONFLICT RULE. wallet_balance_samples carries at most one row per
 -- (sample_date, symbol) (its own UNIQUE constraint), but wallet_sleeve_samples
 -- can carry several (one per wallet), and the two tables can disagree with
@@ -78,12 +88,14 @@ WITH candidates AS (
    WHERE provenance IN ('live', 'seed')
      AND price_usd IS NOT NULL AND price_usd > 0
      AND symbol <> 'SP500'
+     AND sample_date < (now() AT TIME ZONE 'UTC')::date
   UNION ALL
   SELECT sample_date, symbol, price_usd, sampled_at, FALSE AS from_balance
     FROM wallet_sleeve_samples
    WHERE provenance IN ('live', 'seed')
      AND price_usd IS NOT NULL AND price_usd > 0
      AND symbol <> 'SP500'
+     AND sample_date < (now() AT TIME ZONE 'UTC')::date
 ),
 grouped AS (
   SELECT sample_date, symbol, price_usd,

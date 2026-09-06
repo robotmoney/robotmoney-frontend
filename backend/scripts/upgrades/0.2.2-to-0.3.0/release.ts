@@ -95,6 +95,16 @@ export const NEW_TABLES = [
   // first time the backfill resolves that address's floor — the same shape
   // `chain_day_blocks` above has for date resolution.
   "chain_address_floors",
+  // 0046 (issue #849; D41 phase 1). Unlike every NEW_TABLES entry above,
+  // `asset_prices` IS EXPECTED NON-EMPTY after the migration by design — it
+  // seeds one row per (date, symbol) from existing live/seed-provenance
+  // sample rows (see 0046's own comments), so postflight's `new-tables` check
+  // must not require it empty.
+  "asset_prices",
+  // 0046's per-symbol first-priceable-day floor. Empty for gecko-priced
+  // assets (resolved lazily, same shape as `chain_address_floors` above);
+  // seeded only for the three usdc-pinned assets.
+  "asset_price_floors",
 ] as const;
 export const NEW_COLUMNS = [
   { table: "wallet_balance_samples", column: "strategy_nav_idle_only" },
