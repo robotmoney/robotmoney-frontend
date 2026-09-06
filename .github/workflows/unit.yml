@@ -110,8 +110,20 @@ jobs:
       # prose that mentions the path is not evidence a file under that path
       # ran. `file=` is populated from actual provenance, so it can't be
       # spoofed by a test's own name/description text.
+      #
+      # The existence/non-empty check below is this step's own
+      # self-verification, mirroring the Docker-unreachability step above: a
+      # missing or empty JUnit file makes `grep` exit 2 ("no such file"), the
+      # same exit code as "ran fine, found no match" — and since this sits in
+      # an `if` condition, `set -e` never fires. Without the check, a
+      # reporter-flag/version drift or a crashed reporter silently exits 0
+      # here, having verified nothing at all.
       - name: No integration-tier file executed here (checked against the JUnit report)
         run: |
+          if [ ! -s /tmp/test-unit.junit.xml ]; then
+            echo "no JUnit report was produced by test:unit (missing or empty /tmp/test-unit.junit.xml) — cannot verify the tier boundary" >&2
+            exit 1
+          fi
           if grep -q 'file="scripts/tests/integration' /tmp/test-unit.junit.xml; then
             echo "a scripts/tests/integration file appeared in the unit job's test:unit JUnit report — the tier boundary broke" >&2
             exit 1

@@ -23,7 +23,8 @@
 // Cost class: fast unit. Pure file read + YAML parsing + regex checks — no
 // Docker, no network, no model.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const unitYmlPath = join(import.meta.dir, "../../../.github/workflows/unit.yml");
@@ -92,6 +93,79 @@ describe("unit.yml enforces its own no-Docker, unit-only-selector claim (issue #
     expect(guardStep!.run).toContain('file="scripts/tests/integration');
     expect(guardStep!.run).toContain(".junit.xml");
     expect(guardStep!.run).not.toMatch(/grep -q 'scripts\/tests\/integration' \/tmp\/test-unit\.plain/);
+  });
+
+  test("the boundary guard's shell logic fails loudly on a missing or empty JUnit report, instead of failing open", () => {
+    // A reviewer finding on this same issue: the guard's `if grep -q ... ; then`
+    // sits in a bash CONDITION, so `set -e` never applies. A missing or empty
+    // /tmp/test-unit.junit.xml (reporter flag/version drift, a crashed
+    // reporter, a path typo, a disk issue) makes `grep` exit 2 ("no such
+    // file") the same way it would for "ran fine, found no match" — so
+    // without its own existence/non-empty check FIRST, the step exits 0
+    // having verified nothing. This test does not merely assert the YAML
+    // text contains certain strings (a prior version of this file's guard
+    // tests did exactly that, and could not have caught this bug); it
+    // extracts the guard step's actual `run:` script and executes it via a
+    // real shell against controlled fixture files, asserting on exit codes.
+    const guardStep = steps().find(
+      (s) => typeof s.run === "string" && s.run.includes("tier boundary broke"),
+    );
+    expect(guardStep, "a step checks the integration-tier boundary").toBeDefined();
+
+    const tmpDir = mkdtempSync(join(tmpdir(), "unit-yml-guard-"));
+    const junitPath = join(tmpDir, "test-unit.junit.xml");
+    try {
+      // Retarget the guard's hardcoded /tmp path to an isolated temp file so
+      // this test exercises the REAL script logic without touching, or
+      // depending on the absence/presence of, the actual CI-produced
+      // /tmp/test-unit.junit.xml.
+      const script = guardStep!.run!.replaceAll("/tmp/test-unit.junit.xml", junitPath);
+
+      // Missing file.
+      let result = Bun.spawnSync(["bash", "-c", script]);
+      expect(
+        result.exitCode,
+        "a missing JUnit report must fail the guard loudly, not silently pass",
+      ).toBe(1);
+      expect(result.stderr.toString()).toContain("cannot verify the tier boundary");
+
+      // Empty file — `-s` is false for a 0-byte file just as it is for a
+      // missing one, and is the same fail-open hazard.
+      writeFileSync(junitPath, "");
+      result = Bun.spawnSync(["bash", "-c", script]);
+      expect(
+        result.exitCode,
+        "an empty JUnit report must fail the guard loudly, not silently pass",
+      ).toBe(1);
+      expect(result.stderr.toString()).toContain("cannot verify the tier boundary");
+
+      // Non-empty, no integration-tier file recorded: the guard passes. Cites
+      // this file's own real path (it exists) rather than a made-up one, so
+      // the repo's dangling-citation gate (test-path-citations.test.ts) never
+      // flags this fixture string as a stale reference.
+      writeFileSync(
+        junitPath,
+        '<testsuites><testsuite><testcase file="scripts/tests/unit/unit-workflow-tier-boundary.test.ts"/></testsuite></testsuites>',
+      );
+      result = Bun.spawnSync(["bash", "-c", script]);
+      expect(result.exitCode, "a clean JUnit report must pass the guard").toBe(0);
+
+      // Non-empty, WITH an integration-tier file recorded: the guard still
+      // catches the real regression it exists to catch. Cites a real
+      // scripts/tests/integration file for the same dangling-citation reason.
+      writeFileSync(
+        junitPath,
+        '<testsuites><testsuite><testcase file="scripts/tests/integration/admin-live-guard.test.ts"/></testsuite></testsuites>',
+      );
+      result = Bun.spawnSync(["bash", "-c", script]);
+      expect(
+        result.exitCode,
+        "an integration-tier file present in the report must still fail the guard",
+      ).toBe(1);
+      expect(result.stderr.toString()).toContain("tier boundary broke");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   test("the unit cost class step produces the JUnit report the boundary guard reads", () => {
