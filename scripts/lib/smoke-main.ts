@@ -1038,13 +1038,11 @@ async function main(): Promise<void> {
   // run only when it's running the real-inference onboarding eval (Stage 7,
   // ONBOARDING_REAL_EVAL=1 — see the CI branch below): fail before spending
   // minutes standing up the stack, not ~20 minutes later at the eval step
-  // itself. Which CI runs set it (issue #289, #373): .github/workflows/e2e.yml,
-  // on a push to main, on its nightly `schedule` mirror of that push (04:37 UTC
-  // — the slot the retired swarm-opencode-nightly.yml held), on a
-  // `pull_request` whose PR carries the `real-eval` opt-in label, or
-  // on a `workflow_dispatch` started with real_eval=true. An ORDINARY PR run
-  // therefore leaves ONBOARDING_REAL_EVAL empty and skips this resolve, which
-  // is correct: it has no eval to fail early for.
+  // itself. Which CI runs set it (issue #289, #373, #803): e2e.yml's nightly
+  // `schedule` mirror, a `pull_request` labelled `real-eval`, or a
+  // `workflow_dispatch` with real_eval=true — NOT a plain push to main (#803
+  // removed that route). A push run leaves this empty too and skips this
+  // resolve correctly: no eval to fail early for.
   if (tuiActive) {
     tui = createTui({ render });
     tui.start();
@@ -1298,21 +1296,23 @@ async function main(): Promise<void> {
     // the REAL-INFERENCE onboarding admission sweep reuses this EXACT
     // already-booted stack instead of standing up a parallel one — same
     // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1.
-    // Which CI runs set it (issue #289, #373): .github/workflows/e2e.yml on
-    // exactly four events — a push to main, its NIGHTLY `schedule` mirror of
-    // that push (04:37 UTC, the slot the retired swarm-opencode-nightly.yml
-    // held), a `pull_request` whose PR carries the `real-eval` OPT-IN LABEL, and
-    // a `workflow_dispatch` started with real_eval=true. It is off by default on
-    // pull requests: that gating dates from the free-tier default whose quota
-    // one eval per PR exhausted, and survives the funded default (D22 as
-    // amended) because this repo has one self-hosted runner and an eval per PR
-    // is minutes of exclusive runner time against a stochastic metric. Add the
-    // `real-eval` label to opt a PR in; remove it to opt back out. A run
-    // without ONBOARDING_REAL_EVAL set at all (an unlabelled `pull_request` run
-    // of e2e.yml, a plain local `bun run smoke`, or any invocation predating this
-    // env var) is a no-op here and relies on Stage 5's separate inference-off
-    // infra-rails test (scripts/tests/integration/onboarding-eval-infra.test.ts), which
-    // e2e.yml still runs unconditionally on every PR. A failed/timed-out
+    // Which CI runs set it (issue #289, #373, #803): e2e.yml's NIGHTLY
+    // `schedule` mirror, a `pull_request` labelled `real-eval`, and a
+    // `workflow_dispatch` with real_eval=true — NOT a plain push to main (#803
+    // removed that route: its ~50/50 timeout rate, #304, turned an unrelated
+    // push red, so the schedule mirror is now this measurement's only
+    // continuously-recurring home). Off by default on pull requests: that
+    // gating dates from the free-tier default whose quota one eval per PR
+    // exhausted, and survives the funded default (D22 as amended) because this
+    // repo has one self-hosted runner and an eval per PR is minutes of
+    // exclusive runner time against a stochastic metric. Add the `real-eval`
+    // label to opt a PR in; remove it to opt back out. A run without
+    // ONBOARDING_REAL_EVAL set at all (an unlabelled `pull_request` run, a
+    // plain push to main, a plain local `bun run smoke`, or any invocation
+    // predating this env var) is a no-op here and relies on Stage 5's separate
+    // inference-off infra-rails test
+    // (scripts/tests/integration/onboarding-eval-infra.test.ts), which e2e.yml
+    // still runs unconditionally on every PR. A failed/timed-out
     // admission THROWS (via `run`'s pattern — no silent pass): the whole point
     // of real inference is that a vanilla agent failing to navigate our own
     // onboarding instructions is a real regression signal, not a shrug.

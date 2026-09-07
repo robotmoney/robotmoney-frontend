@@ -982,7 +982,8 @@ constant" was actually protecting.
 R8 real-inference onboarding eval. `ONBOARDING_REAL_EVAL` now resolves to `"1"`
 on three routes instead of one:
 
-1. a push to `main` (unchanged);
+1. ~~a push to `main` (unchanged)~~ **Removed by the D26 amendment (issue
+   #803):** a plain push to `main` no longer spends the eval;
 2. a `pull_request` whose PR carries the label **`real-eval`**;
 3. a `workflow_dispatch` started with the `real_eval` input set true.
 
@@ -1371,6 +1372,56 @@ semantics — the very "required reading" this decision exists to remove.
 tooling repo and currently specifies that only `heavy`/`sanity-meta` carry
 `schedule:`. This decision makes non-heavy classes carry it too, so the rubric
 needs a matching change — filed there as an issue, never edited from this repo.
+
+### Amendment (issue #803) — the real-inference eval no longer spends on a
+plain push to `main`; nightly is now its only recurring route
+
+**What changed.** The 2026-08-23 amendment above documented a "deliberate
+asymmetry": the §11 R8 real-inference onboarding eval ran on both a push to
+`main` and the nightly `schedule` mirror, while ordinary rc pushes to
+`releases-*` did not carry it. That asymmetry is now **superseded**.
+`ONBOARDING_REAL_EVAL` in `.github/workflows/e2e.yml` no longer resolves to
+`"1"` on `github.event_name == 'push'` at all. It resolves to `"1"` on exactly
+three routes: the nightly `schedule` mirror, a `pull_request` labelled
+`real-eval`, and a `workflow_dispatch` with `real_eval=true`. E6's numbered
+list above is corrected accordingly.
+
+**Why.** #304 measured the admission at roughly 50/50 within
+`runOnboardingEvalWithRetry`'s 30-minute-per-attempt, two-attempt bound. That
+put a coin flip on every push to `main`: a `timed-out` outcome turned an
+otherwise-green push red for a reason unrelated to the code that landed, on a
+job summary nobody reads until the *next* push finds it (or doesn't — a PR's
+own `e2e` run never spends this eval, so neither the author who caused a real
+onboarding regression nor the author of the next, unrelated push sees the
+failure before it lands on `main`'s history). #800/#803 trace multiple
+apparent "CI is broken" investigations to exactly this signature. The nightly
+`schedule` mirror already measures the identical surface once a night and is
+read as a trend over run history (D26's "admission rate comes free"
+paragraph above) rather than as a per-run verdict, so removing the push route
+does not shrink the measurement — it only removes the false-positive-shaped
+per-push report.
+
+**Does this touch D26's isomorphism rule?** No new job or step is added to
+`schedule` that `push` lacks; the reverse happens — a route present on both is
+narrowed to `schedule` only. `scripts/tests/unit/nightly-mirrors-merge-set.test.ts`
+enforces isomorphism at the workflow level (does every `push: branches:
+[main]` workflow also carry a `schedule:` trigger, and vice versa), which this
+change does not touch: `e2e.yml` keeps both triggers, it merely resolves one
+internal step's env expression differently per event. The nightly's `37 4 * *
+*` slot is now this measurement's **only** continuously-recurring source —
+there is no push-triggered counterpart left to be asymmetric with.
+
+**Does the real-inference eval gate merges to `main`?** No, and this
+amendment does not change that: it was never a GitHub required
+branch-protection check (D26's "Not in scope" bullet above already rules that
+out — "a stochastic measurement cannot gate a merge"). What it *was* doing was
+reporting on `main`'s post-merge commit history, which the Superfield auto
+loop's sequential-merge bookkeeping can observe as a red run against `main`
+even though no individual PR's own required checks ever depended on it. This
+amendment removes that specific post-merge false-positive source; it does not
+newly declare the eval a gate, and does not touch whether any *other* part of
+`e2e.yml` (the browser-check suite) gates a PR — that was already, and remains,
+governed by ordinary branch protection on the `pull_request` run.
 
 ---
 
