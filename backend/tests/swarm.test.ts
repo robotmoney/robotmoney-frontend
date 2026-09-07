@@ -796,6 +796,44 @@ test("GET /api/swarm/sessions: malformed cursor and out-of-range limit are 400s 
   }
 });
 
+// ── Issue #783: nextSessionAt on the sessions envelope ──────────────────────
+
+test("GET /api/swarm/sessions: nextSessionAt is null when the swarm.open_session schedule is disabled (the seeded production baseline)", async () => {
+  const req = new Request("http://test/api/swarm/sessions");
+  const res = await handleSwarm(req, new URL(req.url));
+  expect(res?.status).toBe(200);
+  const body = res!.body as { nextSessionAt: string | null };
+  expect("nextSessionAt" in body).toBe(true); // never omitted, so a caller can tell "not scheduled" apart from "older API"
+  expect(body.nextSessionAt).toBeNull();
+});
+
+test("GET /api/swarm/sessions: nextSessionAt reads the SAME next_run_at tickScheduler maintains for the enabled swarm.open_session row, on both the default page and ?full=1", async () => {
+  const slot = new Date(Date.now() + 3 * 60 * 60 * 1000); // arbitrary future instant
+  await sql`UPDATE job_schedules SET enabled = true, next_run_at = ${slot} WHERE kind = 'swarm.open_session'`;
+
+  const req = new Request("http://test/api/swarm/sessions");
+  const res = await handleSwarm(req, new URL(req.url));
+  expect(res?.status).toBe(200);
+  const body = res!.body as { nextSessionAt: string | null };
+  expect(body.nextSessionAt).toBe(slot.toISOString());
+
+  // ?full=1 is a different response branch in listSessions() — assert it
+  // carries the identical value rather than dropping it like it drops
+  // nextCursor's meaning.
+  const fullReq = new Request("http://test/api/swarm/sessions?full=1");
+  const fullRes = await handleSwarm(fullReq, new URL(fullReq.url));
+  const fullBody = fullRes!.body as { nextSessionAt: string | null };
+  expect(fullBody.nextSessionAt).toBe(slot.toISOString());
+});
+
+test("GET /api/swarm/sessions: nextSessionAt is null when the schedule is enabled but has never ticked (next_run_at not yet seeded)", async () => {
+  await sql`UPDATE job_schedules SET enabled = true, next_run_at = NULL WHERE kind = 'swarm.open_session'`;
+  const req = new Request("http://test/api/swarm/sessions");
+  const res = await handleSwarm(req, new URL(req.url));
+  const body = res!.body as { nextSessionAt: string | null };
+  expect(body.nextSessionAt).toBeNull();
+});
+
 test("GET /api/swarm/members/:id/takes (#243B): collapses list+N-detail into one call — newest first, in-progress states included, doesn't collide with the plain member-detail route", async () => {
   const subjOlder = rid("takesA");
   const subjNewer = rid("takesB");
