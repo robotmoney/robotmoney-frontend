@@ -258,21 +258,32 @@ async function checkPendingMigrations(db: Db, { record }: Checker): Promise<Set<
 //      here against having that guard turned OFF, but an UPDATE or INSERT
 //      statement against it is not graded — postflight's guard-catalog checks
 //      and the trigger itself are what cover that.
-//   7. WHICH MIGRATION INSTALLS A GUARD is read out of the files
-//      (guardedTablesInstalledBy), in the two shapes this repo uses. A guard
-//      installed in a third shape would not be attributed to its migration, and
-//      a removal that runs after it would be graded as running before it. Worse
-//      in composition: an unharvestable install PLUS a later file that merely
-//      MENTIONS the table moves attribution to that later file, so adding a file
-//      which installs nothing can flip a correct FAIL into a PASS. See the ⚠⚠
-//      block on guardedTablesInstalledBy(). The derived map is pinned against
-//      the real migration set by
-//      tests/preflight-0-3-0-append-only-safety.test.ts — but that pin compares
-//      against a hand-written literal, so an author adding an unharvestable
-//      install could reconcile it by editing the expectation. Comparing the
-//      text-derived map against a database-derived one, migration by migration,
-//      is what would make this an enforced invariant rather than a documented
-//      hope.
+//   7. [ENFORCED, not merely documented — see below] WHICH MIGRATION INSTALLS A
+//      GUARD is read out of the files (guardedTablesInstalledBy), in the two
+//      shapes this repo uses. A guard installed in a third shape would not be
+//      attributed to its migration, and a removal that runs after it would be
+//      graded as running before it. Worse in composition: an unharvestable
+//      install PLUS a later file that merely MENTIONS the table moves
+//      attribution to that later file, so adding a file which installs nothing
+//      can flip a correct FAIL into a PASS. See the ⚠⚠ block on
+//      guardedTablesInstalledBy().
+//
+//      tests/preflight-0-3-0-append-only-safety.test.ts asserts the text-derived
+//      `installedAt` map against a GROUND TRUTH built by applying
+//      THIS_RELEASE_MIGRATIONS one file at a time onto a v0.2.2 baseline and
+//      snapshotting `pg_trigger` after each — the database does not care what
+//      shape the DDL took, so a migration installing a guard in an unharvestable
+//      third shape shows up there even when the text scan misses it. That test
+//      also builds a `SELECT … INTO`-shaped fixture that IS unharvestable by
+//      text and asserts the ground-truth comparison catches it. The one thing
+//      still unenforced: the comparison only sees a mismatch if pg_trigger's own
+//      naming vocabulary (isGuardTriggerName) recognises the resulting trigger's
+//      NAME — a guard named entirely outside that vocabulary
+//      (`wallet_aum_snapshot_runs_finalize`, named just above) is invisible to
+//      BOTH sides of the comparison the same way, and so cannot be caught by it.
+//      The `installedAt` map's OLD pin against a hand-written literal is still
+//      present as a redundant cross-check, with its weakness (an author can
+//      edit the literal to match the harvest) noted at its call site.
 //   8. TWO NARROW EXEMPTIONS, both for installing protection rather than
 //      removing it. Each is stated as the code implements it, because an
 //      exemption described more narrowly than it behaves is how the last one
@@ -520,8 +531,13 @@ function tableList(clause: string): string[] {
  * BY NAME. Such a trigger is still caught whenever it sits on an append-only
  * table, because scanMigrationSql() blocks any trigger change on one of those
  * regardless of the trigger's name.
+ *
+ * Exported so the pg_trigger-ground-truth test
+ * (tests/preflight-0-3-0-append-only-safety.test.ts) reads the DATABASE's
+ * triggers with the exact same vocabulary this file uses to read migration
+ * text — two independent instances of the rule would drift silently.
  */
-const isGuardTriggerName = (name: string): boolean => /_append_only|_immutable|_guard/i.test(name);
+export const isGuardTriggerName = (name: string): boolean => /_append_only|_immutable|_guard/i.test(name);
 
 /** Guard FUNCTIONS follow the same two shapes: `rm_append_only_guard()` and the
  *  per-table `rm_<subject>_immutable()` / `rm_<subject>_guard()`. */
