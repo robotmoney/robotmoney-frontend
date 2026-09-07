@@ -254,6 +254,13 @@ export const DEMO_MEMBERS: readonly SessionMember[] = Object.freeze([
   { memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: demoAttends("boreas") },
   { memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: demoAttends("cygnus") },
   { memberId: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: demoAttends("draco") },
+  // Issue #922: smoke-local named-judge persona, kept in sync with the mirror
+  // array in ../smoke-mode.ts. `memberId: "themis"` becomes both this driver's
+  // registerMember() id AND (via deriveMemberHandle's slugify of the name
+  // "Themis") her handle, which is what makes #918's judgeSessionAdmin —
+  // hardcoded to resolve judgeMemberId by looking up handle 'themis' — find
+  // her at all. Absent via the shared DEMO_NO_SHOWS rule, same as draco.
+  { memberId: "themis", name: "Themis", lens: "consensus judge", bias: 0.0, present: demoAttends("themis") },
 ]);
 export const DEMO_SUBJECTS: readonly SessionSubject[] = Object.freeze([
   { id: "woon", name: "Woon Treasury" },
@@ -1037,6 +1044,69 @@ export async function setMemberRole(
 }
 
 /**
+ * `POST /api/swarm/admin/members/:id/update` — sets a member's `operator`
+ * column (issue #922). No new admin capability: `updateMemberAdmin`
+ * (backend/src/swarm/admin.ts) has taken `operator` in its patch since #593,
+ * this just calls the existing versioned route the way `setMemberRole` calls
+ * its own.
+ *
+ * WHY THIS, RATHER THAN FLIPPING `swarm_judge_config.thirdPartyEnabled`: the
+ * smoke-local Themis persona is meant to exercise the SAME in-house exemption
+ * path the real seeded Themis uses (roster-seed.ts stamps `operator:
+ * "robotmoney"` on every in-house seat), not the third-party gate-open path —
+ * those are different facts about how a judging was authorized, and #918's
+ * whole point was that the in-house judge does not need the gate open at all.
+ * `registerMember()` (the path every smoke/test persona enrolls through) never
+ * sets `operator`, so without this call the persona would need
+ * `thirdPartyEnabled: true` instead — a real, meaningfully different coverage
+ * claim this issue does not want to make.
+ */
+export async function setMemberOperator(
+  memberId: string,
+  operator: string,
+  automationToken?: string,
+): Promise<void> {
+  const membersRes = await fetch(`${backendUrl()}${ROUTES.swarm.admin.members}`, {
+    headers: getAutomationHeaders(automationToken),
+  });
+  if (!membersRes.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${membersRes.status}`);
+  const body = await responseJson<{ members?: Array<{ id?: string; version?: number; operator?: string | null }> }>(membersRes);
+  const member = body.members?.find((m) => m.id === memberId);
+  if (!member) {
+    throw new Error(`setMemberOperator: member ${memberId} not found on the admin roster — enroll it before setting its operator`);
+  }
+  if (member.operator === operator) return; // already set — idempotent across re-runs
+  const p = routePath(ROUTES.swarm.admin.memberUpdate, { id: memberId });
+  const r = await fetch(`${backendUrl()}${p}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    body: JSON.stringify({ expectedVersion: member.version, operator }),
+  });
+  if (!r.ok) throw new Error(`POST ${p} {operator:${operator}} -> ${r.status}: ${await r.text()}`);
+}
+
+/**
+ * The in-force judgement's `judgedByMemberId` for a session, read over the
+ * SAME admin endpoint `countJudgements()` reads (issue #922) — proves who a
+ * judgement named, not merely that one landed. Never throws: like
+ * `countJudgements()`, a read failure returns `null` rather than turning a
+ * flaky GET into a false negative on the identity assertion beside it.
+ */
+export async function latestJudgedByMemberId(sessionId: string | number, automationToken?: string): Promise<string | null> {
+  try {
+    const r = await fetch(
+      `${backendUrl()}${routePath(ROUTES.swarm.admin.sessionJudgements, { id: String(sessionId) })}`,
+      { headers: getAutomationHeaders(automationToken) },
+    );
+    if (!r.ok) return null;
+    const body = await responseJson<{ inForce?: { judgedByMemberId?: string | null } | null }>(r);
+    return body.inForce?.judgedByMemberId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Grants `memberId` the judge role, flips `swarm_judge_config.mode` to
  * `shadow`, runs `runJudgedSession` (expected to be a single `runSession`
  * call whose roster already treats `memberId` as absent — a judge-role member
@@ -1046,6 +1116,17 @@ export async function setMemberRole(
  * shared by every `bun smoke` variant that wants this coverage (issue #845),
  * so the grant/flip/assert/restore sequence exists in exactly one place
  * rather than being re-derived per caller.
+ *
+ * Issue #922 adds a SECOND assertion alongside #845's row-count check: the
+ * landed judgement's `judgedByMemberId` must equal `memberId` — the exact
+ * member this call just granted the role to — not merely that some row
+ * exists. That equality only holds when `memberId` is a member #918's
+ * `judgeSessionAdmin` would actually resolve (handle `'themis'`) AND whose
+ * `operator` column already reads `'robotmoney'` (the in-house exemption);
+ * for any other `memberId` the row still lands (`off`-mode's unnamed judge
+ * never disappears) but keeps naming `'robotmoney-in-house'`, and this
+ * function will correctly report that as a mismatch rather than passing
+ * vacuously.
  */
 export async function runJudgeRoleCoverage(
   memberId: string,
@@ -1076,6 +1157,21 @@ export async function runJudgeRoleCoverage(
     console.log(
       `  session ${judged.sessionId}: ${judgementCount} judgement row(s) recorded in swarm_session_judgements ` +
         "(mode=shadow, issue #845)",
+    );
+    // AC: the row does not merely exist — it names the member this call just
+    // granted the role to (issue #922). Read over the same admin HTTP API
+    // countJudgements() used above, not raw SQL, so this stays a smoke-driver
+    // assertion rather than a second, DB-shaped copy of the admin projection.
+    const judgedByMemberId = await latestJudgedByMemberId(judged.sessionId, automationToken);
+    if (judgedByMemberId !== memberId) {
+      throw new Error(
+        `session ${judged.sessionId}: judgement named judgedByMemberId=${judgedByMemberId ?? "null"}, ` +
+          `expected the granted persona '${memberId}' — #918's handle-based resolution did not attribute ` +
+          "this judging to the member the role was granted to (issue #922)",
+      );
+    }
+    console.log(
+      `  session ${judged.sessionId}: judgedByMemberId=${judgedByMemberId} matches granted persona '${memberId}' (issue #922)`,
     );
   } finally {
     await setJudgeMode(restoreJudgeMode, automationToken);
@@ -1459,18 +1555,40 @@ async function main() {
   });
   console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
-  // ── Judge role + judge mode live-stack coverage (issue #845) ──────────────
+  // ── Judge role + judge mode live-stack coverage (issues #845, #922) ───────
   // Session 1 above ran with the shipped `off` default untouched — that
   // matters, because `off` is the one behavior existing smoke assertions may
   // already be relying on. Session 2 is where this coverage lives:
-  // runJudgeRoleCoverage grants `draco` (already enrolled as session 1's
-  // designed no-show — see DEMO_MEMBERS/absent handling in runSession — so
-  // granting it the judge role touches no take-submission path at all) the
-  // `judge` role via the admin route, flips `swarm_judge_config.mode` off ->
-  // `shadow` for exactly this session, asserts a real judgement row landed,
-  // then restores BOTH in `finally` so neither leaks into anything that runs
-  // after this file's main() — including a persistent `--db smoke-twin`
-  // database across repeated runs.
+  // runJudgeRoleCoverage grants `themis` (already enrolled as session 1's
+  // designed no-show — see DEMO_MEMBERS/absent handling in runSession, and
+  // contract's DEMO_NO_SHOWS — so granting it the judge role touches no
+  // take-submission path at all) the `judge` role via the admin route, flips
+  // `swarm_judge_config.mode` off -> `shadow` for exactly this session,
+  // asserts a real judgement row landed AND that it names `themis`'s own
+  // member id, then restores the role in `finally` so it does not leak into
+  // anything that runs after this file's main() — including a persistent
+  // `--db smoke-twin` database across repeated runs.
+  //
+  // `themis`, specifically — not just any role=judge member (issue #922).
+  // judgeSessionAdmin (backend/src/swarm/admin.ts) resolves its judgeMemberId
+  // by looking up the swarm_members row whose HANDLE is 'themis', unconditionally
+  // — granting some OTHER member the judge role (this used to be `draco`,
+  // #845's original target) still produces a judgement row (`off` never
+  // disappears once mode is `shadow`), but that row keeps naming the
+  // anonymous 'robotmoney-in-house' default, because nothing in that path
+  // ever looks at WHICH member holds role=judge. Only a member literally
+  // handled 'themis' engages #918's attribution wiring at all.
+  //
+  // operator='robotmoney' FIRST, unconditionally, before the role grant: this
+  // is what exempts her from #796/#918's third-party gate (judge-session.ts's
+  // `member.operator !== "robotmoney"` check) the same way the real seeded
+  // Themis (roster-seed.ts) is exempt, rather than needing
+  // swarm_judge_config.thirdPartyEnabled flipped for this run. See
+  // setMemberOperator's own comment for why that -- not the flag -- is this
+  // persona's path. Not restored in `finally`: it is themis's permanent,
+  // in-house identity, exactly like the real seeded Themis's row, not a
+  // temporary flip the way the role grant and judge mode are.
+  await setMemberOperator("themis", "robotmoney", rail.automationToken);
   //
   // Session 2: a SECOND sitting, different subject (smokenstrates rotation +
   // cross-session awareness). Eos (added to the roster mid-run above) enrolls and
@@ -1483,7 +1601,7 @@ async function main() {
   // 0022 the DATABASE dates a session, so two sittings on one day are simply two
   // rows with different convened_at rather than one row relabelled to a day that
   // has not happened. The rotation this proves is the real one.
-  await runJudgeRoleCoverage("draco", rail.automationToken, () =>
+  await runJudgeRoleCoverage("themis", rail.automationToken, () =>
     runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members, initializer: "simulation", cadence }));
 
   // Verify list_sessions returns both sessions
