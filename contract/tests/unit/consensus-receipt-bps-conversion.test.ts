@@ -44,6 +44,9 @@ const DOMAIN_SOURCE = readFileSync(
   join(import.meta.dir, "../../../backend/src/swarm/domain.ts"),
   "utf8",
 );
+const conformanceVector = JSON.parse(
+  readFileSync(join(FIXTURES, "consensus-receipt.bps-conversion.conformance.json"), "utf8"),
+);
 const ORDER = RECEIPT_CANONICAL_BUCKET_ORDER as readonly string[];
 
 type Bps = { bucket: string; weight_bps: number };
@@ -191,6 +194,47 @@ describe("consensus receipt bps_conversion — largest remainder (issue #798)", 
     // to implement settle-the-last from this file and still call it 1.0.
     expect(spec.bps_conversion.prefix_rule).toBeUndefined();
     expect(spec.bps_conversion.final_rule).toBeUndefined();
+  });
+
+  // ── the second published conformance vector (issue #823) ──────────────────
+  // consensus-receipt.assembler-input.json / consensus-receipt.valid.json has
+  // a whole-bps mean (raw = [1250, 6000, 1750, 1000]): every remainder is
+  // exactly 0, leftover is 0, and neither the apportionment loop nor the
+  // tie-break ever runs. A reimplementation that still did the SUPERSEDED
+  // settle-the-last rule reproduces that golden byte for byte, so it cannot
+  // discriminate the two rules. This vector — published as its own fixture,
+  // consensus-receipt.bps-conversion.conformance.json — has a nonzero
+  // leftover AND an exact three-way tie, so the two rules disagree on it.
+
+  test("the second conformance vector's expected bps differ under settle-the-last, so it discriminates the two rules", () => {
+    const shares = new Map(ORDER.map((bucket) => [bucket, conformanceVector.shares[bucket] as number]));
+
+    // The published expectation really is what the exported rule produces.
+    const largestRemainder = bucketSharesToBps(shares, ORDER);
+    expect(largestRemainder.map((entry) => entry.weight_bps)).toEqual(conformanceVector.expected_weight_bps.weights);
+    expect(largestRemainder.map((entry) => entry.bucket)).toEqual([...ORDER]);
+    expect(sumBps(largestRemainder)).toBe(BPS_DENOMINATOR);
+
+    // And the superseded rule really does produce a DIFFERENT vector for the
+    // same shares — computed here, not asserted from memory, so this file
+    // cannot go stale relative to settleTheLastBps().
+    const settled = settleTheLastBps(shares, ORDER);
+    expect(settled.map((entry) => entry.weight_bps)).toEqual(conformanceVector.discriminates_from.weights);
+    expect(settled.map((entry) => entry.weight_bps)).not.toEqual(largestRemainder.map((entry) => entry.weight_bps));
+
+    // The whole-bps vector the OLD golden carries is the vacuous case this
+    // fixture exists to stop being the only published vector: both rules
+    // agree on it, which is exactly the gap issue #823 closes.
+    const wholeBps = new Map(ORDER.map((bucket, i) => [bucket, [0.125, 0.6, 0.175, 0.1][i]!]));
+    expect(bucketSharesToBps(wholeBps, ORDER)).toEqual(settleTheLastBps(wholeBps, ORDER));
+  });
+
+  test("the second conformance vector is committed alongside its expected bps and published through the package", () => {
+    expect(conformanceVector.canonical_bucket_order).toEqual([...ORDER]);
+    expect(conformanceVector.expected_weight_bps.weights).toEqual([3334, 3333, 3333, 0]);
+    expect(conformanceVector.discriminates_from.weights).toEqual([3333, 3333, 3333, 1]);
+    expect(conformanceVector.shares.real_world_assets).toBe(0);
+    expect(spec.bps_conversion.conformance_vector).toContain("consensus-receipt.bps-conversion.conformance.json");
   });
 
   // ── (1) the corpus that used to be refused ────────────────────────────────
