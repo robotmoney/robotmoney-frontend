@@ -16,6 +16,7 @@ import {
   activateMember,
   aggregateSession as domainAggregateSession,
   assertRosterCapacity,
+  getMember,
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
   countActiveMembersTx,
@@ -1210,9 +1211,25 @@ export async function judgeSessionAdmin(sessionId: string, expectedVersion: numb
   const pre = await preflightTransition(sessionId, "judged", expectedVersion);
   if (!pre.ok) return pre;
 
+  // Named-judge attribution (issue #918). Resolved by HANDLE, not hardcoded to
+  // an id, because the id is generated per deployment (roster-seed.ts). An
+  // environment that has not run seedLiveRoster() — most of this repo's own
+  // tests — resolves nothing here, and `judgeMemberId` MUST then stay
+  // `undefined` (never `""`) so judgeSession() takes its unnamed-judge path
+  // and every judgement keeps naming 'robotmoney-in-house', unchanged.
+  //
+  // NO STATUS/ROLE/CONFLICT CHECK HERE. judgeSession() already runs all three
+  // — active-status, role==='judge', and the take-conflict check — inside its
+  // own transaction once `judgeMemberId` is passed (judge-session.ts). Redoing
+  // any of them here would be a second, separately-maintained copy of a rule
+  // that must have exactly one source.
+  const namedJudge = await getMember("themis");
+  const judgeMemberId = namedJudge?.id;
+
   let t: GuardedTransitionResult | undefined;
   const result = await judgeSession(sessionId, {
     config,
+    judgeMemberId,
     // Runs inside the judge's transaction, after its advisory lock and before
     // the judgement row is written. A refusal here rolls the whole thing back.
     beforeRecord: async (tx) => {

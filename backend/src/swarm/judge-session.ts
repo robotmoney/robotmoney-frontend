@@ -32,10 +32,17 @@ export interface JudgeConfig {
   /** The model the judge reaches, or null — see migration 0039 on why this is a row. */
   model: string | null;
   /**
-   * Issue #796. Global switch: may a graduated judge member (a `judgeSession()`
-   * call carrying `judgeMemberId`) author a judgement at all. Off by default,
-   * independent of `mode` — the built-in worker (no `judgeMemberId`) is
-   * unaffected either way. Same "database row, not env var, no redeploy to
+   * Issue #796, amended by #918. Global switch: may an EXTERNALLY-OPERATED
+   * graduated judge member (a `judgeSession()` call carrying a `judgeMemberId`
+   * whose row's `operator` is not `'robotmoney'`) author a judgement at all.
+   * Off by default, independent of `mode`. Two classes are unaffected by this
+   * flag either way: the built-in worker (no `judgeMemberId`), and an
+   * IN-HOUSE named judge (Themis, `operator = 'robotmoney'`, see
+   * roster-seed.ts) — the rollout plan this flag implements is explicit that
+   * the in-house judge goes live FIRST, "before third-party judges are
+   * allowed at all" (docs/decisions.md), so folding it under the same gate
+   * would make the in-house stage depend on the third-party one it is
+   * supposed to precede. Same "database row, not env var, no redeploy to
    * flip" posture as `mode` (migration 0039's own reasoning, extended by
    * migration 0048).
    */
@@ -229,24 +236,11 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     // a session locked.
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))`;
     if (judgeMemberId) {
-      // Issue #796. Read inside the write transaction, same reason as the
-      // member/role check below: an admin turning third-party judging off
-      // while the model was thinking must be observed before any judgement
-      // row can land, not merely before the next call. This is the
-      // admin-flippable gate the line below used to call "#796's future
-      // transport" — third-party judging is refused as a class, independent
-      // of whether the named member still holds the judge role.
-      const flagRow = (await tx<{ third_party_enabled: boolean }[]>`
-        SELECT third_party_enabled FROM swarm_judge_config WHERE id = 1`)[0];
-      if (!flagRow?.third_party_enabled) {
-        refusal = { ok: false, status: 403, error: "third_party_judging_disabled" };
-        throw new JudgeRollback();
-      }
       // Read inside the write transaction: an admin revocation that committed
       // while the model was thinking is observed before any judgement row can
       // land.
-      const member = (await tx<{ status: string; role: string }[]>`
-        SELECT status, role FROM swarm_members WHERE id = ${judgeMemberId} FOR UPDATE`)[0];
+      const member = (await tx<{ status: string; role: string; operator: string | null }[]>`
+        SELECT status, role, operator FROM swarm_members WHERE id = ${judgeMemberId} FOR UPDATE`)[0];
       if (!member || member.status !== "active") {
         refusal = { ok: false, status: 403, error: "judge_member_inactive" };
         throw new JudgeRollback();
@@ -254,6 +248,27 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
       if (member.role !== "judge") {
         refusal = { ok: false, status: 403, error: "judge_role_required" };
         throw new JudgeRollback();
+      }
+      // Issue #796, amended by #918. The gate is named "third-party" and the
+      // rollout plan it implements (docs/decisions.md) is explicit: "a single
+      // in-house judge first... before third-party judges are allowed at
+      // all" — an in-house judge is the thing that plan says goes live FIRST,
+      // not the thing this flag exists to hold back. `operator` is the same
+      // field roster-seed.ts already stamps 'robotmoney' on every in-house
+      // seat (Themis included); a judgeMemberId whose member row carries that
+      // operator is exempt from the gate, and everyone else — every
+      // self-registered, externally-operated graduated judge — stays behind
+      // it exactly as #796 shipped. Read inside the write transaction, same
+      // reason as the checks above: an admin turning third-party judging off
+      // while the model was thinking must be observed before any judgement
+      // row can land, not merely before the next call.
+      if (member.operator !== "robotmoney") {
+        const flagRow = (await tx<{ third_party_enabled: boolean }[]>`
+          SELECT third_party_enabled FROM swarm_judge_config WHERE id = 1`)[0];
+        if (!flagRow?.third_party_enabled) {
+          refusal = { ok: false, status: 403, error: "third_party_judging_disabled" };
+          throw new JudgeRollback();
+        }
       }
       const take = (await tx`SELECT 1 FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${judgeMemberId} LIMIT 1`)[0];
       if (take) {
