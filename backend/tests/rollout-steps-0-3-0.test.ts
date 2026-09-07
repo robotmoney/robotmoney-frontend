@@ -186,12 +186,12 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // tripwire on the roster's terminal entry, so that growing the release is a
   // deliberate act somebody had to write down here as well as in release.ts —
   // NOT a lever for shrinking scope. 0042 joined via #754, 0043 via #835, 0044
-  // via #761, 0045 via #760, and 0046 via #849: in each case the drift guard
-  // below named the landed file as undeclared, and the fix was to DECLARE it
-  // (never to raise the numeric floor).
+  // via #761, 0045 via #760, 0046 via #849, and 0047 via #779: in each case the
+  // drift guard below named the landed file as undeclared, and the fix was to
+  // DECLARE it (never to raise the numeric floor).
   test("the release inventory includes the earliest-valid-block floor migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(15);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0046_asset_prices.sql");
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(16);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0047_swarm_session_subject_name_backfill.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");

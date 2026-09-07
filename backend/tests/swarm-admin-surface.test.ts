@@ -102,6 +102,37 @@ test("topics: create validates fields, edit is versioned (409 stale_version), de
   expect((await admin.updateSubjectAdmin(rid("nope"), 1, {})).status).toBe(404);
 });
 
+// ── issue #779: renaming a subject must not leave its PAST sessions behind ──
+// swarm_sessions.subject_name is denormalized off swarm_subjects.name
+// (migration 0001_backends.sql) and, before this fix, updateSubjectAdmin wrote
+// only swarm_subjects — leaving every already-convened session showing the old
+// name on member track records next to chips that read the new one.
+test("topics: renaming a subject backfills subject_name onto its existing sessions", async () => {
+  const id = rid("topic");
+  await admin.createSubjectAdmin({ id, name: "Old Name" });
+
+  const date = "2026-08-15";
+  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId: id });
+  expect(created.status).toBe(201);
+  const sessionId = (created as any).session.id as string;
+
+  const before = (await sql`SELECT subject_name FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  expect(before.subject_name).toBe("Old Name");
+
+  const renamed = await admin.updateSubjectAdmin(id, 1, { name: "New Name" });
+  expect(renamed.status).toBe(200);
+
+  const after = (await sql`SELECT subject_name FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  expect(after.subject_name).toBe("New Name");
+
+  // A patch that leaves `name` untouched must not rewrite session rows at all
+  // — this is a rename backfill, not an unconditional resync on every edit.
+  const untouched = await admin.updateSubjectAdmin(id, 2, { operator: "someone" });
+  expect(untouched.status).toBe(200);
+  const stillNew = (await sql`SELECT subject_name FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  expect(stillNew.subject_name).toBe("New Name");
+});
+
 // ── AC3: member activation/manual-add/reactivation/key rotation ────────────
 test("members: manual add mints a one-time credential; deactivate revokes keys; reactivate + rotate mint fresh credentials", async () => {
   const { publicKeyB64 } = await generateKeyPair();

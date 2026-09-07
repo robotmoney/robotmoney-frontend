@@ -194,6 +194,17 @@ export async function updateSubjectAdmin(
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
+
+    // subject_name is denormalized onto swarm_sessions (migration
+    // 0001_backends.sql) and nothing else backfills it, so a rename that
+    // stops at swarm_subjects leaves every past session displaying the old
+    // name on member track records (issue #779). Backfilling here, inside
+    // the same transaction as the swarm_subjects UPDATE above, makes the
+    // rename atomic across both places the name is stored.
+    if (patch.name != null && patch.name !== row.name) {
+      await tx`UPDATE swarm_sessions SET subject_name = ${merged.name} WHERE subject_id = ${id}`;
+    }
+
     await audit(actor, "subject_update", { subjectId: id }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
   });

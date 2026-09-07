@@ -240,7 +240,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — fifteen migrations
+### 2.2 🔴 The database delta — sixteen migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -265,6 +265,7 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0044_wallet_backfill_leg_terminal.sql` | Widen `wallet_backfill_state.status`'s CHECK to admit `'blocked'` (`DROP CONSTRAINT` + `ADD CONSTRAINT`); `ADD COLUMN defer_leg text`, `defer_streak int NOT NULL DEFAULT 0`, `defer_leg_at timestamptz` | Additive columns with constant defaults **plus a constraint swap on a table this same release creates (`0033`)** |
 | `0045_chain_address_floors.sql` | `CREATE TABLE chain_address_floors` — the per-address earliest-valid-block floor cache (issue #760) | Additive, new table |
 | `0046_asset_prices.sql` | `CREATE TABLE asset_prices`, `CREATE TABLE asset_price_floors`; seed `asset_prices` from existing `live`/`seed`-provenance rows in `wallet_balance_samples`/`wallet_sleeve_samples` with an explicit conflict rule; seed a proven floor for the three `usdc`-pinned assets (issue #849, D41 phases 1/2/5) | Additive DDL **plus a one-time data seed**; no existing read path changes |
+| `0047_swarm_session_subject_name_backfill.sql` | `UPDATE swarm_sessions SET subject_name = swarm_subjects.name` for every session whose `subject_name` disagrees with its subject's current name — the historical catch-up for renames made before `updateSubjectAdmin` started keeping the two in sync (issue #779) | **No DDL — a pure, idempotent data write** |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
@@ -873,7 +874,7 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  15 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  16 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
@@ -889,6 +890,7 @@ for this release:
          0044_wallet_backfill_leg_terminal.sql
          0045_chain_address_floors.sql
          0046_asset_prices.sql
+         0047_swarm_session_subject_name_backfill.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
