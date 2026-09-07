@@ -3,8 +3,9 @@
 // Gunzipped in-test via node:zlib (Bun supports it). FAIL LOUDLY if a fixture
 // is missing — never skip (repo test-coverage policy).
 import { gunzipSync } from "node:zlib";
+import { fileURLToPath } from "node:url";
 
-const DIR = new URL(".", import.meta.url).pathname;
+const DIR = fileURLToPath(new URL(".", import.meta.url));
 
 async function readGz(name: string): Promise<string> {
   const path = DIR + name;
