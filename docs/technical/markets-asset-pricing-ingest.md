@@ -524,10 +524,13 @@ repair path only, on purpose, because the live sampler's write is exactly what
 `asset_prices` still lacks for a cleanly-sampled closed day (§8.1's open
 coverage-gap item) and stopping it there too would break that fallback for the
 majority of history that never gets repaired.** So `price_usd` is not dead
-code today: it is unread by the repair path and unwritten by it, but still
-written by the live sampler and still read by the three join sites whenever
-`asset_prices` has no row yet — which, for a cleanly-sampled day, is most of
-the time. It is recorded here because the sections above describe machinery
+code today: `repairResolvedDay` no longer WRITES it, but still READS the
+prior row's value for its own sample-row-vs-price-row disagreement check and
+evidence copy (unchanged by #851 — that read predates this issue and is
+independent of the write it removed); it is still written by the live sampler
+and still read by the three join sites whenever `asset_prices` has no row yet
+— which, for a cleanly-sampled day, is most of the time. It is recorded here
+because the sections above describe machinery
 whose *reason for existing* this eventually supersedes, and a reader needs to
 know which parts are load-bearing today and which are consequences of a shape
 that is only partway landed.
@@ -1137,8 +1140,12 @@ still written (by the live sampler) and still read (by the three phase-3 join
 sites, as a fallback, and additionally by
 `chain/wallet-balances.ts::lastPersistedHolding`'s stale-degrade path, which
 reads it directly rather than through the join) — an acceptance criterion of
-"no code path reads it" is not yet true repo-wide, only true of the repair
-write site #851 touched. Every claim in §5.6 about read-path behaviour BEFORE
+"no code path writes it" is true only of the repair write site #851 touched
+(the live sampler still writes it, per above); "no code path reads it" is not
+true even there, since `repairResolvedDay` itself still reads the prior row's
+`price_usd` for its own sample-row-vs-price-row disagreement check and
+evidence copy (unchanged by #851, independent of the write it removed).
+Every claim in §5.6 about read-path behaviour BEFORE
 #850 — `chain/wallet-balances.ts`, `chain/wallet-sleeves.ts`,
 `recentPersistedPrice`/`chain/wallet-valuation.ts` serving `price_usd`/
 `value_usd` off the sample row unconditionally — described what phase 3
