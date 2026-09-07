@@ -67,6 +67,10 @@ export async function aggregateSession(payload: Record<string, unknown>): Promis
 // as "judged".
 export async function judgeSession(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
+  // No second wiring point here for Themis's attribution (issue #918):
+  // judgeSessionAdmin resolves the named judge internally and passes it to
+  // judgeSession(), so this cron path and the HTTP admin route share the one
+  // resolution — nothing to add on this side.
   const result = await admin.judgeSessionAdmin(sessionId, undefined, "worker");
   return translateBenignSkip(result, judgeSkipReason, sessionId);
 }

@@ -83,6 +83,17 @@ export interface RosterSeedMember {
    * a file rename to fix a handle, or a wrong handle to keep a filename.
    */
   manifest: string;
+  /**
+   * 'member' submits takes, 'judge' authors consensus judgements (migration
+   * 0043, issue #812). EXPLICIT on every row, not defaulted: the column's own
+   * DEFAULT is 'member', and leaving this field out here would make a re-seed
+   * silently REASSERT that default over an operator's later role grant —
+   * seedLiveRoster() overwrites every profile column on every run, including
+   * this one, so a role an admin promoted through setMemberRoleAdmin would
+   * revert on the next boot unless the row it is compared against already
+   * carries the intended role.
+   */
+  role: "member" | "judge";
   name: string;
   tagline: string;
   lens: string;
@@ -100,6 +111,7 @@ export const LIVE_ROSTER: RosterSeedMember[] = [
   {
     handle: "athena",
     manifest: "athena",
+    role: "member",
     name: "Athena",
     tagline: "Risk officer. Reads the composite. Looks for what breaks.",
     lens: "quant risk",
@@ -115,6 +127,7 @@ export const LIVE_ROSTER: RosterSeedMember[] = [
     // and stays robotmoney.json. See RosterSeedMember.manifest.
     handle: "robot-money",
     manifest: "robotmoney",
+    role: "member",
     name: "Robot Money",
     tagline: "Reads chain. Cites mechanism. Closes positions.",
     lens: "institutional treasury",
@@ -124,6 +137,20 @@ export const LIVE_ROSTER: RosterSeedMember[] = [
     mode: "hybrid",
     operator: "robotmoney",
     avatar: { path: "/avatars/swarm/robotmoney.jpg", source_url: null, credit: "Robot Money brand mark" },
+  },
+  {
+    handle: "themis",
+    manifest: "themis",
+    role: "judge",
+    name: "Themis",
+    tagline: "Consensus judge. Reads every take. Names what still disagrees.",
+    lens: "consensus arbitration",
+    mandate:
+      "Read every take the swarm submitted on a session and the aggregate the committee wrote. Explain, never decide: state why the committee's numbers stand, name the disagreements that remain, and flag when a call rests on too few takes to trust. Author no weight, no allocation, no vote — only the record.",
+    biases: ["pro-explanation", "pro-disclosure", "anti-thin-consensus", "neutral-on-outcome"],
+    mode: "pull",
+    operator: "robotmoney",
+    avatar: { path: "/avatars/swarm/themis.jpg", source_url: null, credit: "Themis mark" },
   },
 ];
 
@@ -169,11 +196,12 @@ export async function seedLiveRoster(): Promise<number> {
     const found = (await sql<{ id: string }[]>`SELECT id FROM swarm_members WHERE handle = ${m.handle}`)[0];
     const id = found?.id ?? crypto.randomUUID();
     await sql`
-      INSERT INTO swarm_members (id, handle, status, name, tagline, lens, mandate, biases, mode, operator, avatar)
-      VALUES (${id}, ${m.handle}, 'active', ${m.name}, ${m.tagline}, ${m.lens}, ${m.mandate},
+      INSERT INTO swarm_members (id, handle, status, role, name, tagline, lens, mandate, biases, mode, operator, avatar)
+      VALUES (${id}, ${m.handle}, 'active', ${m.role}, ${m.name}, ${m.tagline}, ${m.lens}, ${m.mandate},
               ${sql.json(jsonValue(m.biases))}, ${m.mode}, ${m.operator}, ${sql.json(jsonValue(m.avatar))})
       ON CONFLICT (handle) DO UPDATE SET
         status = 'active',
+        role = EXCLUDED.role,
         name = EXCLUDED.name,
         tagline = EXCLUDED.tagline,
         lens = EXCLUDED.lens,

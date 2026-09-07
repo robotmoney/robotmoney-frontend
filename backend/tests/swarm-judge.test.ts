@@ -49,6 +49,7 @@ import {
 import {
   checkRationaleLadder, listRationaleLadderDrift, recentJudgeableSessions, replaySessionJudge,
 } from "../src/swarm/judge-replay.ts";
+import { seedLiveRoster } from "../src/swarm/roster-seed.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -2682,4 +2683,67 @@ test("#806 the warning names only what is STILL untrue — every problem this is
     expect(text, `the warning still mentions "${fixed}", which #806 fixed`).not.toContain(fixed);
   }
   expect(admin.judgeModeWarnings("off")).toEqual([]);
+});
+
+// ── Named-judge attribution wiring (issue #918) ─────────────────────────────
+//
+// judgeSessionAdmin is the ONE function both the HTTP admin route and the
+// worker-swarm cron path call, so resolving Themis inside it wires both entry
+// points at once. These three tests pin exactly that: the direct admin call,
+// the same thing driven through the real job queue, and — the regression
+// proof — an unseeded environment (what every OTHER test in this file is)
+// still names 'robotmoney-in-house', unchanged.
+
+const themisIdFrom = async () =>
+  ((await sql`SELECT id FROM swarm_members WHERE handle = 'themis'`)[0] as any)?.id as string | undefined;
+
+test("#918 judgeSessionAdmin names Themis when the roster is seeded", async () => {
+  await seedLiveRoster();
+  const themisId = await themisIdFrom();
+  expect(themisId, "seedLiveRoster() must have seated a themis row").toBeTruthy();
+
+  await setJudgeConfig({ mode: "shadow" });
+  const { session } = await aggregatedSession("judge-918-admin");
+
+  const result = await admin.judgeSessionAdmin(session.id, undefined) as any;
+  expect(result.ok).toBe(true);
+
+  const row = await latestJudgement(session.id) as any;
+  expect(row.judged_by).toBe(themisId);
+  expect(row.judged_by_member_id).toBe(themisId);
+});
+
+test("#918 the worker-swarm cron path names Themis the same way the direct admin call does", async () => {
+  await seedLiveRoster();
+  const themisId = await themisIdFrom();
+  expect(themisId).toBeTruthy();
+
+  await setJudgeConfig({ mode: "shadow" });
+  const { session } = await aggregatedSession("judge-918-cron");
+
+  const jobId = await enqueueJudgeJob(session.id);
+  await drainUntilRun(jobId);
+
+  const job = await jobRow(jobId);
+  expect(job.status).toBe("succeeded");
+
+  const row = await latestJudgement(session.id) as any;
+  expect(row.judged_by).toBe(themisId);
+  expect(row.judged_by_member_id).toBe(themisId);
+});
+
+test("#918 an unseeded environment degrades safely: judged_by stays 'robotmoney-in-house'", async () => {
+  // No seedLiveRoster() call — this is the shape of every other test in this
+  // file, and of useCleanDatabasePerTest's empty database in general.
+  expect(await themisIdFrom(), "sanity: this test really is unseeded").toBeUndefined();
+
+  await setJudgeConfig({ mode: "shadow" });
+  const { session } = await aggregatedSession("judge-918-unseeded");
+
+  const result = await admin.judgeSessionAdmin(session.id, undefined) as any;
+  expect(result.ok).toBe(true);
+
+  const row = await latestJudgement(session.id) as any;
+  expect(row.judged_by).toBe("robotmoney-in-house");
+  expect(row.judged_by_member_id).toBeNull();
 });
