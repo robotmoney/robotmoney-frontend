@@ -109,7 +109,7 @@ beforeAll(async () => {
   await sql`INSERT INTO swarm_subjects (id, name) VALUES (${SUBJECT}, 'Append Only Subject')`;
   await sql`INSERT INTO swarm_sessions (id, subject_id) VALUES (${SESSION}, ${SUBJECT})`;
   await sql`INSERT INTO swarm_members (id, name, status) VALUES (${MEMBER}, 'Append Only Member', 'inactive')`;
-  // Issue #697: swarm_member_keys joined the protected set (migration 0049).
+  // Issue #697: swarm_member_keys joined the protected set (migration 0050).
   await sql`INSERT INTO swarm_member_keys (member_id, public_key) VALUES (${MEMBER}, 'append-only-test-pubkey')`;
   await sql`INSERT INTO swarm_briefs (date, subject_id, session_id) VALUES ('2031-01-02', ${SUBJECT}, ${SESSION})`;
   await sql`

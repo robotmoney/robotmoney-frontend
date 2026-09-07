@@ -73,7 +73,7 @@ export async function memberIdForToken(token: string): Promise<string | null> {
 //
 // Rows written before `signing_key_id` existed have it NULL and fall back to
 // that older "currently active key" lookup — a documented cutover point
-// (migration 0048's header), not a claim that those older rows are correctly
+// (migration 0049's header), not a claim that those older rows are correctly
 // attributed. A fresh Fragment per call, not a shared constant, so embedding
 // it in several independent queries below cannot share state between them.
 // Every caller embeds it with the recommendation row aliased as `r`.
@@ -1347,7 +1347,7 @@ export async function registerMember(input: { memberId: string; name: string; le
       // scoped to this member's key rows, and a deleted row is gone for that
       // lookup no matter what a take's `signing_key_id` points at.
       // `swarm_member_keys` now also carries its own append-only guard
-      // (migration 0049), so a stray DELETE here would be refused at the
+      // (migration 0050), so a stray DELETE here would be refused at the
       // database regardless — this UPDATE is the correct operation, not a
       // workaround for the guard.
       await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${input.memberId} AND active = true`;

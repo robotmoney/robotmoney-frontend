@@ -20,7 +20,7 @@
 -- ON DELETE SET NULL, not CASCADE and not RESTRICT: a key row must never be
 -- able to take a signed take down with it, and by the time this column
 -- exists `swarm_member_keys` is also joining the append-only protected set
--- (migration 0049) so an ordinary DELETE cannot reach it anyway — SET NULL is
+-- (migration 0050) so an ordinary DELETE cannot reach it anyway — SET NULL is
 -- the belt for the append-only guard's suspenders, not the primary defense.
 --
 -- NO BACKFILL — A DOCUMENTED CUTOVER POINT, DELIBERATELY. Every row inserted
