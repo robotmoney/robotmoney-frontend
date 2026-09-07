@@ -1300,7 +1300,7 @@ export function judgeModeWarnings(mode: JudgeMode): string[] {
 }
 
 export async function setJudgeConfigAdmin(
-  patch: { mode?: JudgeMode; minTakes?: number; model?: string | null },
+  patch: { mode?: JudgeMode; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean },
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   let judge: JudgeConfig;
@@ -1311,10 +1311,13 @@ export async function setJudgeConfigAdmin(
   }
   // Audited WITH the warnings, not just beside them: "who turned the judge on,
   // and what were they told at the time" is the second question asked of any
-  // prose that turns out to be wrong.
+  // prose that turns out to be wrong. `thirdPartyEnabled` rides the same audit
+  // row as `mode` — issue #796 wants this "audited admin action, matching how
+  // `swarm_judge_config.mode` already behaves," not a second audit surface.
   const warnings = judgeModeWarnings(judge.mode);
   await audit(actor, "judge_config", {
-    mode: judge.mode, minTakes: judge.minTakes, model: judge.model, warnings,
+    mode: judge.mode, minTakes: judge.minTakes, model: judge.model,
+    thirdPartyEnabled: judge.thirdPartyEnabled, warnings,
   });
   return { ok: true, status: 200, judge, warnings };
 }

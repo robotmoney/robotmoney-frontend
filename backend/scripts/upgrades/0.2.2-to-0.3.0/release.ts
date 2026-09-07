@@ -47,6 +47,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0045_chain_address_floors.sql",
   "0046_asset_prices.sql",
   "0047_swarm_session_subject_name_backfill.sql",
+  "0048_swarm_judge_third_party_flag.sql",
 ] as const;
 
 /**
@@ -151,6 +152,9 @@ export const NEW_COLUMNS = [
   { table: "wallet_backfill_state", column: "defer_leg" },
   { table: "wallet_backfill_state", column: "defer_streak" },
   { table: "wallet_backfill_state", column: "defer_leg_at" },
+  // 0048 (issue #796): the admin-flippable, no-redeploy gate for third-party
+  // (graduated-member) judging, layered onto 0043's role/attribution columns.
+  { table: "swarm_judge_config", column: "third_party_enabled" },
 ] as const;
 
 /** Every table this release creates, alters, locks, or writes: the roster of the

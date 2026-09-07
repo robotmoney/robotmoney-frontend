@@ -2002,6 +2002,92 @@ target for robotmoney-core#1280 rather than a claim about a hand-written file.
 The keccak256 digest over those bytes remains the consumer obligation §9.7
 describes; nothing in this repository can compute it.
 
+### 9.7.2 Judge identity and the third-party rollout gate (issues #812, #796)
+
+§9.7 describes ONE judge. This section is about MORE THAN ONE — who else may
+be one, and the switch that decides whether that is allowed at all.
+
+**Identity is a role on an existing member, never a second credential**
+(issue #812). `swarm_members.role` (`member` | `judge`, migration 0043) is a
+graduation, not an onboarding: an admin grants or revokes it through the
+existing `/api/swarm/admin/members/*` surface, and the member keeps its
+Ed25519 key, its bearer token, and its rotation/revocation path unchanged.
+A judge is excluded from take rosters and `submitRecommendation()` refuses
+its bearer token (`judge_role_cannot_submit_takes`) — separation of duties as
+a standing property of the role, not a per-session check — and a member who
+already holds a take in a session is refused if it attempts to judge that
+same session (`judge_member_has_take_in_session`). Every
+`swarm_session_judgements` row names its judging party in `judged_by`: the
+literal `robotmoney-in-house` for the built-in worker, or the immutable
+member id, foreign-keyed so the column can never name an identity that never
+existed.
+
+**The gate is a second, independent switch — not a third value on `mode`**
+(issue #796). `swarm_judge_config.third_party_enabled` (migration 0047) is a
+plain boolean beside `mode`/`min_takes`/`model`, defaulting `false` on the
+same "off by default, opt-in on a live swarm" shipped posture `mode` already
+has. It answers a different question than `mode` does: `mode` decides *whether
+the judge runs at all and whether its opinion reaches a session*; this flag
+decides *who is allowed to be the judge that runs*. The two compose rather
+than nest — `mode=off` refuses every judging regardless of this flag, and
+`third_party_enabled=false` refuses only a `judgeMemberId` judging, never the
+built-in worker's.
+
+**Global, not per-party — decided and recorded in `docs/decisions.md`'s
+issue #796 amendment.** The confirmed rollout plan is a single in-house judge
+first, "with a feature flag, activated by an admin, before third-party judges
+are allowed at all" — one switch admitting the class, not a per-member
+allow-list. A per-party table is deferred until a second rollout stage
+actually needs to distinguish one third party from another; today there is
+exactly one identity mechanism (#812's graduated-member role) and nothing yet
+calls it over an authenticated transport, so a table keyed on a party that
+does not yet exist would be speculative schema.
+
+**Enforcement is fail-closed and read fresh inside the write transaction,**
+the same shape #812 built for role revocation: `judgeSession()`
+(`backend/src/swarm/judge-session.ts`) checks `third_party_enabled` before
+its `judgeMemberId` role/status checks whenever `judgeMemberId` is supplied,
+refusing with the named reason `third_party_judging_disabled` and writing no
+row — a bare 403, not the `judge_disabled` 409 `mode=off` produces, so a
+caller can tell "the judge itself is off" from "the judge is on, but not for
+you" without parsing prose. The built-in worker's call (no `judgeMemberId`)
+never reaches this check.
+
+**Rollout states, and what changes at each:**
+
+| State | `mode` | `third_party_enabled` | What a graduated judge member can do | What the built-in worker does |
+|---|---|---|---|---|
+| Judge off | `off` | either | Refused `judge_disabled`, same as everyone | Refused `judge_disabled` |
+| In-house only (today's shipped default) | `shadow` or `enforce` | `false` | Refused `third_party_judging_disabled`; the role exists and take-roster exclusion already applies, but judging itself is not yet permitted | Judges normally |
+| Third-party enabled | `shadow` or `enforce` | `true` | Judges normally, subject to #812's role/status/no-take-in-session checks | Judges normally, unaffected |
+
+Turning `third_party_enabled` on or off is `POST /api/swarm/admin/judge`
+(the same route `mode` already uses), takes effect on the next judging with
+no redeploy, and is audited on the same `judge_config` row `mode` already
+is — "who allowed third-party judging, and when" is exactly the question
+`mode`'s audit trail already answers for the judge switch itself.
+
+**What #796 deliberately does not build.** No route yet lets a third party
+submit a judgement over an authenticated transport — `judgeMemberId` is
+accepted by `judgeSession()` today only from a same-process caller (tests,
+and any future admin/worker path), never from a bearer-token-authenticated
+HTTP request. That transport is a separate, larger piece of work; this gate
+is what it will have to satisfy on arrival, decided and built now so it is
+not designed in a hurry once a real third party is ready to onboard.
+
+**Judge identity is NOT in consensus receipt schema 1.0.** §9.7's `judge`
+block ships `{rationale, disagreements, release_safety, source, mode}` and
+nothing naming who judged. #796 flagged this as the cheap moment to add it —
+inside PR #788's fix round, before schema 1.0 anchors anything — but #788
+merged without it. Reopening the question now means a 2.0 bump: `schema_version`
+is immutable within a version (§9.7), so adding `judged_by` to an
+already-published `judge` block is not an option Schema 1.0 has. This is
+recorded here as the outcome instead of left as an open question with no
+disposition: judge identity in the receipt is deferred to a future
+schema 2.0, tracked separately, and is independent of the rollout gate
+above — a receipt from a third-party-judged session is exactly as
+attributable, or as anonymous, as one from the in-house worker today.
+
 ### 9.8 Testing & smoke
 
 Decision [D25](./decisions.md#d25--external-actor-rail-for-simulated-independent-entities)

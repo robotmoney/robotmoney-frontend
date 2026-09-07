@@ -31,26 +31,36 @@ export interface JudgeConfig {
   minTakes: number;
   /** The model the judge reaches, or null — see migration 0039 on why this is a row. */
   model: string | null;
+  /**
+   * Issue #796. Global switch: may a graduated judge member (a `judgeSession()`
+   * call carrying `judgeMemberId`) author a judgement at all. Off by default,
+   * independent of `mode` — the built-in worker (no `judgeMemberId`) is
+   * unaffected either way. Same "database row, not env var, no redeploy to
+   * flip" posture as `mode` (migration 0039's own reasoning, extended by
+   * migration 0047).
+   */
+  thirdPartyEnabled: boolean;
   updatedAt: string | null;
 }
 
-const DEFAULT_CONFIG: JudgeConfig = { mode: "off", minTakes: 3, model: null, updatedAt: null };
+const DEFAULT_CONFIG: JudgeConfig = { mode: "off", minTakes: 3, model: null, thirdPartyEnabled: false, updatedAt: null };
 
 export async function getJudgeConfig(): Promise<JudgeConfig> {
-  const row = (await sql`SELECT mode, min_takes, model, updated_at FROM swarm_judge_config WHERE id = 1`)[0] as
-    | { mode: string; min_takes: number; model: string | null; updated_at: Date | string }
+  const row = (await sql`SELECT mode, min_takes, model, third_party_enabled, updated_at FROM swarm_judge_config WHERE id = 1`)[0] as
+    | { mode: string; min_takes: number; model: string | null; third_party_enabled: boolean; updated_at: Date | string }
     | undefined;
   if (!row) return DEFAULT_CONFIG;
   return {
     mode: row.mode as JudgeMode,
     minTakes: Number(row.min_takes),
     model: row.model == null || String(row.model).trim() === "" ? null : String(row.model),
+    thirdPartyEnabled: Boolean(row.third_party_enabled),
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
   };
 }
 
 export async function setJudgeConfig(
-  patch: { mode?: JudgeMode; minTakes?: number; model?: string | null },
+  patch: { mode?: JudgeMode; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean },
 ): Promise<JudgeConfig> {
   if (patch.mode !== undefined && !["off", "shadow", "enforce"].includes(patch.mode)) {
     throw new Error(`invalid judge mode "${patch.mode}" — expected off | shadow | enforce`);
@@ -61,20 +71,24 @@ export async function setJudgeConfig(
   if (patch.model !== undefined && patch.model !== null && (typeof patch.model !== "string" || patch.model.trim() === "" || patch.model.length > 200)) {
     throw new Error("invalid judge model — expected a non-empty model id, or null to unset it");
   }
+  if (patch.thirdPartyEnabled !== undefined && typeof patch.thirdPartyEnabled !== "boolean") {
+    throw new Error("invalid judge thirdPartyEnabled — expected a boolean");
+  }
   // `model: null` UNSETS deliberately, which is why it is passed through
   // separately from the COALESCE-on-undefined the other two fields get: taking
   // the model away is how an operator stops model prose without stopping the
   // judge recording template opinions.
   const clearModel = patch.model === null;
   await sql`
-    INSERT INTO swarm_judge_config (id, mode, min_takes, model, updated_at)
+    INSERT INTO swarm_judge_config (id, mode, min_takes, model, third_party_enabled, updated_at)
     VALUES (1, ${patch.mode ?? DEFAULT_CONFIG.mode}, ${patch.minTakes ?? DEFAULT_CONFIG.minTakes},
-            ${patch.model ? patch.model.trim() : null}, now())
+            ${patch.model ? patch.model.trim() : null}, ${patch.thirdPartyEnabled ?? DEFAULT_CONFIG.thirdPartyEnabled}, now())
     ON CONFLICT (id) DO UPDATE SET
       mode = COALESCE(${patch.mode ?? null}, swarm_judge_config.mode),
       min_takes = COALESCE(${patch.minTakes ?? null}::integer, swarm_judge_config.min_takes),
       model = CASE WHEN ${clearModel} THEN NULL
                    ELSE COALESCE(${patch.model ? patch.model.trim() : null}, swarm_judge_config.model) END,
+      third_party_enabled = COALESCE(${patch.thirdPartyEnabled ?? null}, swarm_judge_config.third_party_enabled),
       updated_at = now()`;
   return getJudgeConfig();
 }
@@ -215,9 +229,22 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     // a session locked.
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))`;
     if (judgeMemberId) {
+      // Issue #796. Read inside the write transaction, same reason as the
+      // member/role check below: an admin turning third-party judging off
+      // while the model was thinking must be observed before any judgement
+      // row can land, not merely before the next call. This is the
+      // admin-flippable gate the line below used to call "#796's future
+      // transport" — third-party judging is refused as a class, independent
+      // of whether the named member still holds the judge role.
+      const flagRow = (await tx<{ third_party_enabled: boolean }[]>`
+        SELECT third_party_enabled FROM swarm_judge_config WHERE id = 1`)[0];
+      if (!flagRow?.third_party_enabled) {
+        refusal = { ok: false, status: 403, error: "third_party_judging_disabled" };
+        throw new JudgeRollback();
+      }
       // Read inside the write transaction: an admin revocation that committed
       // while the model was thinking is observed before any judgement row can
-      // land. This is the fail-closed boundary for #796's future transport.
+      // land.
       const member = (await tx<{ status: string; role: string }[]>`
         SELECT status, role FROM swarm_members WHERE id = ${judgeMemberId} FOR UPDATE`)[0];
       if (!member || member.status !== "active") {
