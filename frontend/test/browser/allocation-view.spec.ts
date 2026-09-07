@@ -416,28 +416,21 @@ test("the change ledger reports was, now and a flat move for every sleeve", asyn
   await expectNoBrowserErrors(errors);
 });
 
-// What the last-review panel was for is now two separate things: the mechanism
-// that sets every weight, stated once above the weights, and the change itself,
-// stated by the ledger. The panel restated a session's metadata beside a table
-// of four flat rows, which is the same finding twice.
-test("the page states the mechanism above the weights, and never the backend behind it", async ({ page }) => {
+// The page reports the allocation. It does not explain the swarm that sets it
+// and it does not recap one session's metadata: /swarm and /regime are their
+// own pages and the nav reaches both. The last-review panel restated a
+// session's quorum beside a table of four flat rows, which is one finding
+// stated twice.
+test("the page reports the allocation and narrates neither the swarm nor the backend", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await stubEnvironment(page, { sessions: [allocationSession()] });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
+  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
 
-  const how = page.locator("#how-weights-are-set");
-  // Above the weights in the DOM, which is also above them on the page.
-  await expect(how).toBeVisible();
-  for (const step of ["Regime", "Takes", "Consensus"]) {
-    await expect(how).toContainText(step);
-  }
-  // Validators are defined and unfilled. A page that describes the mechanism
-  // without that reads as a claim about seats nobody holds.
-  await expect(how).toContainText("Every seat is a proposer today");
   await expect(page.locator(".alp__latest")).toHaveCount(0);
-  await expect(page.locator('#how-weights-are-set a[href="/regime"]')).toBeVisible();
-  await expect(page.locator('#how-weights-are-set a[href="/swarm"]')).toBeVisible();
+  await expect(page.locator(".alp__how")).toHaveCount(0);
+  // The one link out: every session that has reviewed these weights.
   await expect(page.locator('#what-changed a[href="/allocation/history"]')).toBeVisible();
   // Schema names, table names and route behaviour are not the reader's
   // business. The page says what is true about the allocation; how the backend
@@ -703,5 +696,6 @@ test("on a phone the fan becomes a list and nothing scrolls the page sideways", 
   expect(overflow).toBeLessThanOrEqual(1);
   await expectNoBrowserErrors(errors);
 });
+
 
 

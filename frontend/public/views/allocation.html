@@ -64,40 +64,6 @@
       </p>
     </div>
   </header>
-
-  <!-- ── § HOW THE WEIGHTS ARE SET ────────────────────────────────────────
-       Above the donut deliberately: who sets a number is the first thing a
-       reader needs about a number they are being asked to trust. This is the
-       mechanism only, and it is true of every session. What one session
-       decided is a fact about that session and stays under the table it
-       moved. -->
-  <section class="alp__how" id="how-weights-are-set">
-    <p class="alp__eyebrow">How the weights are set</p>
-    <ol class="alp__steps">
-      <li>
-        <b>Regime</b>
-        <span>A daily risk-on / risk-off composite over the macro and on-chain
-          panels. Every take starts from the same reading.</span>
-      </li>
-      <li>
-        <b>Takes</b>
-        <span>Proposers file a signed position with its reasoning, its sources
-          and a confidence. Validators score those takes rather than filing a
-          view of their own. Every seat is a proposer today.</span>
-      </li>
-      <li>
-        <b>Consensus</b>
-        <span>The window closes, the takes aggregate into one recommendation,
-          and it publishes with its quorum and mean confidence. Only that moves
-          these weights.</span>
-      </li>
-    </ol>
-    <p class="alp__how-links">
-      <a class="alp__nav" href="/regime">Regime &rarr;</a>
-      <a class="alp__nav" href="/swarm">The swarm &rarr;</a>
-    </p>
-  </section>
-
   <!-- ── § ALLOCATION ─────────────────────────────────────────────────────
        id="allocation" is load-bearing: RM-115 names it as a citable anchor,
        and it belongs on the weights themselves rather than on a comparison
@@ -498,30 +464,6 @@
   font-family: var(--font-display);
   font-weight: 700;
 }
-
-/* ── how the weights are set ───────────────────────────────────────────── */
-/* An <ol> because it is a sequence and the order is the content. No numerals:
-   three steps reading down a column are already ordered, and a counter here
-   would be decoration on a page that is carrying enough. */
-.alp__how {
-  margin: 2rem 0 2.5rem; padding: 1.25rem 0 0;
-  border-top: 1px solid var(--color-border);
-}
-.alp__steps {
-  list-style: none; margin: 1rem 0 0; padding: 0;
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-  gap: 1.25rem 2rem;
-}
-.alp__steps li { display: block; }
-.alp__steps b {
-  display: block; margin-bottom: 0.4rem; font-size: 0.875rem; font-weight: 700;
-  color: var(--color-text);
-}
-.alp__steps span {
-  display: block; max-width: 30rem;
-  color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6;
-}
-.alp__how-links { display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1.5rem 0 0; }
 
 /* ── weights in force ──────────────────────────────────────────────────── */
 .alp__force { border-bottom: 1px solid var(--color-border); padding-bottom: 2rem; }
