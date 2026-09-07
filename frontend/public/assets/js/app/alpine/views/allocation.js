@@ -257,10 +257,9 @@ export function registerAllocationView(Alpine) {
       // about a request that has not finished, and the line holds its height
       // from CSS so nothing moves when the real sentence arrives.
       if (this.loading) return "";
-      if (!this.hasTargets()) return "The published target could not be read.";
+      if (!this.hasTargets()) return "Target weights unavailable.";
       const asOf = this.allocationAsOf();
-      const since = asOf ? `Unchanged since ${longDay(asOf)}. ` : "";
-      return `${since}No session has moved them: applying a recommendation is not built yet.`;
+      return asOf ? `Unchanged since ${longDay(asOf)}.` : "In force.";
     },
 
     // ── degradation states ──────────────────────────────────────────────────
@@ -420,10 +419,8 @@ export function registerAllocationView(Alpine) {
       }));
     },
     changeNote(row) {
-      if (!(row.target > 0)) return "Never funded.";
-      return this.sleeveHasVault(row.key)
-        ? "In force, and a vault holds it."
-        : "In force. No vault holds it yet.";
+      if (!(row.target > 0)) return "Never funded";
+      return this.sleeveHasVault(row.key) ? "Vault live" : "Vault pending";
     },
     // Direction is the GLYPH first and the colour second, so the column
     // survives colourblindness, greyscale and forced-colors. Up takes Pool
@@ -438,6 +435,7 @@ export function registerAllocationView(Alpine) {
       if (d == null || !isFinite(d) || d === 0) return "flat";
       return d > 0 ? "up" : "down";
     },
+
 
     // ── one vault per sleeve ────────────────────────────────────────────────
     // Only fixed income has a contract. The other three are written policy
@@ -467,8 +465,7 @@ export function registerAllocationView(Alpine) {
     concentrationLine() {
       const pct = this.largestVenuePct();
       if (pct == null) return "";
-      return `Largest single venue ${this.fmtPct1(pct)}, across ${this.venueCount()}. `
-        + "One failing costs whatever share it holds.";
+      return `Largest single venue ${this.fmtPct1(pct)}, across ${this.venueCount()}.`;
     },
     vaultToken() { return VAULT_TOKEN; },
     // The 7-day figure the vault reports, and NOT a net one. Every yield on
@@ -551,17 +548,17 @@ export function registerAllocationView(Alpine) {
     // does not hold are the ones carrying the gap.
     trackingErrorLine(key) {
       const te = this.sleeveTrackingError(key);
-      if (te == null) return "The vault holdings could not be read, so there is nothing to compare.";
-      if (te < 0.5) return "The vault holds the policy.";
+      if (te == null) return "Vault holdings unavailable.";
+      if (te < 0.5) return "";
       const missing = this.sleeveVaultRows(key)
         .filter((r) => !r.idle && !r.inVault && r.policy > 0)
         .map((r) => r.label);
-      if (!missing.length) return "The venues the vault holds are not at their target weights.";
+      if (!missing.length) return "The venues held are not at their target weights.";
       const names = missing.length === 1
         ? missing[0]
         : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`;
       const isAre = missing.length === 1 ? "is" : "are";
-      return `${names} ${isAre} in the policy and not in the vault, so the rest carry the difference.`;
+      return `${names} ${isAre} in the policy, not in the vault.`;
     },
     vaultRowBalance(r) {
       return r.balance == null ? "—" : Number(r.balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -570,15 +567,16 @@ export function registerAllocationView(Alpine) {
     vaultRowValue(r) { return r.balance == null ? "—" : this.fmtUsd2(r.value); },
     vaultRowPolicy(r) { return r.idle ? "—" : this.fmtPct(r.policy); },
     vaultRowActual(r) { return r.actual == null ? "—" : this.fmtPct(r.actual); },
-    // Drift is a DEVIATION, not a gain: eight points over is exactly as wrong
-    // as eight points under. So it carries the glyph for direction and stays
-    // in reading ink, and the colour is spent once, on the verdict line. The
-    // change ledger is the opposite case and is coloured, because there up
-    // genuinely means the swarm raised a target.
     vaultRowDrift(r) {
       if (r.drift == null) return "—";
       if (Math.abs(r.drift) < 0.005) return "—";
       return (r.drift > 0 ? "+" : "−") + Math.abs(r.drift).toFixed(2);
+    },
+    // Same convention as the change ledger: glyph for direction, colour to
+    // read it at a glance. Beacon is off this page; --color-warn is the down.
+    vaultRowDriftClass(r) {
+      if (r.drift == null || Math.abs(r.drift) < 0.005) return "flat";
+      return r.drift > 0 ? "up" : "down";
     },
     vaultRowDriftGlyph(r) {
       if (r.drift == null || Math.abs(r.drift) < 0.005) return "";
@@ -671,7 +669,7 @@ export function registerAllocationView(Alpine) {
       const price = this.economics?.sharePrice;
       if (shares == null || price == null) return "—";
       return `${Number(shares).toLocaleString("en-US", { maximumFractionDigits: 2 })} rmUSDC at `
-        + `$${Number(price).toFixed(4)} a share`;
+        + `$${Number(price).toFixed(4)} a share, spot`;
     },
     // Concentration, computed from the live balances: what one venue failing
     // would cost. Not a drawdown percentage — a venue failing is the risk the
@@ -725,9 +723,9 @@ export function registerAllocationView(Alpine) {
     // What the page can say about a missing line, without guessing which of
     // the two reasons applies.
     latestFallback() {
-      if (this.sessionsFailed) return "The session feed could not be read.";
-      if (!this.latest) return "No session has published a recommendation on the allocation yet.";
-      return "This session published no recommendation.";
+      if (this.sessionsFailed) return "Session feed unavailable.";
+      if (!this.latest) return "No session has published a recommendation yet.";
+      return "No recommendation in this session.";
     },
 
     // ── the hero donut (hand-authored inline SVG; no chart dependency) ──────

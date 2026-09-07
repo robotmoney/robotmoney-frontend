@@ -403,7 +403,10 @@ test("the change ledger reports was, now and a flat move for every sleeve", asyn
   // The swarm's reading sits under the numbers it explains, with the id kept
   // so /allocation#latest-recommendation still lands.
   await expect(page.locator("#latest-recommendation")).toBeVisible();
-  await expect(page.locator("#what-changed")).toContainText("Nothing has moved yet");
+  // The Note column carries whether the weight is actually implemented, which
+  // is the one thing the was/now/change columns cannot say.
+  await expect(rows.first()).toContainText("Vault live");
+  await expect(rows.nth(1)).toContainText("Vault pending");
   await expectNoBrowserErrors(errors);
 });
 
@@ -427,7 +430,7 @@ test("the latest recommendation is the session's rationale, and the page says wh
   // The two links the section owes a reader who wants the reasoning behind a
   // move: how the regime is read, and every session that reviewed this.
   await expect(block.locator('a[href="/regime"]')).toBeVisible();
-  await expect(block.locator('a[href="/allocation/history"]')).toBeVisible();
+  await expect(page.locator('#what-changed a[href="/allocation/history"]')).toBeVisible();
   // Schema names, table names and route behaviour are not the reader's
   // business. The page says what is true about the allocation; how the backend
   // stores or types it is ours to know.
@@ -449,14 +452,10 @@ test("the two figures with no route behind them render an explicit pending state
   const pending = page.locator(".alp__pending");
   await expect(pending).toHaveCount(1);
   await expect(pending).toContainText("not published");
-  await expect(pending).toContainText("no route serves the recorded share-price series");
-  const dot = await pending.locator("i").evaluate((el) => ({
-    bg: getComputedStyle(el).backgroundColor,
-    size: Math.max(el.getBoundingClientRect().width, el.getBoundingClientRect().height),
-  }));
-  expect(dot.bg).toBe("rgb(255, 122, 41)");
-  expect(dot.size).toBeGreaterThan(0);
-  expect(dot.size, "Beacon is a POINT, capped about 12px").toBeLessThanOrEqual(12);
+  // No marker. Every clarification on this page used to wear a coloured bullet,
+  // which put Beacon in four places it did not belong on a page already
+  // carrying five categorical hues. The words carry it now.
+  await expect(pending.locator("i")).toHaveCount(0);
 
   // The spot share price IS served, and is shown as a spot read rather than
   // stretched into the series it is not. It sits with the holdings it belongs
@@ -527,7 +526,7 @@ test("the state chip reads seeded whatever source and managed say", async ({ pag
     await page.goto("/index.html");
     await navigate(page, "/allocation");
     await expect(page.locator(".alp__chip")).toHaveText("seeded");
-    await expect(page.locator(".alp__force-line")).toContainText("No session has moved them");
+    await expect(page.locator(".alp__force-line")).toContainText("Unchanged since");
   }
 });
 

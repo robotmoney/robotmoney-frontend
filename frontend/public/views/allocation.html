@@ -58,9 +58,8 @@
     <div class="a2-hero__inner">
       <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
       <p class="a2-hero__lede">
-        The weights the swarm holds the book to, what sits inside each sleeve,
-        and how far the vault has drifted from them. Depositor capital only:
-        the protocol's own wallets are reported separately.
+        Target weights, set by the swarm. Depositor capital only; the
+        protocol's own wallets are reported separately.
       </p>
     </div>
   </header>
@@ -141,21 +140,14 @@
     </div>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      Target weights could not be read, so there are no sleeves to show.
+      Target weights unavailable.
     </p>
     </div>
 
     <!-- The two figures with no route behind them. They were two tiles set in
          display type; one line is the honest weight for a number that is not
          there. Beacon marks it, as a point. -->
-    <p class="alp__pending">
-      <i></i>
-      <span>
-        NAV per share and period returns are <b>not published</b>: no route
-        serves the recorded share-price series. The share price below is one
-        spot read.
-      </span>
-    </p>
+    <p class="alp__pending">NAV per share and period returns are <b>not published</b>.</p>
 
     <!-- Degradation states, carried over in full from the pages this one
          replaces. A page about money that silently assumes fresh data is a
@@ -188,19 +180,16 @@
   <section class="alp__sec" id="what-changed">
     <div class="alp__sec-head">
       <h2 class="alp__h2">What changed</h2>
-      <a class="alp__nav" :href="historyHref">Every session &rarr;</a>
+      <a class="alp__nav" :href="historyHref">All sessions &rarr;</a>
     </div>
     <p class="alp__sub">
-      Every session reviews these weights and either moves them or leaves them.
-      Nothing has moved yet, so <b>was</b> and <b>now</b> are the same reading
-      and every change is flat.
+      Every session reviews these weights.
     </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      Target weights are unavailable, so there is nothing to compare.
+      Target weights unavailable.
     </p>
 
-    <p class="alp__scrollhint" aria-hidden="true" x-show="hasTargets()" x-cloak>Scroll the table sideways for the full row.</p>
     <div class="alp__sk alp__skled" x-show="loading" x-cloak aria-hidden="true">
       <div class="alp__skline alp__skline--head"></div>
       <div class="alp__skline"></div><div class="alp__skline"></div>
@@ -240,7 +229,7 @@
     <div class="alp__latest" id="latest-recommendation" x-show="!loading" x-cloak>
       <p class="alp__eyebrow">The last review</p>
       <div class="alp__latest-meta">
-        <span class="alp__latest-date" x-text="latestDate()">—</span>
+        <span class="alp__latest-date" x-show="latest" x-text="latestDate()"></span>
         <span x-show="latestQuorum()" x-text="latestQuorum()"></span>
         <span x-show="latestConfidence()" x-text="latestConfidence()"></span>
         <span class="alp__latest-flag">no weight change</span>
@@ -255,9 +244,8 @@
         <p class="alp__latest-line alp__latest-line--pend" x-text="latestFallback()"></p>
       </template>
       <p class="alp__why-links">
-        <a class="alp__nav" x-show="latest" :href="latestHref()">Read this session in full</a>
-        <a class="alp__nav" href="/regime">How the regime is read</a>
-        <a class="alp__nav" :href="historyHref">Every session that reviewed this</a>
+        <a class="alp__nav" x-show="latest" :href="latestHref()">Read the session &rarr;</a>
+        <a class="alp__nav" href="/regime">Regime &rarr;</a>
       </p>
     </div>
 
@@ -274,14 +262,12 @@
       <h2 class="alp__h2">Inside each sleeve</h2>
     </div>
     <p class="alp__sub">
-      Each sleeve's split, drawn to its own hundred. Where a vault exists, what
-      it holds and how far it has drifted sit one click away. Agent Tokens
-      lists the allocation's own names, which are not the ones the deposit
-      skill buys.
+      Agent Tokens lists the allocation's own names. The deposit skill buys a
+      different set.
     </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      Target weights are unavailable, so there are no constituents to list.
+      Target weights unavailable.
     </p>
 
     <div class="alp__sk alp__skcards" x-show="loading" x-cloak aria-hidden="true">
@@ -370,7 +356,6 @@
                 </button>
                 <div class="alp__hold-anim" :id="`vault-holdings-${s.key}`" role="region"
                      :aria-label="`${s.name} vault holdings`" :inert="!open"><div class="alp__hold-clip"><div class="alp__hold-body">
-                  <p class="alp__scrollhint" aria-hidden="true">Scroll the table sideways for the full row.</p>
                   <div class="alp__tblwrap">
                     <table class="alp__tbl alp__tbl--wide">
                       <thead>
@@ -401,7 +386,7 @@
                                 <span class="alp__cell-badge">caught up late</span>
                               </template>
                               <template x-if="!r.inVault">
-                                <span class="alp__cell-badge">not held</span>
+                                <span class="alp__cell-badge alp__cell-badge--quiet">not held</span>
                               </template>
                             </td>
                             <td x-text="vaultRowBalance(r)"></td>
@@ -415,7 +400,7 @@
                                  reading grey; the colour is spent once, on the
                                  verdict line below. -->
                             <td>
-                              <span class="alp__dft">
+                              <span class="alp__dft" :class="vaultRowDriftClass(r)">
                                 <i x-text="vaultRowDriftGlyph(r)" aria-hidden="true"></i><span x-text="vaultRowDrift(r)"></span>
                               </span>
                             </td>
@@ -439,25 +424,22 @@
                        section. It is computed from the balances in the table
                        directly above it, which is where it belongs: it was two
                        screens away from them. -->
-                  <p class="alp__hold-note" x-show="concentrationLine()" x-cloak x-text="concentrationLine()"></p>
-                  <p class="alp__vd" :class="onTarget(s.key) ? 'on' : 'off'">
-                    <i></i>
+                  <p class="alp__vd">
                     <span>
                       <b x-text="onTarget(s.key) ? 'On target.' : trackingErrorLabel(s.key) + '.'"></b>
                       <span x-text="trackingErrorLine(s.key)"></span>
                     </span>
                   </p>
+                  <p class="alp__hold-note" x-show="concentrationLine()" x-cloak x-text="concentrationLine()"></p>
                   <p class="alp__hold-note">
-                    <a class="alp__link" :href="vaultSubjectHref">The swarm's record for the vault</a>
-                    carries its sessions and holdings over time.
+                    <a class="alp__nav" :href="vaultSubjectHref">Vault sessions and holdings &rarr;</a>
                   </p>
                 </div></div></div>
               </div>
             </template>
             <template x-if="!sleeveHasVault(s.key)">
-              <p class="alp__vd none">
-                <i></i>
-                <span><b>No vault yet</b>, so there is nothing to compare.</span>
+              <p class="alp__vd">
+                <span><b>No vault yet.</b></span>
               </p>
             </template>
           </div>
@@ -482,7 +464,7 @@
 }
 
 .alp__eyebrow {
-  font-family: var(--font-mono); font-size: 0.62rem; font-weight: 500;
+  font-family: var(--font-mono); font-size: 0.6rem; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.18em;
   color: var(--color-text-muted); margin: 0;
 }
@@ -539,7 +521,7 @@
 }
 
 /* ── weights in force ──────────────────────────────────────────────────── */
-.alp__force { border-bottom: 1px solid var(--color-border); padding-bottom: 1.8rem; }
+.alp__force { border-bottom: 1px solid var(--color-border); padding-bottom: 2rem; }
 .alp__force-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
 /* Two heights reserved from the first paint, because both of these hold copy
    that arrives late and both sit ABOVE the figure, so any growth shoves it
@@ -563,7 +545,7 @@
 }
 .alp__chip {
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.12em; padding: 0.24rem 0.5rem; border-radius: var(--radius);
+  letter-spacing: 0.12em; padding: 0.25rem 0.5rem; border-radius: var(--radius);
   border: 1px solid var(--color-border-light); color: var(--color-text-muted);
 }
 /* A swarm-managed policy would be marked by a Beam RULE, not by a cyan figure:
@@ -593,13 +575,13 @@
    would paint black on a dark ground and vanish. Every shape here sets its
    own; this makes the default a reading colour rather than a trap. */
 .alp__donut svg { display: block; width: 100%; height: auto; fill: var(--color-text); }
-.alp__legend-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.85rem; }
-.alp__legend-list li { display: grid; grid-template-columns: 0.7rem 1fr; gap: 0.8rem; align-items: start; }
+.alp__legend-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.75rem; }
+.alp__legend-list li { display: grid; grid-template-columns: 0.7rem 1fr; gap: 0.75rem; align-items: start; }
 .alp__legend-list b { display: block; font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
 .alp__legend-list span { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted); }
 .alp__legend-list li.dim b { color: var(--color-text-muted); }
 .alp__swatch { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; display: block; }
-.alp__legend-list li { padding: 0.3rem 0.4rem; grid-template-columns: 0.7rem 1fr auto; }
+.alp__legend-list li { padding: 0.25rem 0.5rem; grid-template-columns: 0.7rem 1fr auto; }
 .alp__legend-list li.hot { background: var(--color-surface-light); }
 .alp__legend-pct {
   font-family: var(--font-mono); font-size: 1.05rem; color: var(--color-text);
@@ -624,69 +606,65 @@
    row count a function of the viewport alone. */
 .alp__meta {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-  gap: 0.7rem 1.5rem; margin: 1.1rem 0 0;
-  font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
+  gap: 0.75rem 1.5rem; margin: 1rem 0 0;
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-muted);
 }
-.alp__meta b { display: block; margin-top: 0.15rem; }
+.alp__meta b { display: block; margin-top: 0.25rem; }
 }
 .alp__meta {
-  display: flex; flex-wrap: wrap; gap: 0.45rem 2rem; margin: 1.1rem 0 0;
-  font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase;
+  display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; margin: 1rem 0 0;
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-muted);
 }
-.alp__meta b { display: block; margin-top: 0.2rem; color: var(--color-text); font-weight: 500; text-transform: none; letter-spacing: 0.02em; font-size: 0.85rem; }
+.alp__meta b { display: block; margin-top: 0.25rem; color: var(--color-text); font-weight: 500; text-transform: none; letter-spacing: 0.02em; font-size: 0.875rem; }
 .alp__meta > a { align-self: end; }
 /* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
 
 
 /* The two figures with no route behind them, as one line rather than two
    tiles. Beacon marks it, as a POINT and nothing else. */
-.alp__pending {
-  display: flex; gap: 0.6rem; align-items: flex-start; margin: 1.2rem 0 0;
-  font-size: 0.82rem; color: var(--color-text-muted); line-height: 1.55;
-}
-.alp__pending i {
-  flex: 0 0 auto; width: 0.375rem; height: 0.375rem; border-radius: 50%;
-  background: var(--color-beacon); margin-top: 0.45rem;
-}
+.alp__pending { margin: 1.25rem 0 0; font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.55; }
 .alp__pending b { color: var(--color-text-soft); font-weight: 500; }
 
 /* provenance badges */
 .alp__prov { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
 .alp__badge {
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.12em; padding: 0.28rem 0.5rem; border-radius: var(--radius);
+  letter-spacing: 0.12em; padding: 0.25rem 0.5rem; border-radius: var(--radius);
   border: 1px solid var(--color-border-light); color: var(--color-text-muted);
 }
 .alp__badge--stale, .alp__badge--backfilled { color: var(--color-warm); border-color: var(--color-warm); }
 .alp__cell-badge {
-  display: inline-block; margin-left: 0.5rem; font-size: 0.58rem; text-transform: uppercase;
+  display: inline-block; margin-left: 0.5rem; font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.1em; color: var(--color-warm);
 }
+/* Warm is for PROVENANCE: stale, caught up late. "not held" is ordinary data,
+   already said by the dashes and by the drift, so it stays quiet. */
+.alp__cell-badge--quiet { color: var(--color-text-muted); }
 
 /* ── sections ──────────────────────────────────────────────────────────── */
 .alp__sec { margin-top: 3rem; }
 .alp__sec-head {
   display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
-  gap: 0.6rem 1rem; margin-bottom: 0.35rem;
+  gap: 0.5rem 1rem; margin-bottom: 0.25rem;
 }
 .alp__h2 {
   font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
-  font-size: clamp(1.4rem, 3vw, 1.9rem); line-height: 1.05; letter-spacing: -0.01em;
+  font-size: clamp(1.15rem, 3vw, 1.9rem); line-height: 1.05; letter-spacing: -0.01em;
   margin: 0; color: var(--color-text);
 }
 /* No max-width. A section description runs the width of the section it
    describes: a measure-capped paragraph in a full-width band leaves a hole
    on the right that reads as an unfinished layout rather than as a choice. */
-.alp__sub { margin: 0 0 1.2rem; color: var(--color-text-muted); font-size: 0.86rem; line-height: 1.6; }
+.alp__sub { margin: 0 0 1.25rem; color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6; }
 .alp__sub b { color: var(--color-text-soft); font-weight: 500; }
 .alp__sub code {
   font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
-  background: var(--color-surface); padding: 0.05rem 0.28rem;
+  background: var(--color-surface); padding: 0.25rem 0.25rem;
 }
-.alp__sub--after { margin: 1.2rem 0 0; }
-.alp__empty { color: var(--color-text-muted); font-size: 0.86rem; margin: 0 0 1.2rem; }
+.alp__sub--after { margin: 1.25rem 0 0; }
+.alp__empty { color: var(--color-text-muted); font-size: 0.875rem; margin: 0 0 1.25rem; }
 /* TWO link treatments on this page, and only two.
    .alp__link  — inline, inside prose or a table row. It inherits the type of
                  whatever it sits in, so a link in a mono table reads as table
@@ -703,12 +681,12 @@
 }
 .alp__link:hover { border-bottom-color: var(--color-accent); }
 .alp__nav {
-  font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.13em; color: var(--color-text-soft); text-decoration: none;
   /* Beam at rest, which is the token's whole reason for existing: a rule that
      marks a control without shouting. At border-light these read as labels
      rather than as links. */
-  border-bottom: 1px solid var(--color-accent-line); padding-bottom: 0.15rem;
+  border-bottom: 1px solid var(--color-accent-line); padding-bottom: 0.25rem;
   transition: color 150ms var(--ease-out-expo), border-color 150ms var(--ease-out-expo);
 }
 .alp__nav:hover, .alp__nav:focus-visible { color: var(--color-text); border-bottom-color: var(--color-accent); }
@@ -813,10 +791,10 @@
 }
 .alp__card:hover { border-color: var(--color-border-light); }
 .alp__card-top {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem 1.2rem;
-  flex-wrap: wrap; padding: 1rem 1.15rem 0.85rem; border-bottom: 1px solid var(--color-border);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem 1.25rem;
+  flex-wrap: wrap; padding: 1rem 1.25rem 0.75rem; border-bottom: 1px solid var(--color-border);
 }
-.alp__card-name { display: flex; align-items: baseline; gap: 0.55rem; min-width: 0; }
+.alp__card-name { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
 .alp__card-name i { flex: 0 0 auto; width: 0.6rem; height: 0.6rem; transform: translateY(-0.05em); }
 .alp__card-name b {
   font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
@@ -824,14 +802,14 @@
 }
 .alp__card-w { text-align: right; }
 .alp__card-w b {
-  font-family: var(--font-mono); font-weight: 500; font-size: 1.1rem;
+  font-family: var(--font-mono); font-weight: 500; font-size: 1.15rem;
   color: var(--color-text); font-variant-numeric: tabular-nums;
 }
 .alp__card-w small {
-  display: block; font-family: var(--font-mono); font-size: 0.56rem; text-transform: uppercase;
+  display: block; font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.14em; color: var(--color-text-muted);
 }
-.alp__card-body { padding: 1rem 1.15rem 1.15rem; display: flex; flex-direction: column; flex: 1 1 auto; }
+.alp__card-body { padding: 1rem 1.25rem 1.25rem; display: flex; flex-direction: column; flex: 1 1 auto; }
 
 /* The policy bar, drawn to the SLEEVE's own hundred rather than to its share
    of the book, so a 5% sleeve holding seven names is as readable as a 95% one.
@@ -852,8 +830,8 @@
 .alp__names > span.is-hot b { color: var(--color-text-soft); }
 .alp__names > span.dim { opacity: 0.42; }
 .alp__stk.zero { opacity: 0.45; }
-.alp__names { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; margin-top: 0.7rem; font-size: 0.8rem; }
-.alp__names > span { display: inline-flex; align-items: baseline; gap: 0.4rem; color: var(--color-text-soft); }
+.alp__names { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; margin-top: 0.75rem; font-size: 0.8rem; }
+.alp__names > span { display: inline-flex; align-items: baseline; gap: 0.5rem; color: var(--color-text-soft); }
 .alp__names i { flex: 0 0 auto; width: 0.45rem; height: 0.45rem; transform: translateY(-0.05em); }
 .alp__names b {
   font-family: var(--font-mono); font-weight: 400; color: var(--color-text-muted);
@@ -862,25 +840,25 @@
 
 /* the vault rail: chain, yield and size, or the absence of a contract */
 .alp__vrail {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem 1.3rem;
-  margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--color-border);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.25rem;
+  margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border);
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em;
   color: var(--color-text-muted);
 }
 .alp__vchip {
-  display: inline-flex; align-items: center; gap: 0.4rem; color: var(--color-text);
-  border: 1px solid var(--color-border-light); border-radius: var(--radius); padding: 0.22rem 0.5rem;
+  display: inline-flex; align-items: center; gap: 0.5rem; color: var(--color-text);
+  border: 1px solid var(--color-border-light); border-radius: var(--radius); padding: 0.25rem 0.5rem;
 }
 .alp__vchip i { width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--color-green); }
 .alp__vchip.pending { color: var(--color-text-muted); }
 .alp__vchip.pending i { background: transparent; border: 1px solid var(--color-text-muted); }
 /* An ERC-4626 share symbol is case-carrying: rmUSDC is not RMUSDC. */
 .alp__vrail code {
-  font-family: var(--font-mono); font-size: 0.66rem; text-transform: none; letter-spacing: 0.04em;
-  color: var(--color-text-soft); border: 1px solid var(--color-border); padding: 0.05rem 0.3rem;
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: none; letter-spacing: 0.04em;
+  color: var(--color-text-soft); border: 1px solid var(--color-border); padding: 0.25rem 0.25rem;
 }
 .alp__vstat b {
-  display: block; margin-top: 0.1rem; font-family: var(--font-mono); font-weight: 500;
+  display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-weight: 500;
   font-size: 0.95rem; text-transform: none; letter-spacing: 0; color: var(--color-text);
   font-variant-numeric: tabular-nums;
 }
@@ -888,22 +866,15 @@
 /* the verdict line. This is the ONE place the vault comparison spends colour:
    Beacon as a point for off target, Pool for on it. The drift column itself
    stays in reading ink, because a deviation has no good direction. */
-.alp__vd {
-  display: flex; gap: 0.55rem; align-items: flex-start; margin: 1rem 0 0;
-  font-size: 0.84rem; color: var(--color-text-muted); line-height: 1.55;
-}
-.alp__vd i { flex: 0 0 auto; width: 0.375rem; height: 0.375rem; border-radius: 50%; margin-top: 0.5rem; }
-.alp__vd.off i { background: var(--color-beacon); }
-.alp__vd.on i { background: var(--color-green); }
-.alp__vd.none i { background: transparent; border: 1px solid var(--color-text-muted); margin-top: 0.44rem; }
-.alp__vd b { color: var(--color-text-soft); font-weight: 500; }
+.alp__vd { margin: 1rem 0 0; font-size: 0.875rem; color: var(--color-text-muted); line-height: 1.55; }
+.alp__vd b { color: var(--color-text); font-weight: 500; }
 
 /* the holdings disclosure */
 .alp__hold { margin-top: 1rem; border: 1px solid var(--color-border); }
 .alp__hold-sum {
   width: 100%; cursor: pointer; display: flex; align-items: center;
   justify-content: space-between; gap: 0.75rem 1rem; flex-wrap: wrap;
-  padding: 0.6rem 0.8rem; background: var(--color-surface);
+  padding: 0.5rem 0.75rem; background: var(--color-surface);
   border: 0; border-bottom: 1px solid transparent; text-align: left;
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-soft);
@@ -914,39 +885,39 @@
 .alp__hold-sum:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .alp__off { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--color-text-muted); }
 .alp__hold.is-open .alp__hold-sum { border-bottom-color: var(--color-border); }
-.alp__hold-body { padding: 0.85rem 0.8rem 0.95rem; }
+.alp__hold-body { padding: 0.75rem 0.75rem 1rem; }
 .alp__hold-note {
-  margin: 0.8rem 0 0; padding-top: 0.7rem; border-top: 1px solid var(--color-border);
+  margin: 0.75rem 0 0; padding-top: 0.75rem; border-top: 1px solid var(--color-border);
   font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.55;
 }
 .alp__hold-foot {
-  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.3rem 1rem;
-  margin-top: 0.7rem; font-family: var(--font-mono); font-size: 0.6rem;
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 1rem;
+  margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.6rem;
   color: var(--color-text-muted);
 }
 
 /* the latest recommendation */
 .alp__latest {
-  margin-top: 1.4rem;
+  margin-top: 1.5rem;
   border: 1px solid var(--color-border); border-left: 2px solid var(--color-accent-line);
-  background: var(--color-surface); padding: 1rem 1.15rem 1.15rem;
+  background: var(--color-surface); padding: 1rem 1.25rem 1.25rem;
 }
 .alp__latest-meta {
-  display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; font-family: var(--font-mono);
-  font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted);
+  display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; font-family: var(--font-mono);
+  font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted);
 }
 .alp__latest-date { color: var(--color-text); }
 .alp__latest-flag { color: var(--color-text-soft); }
-.alp__latest-line { margin: 0.7rem 0 0.9rem; color: var(--color-text-soft); font-size: 0.9rem; line-height: 1.6; }
+.alp__latest-line { margin: 0.75rem 0 1rem; color: var(--color-text-soft); font-size: 0.875rem; line-height: 1.6; }
 .alp__latest-line--pend { color: var(--color-text-muted); }
 .alp__latest .alp__eyebrow { margin-bottom: 0.5rem; }
 .alp__why-links {
-  display: flex; flex-wrap: wrap; gap: 0.6rem 1.4rem; margin: 0.9rem 0 0;
-  padding-top: 0.8rem; border-top: 1px solid var(--color-border);
+  display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin: 1rem 0 0;
+  padding-top: 0.75rem; border-top: 1px solid var(--color-border);
 }
 /* The aggregator's sentence, under the actions it explains. */
 .alp__latest-why {
-  margin: -0.5rem 0 0.9rem; color: var(--color-text-muted); font-size: 0.82rem;
+  margin: -0.5rem 0 1rem; color: var(--color-text-muted); font-size: 0.8rem;
   line-height: 1.6;
 }
 
@@ -954,27 +925,19 @@
 /* Six and seven columns do not fit a phone. They scroll inside their own
    container rather than the page, and the hint says so instead of leaving it
    to be discovered. */
-.alp__scrollhint { display: none; }
-@media (max-width: 900px) {
-  .alp__scrollhint {
-    display: block; margin: 0 0 0.6rem; font-family: var(--font-mono);
-    font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em;
-    color: var(--color-text-muted);
-  }
-}
 .alp__tblwrap { overflow-x: auto; border: 1px solid var(--color-border); }
 table.alp__tbl {
   width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.7rem;
   min-width: 40rem; font-variant-numeric: tabular-nums;
 }
 table.alp__tbl th {
-  text-align: right; font-size: 0.58rem; font-weight: 500; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted); padding: 0.7rem 0.9rem;
+  text-align: right; font-size: 0.6rem; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted); padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--color-border-light); background: var(--color-surface);
 }
 table.alp__tbl th:first-child, table.alp__tbl td:first-child { text-align: left; }
 table.alp__tbl td {
-  text-align: right; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--color-border);
+  text-align: right; padding: 0.5rem 1rem; border-bottom: 1px solid var(--color-border);
   color: var(--color-text-soft);
 }
 table.alp__tbl tbody tr:last-child td { border-bottom: 0; }
@@ -991,10 +954,14 @@ table.alp__tbl td.q { color: var(--color-text-muted); }
    treatment every other column header has. */
 table.alp__tbl th.note { text-align: left; }
 table.alp__tbl td.note {
-  text-align: left; font-family: var(--font-sans); font-size: 0.78rem;
+  text-align: left; font-family: var(--font-sans); font-size: 0.8rem;
   white-space: normal; color: var(--color-text-muted); font-variant-numeric: normal;
 }
 table.alp__tbl--led { min-width: 34rem; }
+/* Without a width on the first column the browser hands it every spare pixel
+   and the figures end up a screen away from the sleeve they describe. */
+table.alp__tbl--led th:first-child { width: 34%; }
+table.alp__tbl--led th.note { width: 30%; }
 table.alp__tbl--wide { min-width: 48rem; }
 table.alp__tbl tr.out td { color: var(--color-text-muted); }
 table.alp__tbl tr.out .alp__dot { opacity: 0.4; }
@@ -1005,13 +972,16 @@ table.alp__tbl tr.out .alp__dot { opacity: 0.4; }
 /* Direction is the GLYPH first and the colour second, so the column survives
    greyscale, forced-colors and colourblindness. Beacon appears here as one
    arrow at type size, which is the point size the covenant allows it. */
-.alp__mv { display: inline-flex; align-items: baseline; gap: 0.35rem; justify-content: flex-end; }
+.alp__mv { display: inline-flex; align-items: baseline; gap: 0.25rem; justify-content: flex-end; }
 .alp__mv i { font-style: normal; font-size: 0.78em; line-height: 1; }
-.alp__mv.up { color: var(--color-green); }
-.alp__mv.down { color: var(--color-beacon); }
-.alp__mv.flat { color: var(--color-text-muted); }
-/* Drift is a deviation, not a gain, so it keeps the glyph and stays in ink. */
-.alp__dft { display: inline-flex; align-items: baseline; gap: 0.35rem; justify-content: flex-end; color: var(--color-text-soft); }
+/* Up and down read the same way in both tables: the change ledger and the
+   vault's drift column. --color-warn is the red the palette already carries.
+   Beacon no longer marks notes anywhere here: the only warm hues left are
+   CATEGORICAL series colours, which mean a sleeve or a name and nothing else. */
+.alp__mv.up, .alp__dft.up { color: var(--color-green); }
+.alp__mv.down, .alp__dft.down { color: var(--color-warn); }
+.alp__mv.flat, .alp__dft.flat { color: var(--color-text-muted); }
+.alp__dft { display: inline-flex; align-items: baseline; gap: 0.25rem; justify-content: flex-end; }
 .alp__dft i { font-style: normal; font-size: 0.78em; line-height: 1; }
 
 /* exposure */
