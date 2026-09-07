@@ -284,11 +284,14 @@ test("drift is computed from the two feeds, and names what is missing", async ({
     await expect(tr).toContainText(`${row.actual.toFixed(2)}%`);
     await expect(tr).toContainText(`${drift > 0 ? "+" : "−"}${Math.abs(drift).toFixed(2)}`);
   }
-  // The verdict NAMES the reason rather than restating the number, and the
-  // reason is derived: whichever policy names the vault does not hold.
-  const missing = expected.filter((r) => r.actual === 0).map((r) => r.label);
-  await expect(card.locator(".alp__vd")).toContainText(missing[0]);
-  await expect(card.locator(".alp__vd")).toContainText("not in the vault");
+  // A policy name the vault does not hold is marked on its own row. It was
+  // also stated as a sentence under the table, which narrated the table.
+  const missingIndex = expected.findIndex((r) => r.actual === 0);
+  expect(missingIndex, "the golden should carry a policy name the vault does not hold")
+    .toBeGreaterThan(-1);
+  await expect(card.locator(".alp__hold tbody tr").nth(missingIndex))
+    .toContainText("not held");
+  await expect(card.locator(".alp__vd")).toHaveCount(0);
 
   // A sleeve with no contract says so, and offers no comparison and no
   // invented receipt symbol for an address nobody has deployed.
@@ -407,34 +410,32 @@ test("the change ledger reports was, now and a flat move for every sleeve", asyn
     .evaluate((el) => getComputedStyle(el).color);
   expect(flatColour).toBe("rgb(143, 154, 176)");
 
-  // The swarm's reading sits under the numbers it explains, with the id kept
-  // so /allocation#latest-recommendation still lands.
-  await expect(page.locator("#latest-recommendation")).toBeVisible();
   // Four columns and no fifth. The Note column carried vault status, which
   // each sleeve's own card states beside the vault it is about.
   await expect(page.locator("#what-changed thead th")).toHaveCount(4);
   await expectNoBrowserErrors(errors);
 });
 
-test("the latest recommendation is the session's rationale, and the page says why it is not a vector", async ({ page }) => {
+// What the last-review panel was for is now two separate things: the mechanism
+// that sets every weight, stated once above the weights, and the change itself,
+// stated by the ledger. The panel restated a session's metadata beside a table
+// of four flat rows, which is the same finding twice.
+test("the page states the mechanism above the weights, and never the backend behind it", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  const session = allocationSession();
-  await stubEnvironment(page, { sessions: [session, { ...allocationSession({ id: "x", subjectId: "woon" }) }] });
+  await stubEnvironment(page, { sessions: [allocationSession()] });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  const block = page.locator(".alp__latest");
-  await expect(block).toContainText("1 Sep 2026");
-  await expect(block).toContainText("4 of 5 took part");
-  // The ACTIONS lead: they are what the session recommended. The aggregator's
-  // rationale follows as the supporting sentence.
-  await expect(block.locator(".alp__latest-line")).toHaveText("rotate USDC");
-  await expect(block.locator(".alp__latest-why")).toHaveText(session.swarmRecommendation.rationale);
-  await expect(block).toContainText("no change");
-  await expect(block.locator("a").first())
-    .toHaveAttribute("href", `/swarm/sessions/${session.id}`);
-  // The reasoning behind a move is the mechanism, and it is stated once, at
-  // the top of the page, above the weights it produces.
+  const how = page.locator("#how-weights-are-set");
+  // Above the weights in the DOM, which is also above them on the page.
+  await expect(how).toBeVisible();
+  for (const step of ["Regime", "Takes", "Consensus"]) {
+    await expect(how).toContainText(step);
+  }
+  // Validators are defined and unfilled. A page that describes the mechanism
+  // without that reads as a claim about seats nobody holds.
+  await expect(how).toContainText("Every seat is a proposer today");
+  await expect(page.locator(".alp__latest")).toHaveCount(0);
   await expect(page.locator('#how-weights-are-set a[href="/regime"]')).toBeVisible();
   await expect(page.locator('#how-weights-are-set a[href="/swarm"]')).toBeVisible();
   await expect(page.locator('#what-changed a[href="/allocation/history"]')).toBeVisible();
@@ -702,4 +703,5 @@ test("on a phone the fan becomes a list and nothing scrolls the page sideways", 
   expect(overflow).toBeLessThanOrEqual(1);
   await expectNoBrowserErrors(errors);
 });
+
 

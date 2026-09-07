@@ -152,8 +152,9 @@
       <ul class="alp__legend-list">
         <template x-for="s in sleeves()" :key="s.key">
           <li :class="[s.target === 0 ? 'dim' : '', hotKey === s.key ? 'hot' : '']"
-              @pointerenter="hoverLegend(s.key)"
-              @pointerleave="hoverLegend(null)">
+              @pointerenter="hoverSleeve(s, $event)"
+              @pointermove="moveTip($event)"
+              @pointerleave="leaveSleeve()">
             <i class="alp__swatch" data-mark="series" :style="sleeveSwatch(s)"></i>
             <div>
               <b x-text="s.name"></b>
@@ -251,30 +252,6 @@
       </table>
     </div>
 
-    <!-- The swarm's reading, under the numbers it explains. id kept so
-         /allocation#latest-recommendation still lands on it. -->
-    <div class="alp__latest" id="latest-recommendation" x-show="!loading" x-cloak>
-      <p class="alp__eyebrow">The last review</p>
-      <div class="alp__latest-meta">
-        <span class="alp__latest-date" x-show="latest" x-text="latestDate()"></span>
-        <span x-show="latestQuorum()" x-text="latestQuorum()"></span>
-        <span x-show="latestConfidence()" x-text="latestConfidence()"></span>
-        <span class="alp__latest-flag">no change</span>
-      </div>
-      <template x-if="latestLine()">
-        <p class="alp__latest-line" x-text="latestLine()"></p>
-      </template>
-      <template x-if="latestRationale()">
-        <p class="alp__latest-why" x-text="latestRationale()"></p>
-      </template>
-      <template x-if="!latestLine()">
-        <p class="alp__latest-line alp__latest-line--pend" x-text="latestFallback()"></p>
-      </template>
-      <p class="alp__why-links">
-        <a class="alp__nav" x-show="latest" :href="latestHref()">Read the session &rarr;</a>
-      </p>
-    </div>
-
 </section>
 
   <!-- ── § INSIDE EACH SLEEVE ─────────────────────────────────────────────
@@ -287,6 +264,10 @@
     <div class="alp__sec-head">
       <h2 class="alp__h2">Inside each sleeve</h2>
     </div>
+    <p class="alp__sub">
+      Target weights inside each sleeve, and the vault holding them where one
+      is live.
+    </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
       Target weights unavailable.
@@ -434,17 +415,6 @@
                     <span x-text="sharesLabel()">—</span>
                     <span x-text="asOfLabel()">—</span>
                   </div>
-                  <!-- Concentration, carried over from the retired Vault
-                       section. It is computed from the balances in the table
-                       directly above it, which is where it belongs: it was two
-                       screens away from them. -->
-                  <p class="alp__vd">
-                    <span>
-                      <b x-text="onTarget(s.key) ? 'On target.' : trackingErrorLabel(s.key) + '.'"></b>
-                      <span x-text="trackingErrorLine(s.key)"></span>
-                    </span>
-                  </p>
-                  <p class="alp__hold-note" x-show="concentrationLine()" x-cloak x-text="concentrationLine()"></p>
                   <p class="alp__hold-note">
                     <a class="alp__nav" :href="vaultSubjectHref">Vault sessions and holdings &rarr;</a>
                   </p>
@@ -913,12 +883,6 @@ table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color:
 /* An ERC-4626 share symbol is case-carrying: rmUSDC is not RMUSDC. */
 .alp__vtok { letter-spacing: 0.02em; }
 
-/* the verdict line. This is the ONE place the vault comparison spends colour:
-   Beacon as a point for off target, Pool for on it. The drift column itself
-   stays in reading ink, because a deviation has no good direction. */
-.alp__vd { margin: 1rem 0 0; font-size: 0.875rem; color: var(--color-text-muted); line-height: 1.55; }
-.alp__vd b { color: var(--color-text); font-weight: 500; }
-
 /* the holdings disclosure */
 .alp__hold { margin-top: 1rem; border: 1px solid var(--color-border); }
 .alp__hold-sum {
@@ -944,31 +908,6 @@ table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color:
   display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 1rem;
   margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.6rem;
   color: var(--color-text-muted);
-}
-
-/* the latest recommendation */
-.alp__latest {
-  margin-top: 1.5rem;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface); padding: 1rem 1.25rem 1.25rem;
-}
-.alp__latest-meta {
-  display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; font-family: var(--font-mono);
-  font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted);
-}
-.alp__latest-date { color: var(--color-text); }
-.alp__latest-flag { color: var(--color-text-soft); }
-.alp__latest-line { margin: 0.75rem 0 1rem; color: var(--color-text-soft); font-size: 0.875rem; line-height: 1.6; }
-.alp__latest-line--pend { color: var(--color-text-muted); }
-.alp__latest .alp__eyebrow { margin-bottom: 0.5rem; }
-.alp__why-links {
-  display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin: 1rem 0 0;
-  padding-top: 0.75rem; border-top: 1px solid var(--color-border);
-}
-/* The aggregator's sentence, under the actions it explains. */
-.alp__latest-why {
-  margin: -0.5rem 0 1rem; color: var(--color-text-muted); font-size: 0.8rem;
-  line-height: 1.6;
 }
 
 /* tables */

@@ -43,7 +43,9 @@
 //     every row reads flat until something can write another.
 import { api, ROUTES } from "../../lib/api.js";
 import { PALETTE, CATEGORICAL } from "../../lib/chart-theme.js";
-import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID, isPublishedAllocationSession } from "../../lib/allocation-subject.js";
+
+
+import { VAULT_SUBJECT_ID } from "../../lib/allocation-subject.js";
 
 // The ERC-4626 vault on Base. A public on-chain address, source of truth
 // frontend/public/skill.md.
@@ -81,13 +83,6 @@ const ADAPTER_DISPLAY = {
   morpho: { label: "Gauntlet USDC Prime", type: "Curated vault", managed: true },
   compound: { label: "Compound III USDC", type: "Pooled market", managed: false },
 };
-
-// Sessions are served newest first (swarm_sessions ORDER BY date DESC), so the
-// allocation's latest published session is normally on the first page. Walk a
-// bounded number of pages rather than one, because a run of sessions on the
-// other portfolios can push it off page one, and stop the moment it is found.
-const SESSION_PAGE_SIZE = 100;
-const MAX_SESSION_PAGES = 4;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -151,8 +146,6 @@ export function registerAllocationView(Alpine) {
   Alpine.data("allocationView", () => ({
     economics: null,    // GET /api/dashboards/vault-economics
     allocationFw: null, // GET /api/dashboards/allocation
-    latest: null,       // newest published session on the allocation subject
-    sessionsFailed: false,
     loading: true,
     // The sleeve under the pointer, so the donut and its legend light together.
     hotKey: null,
@@ -175,31 +168,9 @@ export function registerAllocationView(Alpine) {
       await Promise.allSettled([
         fetchInto("economics", ROUTES.dashboards.vaultEconomics),
         fetchInto("allocationFw", ROUTES.dashboards.allocation),
-        this.loadLatestSession(),
       ]);
       this.loading = false;
       this.$nextTick(() => this.draw());
-    },
-
-    // The one line the page needs from the swarm: what the allocation's most
-    // recent published session came out with. `sessionsFailed` is tracked
-    // separately from "there is no session", because a dead feed and an empty
-    // history are different facts and the page says which one it is.
-    async loadLatestSession() {
-      let cursor = null;
-      try {
-        for (let page = 0; page < MAX_SESSION_PAGES; page += 1) {
-          const query = { limit: String(SESSION_PAGE_SIZE) };
-          if (cursor) query.cursor = cursor;
-          const res = await api.get(ROUTES.swarm.sessions, query);
-          const hit = (res.sessions || []).find(isPublishedAllocationSession);
-          if (hit) { this.latest = hit; return; }
-          cursor = res.nextCursor || null;
-          if (!cursor) return;
-        }
-      } catch (_) {
-        this.sessionsFailed = true;
-      }
     },
 
     fmtUsd2(v) {
@@ -209,7 +180,6 @@ export function registerAllocationView(Alpine) {
     },
     // A percentage already expressed in points (4.16 → "4.16%").
     fmtPct(v) { return v == null || !isFinite(v) ? "—" : Number(v).toFixed(2) + "%"; },
-    fmtPct1(v) { return v == null || !isFinite(v) ? "—" : Number(v).toFixed(1) + "%"; },
     // A fraction 0..1 from the API (apy7d) → "4.20%".
     fmtRate(v) { return v == null || !isFinite(v) ? "—" : (Number(v) * 100).toFixed(2) + "%"; },
     // A target weight at one decimal with a trailing ".0" trimmed: 95%, 14.3%.
@@ -346,8 +316,8 @@ export function registerAllocationView(Alpine) {
     // questions the donut cannot: how many names are inside, and whether
     // anything is actually holding this weight.
     sleeveLegendLine(s) {
-      const names = this.constituents(s.key).length;
-      const count = `${names} name${names === 1 ? "" : "s"}`;
+      const n = this.constituents(s.key).length;
+      const count = `${n} asset${n === 1 ? "" : "s"}`;
       if (!this.sleeveHasVault(s.key)) return `${count} · vault pending`;
       const te = this.sleeveTrackingError(s.key);
       return te == null
@@ -456,14 +426,6 @@ export function registerAllocationView(Alpine) {
       return `${rows.filter((row) => this.sleeveHasVault(row.key)).length} of ${rows.length}`;
     },
     deployedLabel() { return this.fmtUsd2(this.tvlUsd()); },
-    // Concentration, carried over from the retired Vault section. It belongs
-    // beside the holdings it is computed from rather than in a section of its
-    // own two screens below them.
-    concentrationLine() {
-      const pct = this.largestVenuePct();
-      if (pct == null) return "";
-      return `Largest single venue ${this.fmtPct1(pct)}, across ${this.venueCount()}.`;
-    },
     vaultToken() { return VAULT_TOKEN; },
     // The 7-day figure the vault reports, and NOT a net one. Every yield on
     // this page is before the 0.25% exit fee (note 1), so calling this "net"
@@ -536,27 +498,6 @@ export function registerAllocationView(Alpine) {
       const te = this.sleeveTrackingError(key);
       return te == null ? "—" : `${te.toFixed(2)} pts off target`;
     },
-    onTarget(key) {
-      const te = this.sleeveTrackingError(key);
-      return te != null && te < 0.5;
-    },
-    // The sentence under the table. It names the reason rather than restating
-    // the number, and the reason is computed: whichever policy names the vault
-    // does not hold are the ones carrying the gap.
-    trackingErrorLine(key) {
-      const te = this.sleeveTrackingError(key);
-      if (te == null) return "Vault holdings unavailable.";
-      if (te < 0.5) return "";
-      const missing = this.sleeveVaultRows(key)
-        .filter((r) => !r.idle && !r.inVault && r.policy > 0)
-        .map((r) => r.label);
-      if (!missing.length) return "The venues held are not at their target weights.";
-      const names = missing.length === 1
-        ? missing[0]
-        : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`;
-      const isAre = missing.length === 1 ? "is" : "are";
-      return `${names} ${isAre} in the policy, not in the vault.`;
-    },
     vaultRowBalance(r) {
       return r.balance == null ? "—" : Number(r.balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     },
@@ -586,24 +527,29 @@ export function registerAllocationView(Alpine) {
     // slices focusable would add tab stops that reach nothing new. The slices
     // keep their <title>, which is what a screen reader reads.
     // A constituent tooltip has to earn the hover, so it does NOT restate the
-    // name and weight printed two lines below the bar. It adds the two figures
-    // that are not on screen: what this name is worth against the whole book,
-    // and, where a vault holds it, what the vault actually has against what the
-    // policy says. The second pair otherwise lives inside a collapsed panel.
+    // name and weight printed two lines below the bar. It adds the figures
+    // that are not on screen: the same target read against the whole
+    // allocation rather than against its sleeve, and, where a vault holds the
+    // asset, what it actually holds and the gap. The last pair otherwise lives
+    // inside a collapsed panel.
+    //
+    // The labels separate TARGET from HELD, because that is the distinction a
+    // reader is here to make. "In sleeve / of allocation / in vault" put three
+    // percentages of three different denominators under three labels that all
+    // read as the same kind of thing.
     constituentTip(sleeve, item, index) {
       const hue = itemColour(index);
-      const rows = [["In sleeve", this.fmtPct(item.target)]];
+      const rows = [["Target in sleeve", this.fmtPct(item.target)]];
       const ofAlloc = (Number(item.target) * Number(sleeve.target)) / 100;
-      rows.push(["Of allocation", this.fmtPct(ofAlloc)]);
+      rows.push(["Target overall", this.fmtPct(ofAlloc)]);
       const held = this.sleeveVaultRows(sleeve.key).find((r) => r.policy === item.target && r.label.toLowerCase().includes(String(item.label).toLowerCase().split(" ")[0]))
         || this.sleeveVaultRows(sleeve.key)[index];
       if (this.sleeveHasVault(sleeve.key) && held && held.actual != null) {
-        rows.push(["In vault", this.fmtPct(held.actual)]);
+        rows.push(["Held in vault", this.fmtPct(held.actual)]);
         const d = held.actual - held.policy;
         rows.push(["Drift", (d >= 0 ? "+" : "−") + Math.abs(d).toFixed(2)]);
       }
-      return this.tipMarkup(hue, item.label, rows,
-        this.sleeveHasVault(sleeve.key) ? null : "No vault holds this sleeve yet.");
+      return this.tipMarkup(hue, item.label, rows);
     },
     tipMarkup(hue, title, rows, foot) {
       let out = `<b><i style="background:${hue}"></i>${title}</b>`;
@@ -641,7 +587,7 @@ export function registerAllocationView(Alpine) {
     tipHtml(row) {
       const rows = [["Target", this.fmtPct(row.target)]];
       const items = this.constituents(row.key);
-      if (items.length) rows.push(["Names", String(items.length)]);
+      if (items.length) rows.push(["Assets", String(items.length)]);
       if (this.sleeveHasVault(row.key)) {
         const te = this.sleeveTrackingError(row.key);
         if (te != null) rows.push(["Off target", `${te.toFixed(2)} pts`]);
@@ -677,12 +623,10 @@ export function registerAllocationView(Alpine) {
       });
     },
 
-    // The donut's slices get the tooltip: a wedge carries no text, so the
-    // tooltip is the only thing that names it. The legend row beside it is
-    // already the name, the count and the weight in reading type, so hovering
-    // it lights its slice and nothing more. A tooltip there was a second copy
-    // of the row it was covering.
-    hoverLegend(key) { this.hotKey = key; this.dimTo(key); },
+    // A slice and its legend row are the same object, so they hover alike: the
+    // tooltip, and the dim on everything else. Both entry points, one handler.
+    hoverSleeve(row, ev) { this.showTip(row, ev); this.dimTo(row.key); },
+    leaveSleeve() { this.hideTip(); this.dimTo(null); },
     showTip(row, ev) {
       this.tipAt(this.tipHtml(row), ev);
       this.hotKey = row.key;
@@ -718,62 +662,6 @@ export function registerAllocationView(Alpine) {
       if (shares == null || price == null) return "—";
       return `${Number(shares).toLocaleString("en-US", { maximumFractionDigits: 2 })} rmUSDC at `
         + `$${Number(price).toFixed(4)} a share, spot`;
-    },
-    // Concentration, computed from the live balances: what one venue failing
-    // would cost. Not a drawdown percentage — a venue failing is the risk the
-    // yield is being paid for.
-    largestVenuePct() {
-      const total = this.adaptersTotalUsd();
-      if (!total) return null;
-      const largest = Math.max(...this.fundedAdapters().map((a) => Number(a.balanceUsd)));
-      return (largest / total) * 100;
-    },
-    venueCount() { return this.fundedAdapters().length; },
-
-    latestDate() { return this.latest ? longDay(this.latest.date) : "—"; },
-    latestHref() {
-      const s = this.latest;
-      if (!s) return this.historyHref;
-      return s.id
-        ? `/swarm/sessions/${encodeURIComponent(s.id)}`
-        : `/swarm/${s.date}/${encodeURIComponent(s.subjectId || ALLOCATION_SUBJECT_ID)}`;
-    },
-    latestQuorum() {
-      const q = this.latest?.swarmRecommendation?.quorum;
-      return q ? `${q.submitted} of ${q.active} took part` : "";
-    },
-    // No vector, and the page says why rather than printing a blank. The
-    // subject is typed `position_actions`, so meanTakeWeights() never runs for
-    // it: what a session publishes is a set of actions and a rationale.
-    //
-    // The ACTIONS are the recommendation and lead. The rationale follows them
-    // as the supporting sentence rather than standing in for them: the
-    // aggregator generates it, and it restates the stance split, the quorum
-    // and the percentile, two of which are already on the line above it.
-    latestLine() {
-      const rec = this.latest?.swarmRecommendation;
-      if (!rec) return "";
-      const acts = (Array.isArray(rec.actions) ? rec.actions : []).filter((a) => a && a.action);
-      if (acts.length) return acts.map((a) => `${a.action} ${a.token}`).join(" · ");
-      return rec.rationale ? String(rec.rationale) : "";
-    },
-    // Rendered under the line, and only when it is not already the line.
-    latestRationale() {
-      const rec = this.latest?.swarmRecommendation;
-      if (!rec?.rationale) return "";
-      const text = String(rec.rationale);
-      return text === this.latestLine() ? "" : text;
-    },
-    latestConfidence() {
-      const c = this.latest?.swarmRecommendation?.meanConfidence;
-      return Number.isFinite(Number(c)) ? `${Math.round(Number(c) * 100)}% mean confidence` : "";
-    },
-    // What the page can say about a missing line, without guessing which of
-    // the two reasons applies.
-    latestFallback() {
-      if (this.sessionsFailed) return "Session feed unavailable.";
-      if (!this.latest) return "No session has published a recommendation yet.";
-      return "No recommendation in this session.";
     },
 
     // ── the hero donut (hand-authored inline SVG; no chart dependency) ──────
@@ -829,8 +717,6 @@ export function registerAllocationView(Alpine) {
         const path = svg("path", {
           d: donutArc(CX, CY, OUTER, INNER, a0, a1), fill: colours[row.key], "data-mark": "series",
         });
-        path.appendChild(label(document.createElementNS(SVG_NS, "title"),
-          `${row.name}: ${this.fmtPctTrim(row.target)} target, ${this.sleeveState(row)}`));
         // The hover layer the pie charts on the old page had, kept. Dimming
         // the others rather than lifting the hovered one, so the ring keeps
         // its geometry and only its emphasis moves.
