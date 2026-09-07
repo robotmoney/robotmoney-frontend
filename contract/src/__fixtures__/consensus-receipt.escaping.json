@@ -19,7 +19,7 @@
     "bullish": 0
   },
   "judge": {
-    "rationale": "Réserve & liquidité — the stable-yield sleeve stays <60% while 保守的な運用 keeps the protocol sleeve intact.\nSecond line, after a real newline. After U+2028. Rockets 🚀 are astral-plane; a\\backslash and a \"quoted phrase\" are here too, and 5 > 3 & 2 < 4. That was a non-breaking space.",
+    "rationale": "Réserve & liquidité — the stable-yield sleeve stays <60% while 保守的な運用 keeps the protocol sleeve intact.\nSecond line, after a real newline. After U+2028. After U+2029. Rockets 🚀 are astral-plane; a\\backslash and a \"quoted phrase\" are here too, and 5 > 3 & 2 < 4. That was a non-breaking space.",
     "disagreements": [
       {
         "topic": "Réserve size — <stable-yield> & the 6 > 5 threshold 🚀",

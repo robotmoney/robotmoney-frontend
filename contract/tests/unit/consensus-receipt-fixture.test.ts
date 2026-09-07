@@ -137,6 +137,51 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     }
   });
 
+  test("number_serialization is published PROSE, and states two SEPARATE guarantees, output form and input value (issue #823)", () => {
+    // WHY THIS IS STATED SEPARATELY FROM THE BYTE-LEVEL TEST ABOVE. That test
+    // proves every number CURRENTLY IN A GOLDEN is a bare integer; it says
+    // nothing about what happens to an input that is not one, and the spec
+    // itself had no clause naming the rule at all — json_serialization covers
+    // whitespace, string_escaping covers strings, and nothing covered numbers.
+    expect(spec.number_serialization).toContain("bare decimal integer");
+    expect(spec.number_serialization).toContain("no exponent");
+    expect(spec.number_serialization).toContain("negative zero");
+    expect(spec.number_serialization).toContain("assertIntegers");
+    expect(spec.number_serialization).toMatch(/\^\(0\|-\?\[1-9\]\\d\*\)\$/);
+
+    // GUARANTEE 1 (input VALUE, not textual form): the reference refuses a
+    // field whose parsed value is not a safe integer at all, by name,
+    // wherever a number appears in the receipt — not only participation_bps.
+    const nonIntegerParticipation = applyPatch(valid, { "/quorum/participation_bps": 6666.5 });
+    expect(() => canonicalizeReceipt(nonIntegerParticipation, spec)).toThrow(/safe integer/);
+
+    const nonIntegerWeight = structuredClone(valid);
+    nonIntegerWeight.weights[0].weight_bps = 1250.5;
+    expect(() => canonicalizeReceipt(nonIntegerWeight, spec)).toThrow(/safe integer/);
+
+    const nonIntegerRevision = structuredClone(valid);
+    nonIntegerRevision.analyst_signatures[0].revision = 1.5;
+    expect(() => canonicalizeReceipt(nonIntegerRevision, spec)).toThrow(/safe integer/);
+
+    // GUARANTEE 2 (output FORM, not input refusal), and the boundary the two
+    // are NOT the same thing: RFC 8259 treats 1250, 1250.0 and 1.25e3 as the
+    // identical number, and JSON.parse has already collapsed all three to the
+    // identical JavaScript Number 1250 before this module ever sees the
+    // value — so a receipt whose source JSON text spelled the field as
+    // "1250.0" or "1.25e3" is NOT refused (Number.isSafeInteger(1.25e3) is
+    // true, same as Number.isSafeInteger(1250)); it canonicalizes cleanly,
+    // and identically, to the bare form "1250". The guarantee this contract
+    // actually makes about those spellings is that they are indistinguishable
+    // downstream and the output is always the bare form — never that the
+    // input spelling itself is checked or refused, which is impossible at
+    // this JSON-parse boundary.
+    const dotForm = JSON.parse(JSON.stringify(valid).replace('"weight_bps":1250', '"weight_bps":1250.0'));
+    const expForm = JSON.parse(JSON.stringify(valid).replace('"weight_bps":1250', '"weight_bps":1.25e3'));
+    expect(canonicalizeReceipt(dotForm, spec)).toBe(canonicalizeReceipt(valid, spec));
+    expect(canonicalizeReceipt(expForm, spec)).toBe(canonicalizeReceipt(valid, spec));
+    expect(canonicalizeReceipt(valid, spec)).toContain('"weight_bps":1250');
+  });
+
   test("weights is the last v1 field and omission preserves the old byte shape", () => {
     expect(spec.field_order.at(-1)).toBe("weights");
     expect(spec.optional_append_only_fields).toEqual(["weights"]);
@@ -288,6 +333,7 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
       "consensus-receipt.invalid.json",
       "consensus-receipt.refused-variants.json",
       "consensus-receipt.bucket-vault-map.json",
+      "consensus-receipt.bps-conversion.conformance.json",
       "consensus-receipt.valid.canonical.txt",
       "consensus-receipt.escaping.canonical.txt",
     ]) {
@@ -343,7 +389,7 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
 
     // Raw, never escaped: every one of these is a byte a defaulting
     // implementation would have written as \uXXXX.
-    for (const raw of ["—", "保守的な運用", "через", "&", "<", ">", " ", "\u{1F680}", " ", "é"]) {
+    for (const raw of ["—", "保守的な運用", "через", "&", "<", ">", " ", " ", "\u{1F680}", " ", "é"]) {
       expect(escapingGolden).toContain(raw);
     }
     // Escaped, and only these: quote, backslash, and the C0 short forms.
@@ -365,7 +411,46 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect(spec.string_escaping.escaped).toContain("U+0000-U+001F");
     expect(spec.string_escaping.raw).toContain("raw UTF-8");
     expect(spec.string_escaping.raw).toContain("U+2028");
+    expect(spec.string_escaping.raw).toContain("U+2029");
     expect(spec.json_serialization).not.toContain("JSON.stringify");
+  });
+
+  test("both line-terminator separators are in the escaping fixture, not only U+2028 (issue #823)", () => {
+    // WHY BOTH ARE NEEDED, NOT JUST ONE. Go's encoding/json escapes U+2028 AND
+    // U+2029 by default, so a fixture carrying only U+2028 would already catch
+    // Go — but it would NOT catch a hypothetical implementation that escaped
+    // only U+2029 and left U+2028 raw: that implementation reproduces a
+    // U+2028-only golden byte-for-byte and diverges on the first receipt whose
+    // free text carries a U+2029. Both are raw UTF-8 here, never \\u-escaped.
+    expect(escaping.judge.rationale).toContain("\u2028");
+    expect(escaping.judge.rationale).toContain("\u2029");
+    expect(escapingGolden).toContain("\u2028");
+    expect(escapingGolden).toContain("\u2029");
+    expect(escapingGolden).not.toContain("\\u2028");
+    expect(escapingGolden).not.toContain("\\u2029");
+  });
+
+  test("the lone-surrogate clause and the reference agree on which guarantee is doing the work (issue #823)", () => {
+    // THE GAP THIS CLOSES. The clause used to say "an assembler must refuse
+    // rather than escape" a lone surrogate, but canonicalizeReceipt() never
+    // enforced that — JSON.stringify silently ESCAPES an unpaired surrogate as
+    // \udXXX, bytes no other language reproduces. Rather than make the
+    // reference refuse (a behavior change to shipped code this issue does not
+    // ask for), the clause is restated to say which guarantee actually holds:
+    // it is a caller obligation, met upstream by Postgres jsonb rejecting a
+    // lone surrogate before the value ever reaches this module.
+    expect(spec.string_escaping.well_formed_input).toContain("does NOT enforce this itself");
+    expect(spec.string_escaping.well_formed_input).toContain("jsonb");
+    expect(spec.string_escaping.well_formed_input).toContain("22P02");
+    expect(spec.string_escaping.well_formed_input).toContain("CALLER obligation");
+
+    // The behavior the clause now documents, exercised rather than merely
+    // asserted: a lone surrogate reaching canonicalizeReceipt is escaped, not
+    // refused, exactly as the clause now says.
+    const loneSurrogate = structuredClone(valid);
+    loneSurrogate.judge.rationale = "lone \ud800 surrogate";
+    const bytes = canonicalizeReceipt(loneSurrogate, spec);
+    expect(bytes).toContain("\\ud800");
   });
 
   // ── canonical bytes are a function of the session ─────────────────────────
@@ -400,6 +485,24 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     for (const receipt of [valid, validNoWeights, escaping]) {
       expect(receipt.created_at).toMatch(pattern);
     }
+  });
+
+  test("created_at's MEANING is stated, not only its form (issue #823)", () => {
+    // Schema 1.0 pinned the SHAPE of created_at exhaustively — the pattern
+    // above — and never said what the value denotes. loadAssemblyInput fills
+    // it from publication wall-clock time, not the session's own date, so a
+    // consumer reading it as "when the committee decided" would be wrong for
+    // every receipt published after its session closed.
+    expect(schema.properties.created_at.description).toContain("PUBLISHED");
+    expect(schema.properties.created_at.description).toContain("not the session's own date");
+    expect(spec.timestamp_serialization.meaning).toContain("PUBLICATION WALL-CLOCK TIME");
+    expect(spec.timestamp_serialization.meaning).toContain("publishConsensusReceipt");
+    // The purity claim this narrows: assembleConsensusReceipt is pure, but its
+    // INPUT carries an ambient clock, so "regenerating from the same take set
+    // reproduces the committed bytes" (issue #754) holds for a frozen input
+    // fixture and not for a live rebuild at a later moment.
+    expect(spec.timestamp_serialization.meaning).toContain("pure function");
+    expect(spec.timestamp_serialization.meaning).toContain("#754");
   });
 
   test("hex is lowercase everywhere, so one session has one digest", () => {
