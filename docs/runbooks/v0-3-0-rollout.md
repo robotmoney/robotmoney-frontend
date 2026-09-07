@@ -266,6 +266,7 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0045_chain_address_floors.sql` | `CREATE TABLE chain_address_floors` — the per-address earliest-valid-block floor cache (issue #760) | Additive, new table |
 | `0046_asset_prices.sql` | `CREATE TABLE asset_prices`, `CREATE TABLE asset_price_floors`; seed `asset_prices` from existing `live`/`seed`-provenance rows in `wallet_balance_samples`/`wallet_sleeve_samples` with an explicit conflict rule; seed a proven floor for the three `usdc`-pinned assets (issue #849, D41 phases 1/2/5) | Additive DDL **plus a one-time data seed**; no existing read path changes |
 | `0047_swarm_session_subject_name_backfill.sql` | `UPDATE swarm_sessions SET subject_name = swarm_subjects.name` for every session whose `subject_name` disagrees with its subject's current name — the historical catch-up for renames made before `updateSubjectAdmin` started keeping the two in sync (issue #779) | **No DDL — a pure, idempotent data write** |
+| `0048_swarm_judge_third_party_flag.sql` | `ALTER TABLE swarm_judge_config ADD COLUMN third_party_enabled boolean NOT NULL DEFAULT false;` + a `COMMENT` — the admin-flippable, no-redeploy gate for third-party (graduated-member) judging, layered onto the `mode`/`min_takes`/`model` row `0039` seeds (issue #796) | Additive column with a constant default, catalog-only on PG 11+; no historical row is rewritten |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
@@ -891,6 +892,7 @@ for this release:
          0045_chain_address_floors.sql
          0046_asset_prices.sql
          0047_swarm_session_subject_name_backfill.sql
+         0048_swarm_judge_third_party_flag.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql

@@ -3298,6 +3298,50 @@ also foreign-keyed, so an attribution cannot name an identity that never
 existed. The later third-party transport/rollout flag remains #796's concern;
 this decision supplies only the identity and fail-closed authorization seam.
 
+### Amendment (issue #796) — the third-party gate is global, and identity stays out of receipt schema 1.0
+
+**Decision 1: the gate is one global boolean, not a per-party allow-list.**
+`swarm_judge_config.third_party_enabled` (migration 0048) sits beside `mode`
+on the same singleton row, defaulting `false`. It answers "is third-party
+judging permitted at all", independent of #812's `mode`, which answers "does
+the judge run and does its opinion reach a session". A `judgeMemberId`
+judging is refused `third_party_judging_disabled` — a 403, distinct from
+`mode=off`'s 409 `judge_disabled` — and writes nothing while the flag is
+false; the built-in worker's judgements (no `judgeMemberId`) are unaffected
+either way. Read fresh inside `judgeSession()`'s write transaction, same as
+#812's role/status check, so an admin turning it off while a model call is in
+flight is observed before any row can land.
+
+**Why global.** The confirmed rollout plan (2026-08-30) is a single in-house
+judge first, "with a feature flag, activated by an admin, before third-party
+judges are allowed at all" — the plan's own words describe one class-wide
+switch, not a roster of individually-toggled parties. A per-party table would
+also be schema with no current referent: #812 gives exactly one identity
+mechanism (a member graduated to the `judge` role), and nothing today calls
+`judgeSession()` with a `judgeMemberId` over an authenticated transport — see
+`docs/architecture.md` §9.7.2. Building per-party granularity now would be
+designing for a second rollout stage that has not started, against a shape
+that stage may not even want (it might be "which model", "which
+organization", or something else entirely). Rejected until a second
+third-party judge actually needs to be distinguished from a first one.
+
+**Decision 2: judge identity does not enter consensus receipt schema 1.0.**
+#796 named this "more urgent than the rest of this issue" and asked for it to
+be decided inside PR #788's fix round, while schema 1.0 was still
+unreleased and the marginal cost of adding a field was near zero. PR #788
+merged (issue #754) without adding one — the `judge` block it shipped is
+`{rationale, disagreements, release_safety, source, mode}`, naming no judging
+party. `schema_version` is immutable within a version once published
+(`docs/architecture.md` §9.7's schema/version policy), so this is not a
+question this decision can still answer "yes, cheaply" to: the cheap window
+named in #796's own text has closed. Recorded rather than left open: judge
+identity in the receipt is deferred to a future schema 2.0, tracked
+separately from this issue, and does not block turning
+`third_party_enabled` on — a receipt from a third-party-judged session is
+exactly as attributable (or not) as one from the in-house worker today, by
+the append-only `swarm_session_judgements.judged_by` row rather than by the
+receipt itself.
+
 ---
 
 ## D43 — CORS, not same-origin, for the eventual frontend/backend repo split (refines D10, D11, D13; issue #871)

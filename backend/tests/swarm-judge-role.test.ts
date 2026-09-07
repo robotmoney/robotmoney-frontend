@@ -63,7 +63,9 @@ test("grant/revoke preserves the existing credential and makes judging immediate
   const whileJudge = await session("while_judge");
   expect((await submit(candidate, whileJudge.date, whileJudge.subjectId)).error).toBe("judge_role_cannot_submit_takes");
 
-  await setJudgeConfig({ mode: "shadow" });
+  // Issue #796's flag gates ALL judgeMemberId judgements, so these #812 tests
+  // of the role/status checks must turn it on to still reach those checks.
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
   const judged = await aggregated("judge_allowed");
   const allowed = await judgeSession(judged.session.id, { judgeMemberId: candidate.id, transport });
   expect(allowed.ok).toBe(true);
@@ -87,7 +89,9 @@ test("grant/revoke preserves the existing credential and makes judging immediate
 });
 
 test("the in-house worker and a graduated member both leave named judgement parties", async () => {
-  await setJudgeConfig({ mode: "shadow" });
+  // Issue #796's flag gates ALL judgeMemberId judgements, so these #812 tests
+  // of the role/status checks must turn it on to still reach those checks.
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
   const inHouse = await aggregated("in_house");
   expect((await judgeSession(inHouse.session.id, { transport })).ok).toBe(true);
   expect((await latestJudgement(inHouse.session.id) as any).judged_by).toBe("robotmoney-in-house");
@@ -102,7 +106,9 @@ test("the in-house worker and a graduated member both leave named judgement part
 });
 
 test("a non-judge is refused before a judgement row is written", async () => {
-  await setJudgeConfig({ mode: "shadow" });
+  // Issue #796's flag gates ALL judgeMemberId judgements, so these #812 tests
+  // of the role/status checks must turn it on to still reach those checks.
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
   const candidate = await member("ungraduated");
   const s = await aggregated("refusal");
   const refused = await judgeSession(s.session.id, { judgeMemberId: candidate.id, transport });

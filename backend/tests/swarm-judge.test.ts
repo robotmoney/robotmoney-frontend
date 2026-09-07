@@ -1462,7 +1462,7 @@ test("the mode is read ONCE and passed down, so flipping the switch mid-run cann
   expect((await getJudgeConfig()).mode).toBe("off");
 
   const passed = await judgeSession(session.id, {
-    config: { mode: "shadow", minTakes: 3, model: null, updatedAt: null },
+    config: { mode: "shadow", minTakes: 3, model: null, thirdPartyEnabled: false, updatedAt: null },
     transport: fixedTransport(goodAnswer(members[0].id, members[1].id)),
   });
   expect(passed.ok).toBe(true);

@@ -245,7 +245,7 @@ export async function handleSwarmAdmin(
     if (m === "GET") return fromResult(await admin.getJudgeConfigAdmin());
     if (m === "POST") {
       const b = (await readJsonObject(req)) ?? {};
-      const patch: { mode?: "off" | "shadow" | "enforce"; minTakes?: number; model?: string | null } = {};
+      const patch: { mode?: "off" | "shadow" | "enforce"; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean } = {};
       if (b.mode !== undefined) {
         if (b.mode !== "off" && b.mode !== "shadow" && b.mode !== "enforce") {
           return { status: 400, body: { error: "mode must be off|shadow|enforce" } };
@@ -264,8 +264,17 @@ export async function handleSwarmAdmin(
         else if (typeof b.model === "string" && b.model.trim() !== "" && b.model.length <= 200) patch.model = b.model.trim();
         else return { status: 400, body: { error: "model must be a non-empty string (max 200 chars), or null" } };
       }
-      if (patch.mode === undefined && patch.minTakes === undefined && patch.model === undefined) {
-        return { status: 400, body: { error: "mode, minTakes or model required" } };
+      if (b.thirdPartyEnabled !== undefined) {
+        // Issue #796. The admin-flippable, no-redeploy gate for third-party
+        // (graduated-member) judging, independent of `mode` — the built-in
+        // worker's judgements are unaffected either way.
+        if (typeof b.thirdPartyEnabled !== "boolean") {
+          return { status: 400, body: { error: "thirdPartyEnabled must be a boolean" } };
+        }
+        patch.thirdPartyEnabled = b.thirdPartyEnabled;
+      }
+      if (patch.mode === undefined && patch.minTakes === undefined && patch.model === undefined && patch.thirdPartyEnabled === undefined) {
+        return { status: 400, body: { error: "mode, minTakes, model or thirdPartyEnabled required" } };
       }
       return fromResult(await admin.setJudgeConfigAdmin(patch));
     }
