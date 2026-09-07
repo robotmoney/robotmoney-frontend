@@ -3301,7 +3301,7 @@ this decision supplies only the identity and fail-closed authorization seam.
 ### Amendment (issue #796) — the third-party gate is global, and identity stays out of receipt schema 1.0
 
 **Decision 1: the gate is one global boolean, not a per-party allow-list.**
-`swarm_judge_config.third_party_enabled` (migration 0047) sits beside `mode`
+`swarm_judge_config.third_party_enabled` (migration 0048) sits beside `mode`
 on the same singleton row, defaulting `false`. It answers "is third-party
 judging permitted at all", independent of #812's `mode`, which answers "does
 the judge run and does its opinion reach a session". A `judgeMemberId`

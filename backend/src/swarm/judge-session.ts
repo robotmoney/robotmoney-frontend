@@ -37,7 +37,7 @@ export interface JudgeConfig {
    * independent of `mode` — the built-in worker (no `judgeMemberId`) is
    * unaffected either way. Same "database row, not env var, no redeploy to
    * flip" posture as `mode` (migration 0039's own reasoning, extended by
-   * migration 0047).
+   * migration 0048).
    */
   thirdPartyEnabled: boolean;
   updatedAt: string | null;

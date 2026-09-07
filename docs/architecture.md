@@ -2023,7 +2023,7 @@ member id, foreign-keyed so the column can never name an identity that never
 existed.
 
 **The gate is a second, independent switch — not a third value on `mode`**
-(issue #796). `swarm_judge_config.third_party_enabled` (migration 0047) is a
+(issue #796). `swarm_judge_config.third_party_enabled` (migration 0048) is a
 plain boolean beside `mode`/`min_takes`/`model`, defaulting `false` on the
 same "off by default, opt-in on a live swarm" shipped posture `mode` already
 has. It answers a different question than `mode` does: `mode` decides *whether
