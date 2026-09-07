@@ -231,8 +231,7 @@
       <h2 class="alp__h2">Inside each sleeve</h2>
     </div>
     <p class="alp__sub">
-      Target weights inside each sleeve, and the vault holding them where one
-      is live.
+      Target weights inside each sleeve, and the vault holding them when available.
     </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
@@ -731,6 +730,11 @@ table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color:
 .alp__tip em {
   font-style: normal; text-transform: uppercase; letter-spacing: 0.1em;
   font-size: 0.85em; color: var(--color-text-muted);
+}
+/* The rule between two denominators. */
+.alp__tip .alp__tip-sep {
+  margin-top: 0.35rem; padding-top: 0.35rem;
+  border-top: 1px solid var(--color-border);
 }
 .alp__tip .alp__tip-soft {
   display: block; margin-top: 0.5rem; color: var(--color-text-muted);

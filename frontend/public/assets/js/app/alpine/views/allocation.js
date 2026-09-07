@@ -539,21 +539,33 @@ export function registerAllocationView(Alpine) {
     // read as the same kind of thing.
     constituentTip(sleeve, item, index) {
       const hue = itemColour(index);
+      // Order carries the arithmetic. Drift is held against the target IN THE
+      // SLEEVE, so those three sit together and read down as a subtraction:
+      // 25.00 held against 0.00 is the −25.00 underneath it. "Target overall"
+      // is the same asset measured against a different denominator and answers
+      // a different question, so it goes below a rule rather than between the
+      // two figures whose difference the reader is being shown.
       const rows = [["Target in sleeve", this.fmtPct(item.target)]];
-      const ofAlloc = (Number(item.target) * Number(sleeve.target)) / 100;
-      rows.push(["Target overall", this.fmtPct(ofAlloc)]);
       const held = this.sleeveVaultRows(sleeve.key).find((r) => r.policy === item.target && r.label.toLowerCase().includes(String(item.label).toLowerCase().split(" ")[0]))
         || this.sleeveVaultRows(sleeve.key)[index];
       if (this.sleeveHasVault(sleeve.key) && held && held.actual != null) {
         rows.push(["Held in vault", this.fmtPct(held.actual)]);
         const d = held.actual - held.policy;
-        rows.push(["Drift", (d >= 0 ? "+" : "−") + Math.abs(d).toFixed(2)]);
+        // "pts" because it is a difference between two percentages, not a
+        // third percentage of something.
+        rows.push(["Drift", (d >= 0 ? "+" : "−") + Math.abs(d).toFixed(2) + " pts"]);
       }
+      const ofAlloc = (Number(item.target) * Number(sleeve.target)) / 100;
+      rows.push(["Target overall", this.fmtPct(ofAlloc), true]);
       return this.tipMarkup(hue, item.label, rows);
     },
+    // A row's third element starts a new group: a hairline above it, because
+    // the figure below the rule is measured against a different denominator
+    // from the ones above it.
     tipMarkup(hue, title, rows, foot) {
       let out = `<b><i style="background:${hue}"></i>${title}</b>`;
-      out += rows.map(([k, v]) => `<span><em>${k}</em>${v}</span>`).join("");
+      out += rows.map(([k, v, sep]) =>
+        `<span${sep ? ' class="alp__tip-sep"' : ""}><em>${k}</em>${v}</span>`).join("");
       if (foot) out += `<span class="alp__tip-soft">${foot}</span>`;
       return out;
     },
