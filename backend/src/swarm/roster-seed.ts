@@ -86,12 +86,15 @@ export interface RosterSeedMember {
   /**
    * 'member' submits takes, 'judge' authors consensus judgements (migration
    * 0043, issue #812). EXPLICIT on every row, not defaulted: the column's own
-   * DEFAULT is 'member', and leaving this field out here would make a re-seed
-   * silently REASSERT that default over an operator's later role grant —
-   * seedLiveRoster() overwrites every profile column on every run, including
-   * this one, so a role an admin promoted through setMemberRoleAdmin would
-   * revert on the next boot unless the row it is compared against already
-   * carries the intended role.
+   * DEFAULT is 'member', and leaving this field out here would make a newly
+   * INSERTed row silently fall back to that default instead of the role this
+   * manifest states.
+   *
+   * seedLiveRoster() writes `role` only on INSERT, unlike the rest of the
+   * profile columns. Those are overwritten on every run because the manifest
+   * is their source of truth, but role is not: once a row exists, an admin
+   * may have since promoted or demoted it through setMemberRoleAdmin, and a
+   * re-seed must never revert that grant.
    */
   role: "member" | "judge";
   name: string;
@@ -170,7 +173,9 @@ export const LIVE_ROSTER_HANDLES: readonly string[] = LIVE_ROSTER.map((m) => m.h
 // profile columns ARE overwritten on every run, because the manifest is the
 // source of truth for them and a re-run is how corrected copy reaches a live
 // deployment. status is forced to 'active' for the same reason — this list IS
-// the seated roster.
+// the seated roster. role is the one exception: it is written on INSERT only,
+// so an admin's later grant/revocation through setMemberRoleAdmin survives a
+// re-seed instead of reverting to the manifest's role (see RosterSeedMember.role).
 //
 // Idempotent: re-running changes nothing once the rows match.
 export async function seedLiveRoster(): Promise<number> {
@@ -201,7 +206,6 @@ export async function seedLiveRoster(): Promise<number> {
               ${sql.json(jsonValue(m.biases))}, ${m.mode}, ${m.operator}, ${sql.json(jsonValue(m.avatar))})
       ON CONFLICT (handle) DO UPDATE SET
         status = 'active',
-        role = EXCLUDED.role,
         name = EXCLUDED.name,
         tagline = EXCLUDED.tagline,
         lens = EXCLUDED.lens,
