@@ -110,6 +110,11 @@ export function registerAdminSwarmSession(Alpine) {
     inForce: null,
     judgementsError: null,
     expandedJudgement: null,
+    // Admin member list (issue #922), fetched best-effort purely to resolve a
+    // judgement's judgedByMemberId to a display name in judgeIdentity() below
+    // — never required for the roster/aggregate/lifecycle data above, which is
+    // why it is not part of load()'s Promise.all.
+    members: [],
 
     fmtUtc, fmtLocal,
 
@@ -198,6 +203,29 @@ export function registerAdminSwarmSession(Alpine) {
         this.inForce = null;
         this.judgementsError = e.message;
       }
+      // Admin member list, best-effort (issue #922) — the SAME "must not blank
+      // a page whose real data loaded fine" shape as load()'s public take
+      // fetch above. Only used to resolve judgedByMemberId to a display name;
+      // judgeIdentity() falls back to the raw judgedBy string when this list
+      // is empty or does not carry the id, so a failure here degrades display
+      // only, never the judgements panel itself.
+      try {
+        const membersRes = await api.adminGet(ROUTES.swarm.admin.members, this._token());
+        this.members = Array.isArray(membersRes?.members) ? membersRes.members : [];
+      } catch (_) {
+        this.members = [];
+      }
+    },
+    // Who judged (issue #918/#922), resolved to a display name when
+    // judgedByMemberId names a member on the admin roster — mirrors
+    // swarm-subject.js's memberLabel() shape — else the raw judgedBy string:
+    // 'robotmoney-in-house' for the anonymous default, or an id the roster no
+    // longer carries.
+    judgeIdentity(j) {
+      if (!j || !j.judgedBy) return "—";
+      if (!j.judgedByMemberId) return j.judgedBy;
+      const m = this.members.find((x) => x.id === j.judgedByMemberId);
+      return m ? `${m.name} (${m.id})` : j.judgedBy;
     },
     toggleJudgement(id) {
       this.expandedJudgement = this.expandedJudgement === id ? null : id;

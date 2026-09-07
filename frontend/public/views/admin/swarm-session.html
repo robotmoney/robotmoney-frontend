@@ -168,6 +168,7 @@
         <template x-if="inForce">
           <dl class="adm-meta-grid" data-testid="judgement-in-force">
             <dt>In force</dt><dd><span x-text="inForce.mode"></span> · <span x-text="judgementEffect(inForce)"></span></dd>
+            <dt>Judged by</dt><dd data-testid="judgement-in-force-judged-by" x-text="judgeIdentity(inForce)"></dd>
             <dt>Prose</dt><dd x-text="judgementIntegrity(inForce)"></dd>
             <dt>Model</dt><dd x-text="inForce.model || '—'"></dd>
             <dt>Takes</dt><dd><span x-text="inForce.takeCount"></span> (min <span x-text="inForce.minTakes"></span>)</dd>
@@ -175,12 +176,13 @@
         </template>
         <div class="rm-table-scroll" x-show="judgements.length > 0" data-testid="judgements-table">
           <table class="rm-table adm-table">
-            <thead><tr><th>Recorded</th><th>Mode</th><th>Effect</th><th>Prose</th><th></th></tr></thead>
+            <thead><tr><th>Recorded</th><th>Mode</th><th>Judged by</th><th>Effect</th><th>Prose</th><th></th></tr></thead>
             <tbody>
               <template x-for="j in judgements" :key="j.id">
                 <tr :data-testid="'judgement-row-' + j.id">
                   <td x-text="fmtUtc(j.createdAt)"></td>
                   <td x-text="j.mode"></td>
+                  <td :data-testid="'judgement-judged-by-' + j.id" x-text="judgeIdentity(j)"></td>
                   <td x-text="judgementEffect(j)"></td>
                   <td x-text="judgementIntegrity(j)"></td>
                   <td>
@@ -192,7 +194,7 @@
               </template>
               <template x-for="j in judgements" :key="j.id + '-detail'">
                 <tr x-show="expandedJudgement === j.id" :data-testid="'judgement-detail-' + j.id">
-                  <td colspan="5">
+                  <td colspan="6">
                     <p><strong>Rationale:</strong> <span x-text="j.opinion?.rationale || '—'"></span></p>
                     <p><strong>Release safety:</strong> <span x-text="j.opinion?.release_safety?.release || '—'"></span></p>
                     <ul class="adm-bullet-list">

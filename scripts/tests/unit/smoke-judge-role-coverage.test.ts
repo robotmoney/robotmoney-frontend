@@ -34,6 +34,11 @@ describe("runJudgeRoleCoverage (scripts/lib/swarm/session.ts) — the shared gra
   const GRANT = 'setMemberRole(memberId, "judge"';
   const FLIP_SHADOW = 'setJudgeMode("shadow"';
   const COUNT_JUDGEMENTS = "countJudgements(judged.sessionId";
+  // Issue #922: a SECOND assertion alongside #845's row-count check — the
+  // landed judgement must NAME the member this call granted the role to, not
+  // merely exist.
+  const IDENTITY_READ = "latestJudgedByMemberId(judged.sessionId";
+  const IDENTITY_CHECK = "judgedByMemberId !== memberId";
   const RESTORE_MODE = "setJudgeMode(restoreJudgeMode";
   const REVOKE = 'setMemberRole(memberId, "member"';
 
@@ -46,6 +51,8 @@ describe("runJudgeRoleCoverage (scripts/lib/swarm/session.ts) — the shared gra
       // The session under test is whatever `runJudgedSession()` returns — a
       // caller-supplied callback, not a literal call this function makes.
       count: src.indexOf(COUNT_JUDGEMENTS),
+      identityRead: src.indexOf(IDENTITY_READ),
+      identityCheck: src.indexOf(IDENTITY_CHECK),
       restore: src.indexOf(RESTORE_MODE),
       revoke: src.indexOf(REVOKE),
     };
@@ -63,10 +70,18 @@ describe("runJudgeRoleCoverage (scripts/lib/swarm/session.ts) — the shared gra
     expect(o.flip).toBeLessThan(o.count);
   });
 
-  test("restore and revoke happen AFTER the judgement count is read, inside a finally", () => {
-    expect(o.count).toBeLessThan(o.restore);
-    expect(o.count).toBeLessThan(o.revoke);
-    expect(sessionSrc.slice(o.count, o.restore)).toContain("} finally {");
+  test("the identity check runs AFTER the row-count check, alongside it rather than replacing it", () => {
+    expect(o.count).toBeLessThan(o.identityRead);
+    expect(o.identityRead).toBeLessThan(o.identityCheck);
+    // COUNT_JUDGEMENTS itself must still be a real, standalone assertion —
+    // this fails if a future edit folds the count check away entirely.
+    expect(sessionSrc).toContain("if (!judgementCount || judgementCount < 1)");
+  });
+
+  test("restore and revoke happen AFTER both assertions, inside a finally", () => {
+    expect(o.identityCheck).toBeLessThan(o.restore);
+    expect(o.identityCheck).toBeLessThan(o.revoke);
+    expect(sessionSrc.slice(o.identityCheck, o.restore)).toContain("} finally {");
   });
 
   test("control: the grader fails on a definition with the grant removed", () => {
@@ -74,10 +89,16 @@ describe("runJudgeRoleCoverage (scripts/lib/swarm/session.ts) — the shared gra
     expect(order(broken).grant).toBe(-1);
     expect(sessionSrc.length).toBeGreaterThan(1000); // the scan is over real text
   });
+
+  test("control: the grader fails on a definition with the identity check removed", () => {
+    const broken = sessionSrc.replace(IDENTITY_CHECK, IDENTITY_CHECK.replace("judgedByMemberId", "somethingElse"));
+    expect(order(broken).identityCheck).toBe(-1);
+  });
 });
 
-describe("session.ts main() wires session 2 through runJudgeRoleCoverage (issue #845)", () => {
-  const CALL = 'runJudgeRoleCoverage("draco"';
+describe("session.ts main() wires session 2 through runJudgeRoleCoverage, targeting themis (issues #845, #922)", () => {
+  const CALL = 'runJudgeRoleCoverage("themis"';
+  const OPERATOR_CALL = 'setMemberOperator("themis", "robotmoney"';
   const SESSION2 = "runSession(subjects[1], 2,";
 
   test("main() calls it, immediately wrapping the session-2 runSession call", () => {
@@ -90,6 +111,20 @@ describe("session.ts main() wires session 2 through runJudgeRoleCoverage (issue 
     // runJudgeRoleCoverage's callback makes.
     const between = sessionSrc.slice(callAt, session2At);
     expect(between).not.toContain("runSession(");
+  });
+
+  test("main() sets themis's operator to 'robotmoney' BEFORE granting her the judge role (issue #922)", () => {
+    const operatorAt = sessionSrc.indexOf(OPERATOR_CALL);
+    const callAt = sessionSrc.indexOf(CALL);
+    expect(operatorAt).toBeGreaterThan(-1);
+    expect(operatorAt).toBeLessThan(callAt);
+  });
+
+  test("targets 'themis' specifically — the handle #918's judgeSessionAdmin resolves — not an arbitrary role=judge member", () => {
+    expect(sessionSrc.indexOf(CALL)).toBeGreaterThan(-1);
+    // The old #845 target must actually be gone from this call site, not just
+    // coexisting with the new one.
+    expect(sessionSrc.indexOf('runJudgeRoleCoverage("draco"')).toBe(-1);
   });
 
   test("control: fails if the call is renamed away", () => {

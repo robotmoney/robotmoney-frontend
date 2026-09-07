@@ -1397,6 +1397,13 @@ function toJudgementAdmin(
     dropped,
     partiallyDegraded: dropped.positions > 0 || dropped.disagreements > 0,
     opinion: r.opinion ?? null,
+    // Who judged (issue #918/#922): a free-text label plus, when the judge is a
+    // known swarm member (e.g. the seeded Themis identity), the member id it
+    // resolved to. `judgedByMemberId` is null for the anonymous in-house
+    // default ('robotmoney-in-house') and for any judgement recorded before
+    // migration 0043 added the columns.
+    judgedBy: (r.judged_by as string | null) ?? null,
+    judgedByMemberId: (r.judged_by_member_id as string | null) ?? null,
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
     // Reconciliation against the session as it stands NOW (issue #806).
     carriedBySession,

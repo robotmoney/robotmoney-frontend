@@ -2279,6 +2279,10 @@ test("the admin read path returns a session's judgement history and names which 
   expect(j.dropped).toEqual({ positions: 0, disagreements: 0 });
   expect(j.takeCount).toBe(3);
   expect(j.minTakes).toBe(3);
+  // Unseeded database (no seedLiveRoster() call) — the anonymous in-house
+  // default, round-tripped through the admin projection (issue #922).
+  expect(j.judgedBy).toBe("robotmoney-in-house");
+  expect(j.judgedByMemberId).toBeNull();
   expect(typeof j.promptHash).toBe("string");
   expect(typeof j.inputsDigest).toBe("string");
   expect(typeof j.opinion.rationale).toBe("string");
@@ -2711,6 +2715,16 @@ test("#918 judgeSessionAdmin names Themis when the roster is seeded", async () =
   const row = await latestJudgement(session.id) as any;
   expect(row.judged_by).toBe(themisId);
   expect(row.judged_by_member_id).toBe(themisId);
+
+  // The admin read path (issue #922) must carry the same identity through its
+  // camelCased projection, not just the raw column — this is what the panel
+  // actually reads.
+  const admin918 = await admin.getSessionJudgementsAdmin(session.id) as any;
+  expect(admin918.ok).toBe(true);
+  expect(admin918.inForce.judgedBy).toBe(themisId);
+  expect(admin918.inForce.judgedByMemberId).toBe(themisId);
+  expect(admin918.judgements[0].judgedBy).toBe(themisId);
+  expect(admin918.judgements[0].judgedByMemberId).toBe(themisId);
 });
 
 test("#918 the worker-swarm cron path names Themis the same way the direct admin call does", async () => {
@@ -2746,4 +2760,9 @@ test("#918 an unseeded environment degrades safely: judged_by stays 'robotmoney-
   const row = await latestJudgement(session.id) as any;
   expect(row.judged_by).toBe("robotmoney-in-house");
   expect(row.judged_by_member_id).toBeNull();
+
+  // Same regression proof through the admin projection (issue #922).
+  const adminUnseeded = await admin.getSessionJudgementsAdmin(session.id) as any;
+  expect(adminUnseeded.inForce.judgedBy).toBe("robotmoney-in-house");
+  expect(adminUnseeded.inForce.judgedByMemberId).toBeNull();
 });

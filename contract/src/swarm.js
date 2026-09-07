@@ -42,7 +42,12 @@ export const SWARM_TAKE_REVISION_CAP = 5;
 // an occasional no-show. Kept deterministic (no Math.random / Date) so the
 // hermetic e2e drivers and any goldens stay reproducible: the roster outcome is
 // fixed (draco absent; athena/boreas/cygnus present).
-export const DEMO_NO_SHOWS = /** @type {const} */ (["draco"]);
+//
+// `themis` joined the list for issue #922: a judge-role member cannot submit a
+// take (judge-session.ts refuses a judgeMemberId with a take already in the
+// session), so the smoke-local judge persona has to be a permanent no-show,
+// exactly like draco, rather than a member the roster ever expects a take from.
+export const DEMO_NO_SHOWS = /** @type {const} */ (["draco", "themis"]);
 
 /**
  * Whether a demo swarm member attends a session (the demo no-show rule).
