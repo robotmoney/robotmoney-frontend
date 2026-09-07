@@ -336,9 +336,11 @@ test("the donut draws one arc per funded sleeve, on the categorical palette, not
   // shows the remainder rather than being rescaled to look complete.
   await expect(donut.locator("circle")).toHaveCount(1);
 
-  // The hole carries the state of the POLICY. "1 USDC / DEPOSIT" answered a
-  // question nobody was asking and framed a policy as a transaction.
-  await expect(donut).toContainText("UNCHANGED SINCE");
+  // The hole carries what the ring adds up to, which is the one fact the ring
+  // cannot state for itself: it is drawn to the full 360, so a policy adding
+  // to less than 100 leaves an arc unfilled and the hole names the remainder.
+  await expect(donut).toContainText("ALLOCATED");
+  await expect(donut).toContainText("100%");
 
   // The legend keys every sleeve, funded or not, and a sleeve at zero keeps
   // its hue: it holds nothing, which is not the same as having no identity.
@@ -408,10 +410,9 @@ test("the change ledger reports was, now and a flat move for every sleeve", asyn
   // The swarm's reading sits under the numbers it explains, with the id kept
   // so /allocation#latest-recommendation still lands.
   await expect(page.locator("#latest-recommendation")).toBeVisible();
-  // The Note column carries whether the weight is actually implemented, which
-  // is the one thing the was/now/change columns cannot say.
-  await expect(rows.first()).toContainText("Vault live");
-  await expect(rows.nth(1)).toContainText("Vault pending");
+  // Four columns and no fifth. The Note column carried vault status, which
+  // each sleeve's own card states beside the vault it is about.
+  await expect(page.locator("#what-changed thead th")).toHaveCount(4);
   await expectNoBrowserErrors(errors);
 });
 
@@ -432,9 +433,10 @@ test("the latest recommendation is the session's rationale, and the page says wh
   await expect(block).toContainText("no change");
   await expect(block.locator("a").first())
     .toHaveAttribute("href", `/swarm/sessions/${session.id}`);
-  // The two links the section owes a reader who wants the reasoning behind a
-  // move: how the regime is read, and every session that reviewed this.
-  await expect(block.locator('a[href="/regime"]')).toBeVisible();
+  // The reasoning behind a move is the mechanism, and it is stated once, at
+  // the top of the page, above the weights it produces.
+  await expect(page.locator('#how-weights-are-set a[href="/regime"]')).toBeVisible();
+  await expect(page.locator('#how-weights-are-set a[href="/swarm"]')).toBeVisible();
   await expect(page.locator('#what-changed a[href="/allocation/history"]')).toBeVisible();
   // Schema names, table names and route behaviour are not the reader's
   // business. The page says what is true about the allocation; how the backend
@@ -531,7 +533,9 @@ test("the state chip reads seeded whatever source and managed say", async ({ pag
     await page.goto("/index.html");
     await navigate(page, "/allocation");
     await expect(page.locator(".alp__chip")).toHaveText("seeded");
-    await expect(page.locator(".alp__force-line")).toContainText("Unchanged since");
+    // The date the weights have been in force is a fact about the weights, so
+    // it is a rail item and not a sentence restating the rail beside it.
+    await expect(page.locator(".alp__meta")).toContainText("In force since");
   }
 });
 
@@ -698,3 +702,4 @@ test("on a phone the fan becomes a list and nothing scrolls the page sideways", 
   expect(overflow).toBeLessThanOrEqual(1);
   await expectNoBrowserErrors(errors);
 });
+

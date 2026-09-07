@@ -58,23 +58,51 @@
     <div class="a2-hero__inner">
       <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
       <p class="a2-hero__lede">
-        Target weights, set by the swarm. Depositor capital only; the
+        What every deposit buys: four sleeves, weighted by the swarm and in
+        force until it publishes a change. Depositor capital only; the
         protocol's own wallets are reported separately.
       </p>
     </div>
   </header>
+
+  <!-- ── § HOW THE WEIGHTS ARE SET ────────────────────────────────────────
+       Above the donut deliberately: who sets a number is the first thing a
+       reader needs about a number they are being asked to trust. This is the
+       mechanism only, and it is true of every session. What one session
+       decided is a fact about that session and stays under the table it
+       moved. -->
+  <section class="alp__how" id="how-weights-are-set">
+    <p class="alp__eyebrow">How the weights are set</p>
+    <ol class="alp__steps">
+      <li>
+        <b>Regime</b>
+        <span>A daily risk-on / risk-off composite over the macro and on-chain
+          panels. Every take starts from the same reading.</span>
+      </li>
+      <li>
+        <b>Takes</b>
+        <span>Proposers file a signed position with its reasoning, its sources
+          and a confidence. Validators score those takes rather than filing a
+          view of their own. Every seat is a proposer today.</span>
+      </li>
+      <li>
+        <b>Consensus</b>
+        <span>The window closes, the takes aggregate into one recommendation,
+          and it publishes with its quorum and mean confidence. Only that moves
+          these weights.</span>
+      </li>
+    </ol>
+    <p class="alp__how-links">
+      <a class="alp__nav" href="/regime">Regime &rarr;</a>
+      <a class="alp__nav" href="/swarm">The swarm &rarr;</a>
+    </p>
+  </section>
 
   <!-- ── § ALLOCATION ─────────────────────────────────────────────────────
        id="allocation" is load-bearing: RM-115 names it as a citable anchor,
        and it belongs on the weights themselves rather than on a comparison
        table about them. -->
   <div class="alp__force" id="allocation">
-    <div class="alp__force-head">
-      <p class="alp__eyebrow">Weights in force</p>
-      <span class="alp__chip" :class="isSwarmManaged() ? 'alp__chip--live' : ''" x-text="stateChip()">seeded</span>
-    </div>
-    <p class="alp__force-line" x-text="unchangedLine()"></p>
-
     <!-- The meta rail. It replaced a four-tile stat block whose two right-hand
          tiles read "not yet published" in display type: a figure that does not
          exist does not earn the top of a page, and it is one footnote below
@@ -82,12 +110,12 @@
          to, which is the only sleeve that has one. -->
     <div class="alp__meta">
       <span>In force since <b x-text="allocationAsOfLabel()">—</b></span>
+      <span>Weights <b class="alp__chip" x-text="stateChip()">seeded</b></span>
       <span>Vaults <b x-text="vaultsLiveLabel()">—</b></span>
       <span>Deployed <b x-text="deployedLabel()">—</b></span>
       <span>Chain <b x-text="vaultChain()">—</b></span>
-      <a class="alp__nav alp__nav--addr" :href="vaultHref()" target="_blank" rel="noopener">
-        <span x-text="shortAddress()"></span> on BaseScan
-      </a>
+      <a class="alp__nav--addr" :href="vaultHref()" target="_blank" rel="noopener"
+         aria-label="Vault contract on BaseScan">Contract <b x-text="shortAddress()">—</b></a>
     </div>
 
     <!-- One deposit, split into the sleeves it is allocated to. A donut, not
@@ -124,9 +152,8 @@
       <ul class="alp__legend-list">
         <template x-for="s in sleeves()" :key="s.key">
           <li :class="[s.target === 0 ? 'dim' : '', hotKey === s.key ? 'hot' : '']"
-              @pointerenter="hoverSleeve(s, $event)"
-              @pointermove="showTip(s, $event)"
-              @pointerleave="leaveSleeve()">
+              @pointerenter="hoverLegend(s.key)"
+              @pointerleave="hoverLegend(null)">
             <i class="alp__swatch" data-mark="series" :style="sleeveSwatch(s)"></i>
             <div>
               <b x-text="s.name"></b>
@@ -199,7 +226,7 @@
     <div class="alp__tblwrap alp__fade" x-show="hasTargets()" x-cloak>
       <table class="alp__tbl alp__tbl--led">
         <thead>
-          <tr><th>Sleeve</th><th>Was</th><th>Now</th><th>Change</th><th class="note">Note</th></tr>
+          <tr><th>Sleeve</th><th>Was</th><th>Now</th><th>Change</th></tr>
         </thead>
         <tbody>
           <template x-for="r in changeRows()" :key="r.key">
@@ -218,7 +245,6 @@
                   <i x-text="changeGlyph(r.delta)" aria-hidden="true"></i><span x-text="changeLabel(r.delta)"></span>
                 </span>
               </td>
-              <td class="note" x-text="r.note"></td>
             </tr>
           </template>
         </tbody>
@@ -246,7 +272,6 @@
       </template>
       <p class="alp__why-links">
         <a class="alp__nav" x-show="latest" :href="latestHref()">Read the session &rarr;</a>
-        <a class="alp__nav" href="/regime">Regime &rarr;</a>
       </p>
     </div>
 
@@ -262,10 +287,6 @@
     <div class="alp__sec-head">
       <h2 class="alp__h2">Inside each sleeve</h2>
     </div>
-    <p class="alp__sub">
-      Agent Tokens lists the allocation's own names. The deposit skill buys a
-      different set.
-    </p>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
       Target weights unavailable.
@@ -283,7 +304,7 @@
               <i :style="sleeveSwatch(s)"></i><b x-text="s.name"></b>
             </span>
             <span class="alp__card-w">
-              <b x-text="fmtPctTrim(s.target)"></b><small>of the book</small>
+              <b x-text="fmtPctTrim(s.target)"></b><small>of allocation</small>
             </span>
           </div>
           <div class="alp__card-body">
@@ -322,11 +343,10 @@
                  the kind of fabrication a reader would act on. -->
             <template x-if="sleeveHasVault(s.key)">
               <div class="alp__vrail">
-                <span class="alp__vchip"><i></i>Vault live</span>
-                <code x-text="vaultToken()"></code>
-                <span class="alp__vstat">Chain<b x-text="vaultChain()"></b></span>
-                <span class="alp__vstat">APY · 7-day<b x-text="vaultApyLabel()"></b></span>
-                <span class="alp__vstat">TVL<b x-text="fmtUsd2(tvlUsd())"></b></span>
+                <span>Vault <b class="alp__vtok" x-text="vaultToken()"></b></span>
+                <span>Chain <b x-text="vaultChain()"></b></span>
+                <span>TVL <b x-text="fmtUsd2(tvlUsd())"></b></span>
+                <span>Net APY · 7-day <b x-text="vaultApyLabel()"></b></span>
               </div>
             </template>
 
@@ -509,15 +529,32 @@
   font-weight: 700;
 }
 
+/* ── how the weights are set ───────────────────────────────────────────── */
+/* An <ol> because it is a sequence and the order is the content. No numerals:
+   three steps reading down a column are already ordered, and a counter here
+   would be decoration on a page that is carrying enough. */
+.alp__how {
+  margin: 2rem 0 2.5rem; padding: 1.25rem 0 0;
+  border-top: 1px solid var(--color-border);
+}
+.alp__steps {
+  list-style: none; margin: 1rem 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.25rem 2rem;
+}
+.alp__steps li { display: block; }
+.alp__steps b {
+  display: block; margin-bottom: 0.4rem; font-size: 0.875rem; font-weight: 700;
+  color: var(--color-text);
+}
+.alp__steps span {
+  display: block; max-width: 30rem;
+  color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6;
+}
+.alp__how-links { display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1.5rem 0 0; }
+
 /* ── weights in force ──────────────────────────────────────────────────── */
 .alp__force { border-bottom: 1px solid var(--color-border); padding-bottom: 2rem; }
-.alp__force-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-/* Two heights reserved from the first paint, because both of these hold copy
-   that arrives late and both sit ABOVE the figure, so any growth shoves it
-   down. The figure's own reservation covers the skeleton and the real block
-   alike. Values are the measured loaded heights: one line of copy beside a
-   300px donut above 680px, three lines above a stacked donut below it. */
-.alp__force-line { margin: 0.5rem 0 0; min-height: 1.6rem; color: var(--color-text-soft); font-size: 0.9rem; }
 /* The slot, not the figure. Skeleton, figure and empty state are three
    elements taking turns in the same place, so a reservation on any one of them
    is gone the moment another is showing — which is exactly when the swap
@@ -528,15 +565,10 @@
    skeleton is shorter than the figure, which is the stacked phone layout. */
 .alp__figslot { display: grid; min-height: 21.7rem; }
 .alp__figslot > * { grid-area: 1 / 1; align-self: start; }
-@media (max-width: 679px) {
-  .alp__force-line { min-height: 4.7rem; }
-  .alp__figslot { min-height: 43rem; }
-}
-.alp__chip {
-  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.12em; padding: 0.25rem 0.5rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border-light); color: var(--color-text-muted);
-}
+@media (max-width: 679px) { .alp__figslot { min-height: 43rem; } }
+/* Provenance is a fact about the weights, so it sits in the rail with the
+   other facts about them rather than in a pill of its own. */
+.alp__chip { text-transform: none; }
 /* A swarm-managed policy would be marked by a Beam RULE, not by a cyan figure:
    the chip's text stays a reading grey and only its edge carries the hue.
    Nothing writes the provenance the chip reads yet, so today it never applies
@@ -598,15 +630,10 @@
   font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
   letter-spacing: 0.12em; color: var(--color-text-muted);
 }
-.alp__meta b { display: block; margin-top: 0.25rem; }
-
-.alp__meta {
-  display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; margin: 1rem 0 0;
-  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted);
+.alp__meta b {
+  display: block; margin-top: 0.25rem; color: var(--color-text); font-weight: 500;
+  text-transform: none; letter-spacing: 0.02em; font-size: 0.875rem;
 }
-.alp__meta b { display: block; margin-top: 0.25rem; color: var(--color-text); font-weight: 500; text-transform: none; letter-spacing: 0.02em; font-size: 0.875rem; }
-.alp__meta > a { align-self: end; }
 /* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
 
 
@@ -686,8 +713,24 @@ table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color:
 }
 .alp__nav:hover, .alp__nav:focus-visible { color: var(--color-text); border-bottom-color: var(--color-accent); }
 .alp__nav:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
-/* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
-.alp__nav--addr { text-transform: none; letter-spacing: 0.04em; }
+/* The contract is one more fact about the weights, so it reads as a rail item
+   and not as a link sitting in a row of labels. Beam arrives on hover, which
+   is the treatment every non-navigational link on this page now takes. */
+.alp__nav--addr {
+  color: inherit; text-decoration: none;
+  transition: color 150ms var(--ease-out-expo);
+}
+/* An address is case-sensitive: EIP-55 checksums live in its capitalisation.
+   inline-block so the rule under it hugs the address instead of running the
+   width of the track, and a step down in size so 18 characters sit inside one
+   track rather than over the edge of the rail. */
+.alp__nav--addr b {
+  display: inline-block; max-width: 100%; font-size: 0.8rem; letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--color-border-light);
+  transition: border-color 150ms var(--ease-out-expo);
+}
+.alp__nav--addr:hover b, .alp__nav--addr:focus-visible b { border-bottom-color: var(--color-accent); }
+.alp__nav--addr:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 
 /* the answer strip: the figures a section exists to give */
 /* What a depositor keeps is money, so it is Pool green like the figure beside
@@ -782,175 +825,6 @@ table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color:
   font-family: var(--font-sans); font-size: 0.8rem; line-height: 1.5;
 }
 
-/* The meta rail that replaced it: one line of facts, none of which is a
-   figure that does not exist yet. */
-/* A GRID, not a wrapping flex row. How many lines a flex row wraps to depends
-   on how long its values are, so this rail grew the moment "—" became
-   "$231.51" and shoved the figure below it down: 0.18 of layout shift on a
-   phone, all of it from one line of text getting longer. Fixed tracks make the
-   row count a function of the viewport alone. */
-.alp__meta {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-  gap: 0.75rem 1.5rem; margin: 1rem 0 0;
-  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted);
-}
-.alp__meta b { display: block; margin-top: 0.25rem; }
-
-.alp__meta {
-  display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; margin: 1rem 0 0;
-  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted);
-}
-.alp__meta b { display: block; margin-top: 0.25rem; color: var(--color-text); font-weight: 500; text-transform: none; letter-spacing: 0.02em; font-size: 0.875rem; }
-.alp__meta > a { align-self: end; }
-/* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
-
-
-/* The two figures with no route behind them, as one line rather than two
-   tiles. Beacon marks it, as a POINT and nothing else. */
-.alp__pending { margin: 1.25rem 0 0; font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.55; }
-.alp__pending b { color: var(--color-text-soft); font-weight: 500; }
-
-/* provenance badges */
-.alp__prov { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
-.alp__badge {
-  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.12em; padding: 0.25rem 0.5rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border-light); color: var(--color-text-muted);
-}
-.alp__badge--stale, .alp__badge--backfilled { color: var(--color-warm); border-color: var(--color-warm); }
-.alp__cell-badge {
-  display: inline-block; margin-left: 0.5rem; font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--color-warm);
-}
-/* Warm is for PROVENANCE: stale, caught up late. "not held" is ordinary data,
-   already said by the dashes and by the drift, so it stays quiet. */
-.alp__cell-badge--quiet { color: var(--color-text-muted); }
-
-/* ── sections ──────────────────────────────────────────────────────────── */
-.alp__sec { margin-top: 3rem; }
-.alp__sec-head {
-  display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
-  gap: 0.5rem 1rem; margin-bottom: 0.25rem;
-}
-.alp__h2 {
-  font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
-  font-size: clamp(1.15rem, 3vw, 1.9rem); line-height: 1.05; letter-spacing: -0.01em;
-  margin: 0; color: var(--color-text);
-}
-/* No max-width. A section description runs the width of the section it
-   describes: a measure-capped paragraph in a full-width band leaves a hole
-   on the right that reads as an unfinished layout rather than as a choice. */
-.alp__sub { margin: 0 0 1.25rem; color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6; }
-.alp__sub b { color: var(--color-text-soft); font-weight: 500; }
-.alp__sub code {
-  font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
-  background: var(--color-surface); padding: 0.25rem 0.25rem;
-}
-.alp__sub--after { margin: 1.25rem 0 0; }
-.alp__empty { color: var(--color-text-muted); font-size: 0.875rem; margin: 0 0 1.25rem; }
-/* TWO link treatments on this page, and only two.
-   .alp__link  — inline, inside prose or a table row. It inherits the type of
-                 whatever it sits in, so a link in a mono table reads as table
-                 text; only the colour and the Beam-at-rest rule mark it.
-   .alp__nav   — a place to go: the section action, the addresses, the row of
-                 links under the last review. Mono, tracked, quiet until you
-                 reach for it, and Beam arrives on hover as a LINE.
-   Before this there were three, and .alp__link rendered three different ways
-   depending on what its container happened to impose on it. */
-.alp__link {
-  color: var(--color-accent); text-decoration: none;
-  border-bottom: 1px solid var(--color-accent-line);
-  transition: border-color 150ms var(--ease-out-expo);
-}
-.alp__link:hover { border-bottom-color: var(--color-accent); }
-/* A link inside a data table is a ROW NAME first. Cyan text there competes
-   with the series chip beside it and reads as interface sitting in a column of
-   figures, so the name keeps reading ink and Beam arrives only on hover. */
-table.alp__tbl .alp__link {
-  color: var(--color-text); border-bottom-color: var(--color-border-light);
-}
-table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color: var(--color-accent); }
-.alp__nav {
-  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.13em; color: var(--color-text-soft); text-decoration: none;
-  /* Beam at rest, which is the token's whole reason for existing: a rule that
-     marks a control without shouting. At border-light these read as labels
-     rather than as links. */
-  border-bottom: 1px solid var(--color-accent-line); padding-bottom: 0.25rem;
-  transition: color 150ms var(--ease-out-expo), border-color 150ms var(--ease-out-expo);
-}
-.alp__nav:hover, .alp__nav:focus-visible { color: var(--color-text); border-bottom-color: var(--color-accent); }
-.alp__nav:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
-/* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
-.alp__nav--addr { text-transform: none; letter-spacing: 0.04em; }
-
-/* the answer strip: the figures a section exists to give */
-/* What a depositor keeps is money, so it is Pool green like the figure beside
-   it. It was warm, which is a second saturated accent doing work the label
-   already does. */
-/* charts */
-/* ── motion, and the skeleton that removes the layout shift ─────────────── */
-/* 100/300/500: 150ms for feedback, 300ms for a layout change like the
-   disclosure. Exponential easing, never bounce. Only opacity and
-   grid-template-rows move; nothing here animates width, height or margin. */
-.alp__fade { animation: alp-in 300ms var(--ease-out-expo) both; }
-@keyframes alp-in { from { opacity: 0; } to { opacity: 1; } }
-
-/* Placeholder blocks, still and quiet. They carry the row count and the
-   geometry so the page does not resize under the reader when the feeds land.
-   No shimmer: a pulsing block is a decoration this brand does not spend, and a
-   still one reads as "not here yet" just as clearly. */
-.alp__sk { pointer-events: none; }
-.alp__sk-b { display: block; background: var(--color-surface-light); }
-.alp__skring {
-  width: 100%; max-width: 300px; aspect-ratio: 1; margin-inline: auto;
-  border-radius: 50%; border: 33px solid var(--color-surface-light);
-}
-.alp__skrows { display: grid; gap: 0; }
-.alp__skrow {
-  display: grid; grid-template-columns: 0.7rem 1fr; gap: 0 0.8rem; align-items: start;
-  padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--color-border);
-}
-.alp__skrow:first-child { border-top: 1px solid var(--color-border); }
-.alp__skrow i { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; }
-.alp__skrow b { width: 11rem; height: 0.95rem; margin: 0.1rem 0 0.5rem; }
-.alp__skrow span { width: 16rem; height: 0.72rem; margin-bottom: 0.35rem; }
-.alp__skled { border: 1px solid var(--color-border); }
-.alp__skline { height: 2.6rem; border-bottom: 1px solid var(--color-border); }
-.alp__skline:last-child { border-bottom: 0; }
-.alp__skline--head { height: 2.15rem; background: var(--color-surface); border-bottom-color: var(--color-border-light); }
-.alp__skcards { display: grid; gap: 1rem; }
-.alp__skcard { height: 16.6rem; border: 1px solid var(--color-border); background: var(--color-deep); }
-
-/* The vault disclosure. `details` cannot transition on its own — its children
-   start at display:none, so a transition has no value to leave from and the
-   panel snaps open. The toggle is intercepted instead: open first, then run
-   the row from 0fr to 1fr, and on close run it down before the element
-   actually closes. Rows, not height: grid-template-rows is the one height-ish
-   property that does not force a layout pass every frame. */
-.alp__hold-anim {
-  display: grid; grid-template-rows: 0fr;
-  transition: grid-template-rows 300ms var(--ease-out-expo);
-}
-.alp__hold.is-open .alp__hold-anim { grid-template-rows: 1fr; }
-/* Three levels, and each one has a job: the grid row animates, the clip hides
-   the overflow, the body carries the padding. Put the padding on the clipped
-   element instead and the row never collapses past it — the panel rests about
-   29px open, which reads as a rendering bug. */
-.alp__hold-clip { overflow: hidden; min-height: 0; }
-.alp__off i { display: inline-block; font-style: normal; transition: transform 300ms var(--ease-out-expo); }
-.alp__hold.is-open .alp__off i { transform: rotate(180deg); }
-.alp__hold > summary { transition: color 150ms var(--ease-out-expo); }
-.alp__hold > summary:hover { color: var(--color-text); }
-
-@media (prefers-reduced-motion: reduce) {
-  .alp__fade { animation: none; }
-  .alp__hold-anim, .alp__off i, .alp__link, .alp__nav, .alp__hold-sum,
-  .alp__card, .alp__stk > span, .alp__names > span { transition: none !important; }
-}
-
 
 /* the seam banner — the window between the reference series and today */
 /* Beacon, as a POINT: a 6px mark, not a glyph set at type size. */
@@ -1018,30 +892,26 @@ table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color:
   font-variant-numeric: tabular-nums;
 }
 
-/* the vault rail: chain, yield and size, or the absence of a contract */
+/* The vault rail: the same four-fact rail the weights carry at the top of the
+   page, in the same grid, so a reader learns one object and reads it twice.
+   It was a chip, a code tag and three flex stats on one line: four type
+   treatments for four facts of equal weight, and the row spread itself across
+   whatever width was going. The "vault live" chip went with them — this rail
+   renders only where a vault exists, so it was labelling its own presence. */
 .alp__vrail {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.25rem;
-  margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border);
-  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em;
-  color: var(--color-text-muted);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.75rem 1.5rem;
+  margin-top: 1rem; padding-top: 0.9rem; border-top: 1px solid var(--color-border);
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted);
 }
-.alp__vchip {
-  display: inline-flex; align-items: center; gap: 0.5rem; color: var(--color-text);
-  border: 1px solid var(--color-border-light); border-radius: var(--radius); padding: 0.25rem 0.5rem;
-}
-.alp__vchip i { width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--color-green); }
-.alp__vchip.pending { color: var(--color-text-muted); }
-.alp__vchip.pending i { background: transparent; border: 1px solid var(--color-text-muted); }
-/* An ERC-4626 share symbol is case-carrying: rmUSDC is not RMUSDC. */
-.alp__vrail code {
-  font-family: var(--font-mono); font-size: 0.7rem; text-transform: none; letter-spacing: 0.04em;
-  color: var(--color-text-soft); border: 1px solid var(--color-border); padding: 0.25rem 0.25rem;
-}
-.alp__vstat b {
-  display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-weight: 500;
-  font-size: 0.95rem; text-transform: none; letter-spacing: 0; color: var(--color-text);
+.alp__vrail b {
+  display: block; margin-top: 0.25rem; font-weight: 500; font-size: 0.95rem;
+  text-transform: none; letter-spacing: 0; color: var(--color-text);
   font-variant-numeric: tabular-nums;
 }
+/* An ERC-4626 share symbol is case-carrying: rmUSDC is not RMUSDC. */
+.alp__vtok { letter-spacing: 0.02em; }
 
 /* the verdict line. This is the ONE place the vault comparison spends colour:
    Beacon as a point for off target, Pool for on it. The drift column itself
@@ -1079,7 +949,7 @@ table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color:
 /* the latest recommendation */
 .alp__latest {
   margin-top: 1.5rem;
-  border: 1px solid var(--color-border); border-left: 2px solid var(--color-accent-line);
+  border: 1px solid var(--color-border);
   background: var(--color-surface); padding: 1rem 1.25rem 1.25rem;
 }
 .alp__latest-meta {
@@ -1130,18 +1000,10 @@ table.alp__tbl td.alp__gain, table.alp__tbl tr.tot td.alp__gain { color: var(--c
    quiet column a figure is measured against; `note` is prose and must be
    allowed to wrap, which the mono default forbids. */
 table.alp__tbl td.q { color: var(--color-text-muted); }
-/* Prose in a numeric table reads left to right; the header keeps the mono
-   treatment every other column header has. */
-table.alp__tbl th.note { text-align: left; }
-table.alp__tbl td.note {
-  text-align: left; font-family: var(--font-sans); font-size: 0.8rem;
-  white-space: normal; color: var(--color-text-muted); font-variant-numeric: normal;
-}
 table.alp__tbl--led { min-width: 34rem; }
 /* Without a width on the first column the browser hands it every spare pixel
    and the figures end up a screen away from the sleeve they describe. */
-table.alp__tbl--led th:first-child { width: 34%; }
-table.alp__tbl--led th.note { width: 30%; }
+table.alp__tbl--led th:first-child { width: 40%; }
 table.alp__tbl--wide { min-width: 48rem; }
 table.alp__tbl tr.out td { color: var(--color-text-muted); }
 table.alp__tbl tr.out .alp__dot { opacity: 0.4; }

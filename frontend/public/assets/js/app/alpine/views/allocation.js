@@ -110,12 +110,6 @@ function longDay(iso) {
   if (parts.length !== 3) return "—";
   return `${Number(parts[2])} ${MONTHS[Number(parts[1]) - 1]} ${parts[0]}`;
 }
-/** "2026-08-04" → "4 Aug". */
-function shortDay(iso) {
-  const parts = String(iso || "").split("-");
-  if (parts.length !== 3) return "—";
-  return `${Number(parts[2])} ${MONTHS[Number(parts[1]) - 1]}`;
-}
 
 // ── the palette ────────────────────────────────────────────────────────────
 // CATEGORICAL from lib/chart-theme.js, whose own comment is the argument: pie
@@ -257,20 +251,8 @@ export function registerAllocationView(Alpine) {
       return this.hasTargets() && !!this.allocationFw?.provenance?.sessionId;
     },
     stateChip() {
-      if (!this.hasTargets()) return "weights unavailable";
+      if (!this.hasTargets()) return "unavailable";
       return this.isSwarmManaged() ? "swarm-managed" : "seeded";
-    },
-    // Read from the code rather than from the feed: no session has ever
-    // changed these weights, because nothing but the seed writes the table.
-    // When a real writer lands, this sentence is the whole of the change.
-    unchangedLine() {
-      // Silent while the feeds are in flight: "could not be read" is a claim
-      // about a request that has not finished, and the line holds its height
-      // from CSS so nothing moves when the real sentence arrives.
-      if (this.loading) return "";
-      if (!this.hasTargets()) return "Target weights unavailable.";
-      const asOf = this.allocationAsOf();
-      return asOf ? `Unchanged since ${longDay(asOf)}.` : "In force.";
     },
 
     // ── degradation states ──────────────────────────────────────────────────
@@ -431,12 +413,7 @@ export function registerAllocationView(Alpine) {
         was: row.target,
         now: row.target,
         delta: 0,
-        note: this.changeNote(row),
       }));
-    },
-    changeNote(row) {
-      if (!(row.target > 0)) return "Never funded";
-      return this.sleeveHasVault(row.key) ? "Vault live" : "Vault pending";
     },
     // Direction is the GLYPH first and the colour second, so the column
     // survives colourblindness, greyscale and forced-colors. Up takes Pool
@@ -616,8 +593,8 @@ export function registerAllocationView(Alpine) {
     constituentTip(sleeve, item, index) {
       const hue = itemColour(index);
       const rows = [["In sleeve", this.fmtPct(item.target)]];
-      const ofBook = (Number(item.target) * Number(sleeve.target)) / 100;
-      rows.push(["Of the book", this.fmtPct(ofBook)]);
+      const ofAlloc = (Number(item.target) * Number(sleeve.target)) / 100;
+      rows.push(["Of allocation", this.fmtPct(ofAlloc)]);
       const held = this.sleeveVaultRows(sleeve.key).find((r) => r.policy === item.target && r.label.toLowerCase().includes(String(item.label).toLowerCase().split(" ")[0]))
         || this.sleeveVaultRows(sleeve.key)[index];
       if (this.sleeveHasVault(sleeve.key) && held && held.actual != null) {
@@ -656,17 +633,23 @@ export function registerAllocationView(Alpine) {
       tip.style.top = Math.max(8, top) + "px";
     },
 
+    // Built through tipMarkup, like the constituent tooltip: one tooltip
+    // object on the page, not two that happen to share a box. It had the
+    // swatch inside a value row and three stacked sentences under it, which is
+    // why it read as a different component every time the pointer crossed
+    // from a bar to a slice.
     tipHtml(row) {
-      const parts = [
-        `<b>${row.name}</b>`,
-        `<span><i style="background:${this.sleeveColours()[row.key]}"></i>Target ${this.fmtPctTrim(row.target)}</span>`,
-      ];
+      const rows = [["Target", this.fmtPct(row.target)]];
       const items = this.constituents(row.key);
-      if (items.length) parts.push(`<span class="alp__tip-soft">${items.length} names</span>`);
-      parts.push(this.sleeveHasVault(row.key)
-        ? `<span class="alp__tip-soft">Vault live · ${this.trackingErrorLabel(row.key)}</span>`
-        : '<span class="alp__tip-soft">Vault pending</span>');
-      return parts.join("");
+      if (items.length) rows.push(["Names", String(items.length)]);
+      if (this.sleeveHasVault(row.key)) {
+        const te = this.sleeveTrackingError(row.key);
+        if (te != null) rows.push(["Off target", `${te.toFixed(2)} pts`]);
+      }
+      return this.tipMarkup(
+        this.sleeveColours()[row.key], row.name, rows,
+        this.sleeveHasVault(row.key) ? null : "No vault holds this sleeve yet.",
+      );
     },
     // Inside a card: hovering a block lights its name and recedes its
     // neighbours, and hovering a name does the same to its block. Applied by
@@ -694,8 +677,12 @@ export function registerAllocationView(Alpine) {
       });
     },
 
-    hoverSleeve(row, ev) { this.showTip(row, ev); this.dimTo(row.key); },
-    leaveSleeve() { this.hideTip(); this.dimTo(null); },
+    // The donut's slices get the tooltip: a wedge carries no text, so the
+    // tooltip is the only thing that names it. The legend row beside it is
+    // already the name, the count and the weight in reading type, so hovering
+    // it lights its slice and nothing more. A tooltip there was a second copy
+    // of the row it was covering.
+    hoverLegend(key) { this.hotKey = key; this.dimTo(key); },
     showTip(row, ev) {
       this.tipAt(this.tipHtml(row), ev);
       this.hotKey = row.key;
@@ -854,23 +841,28 @@ export function registerAllocationView(Alpine) {
         host.appendChild(path);
       });
 
-      // The hole carries the state of the POLICY, not a deposit. This page is
-      // the recipe, and the first question a returning reader has is whether
-      // it moved since they last looked; "1 USDC / DEPOSIT" answered a
-      // question nobody was asking and framed a policy as a transaction.
-      const asOf = this.allocationAsOf();
+      // The hole carries what the ring adds up to. It carried the date the
+      // weights had been in force, which the rail directly above it already
+      // states; a figure printed twice within one screen is one figure and one
+      // decoration. The sum is the one thing the ring cannot say for itself:
+      // it is drawn to the full 360, so a policy adding to less than 100
+      // leaves an unfilled arc, and this names what is missing from it.
+      const total = this.sleeves().reduce((n, r) => n + (Number(r.target) || 0), 0);
+      const gap = 100 - total;
       host.appendChild(label(svg("text", {
         x: CX, y: CY - 12, "text-anchor": "middle", fill: PALETTE.textMuted,
         "font-family": "'JetBrains Mono',monospace", "font-size": 9, "letter-spacing": "0.18em",
-      }), asOf ? "UNCHANGED SINCE" : "IN FORCE"));
+      }), "ALLOCATED"));
       host.appendChild(label(svg("text", {
         x: CX, y: CY + 8, "text-anchor": "middle", fill: PALETTE.text,
         "font-family": "'JetBrains Mono',monospace", "font-size": 15, "font-weight": 700,
-      }), asOf ? shortDay(asOf) : "—"));
-      host.appendChild(label(svg("text", {
-        x: CX, y: CY + 24, "text-anchor": "middle", fill: PALETTE.textMuted,
-        "font-family": "'JetBrains Mono',monospace", "font-size": 9,
-      }), asOf ? asOf.slice(0, 4) : ""));
+      }), this.fmtPctTrim(total)));
+      if (Math.abs(gap) >= 0.005) {
+        host.appendChild(label(svg("text", {
+          x: CX, y: CY + 24, "text-anchor": "middle", fill: PALETTE.textMuted,
+          "font-family": "'JetBrains Mono',monospace", "font-size": 9,
+        }), `${this.fmtPctTrim(Math.abs(gap))} ${gap > 0 ? "unallocated" : "over"}`));
+      }
 
       host.setAttribute("aria-label", "Target allocation, "
         + rows.map((s) => `${s.name} at a ${this.fmtPctTrim(s.target)} target, ${this.sleeveState(s)}`).join("; ")
