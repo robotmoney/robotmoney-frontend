@@ -137,23 +137,21 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     }
   });
 
-  test("number_serialization is published PROSE, and the reference refuses a non-integer by name (issue #823)", () => {
+  test("number_serialization is published PROSE, and states two SEPARATE guarantees, output form and input value (issue #823)", () => {
     // WHY THIS IS STATED SEPARATELY FROM THE BYTE-LEVEL TEST ABOVE. That test
     // proves every number CURRENTLY IN A GOLDEN is a bare integer; it says
     // nothing about what happens to an input that is not one, and the spec
     // itself had no clause naming the rule at all — json_serialization covers
     // whitespace, string_escaping covers strings, and nothing covered numbers.
-    // RFC 8259 treats 1250, 1250.0 and 1.25e3 as the identical number, so
-    // "the bytes are a bare integer" is a rule about FORM, not merely value,
-    // and a foreign implementer has to be told which form is legal.
     expect(spec.number_serialization).toContain("bare decimal integer");
     expect(spec.number_serialization).toContain("no exponent");
     expect(spec.number_serialization).toContain("negative zero");
     expect(spec.number_serialization).toContain("assertIntegers");
     expect(spec.number_serialization).toMatch(/\^\(0\|-\?\[1-9\]\\d\*\)\$/);
 
-    // The reference really does refuse a non-integer, by name, wherever a
-    // number appears in the receipt — not only participation_bps.
+    // GUARANTEE 1 (input VALUE, not textual form): the reference refuses a
+    // field whose parsed value is not a safe integer at all, by name,
+    // wherever a number appears in the receipt — not only participation_bps.
     const nonIntegerParticipation = applyPatch(valid, { "/quorum/participation_bps": 6666.5 });
     expect(() => canonicalizeReceipt(nonIntegerParticipation, spec)).toThrow(/safe integer/);
 
@@ -164,6 +162,24 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     const nonIntegerRevision = structuredClone(valid);
     nonIntegerRevision.analyst_signatures[0].revision = 1.5;
     expect(() => canonicalizeReceipt(nonIntegerRevision, spec)).toThrow(/safe integer/);
+
+    // GUARANTEE 2 (output FORM, not input refusal), and the boundary the two
+    // are NOT the same thing: RFC 8259 treats 1250, 1250.0 and 1.25e3 as the
+    // identical number, and JSON.parse has already collapsed all three to the
+    // identical JavaScript Number 1250 before this module ever sees the
+    // value — so a receipt whose source JSON text spelled the field as
+    // "1250.0" or "1.25e3" is NOT refused (Number.isSafeInteger(1.25e3) is
+    // true, same as Number.isSafeInteger(1250)); it canonicalizes cleanly,
+    // and identically, to the bare form "1250". The guarantee this contract
+    // actually makes about those spellings is that they are indistinguishable
+    // downstream and the output is always the bare form — never that the
+    // input spelling itself is checked or refused, which is impossible at
+    // this JSON-parse boundary.
+    const dotForm = JSON.parse(JSON.stringify(valid).replace('"weight_bps":1250', '"weight_bps":1250.0'));
+    const expForm = JSON.parse(JSON.stringify(valid).replace('"weight_bps":1250', '"weight_bps":1.25e3'));
+    expect(canonicalizeReceipt(dotForm, spec)).toBe(canonicalizeReceipt(valid, spec));
+    expect(canonicalizeReceipt(expForm, spec)).toBe(canonicalizeReceipt(valid, spec));
+    expect(canonicalizeReceipt(valid, spec)).toContain('"weight_bps":1250');
   });
 
   test("weights is the last v1 field and omission preserves the old byte shape", () => {
