@@ -50,6 +50,7 @@ import {
   type RpcCallOptions,
 } from "./base-rpc-client.ts";
 import { fetchAssetPriceUsd } from "./token-prices.ts";
+import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-prices.ts";
 
 // 'seed' = a pre-launch history row backfilled from the ported baked constants
 // (chain/wallet-history-seed.ts), NOT a live chain read — honesty invariant from
@@ -129,23 +130,45 @@ export const providerWalletPriceReader: WalletPriceReader = {
 // missed tick, recent enough that the fallback quote never reads as live.
 export const MAX_PERSISTED_PRICE_AGE_MS = 5 * 60_000;
 
+// D41 phase 3 (issue #850): whatever row this reader lands on is, in the
+// overwhelming common case, TODAY's own live row — the freshness bound below
+// already keeps this near-exclusively a "today" fallback (see the comment
+// preserved below on why a backfilled row almost never qualifies) — and D41
+// says today's live point keeps reading its fused sample row untouched. The
+// LEFT JOIN below exists for the narrow remainder: a row whose `sample_date`
+// is NOT today (a closed day) that still happens to fall inside the
+// freshness window, e.g. a backfill/repair commit landing within minutes of
+// UTC midnight for the day it just closed. For that row, and only that row,
+// the price it reports comes from `asset_prices` rather than the sample's own
+// (soon-to-be-retired, D41 phase 4) `price_usd` column — falling back to the
+// sample's own price when `asset_prices` has no row yet, exactly as
+// wallet-balances.ts::loadHistory does, for the identical #849 known-gap
+// reason (a cleanly-sampled closed day is not guaranteed to have dual-written
+// into `asset_prices` yet).
 async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number; sampledAt: string } | null> {
-  const rows = await sql<{ price_usd: string | null; sampled_at: Date }[]>`
-    SELECT price_usd, sampled_at
-      FROM wallet_balance_samples
-     WHERE symbol = ${symbol}
-       AND price_usd IS NOT NULL
-       AND sampled_at <= now()
+  const rows = await sql<{ price_usd: string | null; sampled_at: Date; asset_price_usd: string | null; is_closed: boolean }[]>`
+    SELECT wbs.price_usd, wbs.sampled_at,
+           ap.price_usd AS asset_price_usd,
+           (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
+      FROM wallet_balance_samples wbs
+      LEFT JOIN asset_prices ap
+        ON ap.symbol = wbs.symbol
+       AND ap.price_date = wbs.sample_date
+       AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
+     WHERE wbs.symbol = ${symbol}
+       AND wbs.price_usd IS NOT NULL
+       AND wbs.sampled_at <= now()
        -- A quarantined row's price may describe a DIFFERENT ASSET (migration
-       -- 0036), and this reader's output is a price served as the live one with
-       -- provenance 'stale'. The MAX_PERSISTED_PRICE_AGE_MS bound below already
-       -- excludes them in practice — the backfill only fills CLOSED days and
-       -- stamps sampled_at at that day's 23:59, so every backfilled row is more
-       -- than five minutes old. That is a happy accident of two unrelated
-       -- policies, which is exactly the "correct today by luck" shape §3 of the
-       -- review is about; the predicate makes it correct by construction.
-       AND provenance <> ${QUARANTINED_PROVENANCE}
-     ORDER BY sampled_at DESC
+       -- 0036) — excluded unconditionally, never served even via the join.
+       AND wbs.provenance <> ${QUARANTINED_PROVENANCE}
+       -- The MAX_PERSISTED_PRICE_AGE_MS bound below already excludes
+       -- quarantined rows in practice too — the backfill only fills CLOSED
+       -- days and stamps sampled_at at that day's 23:59, so every backfilled
+       -- row is more than five minutes old. That is a happy accident of two
+       -- unrelated policies, which is exactly the "correct today by luck"
+       -- shape §3 of the review is about; the predicate above makes it
+       -- correct by construction instead.
+     ORDER BY wbs.sampled_at DESC
      LIMIT 1
   `;
   const row = rows[0];
@@ -153,7 +176,13 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
   const sampledAt = row.sampled_at instanceof Date ? row.sampled_at : new Date(row.sampled_at);
   const sampledAtMs = sampledAt.getTime();
   if (Date.now() - sampledAtMs > MAX_PERSISTED_PRICE_AGE_MS) return null; // too old — not eligible
-  return { priceUsd: Number(row.price_usd), sampledAt: sampledAt.toISOString() };
+  // Same JS-side multiplication discipline as loadHistory/computeWalletSleeves:
+  // this reader returns a PRICE, not a value, so there is no product to worry
+  // about here — only which column's price_usd to read — but the join is
+  // still read in JS rather than folded into the WHERE/SELECT arithmetic so a
+  // future caller that DOES multiply against it inherits the same exactness.
+  const priceUsd = row.is_closed && row.asset_price_usd != null ? Number(row.asset_price_usd) : Number(row.price_usd);
+  return { priceUsd, sampledAt: sampledAt.toISOString() };
 }
 
 // Falls back to a recent persisted PER-SYMBOL price (wallet_balance_samples,
