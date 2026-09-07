@@ -186,12 +186,13 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // tripwire on the roster's terminal entry, so that growing the release is a
   // deliberate act somebody had to write down here as well as in release.ts —
   // NOT a lever for shrinking scope. 0042 joined via #754, 0043 via #835, 0044
-  // via #761, 0045 via #760, 0046 via #849, 0047 via #779, and 0048 via #796:
-  // in each case the drift guard below named the landed file as undeclared,
-  // and the fix was to DECLARE it (never to raise the numeric floor).
+  // via #761, 0045 via #760, 0046 via #849, 0047 via #779, 0048 via #796, and
+  // 0049/0050 via #697: in each case the drift guard below named the landed
+  // file as undeclared, and the fix was to DECLARE it (never to raise the
+  // numeric floor).
   test("the release inventory includes the earliest-valid-block floor migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(17);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0048_swarm_judge_third_party_flag.sql");
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(19);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0050_swarm_member_keys_append_only.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");
@@ -224,6 +225,16 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     // half applies as written, unlike `swarm_judge_config`.
     expect(NEW_TABLES).toContain("swarm_consensus_receipts");
     expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_consensus_receipts");
+    // 0049 (issue #697): a nullable foreign key to swarm_member_keys, recording
+    // which key actually signed a take. Locks swarm_recommendations briefly;
+    // validates trivially since every existing row's value is NULL.
+    expect(NEW_COLUMNS).toContainEqual({ table: "swarm_recommendations", column: "signing_key_id" });
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_recommendations");
+    // 0050 (issue #697): swarm_member_keys joins the append-only roster — the
+    // first table in this release to gain protection while ALREADY populated,
+    // rather than one this release creates fresh.
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_member_keys");
+    expect(APPEND_ONLY_TABLES).toContain("swarm_member_keys");
   });
 
   // ───────────────────────────────────────────────────────────────────────────

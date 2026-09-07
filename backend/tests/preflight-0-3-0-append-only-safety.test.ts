@@ -754,6 +754,10 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
       // names the table in a DO block's `protected text[]` — both branches see
       // it, and the set dedupes to one entry.
       "0042_swarm_consensus_receipts.sql": ["swarm_consensus_receipts"],
+      // 0050 (issue #697): the same DO-block-over-an-ARRAY shape as 0037/0038/
+      // 0040 above, over a table that already exists on the v0.2.2 database
+      // rather than one this release creates.
+      "0050_swarm_member_keys_append_only.sql": ["swarm_member_keys"],
     };
     const actual: Record<string, string[]> = {};
     for (const file of THIS_RELEASE_MIGRATIONS) {

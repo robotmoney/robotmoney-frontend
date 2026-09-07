@@ -240,7 +240,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — sixteen migrations
+### 2.2 🔴 The database delta — eighteen migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -267,6 +267,8 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0046_asset_prices.sql` | `CREATE TABLE asset_prices`, `CREATE TABLE asset_price_floors`; seed `asset_prices` from existing `live`/`seed`-provenance rows in `wallet_balance_samples`/`wallet_sleeve_samples` with an explicit conflict rule; seed a proven floor for the three `usdc`-pinned assets (issue #849, D41 phases 1/2/5) | Additive DDL **plus a one-time data seed**; no existing read path changes |
 | `0047_swarm_session_subject_name_backfill.sql` | `UPDATE swarm_sessions SET subject_name = swarm_subjects.name` for every session whose `subject_name` disagrees with its subject's current name — the historical catch-up for renames made before `updateSubjectAdmin` started keeping the two in sync (issue #779) | **No DDL — a pure, idempotent data write** |
 | `0048_swarm_judge_third_party_flag.sql` | `ALTER TABLE swarm_judge_config ADD COLUMN third_party_enabled boolean NOT NULL DEFAULT false;` + a `COMMENT` — the admin-flippable, no-redeploy gate for third-party (graduated-member) judging, layered onto the `mode`/`min_takes`/`model` row `0039` seeds (issue #796) | Additive column with a constant default, catalog-only on PG 11+; no historical row is rewritten |
+| `0049_swarm_recommendations_signing_key.sql` | `ALTER TABLE swarm_recommendations ADD COLUMN signing_key_id bigint REFERENCES swarm_member_keys(id) ON DELETE SET NULL` — records the exact key row that verified a take at submission time, so a read path can resolve the SIGNING key rather than the member's currently-active one (issue #697) | Additive, nullable, **no default, no backfill — a documented cutover point** |
+| `0050_swarm_member_keys_append_only.sql` | Install the statement- and row-level `rm_append_only_guard()` triggers on `swarm_member_keys` (issue #697) | Triggers on a table this release did **not** create — see §2.2.1 |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
@@ -367,7 +369,7 @@ before `_wallet`, `_swarm` before `_wallet` — so on a fresh database the
 append-only guard is installed *before* the new wallet migrations run, which is
 the same relative order production will see. And no new migration **removes a
 row from** a protected table: `APPEND_ONLY_TABLES` in
-`backend/src/db/append-only-guard.ts` lists sixteen tables, and none of
+`backend/src/db/append-only-guard.ts` lists seventeen tables, and none of
 `wallet_balance_samples`, `chain_day_blocks`, `wallet_backfill_state`,
 `swarm_member_avatars`, `swarm_judge_config` or `job_schedules` is among them.
 `swarm_session_judgements` **is** on that list, but `0039` creates it and `0040`
@@ -377,7 +379,14 @@ row and deletes none. `swarm_consensus_receipts` is the same shape one migration
 later: `0042` creates it AND protects it in the same file, so it likewise does
 not exist on the database the guard is being read against.
 
-Three nuances the list does surface, and all of them are LOCKS rather than
+`swarm_member_keys` (issue #697) is the opposite shape: `0049` adds it to the
+list, but unlike every table above, it **already exists AND already holds
+rows** on the v0.2.2 database — it is not a table this release creates. That
+is still safe: `CREATE TRIGGER` is catalog-only DDL, so installing the guard
+touches no existing row, and the guard fires `BEFORE DELETE OR TRUNCATE` only —
+nothing in `0049` issues either.
+
+Five nuances the list does surface, and all of them are LOCKS rather than
 writes:
 
 - `swarm_members` **is** protected, and `0035` declares
@@ -398,6 +407,11 @@ writes:
   adds role / attribution columns plus a foreign key and CHECK constraint. The
   migration alters metadata and validates constraints; it neither deletes nor
   rewrites a protected history row.
+- `swarm_recommendations` is protected, and `0048` adds a nullable
+  `signing_key_id` foreign key to `swarm_member_keys`. The column carries no
+  default and is not backfilled, so every existing row's value is `NULL` —
+  which trivially satisfies the foreign key, making validation instant — but
+  adding the column and constraint does take a brief lock on the table.
 
 All of them appear in `MIGRATION_TOUCHED_TABLES`, because that constant means
 "creates, alters, locks, or writes" — it is the roster of the release's SCOPE,
@@ -407,10 +421,10 @@ scans each migration's own SQL for the statements the guard actually refuses —
 statement that disables, drops or replaces an immutability guard, which is the
 one destructive change the row trigger structurally cannot see happen to itself.
 A lock is therefore not a collision, and **`append-only-safety` PASSes for 0035,
-0039, 0042 and 0043** (issue #815). It names those tables in its PASS detail, as locked
+0039, 0042, 0043 and 0048** (issue #815). It names those tables in its PASS detail, as locked
 and not written, so the distinction stays visible rather than silent.
 
-**Installing a guard is not removing one.** 0032, 0040 and 0042 all install
+**Installing a guard is not removing one.** 0032, 0040, 0042 and 0049 all install
 idempotently with `DROP TRIGGER IF EXISTS x; CREATE TRIGGER x …`, and 0042 opens
 with `CREATE OR REPLACE FUNCTION rm_consensus_receipt_immutable()` to define its
 own new guard. Reading either as tampering would block the release for *adding*
@@ -875,7 +889,7 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  16 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  18 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
@@ -893,6 +907,8 @@ for this release:
          0046_asset_prices.sql
          0047_swarm_session_subject_name_backfill.sql
          0048_swarm_judge_third_party_flag.sql
+         0049_swarm_recommendations_signing_key.sql
+         0050_swarm_member_keys_append_only.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
@@ -1279,7 +1295,7 @@ All must pass before `v0.3.0` is tagged.
 | 3 | `catchup-policy` | 0034's `UPDATE` hit exactly the intended rows | `collapse-per-bucket` on exactly the two wallet samplers; `all` everywhere else (§4.3). This grades the schedule-policy write; `0036`/`0037` separately quarantine and archive wallet samples |
 | 4 | `new-tables` | all nine new tables and all 29 new columns exist | The two operational tables may already hold repair rows after cold-start dispatch; the two evidence tables may already hold an rc-era quarantined cohort archived by `0037`; snapshot-run headers remain empty until a P1 publisher lands; **`swarm_judge_config` is never empty — `0039` seeds its single operator-switch row**. A WARN reports counts for reconciliation; empty is only the fresh direct-from-v0.2.2 expectation |
 | 5 | `repair-schedule` | the new schedule is seeded, exactly once, enabled, on the cron `release.ts` names — and what the DEPLOYMENT reports it actually did | Read from the latest `ops.repair_gaps` `job_runs` row: dispatched, or declined and why. It used to infer this from `BASE_RPC_MAX_CALLS_PER_SEC` **in postflight's own process**, which is not where the app reads it — an operator taking §5.2's opt-out via `.env` was told the backfill "WILL dispatch" while production had it off. **Confirm it is the world you chose** (§5.2) |
-| 6 | `append-only-intact` | every shared and AUM-specific guard survived the migration | **Both** shared triggers live and enabled on all sixteen protected tables, plus all eleven exact P0/P1 evidence, constituent-immutability, header-immutability and finalization triggers present with `ENABLE ALWAYS`. A missing, disabled, or replication-bypassable guard fails postflight |
+| 6 | `append-only-intact` | every shared and AUM-specific guard survived the migration | **Both** shared triggers live and enabled on all seventeen protected tables, plus all eleven exact P0/P1 evidence, constituent-immutability, header-immutability and finalization triggers present with `ENABLE ALWAYS`. A missing, disabled, or replication-bypassable guard fails postflight |
 | 7 | ⛔ **manual — no script** | a real passkey ceremony completes against the public HTTPS origin | The §5.1 fix, verified end-to-end. Step `P8.acceptance`; reading `WEBAUTHN_ORIGIN` back out of the container proves configuration, not function |
 | 8 | `no-wedge` | the cutover window did not wedge a schedule | `next_run_at` within one cadence of now. Compare against preflight's `wedged-schedules` baseline — a pre-existing wedge is not this release's damage |
 

@@ -1,0 +1,52 @@
+-- Issue #697 — record WHICH key signed a take, so a take stays verifiable
+-- after its author's key rotates.
+--
+-- THE BUG. `submitRecommendation` (swarm/domain.ts) has always resolved the
+-- key it verifies an incoming submission against as "the member's currently
+-- active key" (`publicKeyFor`). That is correct AT THE MOMENT OF SUBMISSION —
+-- it is, by definition, the key that just signed. But the READ paths
+-- (getMemberTakes, withTakes, getTakeReceipt) re-run the SAME "currently
+-- active key" query to decide what public key to *publish* alongside an
+-- already-stored take, and a stored take is read long after the member may
+-- have rotated. Once the active key changes, every read path silently starts
+-- checking a historical signature against the WRONG key.
+--
+-- THE FIX. Record the exact `swarm_member_keys.id` that verified a
+-- submission, at the moment it is accepted (see the INSERT in
+-- swarm/domain.ts's submitRecommendation). Every read path is then updated
+-- (same commit) to resolve a take's public key through THIS column first,
+-- falling back to the old "currently active key" lookup only when it is NULL.
+--
+-- ON DELETE SET NULL, not CASCADE and not RESTRICT: a key row must never be
+-- able to take a signed take down with it, and by the time this column
+-- exists `swarm_member_keys` is also joining the append-only protected set
+-- (migration 0050) so an ordinary DELETE cannot reach it anyway — SET NULL is
+-- the belt for the append-only guard's suspenders, not the primary defense.
+--
+-- NO BACKFILL — A DOCUMENTED CUTOVER POINT, DELIBERATELY. Every row inserted
+-- before this migration has NULL here and keeps resolving through the old
+-- "currently active key" fallback, which is to say: pre-existing rows keep
+-- exhibiting the exact bug this issue reports until nobody re-verifies them.
+-- This is a deliberate choice, not an oversight, for two reasons:
+--   1. It is not always POSSIBLE. `registerMember`'s hard-DELETE (fixed in the
+--      same commit, see swarm/domain.ts) already destroyed the key row behind
+--      an unknown number of historical takes filed before today; there is
+--      nothing left on file to attribute them to, at any confidence, ever.
+--   2. Where a key row DOES still survive (an admin rotation, which has always
+--      deactivated rather than deleted), attributing a historical row to it
+--      would require re-running Ed25519 verification against every key ever
+--      on file for that member from a plain SQL migration, which cannot
+--      execute application crypto. A partial, best-effort backfill that
+--      silently fixes SOME historical rows and not others (with no way for a
+--      reader to tell which) is a worse property than an honest, stated
+--      cutover: "verified from here forward" is a claim this repo can keep;
+--      "verified retroactively, mostly" is not one it can back up.
+-- A future data-repair tool MAY re-verify surviving old rows against every
+-- key on file for their member and backfill this column where exactly one
+-- match is found; nothing here forecloses that. It is out of scope for this
+-- migration, which only stops the bleeding going forward.
+ALTER TABLE swarm_recommendations
+  ADD COLUMN IF NOT EXISTS signing_key_id bigint REFERENCES swarm_member_keys(id) ON DELETE SET NULL;
+
+COMMENT ON COLUMN swarm_recommendations.signing_key_id IS
+  'The swarm_member_keys row verified against at submission time (issue #697). NULL for every row written before this migration — see the cutover note above; read paths must resolve a take''s public key through this column first and fall back to the member''s currently-active key only when it is NULL.';
