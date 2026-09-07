@@ -295,10 +295,31 @@ export interface ListSessionsOptions {
   full?: boolean;
 }
 
+// The next fire time of the enabled swarm.open_session job_schedules row
+// (issue #783). No `scheduled` swarm_sessions row is reliably observable in
+// the public feed — a session convenes as `scheduled` and its brief follows
+// on a separate cron shortly after, so by the time a poller sees the row it
+// has usually already moved past `scheduled` — so the resting-state "when
+// does the next session open" fact has to come from the schedule itself
+// rather than from session rows. This reads the SAME next_run_at
+// worker/scheduler.ts's tickScheduler already maintains to decide when to
+// enqueue swarm.open_session; it is never computed here. Null when the
+// schedule is disabled (or absent) OR when it exists but has not been ticked
+// even once yet (next_run_at seeded lazily on a schedule's first tick) — both
+// collapse to "no known next session", which is the honest answer.
+async function getNextSwarmSessionAt(): Promise<string | null> {
+  const [row] = await sql`
+    SELECT next_run_at FROM job_schedules
+     WHERE kind = 'swarm.open_session' AND enabled
+     LIMIT 1`;
+  return row ? instant(row.next_run_at) : null;
+}
+
 export async function listSessions(opts: ListSessionsOptions = {}) {
+  const nextSessionAt = await getNextSwarmSessionAt();
   if (opts.full) {
     const rows = await sql`SELECT * FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
-    return { sessions: rows.map(toSession), nextCursor: null as string | null };
+    return { sessions: rows.map(toSession), nextCursor: null as string | null, nextSessionAt };
   }
 
   const limit = parseSessionsLimit(opts.limit);
@@ -325,6 +346,7 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   return {
     sessions: page.map(toSessionListItem),
     nextCursor: hasMore ? encodeSessionsCursor(page[page.length - 1]) : (null as string | null),
+    nextSessionAt,
   };
 }
 

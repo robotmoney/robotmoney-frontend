@@ -337,6 +337,14 @@ export interface SwarmSessionListResponse {
   sessions: (SwarmSessionListItem | SwarmSession)[];
   /** Opaque cursor for the next page; null once exhausted (always null for ?full=1). */
   nextCursor: string | null;
+  /**
+   * Next fire time of the enabled `swarm.open_session` schedule (issue #783),
+   * so a resting-state client can say "opens in 3h" without guessing at an
+   * env-configured cron. Null when no such schedule is enabled — never
+   * omitted, so a caller can tell "not scheduled" apart from "older API".
+   * Present on every page (including `?full=1`), not just the first.
+   */
+  nextSessionAt: string | null;
 }
 
 // GET /api/swarm/members/:id/takes response row (issue #243) — a single
