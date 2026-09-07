@@ -1271,11 +1271,16 @@ async function repairResolvedDay(
           const amount = amounts.get(r.key)!;
           if (!amount.ok) continue; // unreachable: checked above
           const priceUsd = priceFor(r.asset.symbol)!;
+          // D41 phase 4 (markets §5.6): price_usd is NOT written here. asset_prices
+          // is the sole write target for price data now that #850 switched every
+          // read site to the join; leaving this column NULL on a repaired row is
+          // deliberate, not an oversight, and value_usd still carries the fused
+          // amount*price product a caller may need before the join lands its row.
           await tx`
             INSERT INTO wallet_balance_samples
-              (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+              (sample_date, symbol, amount, value_usd, provenance, sampled_at)
             VALUES
-              (${date}, ${r.asset.symbol}, ${amount.amount}, ${priceUsd}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
+              (${date}, ${r.asset.symbol}, ${amount.amount}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
           `;
           balanceRows += 1;
 
@@ -1326,11 +1331,13 @@ async function repairResolvedDay(
           const amount = amounts.get(t.key)!;
           if (!amount.ok) continue; // unreachable: checked above
           const priceUsd = priceFor(t.asset.symbol)!;
+          // D41 phase 4 (markets §5.6): same rationale as the balance insert above —
+          // price_usd is left unwritten; value_usd still carries the fused product.
           await tx`
             INSERT INTO wallet_sleeve_samples
-              (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+              (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
             VALUES
-              (${date}, ${t.walletAddress}, ${t.asset.symbol}, ${amount.amount}, ${priceUsd}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
+              (${date}, ${t.walletAddress}, ${t.asset.symbol}, ${amount.amount}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
           `;
           sleeveRows += 1;
         }
