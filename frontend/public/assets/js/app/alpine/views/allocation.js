@@ -322,7 +322,7 @@ export function registerAllocationView(Alpine) {
       const te = this.sleeveTrackingError(s.key);
       return te == null
         ? `${count} · vault live`
-        : `${count} · vault live · ${te.toFixed(2)} pts off`;
+        : `${count} · vault live · ${te.toFixed(2)}% off`;
     },
     // The legend swatch. Every sleeve carries its hue, funded or not: the
     // colour identifies the sleeve, and a sleeve at zero is still the same
@@ -392,7 +392,7 @@ export function registerAllocationView(Alpine) {
     changeGlyph(d) { return d > 0 ? "▲" : d < 0 ? "▼" : ""; },
     changeLabel(d) {
       if (d == null || !isFinite(d) || d === 0) return "—";
-      return (d > 0 ? "+" : "−") + Math.abs(Number(d)).toFixed(2);
+      return (d > 0 ? "+" : "−") + this.fmtPct(Math.abs(Number(d)));
     },
     changeClass(d) {
       if (d == null || !isFinite(d) || d === 0) return "flat";
@@ -496,7 +496,7 @@ export function registerAllocationView(Alpine) {
     },
     trackingErrorLabel(key) {
       const te = this.sleeveTrackingError(key);
-      return te == null ? "—" : `${te.toFixed(2)} pts off target`;
+      return te == null ? "—" : `${te.toFixed(2)}% off target`;
     },
     vaultRowBalance(r) {
       return r.balance == null ? "—" : Number(r.balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -505,10 +505,14 @@ export function registerAllocationView(Alpine) {
     vaultRowValue(r) { return r.balance == null ? "—" : this.fmtUsd2(r.value); },
     vaultRowPolicy(r) { return r.idle ? "—" : this.fmtPct(r.policy); },
     vaultRowActual(r) { return r.actual == null ? "—" : this.fmtPct(r.actual); },
+    // Every figure on this page is a percentage or a difference of
+    // percentages, and both wear %. Points are the stricter unit for the
+    // second kind, but two units on one page cost a reader more than the
+    // precision buys: the label already says the figure is a deviation.
     vaultRowDrift(r) {
       if (r.drift == null) return "—";
       if (Math.abs(r.drift) < 0.005) return "—";
-      return (r.drift > 0 ? "+" : "−") + Math.abs(r.drift).toFixed(2);
+      return (r.drift > 0 ? "+" : "−") + this.fmtPct(Math.abs(r.drift));
     },
     // Same convention as the change ledger: glyph for direction, colour to
     // read it at a glance. Beacon is off this page; --color-warn is the down.
@@ -551,9 +555,7 @@ export function registerAllocationView(Alpine) {
       if (this.sleeveHasVault(sleeve.key) && held && held.actual != null) {
         rows.push(["Held in vault", this.fmtPct(held.actual)]);
         const d = held.actual - held.policy;
-        // "pts" because it is a difference between two percentages, not a
-        // third percentage of something.
-        rows.push(["Drift", (d >= 0 ? "+" : "−") + Math.abs(d).toFixed(2) + " pts"]);
+        rows.push(["Drift", (d >= 0 ? "+" : "−") + this.fmtPct(Math.abs(d))]);
       }
       const ofAlloc = (Number(item.target) * Number(sleeve.target)) / 100;
       rows.push(["Target overall", this.fmtPct(ofAlloc), true]);
@@ -602,7 +604,7 @@ export function registerAllocationView(Alpine) {
       if (items.length) rows.push(["Assets", String(items.length)]);
       if (this.sleeveHasVault(row.key)) {
         const te = this.sleeveTrackingError(row.key);
-        if (te != null) rows.push(["Off target", `${te.toFixed(2)} pts`]);
+        if (te != null) rows.push(["Off target", this.fmtPct(te)]);
       }
       return this.tipMarkup(
         this.sleeveColours()[row.key], row.name, rows,

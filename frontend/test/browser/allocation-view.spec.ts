@@ -271,7 +271,7 @@ test("drift is computed from the two feeds, and names what is missing", async ({
   // The headline rides on the summary, so the finding is legible without
   // opening anything.
   await expect(card.locator(".alp__hold-sum"))
-    .toContainText(`${te.toFixed(2)} pts off target`);
+    .toContainText(`${te.toFixed(2)}% off target`);
   await card.locator(".alp__hold-sum").click();
 
   // By index, not by label: the row NAMES the position rather than the
@@ -696,6 +696,7 @@ test("on a phone the fan becomes a list and nothing scrolls the page sideways", 
   expect(overflow).toBeLessThanOrEqual(1);
   await expectNoBrowserErrors(errors);
 });
+
 
 
 
