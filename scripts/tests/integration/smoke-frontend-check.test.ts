@@ -162,4 +162,26 @@ describe("wallet-balances provenance (issue #134)", () => {
       backend.stop(true);
     }
   }, 20_000);
+
+  // A same-day smoke-twin rehearsal restores job_schedules with a next_run_at
+  // already due by boot time, so the first real cron tick classifies as a
+  // same-bucket catch-up (worker/handlers/slot.ts) and every leg gets relabelled
+  // 'backfilled' (worker/handlers/wallet.ts:63) even though the read itself was
+  // live. This is still a genuine live chain/price read (wallet-valuation.ts:57),
+  // not a fabricated value, so it must be an allowed degrade like 'stale'/'seed'
+  // rather than failing every same-day rehearsal.
+  test("'backfilled' legs are allowed (same-day rehearsal catch-up relabels a live read)", async () => {
+    const backend = startStubBackend({}, walletPayload("live", { "ZYFAI-SS1": "backfilled" }));
+    try {
+      const { exitCode, stdout, stderr } = await runCheck(backend);
+      if (exitCode !== 0) {
+        console.error(stdout);
+        console.error(stderr);
+      }
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("degraded legs (allowed, non-live): ZYFAI-SS1=backfilled");
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
 });
