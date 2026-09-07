@@ -223,7 +223,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.sessions,
     summary: "Swarm session index, paginated",
     description:
-      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.",
+      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the next fire time of the enabled `swarm.open_session` schedule, or null when no such schedule is enabled. Present on every page, including `?full=1`.",
     backs: ["/swarm"],
     params: [
       { name: "state", in: "query", description: "Filter by lifecycle state, for example published.", example: "published" },
