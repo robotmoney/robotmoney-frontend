@@ -30,10 +30,37 @@ import {
 } from "./projections.ts";
 
 // ── Identity ──────────────────────────────────────────────────────────────
+// Issue #799: a key row's `active` flag and its member's `status` are
+// independent — rotateMemberKeyAdmin() (admin.ts) mints a fresh active key
+// against an INACTIVE member on purpose (it is the documented remedy for
+// CARRIED_KEY_UNREGISTRABLE ahead of reactivation), and deactivateMemberAdmin
+// revoking keys only covers the deactivation instant, not a rotation that
+// happens afterward. Without this join, that fresh key authenticates as a
+// live member token even though the member it belongs to cannot act.
+//
+// Fixed at THIS single choke point rather than in each downstream write path
+// (submitRecommendation, postMemo, updateMemberProfile, the /verify-token
+// route) because every one of those resolves identity by calling this
+// function — joining status here makes "the token does not authenticate"
+// the one true statement callers get, instead of "the token authenticates
+// but is not authorized," which every future caller would have to remember
+// to re-check. This is intentionally NOT a "join here AND check status again
+// at every write path" belt-and-suspenders design: a second, independent
+// status re-check downstream would silently diverge from this one the next
+// time either changes, and #799 exists precisely because one of four
+// call sites already had.
+//
+// This is safe for the reactivation flow it appears to interfere with: a key
+// rotated while the member is still inactive simply cannot authenticate
+// until the member is reactivated, and reactivateMemberAdmin ALWAYS revokes
+// the current active key and mints a brand-new token in the same
+// transaction that flips status back to 'active' — so the pre-reactivation
+// token is superseded, never valid, at every point in time.
 export async function memberIdForToken(token: string): Promise<string | null> {
   const rows = await sql<{ member_id: string }[]>`
-    SELECT member_id FROM swarm_member_keys
-    WHERE token_hash = ${hashKey(token)} AND active LIMIT 1`;
+    SELECT k.member_id FROM swarm_member_keys k
+    JOIN swarm_members m ON m.id = k.member_id AND m.status = 'active'
+    WHERE k.token_hash = ${hashKey(token)} AND k.active LIMIT 1`;
   return rows[0]?.member_id ?? null;
 }
 
