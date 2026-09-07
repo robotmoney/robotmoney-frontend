@@ -256,7 +256,7 @@ export const APPEND_ONLY_MIGRATIONS = [
   "0032_append_only_history.sql",
   "0040_swarm_judgements_append_only.sql",
   "0042_swarm_consensus_receipts.sql",
-  "0049_swarm_member_keys_append_only.sql",
+  "0050_swarm_member_keys_append_only.sql",
 ] as const;
 
 /** The two trigger names migration 0032 installs on each protected table. */

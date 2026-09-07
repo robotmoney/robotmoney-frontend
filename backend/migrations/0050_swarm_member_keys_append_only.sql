@@ -66,4 +66,4 @@ END;
 $$;
 
 COMMENT ON TABLE swarm_member_keys IS
-  'Append-only key-history record (migrations 0004, 0049). A row is retired with active = false, never deleted; protected by rm_append_only_guard() so a take''s signing key can never be discarded out from under it. See issue #697.';
+  'Append-only key-history record (migrations 0004, 0050). A row is retired with active = false, never deleted; protected by rm_append_only_guard() so a take''s signing key can never be discarded out from under it. See issue #697.';

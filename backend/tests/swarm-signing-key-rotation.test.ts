@@ -167,7 +167,7 @@ test("submitRecommendation records the exact key row that verified it (signing_k
 });
 
 test("a pre-#697 row (signing_key_id NULL) falls back to the currently-active-key lookup", async () => {
-  // The documented cutover point (migration 0048's header): a row written
+  // The documented cutover point (migration 0049's header): a row written
   // before this column existed has no signing_key_id to resolve through, so
   // it keeps exhibiting the OLD behaviour rather than silently reporting
   // "unverifiable". Simulated here by blanking the column a real submission
