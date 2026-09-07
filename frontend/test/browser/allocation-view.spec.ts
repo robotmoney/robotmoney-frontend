@@ -429,12 +429,31 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
   await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
 
   await expect(page.locator(".alp__latest")).toHaveCount(0);
-  await expect(page.locator(".alp__how")).toHaveCount(0);
-  // The one link out: every session that has reviewed these weights. The
-  // allocation's own decision log is not built, so that is the swarm's page
-  // for the subject and not a page of this branch's own.
+  // The one link out of the ledger: every session that has reviewed these
+  // weights. The allocation's own decision log is not built, so that is the
+  // swarm's page for the subject and not a page of this branch's own.
   await expect(page.locator('#what-changed a[href="/swarm/subjects/robotmoney-allocation"]'))
     .toBeVisible();
+
+  // The mechanism CLOSES the page. It led it for one commit, where it put a
+  // third page's subject between the headline and the weights.
+  const how = page.locator("#how-weights-are-set");
+  for (const step of ["Regime", "Takes", "Consensus"]) {
+    await expect(how).toContainText(step);
+  }
+  // Validators are defined and unfilled. Describing the mechanism without
+  // that is a claim about seats nobody holds.
+  await expect(how).toContainText("Every seat is a proposer today");
+  await expect(how.locator('a[href="/regime"]')).toBeVisible();
+  await expect(how.locator('a[href="/swarm"]')).toBeVisible();
+  // Last, and after the section it explains.
+  const isLast = await how.evaluate((el) => el === el.parentElement?.lastElementChild);
+  expect(isLast, "the mechanism must be the last section on the page").toBe(true);
+  const [sleeves, mech] = await Promise.all([
+    page.locator("#inside-each-sleeve").boundingBox(),
+    how.boundingBox(),
+  ]);
+  expect(mech!.y).toBeGreaterThan(sleeves!.y);
   // Schema names, table names and route behaviour are not the reader's
   // business. The page says what is true about the allocation; how the backend
   // stores or types it is ours to know.
@@ -699,6 +718,7 @@ test("on a phone the fan becomes a list and nothing scrolls the page sideways", 
   expect(overflow).toBeLessThanOrEqual(1);
   await expectNoBrowserErrors(errors);
 });
+
 
 
 

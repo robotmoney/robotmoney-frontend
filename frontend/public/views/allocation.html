@@ -392,6 +392,47 @@
     </div>
   </section>
 
+  <!-- ── § HOW THE WEIGHTS ARE SET ────────────────────────────────────────
+       Closing context, and the page's only handoff. It opened the page for
+       one commit, where it put a third page's subject between the headline
+       and the weights: a reader arrives to see the allocation, not to be
+       taught the swarm. At the bottom it answers the question the numbers
+       raise on the way out, and points at the two pages that own the answer.
+
+       The mechanism only, and it is true of every session. What one session
+       decided is a fact about that session, and the ledger above reports it. -->
+  <section class="alp__sec alp__how" id="how-weights-are-set">
+    <div class="alp__sec-head">
+      <h2 class="alp__h2">How the weights are set</h2>
+    </div>
+    <!-- An <ol> because it is a sequence and the order is the content. No
+         numerals: three steps reading across a row are already ordered, and a
+         counter would be decoration on a page that is carrying enough. -->
+    <ol class="alp__steps">
+      <li>
+        <b>Regime</b>
+        <span>A daily risk-on / risk-off composite over the macro and on-chain
+          panels. Every take starts from the same reading.</span>
+      </li>
+      <li>
+        <b>Takes</b>
+        <span>Proposers file a signed position with its reasoning, its sources
+          and a confidence. Validators score those takes rather than filing a
+          view of their own. Every seat is a proposer today.</span>
+      </li>
+      <li>
+        <b>Consensus</b>
+        <span>The window closes, the takes aggregate into one recommendation,
+          and it publishes with its quorum and mean confidence. Only that moves
+          these weights.</span>
+      </li>
+    </ol>
+    <p class="alp__how-links">
+      <a class="alp__nav" href="/regime">Regime &rarr;</a>
+      <a class="alp__nav" href="/swarm">The swarm &rarr;</a>
+    </p>
+  </section>
+
 </section>
 
 <style>
@@ -463,6 +504,30 @@
   font-family: var(--font-display);
   font-weight: 700;
 }
+
+/* ── how the weights are set: the closing section ──────────────────────── */
+/* A rule above it, because it is a change of subject rather than one more
+   thing about the allocation: everything above reports the weights, and this
+   explains where they come from. The steps sit in the same auto-fit grid as
+   the two rails, so the page has one grid and not three. */
+.alp__how { border-top: 1px solid var(--color-border); padding-top: 1.75rem; }
+/* Its own top margin, where the other two sections get theirs from the
+   one-line sub under the headline. This section's content IS the explanation,
+   so a sub above it would be narration about narration. */
+.alp__steps {
+  list-style: none; margin: 1.5rem 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.5rem 2rem;
+}
+.alp__steps b {
+  display: block; margin-bottom: 0.4rem; font-size: 0.875rem; font-weight: 700;
+  color: var(--color-text);
+}
+.alp__steps span {
+  display: block; max-width: 30rem;
+  color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6;
+}
+.alp__how-links { display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1.75rem 0 0; }
 
 /* ── weights in force ──────────────────────────────────────────────────── */
 .alp__force { border-bottom: 1px solid var(--color-border); padding-bottom: 2rem; }
