@@ -112,13 +112,19 @@ interface RouteCheckResult {
   reason?: string;
 }
 
-// The pure decision behind check 1, pulled out so it can be exercised
-// directly (see "route-liveness rule" below) as well as against every real
-// reference extracted above. A route passes when its fragment exists on disk
-// and — unless the enclosing test's own title says it expects this — is not
-// the NOT_FOUND fragment.
-function checkRouteRef(route: string, testTitle: string): RouteCheckResult {
-  const view = viewFor(route);
+// The pure decision behind check 1, taking the RESOLVED view rather than
+// resolving it, so the rule can be exercised on an input the test controls.
+//
+// It used to resolve internally, which meant its own red control had to name
+// a route that was pinned to NOT_FOUND in routes.js — /vault. RM-115 points
+// /vault at the allocation view, and the moment it did, the control stopped
+// exercising the branch it exists to protect: one half went red, and the
+// other half ("passes when the title says so") went VACUOUSLY GREEN, which is
+// the same class of silent-subject failure issue #805 is about.
+//
+// A route passes when its fragment exists on disk and — unless the enclosing
+// test's own title says it expects this — is not the NOT_FOUND fragment.
+function judgeResolvedView(route: string, testTitle: string, view: string): RouteCheckResult {
   const fragmentPath = join(publicDir, `.${view}`);
   if (!existsSync(fragmentPath)) {
     return {
@@ -139,6 +145,11 @@ function checkRouteRef(route: string, testTitle: string): RouteCheckResult {
     };
   }
   return { ok: true, view };
+}
+
+// Check 1 as it runs against the repo's real spec references.
+function checkRouteRef(route: string, testTitle: string): RouteCheckResult {
+  return judgeResolvedView(route, testTitle, viewFor(route));
 }
 
 describe("a route rename must turn e2e red on a branch (issue #805)", () => {
@@ -164,18 +175,25 @@ describe("a route rename must turn e2e red on a branch (issue #805)", () => {
       expect(result.view).not.toBe(NOT_FOUND_VIEW);
     });
 
+    // The resolved view is given, not looked up: these two assert the RULE,
+    // and must keep asserting it on a day when no route in routes.js happens
+    // to be pinned to NOT_FOUND. Naming a live route here made the control
+    // hostage to that route's fate.
     test("a route pinned to NOT_FOUND, driven by a test whose title doesn't say so, fails", () => {
-      // /vault is genuinely pinned to NOT_FOUND_VIEW in routes.js today. A
-      // test that hits it without an ordinary, non-"not-found" title is
-      // exactly Cluster A's shape: a rename repointed the route and the spec
-      // never noticed.
-      const result = checkRouteRef("/vault", "renders the vault dashboard");
+      // Cluster A's shape: a rename repointed the route at 404 and the spec
+      // driving it never noticed, because its title makes no such claim.
+      const result = judgeResolvedView("/retired-route", "renders the retired dashboard", NOT_FOUND_VIEW);
       expect(result.ok).toBe(false);
       expect(result.view).toBe(NOT_FOUND_VIEW);
+      expect(result.reason).toContain("resolves to the NOT_FOUND fragment");
     });
 
     test("the same NOT_FOUND route passes when the test's own title says it expects that", () => {
-      const result = checkRouteRef("/vault", "/vault renders not-found, not the retired page still sitting in views/");
+      const result = judgeResolvedView(
+        "/retired-route",
+        "/retired-route renders not-found, not the retired page still sitting in views/",
+        NOT_FOUND_VIEW,
+      );
       expect(result.ok).toBe(true);
     });
 

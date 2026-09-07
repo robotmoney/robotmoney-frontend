@@ -17,6 +17,7 @@ import { operatorName } from "../../lib/operator.js";
 // register.
 import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
+import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 
@@ -256,10 +257,17 @@ export function registerSwarmView(Alpine) {
       const noun = rows.length === 1 ? "session" : "sessions";
       return `${rows.length} ${noun} · latest ${this.formatDate(latest)}`;
     },
+    // The allocation's decision log lives in the product section, not the
+    // swarm's (RM-115). It pointed at /allocation/history for one commit;
+    // that page is not built yet, so the sessions live where the swarm keeps
+    // them, on the subject's own profile.
+    //
+    // Unconditional, where the older form returned "" without a subject or
+    // without sessions. That guard existed to avoid linking to
+    // /swarm/subjects/undefined, and the id is a fixed slug rather than
+    // something this view has to resolve.
     allocationHref() {
-      const subj = this.allocationSubject();
-      if (!subj?.id || !this.allocationSessions().length) return "";
-      return `/swarm/subjects/${encodeURIComponent(subj.id)}`;
+      return `/swarm/subjects/${ALLOCATION_SUBJECT_ID}`;
     },
     // Sessions this page lists: every published session, including the
     // allocation subject's. They used to be dropped here and only reachable
