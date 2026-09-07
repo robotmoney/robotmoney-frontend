@@ -9,7 +9,12 @@
     <template x-if="!loading && session">
       <div>
         <header class="sv__detail-head">
-          <p class="sv__eyebrow"><span x-text="formatDate(session.date, 'long')"></span> · portfolio</p>
+          <!-- The kind comes from the subject record, not from a hardcoded
+               word: this said "portfolio" on every session, including the ones
+               reviewing a framework that has no portfolio. Quiet, not Beam:
+               the accent is a line this brand draws deliberately, and an
+               eyebrow is a label. -->
+          <p class="sv__eyebrow sv__eyebrow--quiet"><span x-text="formatDate(session.date, 'long')"></span> · <span x-text="subjectKindOf(subject)">portfolio</span></p>
           <h1 class="sv__detail-title session-title" x-text="session.subjectName"></h1>
           <p class="sv__lede sv__lede--compact" x-text="subject?.thesisBlurb || `${session.subjectName} swarm review.`"></p>
           <!-- Backdrop chips. Label and value are distinct elements: the old

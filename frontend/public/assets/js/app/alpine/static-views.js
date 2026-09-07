@@ -366,6 +366,15 @@ export function withinBucketWeightsFrom(rec) {
 // copy contract as much as a rendering one — the sentence a reader is shown is
 // the thing that was wrong — so the sentence itself is what gets pinned.
 export const helpers = {
+  // What KIND of subject this is, read from the record's own `source.type`
+  // rather than guessed from the slug. Shared by the subject profile and by
+  // the session detail, because a session's eyebrow and its subject's eyebrow
+  // must not disagree about what the reader is looking at. A `framework`
+  // subject has no book: its structural notes open with "no portfolio to
+  // scrape", which both pages were contradicting by printing "portfolio".
+  subjectKindOf(subject) {
+    return subject?.source?.type === "framework" ? "framework" : "portfolio";
+  },
   // Strip punctuation before taking initials. Operators name their agents
   // freely, and "woon (test)" was rendering as "W(" — the second word's first
   // character is a parenthesis, not a letter.
@@ -1154,17 +1163,19 @@ export function registerStaticViews(Alpine) {
     // One sentence saying what this page is. It replaced a three-figure stat
     // strip whose "top position" was the fourth place the same holding appeared,
     // and which never told a reader what a "subject" actually is.
-    summaryLine() {
-      const worth = this.snapshot ? `It holds ${this.fmtUsd(this.snapshot.totalValueUsd)} today` : null;
-      const n = this.sessions.length;
-      const oldest = n ? this.sessions[n - 1].date : null;
-      const since = oldest ? this.formatDate(oldest, "long").replace(/\s*\d{1,2},\s*/, " ") : null;
-      const reviewed = !n
-        ? "The swarm has not reviewed it yet"
-        : `the swarm has reviewed it ${n === 1 ? "once" : n + " times"}${since ? " since " + since : ""}`;
-      const parts = ["This is a portfolio the Robot Money Investment Swarm reviews."];
-      parts.push(worth ? `${worth} and ${reviewed}.` : `${reviewed[0].toUpperCase()}${reviewed.slice(1)}.`);
-      return parts.join(" ");
+    // What KIND of subject this is, from the record rather than from the slug.
+    // A `framework` subject is the allocation recipe and has no book: its own
+    // structural notes open with "no portfolio to scrape", which the page was
+    // contradicting one line above them by calling it a portfolio.
+    isFramework() { return this.subject?.source?.type === "framework"; },
+    subjectKind() { return this.subjectKindOf(this.subject); },
+    // Newest first, so the head's chip names the most recent review. The
+    // prose line this replaced named the OLDEST ("since August 2026"), which
+    // is the less useful of the two: a reader wants to know how current the
+    // page is, not when it started.
+    lastReviewedLabel() {
+      const s = this.sessions[0];
+      return s?.date ? this.formatDate(s.date, "short") : "";
     },
     positionRows() {
       const total = this.snapshot?.totalValueUsd || 0;
