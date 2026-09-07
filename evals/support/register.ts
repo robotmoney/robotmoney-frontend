@@ -1,4 +1,5 @@
 import { test } from "bun:test";
+import { fileURLToPath } from "node:url";
 import { redactTelemetryText } from "../../scripts/lib/onboarding-telemetry.ts";
 import { resolveAgentModel } from "../../scripts/lib/model-registry.ts";
 import { resolveAdmissionEvalModelConfig } from "../../scripts/onboarding-eval-local.ts";
@@ -12,7 +13,7 @@ import {
   type EvalScore,
 } from "./definition.ts";
 
-const repoRoot = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const suiteRunId = evalSuiteRunId();
 const registeredIds = new EvalIdRegistry();
 
