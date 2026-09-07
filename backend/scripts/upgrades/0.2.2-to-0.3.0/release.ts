@@ -46,6 +46,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0044_wallet_backfill_leg_terminal.sql",
   "0045_chain_address_floors.sql",
   "0046_asset_prices.sql",
+  "0047_swarm_session_subject_name_backfill.sql",
 ] as const;
 
 /**
