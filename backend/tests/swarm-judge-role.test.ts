@@ -116,3 +116,34 @@ test("a non-judge is refused before a judgement row is written", async () => {
   const rows = await sql`SELECT id FROM swarm_session_judgements WHERE session_id = ${s.session.id}`;
   expect(rows).toHaveLength(0);
 });
+
+// Issue #925 (review-security-002): the judge/take conflict-of-interest guard
+// (`judge-session.ts`'s `judge_member_has_take_in_session` refusal) had no
+// regression test anywhere in this suite. A member submits a take as an
+// ordinary voter, is later promoted to `role: 'judge'`, and then attempts to
+// judge the very session it already has a take in — separation of duties must
+// refuse this before any judgement row lands, not merely discourage it.
+test("a judge who already submitted a take in the session is refused before a judgement row is written", async () => {
+  // thirdPartyEnabled must be ON so the take-conflict check (which runs AFTER
+  // the third-party gate) is actually what is under test here, rather than a
+  // third-party refusal masking it — this candidate is not on
+  // LIVE_ROSTER_HANDLES, so it is not otherwise exempt from that gate.
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
+
+  const candidate = await member("has_take");
+  const s = await session("take_conflict");
+  const voter = await member("voter_take_conflict");
+  // Submitted while candidate is still a plain member — the role promotion
+  // below happens strictly AFTER this take is on the session.
+  expect((await submit(candidate, s.date, s.subjectId)).status).toBe(201);
+  expect((await submit(voter, s.date, s.subjectId)).status).toBe(201);
+  await swarm.closeWindow(s.session.id);
+  await swarm.aggregateSession(s.session.id);
+
+  expect((await admin.setMemberRoleAdmin(candidate.id, 1, "judge")).ok).toBe(true);
+
+  const refused = await judgeSession(s.session.id, { judgeMemberId: candidate.id, transport });
+  expect(refused).toMatchObject({ ok: false, status: 409, error: "judge_member_has_take_in_session" });
+  const rows = await sql`SELECT id FROM swarm_session_judgements WHERE session_id = ${s.session.id}`;
+  expect(rows).toHaveLength(0);
+});

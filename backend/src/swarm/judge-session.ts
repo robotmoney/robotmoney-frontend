@@ -23,6 +23,7 @@
 import { sql, type DbHandle } from "../db/client.ts";
 import { loadFrozenTakeSet } from "./domain.ts";
 import { judge, type JudgeInput, type JudgeOptions, type JudgeOutcome, type JudgeTake } from "./judge.ts";
+import { LIVE_ROSTER_HANDLES } from "./roster-seed.ts";
 
 export type JudgeMode = "off" | "shadow" | "enforce";
 
@@ -32,19 +33,19 @@ export interface JudgeConfig {
   /** The model the judge reaches, or null — see migration 0039 on why this is a row. */
   model: string | null;
   /**
-   * Issue #796, amended by #918. Global switch: may an EXTERNALLY-OPERATED
-   * graduated judge member (a `judgeSession()` call carrying a `judgeMemberId`
-   * whose row's `operator` is not `'robotmoney'`) author a judgement at all.
-   * Off by default, independent of `mode`. Two classes are unaffected by this
-   * flag either way: the built-in worker (no `judgeMemberId`), and an
-   * IN-HOUSE named judge (Themis, `operator = 'robotmoney'`, see
-   * roster-seed.ts) — the rollout plan this flag implements is explicit that
-   * the in-house judge goes live FIRST, "before third-party judges are
-   * allowed at all" (docs/decisions.md), so folding it under the same gate
-   * would make the in-house stage depend on the third-party one it is
-   * supposed to precede. Same "database row, not env var, no redeploy to
-   * flip" posture as `mode` (migration 0039's own reasoning, extended by
-   * migration 0048).
+   * Issue #796, amended by #918, re-keyed by #925. Global switch: may an
+   * EXTERNALLY-OPERATED graduated judge member (a `judgeSession()` call
+   * carrying a `judgeMemberId` whose `handle` is not in `LIVE_ROSTER_HANDLES`)
+   * author a judgement at all. Off by default, independent of `mode`. Two
+   * classes are unaffected by this flag either way: the built-in worker (no
+   * `judgeMemberId`), and an IN-HOUSE named judge (Themis, seated by
+   * roster-seed.ts and therefore on `LIVE_ROSTER_HANDLES`) — the rollout plan
+   * this flag implements is explicit that the in-house judge goes live FIRST,
+   * "before third-party judges are allowed at all" (docs/decisions.md), so
+   * folding it under the same gate would make the in-house stage depend on
+   * the third-party one it is supposed to precede. Same "database row, not
+   * env var, no redeploy to flip" posture as `mode` (migration 0039's own
+   * reasoning, extended by migration 0048).
    */
   thirdPartyEnabled: boolean;
   updatedAt: string | null;
@@ -239,8 +240,8 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
       // Read inside the write transaction: an admin revocation that committed
       // while the model was thinking is observed before any judgement row can
       // land.
-      const member = (await tx<{ status: string; role: string; operator: string | null }[]>`
-        SELECT status, role, operator FROM swarm_members WHERE id = ${judgeMemberId} FOR UPDATE`)[0];
+      const member = (await tx<{ status: string; role: string; handle: string }[]>`
+        SELECT status, role, handle FROM swarm_members WHERE id = ${judgeMemberId} FOR UPDATE`)[0];
       if (!member || member.status !== "active") {
         refusal = { ok: false, status: 403, error: "judge_member_inactive" };
         throw new JudgeRollback();
@@ -249,20 +250,29 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
         refusal = { ok: false, status: 403, error: "judge_role_required" };
         throw new JudgeRollback();
       }
-      // Issue #796, amended by #918. The gate is named "third-party" and the
-      // rollout plan it implements (docs/decisions.md) is explicit: "a single
-      // in-house judge first... before third-party judges are allowed at
-      // all" — an in-house judge is the thing that plan says goes live FIRST,
-      // not the thing this flag exists to hold back. `operator` is the same
-      // field roster-seed.ts already stamps 'robotmoney' on every in-house
-      // seat (Themis included); a judgeMemberId whose member row carries that
-      // operator is exempt from the gate, and everyone else — every
-      // self-registered, externally-operated graduated judge — stays behind
-      // it exactly as #796 shipped. Read inside the write transaction, same
-      // reason as the checks above: an admin turning third-party judging off
-      // while the model was thinking must be observed before any judgement
-      // row can land, not merely before the next call.
-      if (member.operator !== "robotmoney") {
+      // Issue #796, amended by #918, re-keyed by #925. The gate is named
+      // "third-party" and the rollout plan it implements (docs/decisions.md)
+      // is explicit: "a single in-house judge first... before third-party
+      // judges are allowed at all" — an in-house judge is the thing that plan
+      // says goes live FIRST, not the thing this flag exists to hold back.
+      //
+      // #925: THIS USED TO CHECK `member.operator !== "robotmoney"`.
+      // `operator` is a free-text, self-service-writable display column
+      // (validateMemberProfile — any active member can POST
+      // `{"operator": "robotmoney"}` to its own profile), so that check
+      // collapsed the "in-house" exemption into a string an ordinary member
+      // already controlled: grant it `role: 'judge'` (a real admin
+      // prerequisite, but a disjoint one that never reads `operator`) and it
+      // could forge its way past the third-party gate at judging time. The
+      // exemption is re-keyed off `handle` instead — a member CANNOT set its
+      // own handle (validateMemberProfile refuses it outright, issue #593) —
+      // checked against `LIVE_ROSTER_HANDLES`, the compile-time list of
+      // handles roster-seed.ts actually seats (Themis included). Read inside
+      // the write transaction, same reason as the checks above: an admin
+      // turning third-party judging off while the model was thinking must be
+      // observed before any judgement row can land, not merely before the
+      // next call.
+      if (!LIVE_ROSTER_HANDLES.includes(member.handle)) {
         const flagRow = (await tx<{ third_party_enabled: boolean }[]>`
           SELECT third_party_enabled FROM swarm_judge_config WHERE id = 1`)[0];
         if (!flagRow?.third_party_enabled) {

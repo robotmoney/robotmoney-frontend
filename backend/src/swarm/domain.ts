@@ -2265,6 +2265,10 @@ export async function updateMemberProfile(token: string, memberRef: string, patc
       avatar = ${sql.json(merged.avatar as any)}, updated_at = now()
     WHERE id = ${memberId}
     RETURNING *`;
-  await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'update_profile', ${sql.json({ memberId } as any)})`;
+  // Issue #925: name the changed fields, matching admin.ts's updateMemberAdminTx
+  // audit style. Previously this logged only `{ memberId }` — an admin
+  // investigating a suspected self-service forgery after the fact had no
+  // record of which field, if any, had ever held a different value.
+  await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'update_profile', ${sql.json({ memberId, fields: Object.keys(patch) } as any)})`;
   return { ok: true, status: 200, member: toMember(updated[0]) };
 }
