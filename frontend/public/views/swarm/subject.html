@@ -17,27 +17,40 @@
 
     <template x-if="!loading && subject">
       <div>
-        <header class="sv__profile-head">
-          <div class="sv__avatar sv__avatar--xl sp-mark"
-               x-text="initials(subject.name)"></div>
-          <div class="sv__profile-main">
-            <p class="sv__eyebrow">portfolio<span x-show="subject.operator"> · operator <span x-text="subject.operator"></span></span></p>
-            <h1 class="sv__detail-title" x-text="subject.name"></h1>
-            <p class="sv__lede sv__lede--compact" x-show="subject.thesisBlurb" x-text="subject.thesisBlurb"></p>
-            <p class="sp-links" x-show="subject.homepage || subject.xHandle">
-              <a x-show="subject.homepage" :href="subject.homepage" rel="noopener noreferrer" target="_blank"
-                 x-text="hostOf(subject.homepage) + ' ↗'"></a>
-              <a x-show="subject.xHandle" :href="`https://x.com/${String(subject.xHandle).replace(/^@/, '')}`"
-                 rel="noopener noreferrer" target="_blank" x-text="'@' + String(subject.xHandle).replace(/^@/, '') + ' ↗'"></a>
-            </p>
+        <!-- .sv__detail-head, and the same four elements in the same order as
+             session.html: eyebrow, title, the subject's own blurb, a row of
+             facts. A session and the subject it reviews are two views of one
+             thing, and they open identically now.
+
+             No identity mark. It was a 5rem square of the subject's initials
+             standing in for an avatar that does not exist: it carried no
+             information, and it indented the headline and its copy away from
+             the left edge every other block on this page sits on. -->
+        <header class="sv__detail-head">
+          <p class="sv__eyebrow sv__eyebrow--quiet"><span x-text="subjectKind()">portfolio</span><span x-show="subject.operator"> · operator <span x-text="subject.operator"></span></span></p>
+          <h1 class="sv__detail-title" x-text="subject.name"></h1>
+          <p class="sv__lede sv__lede--compact" x-show="subject.thesisBlurb" x-text="subject.thesisBlurb"></p>
+          <p class="sp-links" x-show="subject.homepage || subject.xHandle">
+            <a x-show="subject.homepage" :href="subject.homepage" rel="noopener noreferrer" target="_blank"
+               x-text="hostOf(subject.homepage) + ' ↗'"></a>
+            <a x-show="subject.xHandle" :href="`https://x.com/${String(subject.xHandle).replace(/^@/, '')}`"
+               rel="noopener noreferrer" target="_blank" x-text="'@' + String(subject.xHandle).replace(/^@/, '') + ' ↗'"></a>
+          </p>
+          <!-- The same chips a session carries, with the facts a subject has.
+               This was a prose sentence spelling the same two numbers out
+               ("It holds $42,688 today and the swarm has reviewed it 6 times
+               since August 2026"), which read as narration and, on a framework
+               subject, asserted a book that does not exist. -->
+          <div class="sv__fact-row">
+            <span class="sv__fact"><em>sessions</em><b x-text="sessions.length"></b></span>
+            <span class="sv__fact" x-show="lastReviewedLabel()">
+              <em>last reviewed</em><b x-text="lastReviewedLabel()"></b>
+            </span>
+            <span class="sv__fact" x-show="snapshot && !isFramework()">
+              <em>holdings</em><b x-text="fmtUsd(snapshot?.totalValueUsd)"></b>
+            </span>
           </div>
         </header>
-
-        <!-- What this page IS, in a sentence. The page previously opened with a
-             three-figure stat strip whose "Top position" was the fourth place
-             the same holding appeared, and it never said what a subject is. A
-             reader should not have to infer that from an eyebrow. -->
-        <p class="sp-summary" x-text="summaryLine()"></p>
 
         <!-- Concentration over time. A holdings table is a single day; the
              question a reader actually has is whether the book is getting more
@@ -183,74 +196,68 @@
       </div>
     </template>
 
-    <!-- The swarm disclaimer belongs here too, and production carries it on
-         every swarm surface. It is deliberately NOT in this change: the
-         shared string lands with fix/swarm-parity-and-status-page, and
-         duplicating it here would fork the wording. Once that merges this page
-         takes the same four lines the other three surfaces use:
-           <section class="rm-disclaimer" role="note" aria-label="Disclaimer"
-                    x-data="swarmDisclaimer()"> … </section>
-         Tracked so it cannot be forgotten: this page is the fifth surface. -->
+    <!-- The fifth surface. The shared string has landed, so this page carries
+         the same disclaimer, from the same source, as every other swarm
+         surface rather than being the one that quietly omits it. -->
+    <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="swarmDisclaimer()">
+      <p class="rm-disclaimer__label">Disclaimer</p>
+      <p class="rm-disclaimer__body" x-text="text"></p>
+    </section>
   </div>
 
   <style>
-    /* The subject mark is a SQUARE, matching the swarm's grammar: a round mark
-       is a reading, a square one is an identity (see .rm-mark in
-       components.css). It is NEUTRAL. Identity carries shape and label; hue
-       belongs to stance alone, because stance is the only ordinal variable
-       here and a ramp is the only encoding that shows direction. This border
-       used to take subjectDot()'s hue, which meant the same green read as
-       "the vault" here and "bullish" two sections down. */
-    /* One sentence, set larger than body, doing the job the stat strip did
-       badly: say what this page is and give the two figures that matter. */
-    .sp-summary { font-size: 1.05rem; line-height: 1.6; color: var(--color-text-muted);
-                  max-width: 62ch; margin: 20px 0 0; border-top: 1px solid var(--color-accent);
-                  padding-top: 16px; }
-    .sp-holdings { margin-top: 14px; }
+    /* Page-local styles. Every length here is on the same rem scale the
+       shared sv__ components use (0.25rem steps); this block carried a mix of
+       10px, 11.5px, 12.5px, 14px, 20px and 34px, which is what a page looks
+       like after several passes that each guessed. Every colour is a token:
+       one rule was painting a raw #7E889E through a --color-muted variable
+       that does not exist. */
+
+    .sp-holdings { margin-top: 1rem; }
     /* The series key, matching the chart's band for the same token. A filled
-       square, not a rule: the figure is now a stack of areas, and the key has to
+       square, not a rule: the figure is a stack of areas, and the key has to
        look like the thing it points at. */
-    .sp-key { display: inline-block; width: 9px; height: 9px; background: var(--k, var(--color-border));
-              vertical-align: baseline; margin-right: 9px; }
-    .sp-sessions { margin-top: 34px; }
-    .sp-mark { border-radius: 0; border-color: var(--color-border); }
-    /* Set the colour explicitly. Left to the UA these render as default-blue
-       underlined links, which is not a house colour and reads as unstyled. */
-    .sp-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
-                font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
-    .sp-links a { color: var(--color-accent); text-decoration: none;
-                  border-bottom: 1px solid transparent; }
+    .sp-key { display: inline-block; width: 0.5rem; height: 0.5rem; background: var(--k, var(--color-border));
+              vertical-align: baseline; margin-right: 0.5rem; }
+    .sp-sessions { margin-top: 2.5rem; }
+    /* An external link, in the second of the two link treatments this site
+       uses: reading ink with a quiet rule, and Beam arriving on hover. It was
+       cyan at rest, which put the accent on a hostname. */
+    .sp-links { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem;
+                font-family: var(--font-mono); font-size: 0.72rem; }
+    .sp-links a { color: var(--color-text); text-decoration: none;
+                  border-bottom: 1px solid var(--color-border-light);
+                  transition: border-color 0.16s ease; }
     .sp-links a:hover, .sp-links a:focus-visible { border-bottom-color: var(--color-accent); }
     /* Chart and legend sit side by side while there is room for both, and the
        legend drops under the figure once the row would squeeze the bands. The
        figure keeps a floor of ~300px so it never compresses to a stripe. */
     .sp-chart__body { display: flex; flex-wrap: wrap; align-items: flex-start;
-                      gap: 8px 22px; margin: 14px 0 2px; }
+                      gap: 0.5rem 1.5rem; margin: 1rem 0 0; }
     .sp-chart__svg { flex: 1 1 300px; min-width: 0; }
     .sp-chart__svg svg { display: block; width: 100%; height: auto; }
-    .sp-legend { flex: 0 1 auto; list-style: none; margin: 2px 0 0; padding: 0;
-                 font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px;
-                 line-height: 1.9; }
-    .sp-legend li { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+    .sp-legend { flex: 0 1 auto; list-style: none; margin: 0; padding: 0;
+                 font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.9; }
+    .sp-legend li { display: flex; align-items: baseline; gap: 0.5rem; white-space: nowrap; }
     /* A square, matching the band it names — not the rounded dot the rest of the
        site uses for a reading. */
-    .sp-legend__key { flex: none; width: 9px; height: 9px; background: var(--k, var(--color-border));
+    .sp-legend__key { flex: none; width: 0.5rem; height: 0.5rem; background: var(--k, var(--color-border));
                       transform: translateY(1px); }
     .sp-legend__token { color: var(--color-text); }
     /* The share is a supporting figure, not the label: muted, and pushed to a
        column of its own so the numbers align down the legend. */
-    .sp-legend__pct { margin-left: auto; padding-left: 10px; color: var(--color-text-muted);
+    .sp-legend__pct { margin-left: auto; padding-left: 0.75rem; color: var(--color-text-muted);
                       font-variant-numeric: tabular-nums; }
     /* Stacked under the figure, the legend goes wide — let the rows flow into a
        band instead of one tall column pinned to the left. */
     @media (max-width: 620px) {
-      .sp-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; width: 100%; }
+      .sp-legend { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; width: 100%; }
       .sp-legend__pct { margin-left: 0; padding-left: 0; }
     }
-    .sp-wallets li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .sp-wallet__label { font-size: 12.5px; }
-    .sp-wallets code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px;
+    .sp-wallets li { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .sp-wallet__label { font-size: 0.8rem; }
+    .sp-wallets code { font-family: var(--font-mono); font-size: 0.72rem;
                        color: var(--color-text-muted); }
-    .sp-note { font-size: 12.5px; color: var(--color-muted, #7E889E); margin-bottom: 8px; }
+    .sp-note { font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.5rem; }
   </style>
 </section>
