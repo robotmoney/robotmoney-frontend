@@ -149,6 +149,24 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *    never held. It is also the one protected table that additionally refuses
  *    UPDATE (`rm_consensus_receipt_immutable()`, migration 0042), because
  *    amending these bytes does not amend the receipt, it orphans the anchor.
+ *  - `swarm_member_keys` — issue #697. Every take's `public_key` at read time
+ *    was, until this migration, resolved as "the member's CURRENTLY ACTIVE
+ *    key", not the key that actually signed it — so once a member's key
+ *    rotated, an already-stored, append-only-protected take silently stopped
+ *    verifying (an admin rotation) or lost its signing key row outright (a
+ *    hard-DELETE on re-registration, since fixed in swarm/domain.ts's
+ *    registerMember to deactivate like every other rotation path). This table
+ *    was ORIGINALLY excluded here with the reason "key lifecycle, not
+ *    history: an operator must be able to remove a key" — see the git history
+ *    of this comment. That reasoning was already false the day it was
+ *    written: every real removal path retained the old row as
+ *    `active = false`, so nothing ever needed DELETE here, and the exclusion
+ *    served only to leave the re-registration bug legal. A `swarm_member_keys`
+ *    row is exactly the material 0032's own header says the guarantee is
+ *    about — "the signatures were made by keys the server never held" — for
+ *    every take that row verified, so it belongs in the same protected set as
+ *    the takes themselves. UPDATE (`active = false`) is untouched and remains
+ *    the correct way to retire a key.
  *  - `swarm_applications` — the inbound application record behind an admission
  *    or a rejection.
  *  - `audit_log`, `agent_activity_log` — the trail of who did what. An audit
@@ -166,15 +184,6 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *    ephemeral auth state whose PURPOSE is to be consumed or to expire. A
  *    WebAuthn challenge that cannot be deleted is a replay window: protecting
  *    these would REDUCE security.
- *  - `swarm_member_keys` — key lifecycle, not history: an operator must be able
- *    to remove a key, and every admin rotation path already retains the old row
- *    as `active = false` rather than deleting it. NOTE a known consequence that
- *    is NOT fixed here and is tracked separately: swarm/domain.ts's
- *    registerMember hard-removes every key row on re-registration, and the read
- *    paths resolve a take's key as the member's CURRENTLY ACTIVE one, so a
- *    retained (append-only) take can stop verifying after a rotation. Protecting
- *    this table would not fix that; the register path and the read path are what
- *    need to change.
  *  - `jobs`, `job_runs`, `job_schedules` — queue and coordination churn, and
  *    the queue is periodically pruned by design. NOTE the cost, recorded in
  *    0032's header: `jobs` has `ON DELETE SET NULL` edges into protected tables
@@ -220,6 +229,7 @@ export const APPEND_ONLY_TABLES = [
   "swarm_subject_snapshots",
   "swarm_session_judgements",
   "swarm_consensus_receipts",
+  "swarm_member_keys",
   "swarm_applications",
   "audit_log",
   "agent_activity_log",
@@ -246,6 +256,7 @@ export const APPEND_ONLY_MIGRATIONS = [
   "0032_append_only_history.sql",
   "0040_swarm_judgements_append_only.sql",
   "0042_swarm_consensus_receipts.sql",
+  "0049_swarm_member_keys_append_only.sql",
 ] as const;
 
 /** The two trigger names migration 0032 installs on each protected table. */
