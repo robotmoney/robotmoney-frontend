@@ -292,10 +292,15 @@ test("drift is computed from the two feeds, and names what is missing", async ({
 
   // A sleeve with no contract says so, and offers no comparison and no
   // invented receipt symbol for an address nobody has deployed.
+  // A sleeve with no contract shows NOTHING about a vault: no rail, no chip, no
+  // sentence. It used to say the same thing three ways, and the donut legend
+  // and the meta rail each state it once already.
   const agent = page.locator(".alp__card").nth(1);
-  await expect(agent.locator(".alp__vchip")).toContainText("Vault pending");
+  await expect(agent.locator(".alp__vrail")).toHaveCount(0);
   await expect(agent.locator(".alp__hold")).toHaveCount(0);
   await expect(agent).not.toContainText("rm");
+  // What it DOES say is what the sleeve is.
+  await expect(agent.locator(".alp__card-what")).toContainText("$ROBOTMONEY");
   await expectNoBrowserErrors(errors);
 });
 
@@ -424,7 +429,7 @@ test("the latest recommendation is the session's rationale, and the page says wh
   // rationale follows as the supporting sentence.
   await expect(block.locator(".alp__latest-line")).toHaveText("rotate USDC");
   await expect(block.locator(".alp__latest-why")).toHaveText(session.swarmRecommendation.rationale);
-  await expect(block).toContainText("no weight change");
+  await expect(block).toContainText("no change");
   await expect(block.locator("a").first())
     .toHaveAttribute("href", `/swarm/sessions/${session.id}`);
   // The two links the section owes a reader who wants the reasoning behind a

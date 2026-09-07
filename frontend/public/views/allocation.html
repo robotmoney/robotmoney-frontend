@@ -82,7 +82,7 @@
          to, which is the only sleeve that has one. -->
     <div class="alp__meta">
       <span>In force since <b x-text="allocationAsOfLabel()">—</b></span>
-      <span>Vaults live <b x-text="vaultsLiveLabel()">—</b></span>
+      <span>Vaults <b x-text="vaultsLiveLabel()">—</b></span>
       <span>Deployed <b x-text="deployedLabel()">—</b></span>
       <span>Chain <b x-text="vaultChain()">—</b></span>
       <a class="alp__nav alp__nav--addr" :href="vaultHref()" target="_blank" rel="noopener">
@@ -136,7 +136,6 @@
           </li>
         </template>
       </ul>
-      <div class="alp__tip alp__tip--alloc" x-ref="allocTip" aria-hidden="true"></div>
     </div>
 
     <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
@@ -170,6 +169,8 @@
       </span>
     </div>
   </div>
+
+  <div class="alp__tip alp__tip--alloc" x-ref="allocTip" aria-hidden="true"></div>
 
   <!-- ── § WHAT CHANGED ───────────────────────────────────────────────────
        Was, now, and the move between them. It absorbs the old "Latest
@@ -232,7 +233,7 @@
         <span class="alp__latest-date" x-show="latest" x-text="latestDate()"></span>
         <span x-show="latestQuorum()" x-text="latestQuorum()"></span>
         <span x-show="latestConfidence()" x-text="latestConfidence()"></span>
-        <span class="alp__latest-flag">no weight change</span>
+        <span class="alp__latest-flag">no change</span>
       </div>
       <template x-if="latestLine()">
         <p class="alp__latest-line" x-text="latestLine()"></p>
@@ -286,6 +287,7 @@
             </span>
           </div>
           <div class="alp__card-body">
+            <p class="alp__card-what" x-show="sleeveNote(s.key)" x-cloak x-text="sleeveNote(s.key)"></p>
             <!-- Constituents restart at the front of the palette inside their
                  own sleeve, keyed on their position in the policy. The vault
                  table below keys on the same index, so a venue is one colour
@@ -301,12 +303,13 @@
                 <span data-mark="series" role="img"
                       :aria-label="`${c.label}, ${fmtPct(c.target)} of ${s.name}`"
                       :style="`width:${Math.max(0, Math.min(100, c.target))}%;background:${constituentColour(ci)}`"
-                      @pointerenter="hoverItem($event, ci)"></span>
+                      @pointerenter="hoverItem($event, ci, s, c)"
+                      @pointermove="moveTip($event)"></span>
               </template>
             </div>
             <div class="alp__names" @pointerleave="leaveItem($event)">
               <template x-for="(c, ci) in constituents(s.key)" :key="c.label">
-                <span @pointerenter="hoverItem($event, ci)">
+                <span @pointerenter="hoverItem($event, ci, s, c)" @pointermove="moveTip($event)">
                   <i data-mark="series" :style="`background:${constituentColour(ci)}`"></i><span x-text="c.label"></span>
                   <b x-text="fmtPctTrim(c.target)"></b>
                 </span>
@@ -317,24 +320,15 @@
                  is no contract yet. A sleeve without a vault gets NO receipt
                  symbol: naming a token for an address nobody has deployed is
                  the kind of fabrication a reader would act on. -->
-            <div class="alp__vrail">
-              <span class="alp__vchip" :class="sleeveHasVault(s.key) ? '' : 'pending'">
-                <i></i><span x-text="sleeveHasVault(s.key) ? 'Vault live' : 'Vault pending'"></span>
-              </span>
-              <template x-if="sleeveHasVault(s.key)">
+            <template x-if="sleeveHasVault(s.key)">
+              <div class="alp__vrail">
+                <span class="alp__vchip"><i></i>Vault live</span>
                 <code x-text="vaultToken()"></code>
-              </template>
-              <span class="alp__vstat">Chain<b x-text="vaultChain()"></b></span>
-              <template x-if="sleeveHasVault(s.key)">
+                <span class="alp__vstat">Chain<b x-text="vaultChain()"></b></span>
                 <span class="alp__vstat">APY · 7-day<b x-text="vaultApyLabel()"></b></span>
-              </template>
-              <template x-if="sleeveHasVault(s.key)">
                 <span class="alp__vstat">TVL<b x-text="fmtUsd2(tvlUsd())"></b></span>
-              </template>
-              <template x-if="!sleeveHasVault(s.key)">
-                <span class="alp__vstat">Status<b>Not deployed</b></span>
-              </template>
-            </div>
+              </div>
+            </template>
 
             <template x-if="sleeveHasVault(s.key)">
               <!-- Not <details>. Its content renders for the first time already
@@ -436,11 +430,6 @@
                   </p>
                 </div></div></div>
               </div>
-            </template>
-            <template x-if="!sleeveHasVault(s.key)">
-              <p class="alp__vd">
-                <span><b>No vault yet.</b></span>
-              </p>
             </template>
           </div>
         </div>
@@ -595,7 +584,6 @@
 .alp__donut svg path.dim { opacity: 0.3; }
 @media (prefers-reduced-motion: reduce) { .alp__donut svg path { transition: none; } }
 .alp__split { position: relative; }
-.alp__tip--alloc { white-space: normal; max-width: 15rem; }
 
 /* The meta rail that replaced it: one line of facts, none of which is a
    figure that does not exist yet. */
@@ -611,7 +599,7 @@
   letter-spacing: 0.12em; color: var(--color-text-muted);
 }
 .alp__meta b { display: block; margin-top: 0.25rem; }
-}
+
 .alp__meta {
   display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; margin: 1rem 0 0;
   font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
@@ -680,6 +668,13 @@
   transition: border-color 150ms var(--ease-out-expo);
 }
 .alp__link:hover { border-bottom-color: var(--color-accent); }
+/* A link inside a data table is a ROW NAME first. Cyan text there competes
+   with the series chip beside it and reads as interface sitting in a column of
+   figures, so the name keeps reading ink and Beam arrives only on hover. */
+table.alp__tbl .alp__link {
+  color: var(--color-text); border-bottom-color: var(--color-border-light);
+}
+table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color: var(--color-accent); }
 .alp__nav {
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.13em; color: var(--color-text-soft); text-decoration: none;
@@ -759,19 +754,203 @@
   .alp__card, .alp__stk > span, .alp__names > span { transition: none !important; }
 }
 
+/* The one tooltip on the page, shared by the donut's slices and by every
+   sleeve bar. Name on top, then label/value rows that line up. */
 .alp__tip {
-  position: absolute; pointer-events: none; opacity: 0; transition: opacity 0.1s;
+  position: fixed; pointer-events: none; opacity: 0; transition: opacity 0.1s;
+  white-space: normal; min-width: 11rem; max-width: 16rem;
   background: var(--color-surface); border: 1px solid var(--color-border-light);
-  padding: 0.5rem 0.6rem; font-family: var(--font-mono); font-size: 0.65rem;
-  color: var(--color-text); white-space: nowrap; z-index: 2;
+  padding: 0.5rem 0.75rem 0.6rem; font-family: var(--font-mono); font-size: 0.7rem;
+  color: var(--color-text); z-index: 2;
 }
 .alp__tip b {
-  display: block; color: var(--color-text-muted); font-weight: 500; margin-bottom: 0.3rem;
-  text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.58rem;
+  display: flex; align-items: baseline; gap: 0.5rem; font-weight: 500;
+  font-family: var(--font-sans); font-size: 0.875rem; color: var(--color-text);
+  margin-bottom: 0.5rem;
 }
-.alp__tip span { display: block; }
-.alp__tip .alp__tip-soft { color: var(--color-text-soft); }
-.alp__tip i { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.4rem; }
+.alp__tip b i { flex: 0 0 auto; width: 0.5rem; height: 0.5rem; transform: translateY(-0.05em); }
+.alp__tip span {
+  display: flex; justify-content: space-between; gap: 1.5rem;
+  font-variant-numeric: tabular-nums; line-height: 1.7;
+}
+.alp__tip em {
+  font-style: normal; text-transform: uppercase; letter-spacing: 0.1em;
+  font-size: 0.85em; color: var(--color-text-muted);
+}
+.alp__tip .alp__tip-soft {
+  display: block; margin-top: 0.5rem; color: var(--color-text-muted);
+  font-family: var(--font-sans); font-size: 0.8rem; line-height: 1.5;
+}
+
+/* The meta rail that replaced it: one line of facts, none of which is a
+   figure that does not exist yet. */
+/* A GRID, not a wrapping flex row. How many lines a flex row wraps to depends
+   on how long its values are, so this rail grew the moment "—" became
+   "$231.51" and shoved the figure below it down: 0.18 of layout shift on a
+   phone, all of it from one line of text getting longer. Fixed tracks make the
+   row count a function of the viewport alone. */
+.alp__meta {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem 1.5rem; margin: 1rem 0 0;
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted);
+}
+.alp__meta b { display: block; margin-top: 0.25rem; }
+
+.alp__meta {
+  display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; margin: 1rem 0 0;
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted);
+}
+.alp__meta b { display: block; margin-top: 0.25rem; color: var(--color-text); font-weight: 500; text-transform: none; letter-spacing: 0.02em; font-size: 0.875rem; }
+.alp__meta > a { align-self: end; }
+/* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
+
+
+/* The two figures with no route behind them, as one line rather than two
+   tiles. Beacon marks it, as a POINT and nothing else. */
+.alp__pending { margin: 1.25rem 0 0; font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.55; }
+.alp__pending b { color: var(--color-text-soft); font-weight: 500; }
+
+/* provenance badges */
+.alp__prov { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+.alp__badge {
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.12em; padding: 0.25rem 0.5rem; border-radius: var(--radius);
+  border: 1px solid var(--color-border-light); color: var(--color-text-muted);
+}
+.alp__badge--stale, .alp__badge--backfilled { color: var(--color-warm); border-color: var(--color-warm); }
+.alp__cell-badge {
+  display: inline-block; margin-left: 0.5rem; font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-warm);
+}
+/* Warm is for PROVENANCE: stale, caught up late. "not held" is ordinary data,
+   already said by the dashes and by the drift, so it stays quiet. */
+.alp__cell-badge--quiet { color: var(--color-text-muted); }
+
+/* ── sections ──────────────────────────────────────────────────────────── */
+.alp__sec { margin-top: 3rem; }
+.alp__sec-head {
+  display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
+  gap: 0.5rem 1rem; margin-bottom: 0.25rem;
+}
+.alp__h2 {
+  font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
+  font-size: clamp(1.15rem, 3vw, 1.9rem); line-height: 1.05; letter-spacing: -0.01em;
+  margin: 0; color: var(--color-text);
+}
+/* No max-width. A section description runs the width of the section it
+   describes: a measure-capped paragraph in a full-width band leaves a hole
+   on the right that reads as an unfinished layout rather than as a choice. */
+.alp__sub { margin: 0 0 1.25rem; color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6; }
+.alp__sub b { color: var(--color-text-soft); font-weight: 500; }
+.alp__sub code {
+  font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
+  background: var(--color-surface); padding: 0.25rem 0.25rem;
+}
+.alp__sub--after { margin: 1.25rem 0 0; }
+.alp__empty { color: var(--color-text-muted); font-size: 0.875rem; margin: 0 0 1.25rem; }
+/* TWO link treatments on this page, and only two.
+   .alp__link  — inline, inside prose or a table row. It inherits the type of
+                 whatever it sits in, so a link in a mono table reads as table
+                 text; only the colour and the Beam-at-rest rule mark it.
+   .alp__nav   — a place to go: the section action, the addresses, the row of
+                 links under the last review. Mono, tracked, quiet until you
+                 reach for it, and Beam arrives on hover as a LINE.
+   Before this there were three, and .alp__link rendered three different ways
+   depending on what its container happened to impose on it. */
+.alp__link {
+  color: var(--color-accent); text-decoration: none;
+  border-bottom: 1px solid var(--color-accent-line);
+  transition: border-color 150ms var(--ease-out-expo);
+}
+.alp__link:hover { border-bottom-color: var(--color-accent); }
+/* A link inside a data table is a ROW NAME first. Cyan text there competes
+   with the series chip beside it and reads as interface sitting in a column of
+   figures, so the name keeps reading ink and Beam arrives only on hover. */
+table.alp__tbl .alp__link {
+  color: var(--color-text); border-bottom-color: var(--color-border-light);
+}
+table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color: var(--color-accent); }
+.alp__nav {
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.13em; color: var(--color-text-soft); text-decoration: none;
+  /* Beam at rest, which is the token's whole reason for existing: a rule that
+     marks a control without shouting. At border-light these read as labels
+     rather than as links. */
+  border-bottom: 1px solid var(--color-accent-line); padding-bottom: 0.25rem;
+  transition: color 150ms var(--ease-out-expo), border-color 150ms var(--ease-out-expo);
+}
+.alp__nav:hover, .alp__nav:focus-visible { color: var(--color-text); border-bottom-color: var(--color-accent); }
+.alp__nav:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+/* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
+.alp__nav--addr { text-transform: none; letter-spacing: 0.04em; }
+
+/* the answer strip: the figures a section exists to give */
+/* What a depositor keeps is money, so it is Pool green like the figure beside
+   it. It was warm, which is a second saturated accent doing work the label
+   already does. */
+/* charts */
+/* ── motion, and the skeleton that removes the layout shift ─────────────── */
+/* 100/300/500: 150ms for feedback, 300ms for a layout change like the
+   disclosure. Exponential easing, never bounce. Only opacity and
+   grid-template-rows move; nothing here animates width, height or margin. */
+.alp__fade { animation: alp-in 300ms var(--ease-out-expo) both; }
+@keyframes alp-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Placeholder blocks, still and quiet. They carry the row count and the
+   geometry so the page does not resize under the reader when the feeds land.
+   No shimmer: a pulsing block is a decoration this brand does not spend, and a
+   still one reads as "not here yet" just as clearly. */
+.alp__sk { pointer-events: none; }
+.alp__sk-b { display: block; background: var(--color-surface-light); }
+.alp__skring {
+  width: 100%; max-width: 300px; aspect-ratio: 1; margin-inline: auto;
+  border-radius: 50%; border: 33px solid var(--color-surface-light);
+}
+.alp__skrows { display: grid; gap: 0; }
+.alp__skrow {
+  display: grid; grid-template-columns: 0.7rem 1fr; gap: 0 0.8rem; align-items: start;
+  padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--color-border);
+}
+.alp__skrow:first-child { border-top: 1px solid var(--color-border); }
+.alp__skrow i { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; }
+.alp__skrow b { width: 11rem; height: 0.95rem; margin: 0.1rem 0 0.5rem; }
+.alp__skrow span { width: 16rem; height: 0.72rem; margin-bottom: 0.35rem; }
+.alp__skled { border: 1px solid var(--color-border); }
+.alp__skline { height: 2.6rem; border-bottom: 1px solid var(--color-border); }
+.alp__skline:last-child { border-bottom: 0; }
+.alp__skline--head { height: 2.15rem; background: var(--color-surface); border-bottom-color: var(--color-border-light); }
+.alp__skcards { display: grid; gap: 1rem; }
+.alp__skcard { height: 16.6rem; border: 1px solid var(--color-border); background: var(--color-deep); }
+
+/* The vault disclosure. `details` cannot transition on its own — its children
+   start at display:none, so a transition has no value to leave from and the
+   panel snaps open. The toggle is intercepted instead: open first, then run
+   the row from 0fr to 1fr, and on close run it down before the element
+   actually closes. Rows, not height: grid-template-rows is the one height-ish
+   property that does not force a layout pass every frame. */
+.alp__hold-anim {
+  display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows 300ms var(--ease-out-expo);
+}
+.alp__hold.is-open .alp__hold-anim { grid-template-rows: 1fr; }
+/* Three levels, and each one has a job: the grid row animates, the clip hides
+   the overflow, the body carries the padding. Put the padding on the clipped
+   element instead and the row never collapses past it — the panel rests about
+   29px open, which reads as a rendering bug. */
+.alp__hold-clip { overflow: hidden; min-height: 0; }
+.alp__off i { display: inline-block; font-style: normal; transition: transform 300ms var(--ease-out-expo); }
+.alp__hold.is-open .alp__off i { transform: rotate(180deg); }
+.alp__hold > summary { transition: color 150ms var(--ease-out-expo); }
+.alp__hold > summary:hover { color: var(--color-text); }
+
+@media (prefers-reduced-motion: reduce) {
+  .alp__fade { animation: none; }
+  .alp__hold-anim, .alp__off i, .alp__link, .alp__nav, .alp__hold-sum,
+  .alp__card, .alp__stk > span, .alp__names > span { transition: none !important; }
+}
+
 
 /* the seam banner — the window between the reference series and today */
 /* Beacon, as a POINT: a 6px mark, not a glyph set at type size. */
@@ -810,6 +989,7 @@
   letter-spacing: 0.14em; color: var(--color-text-muted);
 }
 .alp__card-body { padding: 1rem 1.25rem 1.25rem; display: flex; flex-direction: column; flex: 1 1 auto; }
+.alp__card-what { margin: 0 0 1rem; color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6; }
 
 /* The policy bar, drawn to the SLEEVE's own hundred rather than to its share
    of the book, so a 5% sleeve holding seven names is as readable as a 95% one.

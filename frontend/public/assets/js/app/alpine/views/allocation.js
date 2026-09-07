@@ -58,6 +58,17 @@ const FIXED_INCOME_KEY = "defi-yield";
 // not a feed. The other three sleeves get no symbol at all: naming a token for
 // a contract nobody has deployed is a fabrication a reader would act on.
 const VAULT_TOKEN = "rmUSDC";
+
+// What each sleeve IS, keyed on the framework's own bucket key. Page copy, not
+// a feed: the allocation DTO serves labels and weights and no prose. It says
+// what the sleeve holds and why it exists, and deliberately does not re-list
+// the names, which are already printed under the bar.
+const SLEEVE_NOTE = {
+  "defi-yield": "Lending USDC on Base. The lowest-volatility sleeve, aimed at capital preservation.",
+  "agent-tokens": "Tokens of the agents that hold $ROBOTMONEY. The list is admin-managed.",
+  "protocol-tokens": "Large-cap crypto and DeFi assets.",
+  rwa: "Tokenised traditional instruments: equity index and commodities.",
+};
 const VAULT_CHAIN = "Base";
 
 // Adapter display names and venue types. vault-economics serves the protocol
@@ -281,8 +292,13 @@ export function registerAllocationView(Alpine) {
     // rather than an adjective. The direct descendant of the old page's
     // sleeveStaleLabel(w) over wallet-sleeves, pointed at the only book this
     // page is allowed to read.
+    // Keyed on the ROW, not on the feed. A whole-feed `stale` is already stated
+    // once by the page badge and again by asOfLabel()'s "(stale)"; repeating it
+    // on every row said nothing new and put three warm badges in a column that
+    // is otherwise all figures. The per-row badge is for the case it was built
+    // for: SOME rows degraded, each naming its own observation time.
     sleeveStaleLabel(adapter) {
-      const degraded = adapter?.provenance === "stale" || this.vaultStale();
+      const degraded = adapter?.provenance === "stale";
       if (!degraded) return "";
       const observed = adapter?.balanceObservedAt || this.economics?.asOf;
       if (!observed) return "stale";
@@ -449,6 +465,10 @@ export function registerAllocationView(Alpine) {
     // callers. Keyed on the sleeve, NOT on sleeveHasVault: a dead economics
     // feed must not take the anchor down with it.
     sleeveAnchor(key) { return key === FIXED_INCOME_KEY ? "vault" : null; },
+    // Empty for a bucket key we have no copy for, which renders nothing rather
+    // than a placeholder: a sleeve the framework adds later gets no sentence
+    // until someone writes one.
+    sleeveNote(key) { return SLEEVE_NOTE[key] || ""; },
     vaultChain() { return VAULT_CHAIN; },
     // The meta rail, which replaced a four-tile stat block. Two of those tiles
     // were "not yet published" set in display type, which spent the top of the
@@ -588,6 +608,54 @@ export function registerAllocationView(Alpine) {
     // already on the page as text in the legend beside it, so making four
     // slices focusable would add tab stops that reach nothing new. The slices
     // keep their <title>, which is what a screen reader reads.
+    // A constituent tooltip has to earn the hover, so it does NOT restate the
+    // name and weight printed two lines below the bar. It adds the two figures
+    // that are not on screen: what this name is worth against the whole book,
+    // and, where a vault holds it, what the vault actually has against what the
+    // policy says. The second pair otherwise lives inside a collapsed panel.
+    constituentTip(sleeve, item, index) {
+      const hue = itemColour(index);
+      const rows = [["In sleeve", this.fmtPct(item.target)]];
+      const ofBook = (Number(item.target) * Number(sleeve.target)) / 100;
+      rows.push(["Of the book", this.fmtPct(ofBook)]);
+      const held = this.sleeveVaultRows(sleeve.key).find((r) => r.policy === item.target && r.label.toLowerCase().includes(String(item.label).toLowerCase().split(" ")[0]))
+        || this.sleeveVaultRows(sleeve.key)[index];
+      if (this.sleeveHasVault(sleeve.key) && held && held.actual != null) {
+        rows.push(["In vault", this.fmtPct(held.actual)]);
+        const d = held.actual - held.policy;
+        rows.push(["Drift", (d >= 0 ? "+" : "−") + Math.abs(d).toFixed(2)]);
+      }
+      return this.tipMarkup(hue, item.label, rows,
+        this.sleeveHasVault(sleeve.key) ? null : "No vault holds this sleeve yet.");
+    },
+    tipMarkup(hue, title, rows, foot) {
+      let out = `<b><i style="background:${hue}"></i>${title}</b>`;
+      out += rows.map(([k, v]) => `<span><em>${k}</em>${v}</span>`).join("");
+      if (foot) out += `<span class="alp__tip-soft">${foot}</span>`;
+      return out;
+    },
+    // Viewport coordinates, because the tooltip is now shared by the donut and
+    // by every sleeve bar rather than living inside the figure.
+    tipAt(html, ev) {
+      const tip = this.$refs.allocTip;
+      if (!tip) return;
+      tip.innerHTML = html;
+      tip.style.opacity = "1";
+      this.moveTip(ev);
+    },
+    moveTip(ev) {
+      const tip = this.$refs.allocTip;
+      if (!tip || tip.style.opacity !== "1" || !ev) return;
+      const pad = 14;
+      const r = tip.getBoundingClientRect();
+      let left = ev.clientX + pad;
+      let top = ev.clientY + pad;
+      if (left + r.width > window.innerWidth - 8) left = ev.clientX - r.width - pad;
+      if (top + r.height > window.innerHeight - 8) top = ev.clientY - r.height - pad;
+      tip.style.left = Math.max(8, left) + "px";
+      tip.style.top = Math.max(8, top) + "px";
+    },
+
     tipHtml(row) {
       const parts = [
         `<b>${row.name}</b>`,
@@ -605,7 +673,8 @@ export function registerAllocationView(Alpine) {
     // hand rather than through Alpine state because the cards come out of an
     // x-for and a per-card scope for one transient class would cost more than
     // it explains.
-    hoverItem(ev, index) {
+    hoverItem(ev, index, sleeve, item) {
+      if (sleeve && item) this.tipAt(this.constituentTip(sleeve, item, index), ev);
       const card = ev.currentTarget.closest(".alp__card");
       if (!card) return;
       card.querySelectorAll(".alp__stk > span").forEach((node, i) => {
@@ -617,6 +686,7 @@ export function registerAllocationView(Alpine) {
       });
     },
     leaveItem(ev) {
+      this.hideTip();
       const card = ev.currentTarget.closest(".alp__card");
       if (!card) return;
       card.querySelectorAll(".alp__stk > span, .alp__names > span").forEach((node) => {
@@ -627,16 +697,7 @@ export function registerAllocationView(Alpine) {
     hoverSleeve(row, ev) { this.showTip(row, ev); this.dimTo(row.key); },
     leaveSleeve() { this.hideTip(); this.dimTo(null); },
     showTip(row, ev) {
-      const tip = this.$refs.allocTip;
-      const host = this.$refs.allocFig;
-      if (!tip || !host) return;
-      tip.innerHTML = this.tipHtml(row);
-      tip.style.opacity = "1";
-      const rect = host.getBoundingClientRect();
-      const x = ev && ev.clientX != null ? ev.clientX - rect.left : rect.width / 2;
-      const y = ev && ev.clientY != null ? ev.clientY - rect.top : rect.height / 2;
-      tip.style.left = Math.min(Math.max(x + 14, 8), Math.max(8, rect.width - 190)) + "px";
-      tip.style.top = Math.max(8, y - 10) + "px";
+      this.tipAt(this.tipHtml(row), ev);
       this.hotKey = row.key;
     },
     hideTip() {
