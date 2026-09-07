@@ -133,10 +133,8 @@ test("public subject profile renders holdings, wallets, NFT contracts, and struc
 
 // The optional panels gate on .length rather than rendering an empty section.
 // This used to be asserted against robotmoney-allocation, whose archive
-// manifest is the only one carrying `wallets: []` with no `nft_contracts` key
-// — and RM-115 redirected that address to /allocation/history, because the
-// allocation is a framework rather than a book and this template had nothing
-// to show for it. The two gates are covered separately now: the NFT one off
+// manifest is the only one carrying `wallets: []` with no `nft_contracts` key.
+// The two gates are covered separately now: the NFT one off
 // the archive, which is the fixture that has it, and the wallets one off a
 // stubbed API subject, which is the path production actually takes.
 test("public subject profile hides the NFT panel for an archived subject with none declared", async ({ page }) => {

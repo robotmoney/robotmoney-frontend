@@ -55,7 +55,6 @@ describe("frontend route resolution", () => {
     // than an absence: the catch-all maps any unknown path to
     // `/views/<path>.html`, so a bare deletion would 404 a live address.
     expect(viewFor("/vault")).toBe("/views/allocation.html");
-    expect(viewFor("/allocation/history")).toBe("/views/allocation-history.html");
     expect(viewFor("/research/channel-divergence")).toBe("/views/research/channel-divergence.html");
   });
 

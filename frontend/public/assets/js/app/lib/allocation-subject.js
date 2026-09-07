@@ -2,11 +2,10 @@
 //
 // `robotmoney-allocation` is a slug, not a uuid: it is the primary key of the
 // framework subject in `swarm_subjects`, it appears in the session feed as
-// `subjectId`, and it is the old reader-facing URL that now redirects to
-// /allocation/history. Three surfaces need to agree about it — the product
-// sheet's "latest recommendation" line, the decision log's row set, and the
-// router's redirect — so it is a shared constant rather than a string typed
-// out three times.
+// `subjectId`, and it is the reader-facing URL of the subject's own page. Two
+// surfaces need to agree about it — /allocation's link out to the sessions
+// that review these weights, and the session filter — so it is a shared
+// constant rather than a string typed out twice.
 //
 // It is matched by ID and never by `source.type === "framework"`: the type
 // test needs every subject record fetched first, which is a request per

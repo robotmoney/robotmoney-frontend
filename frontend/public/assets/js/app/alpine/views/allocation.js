@@ -2,8 +2,8 @@
 // container rule RM-114).
 //
 // THE ONE RULE THIS FILE EXISTS TO KEEP: it reads
-// GET /api/dashboards/allocation, GET /api/dashboards/vault-economics and
-// GET /api/swarm/sessions, and NOTHING ELSE. It must never read
+// GET /api/dashboards/allocation and GET /api/dashboards/vault-economics,
+// and NOTHING ELSE. It must never read
 // wallet-balances or wallet-sleeves. Those are the three protocol-owned prop
 // wallets — the house book, a different pot of money with different owners,
 // moving to the token page under RM-103. The page this replaced added the two
@@ -14,8 +14,9 @@
 // exclusion before anything else.
 //
 // The allocation is a POLICY, not a book of holdings (RM-114). This page is
-// the policy as it stands now; /allocation/history is how it has changed;
-// /swarm/subjects/:id is a book, and the vault keeps one.
+// the policy as it stands now; the sessions that reviewed it are on the
+// swarm's page for the subject; /swarm/subjects/:id is otherwise a book, and
+// the vault keeps one.
 //
 // Live, per fetch:
 //   allocation       the four sleeve target weights and their constituents,
@@ -25,8 +26,6 @@
 //                    three adapter holdings. They drive the vault panel inside
 //                    the sleeve the vault implements, and the drift between
 //                    what it holds and what the policy says it should.
-//   swarm/sessions   the newest PUBLISHED session on the allocation subject,
-//                    for the reading under the change ledger.
 //
 // NOT live, and said so on the page:
 //   * NAV per share and true period returns. There is no GET route over
@@ -34,18 +33,12 @@
 //     vault-economics does serve one SPOT `sharePrice`, printed as a spot read
 //     with its own timestamp; one number is not a series, and a
 //     since-inception return derived from it would be a fabrication.
-//   * The recommendation VECTOR. `robotmoney-allocation` is typed
-//     `position_actions`, so meanTakeWeights() never runs for it and no
-//     session publishes weights. The line shows the session's actions instead
-//     of inventing a vector.
 //   * A second version of the weights. `allocation_framework` has one writer,
 //     the database seed, so the change ledger's `was` is the row in force and
 //     every row reads flat until something can write another.
 import { api, ROUTES } from "../../lib/api.js";
 import { PALETTE, CATEGORICAL } from "../../lib/chart-theme.js";
-
-
-import { VAULT_SUBJECT_ID } from "../../lib/allocation-subject.js";
+import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID } from "../../lib/allocation-subject.js";
 
 // The ERC-4626 vault on Base. A public on-chain address, source of truth
 // frontend/public/skill.md.
@@ -152,7 +145,9 @@ export function registerAllocationView(Alpine) {
 
     vaultAddress: VAULT_ADDRESS,
     vaultSubjectHref: `/swarm/subjects/${VAULT_SUBJECT_ID}`,
-    historyHref: "/allocation/history",
+    // The allocation's own decision log is not built yet, so the sessions
+    // live where the swarm keeps them.
+    historyHref: `/swarm/subjects/${ALLOCATION_SUBJECT_ID}`,
 
     init() {
       this.load();

@@ -430,8 +430,11 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
 
   await expect(page.locator(".alp__latest")).toHaveCount(0);
   await expect(page.locator(".alp__how")).toHaveCount(0);
-  // The one link out: every session that has reviewed these weights.
-  await expect(page.locator('#what-changed a[href="/allocation/history"]')).toBeVisible();
+  // The one link out: every session that has reviewed these weights. The
+  // allocation's own decision log is not built, so that is the swarm's page
+  // for the subject and not a page of this branch's own.
+  await expect(page.locator('#what-changed a[href="/swarm/subjects/robotmoney-allocation"]'))
+    .toBeVisible();
   // Schema names, table names and route behaviour are not the reader's
   // business. The page says what is true about the allocation; how the backend
   // stores or types it is ours to know.

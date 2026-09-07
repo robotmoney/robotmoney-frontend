@@ -1,11 +1,6 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
-// /allocation/history — the allocation's decision log (RM-115). The fragment is
-// `allocation-history.html`, NOT `allocation/history.html`: the catch-all at the
-// bottom of viewFor() would resolve the nested path to a nested file, and the
-// smoke frontend check reads the flat name.
-export const ALLOCATION_HISTORY_VIEW = `${VIEW_DIR}/allocation-history.html`;
 // There is still no VAULT_VIEW, and now there is no views/vault.html either.
 // It was kept UNREACHABLE in the tree while RM-104's information architecture
 // was reworked, on the note that "the page comes back through that work". This
@@ -162,7 +157,6 @@ const ROUTES = {
   // just be /blog again under another address. Falling through to the catch-all
   // (→ views/research.html, absent → not-found) is the honest answer.
   "/allocation": ALLOCATION_VIEW,
-  "/allocation/history": ALLOCATION_HISTORY_VIEW,
   "/performance": PERFORMANCE_VIEW,
   "/allocation2": PERFORMANCE_VIEW, // legacy redirect
   // /vault renders /allocation (RM-115's URL table). It was pinned to
@@ -194,44 +188,6 @@ const ROUTES = {
   // /admin section first, so the standalone page was dropped as a duplicate
   // (see PR #172).
 };
-
-/**
- * Paths that MOVE, as opposed to paths that are merely rewritten.
- *
- * routes.js's other legacy handling (the /committee tree, /allocation2) is a
- * REWRITE: the old address keeps rendering, serving the new page's fragment
- * under the old URL, and seo.js declares the new address canonical so the
- * duplicate does not compete in search. That is right for a rename nobody
- * needs to notice.
- *
- * This is different. /swarm/subjects/robotmoney-allocation is a portfolio
- * profile for a subject that has no portfolio: `source: {type: "framework"}`,
- * `wallets: []`, and a structural note reading "no portfolio to scrape". A
- * reader who lands there should end up somewhere that answers the question
- * they arrived with, at an address they can copy, so the router rewrites the
- * URL and renders the destination rather than serving it under the old name
- * (RM-115).
- *
- * `render()` in router.js consults this before anything else and replaces the
- * history entry, so the old address never stays in the bar and never becomes
- * a back-button trap. seo.js's LEGACY_ALIASES carries the same pair, for the
- * prerenderer and the api process's shell fallback, which have no router.
- *
- * @type {Record<string, string>}
- */
-const REDIRECTS = {
-  "/swarm/subjects/robotmoney-allocation": "/allocation/history",
-};
-
-/**
- * The path a request should be MOVED to, or null to render `pathname` itself.
- * @param {string} pathname
- * @returns {string | null}
- */
-export function redirectFor(pathname) {
-  const clean = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
-  return REDIRECTS[clean] || null;
-}
 
 /** @param {string} pathname */
 export function viewFor(pathname) {

@@ -804,10 +804,10 @@
   letter-spacing: -0.01em !important;
   text-transform: uppercase !important;
 }
-/* Kept off the swarm's detail titles and /allocation/history's: those sit under
-   a 10px mono eyebrow that needs its own small gap, where these heroes pin to
-   the top of their block. (.vp__title left this list with views/vault.html,
-   which RM-115 retired into /allocation's `#vault` section.) */
+/* Kept off the swarm's detail titles: those sit under a 10px mono eyebrow that
+   needs its own small gap, where these heroes pin to the top of their block.
+   (.vp__title left this list with views/vault.html, which RM-115 retired into
+   /allocation's `#vault` section.) */
 .sk__title, .rv__title, .tok__h1, .a2-hero__title,
 .md-hero__title, .cl__h1, .sv__title {
   /* /regime and /swarm carried an 8px top margin, which is enough to read

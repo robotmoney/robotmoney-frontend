@@ -17,6 +17,7 @@ import { operatorName } from "../../lib/operator.js";
 // register.
 import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
+import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 
@@ -257,18 +258,16 @@ export function registerSwarmView(Alpine) {
       return `${rows.length} ${noun} · latest ${this.formatDate(latest)}`;
     },
     // The allocation's decision log lives in the product section, not the
-    // swarm's (RM-115). This used to point at /swarm/subjects/<id>, a
-    // PORTFOLIO profile — concentration over time, a holdings table, tracked
-    // wallets — for a subject with no portfolio at all; that address now
-    // redirects here anyway (routes.js's REDIRECTS).
+    // swarm's (RM-115). It pointed at /allocation/history for one commit;
+    // that page is not built yet, so the sessions live where the swarm keeps
+    // them, on the subject's own profile.
     //
-    // Unconditional, where the old form returned "" without a subject or
+    // Unconditional, where the older form returned "" without a subject or
     // without sessions. That guard existed to avoid linking to
-    // /swarm/subjects/undefined, and a fixed destination cannot be undefined:
-    // the page exists whether or not this view resolved the subject, and it
-    // renders its own empty state when nothing has published.
+    // /swarm/subjects/undefined, and the id is a fixed slug rather than
+    // something this view has to resolve.
     allocationHref() {
-      return "/allocation/history";
+      return `/swarm/subjects/${ALLOCATION_SUBJECT_ID}`;
     },
     // Sessions this page lists: every published session, including the
     // allocation subject's. They used to be dropped here and only reachable
