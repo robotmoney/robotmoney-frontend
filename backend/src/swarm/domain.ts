@@ -64,11 +64,43 @@ export async function memberIdForToken(token: string): Promise<string | null> {
   return rows[0]?.member_id ?? null;
 }
 
-async function publicKeyFor(memberId: string): Promise<string | null> {
-  const rows = await sql<{ public_key: string }[]>`
-    SELECT public_key FROM swarm_member_keys
+// Issue #697: a take's public key must be resolved by the key that ACTUALLY
+// SIGNED IT (`signing_key_id`, recorded on the row at submission time — see
+// submitRecommendation), never by whichever key happens to be active NOW.
+// The active key can rotate (or be re-registered) long after an already
+// stored, append-only take was written, and re-resolving "currently active"
+// at read time silently starts checking history against the wrong key.
+//
+// Rows written before `signing_key_id` existed have it NULL and fall back to
+// that older "currently active key" lookup — a documented cutover point
+// (migration 0048's header), not a claim that those older rows are correctly
+// attributed. A fresh Fragment per call, not a shared constant, so embedding
+// it in several independent queries below cannot share state between them.
+// Every caller embeds it with the recommendation row aliased as `r`.
+function signingPublicKeySql() {
+  return sql`
+  COALESCE(
+    (SELECT k.public_key FROM swarm_member_keys k WHERE k.id = r.signing_key_id),
+    (SELECT k.public_key FROM swarm_member_keys k
+     WHERE k.member_id = r.member_id AND k.active
+     ORDER BY k.created_at DESC LIMIT 1)
+  )`;
+}
+
+// Issue #697: callers need BOTH the key material (to verify against) and the
+// key's own row id (to record, at write time, which exact key verified a
+// take — see submitRecommendation's INSERT). A bare public_key string cannot
+// answer "which row was this" once a member has rotated more than once.
+// `id` is typed `string`, not `number` — swarm_member_keys.id is `bigserial`,
+// and postgres.js returns bigint columns as strings to avoid silent precision
+// loss (the same convention swarm_session_judgements.id is read under
+// elsewhere in this codebase). It is never arithmetic here, only threaded
+// through to another query parameter.
+async function activeKeyFor(memberId: string): Promise<{ id: string; publicKey: string } | null> {
+  const rows = await sql<{ id: string; public_key: string }[]>`
+    SELECT id, public_key FROM swarm_member_keys
     WHERE member_id = ${memberId} AND active ORDER BY created_at DESC LIMIT 1`;
-  return rows[0]?.public_key ?? null;
+  return rows[0] ? { id: rows[0].id, publicKey: rows[0].public_key } : null;
 }
 
 // Fixed maximum size for the standing swarm. HARD-ENFORCED at every
@@ -418,9 +450,7 @@ export async function getMemberTakes(memberId: string, limit?: number) {
              r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
              s.date AS session_date, s.generated_at AS session_generated_at,
              s.subject_id, s.subject_name, s.state AS session_state,
-             (SELECT k.public_key FROM swarm_member_keys k
-              WHERE k.member_id = r.member_id AND k.active
-              ORDER BY k.created_at DESC LIMIT 1) AS public_key
+             ${signingPublicKeySql()} AS public_key
       FROM swarm_recommendations r
       JOIN swarm_sessions s ON s.id = r.session_id
       JOIN swarm_members m ON m.id = r.member_id
@@ -502,9 +532,7 @@ async function withTakes(s: Record<string, unknown>) {
              r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
              r.stance, r.confidence, r.body,
              r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
-             (SELECT k.public_key FROM swarm_member_keys k
-              WHERE k.member_id = r.member_id AND k.active
-              ORDER BY k.created_at DESC LIMIT 1) AS public_key
+             ${signingPublicKeySql()} AS public_key
       FROM swarm_recommendations r
       JOIN swarm_members m ON m.id = r.member_id
       WHERE r.session_id = ${s.id as string}
@@ -530,9 +558,7 @@ export async function getTakeReceipt(id: string) {
     SELECT r.id, r.session_id, r.member_id, m.handle AS member_handle, m.name AS member_name,
            r.stance, r.confidence, r.body,
            r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
-           (SELECT k.public_key FROM swarm_member_keys k
-            WHERE k.member_id = r.member_id AND k.active
-            ORDER BY k.created_at DESC LIMIT 1) AS public_key
+           ${signingPublicKeySql()} AS public_key
     FROM swarm_recommendations r
     JOIN swarm_members m ON m.id = r.member_id
     WHERE r.id = ${id} LIMIT 1`)[0];
@@ -773,9 +799,9 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     return { ok: false, status: 409, error: "nonce already used by this member (replay); mint a fresh nonce to amend" };
   }
 
-  const pub = await publicKeyFor(memberId);
-  if (!pub) return { ok: false, status: 403, error: "no registered key for member" };
-  const verified = await verifySubmissionSignature(sub, sub.signature, pub);
+  const key = await activeKeyFor(memberId);
+  if (!key) return { ok: false, status: 403, error: "no registered key for member" };
+  const verified = await verifySubmissionSignature(sub, sub.signature, key.publicKey);
   if (!verified) {
     // Agent-health surface (issue #208, scout #214): a rejected/tampered
     // signature was previously visible only in the submitting agent's own
@@ -814,11 +840,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // the two-statement path explainable in the audit row.
     const rows = await sql`
       INSERT INTO swarm_recommendations
-        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision)
+        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision, signing_key_id)
       SELECT s.id, ${memberId}, ${sub.subjectId}, ${sub.date}, ${sub.nonce}, ${sub.stance},
              ${sub.confidence}, ${sub.body ?? null}, ${sub.memoUrl ?? null}, ${sql.json(sub as any)}, ${sub.signature}, true,
              (SELECT coalesce(max(r.revision), 0) + 1 FROM swarm_recommendations r
-              WHERE r.session_id = s.id AND r.member_id = ${memberId})
+              WHERE r.session_id = s.id AND r.member_id = ${memberId}),
+             ${key.id}
       FROM swarm_sessions s
       WHERE s.id = ${session.id}
         AND (s.window_closes_at IS NULL OR s.window_closes_at > now())
@@ -1311,7 +1338,19 @@ export async function registerMember(input: { memberId: string; name: string; le
         const handle = await deriveMemberHandle(tx, { memberId: input.memberId, name: input.name });
         await tx`UPDATE swarm_members SET handle = ${handle} WHERE id = ${input.memberId}`;
       }
-      await tx`DELETE FROM swarm_member_keys WHERE member_id = ${input.memberId}`;
+      // DEACTIVATE, never delete (issue #697) — matching every admin rotation
+      // path (deactivateMemberAdmin, reactivateMemberAdmin, rotateMemberKeyAdmin
+      // in swarm/admin.ts), all of which retain the prior row as
+      // `active = false` rather than removing it. This used to be a hard
+      // DELETE, which is exactly what made a re-registered member's PAST takes
+      // stop being verifiable: their `public_key` resolves through a lookup
+      // scoped to this member's key rows, and a deleted row is gone for that
+      // lookup no matter what a take's `signing_key_id` points at.
+      // `swarm_member_keys` now also carries its own append-only guard
+      // (migration 0049), so a stray DELETE here would be refused at the
+      // database regardless — this UPDATE is the correct operation, not a
+      // workaround for the guard.
+      await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${input.memberId} AND active = true`;
       await tx`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
                VALUES (${input.memberId}, ${input.publicKey}, ${hashKey(token)})`;
       return { memberId: input.memberId, token };
