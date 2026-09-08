@@ -150,6 +150,21 @@ test("throttleWaitMs: honors Retry-After up to the budget, clamps hostile values
   expect(throttleWaitMs(3, null, 10_000)).toBe(4000);
 });
 
+test("throttleWaitMs: #935 minimum backoff floor — a Retry-After of 0 (or an already-past date) never produces a near-instant retry", () => {
+  // Retry-After: 0 (delta-seconds form) is floored, not honored literally.
+  expect(throttleWaitMs(1, "0", 10_000)).toBe(500);
+  // An already-past HTTP-date (negative wait before clamping) is floored the same way.
+  const now = Math.floor(Date.now() / 1000) * 1000;
+  expect(throttleWaitMs(1, new Date(now - 5000).toUTCString(), 10_000, now)).toBe(500);
+  // A Retry-After at/above the floor is still respected verbatim (not overridden).
+  expect(throttleWaitMs(1, "1", 10_000)).toBe(1000);
+  expect(throttleWaitMs(1, "3", 10_000)).toBe(3000);
+  // The floor itself must still respect the remaining sweep budget: a
+  // degenerate Retry-After with almost no budget left still gives up (null),
+  // it is not force-slept past the deadline.
+  expect(throttleWaitMs(1, "0", 100)).toBe(null);
+});
+
 test("non-transient status: throws immediately with no retries (no backoff time wasted)", async () => {
   const orig = globalThis.fetch;
   let calls = 0;

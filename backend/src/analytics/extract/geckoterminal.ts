@@ -38,6 +38,7 @@ const MAX_SWEEP_MS = 45_000; // aggregate wall-clock budget for the whole pagina
 const MAX_ATTEMPTS_PER_PAGE = 5; // 1 try + up to 4 retries per page
 const RETRY_BASE_MS = 1_000; // exponential fallback when no Retry-After is sent
 const MAX_BACKOFF_MS = 15_000; // single-wait ceiling: a hostile/huge Retry-After can't stall the run
+const MIN_BACKOFF_MS = 500; // floor (#935): a Retry-After of 0 (or an already-past date) must not produce a near-instant retry burst
 
 type Sleep = (ms: number) => Promise<void>;
 const defaultSleep: Sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,9 +57,12 @@ export const geckoTerminalUrl = (page: number) => `${ENDPOINT}?page=${page}`;
 
 // Pure: the wait before the Nth retry (1-based) of a throttled page. Honors
 // `Retry-After` (RFC 7231 delta-seconds or HTTP-date) when present, else
-// exponential backoff (base × 2^(n-1)); either way clamped to MAX_BACKOFF_MS.
-// Returns null when the wait would overrun `remainingMs` (the sweep budget) —
-// the caller must give up loudly instead of sleeping past its deadline.
+// exponential backoff (base × 2^(n-1)); either way clamped to [MIN_BACKOFF_MS,
+// MAX_BACKOFF_MS] — the floor (#935) means a degenerate `Retry-After: 0` (or an
+// already-past HTTP-date) can never produce a near-instant retry burst, while a
+// larger `Retry-After` is still honored as-is. Returns null when the wait would
+// overrun `remainingMs` (the sweep budget) — the caller must give up loudly
+// instead of sleeping past its deadline.
 export function throttleWaitMs(
   attempt: number,
   retryAfterHeader: string | null,
@@ -75,6 +79,7 @@ export function throttleWaitMs(
     }
   }
   if (wait === null) wait = RETRY_BASE_MS * 2 ** (attempt - 1);
+  wait = Math.max(wait, MIN_BACKOFF_MS);
   wait = Math.min(wait, MAX_BACKOFF_MS);
   return wait <= remainingMs ? wait : null;
 }
