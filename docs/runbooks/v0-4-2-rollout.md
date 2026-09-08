@@ -2,7 +2,7 @@
 
 > Operator procedure for upgrading production from **v0.4.1** to **v0.4.2**.
 > The candidate currently under test is **`v0.4.2-rc.0`** at commit
-> `TBD-RESOLVE-AFTER-COMMIT` on `releases-0.4.x`.
+> `ee5e6df6f6380b998530855b78b22c95bc233bad` on `releases-0.4.x`.
 > Re-resolve the tag and SHA when a later RC is cut; this document is not
 > authority for a moving branch.
 
