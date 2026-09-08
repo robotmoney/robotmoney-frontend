@@ -1593,7 +1593,7 @@ re-read the SAME COLUMN and compared the two. A value compared against itself
 across a call that cannot write is TRUE BY CONSTRUCTION; the only defect it
 could ever report was `judge()` starting to write, and this section presented it
 as the evidence that judging never moves a vector against real history. It was
-not evidence of anything. What the tool proves now, three assertions kept
+not evidence of anything. What the tool proves now, four assertions kept
 separate because they fail for different reasons:
 
 | Assertion | What it establishes | Effect on the exit code |
@@ -1601,6 +1601,7 @@ separate because they fail for different reasons:
 | **Reproducibility** — stored `weights` vs `meanTakeWeights()` over the session's CURRENT frozen take set | D4 puts the signed number on `meanTakeWeights`, so this is "anyone holding the take set can recompute the vector" — the property the receipt rests on, and the one nothing asserted against real history before. It is the check that would have surfaced the `judged`-state amendment defect PR #757 fixed | `MISMATCH` → non-zero |
 | **The judge wrote nothing** — the column, byte-identical either side of the `judge()` call | Kept, and named for what it is: a guard on THIS path, not a fact about history. Worth having, not the headline | written → non-zero |
 | **D42 tie-break drift** — published sessions whose stored TEMPLATE rationale names a majority the fixed ladder would not elect | The enumeration D42 promises (see below). Deliberately reported and not repaired | none — reporting only |
+| **inputs_digest reproducibility** (issue #829) — the session's latest judgement's stored `inputs_digest` vs a fresh recomputation over the same frozen set | The claim `inputs_digest` exists to let anyone check: "given exactly these inputs, this recorded opinion follows". Until #829 the tool printed the recomputed value and never compared it to the stored one at all — a printed column that reads as a check that ran. See D44 for the `digest_scheme` discriminator this needs | `mismatch` (current scheme) → non-zero; `historical_divergence` (an earlier scheme) → none, reporting only |
 
 A session carrying no vector legitimately — a `position_actions` subject, or a
 `bucket_weights` session in which no member filed one — reports `n/a`, not a
@@ -1629,6 +1630,35 @@ Both halves are pinned by paired tests in `backend/tests/swarm-judge.test.ts`
 (§9b) — a constructed defect the tool must name AND a healthy session it must
 leave alone, for each half — because a tool that reports nothing on healthy data
 is indistinguishable from a tool that cannot report.
+
+**The replay now COMPARES `inputs_digest`, and a discriminator says what a
+divergence means** (issue #829, D44; §9c). Before #829, the script printed the
+freshly computed `inputsDigest` on every row and never once read
+`swarm_session_judgements.inputs_digest` to compare against it — the third
+instance of the shape #766 fixed, and the worst: a printed digest column reads
+as a check that ran, next to a session, in a tool whose whole purpose is
+verifying reproducibility. #808 made a divergence genuinely ambiguous on top of
+that: it widened what the digest commits to, so a judgement written before that
+change is EXPECTED to fail a raw comparison against today's formula, and one
+written after it is not. `swarm_session_judgements.digest_scheme` (migration
+0052) is the discriminator — every row is stamped, at write time, with
+`judge.ts`'s `DIGEST_SCHEME` constant — so the replay can tell them apart
+without guessing from a timestamp:
+
+- the row's own stored `inputs_digest` reproduces exactly → `reproduced`
+- it does not, and the row is stamped with the scheme this code implements
+  right now → `mismatch`, a real finding, fails the run
+- it does not, and the row is stamped with anything else (an older scheme, or
+  one this deployment has never written) → `historical_divergence`, expected
+  history, reports and exits 0 — the same split D42's drift uses, for the same
+  reason: a run permanently red on history it may not repair is a report
+  nobody reads
+
+A session never judged reports `not_applicable`, not a false mismatch. The
+recomputation uses the judgement's OWN recorded `min_takes`, not the caller's
+current config, because `inputsDigest()` covers `minTakes` (issue #765) and an
+operator changing the threshold is a different fact from a take set moving
+under a published opinion.
 
 **The consensus receipt carries the opinion, not a paraphrase of it** (issue
 #775). The receipt is the signed, publicly-anchored artifact — the thing

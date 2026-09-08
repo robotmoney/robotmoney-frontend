@@ -19,8 +19,8 @@
 import { STANCES } from "@robotmoney/contract";
 import { sql } from "../db/client.ts";
 import { buildRationale, loadFrozenTakeSet, majorityStance, meanTakeWeights } from "./domain.ts";
-import { judge, type JudgeOptions, type JudgeOutcome } from "./judge.ts";
-import { getJudgeConfig, judgeInputFromFrozen } from "./judge-session.ts";
+import { DIGEST_SCHEME, inputsDigest, judge, type JudgeOptions, type JudgeOutcome } from "./judge.ts";
+import { getJudgeConfig, judgeInputFromFrozen, latestJudgement } from "./judge-session.ts";
 
 // WHAT IT USED TO CHECK, AND WHY THAT WAS WORTHLESS (issue #766). The original
 // version read `swarm_recommendation.weights`, called `judge()` — which writes
@@ -31,7 +31,7 @@ import { getJudgeConfig, judgeInputFromFrozen } from "./judge-session.ts";
 // evidence that judging never moves a vector against real history. It was not
 // evidence of anything.
 //
-// WHAT IT CHECKS NOW. Three assertions, named separately, because they fail for
+// WHAT IT CHECKS NOW. Four assertions, named separately, because they fail for
 // different reasons and only one of them is the headline:
 //
 //   1. REPRODUCIBILITY (the headline). The session's STORED `weights` still
@@ -49,6 +49,19 @@ import { getJudgeConfig, judgeInputFromFrozen } from "./judge-session.ts";
 //   3. RATIONALE / LADDER AGREEMENT, per session — see
 //      `listRationaleLadderDrift()` below for the deployment-wide enumeration
 //      D42 promises.
+//   4. inputs_digest REPRODUCIBILITY (issue #829, third instance of the shape
+//      #766 fixed — this script used to print the freshly recomputed digest
+//      on every row and never compare it against
+//      `swarm_session_judgements.inputs_digest` at all). #808 widened what the
+//      digest commits to, which made a divergence EXPECTED for any row
+//      written before that change and unremarkable for one written after —
+//      and the tool could not tell an operator which they were looking at.
+//      `digest_scheme` (migration 0052) is the discriminator: a row stamped
+//      with the scheme this code implements NOW that fails to reproduce is a
+//      real finding (`mismatch`, fails the run); a row stamped with anything
+//      else is expected history (`historical_divergence`, reports and exits
+//      0) — see D44 (docs/decisions.md) for the decision and judge.ts's
+//      `DIGEST_SCHEME` for the constant both sides compare against.
 
 /** Which of the three verdicts the weight-reproducibility check reached. */
 export type WeightsVerdict =
@@ -57,6 +70,25 @@ export type WeightsVerdict =
   /** It does NOT — the published number can no longer be re-derived from the takes. */
   | "mismatch"
   /** Not a `bucket_weights` session and carrying no vector: nothing to reproduce. */
+  | "not_applicable";
+
+/**
+ * Which of the FOUR outcomes the `inputs_digest` reproducibility check
+ * reached (issue #829, D44). Unlike `WeightsVerdict`, a bare "reproduced" /
+ * "mismatch" split is not enough here: `#808` changed what the digest
+ * commits to, so a row stamped under an older scheme is EXPECTED to diverge
+ * from a recomputation under today's rule, and reporting that as a fault
+ * would make the tool cry wolf on exactly the history #808's own gate
+ * accepted as non-recomputable.
+ */
+export type DigestVerdict =
+  /** The row's OWN stamped `digest_scheme` reproduces exactly. */
+  | "reproduced"
+  /** Differs, and the row is stamped with the scheme this code implements NOW — a real finding. */
+  | "mismatch"
+  /** Differs, and the row is stamped with an older (or absent) scheme — expected, not a fault. */
+  | "historical_divergence"
+  /** No judgement is on file for this session at all: nothing to compare. */
   | "not_applicable";
 
 export interface JudgeReplayResult {
@@ -84,6 +116,20 @@ export interface JudgeReplayResult {
 
   // ── 3. Per-session rationale/ladder agreement (the D42 half, one session).
   rationale: RationaleLadderCheck;
+
+  // ── 4. inputs_digest reproducibility (issue #829). The digest ON FILE for
+  // this session's most recent judgement, compared against a fresh
+  // recomputation over the frozen set just loaded — reported as a
+  // COMPARISON, not printed as a bare value.
+  /** `swarm_session_judgements.inputs_digest` for the session's latest judgement, or null if never judged. */
+  digestStored: string | null;
+  /** `inputsDigest()` recomputed now, over the same frozen set, under that row's own recorded `min_takes`. */
+  digestRederived: string | null;
+  /** The scheme the stored row was stamped with (`swarm_session_judgements.digest_scheme`), or null if never judged. */
+  digestScheme: string | null;
+  digestVerdict: DigestVerdict;
+  /** Convenience: true unless `digestVerdict === "mismatch"` — a historical divergence is not a fault. */
+  digestReproducible: boolean;
 
   outcome: JudgeOutcome;
 }
@@ -168,6 +214,45 @@ export async function replaySessionJudge(
     | undefined;
   const weightsAfter = after?.swarm_recommendation?.weights ?? null;
 
+  // ── 4. inputs_digest reproducibility (issue #829, D44). The digest ON FILE
+  // for this session's latest judgement, recomputed over the SAME frozen set
+  // already loaded above, and reported as a comparison rather than printed
+  // as a bare value.
+  const judgement = await latestJudgement(sessionId) as
+    | { inputs_digest: unknown; min_takes: unknown; digest_scheme: unknown }
+    | null;
+  let digestStored: string | null = null;
+  let digestRederived: string | null = null;
+  let digestScheme: string | null = null;
+  let digestVerdict: DigestVerdict;
+  if (!judgement) {
+    // Never judged: nothing on file to compare against.
+    digestVerdict = "not_applicable";
+  } else {
+    digestStored = String(judgement.inputs_digest);
+    digestScheme = judgement.digest_scheme == null ? null : String(judgement.digest_scheme);
+    // THAT ROW'S OWN recorded `min_takes`, not the caller's current config —
+    // `inputsDigest()` covers `minTakes` (issue #765), so recomputing under
+    // today's threshold would report an operator changing the config as a
+    // digest mismatch, which is a different fact than "this opinion can no
+    // longer be re-derived from what produced it".
+    const digestInput = await judgeInputFromFrozen(frozen, Number(judgement.min_takes));
+    digestRederived = inputsDigest(digestInput);
+    const matches = digestRederived === digestStored;
+    // THE DISCRIMINATOR (D44): a mismatch is a real finding only when the row
+    // claims to be stamped with the scheme this code implements right now.
+    // Any other stamped value (an older scheme, or one this deployment has
+    // never seen) means the row was written under a DIFFERENT canonical
+    // form, so failing to reproduce it under today's formula is expected —
+    // it is history, not a fault, and reported rather than failed exactly as
+    // D42's tie-break drift is (see the file header).
+    digestVerdict = matches
+      ? "reproduced"
+      : digestScheme === DIGEST_SCHEME
+      ? "mismatch"
+      : "historical_divergence";
+  }
+
   const date = frozen.session.date instanceof Date
     ? frozen.session.date.toISOString().slice(0, 10)
     : String(frozen.session.date).slice(0, 10);
@@ -191,6 +276,11 @@ export async function replaySessionJudge(
     // is a difference in the row.
     judgeWroteNothing: JSON.stringify(weightsBefore) === JSON.stringify(weightsAfter),
     rationale: checkRationaleLadder(rec, subjectLabel, frozen.session.regime_summary ?? null),
+    digestStored,
+    digestRederived,
+    digestScheme,
+    digestVerdict,
+    digestReproducible: digestVerdict !== "mismatch",
     outcome,
   };
 }

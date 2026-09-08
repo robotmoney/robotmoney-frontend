@@ -38,6 +38,20 @@
 //   went red on them would be permanently red on any deployment that has one,
 //   which is how a report gets ignored.
 //
+//   INPUTS_DIGEST REPRODUCIBILITY (issue #829). Recomputes each session's
+//   latest judgement's `inputs_digest` and COMPARES it against
+//   `swarm_session_judgements.inputs_digest`, rather than printing the
+//   recomputed value bare — the third instance of the #766 shape, and the
+//   worst of the three: a printed digest column reads as a check that ran even
+//   when nothing was ever compared. `digest_scheme` (migration 0052, D44)
+//   discriminates the two ways a divergence happens: a row stamped with the
+//   scheme this code implements NOW that still fails to reproduce is a real
+//   finding (`DIGEST-MISMATCH`, fails the run); a row stamped with an older
+//   scheme (#808 widened what the digest commits to) is EXPECTED to diverge
+//   under today's formula (`DIGEST-HISTORICAL`, reports and does not fail) —
+//   same split D42 uses, for the same reason: a run permanently red on history
+//   it may not repair is a report nobody reads.
+//
 //   bun run scripts/swarm-judge-replay.ts [--limit N] [--session <uuid>] [--json]
 //
 // `--limit` bounds the REPLAY window (the N most recently convened judgeable
@@ -54,6 +68,7 @@ import {
   recentJudgeableSessions,
   replaySessionJudge,
 } from "../src/swarm/judge-replay.ts";
+import { DIGEST_SCHEME } from "../src/swarm/judge.ts";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -73,6 +88,8 @@ if (sessionIds.length === 0) {
 const results = [];
 let mismatched = 0;
 let wrote = 0;
+let digestMismatched = 0;
+let digestHistorical = 0;
 for (const id of sessionIds) {
   const replay = await replaySessionJudge(id);
   if (!replay) {
@@ -81,6 +98,8 @@ for (const id of sessionIds) {
   }
   if (replay.weightsVerdict === "mismatch") mismatched++;
   if (!replay.judgeWroteNothing) wrote++;
+  if (replay.digestVerdict === "mismatch") digestMismatched++;
+  if (replay.digestVerdict === "historical_divergence") digestHistorical++;
   results.push({
     sessionId: replay.sessionId,
     date: replay.date,
@@ -101,6 +120,11 @@ for (const id of sessionIds) {
     release: replay.outcome.opinion.release_safety.release,
     promptHash: replay.outcome.promptHash,
     inputsDigest: replay.outcome.inputsDigest,
+    digestVerdict: replay.digestVerdict,
+    digestReproducible: replay.digestReproducible,
+    digestScheme: replay.digestScheme,
+    digestStored: replay.digestStored,
+    digestRederived: replay.digestRederived,
   });
   if (!asJson) {
     const verdict = replay.weightsVerdict === "mismatch"
@@ -108,6 +132,13 @@ for (const id of sessionIds) {
       : replay.weightsVerdict === "not_applicable"
       ? "n/a      "
       : "reproduced";
+    const digestBadge = replay.digestVerdict === "mismatch"
+      ? "DIGEST-MISMATCH"
+      : replay.digestVerdict === "historical_divergence"
+      ? "digest-historical"
+      : replay.digestVerdict === "not_applicable"
+      ? "digest-n/a"
+      : "digest-ok";
     console.log(
       [
         verdict,
@@ -116,6 +147,7 @@ for (const id of sessionIds) {
         `takes=${replay.takeCount}`,
         `judge=${replay.outcome.source}${replay.outcome.fallbackReason ? `(${replay.outcome.fallbackReason})` : ""}`,
         `release=${replay.outcome.opinion.release_safety.release}`,
+        digestBadge,
         replay.outcome.opinion.release_safety.thinly_supported ? "THIN" : "",
         replay.judgeWroteNothing ? "" : "JUDGE-WROTE-THE-VECTOR",
       ].join("  ").trimEnd(),
@@ -123,6 +155,16 @@ for (const id of sessionIds) {
     if (replay.weightsVerdict === "mismatch") {
       console.log(`           stored:    ${JSON.stringify(replay.weightsStored)}`);
       console.log(`           rederived: ${JSON.stringify(replay.weightsRederived)}`);
+    }
+    if (replay.digestVerdict === "mismatch" || replay.digestVerdict === "historical_divergence") {
+      console.log(
+        `           digest scheme: stored=${replay.digestScheme ?? "(none)"} current=${DIGEST_SCHEME}` +
+          (replay.digestVerdict === "historical_divergence"
+            ? "  — written under an earlier canonical form; a raw comparison is expected to differ (D44)"
+            : "  — SAME scheme as this code implements now; this divergence is a real finding"),
+      );
+      console.log(`           digest stored:    ${replay.digestStored}`);
+      console.log(`           digest rederived: ${replay.digestRederived}`);
     }
   }
 }
@@ -132,11 +174,14 @@ for (const id of sessionIds) {
 const drift = only ? null : await listRationaleLadderDrift();
 
 if (asJson) {
-  console.log(JSON.stringify({ sessions: results, mismatched, wrote, rationaleDrift: drift }, null, 2));
+  console.log(
+    JSON.stringify({ sessions: results, mismatched, wrote, digestMismatched, digestHistorical, rationaleDrift: drift }, null, 2),
+  );
 } else {
   console.log(
     `\n${results.length} session(s) replayed, ${mismatched} vector(s) no longer reproducible, ` +
-      `${wrote} vector(s) written by the replay`,
+      `${wrote} vector(s) written by the replay, ${digestMismatched} digest(s) mismatched under the current scheme, ` +
+      `${digestHistorical} digest(s) diverged under an earlier scheme (expected, not failed)`,
   );
   if (drift) {
     console.log(
@@ -163,5 +208,7 @@ if (asJson) {
   }
 }
 
-// Drift is deliberately NOT in the exit code — see the header.
-process.exit(mismatched === 0 && wrote === 0 ? 0 : 1);
+// Drift and historical digest divergence are deliberately NOT in the exit
+// code — see the header. A post-cutover digest mismatch IS: it is a real
+// finding, exactly as a weight mismatch is.
+process.exit(mismatched === 0 && wrote === 0 && digestMismatched === 0 ? 0 : 1);

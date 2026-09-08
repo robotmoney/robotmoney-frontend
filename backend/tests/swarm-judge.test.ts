@@ -39,7 +39,7 @@ import { processOneJob } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
-  inputsDigest, JUDGE_PROMPT_HASH, judge, parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
+  DIGEST_SCHEME, inputsDigest, JUDGE_PROMPT_HASH, judge, parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
   resolveJudgeTransport, templateOpinion, UNTRUSTED_INPUTS_BEGIN, UNTRUSTED_INPUTS_END,
   type JudgeInput, type JudgeTransport,
 } from "../src/swarm/judge.ts";
@@ -1073,6 +1073,128 @@ test("the replay CLI names the non-reproducible vector, prints the D42 list, and
   expect(census.exitCode, `drift must not fail the run:\n${census.stdout.toString()}`)
     .toBe(report.mismatched === 0 ? 0 : 1);
   expect(report.mismatched).toBe(0);
+});
+
+// ── 9c. inputs_digest reproducibility (issue #829) ──────────────────────────
+//
+// The third instance of the #766 shape, and the worst of the three: the
+// script used to print the freshly recomputed `inputsDigest` on every row and
+// never compare it against `swarm_session_judgements.inputs_digest` at all —
+// a printed digest reads as a check that ran even though nothing was ever
+// compared. Same "paired assertion, plus the discriminator" discipline as
+// 9b's weight checks: a healthy row the replay must leave alone, a real
+// defect it must name, AND a row whose divergence is expected history rather
+// than a fault (D44, migration 0052's `digest_scheme`).
+
+test("the replay COMPARES the stored inputs_digest rather than printing it bare — reproduced, then a real mismatch after an amendment", async () => {
+  const { session, members } = await aggregatedSession("digest-repro", 3);
+  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+  const judged = await judgeSession(session.id, { transport: null });
+  expect(judged.ok).toBe(true);
+
+  const healthy = (await replaySessionJudge(session.id, { transport: null }))!;
+  expect(healthy.digestVerdict).toBe("reproduced");
+  expect(healthy.digestReproducible).toBe(true);
+  // The row was written by THIS code, so it is stamped with the scheme this
+  // code implements now — that is what makes a later divergence on it a real
+  // finding rather than expected history.
+  expect(healthy.digestScheme).toBe(DIGEST_SCHEME);
+  expect(healthy.digestStored).not.toBeNull();
+  expect(healthy.digestStored).toBe(healthy.digestRederived);
+
+  // AN AMENDMENT LANDING AFTER JUDGING moves the take set the digest claims to
+  // have read. Written at the database, exactly like nonReproducibleSession()
+  // above, because the app path this used to reach — an amendment after the
+  // window closes — is what PR #757 already closed; the tool under test still
+  // only READS.
+  await sql`
+    UPDATE swarm_recommendations SET body = 'an amended take, filed after judging'
+     WHERE session_id = ${session.id} AND member_id = ${members[0]!.id}`;
+
+  const broken = (await replaySessionJudge(session.id, { transport: null }))!;
+  expect(broken.digestVerdict, "a moved take set was not named").toBe("mismatch");
+  expect(broken.digestReproducible).toBe(false);
+  expect(broken.digestScheme).toBe(DIGEST_SCHEME);
+  expect(broken.digestStored).not.toBeNull();
+  expect(broken.digestRederived).not.toBeNull();
+  expect(broken.digestStored).not.toBe(broken.digestRederived);
+});
+
+test("a session never judged reports digest `not_applicable`, not a false mismatch", async () => {
+  const { session } = await aggregatedSession("digest-never-judged", 3);
+  const replay = (await replaySessionJudge(session.id, { transport: null }))!;
+  expect(replay.digestVerdict).toBe("not_applicable");
+  expect(replay.digestStored).toBeNull();
+  expect(replay.digestRederived).toBeNull();
+  expect(replay.digestScheme).toBeNull();
+  expect(replay.digestReproducible).toBe(true);
+});
+
+test("a judgement stamped with an earlier digest_scheme is reported as expected historical divergence, not a fault", async () => {
+  // A row THIS deployment's writer never produces: an older scheme, stamped by
+  // hand to stand in for a row `judgeSession()` wrote before a canonicalization
+  // change (#808 already made one; the discriminator has to keep holding for
+  // the next one too). `inputs_digest` is deliberately a value that cannot
+  // possibly match a fresh recomputation, so the assertion is really about the
+  // VERDICT the mismatch gets sorted into, not about whether it is detected.
+  const { session } = await aggregatedSession("digest-historical", 3);
+  const OLD_SCHEME_OPINION = {
+    rationale: "r", disagreements: [], release_safety: { release: "safe", concerns: [] },
+  };
+  await sql`
+    INSERT INTO swarm_session_judgements
+      (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
+       take_count, min_takes, opinion)
+    VALUES (${session.id}, 'shadow', 'fallback', 'model_unconfigured', NULL, 'ph',
+            ${"0".repeat(64)}, 'prompt-bytes-v0', 3, 3, ${sql.json(OLD_SCHEME_OPINION as any)})`;
+
+  const replay = (await replaySessionJudge(session.id, { transport: null }))!;
+  expect(replay.digestVerdict).toBe("historical_divergence");
+  // NOT a fault: the convenience flag says so, and the exit code (below) backs it.
+  expect(replay.digestReproducible).toBe(true);
+  expect(replay.digestScheme).toBe("prompt-bytes-v0");
+  expect(replay.digestStored).toBe("0".repeat(64));
+  expect(replay.digestStored).not.toBe(replay.digestRederived);
+});
+
+test("the replay CLI fails on a real (current-scheme) digest mismatch and passes on a historical one", async () => {
+  const { session, members } = await aggregatedSession("cli-digest-mismatch", 3);
+  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+  const judged = await judgeSession(session.id, { transport: null });
+  expect(judged.ok).toBe(true);
+  await sql`
+    UPDATE swarm_recommendations SET body = 'an amended take, filed after judging'
+     WHERE session_id = ${session.id} AND member_id = ${members[0]!.id}`;
+
+  const { session: histSession } = await aggregatedSession("cli-digest-historical", 3);
+  const OLD_SCHEME_OPINION = {
+    rationale: "r", disagreements: [], release_safety: { release: "safe", concerns: [] },
+  };
+  await sql`
+    INSERT INTO swarm_session_judgements
+      (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
+       take_count, min_takes, opinion)
+    VALUES (${histSession.id}, 'shadow', 'fallback', 'model_unconfigured', NULL, 'ph',
+            ${"1".repeat(64)}, 'prompt-bytes-v0', 3, 3, ${sql.json(OLD_SCHEME_OPINION as any)})`;
+
+  const env = { ...process.env, OPENCODE_API_KEY: "", DATABASE_URL: await currentDatabaseUrl() };
+  const cwd = fileURLToPath(new URL("..", import.meta.url));
+
+  const bad = Bun.spawnSync(
+    ["bun", "run", "scripts/swarm-judge-replay.ts", "--session", session.id],
+    { cwd, env },
+  );
+  const badOut = bad.stdout.toString();
+  expect(bad.exitCode, `expected a red run:\n${badOut}${bad.stderr.toString()}`).toBe(1);
+  expect(badOut).toContain("DIGEST-MISMATCH");
+
+  const hist = Bun.spawnSync(
+    ["bun", "run", "scripts/swarm-judge-replay.ts", "--session", histSession.id],
+    { cwd, env },
+  );
+  const histOut = hist.stdout.toString();
+  expect(hist.exitCode, `historical divergence must not fail the run:\n${histOut}${hist.stderr.toString()}`).toBe(0);
+  expect(histOut).toContain("digest-historical");
 });
 
 /** This test file's own clone, as a URL a child process can connect to. */
