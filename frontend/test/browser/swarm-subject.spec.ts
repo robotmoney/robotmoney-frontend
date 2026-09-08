@@ -218,3 +218,84 @@ test("a slow subject fetch does not stamp its name on the route the visitor move
   await page.waitForTimeout(FETCH_DELAY_MS + 1500);
   expect(await page.title()).toBe(faqTitle);
 });
+
+// A subject profile lists the same sessions /swarm does, and used to read them
+// a different way: /swarm showed the stance spread, the consensus lean, the
+// quorum and what the session decided, while the profile showed a take count
+// and five lines of synthesis. Same session, two stories, depending on which
+// page you arrived from.
+//
+// Both surfaces now derive those from lib/session-summary.js. The data was
+// never the obstacle: loadSessions() already fetched each session's FULL
+// detail and discarded everything but `synthesis`.
+//
+// Stubbed rather than archive-driven on purpose: the checked-in archive
+// sessions carry a recommendation but no `stances`, `quorum` or
+// `meanConfidence`, so the archive path cannot exercise the consensus half of
+// the card at all.
+test("a subject's session card carries the consensus and the decision, as /swarm does", async ({ page }) => {
+  const session = {
+    id: "3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41",
+    date: "2026-09-01",
+    subject_id: "robotmoney-allocation",
+    subject_name: "Robot Money Allocation",
+    state: "published",
+    synthesis: "The swarm held the 95/5/0/0 frame.",
+    swarm_recommendation: {
+      type: "bucket_weights",
+      weights: {
+        conservative_defi_yield: 0.95,
+        agent_tokens: 0.05,
+        protocol_tokens: 0,
+        real_world_assets: 0,
+      },
+      stances: { constructive: 4, cautious: 1 },
+      quorum: { submitted: 5, active: 7 },
+      meanConfidence: 0.62,
+    },
+  };
+
+  await page.route("**/api/swarm/subjects/robotmoney-allocation", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "robotmoney-allocation",
+        name: "Robot Money Allocation",
+        source: { type: "framework" },
+        structural_notes: [],
+        wallets: [],
+      }),
+    }));
+  await page.route("**/api/swarm/subjects/robotmoney-allocation/snapshots", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ snapshots: [] }) }));
+  await page.route("**/api/swarm/sessions?**", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions: [session], nextCursor: null }) }));
+  await page.route("**/api/swarm/sessions", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions: [session], nextCursor: null }) }));
+  await page.route("**/api/swarm/sessions/2026-09-01/robotmoney-allocation", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ session, takes: [{}, {}, {}, {}, {}] }) }));
+
+  await page.goto("/index.html");
+  await navigate(page, "/swarm/subjects/robotmoney-allocation");
+  const card = page.locator(".sv__session-card").first();
+  await expect(card).toBeVisible();
+
+  // The date is the identity here, not the subject's name: on this page every
+  // row would carry the same name.
+  await expect(card.locator(".sv__session-title")).toHaveText(/Sep 1, 2026/);
+  await expect(card.locator(".sv__session-title"))
+    .toHaveAttribute("href", `/swarm/sessions/${session.id}`);
+
+  // One bar segment per stance that was actually filed.
+  await expect(card.locator(".sv__spread > i")).toHaveCount(2);
+  // The consensus, in the same three parts /swarm prints.
+  await expect(card.locator(".sv__stance-badge")).toHaveText("constructive");
+  await expect(card).toContainText("5 of 7 took part");
+  await expect(card).toContainText("62% mean confidence");
+  // What it DECIDED, in the subject's own units.
+  await expect(card.locator(".sv__rec-n")).toHaveText("95 / 5 / 0 / 0");
+  // And the reasoning under it, which /swarm drops because its list
+  // interleaves every subject.
+  await expect(card.locator(".sv__take-body")).toContainText("held the 95/5/0/0 frame");
+});

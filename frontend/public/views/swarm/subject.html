@@ -175,19 +175,73 @@
             <!-- Keyed on the SESSION id: a subject may convene more than once
                  a day, so (date, subjectId) is no longer unique. -->
             <template x-for="s in sessions" :key="s.id">
+              <!-- The /swarm card, on a page where the subject is already
+                   known. There the title is the subject's name, because that
+                   list interleaves every subject; here the DATE is the
+                   identity, and the name would be the same string on every
+                   row. Everything under it is the same markup reading the same
+                   helpers, so one session does not tell two stories depending
+                   on which page you reached it from. -->
               <article class="sv__session-card">
                 <div class="sv__session-top">
-                  <div class="sv__session-titleline">
-                    <span class="sv__date" x-text="formatDate(s.date, 'short')"></span>
-                    <!-- Same reason as the /swarm list: link the exact
-                         session by id when the row has one (live API), and fall
-                         back to the dated URL for static-archive rows, whose
-                         synthetic id is the `${date}-${subjectId}` composite. -->
-                    <a class="sv__session-title"
-                       :href="s.id && s.id !== `${s.date}-${s.subjectId}` ? `/swarm/sessions/${encodeURIComponent(s.id)}` : `/swarm/${s.date}/${encodeURIComponent(s.subjectId)}`"
-                       x-text="takeCountLabel(s)"></a>
+                  <!-- Link the exact session by id when the row has one (live
+                       API), and fall back to the dated URL for static-archive
+                       rows, whose synthetic id is the `${date}-${subjectId}`
+                       composite. -->
+                  <a class="sv__session-title"
+                     :href="s.id && s.id !== `${s.date}-${s.subjectId}` ? `/swarm/sessions/${encodeURIComponent(s.id)}` : `/swarm/${s.date}/${encodeURIComponent(s.subjectId)}`"
+                     x-text="formatDate(s.date, 'short')"></a>
+                  <span class="sv__date" x-text="takeCountLabel(s)"></span>
+                </div>
+
+                <div class="sv__spread" role="img" :aria-label="`Stances: ${spreadLabel(s)}`" x-show="stanceSpread(s).length">
+                  <template x-for="r in stanceSpread(s)" :key="r.stance">
+                    <i :style="`flex:${r.n};background:${stanceColor(r.stance)}`"></i>
+                  </template>
+                </div>
+
+                <div class="sv__session-body">
+                  <div class="sv__session-consensus">
+                    <p class="sv__session-kicker">Consensus</p>
+                    <div class="sv__card-verdict">
+                      <span class="sv__stance-badge" x-show="lean(s)" :style="leanBadgeStyle(s)">
+                        <i x-show="leanStance(s)" :style="leanDotStyle(s)"></i>
+                        <span x-text="leanLabel(s)"></span>
+                      </span>
+                      <span x-text="quorumText(s)"></span>
+                      <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
+                    </div>
+                  </div>
+
+                  <div class="sv__session-payload">
+                    <template x-if="recommendation(s)">
+                      <dl class="sv__rec">
+                        <dt>Recommendation</dt>
+                        <template x-if="recommendation(s).kind === 'weights'">
+                          <dd>Target weights <b class="sv__rec-n" x-text="recommendation(s).text"></b></dd>
+                        </template>
+                        <template x-if="recommendation(s).kind === 'text'">
+                          <dd x-text="recommendation(s).text"></dd>
+                        </template>
+                        <template x-if="recommendation(s).kind === 'actions'">
+                          <div>
+                            <template x-for="a in recommendation(s).actions" :key="a.token + a.action">
+                              <dd><b x-text="`${a.action} ${a.token}`"></b><span x-show="a.rationale" x-text="` · ${a.rationale}`"></span></dd>
+                            </template>
+                            <dd class="sv__rec-more" x-show="recommendation(s).more"
+                                x-text="`+${recommendation(s).more} more on the session`"></dd>
+                          </div>
+                        </template>
+                      </dl>
+                    </template>
                   </div>
                 </div>
+
+                <!-- The reasoning, under the decision it explains. /swarm drops
+                     it: five lines of synthesis on every row of an interleaved
+                     list buries the one line a reader came for. Here the list
+                     is one subject deep and the reasoning is the reason to
+                     stay on the page. -->
                 <div class="sv__take-body" x-show="s.synthesis" x-html="linkified(s.synthesis || '')"></div>
               </article>
             </template>
