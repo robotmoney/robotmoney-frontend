@@ -42,8 +42,9 @@ export let sql = makePool(config.databaseUrl);
 // database at an attacker-chosen or merely mistaken URL is not a claim worth
 // making on a comment alone. `config.env` fails closed to "prod" when RM_ENV is
 // unset (config.ts), so the guard is on by default everywhere it matters.
-export async function setDatabase(url: string): Promise<void> {
-  if (config.env !== "ephemeral") {
+export async function setDatabase(url: string, options: { purpose?: "migration" } = {}): Promise<void> {
+  const migrationRedirect = options.purpose === "migration" && url === process.env.MIGRATE_DATABASE_URL;
+  if (config.env !== "ephemeral" && !migrationRedirect) {
     throw new Error(
       `db/client.setDatabase() is a test-only seam and refuses to run under RM_ENV=${config.env}. ` +
         "Point the process at a different database with DATABASE_URL and restart it.",

@@ -4,7 +4,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sql, closeDb } from "./client.ts";
+import { sql, closeDb, setDatabase } from "./client.ts";
 import { seed, seedSmokeJobSchedules } from "./seed.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
@@ -28,6 +28,10 @@ async function waitForDb(timeoutMs = 30_000): Promise<void> {
 }
 
 export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): Promise<void> {
+  // Deploy-time migrations have their own credential.  It is deliberately not
+  // inherited from a long-lived API process.  Local/ephemeral environments
+  // retain DATABASE_URL for bootstrap compatibility.
+  if (process.env.MIGRATE_DATABASE_URL) await setDatabase(process.env.MIGRATE_DATABASE_URL, { purpose: "migration" });
   await waitForDb();
   await sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -48,6 +52,10 @@ export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): P
     if (applied.has(file)) continue;
     const ddl = await readFile(join(migrationsDir, file), "utf8");
     await sql.begin(async (tx) => {
+      // 0053 creates rm_owner and transfers existing objects.  Every later
+      // migration runs as that non-login owner through a short-lived bootstrap
+      // connection that has been granted SET ROLE capability.
+      if (file >= "0054_rm_worker_allowlist.sql") await tx.unsafe("SET LOCAL ROLE rm_owner");
       await tx.unsafe(ddl);
       await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
     });
