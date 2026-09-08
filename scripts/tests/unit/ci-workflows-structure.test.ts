@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { EVIDENCE_DIR } from "../../../backend/scripts/lib/rollout-signing.ts";
 
 const root = join(import.meta.dir, "../../..");
 const workflows = join(root, ".github/workflows");
@@ -264,6 +265,35 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       );
       expect(researchYml, `research-pipeline.yml runs ${file}`).toContain(file);
     }
+  });
+
+  // ── committed rollout evidence (issue #937) ────────────────────────────────
+  test("backend.yml's pull_request paths-filter names the committed-evidence tree", () => {
+    // The evidence tree lives OUTSIDE backend/ by construction: it must match no
+    // rollout step's dependsOn glob, or recording one step's receipt would count
+    // as code drift and invalidate the next one. That also puts it outside
+    // backend.yml's original `backend/**` filter — so a PR that changed only a
+    // committed receipt, or the allowed-signers file that is the entire trust
+    // root, would skip the suite that verifies signatures
+    // (backend/tests/rollout-receipt-repo-source.test.ts) and merge unverified.
+    //
+    // Asserted against rollout-signing.ts's own EVIDENCE_DIR constant rather
+    // than a literal, so renaming the directory breaks this test instead of
+    // silently un-gating the verifier.
+    const filters = (parse("backend.yml").jobs?.changes?.steps ?? []).find((s) =>
+      (s.uses ?? "").startsWith("dorny/paths-filter@"),
+    ) as (WorkflowStep & { with?: { filters?: string } }) | undefined;
+    expect(filters?.with?.filters, "backend.yml's changes job has a dorny/paths-filter step").toBeTruthy();
+    const patterns = Object.values(
+      Bun.YAML.parse(filters!.with!.filters!) as Record<string, string[]>,
+    ).flat();
+    expect(
+      patterns.filter((p) => p.startsWith(`${EVIDENCE_DIR}/`)),
+      `backend.yml's filter names ${EVIDENCE_DIR}/ — patterns were [${patterns.join(", ")}]`,
+    ).not.toEqual([]);
+    // The pattern must be recursive: the allowed-signers file sits at the root
+    // of the tree and the receipts one level down, and both have to select the job.
+    expect(patterns).toContain(`${EVIDENCE_DIR}/**`);
   });
 });
 

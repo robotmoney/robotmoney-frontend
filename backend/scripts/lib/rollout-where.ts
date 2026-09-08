@@ -39,11 +39,13 @@ import {
   deriveHostRole,
   emitReceipt,
   gitFacts,
+  readCommittedEvidence,
   readReceipts,
   receiptsDir,
   sha256File,
 } from "./rollout-receipt.ts";
-import type { RolloutReceipt } from "./rollout-receipt.ts";
+import type { CommittedReceipt, RolloutReceipt } from "./rollout-receipt.ts";
+import { allowedSignersPath, committedReceiptsDir, verifyTagSigner } from "./rollout-signing.ts";
 import { stepById } from "./rollout-manifest.ts";
 import type { RolloutStep } from "./rollout-manifest.ts";
 
@@ -58,6 +60,32 @@ export interface WhereConfig {
   tagGlob: string;
   /** The release tracking issue, echoed in `--json` for the caller. */
   trackingIssue: number;
+  /**
+   * OPT-IN: the release's directory under `rollout-evidence/`, when this release
+   * commits signed receipts into the tree.
+   *
+   * Absent = host-local receipts only, which is what v0.2.2 and v0.3.0 do and
+   * must keep doing: a shared lib must never silently repoint a shipped
+   * release's evidence. Only the release that adopted committed evidence sets
+   * this, and it sets it in its own steps.ts.
+   */
+  committedEvidenceDir?: string;
+}
+
+/**
+ * One step's evidence, and where it came from.
+ *
+ * The two sources are merged under the SAME newest-wins rule readReceipts()
+ * already uses per directory: whichever copy of a step's receipt is newer wins,
+ * regardless of which side it came from. A committed receipt only ever enters
+ * this map after its signature verified — an unverifiable one is dropped and
+ * recorded as a REJECTION, which grades "no evidence" rather than "no receipt".
+ */
+interface Evidence {
+  receipt: RolloutReceipt | CommittedReceipt;
+  source: "host" | "committed";
+  /** The allowed-signers principal, for a committed receipt. */
+  signer: string | null;
 }
 
 type Status = "ok" | "expired" | "invalid" | "failed" | "missing" | "unverifiable" | "blocked";
@@ -69,7 +97,11 @@ interface Evaluated {
   because: string;
   /** false when this host cannot execute the step at all (rollout-procedure.md's host split). */
   runnableHere: boolean;
-  receipt?: RolloutReceipt;
+  receipt?: RolloutReceipt | CommittedReceipt;
+  /** Which evidence store this row's receipt came from, if any. */
+  source?: "host" | "committed";
+  /** The principal that signed a committed receipt. */
+  signer?: string | null;
   /** Set on a `blocked` step: the requires that are not themselves `ok`. */
   blockedBy?: { id: string; status: Status }[];
   /** True when a blocker is RED rather than merely stale — drives the glyph. */
@@ -210,9 +242,9 @@ function matchesAny(file: string, globs: string[]): string | null {
   return null;
 }
 
-function evaluate(step: RolloutStep, receipts: Map<string, RolloutReceipt>, ctx: Ctx): Evaluated {
+function evaluate(step: RolloutStep, evidence: Map<string, Evidence>, ctx: Ctx): Evaluated {
   const runnableHere = step.hostRole === "any" || step.hostRole === ctx.hostRole;
-  const base = { step, runnableHere };
+  const base: Omit<Evaluated, "status" | "because"> = { step, runnableHere };
 
   // Derived steps carry no receipt — git is the record.
   if (step.derived) {
@@ -230,8 +262,19 @@ function evaluate(step: RolloutStep, receipts: Map<string, RolloutReceipt>, ctx:
     }
   }
 
-  const r = receipts.get(step.id);
-  if (!r) return { ...base, status: "missing", because: "no receipt" };
+  const ev = evidence.get(step.id);
+  if (!ev) {
+    // A committed receipt that FAILED verification is not the same as no
+    // committed receipt. Saying "no receipt" would report a tampered, unsigned
+    // or unknown-signer file as an innocent absence — the one reading an
+    // attacker would most like an operator to get. Fail closed, and say so.
+    return ctx.rejectedEvidence.has(step.id)
+      ? { ...base, status: "missing", because: "no evidence" }
+      : { ...base, status: "missing", because: "no receipt" };
+  }
+  const r = ev.receipt;
+  base.source = ev.source;
+  base.signer = ev.signer;
 
   if (r.exit !== 0) {
     return { ...base, status: "failed", because: `exit ${r.exit} · ${r.verdict} · ${shortAge(r.at)}`, receipt: r };
@@ -254,10 +297,15 @@ function evaluate(step: RolloutStep, receipts: Map<string, RolloutReceipt>, ctx:
   // 2. A receipt written against the wrong kind of database is not what it says.
   if (r.db && step.expectInRecovery !== undefined && r.db.in_recovery !== step.expectInRecovery) {
     const wanted = step.expectInRecovery ? "the read replica" : "the primary";
+    // A committed receipt carries in_recovery and NOTHING else about the
+    // connection — server and port are redacted before it enters a public
+    // repository. The verdict is identical either way; only the sentence is
+    // shorter.
+    const on = "server" in r.db ? ` on ${r.db.server}:${r.db.port}` : "";
     return {
       ...base,
       status: "invalid",
-      because: `receipt records in_recovery=${r.db.in_recovery} on ${r.db.server}:${r.db.port} — that was not ${wanted}`,
+      because: `receipt records in_recovery=${r.db.in_recovery}${on} — that was not ${wanted}`,
       receipt: r,
     };
   }
@@ -313,6 +361,19 @@ interface Ctx {
   changedSinceRc: string[];
   backupDir: string;
   replica: string | null;
+  /** Step ids whose committed receipt was thrown away, and why. */
+  rejectedEvidence: Map<string, string>;
+  /** null when this release has not opted into committed evidence. */
+  committedDir: string | null;
+  allowedSigners: string | null;
+  /**
+   * Who cut the rc tag at HEAD, resolved against the SAME allowed-signers file
+   * the receipts are verified against. REPORTED, never enforced: this release
+   * makes the signer knowable, and refusing to proceed when it is wrong is a
+   * policy gate that belongs with the manifest change that makes the tag an
+   * outcome rather than a precondition.
+   */
+  headTagSigner: string | null;
 }
 
 function git(repoRoot: string, args: string[]): string {
@@ -331,7 +392,33 @@ function replicaTarget(repoRoot: string): string | null {
   return `${get("username")}@${get("host")}:${get("port")}/${get("database")}`;
 }
 
-function collectCtx(cfg: WhereConfig, backupDir: string): Ctx {
+/**
+ * Host-local and committed receipts, merged under the existing newest-wins rule.
+ *
+ * Committed evidence is OPT-IN per release, so a release that never adopted it
+ * takes exactly the path it always took — `readReceipts()` and nothing else.
+ */
+function collectEvidence(cfg: WhereConfig, backupDir: string): {
+  evidence: Map<string, Evidence>;
+  rejected: Map<string, string>;
+} {
+  const evidence = new Map<string, Evidence>();
+  for (const [id, receipt] of readReceipts(backupDir)) {
+    evidence.set(id, { receipt, source: "host", signer: null });
+  }
+  if (!cfg.committedEvidenceDir) return { evidence, rejected: new Map() };
+
+  const committed = readCommittedEvidence(cfg.repoRoot, cfg.committedEvidenceDir);
+  for (const [id, entry] of committed.verified) {
+    const prev = evidence.get(id);
+    if (!prev || entry.receipt.at > prev.receipt.at) {
+      evidence.set(id, { receipt: entry.receipt, source: "committed", signer: entry.signer });
+    }
+  }
+  return { evidence, rejected: committed.rejected };
+}
+
+function collectCtx(cfg: WhereConfig, backupDir: string, rejectedEvidence: Map<string, string>): Ctx {
   const { repoRoot, tagGlob } = cfg;
   const host = deriveHostRole(repoRoot);
   const g = gitFacts(repoRoot, tagGlob);
@@ -360,6 +447,10 @@ function collectCtx(cfg: WhereConfig, backupDir: string): Ctx {
     changedSinceRc: since.files,
     backupDir,
     replica: replicaTarget(repoRoot),
+    rejectedEvidence,
+    committedDir: cfg.committedEvidenceDir ? committedReceiptsDir(repoRoot, cfg.committedEvidenceDir) : null,
+    allowedSigners: existsSync(allowedSignersPath(repoRoot)) ? allowedSignersPath(repoRoot) : null,
+    headTagSigner: g.tag ? verifyTagSigner(repoRoot, g.tag, allowedSignersPath(repoRoot)) : null,
   };
 }
 
@@ -370,6 +461,12 @@ function printState(ctx: Ctx, rows: Evaluated[]): void {
   p(`         ${ctx.hostWhy}`);
   p(`         replica: ${ctx.replica ?? "not configured (.env.readonly absent)"}`);
   p(`         receipts: ${receiptsDir(ctx.backupDir)}`);
+  if (ctx.committedDir) {
+    const rejected = ctx.rejectedEvidence.size;
+    p(`         committed: ${ctx.committedDir}${rejected ? `  ⚠ ${rejected} rejected` : ""}`);
+    p(`         signers: ${ctx.allowedSigners ?? "⚠ NO allowed-signers file — no committed receipt can count"}`);
+    for (const [id, why] of ctx.rejectedEvidence) p(`           ✖ ${id}: ${why}`);
+  }
   p("");
   p(`RELEASE  ${ctx.branch} @ ${ctx.sha.slice(0, 7)}${ctx.dirty ? "  ⚠ DIRTY TREE" : ""}`);
   // THE ONE LINE THE LIFT CHANGED, and it is deliberate. The two copies had
@@ -380,7 +477,11 @@ function printState(ctx: Ctx, rows: Evaluated[]): void {
   // "read this first" section, which never cut a tag. So the neutral wording
   // wins, and v0.2.2's probe loses a pointer into docs/archive/v0-2-2-rollout.md
   // — a section reference in a runbook that has already been archived.
-  p(`         HEAD tag: ${ctx.headTag ?? "(none — no rc cut at this commit)"}`);
+  // The tag's signer is REPORTED, not enforced: "who cut this rc" stops being an
+  // assumption. An unsigned tag or an unlisted key reads as "unverified signer",
+  // which is a fact about the tag, not a verdict on the rollout.
+  const tagSigner = ctx.headTag ? ` · signer: ${ctx.headTagSigner ?? "unverified"}` : "";
+  p(`         HEAD tag: ${ctx.headTag ?? "(none — no rc cut at this commit)"}${tagSigner}`);
   if (ctx.newestRc) {
     p(`         newest rc: ${ctx.newestRc.tag} = ${ctx.newestRc.sha.slice(0, 7)} · ${ctx.commitsSinceRc} commit(s) behind HEAD`);
   } else {
@@ -398,7 +499,10 @@ function printState(ctx: Ctx, rows: Evaluated[]): void {
     const id = e.step.id.padEnd(20);
     const title = e.step.title.length > 46 ? `${e.step.title.slice(0, 45)}…` : e.step.title.padEnd(46);
     const because = blocked ? `needs role=${e.step.hostRole} — ${e.because}` : e.because;
-    p(`    ${mark} ${id} ${e.step.section.padEnd(6)} ${title}  ${because}`);
+    // Source and signer ride BESIDE `because`, never inside it: `because` is the
+    // sentence that explains the status, and a golden pins it.
+    const provenance = e.source === "committed" ? `  [committed · signed by ${e.signer ?? "?"}]` : "";
+    p(`    ${mark} ${id} ${e.step.section.padEnd(6)} ${title}  ${because}${provenance}`);
   }
   p("");
 
@@ -453,7 +557,7 @@ function record(cfg: WhereConfig, stepId: string, ctx: Ctx): number {
     return 2;
   }
   const exit = Number(arg("--exit") ?? 0);
-  const { path, receipt } = emitReceipt({
+  const { path, receipt, committed } = emitReceipt({
     step: stepId,
     exit,
     verdict: arg("--verdict") ?? (exit === 0 ? "attested by operator" : "attested FAILED"),
@@ -465,9 +569,11 @@ function record(cfg: WhereConfig, stepId: string, ctx: Ctx): number {
     artifactPaths,
     attested: true,
     note: arg("--note"),
+    committedEvidenceDir: cfg.committedEvidenceDir,
   });
   console.log(`recorded ${stepId} → ${path}`);
   console.log(`  sha ${receipt.repo_sha.slice(0, 7)}${receipt.rc_tag ? ` (${receipt.rc_tag})` : ""} · host ${receipt.host} · ${receipt.artifacts.length} artifact(s)`);
+  if (committed) console.log(`  committed copy ${committed.json} + ${committed.sig} — commit both`);
   if (receipt.repo_dirty) console.log("  ⚠ tree is dirty — this receipt does not describe a committed state");
   return 0;
 }
@@ -475,7 +581,8 @@ function record(cfg: WhereConfig, stepId: string, ctx: Ctx): number {
 /** The probe. Returns the process exit code; prints to stdout/stderr. */
 export async function runWhere(cfg: WhereConfig): Promise<number> {
   const backupDir = arg("--backup-dir") ?? DEFAULT_BACKUP_DIR;
-  const ctx = collectCtx(cfg, backupDir);
+  const { evidence, rejected } = collectEvidence(cfg, backupDir);
+  const ctx = collectCtx(cfg, backupDir, rejected);
   if (!ctx.sha) {
     console.error("not a git checkout (or git unavailable) — this probe derives release identity from git");
     return 2;
@@ -484,8 +591,7 @@ export async function runWhere(cfg: WhereConfig): Promise<number> {
   const recordId = arg("--record");
   if (recordId) return record(cfg, recordId, ctx);
 
-  const receipts = readReceipts(backupDir);
-  const rows = propagateBlocked(cfg.steps.map((s) => evaluate(s, receipts, ctx)));
+  const rows = propagateBlocked(cfg.steps.map((s) => evaluate(s, evidence, ctx)));
 
   if (process.argv.includes("--json")) {
     console.log(
@@ -497,10 +603,18 @@ export async function runWhere(cfg: WhereConfig): Promise<number> {
             sha: ctx.sha,
             dirty: ctx.dirty,
             head_tag: ctx.headTag,
+            head_tag_signer: ctx.headTagSigner,
             newest_rc: ctx.newestRc,
             commits_since_rc: ctx.commitsSinceRc,
             changed_since_rc: ctx.changedSinceRc,
           },
+          evidence: ctx.committedDir
+            ? {
+                committed_dir: ctx.committedDir,
+                allowed_signers: ctx.allowedSigners,
+                rejected: Object.fromEntries(ctx.rejectedEvidence),
+              }
+            : null,
           steps: rows.map((e) => ({
             id: e.step.id,
             phase: e.step.phase,
@@ -508,6 +622,8 @@ export async function runWhere(cfg: WhereConfig): Promise<number> {
             gate: e.step.gate ?? null,
             status: e.status,
             because: e.because,
+            source: e.source ?? null,
+            signer: e.signer ?? null,
             runnable_here: e.runnableHere,
             blocked_by: e.blockedBy ?? null,
             verify: e.step.verify,

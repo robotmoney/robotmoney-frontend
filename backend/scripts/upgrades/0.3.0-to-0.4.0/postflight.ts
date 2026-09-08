@@ -4,6 +4,7 @@ import type { Checker } from "../../lib/checks.ts";
 import { runPostflightMain, type Db } from "../../lib/postflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import { JUDGE_CONFIG_TABLE, JUDGEMENT_TABLE, RECEIPT_TABLE, TAG_GLOB, THIS_RELEASE_MIGRATIONS } from "./release.ts";
+import { COMMITTED_EVIDENCE_DIR } from "./steps.ts";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(dir, "..", "..", "..", "..");
@@ -40,5 +41,5 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
 }
 
 runPostflightMain({ name: "postflight-0.4.0", runChecks,
-  receipt: receiptStep ? { step: receiptStep, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role } : undefined,
+  receipt: receiptStep ? { step: receiptStep, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, committedEvidenceDir: COMMITTED_EVIDENCE_DIR } : undefined,
 }).then((code) => process.exitCode = code);

@@ -1,0 +1,2 @@
+# v0.3.0 -> v0.4.0 committed rollout receipts land here as <step>.json plus a
+# detached <step>.json.sig. Empty until a step runs with ROLLOUT_SIGNING_KEY set.
