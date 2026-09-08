@@ -1103,6 +1103,21 @@ unset (`smokePassthroughEnv`, `:446-453`).
 > the prior values, and it is the only record of them. Plan for the swarm to be
 > manually driven after cutover.
 
+> ℹ **Two different `SWARM_SCHEDULES_ENABLED` checks, at two different layers.**
+> `docker-compose.smoke.yml:72` pins the **api container's own** copy of this
+> variable to `"0"` — unconditionally, on every boot that includes that
+> overlay (every `bun smoke` boot does). No repo-root `.env` value can change
+> what the container sees. Separately, `assertProductionConstants`
+> (`scripts/lib/smoke-schedule.ts`) is a **host-side, boot-time** check: before
+> the container ever starts, it reads the operator's own environment straight
+> from the repo-root `.env` and refuses a `--static-port` boot outright unless
+> that *also* says exactly `"0"`, naming the file in its refusal message. It
+> does not exist because the container pin might fail — that pin cannot be
+> shadowed by anything the shell exports. It exists so the operator's own
+> `.env` (the surface every runbook and credential check reads) is never
+> silently out of sync with what the container is really running, and so this
+> stays a working safety net even if the overlay pin is ever refactored away.
+
 ---
 
 ## 8. Cutover mechanics
