@@ -120,6 +120,27 @@ test("POST /api/swarm/apply rejects malformed Ed25519 keys and an invalid signat
   expect((goodRes?.body as { memberId: string }).memberId).toBeString();
 });
 
+// #848: applying is deliberately not a role-claim path. The public parser
+// admits only the signed application fields, and a client-supplied role cannot
+// change the database default. Judge/Validator assignment remains on the
+// privileged admin review/role routes (admin-swarm.test.ts).
+test("POST /api/swarm/apply cannot self-assign the judge role", async () => {
+  const applied = await signedApply({ name: "No Self-Assigned Judge", contact: `${rid("judge")}@example.test` });
+  const req = new Request("http://test/api/swarm/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    // `role` is intentionally outside the canonical signed application shape.
+    body: JSON.stringify({ ...applied.body, role: "judge" }),
+  });
+
+  const result = await handleSwarm(req, new URL(req.url));
+  expect(result?.status).toBe(201);
+  const memberId = (result!.body as { memberId: string }).memberId;
+  const member = (await sql<{ role: string; status: string }[]>`
+    SELECT role, status FROM swarm_members WHERE id = ${memberId}`)[0];
+  expect(member).toEqual({ role: "member", status: "applied" });
+});
+
 // Issue #789, second half. `canonicalPublicKeyBytes()` gates every path that
 // USES a key; the finding on PR #792 was that it did not gate the three paths
 // that STORE one — POST /api/swarm/register (which checked `length >= 16`),
