@@ -15,6 +15,7 @@ import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
+import { sessionSummary } from "../lib/session-summary.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -1040,6 +1041,7 @@ export function registerStaticViews(Alpine) {
   // shaping over an API that was already answering.
   Alpine.data("subjectProfile", () => ({
     ...helpers,
+    ...sessionSummary,
     loading: true,
     error: null,
     subject: null,
@@ -1145,24 +1147,37 @@ export function registerStaticViews(Alpine) {
           return [];
         }
       }
+      // The FULL detail is fetched per session either way — that request was
+      // already being made and all but `synthesis` discarded. Keeping
+      // swarmRecommendation is what lets this page show the stance spread, the
+      // consensus and what the session decided, exactly as /swarm does, at no
+      // extra cost. See lib/session-summary.js.
       return Promise.all(index.map(async (s) => {
         try {
           const detail = await api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }));
-          return { ...s, synthesis: camelSession(detail.session || detail).synthesis, takes: (detail.takes || []).length };
+          const full = camelSession(detail.session || detail);
+          return {
+            ...s,
+            synthesis: full?.synthesis || "",
+            swarmRecommendation: full?.swarmRecommendation || null,
+            takes: (detail.takes || []).length,
+          };
         } catch (_) {
           if (archivePreferred(s.date)) {
             try {
               const archive = await loadArchiveSession(s.date, s.subjectId);
-              return { ...s, synthesis: archive.session?.synthesis || "", takes: (archive.takes || []).length };
+              return {
+                ...s,
+                synthesis: archive.session?.synthesis || "",
+                swarmRecommendation: archive.session?.swarmRecommendation || null,
+                takes: (archive.takes || []).length,
+              };
             } catch (_) { /* fall through */ }
           }
-          return { ...s, synthesis: "", takes: 0 };
+          return { ...s, synthesis: "", swarmRecommendation: null, takes: 0 };
         }
       }));
     },
-    // One sentence saying what this page is. It replaced a three-figure stat
-    // strip whose "top position" was the fourth place the same holding appeared,
-    // and which never told a reader what a "subject" actually is.
     // What KIND of subject this is, from the record rather than from the slug.
     // A `framework` subject is the allocation recipe and has no book: its own
     // structural notes open with "no portfolio to scrape", which the page was

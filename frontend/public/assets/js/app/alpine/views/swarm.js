@@ -18,6 +18,7 @@ import { operatorName } from "../../lib/operator.js";
 import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
+import { sessionSummary } from "../../lib/session-summary.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 
@@ -27,8 +28,6 @@ import { CATEGORICAL } from "../../lib/chart-theme.js";
 // lands, this function reads it and nothing else moves. RM-97's roles table.
 // Bearish through bullish, so the spread bar always runs the same direction
 // no matter which stances a session actually produced.
-const STANCE_ORDER = ["bullish", "constructive", "neutral", "cautious", "bearish"];
-
 const DEFAULT_ROLE = "proposer";
 
 // The sessions list is paginated and the page used to render only the first
@@ -73,6 +72,7 @@ const rowBlurb = (p) => ROW_BLURBS[String(p?.name || "").trim()] || p?.thesisBlu
 export function registerSwarmView(Alpine) {
   // ── Investment Swarm ──────────────────────────────────────────────────
   Alpine.data("swarmView", () => ({
+    ...sessionSummary,
     loading: true,
     error: null,
     members: [],
@@ -474,17 +474,6 @@ export function registerSwarmView(Alpine) {
     // `bucket_weights`. Sessions since the 2026-08-06 cutover carry
     // `position_actions` instead, so this returns null rather than inventing a
     // number, and the row says "no weight change" instead.
-    sessionWeights(s) {
-      const rec = s?.swarmRecommendation;
-      if (rec?.type !== "bucket_weights" || !rec.weights) return null;
-      const order = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
-      const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const by = {};
-      for (const [k, v] of Object.entries(rec.weights)) by[norm(k)] = Number(v) * 100;
-      const vals = order.map((k) => by[norm(k)]).filter((v) => Number.isFinite(v));
-      return vals.length ? vals.map((v) => Math.round(v)).join(" / ") : null;
-    },
-
     // ── sessions ─────────────────────────────────────────────────────────
     // Portfolio encoding + filter, identical in behaviour to the member
     // profile's track record — the roster is the same problem at larger scale
@@ -584,65 +573,15 @@ export function registerSwarmView(Alpine) {
     },
     stanceEntries(s) { return Object.entries(s.swarmRecommendation?.stances || {}); },
     // ── what a session came out with ─────────────────────────────────────
-    // The spread as proportions, in a fixed direction. Unknown stances keep
-    // their count and sort last rather than being dropped: a stance this
-    // build does not know is still a take somebody signed.
-    stanceSpread(s) {
-      const st = s?.swarmRecommendation?.stances || {};
-      const n = (k) => Number(st[k]) || 0;
-      const keys = [...STANCE_ORDER.filter(n), ...Object.keys(st).filter((k) => !STANCE_ORDER.includes(k) && n(k))];
-      const total = keys.reduce((a, k) => a + n(k), 0);
-      return total ? keys.map((k) => ({ stance: k, n: n(k), pct: n(k) / total })) : [];
-    },
-    spreadLabel(s) {
-      const rows = this.stanceSpread(s);
-      return rows.length ? rows.map((r) => `${r.n} ${r.stance}`).join(", ") : "";
-    },
-    // The one-word answer. A tie is a real outcome, not a rounding problem, so
-    // it is reported rather than resolved into a winner.
-    lean(s) {
-      const rows = this.stanceSpread(s);
-      if (!rows.length) return null;
-      const max = Math.max(...rows.map((r) => r.n));
-      const top = rows.filter((r) => r.n === max);
-      return top.length > 1 ? { stance: null, label: "split" } : { stance: top[0].stance, label: top[0].stance };
-    },
-    leanStance(s) { return this.lean(s)?.stance || ""; },
-    leanLabel(s) { return this.lean(s)?.label || ""; },
-    leanBadgeStyle(s) {
-      const st = this.leanStance(s);
-      return st ? stanceStyle(st) : "";
-    },
-    leanDotStyle(s) {
-      const st = this.leanStance(s);
-      return st ? `background:${stanceColor(st)}` : "";
-    },
-    meanConfidenceText(s) {
-      const c = s?.swarmRecommendation?.meanConfidence;
-      return Number.isFinite(c) ? `${Math.round(Number(c) * 100)}% mean confidence` : "";
-    },
+    // stanceSpread / lean / quorum / recommendation come from
+    // lib/session-summary.js, spread into this component above. A subject
+    // profile lists the same sessions this page does and must not read them a
+    // second way.
     closedAgo(s) { return timeAgo(s?.windowClosesAt, this.now); },
     closedAbsolute(s) { return absoluteUtc(s?.windowClosesAt); },
     fmtPct(value) {
       const n = Number(value);
       return Number.isFinite(n) ? `${Math.round(n * 100)}%` : "";
-    },
-
-    // What the session DECIDED. The card printed the synthesis paragraph here,
-    // which is the reasoning: five lines of it, identical in shape on every
-    // row, burying the one line a reader came for. Weights where the portfolio
-    // takes weights, the load-bearing actions otherwise, and the aggregator's
-    // own one-line rationale when a session carried neither.
-    recommendation(s) {
-      const rec = s?.swarmRecommendation;
-      if (!rec) return null;
-      if (rec.type === "bucket_weights") {
-        const w = this.sessionWeights(s);
-        return w ? { kind: "weights", text: w } : null;
-      }
-      const acts = (Array.isArray(rec.actions) ? rec.actions : []).filter((a) => a && a.action);
-      if (acts.length) return { kind: "actions", actions: acts.slice(0, 2), more: Math.max(0, acts.length - 2) };
-      return rec.rationale ? { kind: "text", text: rec.rationale } : null;
     },
 
     // ── takes, on demand ─────────────────────────────────────────────────
@@ -725,15 +664,6 @@ export function registerSwarmView(Alpine) {
         name: this.memberById(id)?.name || id,
         href: this.memberHref(id),
       }));
-    },
-    quorumText(s) {
-      const q = s.swarmRecommendation?.quorum;
-      return q ? `${q.submitted} of ${q.active} took part` : "";
-    },
-    takesCount(s) {
-      const q = s?.swarmRecommendation?.quorum;
-      const n = Number(q?.submitted);
-      return Number.isFinite(n) ? n : this.stanceSpread(s).reduce((a, r) => a + r.n, 0);
     },
     // One ramp, in lib/stance.js. This used to hold a second copy of the five
     // colours, so the same stance could be painted differently here than on a
