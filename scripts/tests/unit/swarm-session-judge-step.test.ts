@@ -27,7 +27,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionEvent } from "../../lib/swarm/session.ts";
-import { enqueueLifecycleJob, judgedProgress, runJudgeStep, sessionEmitter } from "../../lib/swarm/session.ts";
+import { countJudgements, enqueueLifecycleJob, judgedProgress, runJudgeStep, sessionEmitter } from "../../lib/swarm/session.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const sessionSrc = readFileSync(join(repoRoot, "scripts", "lib", "swarm", "session.ts"), "utf8");
@@ -253,6 +253,84 @@ describe("enqueueLifecycleJob — a job that was not queued is an error, not a l
       .toMatchObject({ jobId: 12, deduped: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// countJudgements bounds fetch with an AbortSignal (issue #890).
+// Executed against a stubbed fetch — no network, no server.
+// ---------------------------------------------------------------------------
+describe("countJudgements — bounded by an AbortSignal timeout (issue #890)", () => {
+  const realFetch = globalThis.fetch;
+  const realBackend = process.env.BACKEND_URL;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realBackend === undefined) delete process.env.BACKEND_URL;
+    else process.env.BACKEND_URL = realBackend;
+  });
+
+  test("passes an AbortSignal to fetch and parses judgements successfully", async () => {
+    process.env.BACKEND_URL = "http://count.invalid";
+    let receivedSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (_input: any, init?: any) => {
+      receivedSignal = init?.signal;
+      return new Response(JSON.stringify({ judgements: [{ id: 1 }, { id: 2 }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const count = await countJudgements(SESSION_ID);
+    expect(count).toBe(2);
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  test("returns null when fetch aborts or times out within the bounded time", async () => {
+    process.env.BACKEND_URL = "http://count.invalid";
+    // Simulate a fetch that hangs until aborted by the signal
+    globalThis.fetch = ((_input: any, init?: any) => {
+      const signal: AbortSignal | undefined = init?.signal;
+      return new Promise((_, reject) => {
+        if (signal?.aborted) {
+          reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+          return;
+        }
+        signal?.addEventListener("abort", () => {
+          reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+        });
+      });
+    }) as typeof fetch;
+
+    const start = Date.now();
+    // Test with a short timeout to prove it returns null promptly
+    const count = await countJudgements(SESSION_ID, undefined, { timeoutMs: 50 });
+    const elapsed = Date.now() - start;
+
+    expect(count).toBeNull();
+    expect(elapsed).toBeLessThan(1000);
+  });
+
+  test("returns null when an external signal is already aborted", async () => {
+    process.env.BACKEND_URL = "http://count.invalid";
+    globalThis.fetch = ((_input: any, init?: any) => {
+      const signal: AbortSignal | undefined = init?.signal;
+      if (signal?.aborted) {
+        return Promise.reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+      }
+      return new Promise((_, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+        });
+      });
+    }) as typeof fetch;
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const count = await countJudgements(SESSION_ID, undefined, { signal: controller.signal });
+    expect(count).toBeNull();
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // SOURCE-TEXT CHECK on runSession's ORDER: the judge sits between the rollup it

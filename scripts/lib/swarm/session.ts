@@ -756,11 +756,16 @@ export async function readJudgeMode(automationToken?: string): Promise<string | 
  * very different things happened. Never throws: it exists to make a log line
  * more honest, and must not turn a survivable timeout into a failed run.
  */
-export async function countJudgements(sessionId: string | number, automationToken?: string): Promise<number | null> {
+export async function countJudgements(
+  sessionId: string | number,
+  automationToken?: string,
+  opts?: { signal?: AbortSignal; timeoutMs?: number },
+): Promise<number | null> {
   try {
+    const signal = opts?.signal ?? AbortSignal.timeout(opts?.timeoutMs ?? 5_000);
     const r = await fetch(
       `${backendUrl()}${routePath(ROUTES.swarm.admin.sessionJudgements, { id: String(sessionId) })}`,
-      { headers: getAutomationHeaders(automationToken) },
+      { headers: getAutomationHeaders(automationToken), signal },
     );
     if (!r.ok) return null;
     const body = await responseJson<{ judgements?: unknown[] }>(r);
