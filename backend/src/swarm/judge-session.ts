@@ -22,7 +22,7 @@
 // pre-#766 version of it proved nothing.
 import { sql, type DbHandle } from "../db/client.ts";
 import { loadFrozenTakeSet } from "./domain.ts";
-import { judge, type JudgeInput, type JudgeOptions, type JudgeOutcome, type JudgeTake } from "./judge.ts";
+import { DIGEST_SCHEME, judge, type JudgeInput, type JudgeOptions, type JudgeOutcome, type JudgeTake } from "./judge.ts";
 import { LIVE_ROSTER_HANDLES } from "./roster-seed.ts";
 
 export type JudgeMode = "off" | "shadow" | "enforce";
@@ -322,11 +322,11 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
 
     const inserted = (await tx`
       INSERT INTO swarm_session_judgements
-        (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, take_count, min_takes,
+        (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme, take_count, min_takes,
          applied, applied_skipped_reason, dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion)
       VALUES (
         ${sessionId}, ${config.mode}, ${outcome.source}, ${outcome.fallbackReason ?? null}, ${outcome.model},
-        ${outcome.promptHash}, ${outcome.inputsDigest}, ${outcome.takeCount}, ${outcome.minTakes},
+        ${outcome.promptHash}, ${outcome.inputsDigest}, ${DIGEST_SCHEME}, ${outcome.takeCount}, ${outcome.minTakes},
         ${applied}, ${appliedSkippedReason},
         ${outcome.drops?.positions ?? 0}, ${outcome.drops?.disagreements ?? 0},
         ${judgeMemberId ?? "robotmoney-in-house"}, ${judgeMemberId ?? null},
@@ -475,7 +475,7 @@ export async function sessionJudgeFingerprint(
 export async function listJudgements(sessionId: string, limit = 50) {
   const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 50;
   return (await sql`
-    SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest,
+    SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
            take_count, min_takes, applied, applied_skipped_reason,
            dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at
     FROM swarm_session_judgements WHERE session_id = ${sessionId}

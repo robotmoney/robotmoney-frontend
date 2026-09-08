@@ -3409,3 +3409,54 @@ longer same-origin; `contract/` still needs to actually be published as a
 versioned package; the frontend's sibling container, its DO placement, and its
 DNS record are still design, not shipped; and the `git filter-repo` split
 itself has not been executed.
+
+---
+
+## D44 — `digest_scheme`: a recorded marker, not a cutover date, discriminates which canonical form wrote an `inputs_digest` (issue #829, third instance of the shape #766 fixed)
+
+**Decision.** `swarm_session_judgements` gains a `digest_scheme` column
+(migration 0051), written on every insert with `judge.ts`'s new `DIGEST_SCHEME`
+constant. `swarm-judge-replay` (`judge-replay.ts`) uses it, not a hardcoded
+merge-commit timestamp, to decide whether a recomputed `inputs_digest` that
+fails to match the stored value is a real finding or expected history: a row
+stamped with the scheme this code implements right now is `mismatch` (fails
+the run); a row stamped with anything else is `historical_divergence` (reports
+and exits 0). A row with no judgement at all is `not_applicable`.
+
+**Why a marker and not a cutover rule.** The issue text offered both as
+acceptable. A `created_at`-before-a-fixed-instant rule would have worked for
+*this* boundary — `#808` (`b8cd15a7`, 2026-08-31) is the only canonicalization
+change so far, and `swarm_judge_config.mode` ships `off`, so #808's own gate
+already established that no default deployment had ever written a row at all,
+under either reading, before that commit. But a hardcoded instant answers
+exactly one question: "is this row older than THIS ONE change". The next
+change to `canonicalizeDigestInputs()`'s covered field set — and there will be
+one; `#765` and `#808` are the second and third field-set changes this digest
+has already had — would need a SECOND hardcoded instant, then a chain of
+`if (before A) … else if (before B) …` that the audit has to keep in sync with
+git history by hand. A column stamped by the writer answers the general
+question once: "which scheme produced this row", by construction, forever,
+for every future change to the digest's covered fields — the writer and the
+constant it reads change together, in the same commit, and the audit's
+comparison logic never has to change again.
+
+**Why NOT NULL DEFAULT is safe on an ALTER against a live table.** As of this
+migration, `digest_scheme` defaults to the CURRENT scheme name
+(`derivation-v1`) rather than `NULL`. That is only safe because — per the
+paragraph above — no row in this table, on any default deployment, predates
+`#808`: `mode` has always shipped `off`, so every row that exists anywhere was
+already written under the post-#808 formula before this migration ran. The
+column exists for the NEXT change, not this one. A future canonicalization
+change must bump `judge.ts`'s `DIGEST_SCHEME` to a new, still-unique string IN
+THE SAME CHANGE that edits `canonicalizeDigestInputs()` — the two are
+documented as one obligation at the constant's definition, not left to be
+rediscovered.
+
+**What this is not.** It does not attempt to make an old-scheme row's digest
+verifiable again — an append-only row written under a scheme this code no
+longer implements is, and stays, non-recomputable under today's formula; that
+consequence was already accepted and recorded when `#808` merged. This
+decision is only about NAMING that fact so an operator reading the replay's
+output can tell it apart from a row that claims today's rule and genuinely no
+longer reproduces — which prior to `#829` the tool could not do at all, because
+it never compared the two values in the first place.

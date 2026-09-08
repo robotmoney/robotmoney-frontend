@@ -69,6 +69,13 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0049_swarm_recommendations_signing_key.sql",
   "0050_swarm_member_keys_append_only.sql",
   "0051_swarm_vault_recommendation_type_repair.sql",
+  // 0052 (issue #829, D44): `swarm_session_judgements.digest_scheme`, a
+  // NOT NULL DEFAULT'd column on the same already-protected table 0040/0041/
+  // 0043 alter. A constant default does not rewrite on PG 11+ (same shape the
+  // note above already argues for the other ADD COLUMNs in this release), and
+  // it removes no row, so it is a lock in exactly the sense already established
+  // here — never a write.
+  "0052_swarm_judgement_digest_scheme.sql",
 ] as const;
 
 /**
@@ -181,6 +188,12 @@ export const NEW_COLUMNS = [
   // before this migration keeps NULL and falls back to the pre-#697 lookup
   // (see the migration's own header for why a backfill is not attempted).
   { table: "swarm_recommendations", column: "signing_key_id" },
+  // 0052 (issue #829, D44): which canonical form produced a row's
+  // inputs_digest. NOT NULL DEFAULT'd to the current scheme rather than
+  // nullable-no-backfill like the column above — safe because no row on any
+  // v0.2.2 database predates it (swarm_judge_config.mode ships `off`; see the
+  // migration's own header).
+  { table: "swarm_session_judgements", column: "digest_scheme" },
 ] as const;
 
 /** Every table this release creates, alters, locks, or writes: the roster of the
