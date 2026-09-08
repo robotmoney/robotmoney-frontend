@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "review": "review-security",
+  "repository": "https://github.com/robotmoney/robotmoney-frontend.git",
+  "branch": "review/judge-security-audit",
+  "commit": "7a34666d3334d87e43506cbebfc18dad5505beaa",
+  "reviewed_at": "2026-09-07",
+  "scope": [
+    "backend/src/swarm/domain.ts (submitRecommendation, memberIdForToken, updateMemberProfile)",
+    "backend/src/swarm/judge-session.ts (judgeSession() guard block: active-status, role, take-conflict, third_party_enabled gate, #918 operator exemption)",
+    "backend/src/swarm/admin.ts (setMemberRoleAdmin, judgeSessionAdmin, updateMemberAdmin, reviewApplicationAdmin)",
+    "backend/src/swarm/roster-seed.ts (seedLiveRoster, pruneToLiveRoster, LIVE_ROSTER)",
+    "backend/src/api/validation.ts (validateMemberProfile, validateMemberAdminPatch)",
+    "backend/src/api/routes/swarm-admin.ts (admin authorization gate for role-grant and member-update routes)",
+    "#922 diff: judgedBy/judgedByMemberId exposure through the admin API/panel"
+  ],
+  "verdict": "One medium-severity finding confirms and sharpens already-filed issue #925: the self-service 'operator' field forges the trust signal judge-session.ts uses to exempt in-house judges from the #796 third-party gate, requiring only a routine (not unusual) admin role grant to become live. Two low/info secondary findings (untested take-conflict guard, thin self-service audit trail). All other examined authorization, race, and lifecycle boundaries held up under adversarial testing.",
+  "findings": [
+    {
+      "id": "review-security-001",
+      "review": "review-security",
+      "classification": "SECURITY_TRUST_SIGNAL_FORGERY",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/decisions.md:3301-3341 (#796 amendment: third-party judging gated behind an admin-flippable, off-by-default flag, independent of role grant)",
+      "evidence": [
+        "backend/src/api/validation.ts:396",
+        "backend/src/api/validation.ts:468-472",
+        "backend/src/swarm/domain.ts:2183-2231",
+        "backend/src/swarm/judge-session.ts:242-272",
+        "backend/src/swarm/admin.ts:430-465",
+        "backend/src/swarm/admin.ts:470-498",
+        "backend/migrations/0001_backends.sql:42",
+        "backend/tests/swarm-member-profile.test.ts:57-78"
+      ],
+      "impact": "Any active member can self-declare operator='robotmoney' via the unrestricted self-service profile route, with no role or admin check. judge-session.ts's #918 exemption reads this field fresh on every judging attempt and grants the in-house exemption to any row carrying that value, regardless of who set it. Combined with a routine (not unusual) admin grant of role:'judge' -- the same action #796/#812 document as the normal path for a legitimate external judge -- an unvetted, self-registered member's model-authored opinion can bypass the third_party_enabled gate entirely, landing in swarm_recommendation in enforce mode or accumulating trusted-looking history in shadow mode, without the admin's separate documented decision to permit third-party judging ever being made. The self-service audit row records no field values (finding 003), so the forgery is stealthy by default.",
+      "recommendation": "Remove operator from self-service PROFILE_KEYS (admin-only, like handle) or refuse reserved values (at minimum 'robotmoney') in validateMemberProfile(); and/or re-key judge-session.ts's exemption off LIVE_ROSTER_HANDLES membership rather than the free-text operator column. Add the regression test named in this finding's evidence trail (a judge-role member self-declaring operator via updateMemberProfile must still be refused third_party_judging_disabled while the flag is off).",
+      "owner": "code",
+      "related_findings": ["gh-issue-925"]
+    },
+    {
+      "id": "review-security-002",
+      "review": "review-security",
+      "classification": "SECURITY_UNVERIFIED_GUARD",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": "docs/decisions.md:3283-3291 (#812: a judge with a take in the session it judges must be refused, to keep the judge free of a market view)",
+      "evidence": [
+        "backend/src/swarm/judge-session.ts:273-277",
+        "backend/tests/swarm-judge-role.test.ts",
+        "backend/tests/swarm-judge-third-party-flag.test.ts"
+      ],
+      "impact": "The judge_member_has_take_in_session refusal has no test anywhere in backend/tests/ (confirmed by repository-wide grep for its exact error string, which matches only the definition site). The guard's logic is correct on direct inspection, but a future edit could silently weaken, invert, or misscope this one-line check with no red test to catch the regression.",
+      "recommendation": "Add a test: promote a member with an existing take in session S from role='member' to role='judge', then call judgeSession(S, { judgeMemberId }) and assert a 409 judge_member_has_take_in_session with no judgement row written.",
+      "owner": "tests",
+      "related_findings": []
+    },
+    {
+      "id": "review-security-003",
+      "review": "review-security",
+      "classification": "SECURITY_INSUFFICIENT_AUDIT_TRAIL",
+      "severity": "info",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/swarm/domain.ts:2229",
+        "backend/src/swarm/admin.ts:611-625"
+      ],
+      "impact": "updateMemberProfile()'s audit row logs only {memberId}, unlike updateMemberAdminTx's audit row which logs the changed field names (and old/new value for a handle change). Now that operator carries authorization significance (finding 001), an admin cannot reconstruct from the audit log alone whether or when a member's operator value was ever forged, compounding finding 001's stealthiness. No capability is granted by this gap on its own.",
+      "recommendation": "Log fields: Object.keys(patch) on the self-service update_profile audit row, mirroring the admin path.",
+      "owner": "code",
+      "related_findings": ["review-security-001"]
+    }
+  ],
+  "clean_areas": [
+    "Admin route authorization (X-Admin-Token / isPrivileged()) is fail-closed and checked before any request body is parsed or database touched, across all /api/swarm/admin/* routes (backend/src/api/routes/swarm-admin.ts:1-7).",
+    "The 60-second model-call race window for judge status/role/third_party_enabled is correctly closed: all three checks run inside judgeSession()'s write transaction, after the model call returns, under a per-session pg_advisory_xact_lock (backend/src/swarm/judge-session.ts:219-278), directly exercised by backend/tests/swarm-judge-third-party-flag.test.ts's fresh-read test.",
+    "judgeSessionAdmin's out-of-transaction resolution of Themis's id by handle (admin.ts:1214-1227) is safe: the transaction's own SELECT ... FOR UPDATE on that exact id re-verifies status/role/operator fresh, so a concurrent revocation between the two reads is caught with a correctly-attributed refusal, never a misleading generic error.",
+    "The take-conflict guard's transaction ordering (model call outside the transaction, conflict check inside it after the advisory lock) is structurally correct, though untested (finding 002).",
+    "Member handle/id namespace collision is enforced at the database level by an ENABLE ALWAYS trigger (migration 0031) surviving pg_restore --disable-triggers and logical replication; self-service cannot set handle at all, so a member cannot rename itself to 'themis' to hijack judgeSessionAdmin's handle-based resolution.",
+    "applyOpinion() never writes weights/quorum/stances -- confirmed by direct reading of its merge object literal (judge-session.ts:368-431), matching the module's documented invariant.",
+    "swarm_session_judgements and swarm_members are both covered by the append-only guard (backend/src/db/append-only-guard.ts:212,221).",
+    "memberIdForToken() correctly joins on status='active' (issue #799 fix), and submitRecommendation() independently refuses any role='judge' member from submitting a take at all, which is the primary defense the take-conflict guard backs up for the narrower promoted-after-submission case.",
+    "seedLiveRoster()'s idempotent upsert correctly preserves an admin's later role grant/revocation across re-seeds (commit 4c57cef3) while still refreshing operator from the manifest for the three named seats."
+  ],
+  "unresolved_decisions": [
+    "Which of issue #925's two proposed fixes (remove operator from self-service entirely, vs. reserve specific values) is the intended remediation direction.",
+    "Whether the public roster route's verbatim rendering of a self-declared operator (a display-only reputational-forgery surface noted in issue #925's own text) needs independent remediation; no other backend authorization decision was found to read operator besides judge-session.ts."
+  ],
+  "limitations": [
+    "judge.ts's prompt construction and the full take/brief-to-model-call content flow were not separately re-audited for prompt-injection beyond confirming the weights-are-never-written invariant by direct inspection.",
+    "#922's frontend admin panel changes were reviewed only for new privileged-data exposure (none found), not for XSS/rendering correctness.",
+    "CORS/cross-origin implications (D43) were out of scope.",
+    "The test suite was not executed; 'no test exists' claims are based on grep-verified absence of relevant assertions/error strings across backend/tests/, not a red run.",
+    "worker/handlers/swarm.ts's cron scheduling logic was reviewed only far enough to confirm it calls the same judgeSessionAdmin() entry point audited above."
+  ],
+  "unreviewed_surfaces": [
+    "judge.ts's model prompt-injection surface beyond the weights-invariant check.",
+    "Full XSS/rendering review of the admin swarm-session panel changes in #922.",
+    "CORS/cross-origin behavior of public swarm read routes.",
+    "worker-swarm's broader job-queue/backoff behavior beyond the judge entry point."
+  ]
+}

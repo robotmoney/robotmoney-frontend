@@ -468,6 +468,17 @@ export function validateMemberProfile(body: JsonObject | null): ValidationResult
   if (body.operator !== undefined) {
     const v = requiredString(body, "operator", 200);
     if (!v) return { ok: false, error: "operator must be a non-empty string up to 200 chars" };
+    // Issue #925, defense in depth. `judge-session.ts`'s in-house exemption no
+    // longer reads `operator` at all (it keys off `handle`, which self-service
+    // can never set), so this check gates nothing security-relevant by
+    // itself. It exists only because `GET /api/swarm/members` renders
+    // `operator` verbatim (issue #918) — refusing the literal in-house value
+    // stops an ordinary member from cosmetically forging itself as
+    // 'robotmoney'-operated on the public roster, while an ordinary operator
+    // string ('peaq', 'self', ...) still goes through untouched.
+    if (v.toLowerCase() === "robotmoney") {
+      return { ok: false, error: "operator cannot be set to 'robotmoney' via self-service" };
+    }
     patch.operator = v;
   }
   if (body.biases !== undefined) {

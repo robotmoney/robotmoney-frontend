@@ -92,6 +92,35 @@ test("shipped default is off, and off refuses a third-party judgement before any
   expect(await latestJudgement(s.session.id)).toBeNull();
 });
 
+// Issue #925 (review-security-001): a self-declared `operator: 'robotmoney'`
+// must not exempt a non-roster judge from this gate. This is the exact
+// regression the security review specified as currently-failing before the
+// in-house exemption was re-keyed off `handle` — a non-roster member cannot
+// forge its way past `third_party_enabled` merely because SOME writer once
+// stamped its `operator` column with the in-house value. Written against the
+// domain function directly, bypassing validateMemberProfile's own reservation
+// of that literal (#925's separate defense-in-depth fix) — the point here is
+// that judge-session.ts's exemption check is independent of `operator`
+// entirely, not merely that one caller of it is blocked.
+test("a self-declared operator='robotmoney' does not exempt a non-roster judge from the third-party gate", async () => {
+  expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
+  await setJudgeConfig({ mode: "shadow" }); // thirdPartyEnabled left at its default: false
+
+  const judge = await judgeRole("forger");
+  const patched = await swarm.updateMemberProfile(judge.token, judge.id, { operator: "robotmoney" });
+  expect(patched.status).toBe(200);
+  const row = await sql`SELECT operator FROM swarm_members WHERE id = ${judge.id}`;
+  expect((row[0] as any).operator).toBe("robotmoney");
+
+  const s = await aggregated("forged_operator");
+  const result = await judgeSession(s.session.id, { judgeMemberId: judge.id, transport });
+  expect(result).toMatchObject({ ok: false, status: 403, error: "third_party_judging_disabled" });
+
+  const rows = await sql`SELECT id FROM swarm_session_judgements WHERE session_id = ${s.session.id}`;
+  expect(rows).toHaveLength(0);
+  expect(await latestJudgement(s.session.id)).toBeNull();
+});
+
 test("the in-house worker succeeds with the flag off — third parties are never a prerequisite for the in-house stage", async () => {
   await setJudgeConfig({ mode: "shadow" });
   expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
