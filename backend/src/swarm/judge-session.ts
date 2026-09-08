@@ -541,7 +541,7 @@ async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutco
  * exists to keep honest.
  */
 export async function sessionJudgeFingerprint(
-  handle: DbHandle,
+  handle: DbHandle = sql,
   sessionId: string,
 ): Promise<{ promptHash: string; inputsDigest: string } | null> {
   const row = (await handle`
@@ -563,9 +563,9 @@ export async function sessionJudgeFingerprint(
 // latestJudgement() names a different opinion than the one on the session,
 // which is exactly the disagreement prompt_hash/inputs_digest exists to rule
 // out.
-export async function listJudgements(sessionId: string, limit = 50) {
+export async function listJudgements(sessionId: string, limit = 50, db: DbHandle = sql) {
   const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 50;
-  return (await sql`
+  return (await db`
     SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
            take_count, min_takes, applied, applied_skipped_reason,
            dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at
@@ -574,6 +574,7 @@ export async function listJudgements(sessionId: string, limit = 50) {
 }
 
 /** The opinion IN FORCE — the newest row, by the ordering argued above. */
-export async function latestJudgement(sessionId: string) {
-  return (await listJudgements(sessionId, 1))[0] ?? null;
+export async function latestJudgement(sessionId: string, db: DbHandle = sql) {
+  return (await listJudgements(sessionId, 1, db))[0] ?? null;
 }
+
