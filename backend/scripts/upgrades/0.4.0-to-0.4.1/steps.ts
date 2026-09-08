@@ -24,12 +24,12 @@ export const STEPS: RolloutStep[] = [
     verify: `bun backend/scripts/upgrades/${DIR}/restore-check.ts $RM_BACKUP_DIR --emit-receipt`,
   },
   {
-    id: "P4.preflight-live", phase: "P4 preflight", section: "§4", title: "live v0.4.0 database is safe for a code-only rollout",
+    id: "P4.preflight-live", phase: "P4 preflight", section: "§4", title: "live v0.4.0 database is safe to migrate",
     hostRole: "stage", actor: "script", requires: ["P3.gate-c"], dependsOn: preflightCode(DIR), ttlHours: 2,
     verify: `bun backend/scripts/upgrades/${DIR}/preflight.ts --emit-receipt`,
   },
   {
-    id: "P5.rehearsal", phase: "P5 rehearsal", section: "§5", title: "RC boots and postflight passes on the smoke-twin",
+    id: "P5.rehearsal", phase: "P5 rehearsal", section: "§5", title: "RC migrates and postflight passes on the smoke-twin",
     hostRole: "stage", actor: "script", requires: ["P3.gate-c"], dependsOn: [...APP_CODE, `backend/scripts/upgrades/${DIR}/stage-rehearsal.ts`], ttlHours: 48,
     verify: `bun backend/scripts/upgrades/${DIR}/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt`,
   },
