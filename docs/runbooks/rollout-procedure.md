@@ -113,6 +113,73 @@ and the filesystem disagree, the filesystem wins. Delete the receipts directory
 and you have lost bookkeeping, not safety — every gate can be re-run, and a
 step with no receipt is simply not done.
 
+#### The split: encrypted dumps stay out of the tree, redacted receipts come in
+
+A release that opts in writes a **second** copy of each receipt, into the
+checkout at `rollout-evidence/<FROM>-to-<TO>/<step>.json`, with a detached
+`ssh-keygen` signature beside it. This is not a reversal of §5.1's "`cd` out of
+the checkout first" or of §5.2 — read carefully, both of those rules are about
+**the dump**, which is a credential store and must never enter the tree. They
+say nothing about a receipt, and the two artifacts have opposite requirements:
+
+| | encrypted dump + globals + passphrase | receipt |
+|---|---|---|
+| contains | password hashes, session tokens, member keys | exit code, verdict, SHA, hashes |
+| if published | account takeover | nothing |
+| who needs it | one host, during a restore | every host, for the whole rollout |
+| lives | `$RM_BACKUP_DIR`, outside the tree (§5.1, §5.2) | both: full copy on its host, redacted copy in the tree |
+
+The reason for the second copy is that the first one cannot travel. A receipt
+written on the stage host proves nothing on the cutover host: carrying it across
+is a manual `scp`, and a receipt that arrives that way is one the probe can only
+grade *unverifiable*, because nothing in it says who wrote it. Committing a
+redacted copy makes stage evidence reach the cutover host the same way code
+does, through a reviewed commit.
+
+**The committed copy is REDACTED, and the redaction is an allow-list.** This
+repository is public, and a full receipt names the database's server address,
+port, database name and user, plus the hostname of the box that ran the step.
+The committed projection carries **only `in_recovery`** out of that identity, and
+omits the hostname entirely — omitted, not masked. The list is *positive*: every
+field of the receipt is classified as public or redacted, so a field added later
+fails the redaction test rather than shipping to a public repository by default.
+The full-fidelity receipt keeps every field and never leaves its own host.
+
+**A signature answers authorship, and nothing else.** Each committed receipt is
+signed over exactly its committed bytes, under a fixed namespace, with the
+environment agent's SSH key. `rollout-evidence/allowed-signers` holds one
+**public** key per environment principal — never a private key, and a distinct
+key per environment, so a stage key cannot sign a production step. The probe
+verifies every signature before it believes a committed receipt: **unsigned,
+tampered, wrongly-namespaced, unknown-signer, a malformed `.sig` and a missing
+allowed-signers file all count as NO EVIDENCE**, never as a pass. None of them
+stops the probe, which still prints the table and exits `0`.
+
+The probe also resolves the signer of the rc tag at HEAD against that same file
+and **reports** it, so "who cut this tag" is a mechanical answer. It is reported,
+not enforced: nothing here refuses to proceed on a wrong signer.
+
+This changes what a receipt IS in no way at all. It is still evidence, not
+authority — a verified signature says the receipt was not forged, and says
+nothing about whether the step still holds. Host role, artifact hashes and code
+drift are re-derived exactly as before.
+
+**Host-side setup** (once per environment, outside this repository):
+
+```bash
+# On the environment's own host, as the agent that runs rollout steps.
+ssh-keygen -t ed25519 -N '' -C 'rollout-<env>@robotmoney' -f ~/.ssh/rollout-<env>
+export ROLLOUT_SIGNING_KEY=~/.ssh/rollout-<env>   # read by --emit-receipt
+```
+
+Then register the **public** half — replace that principal's line in
+`rollout-evidence/allowed-signers` with the contents of
+`~/.ssh/rollout-<env>.pub`, in a reviewed commit. The review is the key
+distribution ceremony; the private half never leaves the host and is never
+committed. With `ROLLOUT_SIGNING_KEY` unset, a step writes its host-local receipt
+and skips the committed copy — an unsigned committed receipt would be no
+evidence at all, so none is written.
+
 Each step also has a machine-readable block (```` ```yaml step ````) carrying
 what a program has to know: its id, artifacts, TTL and `verify:` command. Those
 blocks live in the **per-release** runbook, not here — every field in one names
@@ -331,6 +398,14 @@ upgrade is allowed to touch anything.
 > credential dump (§5.2) inside the git checkout puts it where §5.2 forbids: in
 > the tree, and inside `./_static` / repo-root reach of a compose bind mount.
 > Pick a directory outside the repo on a filesystem you control.
+>
+> **This rule is about the DUMP, and only the dump.** It is not a rule that
+> nothing from a rollout may enter the tree — §1's "Receipts" splits the two
+> explicitly, and a redacted, signed receipt is committed on purpose. The
+> distinction is what the artifact contains: the dump is a credential store, a
+> receipt is an exit code and a hash. Do not generalise this box into "keep
+> rollout output out of the checkout", and do not read the committed receipts as
+> a licence to relax it.
 
 > **One role, one password, one host.** Both commands below run as
 > `rm_readonly` against the replica (the globals dump too — see the ✅ box
@@ -466,6 +541,15 @@ reversible form:
 - `admin_session` tokens and `admin_passkey` credentials.
 - `admin_webauthn_challenge` — live claim challenges.
 - Swarm member access keys, and every stored email address.
+
+**The dump, the globals dump and the passphrase file stay OUTSIDE the tree —
+unchanged.** §1's "Receipts" moves a redacted receipt into the checkout and
+nothing else: no dump, no globals, no passphrase, no backup artifact of any
+kind. The two are opposite cases of the same test — *what does this file cost if
+it is published?* For everything in the list above the answer is account
+takeover, so it is encrypted and kept out; for a receipt the answer is nothing,
+once database identity and the hostname are projected away. Never move a file
+into `rollout-evidence/` because a receipt lives there.
 
 **Use a passphrase FILE, not gpg's interactive prompt.** `restore-check.ts`
 and `stage-rehearsal.ts` decrypt non-interactively with

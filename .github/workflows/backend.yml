@@ -26,7 +26,8 @@
 # covered this the moment the trigger did.
 #
 # Path-gated (issue #275 addendum): a `pull_request` run whose changed files
-# don't match `backend/**`/`docker-compose*.yml` skips the job body entirely —
+# don't match `backend/**`/`docker-compose*.yml`/`rollout-evidence/**` skips the
+# job body entirely —
 # a REAL dorny/paths-filter-computed skip, not a synthetic outcome. Because
 # it's a job-level `if:` skip (never workflow-level `on.paths`), it reports a
 # real `skipped` conclusion to the Checks API, so requiring this workflow
@@ -83,6 +84,19 @@ jobs:
             backend:
               - 'backend/**'
               - 'docker-compose*.yml'
+              # Committed rollout evidence lives OUTSIDE backend/ on purpose: it
+              # must match no step's dependsOn glob, or recording one step's
+              # receipt would count as code drift and invalidate the next one.
+              # That puts it outside this filter too, so a PR that changes only
+              # a committed receipt or the allowed-signers file would skip the
+              # very suite that verifies signatures
+              # (backend/tests/rollout-receipt-repo-source.test.ts). Named here
+              # so the verifier runs on exactly the PRs that change what it
+              # verifies. Asserted by
+              # scripts/tests/unit/ci-workflows-structure.test.ts against
+              # rollout-signing.ts's own EVIDENCE_DIR constant, so a rename
+              # cannot leave this behind.
+              - 'rollout-evidence/**'
 
   backend:
     needs: [changes]

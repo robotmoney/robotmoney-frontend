@@ -21,8 +21,10 @@ import {
   stepById,
 } from "../scripts/lib/rollout-manifest.ts";
 import type { RolloutStep } from "../scripts/lib/rollout-manifest.ts";
+import { EVIDENCE_DIR } from "../scripts/lib/rollout-signing.ts";
 import { STEPS as STEPS_022 } from "../scripts/upgrades/0.2.1-to-0.2.2/steps.ts";
 import { STEPS as STEPS_030 } from "../scripts/upgrades/0.2.2-to-0.3.0/steps.ts";
+import { COMMITTED_EVIDENCE_DIR, STEPS as STEPS_040 } from "../scripts/upgrades/0.3.0-to-0.4.0/steps.ts";
 
 interface ReleaseUnderTest {
   name: string;
@@ -103,5 +105,73 @@ describe("the shared groups are genuinely shared", () => {
     for (const g of [...APP_CODE, ...RESTORE_CODE, ...preflightCode("X"), ...postflightCode("X", ["Y"])]) {
       expect({ g, crossCutting: g === "backend/scripts/**" }).toEqual({ g, crossCutting: false });
     }
+  });
+});
+
+// ── committed rollout evidence must not invalidate the step after it ────────
+//
+// Receipts now get a redacted, signed copy committed INTO the tree. That makes
+// writing evidence a code change, and a code change is exactly what
+// rollout-where.ts's drift axis treats as invalidating: if a committed receipt
+// path matched any step's `dependsOn`, recording P4's receipt would appear in
+// `git diff <P5's sha>..HEAD` and smoke P5 back to `invalid`. Evidence would
+// destroy evidence, and the more of the rollout you recorded the less of it
+// would count.
+//
+// The property is asserted against EVERY step of EVERY live release, including
+// the two that do not commit evidence at all — they share the glob-group
+// factories, so a group that started matching would break them too. Mirrors the
+// existing "no glob group names backend/scripts/**" case: same failure mode,
+// same shape.
+describe("committed evidence paths match no step's dependsOn glob", () => {
+  const LIVE: { name: string; steps: RolloutStep[] }[] = [
+    { name: "v0.2.2", steps: STEPS_022 },
+    { name: "v0.3.0", steps: STEPS_030 },
+    { name: "v0.4.0", steps: STEPS_040 },
+  ];
+
+  /** Every shape a file in the committed evidence tree can take. */
+  const EVIDENCE_PATHS = [
+    `${EVIDENCE_DIR}/allowed-signers`,
+    `${EVIDENCE_DIR}/${COMMITTED_EVIDENCE_DIR}/P4.preflight-live.json`,
+    `${EVIDENCE_DIR}/${COMMITTED_EVIDENCE_DIR}/P4.preflight-live.json.sig`,
+    `${EVIDENCE_DIR}/${COMMITTED_EVIDENCE_DIR}/P8.postflight-prod.json`,
+    `${EVIDENCE_DIR}/${COMMITTED_EVIDENCE_DIR}/P8.postflight-prod.json.sig`,
+  ];
+
+  for (const rel of LIVE) {
+    test(`${rel.name}: no step's dependsOn matches a committed-evidence path`, () => {
+      const hits: string[] = [];
+      for (const step of rel.steps) {
+        for (const path of EVIDENCE_PATHS) {
+          for (const glob of step.dependsOn) {
+            // Bun.Glob is the SAME matcher rollout-where.ts's evaluate() uses,
+            // so this asserts the real behaviour rather than an approximation.
+            if (new Bun.Glob(glob).match(path)) hits.push(`${step.id}: ${glob} matches ${path}`);
+          }
+        }
+      }
+      expect(hits).toEqual([]);
+    });
+  }
+
+  test("every live release is represented, and each carries steps that declare globs", () => {
+    // Guards the cases above against going vacuous: a release whose steps all
+    // had empty dependsOn would pass while proving nothing.
+    expect(LIVE.map((r) => r.name)).toEqual(["v0.2.2", "v0.3.0", "v0.4.0"]);
+    for (const rel of LIVE) {
+      expect({ release: rel.name, hasGlobs: rel.steps.some((s) => s.dependsOn.length > 0) }).toEqual({
+        release: rel.name,
+        hasGlobs: true,
+      });
+    }
+  });
+
+  test("RED CONTROL: the matcher does match a path a glob group really covers", () => {
+    // `scripts/**` is in APP_CODE. If the evidence tree had been put under
+    // scripts/, every assertion above would be red — which is the proof that
+    // they are not passing because Bun.Glob silently matches nothing.
+    expect(new Bun.Glob("scripts/**").match("scripts/lib/restore-container.ts")).toBe(true);
+    expect(new Bun.Glob("scripts/**").match(`scripts/${EVIDENCE_DIR}/allowed-signers`)).toBe(true);
   });
 });

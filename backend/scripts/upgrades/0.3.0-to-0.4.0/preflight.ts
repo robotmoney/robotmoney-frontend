@@ -5,6 +5,7 @@ import type { Checker } from "../../lib/checks.ts";
 import { runPreflightMain, type Db } from "../../lib/preflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import { JUDGE_CONFIG_TABLE, JUDGEMENT_TABLE, PRIOR_RELEASE_MIGRATIONS, RECEIPT_TABLE, TAG_GLOB, THIS_RELEASE_MIGRATIONS } from "./release.ts";
+import { COMMITTED_EVIDENCE_DIR } from "./steps.ts";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(dir, "..", "..", "..", "..");
@@ -25,5 +26,5 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
 
 const emit = process.argv.includes("--emit-receipt");
 runPreflightMain({ envPath: join(repoRoot, ".env.readonly"), name: "preflight-0.4.0", allowPrivilegedEnvVar: "PREFLIGHT_ALLOW_PRIVILEGED", runChecks,
-  receipt: emit ? { step: "P4.preflight-live", repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role } : undefined,
+  receipt: emit ? { step: "P4.preflight-live", repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, committedEvidenceDir: COMMITTED_EVIDENCE_DIR } : undefined,
 }).then((code) => process.exitCode = code);

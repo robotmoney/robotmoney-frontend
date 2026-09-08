@@ -21,6 +21,14 @@ if (vFlag !== -1 && process.argv.length > vFlag + 1) {
 }
 
 const stepsPath = join(scriptDir, targetDir, "steps.ts");
-const { STEPS, TAG_GLOB, TRACKING_ISSUE } = await import(stepsPath);
+// COMMITTED_EVIDENCE_DIR is undefined for every release that has not opted into
+// signed in-tree receipts, which leaves runWhere() on its host-local-only path.
+const { STEPS, TAG_GLOB, TRACKING_ISSUE, COMMITTED_EVIDENCE_DIR } = await import(stepsPath);
 
-mainWhere({ repoRoot, steps: STEPS, tagGlob: TAG_GLOB, trackingIssue: TRACKING_ISSUE });
+mainWhere({
+  repoRoot,
+  steps: STEPS,
+  tagGlob: TAG_GLOB,
+  trackingIssue: TRACKING_ISSUE,
+  committedEvidenceDir: COMMITTED_EVIDENCE_DIR,
+});
