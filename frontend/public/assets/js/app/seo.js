@@ -39,8 +39,8 @@ const META = {
     description: "$ROBOTMONEY directs allocation of the Robot Money USDC vault on Base. Holders vote which agent tokens it holds; protocol revenue funds buybacks and burns.",
   },
   "/allocation": {
-    title: "Allocation — Live Vault & Wallet AUM | Robot Money",
-    description: "Track Robot Money's live allocation: vault strategy breakdown, per-adapter TVL, 7-day APY, agent wallet holdings, and $ROBOTMONEY buyback history on Base.",
+    title: "Allocation — Target Sleeves & Vault | Robot Money",
+    description: "What a Robot Money deposit is allocated to: four target sleeves against what the ERC-4626 vault holds on Base, per-venue balances, drift, and what it pays.",
   },
   "/performance": {
     title: "Wallet Performance & AUM History — Robot Money",
@@ -303,6 +303,11 @@ const LEGACY_ALIASES = [
   // cited inline by the archived swarm sessions (routes.js:152,161).
   ["/allocation2", "/performance"],
   ["/articles/treasury-allocation", "/blog/treasury-allocation"],
+  // /vault renders views/allocation.html (RM-115). Without an entry here both
+  // addresses return 200 with the same page and neither names the other
+  // canonical, and /vault, having no META entry of its own, would serve the
+  // product sheet under "Page Not Found" and `noindex, follow`.
+  ["/vault", "/allocation"],
 ];
 
 // The last resort in metaFor(), reached only by a path that is in no META

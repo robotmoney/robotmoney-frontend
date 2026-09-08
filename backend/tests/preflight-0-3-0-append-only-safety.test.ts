@@ -31,6 +31,8 @@ import type { Db } from "../scripts/lib/preflight-utils.ts";
 import {
   checkAppendOnlySafety,
   guardedTablesInstalledBy,
+  guardTriggersReinstalledBy,
+  isGuardTriggerName,
   type MigrationSql,
   runChecks,
   scanMigrationSql,
@@ -50,6 +52,83 @@ if (!DB_URL) throw new Error("DATABASE_URL is unset — tests/preload.ts must pr
 
 /** The guard migration is the only `applied` entry the check reads. */
 const GUARD_APPLIED = new Set<string>([APPEND_ONLY_MIGRATION]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GROUND TRUTH HELPERS (issue #830). Blind spot 7 records the hope that
+// guardedTablesInstalledBy()'s text harvest agrees with when a guard ACTUALLY
+// goes live. The helpers below make that a checked fact: apply migrations one
+// at a time to a real database and read `pg_trigger` after each, which does not
+// care what shape the installing DDL took.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Table names carrying a guard-shaped trigger (isGuardTriggerName — the SAME
+ *  naming vocabulary preflight.ts uses to read migration text), read directly
+ *  off `pg_trigger`. The database's own opinion, independent of any file. */
+async function guardTriggerTables(db: Db): Promise<Set<string>> {
+  const rows = (await db`
+    SELECT c.relname AS table_name, t.tgname AS trigger_name
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public'
+       AND NOT t.tgisinternal
+  `) as unknown as { table_name: string; trigger_name: string }[];
+  return new Set(rows.filter((r) => isGuardTriggerName(r.trigger_name)).map((r) => r.table_name));
+}
+
+/**
+ * Applies `migrations` to `db` one file per transaction — the same shape the
+ * real runner and the end-to-end block below use — and returns two
+ * `installedAt` maps built in lockstep:
+ *
+ *  - `text`: guardedTablesInstalledBy() over each file's own SQL, first
+ *    occurrence wins. This is what checkAppendOnlySafety() actually reads.
+ *  - `live`: the index of the first migration AFTER WHICH `pg_trigger` shows a
+ *    guard-shaped trigger on that table that was not there before. Ground
+ *    truth: ask the database, not the file.
+ *
+ * Blind spot 7 is exactly the claim that these two maps agree.
+ */
+async function computeInstalledAtMaps(
+  db: Db,
+  migrations: MigrationSql[],
+): Promise<{ text: Map<string, number>; live: Map<string, number> }> {
+  const text = new Map<string, number>();
+  const live = new Map<string, number>();
+  let seen = await guardTriggerTables(db);
+  for (let i = 0; i < migrations.length; i++) {
+    const { sql } = migrations[i]!;
+    for (const t of guardedTablesInstalledBy(sql)) if (!text.has(t)) text.set(t, i);
+    await db.begin(async (tx) => {
+      await tx.unsafe(sql);
+    });
+    const after = await guardTriggerTables(db);
+    for (const t of after) if (!seen.has(t) && !live.has(t)) live.set(t, i);
+    seen = after;
+  }
+  return { text, live };
+}
+
+/** Human-readable mismatches between the two maps above — empty means the two
+ *  sources agree on every table either one names. Each line names the table and
+ *  which file (or "unattributed" / "never installed") each side blames. */
+function describeInstalledAtMismatch(
+  text: Map<string, number>,
+  live: Map<string, number>,
+  migrations: MigrationSql[],
+): string[] {
+  const tables = new Set<string>([...text.keys(), ...live.keys()]);
+  const lines: string[] = [];
+  for (const t of [...tables].sort()) {
+    const ti = text.get(t);
+    const li = live.get(t);
+    if (ti === li) continue;
+    const textSide = ti === undefined ? "unattributed" : migrations[ti]!.file;
+    const liveSide = li === undefined ? "never installed" : migrations[li]!.file;
+    lines.push(`${t}: text-derived says ${textSide}, pg_trigger-derived says ${liveSide}`);
+  }
+  return lines;
+}
 
 describe("append-only-safety tells a LOCK apart from a WRITE", () => {
   let db: Db;
@@ -562,6 +641,29 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     expect(r.detail.join("\n")).toContain("presence is what is checked, not execution");
   });
 
+  test("RED: a STATIC drop paired with a DYNAMIC re-creation is reported, not exempted", async () => {
+    // guardTriggersReinstalledBy()'s own header states this shape "would be
+    // reported rather than exempted... and no migration in this repo has that
+    // shape" — a prose claim until now. The DROP is static text; the
+    // re-creation is built with EXECUTE format(...), which lives inside a
+    // string literal and is stripped by stripSqlNoise() before
+    // guardTriggersReinstalledBy() ever scans it. So the exemption source never
+    // sees a re-creation for this table, and the drop blocks — the false
+    // positive is the safe direction, exercised rather than argued.
+    const r = await check({
+      file: "9038_static_drop_dynamic_recreate.sql",
+      sql: [
+        "DROP TRIGGER IF EXISTS swarm_briefs_append_only ON swarm_briefs;",
+        "DO $$ BEGIN",
+        "  EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard()', 'swarm_briefs_append_only', 'swarm_briefs');",
+        "END $$;",
+      ].join("\n"),
+    });
+    expect(r.status).toBe("FAIL");
+    expect(r.detail.join("\n")).toContain("DROP TRIGGER swarm_briefs.swarm_briefs_append_only");
+    expect(r.detail.join("\n")).not.toContain("also CONTAINS a re-creation for that table");
+  });
+
   test("GREEN: CREATE OR REPLACE FUNCTION defining a NEW guard is protection being added", async () => {
     // 0042's real opening line. The function does not exist on the database and
     // no earlier migration defines it, so this defines a guard rather than
@@ -625,6 +727,18 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     // uses: a static CREATE TRIGGER (0038's snapshot-run pair) and a DO block
     // that builds the trigger with format() over an ARRAY of table names
     // (0037, 0038's constituent guards, 0040).
+    //
+    // REDUNDANT BY DESIGN, since issue #830. This is an equality pin against a
+    // HAND-WRITTEN literal: an author adding a migration whose install shape is
+    // unharvestable would see `actual` come back short and could reconcile it
+    // by editing `expected` — the test would stay green through exactly the
+    // change it should catch. The enforced version of this claim is the
+    // pg_trigger-ground-truth test in the "end to end" describe below, which
+    // compares this same harvest against what the DATABASE says is live rather
+    // than against a literal a future edit can quietly match. This test is kept
+    // anyway: it fails LOUDLY and by name (`toEqual` on two objects) on any
+    // drift, where the ground-truth test's failure is a same-status FAIL from a
+    // generic diff.
     const expected: Record<string, string[]> = {
       "0037_aum_repairable_quarantine.sql": ["wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence"],
       "0038_wallet_aum_snapshot_foundation.sql": [
@@ -655,6 +769,111 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
     await checkAppendOnlySafety(db, notApplied, new Set(), async () => []);
     expect(notApplied.results[0]!.status).toBe("FAIL");
     expect(notApplied.results[0]!.detail[0]).toContain(APPEND_ONLY_MIGRATION);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// guardTriggersReinstalledBy() ⊆ guardedTablesInstalledBy() — issue #830's third
+// acceptance criterion. guardTriggersReinstalledBy() is documented as
+// "deliberately much stricter than guardedTablesInstalledBy()"; this pins that
+// the strict source really is a subset of the permissive one, INDEPENDENTLY of
+// the append-only-safety call site, so a later loosening of one or tightening
+// of the other fails loudly here rather than only where it happens to matter
+// for today's exemption. (The exemption's reliance on the strict source over the
+// permissive one is already covered above: swapping them at the call site turns
+// test 9034 red.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("guardTriggersReinstalledBy is a (sometimes strict) SUBSET of guardedTablesInstalledBy", () => {
+  function assertSubset(label: string, sql: string): void {
+    const strict = guardTriggersReinstalledBy(sql);
+    const permissive = guardedTablesInstalledBy(sql);
+    for (const table of strict) {
+      expect({ label, table, harvestedByPermissive: permissive.has(table) }).toEqual({
+        label,
+        table,
+        harvestedByPermissive: true,
+      });
+    }
+  }
+
+  test("holds for every real migration file in the repo", async () => {
+    const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql"));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const sql = await readFile(join(migrationsDir, file), "utf8");
+      assertSubset(file, sql);
+    }
+  });
+
+  test.each([
+    [
+      "static install idiom",
+      "DROP TRIGGER IF EXISTS x_append_only ON x; CREATE TRIGGER x_append_only BEFORE DELETE ON x FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard();",
+    ],
+    [
+      "DO block dynamic install",
+      "DO $$ DECLARE t text; BEGIN FOREACH t IN ARRAY ARRAY['y'] LOOP EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION rm_x()', t || '_append_only', t); END LOOP; END $$;",
+    ],
+    ["drop with no recreation", "DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members;"],
+    [
+      "recreate on a different table",
+      "DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members; CREATE TRIGGER swarm_briefs_append_only BEFORE DELETE ON swarm_briefs FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard();",
+    ],
+    [
+      "names but CONTINUEs past it (the review finding fixture)",
+      [
+        "DROP TRIGGER IF EXISTS swarm_sessions_append_only ON swarm_sessions;",
+        "DO $$",
+        "DECLARE t text; protected text[] := ARRAY['swarm_consensus_receipts', 'swarm_sessions'];",
+        "BEGIN",
+        "  FOREACH t IN ARRAY protected LOOP",
+        "    IF t = 'swarm_sessions' THEN CONTINUE; END IF;",
+        "    EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard()', t || '_append_only_row', t);",
+        "  END LOOP;",
+        "END $$;",
+      ].join("\n"),
+    ],
+    [
+      "contains-not-executes (guarded by IF false)",
+      [
+        "DROP TRIGGER IF EXISTS swarm_briefs_append_only ON swarm_briefs;",
+        "DO $$ BEGIN IF false THEN",
+        "  CREATE TRIGGER swarm_briefs_append_only BEFORE DELETE ON swarm_briefs",
+        "    FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard();",
+        "END IF; END $$;",
+      ].join("\n"),
+    ],
+    [
+      "static drop paired with a dynamic re-creation",
+      [
+        "DROP TRIGGER IF EXISTS swarm_briefs_append_only ON swarm_briefs;",
+        "DO $$ BEGIN",
+        "  EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard()', 'swarm_briefs_append_only', 'swarm_briefs');",
+        "END $$;",
+      ].join("\n"),
+    ],
+  ])("holds for the fixture: %s", (label, sql) => {
+    assertSubset(label, sql);
+  });
+
+  test("is STRICT for the CONTINUE-past-it fixture: the permissive harvest names both tables, the strict one names neither", () => {
+    const sql = [
+      "DROP TRIGGER IF EXISTS swarm_sessions_append_only ON swarm_sessions;",
+      "DO $$",
+      "DECLARE t text; protected text[] := ARRAY['swarm_consensus_receipts', 'swarm_sessions'];",
+      "BEGIN",
+      "  FOREACH t IN ARRAY protected LOOP",
+      "    IF t = 'swarm_sessions' THEN CONTINUE; END IF;",
+      "    EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard()', t || '_append_only_row', t);",
+      "  END LOOP;",
+      "END $$;",
+    ].join("\n");
+    const strict = guardTriggersReinstalledBy(sql);
+    const permissive = guardedTablesInstalledBy(sql);
+    expect([...strict].sort()).toEqual([]);
+    expect([...permissive].sort()).toEqual(["swarm_consensus_receipts", "swarm_sessions"]);
+    expect(strict.size).toBeLessThan(permissive.size);
   });
 });
 
@@ -831,4 +1050,106 @@ describe("v0.3.0 preflight, end to end on a v0.2.2 baseline database", () => {
     });
     expect({ exit }).toEqual({ exit: 0 });
   }, 60_000);
+
+  // Issue #830. Continues PAST the v0.2.2 baseline built above — this is the
+  // last thing done with `baselineDb`, so advancing it forward here disturbs no
+  // earlier test. Applies THIS_RELEASE_MIGRATIONS one file at a time and
+  // snapshots `pg_trigger` after each, then compares the DATABASE's own opinion
+  // of when a guard went live against the TEXT-derived map
+  // checkAppendOnlySafety() actually reads. That is blind spot 7's documented
+  // hope made an executed invariant: the database does not care what shape the
+  // installing DDL took — dynamic format(), SELECT … INTO, a literal, anything —
+  // the trigger either exists after migration n or it does not.
+  test("ground truth: the text-derived installedAt map equals the pg_trigger-derived one for the real release", async () => {
+    const migrations = await Promise.all(
+      THIS_RELEASE_MIGRATIONS.map(async (file) => ({ file, sql: await readFile(join(migrationsDir, file), "utf8") })),
+    );
+    const { text, live } = await computeInstalledAtMaps(baselineDb, migrations);
+
+    expect(describeInstalledAtMismatch(text, live, migrations)).toEqual([]);
+
+    // Non-vacuous: the release really does install guards this run should see,
+    // on both harvest shapes (a static CREATE TRIGGER and a DO-block format()
+    // build) — a comparison that passed by finding nothing would be worthless.
+    expect(live.size).toBeGreaterThan(0);
+    expect(live.get("wallet_aum_snapshot_runs")).toBe(
+      migrations.findIndex((m) => m.file === "0038_wallet_aum_snapshot_foundation.sql"),
+    );
+    expect(live.get("swarm_consensus_receipts")).toBe(
+      migrations.findIndex((m) => m.file === "0042_swarm_consensus_receipts.sql"),
+    );
+  }, 60_000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #830, acceptance criterion 2: "The assertion goes red for a migration
+// whose guard install is unharvestable by text — demonstrated with a
+// SELECT … INTO-shaped fixture, not argued." Builds an actual throwaway
+// database and applies an actual migration whose guard-install table name
+// arrives via `SELECT … INTO` a real table rather than a string literal — the
+// "third shape" blind spot 7 names — and shows the ground-truth comparison
+// above catches it where the hand-written-literal pin could not.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("ground truth catches what text-harvesting cannot: a SELECT ... INTO install", () => {
+  let admin: ReturnType<typeof postgres>;
+  let db: Db;
+  let dbName: string;
+
+  beforeAll(async () => {
+    admin = postgres(DB_URL, { max: 1, onnotice: () => {} });
+    dbName = `tmp_preflight_select_into_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    await admin.unsafe(`CREATE DATABASE ${dbName}`);
+    const url = new URL(DB_URL);
+    url.pathname = `/${dbName}`;
+    db = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  });
+
+  afterAll(async () => {
+    await db?.end({ timeout: 5 });
+    if (dbName) await admin.unsafe(`DROP DATABASE IF EXISTS ${dbName}`);
+    await admin?.end({ timeout: 5 });
+  });
+
+  test("RED: a guard installed via SELECT ... INTO is unattributed by text but live in pg_trigger", async () => {
+    const migrations: MigrationSql[] = [
+      {
+        file: "9039_shadow_registry.sql",
+        sql: [
+          "CREATE TABLE fixture_shadow_registry (name text NOT NULL);",
+          "CREATE TABLE fixture_shadow_table (id int PRIMARY KEY);",
+          "INSERT INTO fixture_shadow_registry (name) VALUES ('fixture_shadow_table');",
+          "CREATE OR REPLACE FUNCTION rm_fixture_guard() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN RAISE EXCEPTION 'append-only'; END; $fn$;",
+        ].join("\n"),
+      },
+      {
+        // The unharvestable shape: the table name comes from a SELECT ... INTO
+        // over a REAL table's data, not a string literal, so no literal naming
+        // `fixture_shadow_table` ever appears in this file's SQL text — which is
+        // exactly what guardedTablesInstalledBy() needs to see something.
+        file: "9040_select_into_install.sql",
+        sql: [
+          "DO $$",
+          "DECLARE t text;",
+          "BEGIN",
+          "  SELECT name INTO t FROM fixture_shadow_registry LIMIT 1;",
+          "  EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION rm_fixture_guard()', t || '_append_only', t);",
+          "END $$;",
+        ].join("\n"),
+      },
+    ];
+
+    // Confirm the premise before trusting the conclusion: the harvester really
+    // does come back empty for this file.
+    expect([...guardedTablesInstalledBy(migrations[1]!.sql)]).not.toContain("fixture_shadow_table");
+
+    const { text, live } = await computeInstalledAtMaps(db, migrations);
+    expect(text.has("fixture_shadow_table")).toBe(false);
+    expect(live.get("fixture_shadow_table")).toBe(1);
+
+    // And the failure names the table, not just "something is wrong".
+    expect(describeInstalledAtMismatch(text, live, migrations)).toEqual([
+      "fixture_shadow_table: text-derived says unattributed, pg_trigger-derived says 9040_select_into_install.sql",
+    ]);
+  });
 });

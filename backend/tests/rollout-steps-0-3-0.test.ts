@@ -185,13 +185,13 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // THIS PIN MOVES ONLY UPWARD, AND ONLY WITH A DECLARATION BESIDE IT. It is a
   // tripwire on the roster's terminal entry, so that growing the release is a
   // deliberate act somebody had to write down here as well as in release.ts —
-  // NOT a lever for shrinking scope. 0042 joined via #754, 0043 via #835, and
-  // 0044 via #761: in each case the drift guard below named the landed file as
-  // undeclared, and the fix was to DECLARE it (never to raise the numeric
-  // floor).
-  test("the release inventory includes the shared-leg circuit breaker migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(13);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0044_wallet_backfill_leg_terminal.sql");
+  // NOT a lever for shrinking scope. 0042 joined via #754, 0043 via #835, 0044
+  // via #761, 0045 via #760, 0046 via #849, 0047 via #779, and 0048 via #796:
+  // in each case the drift guard below named the landed file as undeclared,
+  // and the fix was to DECLARE it (never to raise the numeric floor).
+  test("the release inventory includes the earliest-valid-block floor migration", () => {
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(17);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0048_swarm_judge_third_party_flag.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");
@@ -205,6 +205,9 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     expect(NEW_COLUMNS).toContainEqual({ table: "wallet_backfill_state", column: "defer_leg" });
     expect(NEW_COLUMNS).toContainEqual({ table: "wallet_backfill_state", column: "defer_streak" });
     expect(NEW_COLUMNS).toContainEqual({ table: "wallet_backfill_state", column: "defer_leg_at" });
+    // 0048 (issue #796): the admin-flippable, no-redeploy gate for
+    // third-party judging, on the same singleton row `mode` already lives on.
+    expect(NEW_COLUMNS).toContainEqual({ table: "swarm_judge_config", column: "third_party_enabled" });
     expect(AUM_GUARD_TRIGGERS).toHaveLength(11);
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_balance_samples");
     expect(MIGRATION_TOUCHED_TABLES).toContain("wallet_sleeve_samples");
@@ -413,6 +416,34 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     expect({ found: block !== null }).toEqual({ found: true });
     const fromGuard = [...block![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
     expect({ tables: [...APPEND_ONLY_TABLES] as string[] }).toEqual({ tables: fromGuard });
+  });
+
+  test("§9 check 6's protected-table count matches APPEND_ONLY_TABLES.length", () => {
+    // #816: the runbook restated this count in English prose ("all fourteen
+    // protected tables") in two places, and #811 fixed only one of them —
+    // both said "fourteen" even after APPEND_ONLY_TABLES grew to fifteen. A
+    // hand-maintained number with two homes drifts silently every time a
+    // table is added; this test gives it one home (APPEND_ONLY_TABLES) and
+    // fails the moment the prose disagrees, the same mechanism as the
+    // migration-roster tests above.
+    const NUMBER_WORDS: Record<string, number> = {
+      ten: 10,
+      eleven: 11,
+      twelve: 12,
+      thirteen: 13,
+      fourteen: 14,
+      fifteen: 15,
+      sixteen: 16,
+      seventeen: 17,
+      eighteen: 18,
+      nineteen: 19,
+      twenty: 20,
+    };
+    const m = runbook.match(/on all (\w+) protected tables/);
+    expect({ found: m !== null }).toEqual({ found: true });
+    const word = m![1]!.toLowerCase();
+    expect({ word, known: word in NUMBER_WORDS }).toEqual({ word, known: true });
+    expect({ runbookCount: NUMBER_WORDS[word] }).toEqual({ runbookCount: APPEND_ONLY_TABLES.length });
   });
 });
 

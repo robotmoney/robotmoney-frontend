@@ -258,7 +258,7 @@ async function checkNewTables(db: Db, { record }: Checker): Promise<void> {
       "new-tables",
       "WARN",
       [`present but not empty: ${nonEmpty.join(", ")}`],
-      "swarm_judge_config ALWAYS reports one row — 0039 seeds the operator switch. Beyond that: non-empty operational tables mean repair already dispatched; non-empty evidence tables mean 0037 archived an rc-era quarantined cohort. Reconcile the reported counts before tagging.",
+      "swarm_judge_config ALWAYS reports one row — 0039 seeds the operator switch. asset_prices ALWAYS reports rows too — 0046 seeds one row per (date, symbol) from existing live/seed-provenance samples, deliberately excluding the still-open UTC day (D41 phase 1). Beyond that: non-empty operational tables mean repair already dispatched; non-empty evidence tables mean 0037 archived an rc-era quarantined cohort. Reconcile the reported counts before tagging.",
     );
     return;
   }

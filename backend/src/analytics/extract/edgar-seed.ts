@@ -13,6 +13,7 @@
 // ../edgar-seed-loader.ts.
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import type { RawIndicatorHistory } from "../types.ts";
 
 export const EDGAR_SEED_FORMAT_VERSION = 1;
@@ -42,14 +43,12 @@ export interface EdgarSeedManifest {
 // The committed fixture location (same convention as extract/floor-seed.ts's
 // DEFAULT_FLOOR_SEED_PATH) — overridable via EDGAR_SEED_PATH/
 // EDGAR_SEED_MANIFEST_PATH for tests and the repopulation/regeneration CLIs.
-export const DEFAULT_EDGAR_SEED_PATH = new URL(
-  "../../../tests/fixtures/regime/edgar-mna-seed.csv.gz",
-  import.meta.url,
-).pathname;
-export const DEFAULT_EDGAR_SEED_MANIFEST_PATH = new URL(
-  "../../../tests/fixtures/regime/edgar-mna-seed.manifest.json",
-  import.meta.url,
-).pathname;
+export const DEFAULT_EDGAR_SEED_PATH = fileURLToPath(
+  new URL("../../../tests/fixtures/regime/edgar-mna-seed.csv.gz", import.meta.url),
+);
+export const DEFAULT_EDGAR_SEED_MANIFEST_PATH = fileURLToPath(
+  new URL("../../../tests/fixtures/regime/edgar-mna-seed.manifest.json", import.meta.url),
+);
 
 function resolveSeedPath(explicit?: string): string {
   return explicit || process.env.EDGAR_SEED_PATH || DEFAULT_EDGAR_SEED_PATH;

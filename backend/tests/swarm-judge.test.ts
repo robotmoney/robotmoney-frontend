@@ -27,6 +27,7 @@
 // the part that must be correct when the model is at its worst.
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import * as ic from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -809,7 +810,7 @@ test("the replay CLI runs against real session rows and reports every vector unc
   const proc = Bun.spawnSync(
     ["bun", "run", "scripts/swarm-judge-replay.ts", "--limit", "5", "--json"],
     {
-      cwd: new URL("..", import.meta.url).pathname,
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
       // OPENCODE_API_KEY withheld: with no model on the config row the replay
       // is template-only anyway, and withholding it makes that structural
       // rather than incidental — this test can never reach a network.
@@ -1037,7 +1038,7 @@ test("the replay CLI names the non-reproducible vector, prints the D42 list, and
   await setJudgeConfig({ mode: "shadow", minTakes: 3 });
 
   const env = { ...process.env, OPENCODE_API_KEY: "", DATABASE_URL: await currentDatabaseUrl() };
-  const cwd = new URL("..", import.meta.url).pathname;
+  const cwd = fileURLToPath(new URL("..", import.meta.url));
 
   const bad = Bun.spawnSync(
     ["bun", "run", "scripts/swarm-judge-replay.ts", "--session", broken.session.id],
@@ -1461,7 +1462,7 @@ test("the mode is read ONCE and passed down, so flipping the switch mid-run cann
   expect((await getJudgeConfig()).mode).toBe("off");
 
   const passed = await judgeSession(session.id, {
-    config: { mode: "shadow", minTakes: 3, model: null, updatedAt: null },
+    config: { mode: "shadow", minTakes: 3, model: null, thirdPartyEnabled: false, updatedAt: null },
     transport: fixedTransport(goodAnswer(members[0].id, members[1].id)),
   });
   expect(passed.ok).toBe(true);

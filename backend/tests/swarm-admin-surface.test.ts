@@ -102,6 +102,37 @@ test("topics: create validates fields, edit is versioned (409 stale_version), de
   expect((await admin.updateSubjectAdmin(rid("nope"), 1, {})).status).toBe(404);
 });
 
+// ── issue #779: renaming a subject must not leave its PAST sessions behind ──
+// swarm_sessions.subject_name is denormalized off swarm_subjects.name
+// (migration 0001_backends.sql) and, before this fix, updateSubjectAdmin wrote
+// only swarm_subjects — leaving every already-convened session showing the old
+// name on member track records next to chips that read the new one.
+test("topics: renaming a subject backfills subject_name onto its existing sessions", async () => {
+  const id = rid("topic");
+  await admin.createSubjectAdmin({ id, name: "Old Name" });
+
+  const date = "2026-08-15";
+  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId: id });
+  expect(created.status).toBe(201);
+  const sessionId = (created as any).session.id as string;
+
+  const before = (await sql`SELECT subject_name FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  expect(before.subject_name).toBe("Old Name");
+
+  const renamed = await admin.updateSubjectAdmin(id, 1, { name: "New Name" });
+  expect(renamed.status).toBe(200);
+
+  const after = (await sql`SELECT subject_name FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  expect(after.subject_name).toBe("New Name");
+
+  // A patch that leaves `name` untouched must not rewrite session rows at all
+  // — this is a rename backfill, not an unconditional resync on every edit.
+  const untouched = await admin.updateSubjectAdmin(id, 2, { operator: "someone" });
+  expect(untouched.status).toBe(200);
+  const stillNew = (await sql`SELECT subject_name FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  expect(stillNew.subject_name).toBe("New Name");
+});
+
 // ── AC3: member activation/manual-add/reactivation/key rotation ────────────
 test("members: manual add mints a one-time credential; deactivate revokes keys; reactivate + rotate mint fresh credentials", async () => {
   const { publicKeyB64 } = await generateKeyPair();
@@ -159,6 +190,64 @@ test("members: manual add mints a one-time credential; deactivate revokes keys; 
   // application review approve/reject" above for the full 409 story that a
   // non-null-asserted `r.token!` was masking before issue #454.
   expect((await admin.deactivateMemberAdmin(memberId, 4)).status).toBe(200);
+});
+
+// ── Issue #799: an inactive member must not hold an authenticating token ──
+// deactivateMemberAdmin revokes the member's active key, but
+// rotateMemberKeyAdmin (the documented remedy for CARRIED_KEY_UNREGISTRABLE
+// ahead of reactivation — see the comment above it in admin.ts) has never
+// checked member status and mints a fresh ACTIVE key regardless. Before this
+// fix that meant a member sitting at status='inactive' could still be handed
+// a token that authenticated as a live member everywhere memberIdForToken()
+// is the identity check: submitRecommendation (which is also the amendment
+// path — a resubmit is just a higher revision through the same gate),
+// postMemo, and updateMemberProfile. The fix joins swarm_members.status =
+// 'active' into memberIdForToken() itself, so the token simply does not
+// resolve to an identity — the same 401 an unknown token gets everywhere.
+test("security: a token minted by rotating an INACTIVE member's key does not authenticate anywhere; an active member's token is unaffected", async () => {
+  const member = await activeMember("to-deactivate");
+  const control = await activeMember("stays-active");
+
+  const deact = await admin.deactivateMemberAdmin(member.id, 1);
+  expect(deact.status).toBe(200);
+
+  // Rotate while still INACTIVE. deactivateMemberAdmin already flipped the
+  // prior key to active=false, so rotateMemberKeyAdmin has no on-file active
+  // key to carry forward and needs an explicit fresh publicKey — exactly the
+  // real remedy an admin exercises ahead of reactivation.
+  const { publicKeyB64: freshKey, privateKey: freshPrivateKey } = await generateKeyPair();
+  const rotated = await admin.rotateMemberKeyAdmin(member.id, { publicKey: freshKey });
+  expect(rotated.status).toBe(200);
+  const inactiveToken = (rotated as any).token as string;
+  expect(typeof inactiveToken).toBe("string");
+
+  // Identity does not resolve for a rotated-while-inactive token.
+  expect(await ic.memberIdForToken(inactiveToken)).toBeNull();
+
+  // Every downstream write path that authenticates off memberIdForToken()
+  // refuses it identically to an unknown token (401), never reaching its
+  // own authorization logic.
+  const memoResult = await ic.postMemo(inactiveToken, { sessionId: crypto.randomUUID(), body: "hi" });
+  expect(memoResult.status).toBe(401);
+
+  const profileResult = await ic.updateMemberProfile(inactiveToken, member.id, { tagline: "hi" });
+  expect(profileResult.status).toBe(401);
+
+  const subjectId = await activeSubject();
+  const rotatedMember = { id: member.id, token: inactiveToken, privateKey: freshPrivateKey };
+  const submission = await signedSubmission(rotatedMember, "2026-08-20", subjectId);
+  const submitResult = await ic.submitRecommendation(inactiveToken, submission);
+  expect(submitResult.status).toBe(401);
+
+  // Control: an ACTIVE member's token is completely unaffected by this
+  // change — identity still resolves, and a real write (profile edit, which
+  // has no session/FK dependency to complicate the assertion) still succeeds.
+  expect(await ic.memberIdForToken(control.token)).toBe(control.id);
+  const controlProfile = await ic.updateMemberProfile(control.token, control.id, { tagline: "unaffected" });
+  expect(controlProfile.status).toBe(200);
+
+  // Free the roster slot `control` claimed (see the matching comment above).
+  expect((await admin.deactivateMemberAdmin(control.id, 1)).status).toBe(200);
 });
 
 test("members: application review approve/reject", async () => {

@@ -1,8 +1,10 @@
 // LIVE cost class (docs/architecture.md §3 "Test, eval, and tooling layout",
-// L1): this file makes a REAL request to raw.githubusercontent.com, so it lives
-// in its own directory and is unreachable from the contract package's default
-// target (`bun test tests/unit`) and from the repo root's `bun test
-// scripts/tests`.
+// L1): this file makes a REAL request to the skill's deployed origin
+// (robotmoney.network — SWARM_ONBOARDING_SKILL_URL moved off
+// raw.githubusercontent.com to same-origin hosting; see swarm-application.js),
+// so it lives in its own directory and is unreachable from the contract
+// package's default target (`bun test tests/unit`) and from the repo root's
+// `bun test scripts/tests`.
 //
 // WHERE IT RUNS (issue #484). It is invoked by `bun run test:live` in the
 // `contract` job of .github/workflows/contract.yml — the same already-required
@@ -41,9 +43,55 @@
 // exits 1 on bun 1.3.x, so an emptied `tests/live/` is red, not a vacuous
 // green.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { SWARM_ONBOARDING_SKILL_URL } from "../../src/swarm-application.js";
+import { describeSkillMismatch } from "../../src/skill-parity.js";
 
 const TIMEOUT_MS = 30_000;
+
+// Issue #759. PR #758 (issue #748) closed the unverified `curl | tar xz`
+// install form and covered it with
+// scripts/tests/unit/onboarding-skill-rmpc-install-verified.test.ts — but that
+// test asserts against the REPO-LOCAL file. Issue #748's own AC1 was about the
+// SERVED document ("the skill as served from
+// https://robotmoney.net/skills/swarm-onboarding/SKILL.md contains no
+// `curl ... | tar xz` install form"), and nothing checked that the deployed
+// bytes actually match. This file already makes the one live fetch this job
+// is allowed (see the module header above), so the parity check below rides
+// the same request rather than adding a second one.
+const SKILL_REL = "frontend/public/skills/swarm-onboarding/SKILL.md";
+const repoSkill = readFileSync(join(import.meta.dir, "../../..", SKILL_REL), "utf8");
+
+// Issue #759 deliverable 3 — DECISION: this parity check does NOT also need
+// to cover the onboarding eval's local skill URL, and the eval is left
+// unchanged.
+//
+// scripts/lib/onboarding-eval.ts builds `localSkillUrl` by taking
+// `LOCAL_SWARM_ONBOARDING_SKILL_PATH` (SWARM_ONBOARDING_SKILL_URL's own
+// pathname) and prefixing the eval stack's own `apiBaseUrl` — i.e. the eval
+// fetches this exact same repo file from the same job's own API container,
+// which serves `frontend/public/` straight out of the checkout that job
+// already has on disk (`STATIC_DIR`, backend/src/api/static.ts). There is no
+// separate deploy, build artifact, or CDN cache between "the file in this
+// checkout" and "what the eval's container fetches" — the two are the same
+// bytes by construction, in the same process, every run.
+//
+// The failure class this issue exists to close is specifically a DIVERGENCE
+// between the repo and something deployed independently of it (a stale or
+// failed deploy to robotmoney.network). That class cannot occur for the
+// eval's local URL, because nothing independent is deployed — extending this
+// check to also diff the eval's served copy against the repo would only be
+// re-verifying that a static file server returns the file it was pointed at,
+// which is not this issue's risk and not worth a second live assertion.
+//
+// (The onboarding-eval-uses-repo-local-skill note this decision closes is
+// about a DIFFERENT gap — the eval never exercises the real
+// SWARM_ONBOARDING_SKILL_URL/production endpoint at all, so a green eval
+// proves nothing about production. That gap is what THIS file's fetch against
+// SWARM_ONBOARDING_SKILL_URL itself, run in the required `contract` job on
+// every push to main and nightly, exists to close — see "WHERE IT RUNS"
+// above. No further eval change is needed for issue #759.)
 
 /**
  * The skill slug the URL itself names — the directory immediately above
@@ -121,6 +169,30 @@ describe("SWARM_ONBOARDING_SKILL_URL — live reachability", () => {
       // procedure, whatever else it happens to contain.
       expect(body.toLowerCase()).not.toContain("no instructions to follow");
       expect(body.length).toBeGreaterThan(10_000);
+
+      // Issue #759 AC1/AC3 — the served bytes must match the repo-local copy
+      // exactly, not merely carry a few markers in common. Every assertion
+      // above would still pass against a stale deploy that kept some other
+      // paragraph — including the pre-#758 unverified install block — as long
+      // as the handful of strings checked above happened to survive; a byte
+      // comparison against the file this deploy is supposed to be serving
+      // closes that gap. describeSkillMismatch() (contract/src/skill-parity.js)
+      // is the same function contract/tests/unit/skill-parity.test.ts drives
+      // against a fixture pre-#758 body, so "this would go red on a stale
+      // deploy" is demonstrated there without needing a real one in
+      // production.
+      const mismatch = describeSkillMismatch({
+        url: SWARM_ONBOARDING_SKILL_URL,
+        served: body,
+        repoPath: SKILL_REL,
+        repo: repoSkill,
+      });
+      expect(mismatch, mismatch ?? "").toBeNull();
+
+      // Issue #759 deliverable 1's explicit floor, independent of the byte
+      // comparison above: even if repoSkill itself somehow regressed, the
+      // served copy must never carry the unverified pipe-into-tar form.
+      expect(body).not.toMatch(/\|\s*tar\b/);
     },
     TIMEOUT_MS,
   );

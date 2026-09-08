@@ -38,7 +38,6 @@ Source code is public and clonable: [github.com/robotmoney/robotmoney-frontend](
 
 ## Live data pages (rendered client-side; use the API below instead)
 - [Allocation](https://robotmoney.network/allocation): the four allocation sleeves and their target weights, per-adapter vault TVL, APY, Robot Money protocol wallet holdings, and $ROBOTMONEY buybacks.
-- [Allocation history](https://robotmoney.network/allocation/history): every session in which the swarm reviewed the allocation, and whether the target weights changed.
 - [Performance](https://robotmoney.network/performance): daily value and allocation of the Robot Money protocol wallets since inception. Days with no persisted snapshot are drawn as gaps, never interpolated.
 - [Regime](https://robotmoney.network/regime): the daily cross-asset risk-on/risk-off classifier (macro, onchain, equity-factor panels) with backtests. Composite score in 0..1; below 0.33 is risk_off, 0.33 to 0.67 is neutral, above 0.67 is risk_on.
 - [Investment Swarm](https://robotmoney.network/swarm): the daily AI swarm that analyzes agent portfolios: members, subjects, and signed sessions.

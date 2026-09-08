@@ -1,12 +1,14 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
-// There is deliberately no VAULT_VIEW. views/vault.html stays in the tree but
-// UNREACHABLE: no route resolves to it, the same way views/allocation.html was
-// kept while /vault owned the content. RM-104's information architecture is
-// being reworked against the recommendation-receipt model and the page comes
-// back through that work, not through this table. Its last shipped state is on
-// branch david/vault-ia-polish.
+// There is still no VAULT_VIEW, and now there is no views/vault.html either.
+// It was kept UNREACHABLE in the tree while RM-104's information architecture
+// was reworked, on the note that "the page comes back through that work". This
+// is that work: RM-115 supersedes the /vault page shape, and the vault is now
+// the implementation SECTION of /allocation (`#vault`) rather than a page of
+// its own. Its content, the venue-rate reference dataset included, moved into
+// views/allocation.html and alpine/views/allocation.js; the deleted file is in
+// history and on branch david/vault-ia-polish.
 export const PERFORMANCE_VIEW = `${VIEW_DIR}/performance.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
 export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
@@ -157,14 +159,16 @@ const ROUTES = {
   "/allocation": ALLOCATION_VIEW,
   "/performance": PERFORMANCE_VIEW,
   "/allocation2": PERFORMANCE_VIEW, // legacy redirect
-  // /vault resolves to NOT FOUND, explicitly. Deleting the ROUTE is not enough
-  // to retire a page: the catch-all at the bottom of viewFor() maps any unknown
-  // path to `/views/<path>.html`, so leaving views/vault.html in the tree with
-  // no entry here left /vault rendering the full page exactly as before. That
-  // is how views/allocation.html stayed genuinely unreachable while /vault
-  // owned the content — /allocation had an explicit entry pointing elsewhere,
-  // so the catch-all never ran for it. This is the same trick, pointed at 404.
-  "/vault": NOT_FOUND_VIEW,
+  // /vault renders /allocation (RM-115's URL table). It was pinned to
+  // NOT_FOUND while views/vault.html sat unreachable in the tree, because the
+  // catch-all at the bottom of viewFor() maps any unknown path to
+  // `/views/<path>.html` and removing the entry alone would have gone on
+  // serving the retired page in full. The fragment is deleted now and its
+  // content is a section of /allocation, so the entry points there: an address
+  // people already hold is worth more resolving to the page that answers it
+  // than 404ing. seo.js's LEGACY_ALIASES names /allocation canonical for it,
+  // so the two addresses do not compete as duplicates.
+  "/vault": ALLOCATION_VIEW,
   "/projects": PROJECTS_VIEW,
   // Legacy article URL, still live on robotmoney.network and still linked from the
   // synthesis prose of twenty archived swarm sessions (they cite

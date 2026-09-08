@@ -15,6 +15,7 @@ import {
   DEFAULT_RATE_PER_SEC,
   ethCall,
   ethGetBalance,
+  ethGetCode,
   isEmptyReturnData,
   resolveRpcRateBudget,
   rpcRequest,
@@ -77,6 +78,14 @@ test("a blockTag is threaded verbatim to both call sites", async () => {
   cap.restore();
   expect(cap.params[0]![1]).toBe("0x1e8480");
   expect(cap.params[1]![1]).toBe("0x1e8480");
+});
+
+test("ethGetCode threads the address and block tag verbatim (issue #760)", async () => {
+  const cap = captureParams();
+  await ethGetCode("0xdead", "0x1e8480", { rpcUrl: RPC });
+  cap.restore();
+  expect(cap.params[0]![0]).toBe("0xdead");
+  expect(cap.params[0]![1]).toBe("0x1e8480");
 });
 
 test("toBlockTag encodes a block number as 0x-hex and refuses nonsense", () => {

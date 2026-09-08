@@ -95,10 +95,15 @@ test("scheduler: a per-minute cron >1000 slots (16h40m) behind is never left pin
 
   const [afterSecond] = await sql`SELECT next_run_at FROM job_schedules WHERE kind='test.ok'`;
   expect(new Date(afterSecond.next_run_at).getTime()).toBeGreaterThan(new Date(afterFirst.next_run_at).getTime());
-  // 1200 slots / 1000-per-tick cap drains fully within two ticks; confirm it
-  // actually reached the future rather than merely moving forward.
-  expect(new Date(afterSecond.next_run_at).getTime()).toBeGreaterThan(Date.now());
-
+  // 1200 slots / 1000-per-tick cap drains fully within two ticks. We don't
+  // assert afterSecond.next_run_at > Date.now() here: next_run_at lands on an
+  // exact minute boundary, and a Date.now() read taken this much later (after
+  // the tick's own work) can itself have crossed that same boundary, racing a
+  // pass on ~1 run in 1000 (issue #764). "Reached the future" is instead
+  // proven properly below: tickScheduler() selects WHERE next_run_at <= now(),
+  // so a third tick returning 0 means the DB itself — read at selection time,
+  // not after the fact from JS — considers this schedule no longer due.
+  //
   // Fully caught up now: a third tick finds nothing newly due for this slot
   // cursor (dedupe still suppresses any residual overlap, and next_run_at is
   // future so nothing is even selected).
@@ -122,9 +127,11 @@ test("scheduler: an hourly cron >1000 slots (~41 days) behind is never left pinn
   expect(new Date(afterFirst.next_run_at).getTime()).toBeGreaterThan(staleAt.getTime());
 
   const secondTickEnqueued = await tickScheduler();
-  const [afterSecond] = await sql`SELECT next_run_at FROM job_schedules WHERE kind='test.ok'`;
-  expect(new Date(afterSecond.next_run_at).getTime()).toBeGreaterThan(Date.now());
   expect(secondTickEnqueued).toBeGreaterThanOrEqual(0); // remaining ~80 slots, may finish on tick 2
+  // See the per-minute test above (issue #764): next_run_at lands on an exact
+  // hour boundary, so comparing it to a Date.now() read taken after the tick
+  // races that boundary the same way. tickScheduler() returning 0 proves
+  // "reached the future" against the DB's own now() at selection time instead.
   expect(await tickScheduler()).toBe(0);
 });
 

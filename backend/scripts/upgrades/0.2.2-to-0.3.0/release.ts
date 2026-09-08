@@ -44,6 +44,10 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0042_swarm_consensus_receipts.sql",
   "0043_swarm_member_judges.sql",
   "0044_wallet_backfill_leg_terminal.sql",
+  "0045_chain_address_floors.sql",
+  "0046_asset_prices.sql",
+  "0047_swarm_session_subject_name_backfill.sql",
+  "0048_swarm_judge_third_party_flag.sql",
 ] as const;
 
 /**
@@ -88,6 +92,21 @@ export const NEW_TABLES = [
   // has the table, and postflight's new-tables check requires it present and
   // empty.
   "swarm_consensus_receipts",
+  // 0045 (issue #760): the per-address earliest-valid-block floor cache. Empty
+  // after the migration — populated lazily, one row per tracked address, the
+  // first time the backfill resolves that address's floor — the same shape
+  // `chain_day_blocks` above has for date resolution.
+  "chain_address_floors",
+  // 0046 (issue #849; D41 phase 1). Unlike every NEW_TABLES entry above,
+  // `asset_prices` IS EXPECTED NON-EMPTY after the migration by design — it
+  // seeds one row per (date, symbol) from existing live/seed-provenance
+  // sample rows (see 0046's own comments), so postflight's `new-tables` check
+  // must not require it empty.
+  "asset_prices",
+  // 0046's per-symbol first-priceable-day floor. Empty for gecko-priced
+  // assets (resolved lazily, same shape as `chain_address_floors` above);
+  // seeded only for the three usdc-pinned assets.
+  "asset_price_floors",
 ] as const;
 export const NEW_COLUMNS = [
   { table: "wallet_balance_samples", column: "strategy_nav_idle_only" },
@@ -133,6 +152,9 @@ export const NEW_COLUMNS = [
   { table: "wallet_backfill_state", column: "defer_leg" },
   { table: "wallet_backfill_state", column: "defer_streak" },
   { table: "wallet_backfill_state", column: "defer_leg_at" },
+  // 0048 (issue #796): the admin-flippable, no-redeploy gate for third-party
+  // (graduated-member) judging, layered onto 0043's role/attribution columns.
+  { table: "swarm_judge_config", column: "third_party_enabled" },
 ] as const;
 
 /** Every table this release creates, alters, locks, or writes: the roster of the

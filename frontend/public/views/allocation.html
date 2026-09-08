@@ -1,454 +1,462 @@
-<!-- Asset Allocation
-     Buildless port of robotmoney-site/src/app/allocation/page.tsx — now fully
-     data-driven, no baked DATA literals. Every pie is a Chart.js pie drawn by
-     the boot-registered allocationView() factory (alpine/views.js) from live
-     endpoints:
-       • Strategy pie + 4 mini bucket pies + bucket target weights ←
-         GET /api/dashboards/allocation (admin/swarm-managed target weights).
-       • Vault pie / holdings table / TVL / 7-Day APY ←
-         GET /api/dashboards/vault-economics (Base JSON-RPC, short-TTL cache;
-         degrades to `stale`/null, never a fabricated number).
-       • Wallet pie + aggregate holdings table ← GET /api/dashboards/wallet-balances.
-       • Per-wallet sleeve tables ← GET /api/dashboards/wallet-sleeves.
-       • Buyback total + table ← GET /api/dashboards/buybacks (ROBOTMONEY
-         Transfer logs into the primary prop wallet; 10 seeded historical rows).
-     Slice/legend COLOURS are presentation-only (client-side); the numbers are
-     never baked. Each feed degrades independently (loading → "—"/empty state)
-     so one stale endpoint never blanks the page. The hero reports the two pools
-     of money SEPARATELY: the Robot Money protocol wallets (wallet-balances) and
-     vault TVL (vault-economics). They are never summed; see the hero comment.
-     Shares the a2-* design system with performance.html.
--->
+<!-- /allocation — the product sheet (RM-115; container rule RM-114).
+     The allocation is a POLICY and gets a page of its own. A portfolio is a
+     book of holdings and gets a row on /swarm plus its own subject page. This
+     page is the policy as it stands now. How it has changed is every session
+     that reviewed it, on the swarm's page for the subject.
 
-<section class="a2 container" x-data="allocationView()">
+     THE CONSTRAINT A REVIEWER SHOULD CHECK FIRST: this page binds
+     GET /api/dashboards/allocation and GET /api/dashboards/vault-economics,
+     and nothing else. wallet-balances and
+     wallet-sleeves are the three protocol-owned prop wallets, a different pot
+     of money that moves to the token page under RM-103. Adding them together
+     under one heading is what made a $229 vault 0.4% of a "Total AUM" figure
+     printed under a heading about the vault.
 
-  <!-- ── HERO ────────────────────────────────────────────────────────────── -->
-  <header class="a2-hero alloc-hero">
+     Sections: Allocation (weights in force, the donut) · What changed ·
+     Inside each sleeve. The yield comparison and the deposit CTA came off:
+     neither is the allocation, and the reference series behind the first one
+     was the last non-live dataset on the page. Its seam disclosure went with
+     it, because there is no longer a seam to disclose.
+
+     There is no longer a Vault SECTION. Its holdings moved into the sleeve
+     they implement, where they can be compared to the policy instead of read
+     on their own two screens away, and its remaining facts went with them:
+     concentration and the portfolio link into the same disclosure, the address
+     onto the meta rail, fees and caps into Exposure where a reader is actually
+     deciding to deposit. id="vault" moved onto that sleeve's card, because
+     /allocation#vault is cited by the deposit skill and by the swarm's vault
+     row and must keep landing on the vault.
+     "What changed" comes before the breakdown because the two questions a
+     returning reader has are what the allocation is and whether it moved, and
+     both are cheaper to answer than the detail underneath them. The old
+     "Latest recommendation" section is inside it: the swarm's reading is the
+     WHY of a change and belongs beside the numbers it explains.
+
+     id="allocation" and id="vault" are load-bearing: RM-115 names both as
+     citable anchors, and /allocation#vault is the address the swarm's vault
+     row and the deposit skill point at. Both still resolve: "allocation" on
+     the weights themselves, "vault" on the sleeve card the vault implements.
+
+     Every figure is live except the venue-rate comparison behind "What it
+     pays", which is a dated reference dataset carrying a non-live badge and a
+     seam banner, and NAV per share and period returns, which render "not yet
+     published" because no route serves vault_share_price_history yet. See
+     alpine/views/allocation.js. -->
+
+<section class="alp" x-data="allocationView()">
+
+  <!-- ── HERO ─────────────────────────────────────────────────────────────
+       .a2-hero / .a2-hero__inner / .a2-hero__title are the SHARED hero
+       component (assets/css/components.css pins their offset, size and
+       typeface with !important so every nav page's headline lands in the same
+       place). The old two-figure money card that used to sit beside the
+       headline is gone with the house book; the stat rail below carries the
+       figures now, which is also what retires the 8px headline drift that
+       card's centring caused. -->
+  <header class="a2-hero">
     <div class="a2-hero__viz" x-data="meshHero()" aria-hidden="true"></div>
-    <div class="a2-hero__inner alloc-hero__inner">
-      <div class="alloc-hero__text">
-        <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
-        <p class="a2-hero__lede">
-          Vault TVL and target sleeves, plus the holdings and buyback history of
-          the Robot Money protocol wallets. Two separate pools of money,
-          reported separately.
-        </p>
-      </div>
-      <!-- TWO POOLS, TWO FIGURES. This card used to print one "Total AUM": the
-           Robot Money protocol wallets PLUS vault TVL, added together under a
-           page heading about the vault. On 2026-09-02 the protocol wallets held
-           $59.2k and the vault held $229, so the vault was 0.4% of a number a
-           reader took for the vault. The two are different money with different
-           owners: the vault holds depositor capital, the protocol wallets hold
-           the house's own book, and backend config.ts throws at boot if a prop
-           wallet is ever configured as the vault ("would double-count vault
-           TVL"). Each half now shows its own value, its own timestamp and its
-           own provenance state, and nothing is summed across the two.
-           Wallet half ← GET /api/dashboards/wallet-balances (wallet.totalUsd).
-           Vault half  ← GET /api/dashboards/vault-economics (economics.tvlUsd).
-           The alloc-aum* class names are kept so the hero layout rules and the
-           browser specs keep resolving; only the labels and the split changed. -->
-      <div class="alloc-aum">
-        <div class="alloc-aum__stat">
-          <span class="alloc-aum__label">Robot Money protocol wallets</span>
-          <span class="alloc-aum__value alloc-aum__value--wallets" x-text="fmtUsd(wallet?.totalUsd)">—</span>
-          <span class="alloc-aum__sub" x-text="walletAsOfLabel()">—</span>
-          <span class="alloc-aum__prov alloc-wallet-nonlive" x-show="walletNonLive()" x-cloak>
-            Wallet feed: non-live (stub) data
-          </span>
-          <span class="alloc-aum__prov alloc-wallet-stale" x-show="walletStale()" x-cloak>
-            Wallet feed: stale (last-persisted) data
-          </span>
-          <span class="alloc-aum__prov alloc-wallet-backfilled" x-show="walletBackfilled()" x-cloak>
-            Wallet feed: caught up late (still a live read)
-          </span>
-        </div>
-        <div class="alloc-aum__stat">
-          <span class="alloc-aum__label">Vault TVL</span>
-          <span class="alloc-aum__value alloc-aum__value--vault" x-text="fmtUsd(economics?.tvlUsd)">—</span>
-          <span class="alloc-aum__sub" x-text="asOfLabel()">—</span>
-        </div>
-        <p class="alloc-aum__note">
-          Two separate pools. The vault holds depositor capital; the protocol
-          wallets are Robot Money's own book. They are not added together.
-        </p>
-        <span class="alloc-aum__prov alloc-aum-partial" x-show="aumPartial()" x-cloak>
-          One of the two feeds has not resolved; the figure it fills is blank.
-        </span>
-      </div>
+    <div class="a2-hero__inner">
+      <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
+      <p class="a2-hero__lede">
+        Four sleeves, weighted by the investment swarm of agents and in force
+        until a session changes them. Each sleeve gets its own vault.
+      </p>
     </div>
   </header>
-
-  <!-- ── 01 / STRATEGY — Vault Allocation ────────────────────────────────── -->
-  <section class="a2-section">
-    <div class="a2-section__head">
-      <span class="a2-eyebrow">01 / Strategy</span>
-      <h2 class="a2-h2">Vault <span class="a2-grad">Allocation</span></h2>
-      <!-- No voting table, route or job exists. What runs today: swarm members
-           file signed takes, the recommendation is the arithmetic mean over the
-           take set, and applying a proposed allocation is gated by the admin
-           multisig. Tokenholder governance of allocation policy is planned, and
-           has to read as planned. The four sleeves are targets: the vault holds
-           USDC across Morpho, Aave and Compound, and the sleeves do not exist
-           on chain. Weights are bound live below (stratPct), never typed here. -->
-      <p class="a2-section__lede">
-        These are the four target sleeves, not holdings. The vault itself holds
-        USDC across Morpho, Aave and Compound. The swarm proposes changes to
-        these targets; applying one is gated by the admin multisig. Tokenholder
-        voting on allocation policy is planned, not built: no voting contract,
-        route or table exists today.
-      </p>
+  <!-- ── § ALLOCATION ─────────────────────────────────────────────────────
+       id="allocation" is load-bearing: RM-115 names it as a citable anchor,
+       and it belongs on the weights themselves rather than on a comparison
+       table about them. -->
+  <div class="alp__force" id="allocation">
+    <!-- The meta rail. It replaced a four-tile stat block whose two right-hand
+         tiles read "not yet published" in display type: a figure that does not
+         exist does not earn the top of a page, and it is one footnote below
+         instead. The yield moved to the vault rail on the sleeve it belongs
+         to, which is the only sleeve that has one. -->
+    <div class="alp__meta">
+      <span>In force since <b x-text="allocationAsOfLabel()">—</b></span>
+      <span>Weights <b class="alp__chip" x-text="stateChip()">seeded</b></span>
+      <span>Vaults <b x-text="vaultsLiveLabel()">—</b></span>
+      <span>Deployed <b x-text="deployedLabel()">—</b></span>
+      <span>Chain <b x-text="vaultChain()">—</b></span>
+      <a class="alp__nav--addr" :href="vaultHref()" target="_blank" rel="noopener"
+         aria-label="Vault contract on BaseScan">Contract <b x-text="shortAddress()">—</b></a>
     </div>
 
-    <div class="alloc-grid3">
-      <!-- Big strategy pie -->
-      <div class="a2-card alloc-pie-card">
-        <div class="alloc-pie rm-chart"><canvas x-ref="strategy"></canvas></div>
+    <!-- One deposit, split into the sleeves it is allocated to. A donut, not
+         the fan this page carried while it was framed vault-first: the section
+         below now carries target against held, so this only has to answer
+         "what is the recipe". The ring underneath is the full 360, so a policy
+         whose weights do not add to 100 leaves the remainder unfilled instead
+         of being rescaled to look complete. -->
+    <!-- The skeleton is not decoration: it is the CLS fix. Everything here was
+         behind x-show="!loading", so the page painted headings over nothing and
+         then shoved them down when three feeds landed. It now holds the shape
+         and the row count from the first paint, and the real content crossfades
+         into it. No shimmer: a pulsing block is a decoration this brand does
+         not spend, and a still one reads as "not here yet" just as clearly. -->
+    <div class="alp__figslot">
+    <div class="alp__split alp__sk" x-show="loading" x-cloak aria-hidden="true">
+      <div class="alp__skring"></div>
+      <div class="alp__skrows">
+        <div class="alp__skrow"><i class="alp__sk-b"></i><div><b class="alp__sk-b"></b><span class="alp__sk-b"></span></div></div>
+        <div class="alp__skrow"><i class="alp__sk-b"></i><div><b class="alp__sk-b"></b><span class="alp__sk-b"></span></div></div>
+        <div class="alp__skrow"><i class="alp__sk-b"></i><div><b class="alp__sk-b"></b><span class="alp__sk-b"></span></div></div>
+        <div class="alp__skrow"><i class="alp__sk-b"></i><div><b class="alp__sk-b"></b><span class="alp__sk-b"></span></div></div>
       </div>
+    </div>
 
-      <!-- 2x2 bucket cards -->
-      <div class="alloc-buckets">
-        <!-- Card 1 -->
-        <div class="a2-card alloc-bucket">
-          <div class="alloc-bucket__top">
-            <div class="alloc-bucket__info">
-              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#10b981;"></span><span x-text="stratPct(0)">—</span></div>
-              <h4 class="alloc-bucket__title">Conservative DeFi Yield</h4>
-              <p class="alloc-bucket__desc">Aave, Compound, Morpho, Sky on Base. The lowest-volatility sleeve, aimed at capital preservation.</p>
-            </div>
-            <div class="alloc-bucket__pie"><canvas x-ref="mini1"></canvas></div>
-          </div>
-          <div class="alloc-legend">
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#10b981;"></span>Aave</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#00e5ff;"></span>Morpho</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#e8a640;"></span>Compound</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#7e889e;"></span>Sky</span>
-          </div>
-        </div>
-
-        <!-- Card 2 -->
-        <div class="a2-card alloc-bucket">
-          <div class="alloc-bucket__top">
-            <div class="alloc-bucket__info">
-              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#00e5ff;"></span><span x-text="stratPct(1)">—</span></div>
-              <h4 class="alloc-bucket__title">Agent Tokens</h4>
-              <p class="alloc-bucket__desc">Tokens of agents that hold $ROBOTMONEY. The list is admin-managed today; tokenholder selection is planned.</p>
-            </div>
-            <div class="alloc-bucket__pie"><canvas x-ref="mini2"></canvas></div>
-          </div>
-          <div class="alloc-legend">
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#10b981;"></span>RobotMoney</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#00e5ff;"></span>Juno</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#e8a640;"></span>Woon</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#7e889e;"></span>Peaq</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#ff7a29;"></span>Zyfai</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#5fb3a1;"></span>Giza</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#9cffd2;"></span>DEUS</span>
-          </div>
-        </div>
-
-        <!-- Card 3 -->
-        <div class="a2-card alloc-bucket">
-          <div class="alloc-bucket__top">
-            <div class="alloc-bucket__info">
-              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#e8a640;"></span><span x-text="stratPct(2)">—</span></div>
-              <h4 class="alloc-bucket__title">Protocol Tokens</h4>
-              <p class="alloc-bucket__desc">Large-cap crypto and DeFi digital assets. BTC, ETH, HYPE.</p>
-            </div>
-            <div class="alloc-bucket__pie"><canvas x-ref="mini3"></canvas></div>
-          </div>
-          <div class="alloc-legend">
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#10b981;"></span>BTC</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#00e5ff;"></span>ETH</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#e8a640;"></span>HYPE</span>
-          </div>
-        </div>
-
-        <!-- Card 4 -->
-        <div class="a2-card alloc-bucket">
-          <div class="alloc-bucket__top">
-            <div class="alloc-bucket__info">
-              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#7e889e;"></span><span x-text="stratPct(3)">—</span></div>
-              <h4 class="alloc-bucket__title">Real World Assets</h4>
-              <p class="alloc-bucket__desc">Traditional instruments. Exposure to the S&amp;P 500 or commodities.</p>
-            </div>
-            <div class="alloc-bucket__pie"><canvas x-ref="mini4"></canvas></div>
-          </div>
-          <div class="alloc-legend">
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#10b981;"></span>SPY</span>
-            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#00e5ff;"></span>Gold</span>
-          </div>
-        </div>
+    <div class="alp__split alp__fade" x-show="hasTargets()" x-cloak x-ref="allocFig">
+      <div class="alp__donut">
+        <svg x-ref="donut" viewBox="0 0 240 240" role="img" aria-label="Target allocation across the sleeves"></svg>
       </div>
+      <!-- The hover legend the mini pies on this page have always had, kept
+           and pointed at the sleeves. Pointer only: every figure it shows is
+           in the legend row beside it, so focusable slices would add tab stops
+           that reach nothing new. Each slice keeps its <title> for readers. -->
+      <ul class="alp__legend-list">
+        <template x-for="s in sleeves()" :key="s.key">
+          <li :class="[s.target === 0 ? 'dim' : '', hotKey === s.key ? 'hot' : '']"
+              @pointerenter="hoverSleeve(s, $event)"
+              @pointermove="moveTip($event)"
+              @pointerleave="leaveSleeve()">
+            <i class="alp__swatch" data-mark="series" :style="sleeveSwatch(s)"></i>
+            <div>
+              <b x-text="s.name"></b>
+              <span x-text="sleeveLegendLine(s)"></span>
+            </div>
+            <span class="alp__legend-pct" x-text="fmtPctTrim(s.target)"></span>
+          </li>
+        </template>
+      </ul>
+    </div>
+
+    <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
+      Target weights unavailable.
+    </p>
+    </div>
+
+    <!-- The two figures with no route behind them. They were two tiles set in
+         display type; one line is the honest weight for a number that is not
+         there. Beacon marks it, as a point. -->
+    <p class="alp__pending">NAV per share and period returns are <b>not published</b>.</p>
+
+    <!-- Degradation states, carried over in full from the pages this one
+         replaces. A page about money that silently assumes fresh data is a
+         regression, so each one renders rather than warning to a console. -->
+    <div class="alp__prov" x-show="!loading" x-cloak>
+      <span class="alp__badge alp__badge--nonlive alp-vault-nonlive" x-show="vaultNonLive()" x-cloak>
+        Vault feed: non-live (stub) data
+      </span>
+      <span class="alp__badge alp__badge--stale alp-vault-stale" x-show="vaultStale()" x-cloak>
+        Vault feed: stale (last-persisted) data
+      </span>
+      <span class="alp__badge alp__badge--backfilled alp-vault-backfilled" x-show="vaultBackfilled()" x-cloak>
+        Vault feed: caught up late (still a live read)
+      </span>
+      <span class="alp__badge alp__badge--stale" x-show="!economics" x-cloak>
+        Vault feed unavailable
+      </span>
+      <span class="alp__badge alp__badge--stale" x-show="!allocationFw" x-cloak>
+        Target weights unavailable
+      </span>
+    </div>
+  </div>
+
+  <div class="alp__tip alp__tip--alloc" x-ref="allocTip" aria-hidden="true"></div>
+
+  <!-- ── § WHAT CHANGED ───────────────────────────────────────────────────
+       Was, now, and the move between them. It absorbs the old "Latest
+       recommendation" section: the swarm's reading is the WHY of a change, and
+       reading it three sections away from the numbers it explains meant the
+       page stated the same "no session has moved these weights" fact twice
+       without ever putting it next to the weights. -->
+  <section class="alp__sec" id="what-changed">
+    <div class="alp__sec-head">
+      <h2 class="alp__h2">What changed</h2>
+      <a class="alp__nav" :href="historyHref">All sessions &rarr;</a>
+    </div>
+    <p class="alp__sub">
+      Every session reviews these weights.
+    </p>
+
+    <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
+      Target weights unavailable.
+    </p>
+
+    <div class="alp__sk alp__skled" x-show="loading" x-cloak aria-hidden="true">
+      <div class="alp__skline alp__skline--head"></div>
+      <div class="alp__skline"></div><div class="alp__skline"></div>
+      <div class="alp__skline"></div><div class="alp__skline"></div>
+    </div>
+    <div class="alp__tblwrap alp__fade" x-show="hasTargets()" x-cloak>
+      <table class="alp__tbl alp__tbl--led">
+        <thead>
+          <tr><th>Sleeve</th><th>Was</th><th>Now</th><th>Change</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="r in changeRows()" :key="r.key">
+            <tr>
+              <td>
+                <i class="alp__dot" data-mark="series" :style="`background:${r.colour}`"></i><span x-text="r.name"></span>
+              </td>
+              <td class="q" x-text="fmtPctTrim(r.was)"></td>
+              <td x-text="fmtPctTrim(r.now)"></td>
+              <!-- Direction is the GLYPH first and the colour second, so the
+                   column still reads in greyscale, in forced-colors and to a
+                   colourblind reader. Beacon appears here as one arrow at type
+                   size, which is the point the covenant allows it. -->
+              <td>
+                <span class="alp__mv" :class="changeClass(r.delta)">
+                  <i x-text="changeGlyph(r.delta)" aria-hidden="true"></i><span x-text="changeLabel(r.delta)"></span>
+                </span>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+</section>
+
+  <!-- ── § INSIDE EACH SLEEVE ─────────────────────────────────────────────
+       One card per sleeve: the policy, then the vault that implements it if
+       one exists. The policy bar is drawn to the SLEEVE's own hundred, not to
+       its share of the book, so a 5% sleeve holding seven names is as readable
+       as a 95% one. Inside a single ring those seven would be a 2.6 degree
+       wedge each. -->
+  <section class="alp__sec" id="inside-each-sleeve">
+    <div class="alp__sec-head">
+      <h2 class="alp__h2">Inside each sleeve</h2>
+    </div>
+    <p class="alp__sub">
+      Target weights inside each sleeve, and the vault holding them when available.
+    </p>
+
+    <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
+      Target weights unavailable.
+    </p>
+
+    <div class="alp__sk alp__skcards" x-show="loading" x-cloak aria-hidden="true">
+      <div class="alp__skcard"></div><div class="alp__skcard"></div>
+      <div class="alp__skcard"></div><div class="alp__skcard"></div>
+    </div>
+    <div class="alp__cards alp__fade" x-show="hasTargets()" x-cloak>
+      <template x-for="s in sleeves()" :key="s.key">
+        <div class="alp__card" :id="sleeveAnchor(s.key)">
+          <div class="alp__card-top">
+            <span class="alp__card-name">
+              <i :style="sleeveSwatch(s)"></i><b x-text="s.name"></b>
+            </span>
+            <span class="alp__card-w">
+              <b x-text="fmtPctTrim(s.target)"></b><small>of allocation</small>
+            </span>
+          </div>
+          <div class="alp__card-body">
+            <p class="alp__card-what" x-show="sleeveNote(s.key)" x-cloak x-text="sleeveNote(s.key)"></p>
+            <!-- Constituents restart at the front of the palette inside their
+                 own sleeve, keyed on their position in the policy. The vault
+                 table below keys on the same index, so a venue is one colour
+                 wherever it appears and the holdings feed cannot repaint it. -->
+            <!-- Hovering a block lights its name and recedes the rest, and the
+                 name does the same to the block. That reciprocal highlight is
+                 the whole association a reader needs here, which is why there
+                 is no tooltip: the name and the weight are already three
+                 pixels below, and repeating them would be noise. -->
+            <div class="alp__stk" :class="s.target > 0 ? '' : 'zero'"
+                 @pointerleave="leaveItem($event)">
+              <template x-for="(c, ci) in constituents(s.key)" :key="c.label">
+                <span data-mark="series" role="img"
+                      :aria-label="`${c.label}, ${fmtPct(c.target)} of ${s.name}`"
+                      :style="`width:${Math.max(0, Math.min(100, c.target))}%;background:${constituentColour(ci)}`"
+                      @pointerenter="hoverItem($event, ci, s, c)"
+                      @pointermove="moveTip($event)"></span>
+              </template>
+            </div>
+            <div class="alp__names" @pointerleave="leaveItem($event)">
+              <template x-for="(c, ci) in constituents(s.key)" :key="c.label">
+                <span @pointerenter="hoverItem($event, ci, s, c)" @pointermove="moveTip($event)">
+                  <i data-mark="series" :style="`background:${constituentColour(ci)}`"></i><span x-text="c.label"></span>
+                  <b x-text="fmtPctTrim(c.target)"></b>
+                </span>
+              </template>
+            </div>
+
+            <!-- The vault rail: chain, yield and size, or the fact that there
+                 is no contract yet. A sleeve without a vault gets NO receipt
+                 symbol: naming a token for an address nobody has deployed is
+                 the kind of fabrication a reader would act on. -->
+            <template x-if="sleeveHasVault(s.key)">
+              <div class="alp__vrail">
+                <span>Vault <b class="alp__vtok" x-text="vaultToken()"></b></span>
+                <span>Chain <b x-text="vaultChain()"></b></span>
+                <span>TVL <b x-text="fmtUsd2(tvlUsd())"></b></span>
+                <span>Net APY · 7-day <b x-text="vaultApyLabel()"></b></span>
+              </div>
+            </template>
+
+            <template x-if="sleeveHasVault(s.key)">
+              <!-- Not <details>. Its content renders for the first time already
+                   at full size, so a height transition has no previous value to
+                   leave and the panel snaps however you sequence the toggle.
+                   This one is always in the DOM at 0fr, which makes the
+                   transition ordinary in both directions and keeps the drift
+                   table findable. aria-expanded and inert carry the semantics
+                   <details> was giving us for free. -->
+              <div class="alp__hold" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                <button type="button" class="alp__hold-sum"
+                        :aria-expanded="open ? 'true' : 'false'"
+                        :aria-controls="`vault-holdings-${s.key}`"
+                        @click="open = !open">
+                  <span x-text="`Vault holdings · ${sleeveVaultRows(s.key).filter((r) => r.inVault).length} positions`"></span>
+                  <span class="alp__off">
+                    <span x-text="trackingErrorLabel(s.key)"></span><i aria-hidden="true">⌄</i>
+                  </span>
+                </button>
+                <div class="alp__hold-anim" :id="`vault-holdings-${s.key}`" role="region"
+                     :aria-label="`${s.name} vault holdings`" :inert="!open"><div class="alp__hold-clip"><div class="alp__hold-body">
+                  <div class="alp__tblwrap">
+                    <table class="alp__tbl alp__tbl--wide">
+                      <thead>
+                        <tr>
+                          <th>Name</th><th>Balance</th><th>Price</th><th>Value</th>
+                          <th>Policy</th><th>In vault</th><th>Drift</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <template x-for="r in sleeveVaultRows(s.key)" :key="r.label">
+                          <tr :class="r.inVault ? '' : 'out'">
+                            <td>
+                              <i class="alp__dot" data-mark="series" x-show="r.colour" :style="`background:${r.colour}`"></i>
+                              <template x-if="r.adapter && adapterHref(r.adapter)">
+                                <a class="alp__link" :href="adapterHref(r.adapter)" target="_blank" rel="noopener" x-text="r.label"></a>
+                              </template>
+                              <template x-if="!(r.adapter && adapterHref(r.adapter))">
+                                <span x-text="r.label"></span>
+                              </template>
+                              <!-- x-if, not x-show: a badge that is present but
+                                   hidden still reads as "stale" to anything
+                                   holding the row's text, and a row's
+                                   provenance must not be ambiguous. -->
+                              <template x-if="r.adapter && sleeveStaleLabel(r.adapter)">
+                                <span class="alp__cell-badge" x-text="sleeveStaleLabel(r.adapter)"></span>
+                              </template>
+                              <template x-if="r.adapter && r.adapter.provenance === 'backfilled'">
+                                <span class="alp__cell-badge">caught up late</span>
+                              </template>
+                              <template x-if="!r.inVault">
+                                <span class="alp__cell-badge alp__cell-badge--quiet">not held</span>
+                              </template>
+                            </td>
+                            <td x-text="vaultRowBalance(r)"></td>
+                            <td x-text="vaultRowPrice(r)"></td>
+                            <td x-text="vaultRowValue(r)"></td>
+                            <td class="q" x-text="vaultRowPolicy(r)"></td>
+                            <td x-text="vaultRowActual(r)"></td>
+                            <!-- Drift is a DEVIATION, not a gain: eight points
+                                 over is exactly as wrong as eight under. The
+                                 glyph carries direction and the ink stays a
+                                 reading grey; the colour is spent once, on the
+                                 verdict line below. -->
+                            <td>
+                              <span class="alp__dft" :class="vaultRowDriftClass(r)">
+                                <i x-text="vaultRowDriftGlyph(r)" aria-hidden="true"></i><span x-text="vaultRowDrift(r)"></span>
+                              </span>
+                            </td>
+                          </tr>
+                        </template>
+                        <tr class="tot">
+                          <td>Vault TVL</td><td>—</td><td>—</td>
+                          <td x-text="fmtUsd2(tvlUsd())"></td>
+                          <td>—</td>
+                          <td x-text="tvlUsd() == null ? '—' : '100.00%'"></td>
+                          <td>—</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="alp__hold-foot">
+                    <span x-text="sharesLabel()">—</span>
+                    <span x-text="asOfLabel()">—</span>
+                  </div>
+                  <p class="alp__hold-note">
+                    <a class="alp__nav" :href="vaultSubjectHref">Vault sessions and holdings &rarr;</a>
+                  </p>
+                </div></div></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
     </div>
   </section>
 
-  <!-- ── Vault TVL ───────────────────────────────────────────────────────── -->
-  <section class="a2-section alloc-section--bordered">
-    <div class="a2-section__head">
-      <h2 class="a2-h2">Vault <span class="a2-grad">TVL</span></h2>
-      <div class="alloc-chip">
-        <span class="alloc-chip__label">7-Day APY</span>
-        <span class="alloc-chip__value" x-text="fmtPct(economics?.apy7d)">—</span>
-      </div>
-      <p class="alloc-stale" x-show="economics?.stale" x-cloak>
-        Live chain data unavailable — showing last known values.
-      </p>
-      <!-- Non-live indicator (issue #50): the vault-economics payload carries
-           source:'stub' when the backend runs against the hermetic demo/CI RPC
-           stub — canned fixture numbers must never be presented as live
-           chain data. -->
-      <p class="alloc-nonlive" x-show="economics?.source === 'stub'" x-cloak>
-        Demo data — hermetic stub, not live chain data.
-      </p>
+  <!-- ── § HOW THE WEIGHTS ARE SET ────────────────────────────────────────
+       Closing context, and the page's only handoff. It opened the page for
+       one commit, where it put a third page's subject between the headline
+       and the weights: a reader arrives to see the allocation, not to be
+       taught the swarm. At the bottom it answers the question the numbers
+       raise on the way out, and points at the two pages that own the answer.
+
+       The mechanism only, and it is true of every session. What one session
+       decided is a fact about that session, and the ledger above reports it. -->
+  <section class="alp__sec alp__how" id="how-weights-are-set">
+    <div class="alp__sec-head">
+      <h2 class="alp__h2">How the weights are set</h2>
     </div>
-
-    <div class="alloc-grid3">
-      <!-- Vault pie -->
-      <div class="a2-card alloc-pie-card">
-        <div class="alloc-pie rm-chart"><canvas x-ref="vault"></canvas></div>
-      </div>
-
-      <!-- Vault holdings table — live per-adapter balances from
-           GET /api/dashboards/vault-economics (issue #40), matching the
-           original site's Protocol/Balance/Price/Value column structure
-           (robotmoney-site src/app/allocation/page.tsx Vault TVL table). The
-           endpoint only carries {name, address, balanceUsd} per adapter — no
-           separate on-chain quantity/price breakdown — but every adapter is a
-           USDC-denominated lending position (chain/vault-economics.ts toUsd()
-           reads totalAssets() as pure USDC units), so Balance and the $1.00
-           peg Price are derivable from balanceUsd without inventing data; the
-           protocol name links to its BaseScan address. -->
-      <div class="a2-card alloc-tablecard">
-        <table class="alloc-table">
-          <thead>
-            <tr>
-              <th class="alloc-l">Protocol</th>
-              <th class="alloc-r">Balance</th>
-              <th class="alloc-r">Price</th>
-              <th class="alloc-r">Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template x-for="a in (economics?.adapters ?? [])" :key="a.address">
-              <tr>
-                <td class="alloc-sym">
-                  <span class="alloc-dot" style="background:#10b981;"></span>
-                  <a class="alloc-link" target="_blank" rel="noopener" :href="`https://basescan.org/address/${a.address}`" x-text="a.name.toUpperCase()"></a>
-                </td>
-                <td class="alloc-r" x-text="adapterBalance(a)"></td>
-                <td class="alloc-r" x-text="adapterPrice(a)"></td>
-                <!-- issue #50: adapters still at placeholder addresses come back
-                     configured:false + balanceUsd:null — shown as an explicit
-                     unconfigured state, never a live-looking $0. -->
-                <td class="alloc-r alloc-val" :class="a.configured === false ? 'alloc-val--unconfigured' : ''" x-text="adapterValue(a)"></td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
-        <div class="alloc-tfoot">
-          <div class="alloc-tfoot__row">
-            <span class="alloc-tfoot__label">Total Vault Assets</span>
-            <span class="alloc-tfoot__value" x-text="fmtUsd(economics?.tvlUsd)">—</span>
-          </div>
-          <div class="alloc-tfoot__row alloc-tfoot__row--sub">
-            <span x-text="sharesLabel()">—</span>
-            <span x-text="asOfLabel()">—</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── 02 / WALLET — Agent Wallet ──────────────────────────────────────── -->
-  <section class="a2-section alloc-section--bordered">
-    <div class="a2-section__head">
-      <span class="a2-eyebrow">02 / Wallet</span>
-      <h2 class="a2-h2">Agent <span class="a2-grad">Wallet</span></h2>
-    </div>
-
-    <div class="alloc-grid3">
-      <!-- Wallet pie -->
-      <div class="a2-card alloc-pie-card">
-        <div class="alloc-pie rm-chart"><canvas x-ref="wallet"></canvas></div>
-      </div>
-
-      <!-- Aggregate holdings table -->
-      <div class="a2-card alloc-tablecard">
-        <table class="alloc-table">
-          <thead>
-            <tr>
-              <th class="alloc-l">Asset</th>
-              <th class="alloc-r">Balance</th>
-              <th class="alloc-r">Price</th>
-              <th class="alloc-r">Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            <!-- Live per-asset legs from GET /api/dashboards/wallet-balances
-                 (holdings[]); dot colour + amount/price/value are all served,
-                 never baked. Loading → a single placeholder row; a null leg
-                 renders "—" rather than a fabricated figure. -->
-            <tr x-show="loading">
-              <td class="alloc-sym">Loading…</td><td class="alloc-r">—</td><td class="alloc-r">—</td><td class="alloc-r alloc-val">—</td>
-            </tr>
-            <template x-for="h in (wallet?.holdings ?? [])" :key="h.symbol">
-              <tr>
-                <td class="alloc-sym"><span class="alloc-dot" :style="`background:${h.color || dotColor(h.symbol)};`"></span><span x-text="h.symbol"></span></td>
-                <td class="alloc-r" x-text="fmtAmount(h.amount)"></td>
-                <td class="alloc-r" x-text="fmtPrice(h.priceUsd)"></td>
-                <td class="alloc-r alloc-val" x-text="fmtUsd(h.valueUsd)"></td>
-              </tr>
-            </template>
-            <tr x-show="!loading && !(wallet?.holdings || []).length">
-              <td class="alloc-sym" colspan="4">No live wallet data available.</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="alloc-tfoot">
-          <div class="alloc-tfoot__row">
-            <span class="alloc-tfoot__label">Total</span>
-            <span class="alloc-tfoot__value" x-text="fmtUsd(wallet?.totalUsd)">—</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Wallet Holdings (Sleeves) -->
-    <h3 class="alloc-sleeves__head">Wallet Holdings (Sleeves)</h3>
-
-    <!-- Per-wallet sleeves — live from GET /api/dashboards/wallet-sleeves. Each
-         wallet's name / type / total and its per-holding balance/price/value are
-         served (dot colour is presentation-only, keyed by symbol). Loading and
-         empty states are explicit; a null leg renders "—", never a baked figure. -->
-    <div class="a2-card alloc-tablecard alloc-sleeve" x-show="loading">
-      <div class="alloc-sleeve__head"><span class="alloc-sleeve__name">Loading sleeves…</span></div>
-    </div>
-    <template x-for="w in sleeveWallets()" :key="w.address">
-      <div class="a2-card alloc-tablecard alloc-sleeve">
-        <div class="alloc-sleeve__head">
-          <span class="alloc-sleeve__name" x-text="w.name"></span>
-          <span class="alloc-sleeve__totalwrap">
-            <span class="alloc-sleeve__stale badge badge--stale" x-show="w.stale" x-text="sleeveStaleLabel(w)">stale</span>
-            <span class="alloc-sleeve__total" x-text="fmtUsd(w.totalUsd)"></span>
-            <span class="alloc-sleeve__type" x-text="w.type"></span>
-          </span>
-        </div>
-        <table class="alloc-table">
-          <thead>
-            <tr><th class="alloc-l">Asset</th><th class="alloc-r">Balance</th><th class="alloc-r">Price</th><th class="alloc-r">Value</th></tr>
-          </thead>
-          <tbody>
-            <template x-for="h in (w.holdings ?? [])" :key="h.symbol">
-              <tr>
-                <td class="alloc-sym"><span class="alloc-dot" :style="`background:${dotColor(h.symbol)};`"></span><span x-text="h.symbol"></span></td>
-                <td class="alloc-r" x-text="fmtAmount(h.amount)"></td>
-                <td class="alloc-r" x-text="fmtPrice(h.priceUsd)"></td>
-                <td class="alloc-r alloc-val" x-text="fmtUsd(h.valueUsd)"></td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
-      </div>
-    </template>
-    <div class="a2-card alloc-tablecard alloc-sleeve" x-show="!loading && !walletCount()">
-      <div class="alloc-sleeve__head"><span class="alloc-sleeve__name">No live sleeve data available.</span></div>
-    </div>
-
-    <p class="alloc-caption" x-show="walletCount()" x-cloak>
-      Aggregate view across <span x-text="walletCount()"></span> wallets. Each wallet displays its individual positions.
+    <!-- An <ol> because it is a sequence and the order is the content. No
+         numerals: three steps reading across a row are already ordered, and a
+         counter would be decoration on a page that is carrying enough. -->
+    <ol class="alp__steps">
+      <li>
+        <b>Regime</b>
+        <span>A daily risk-on / risk-off composite over the macro and on-chain
+          panels. Every take starts from the same reading.</span>
+      </li>
+      <li>
+        <b>Takes</b>
+        <span>Proposers file a signed position with its reasoning, its sources
+          and a confidence. Validators score those takes rather than filing a
+          view of their own. Every seat is a proposer today.</span>
+      </li>
+      <li>
+        <b>Consensus</b>
+        <span>The window closes, the takes aggregate into one recommendation,
+          and it publishes with its quorum and mean confidence. Only that moves
+          these weights.</span>
+      </li>
+    </ol>
+    <p class="alp__how-links">
+      <a class="alp__nav" href="/regime">Regime &rarr;</a>
+      <a class="alp__nav" href="/swarm">The swarm &rarr;</a>
     </p>
   </section>
 
-  <!-- ── 03 / BUYBACKS — Token Buybacks ──────────────────────────────────── -->
-  <section class="a2-section alloc-section--bordered">
-    <div class="a2-section__head">
-      <span class="a2-eyebrow">03 / Buybacks</span>
-      <h2 class="a2-h2">Token <span class="a2-grad">Buybacks</span></h2>
-      <p class="a2-section__lede">
-        Historical buyback transactions where WETH was swapped for $ROBOTMONEY.
-      </p>
-    </div>
-
-    <!-- Total + rows are live from GET /api/dashboards/buybacks (ROBOTMONEY
-         Transfer logs into the primary prop wallet; the 10 historical 2026-03-23
-         rows are the seeded backfill). Nothing is baked; a stub feed is flagged. -->
-    <div class="alloc-spent">
-      <span class="alloc-spent__label">Total Spent on Buybacks</span>
-      <span class="alloc-spent__value" x-text="fmtWethLabel(buybacks?.totals?.wethSpent)">—</span>
-      <span class="alloc-buyback-nonlive" x-show="buybackNonLive()" x-cloak>Demo data — hermetic stub, not live chain data.</span>
-    </div>
-
-    <div class="a2-card alloc-tablecard">
-      <div class="alloc-table__scroll">
-        <table class="alloc-table alloc-table--buyback">
-          <thead>
-            <tr>
-              <th class="alloc-l">Date</th>
-              <th class="alloc-r">WETH Spent</th>
-              <th class="alloc-r">Value (USD)</th>
-              <th class="alloc-r">$ROBOTMONEY Received</th>
-              <th class="alloc-r">Transaction</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr x-show="loading">
-              <td>Loading…</td><td class="alloc-r">—</td><td class="alloc-r">—</td><td class="alloc-r alloc-val">—</td><td class="alloc-r">—</td>
-            </tr>
-            <template x-for="b in buybackRows()" :key="b.txHash">
-              <tr>
-                <td x-text="b.date"></td>
-                <td class="alloc-r alloc-warn" x-text="fmtWeth(b.wethSpent)"></td>
-                <td class="alloc-r" x-text="fmtUsd2(b.valueUsd)"></td>
-                <td class="alloc-r alloc-val" x-text="fmtRmoney(b.robotmoneyReceived)"></td>
-                <td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" :href="txUrl(b.txHash)" x-text="shortHash(b.txHash)"></a></td>
-              </tr>
-            </template>
-            <tr x-show="!loading && !buybackRows().length">
-              <td colspan="5">No live buyback data available.</td>
-            </tr>
-          </tbody>
-          <tfoot x-show="buybackRows().length" x-cloak>
-            <tr class="alloc-table__total">
-              <td>TOTAL</td>
-              <td class="alloc-r alloc-warn" x-text="fmtWethLabel(buybacks?.totals?.wethSpent)"></td>
-              <td class="alloc-r alloc-val" x-text="fmtUsd2(buybacks?.totals?.valueUsd)"></td>
-              <td class="alloc-r alloc-val" x-text="fmtRmoney(buybacks?.totals?.robotmoneyReceived)"></td>
-              <td></td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </div>
-  </section>
 </section>
 
 <style>
-.a2 {
-  max-width: 80rem;
+/* /allocation — page-local styles. `alp__` is this page; `a2-hero*` above is
+   the shared hero component, whose offset, size and typeface are pinned in
+   assets/css/components.css. No hex is introduced here that is not already a
+   token in tokens.css. */
+
+.alp {
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 0 1.5rem 5rem;
+  padding: 0 1.5rem 6rem;
   color: var(--color-text);
 }
 
-.a2-eyebrow {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.3em;
-  color: var(--color-accent);
-  margin-bottom: 1rem;
+.alp__eyebrow {
+  font-family: var(--font-mono); font-size: 0.6rem; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.18em;
+  color: var(--color-text-muted); margin: 0;
 }
 
-.a2-grad {
-  color: var(--color-text);
-  font-style: normal;
-  font-family: var(--font-display);
-  font-weight: 700;
-}
-
-/* Hero — full-bleed (breaks out of the 1400px .a2 content band) */
+/* ── shared hero component ─────────────────────────────────────────────── */
+/* Full-bleed: breaks out of the .alp content band. The offset, size and
+   typeface of .a2-hero__title come from components.css and are deliberately
+   not restated here. */
 .a2-hero {
   position: relative;
   width: 100vw;
@@ -458,8 +466,6 @@
   display: flex;
   align-items: center;
   overflow: hidden;
-  border: none;
-  border-radius: 0;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-void);
   margin-bottom: 3rem;
@@ -473,446 +479,505 @@
   padding: 2.5rem 1.5rem;
 }
 .a2-hero__viz { position: absolute; inset: 0; z-index: 0; }
+.a2-hero__viz canvas { display: block; width: 100%; height: 100%; }
+/* Hero legibility. The lede sits over a live mesh, and a bright node passing
+   behind a glyph is worse than the average contrast suggests. A FLAT veil, not
+   the bottom-fade gradient this page used to carry: the covenant does not
+   spend a gradient on a scrim, and a uniform one reads the same everywhere. */
 .a2-hero__viz::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(to top, var(--color-void), transparent 60%);
-}
-.a2-hero__viz canvas { display: block; width: 100%; height: 100%; }
-.a2-hero__title {
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: 2.5rem;
-  line-height: 1.05;
-  margin: 0 0 1rem;
+  background: rgba(6, 8, 12, 0.45);
 }
 .a2-hero__lede {
   color: var(--color-text-muted);
   font-size: 1rem;
   line-height: 1.6;
-  margin: 0;
-  max-width: 34rem;
+  margin: 1rem 0 0;
+  max-width: 44rem;
 }
-
-/* Hero: allocation two-column inner (title/lede at left, the two money
-   figures at right) */
-.alloc-hero__inner {
-  display: flex;
-  flex-direction: column;
-  gap: 1.75rem;
-  width: 100%;
-  align-items: flex-start;
-  justify-content: space-between;
-}
-.alloc-hero__text { max-width: 40rem; }
-
-.alloc-aum {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 0.75rem 1.25rem;
-}
-.alloc-aum__label {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.3em;
-  color: var(--color-text-muted);
-}
-/* Cyan is the interface hue and never touches a figure: it is a line, not a
-   number. The site's other large mono readout, .rs__gauge-val on /regime,
-   already uses --color-text. These two were the last cyan money figures, and
-   splitting one tile into two would have doubled the violation. */
-.alloc-aum__value {
-  font-family: var(--font-mono);
-  font-size: 1.5rem;
-  font-weight: 700;
+.a2-grad {
   color: var(--color-text);
-}
-.alloc-aum__sub {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  color: var(--color-text-muted);
-}
-
-/* Two pools, two figures: the protocol-wallet total and vault TVL stack inside
-   the one hero card, each with its own value, timestamp and provenance chips.
-   Stacked rather than side by side on purpose: a row would squeeze the h1 at
-   the 768px breakpoint, and the drift invariant below pins that headline. */
-.alloc-aum__stat {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-.alloc-aum__stat + .alloc-aum__stat {
-  margin-top: 0.85rem;
-  padding-top: 0.85rem;
-  border-top: 1px solid var(--color-border);
-}
-.alloc-aum__note {
-  font-size: 0.7rem;
-  line-height: 1.5;
-  color: var(--color-text-muted);
-  margin: 0.85rem 0 0;
-  max-width: 20rem;
-}
-
-/* Section */
-.a2-section { padding-top: 1rem; margin-bottom: 3.5rem; }
-.a2-section__head { margin-bottom: 2rem; }
-.alloc-section--bordered {
-  border-top: 1px solid var(--color-border);
-  padding-top: 3rem;
-}
-.a2-h2 {
+  font-style: normal;
   font-family: var(--font-display);
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: 1.75rem;
-  margin: 0.25rem 0 0;
-}
-.a2-section__lede {
-  font-size: 0.875rem;
-  color: var(--color-text-muted);
-  margin: 0.75rem 0 0;
-  max-width: 46rem;
-  line-height: 1.6;
 }
 
-/* Chip (7-day APY) */
-.alloc-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-top: 1rem;
-  background: var(--color-void);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 0.375rem 0.75rem;
+/* ── how the weights are set: the closing section ──────────────────────── */
+/* A rule above it, because it is a change of subject rather than one more
+   thing about the allocation: everything above reports the weights, and this
+   explains where they come from. The steps sit in the same auto-fit grid as
+   the two rails, so the page has one grid and not three. */
+.alp__how { border-top: 1px solid var(--color-border); padding-top: 1.75rem; }
+/* Its own top margin, where the other two sections get theirs from the
+   one-line sub under the headline. This section's content IS the explanation,
+   so a sub above it would be narration about narration. */
+.alp__steps {
+  list-style: none; margin: 1.5rem 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.5rem 2rem;
 }
-.alloc-chip__label {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  color: var(--color-text-muted);
+.alp__steps b {
+  display: block; margin-bottom: 0.4rem; font-size: 0.875rem; font-weight: 700;
+  color: var(--color-text);
 }
-.alloc-chip__value {
-  font-family: var(--font-mono);
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-accent);
+.alp__steps span {
+  display: block; max-width: 30rem;
+  color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6;
 }
+.alp__how-links { display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1.75rem 0 0; }
 
-/* Stale badge — live vault-economics fetch failed; last-known/null values are
-   shown instead (issue #40, never a fabricated number). */
-.alloc-stale {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--color-warn);
-  margin: 0.5rem 0 0;
-}
+/* ── weights in force ──────────────────────────────────────────────────── */
+.alp__force { border-bottom: 1px solid var(--color-border); padding-bottom: 2rem; }
+/* The slot, not the figure. Skeleton, figure and empty state are three
+   elements taking turns in the same place, so a reservation on any one of them
+   is gone the moment another is showing — which is exactly when the swap
+   happens and everything below jumps.
+   All three share ONE grid cell, which is what actually removes the shift: the
+   slot is as tall as its tallest child whether that child is showing or not,
+   so the swap changes nothing. The floor only has to cover the case where the
+   skeleton is shorter than the figure, which is the stacked phone layout. */
+.alp__figslot { display: grid; min-height: 21.7rem; }
+.alp__figslot > * { grid-area: 1 / 1; align-self: start; }
+@media (max-width: 679px) { .alp__figslot { min-height: 43rem; } }
+/* Provenance is a fact about the weights, so it sits in the rail with the
+   other facts about them rather than in a pill of its own. */
+.alp__chip { text-transform: none; }
+/* A swarm-managed policy would be marked by a Beam RULE, not by a cyan figure:
+   the chip's text stays a reading grey and only its edge carries the hue.
+   Nothing writes the provenance the chip reads yet, so today it never applies
+   and the chip reads "seeded". */
+.alp__chip--live { border-color: var(--color-accent-line); color: var(--color-text-soft); }
 
-/* Non-live badge — the payload is served by the hermetic demo/CI RPC stub
-   (source:'stub', issue #50); stub numbers are flagged, never shown as live. */
-.alloc-nonlive,
-.alloc-buyback-nonlive {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--color-warn);
-  margin: 0.5rem 0 0;
-}
-
-/* Hero protocol-wallet feed provenance badges (issue #84): the wallet figure is
-   non-live (stub) or degraded (stale). Distinct classes from the vault badges
-   above so each surface is asserted independently. */
-.alloc-aum__prov {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--color-warn);
-  margin: 0.35rem 0 0;
-}
-
-/* Unconfigured adapter value — placeholder address, no live balance (issue #50). */
-.alloc-val--unconfigured {
-  color: var(--color-text-muted);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-/* Card + grid */
-.a2-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 1.25rem;
-}
-.alloc-grid3 {
-  display: grid;
+/* the donut and its legend. Side by side where there is room, stacked on a
+   phone; the donut scales rather than being swapped for a list, which is what
+   the fan needed because its 16px in-diagram labels rendered at about 6px. */
+.alp__split {
+  margin: 1.6rem 0 0; border: 1px solid var(--color-border); background: var(--color-deep);
+  padding: 1.4rem 1.2rem; display: grid; gap: 1.4rem 2rem; align-items: center;
   grid-template-columns: 1fr;
-  gap: 1.5rem;
-  align-items: stretch;
 }
-.alloc-buckets {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.25rem;
+/* The legend is a FIGURE legend, not prose, and it is tracked to the donut it
+   keys: let it take the full width of a wide viewport and the percentage ends
+   up a thousand pixels from the name it belongs to, which is a lookup rather
+   than a reading. The figure gets the proportions it was designed at and the
+   band ends where the figure ends. */
+@media (min-width: 680px) {
+  .alp__split { grid-template-columns: 300px minmax(0, 42rem); justify-content: start; }
+}
+.alp__donut { justify-self: center; width: 100%; max-width: 300px; }
+/* An SVG root inherits fill:black, so anything drawn without an explicit one
+   would paint black on a dark ground and vanish. Every shape here sets its
+   own; this makes the default a reading colour rather than a trap. */
+.alp__donut svg { display: block; width: 100%; height: auto; fill: var(--color-text); }
+.alp__legend-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.75rem; }
+.alp__legend-list li { display: grid; grid-template-columns: 0.7rem 1fr; gap: 0.75rem; align-items: start; }
+.alp__legend-list b { display: block; font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
+.alp__legend-list span { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted); }
+.alp__legend-list li.dim b { color: var(--color-text-muted); }
+.alp__swatch { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; display: block; }
+.alp__legend-list li { padding: 0.25rem 0.5rem; grid-template-columns: 0.7rem 1fr auto; }
+.alp__legend-list li.hot { background: var(--color-surface-light); }
+.alp__legend-pct {
+  font-family: var(--font-mono); font-size: 1.05rem; color: var(--color-text);
+  font-variant-numeric: tabular-nums; align-self: center;
+}
+.alp__legend-list li.dim .alp__legend-pct { color: var(--color-text-muted); }
+.alp__legend-list li.dim .alp__swatch { opacity: 0.45; }
+/* The hovered slice keeps its geometry; the others recede. Lifting the hovered
+   one instead would move the ring under the pointer. */
+.alp__donut svg path { transition: opacity 0.12s linear; }
+.alp__donut svg path.dim { opacity: 0.3; }
+@media (prefers-reduced-motion: reduce) { .alp__donut svg path { transition: none; } }
+.alp__split { position: relative; }
+
+/* The meta rail that replaced it: one line of facts, none of which is a
+   figure that does not exist yet. */
+/* A GRID, not a wrapping flex row. How many lines a flex row wraps to depends
+   on how long its values are, so this rail grew the moment "—" became
+   "$231.51" and shoved the figure below it down: 0.18 of layout shift on a
+   phone, all of it from one line of text getting longer. Fixed tracks make the
+   row count a function of the viewport alone. */
+.alp__meta {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem 1.5rem; margin: 1rem 0 0;
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted);
+}
+.alp__meta b {
+  display: block; margin-top: 0.25rem; color: var(--color-text); font-weight: 500;
+  text-transform: none; letter-spacing: 0.02em; font-size: 0.875rem;
+}
+/* An address is case-sensitive: EIP-55 checksums live in its capitalisation. */
+
+
+/* The two figures with no route behind them, as one line rather than two
+   tiles. Beacon marks it, as a POINT and nothing else. */
+.alp__pending { margin: 1.25rem 0 0; font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.55; }
+.alp__pending b { color: var(--color-text-soft); font-weight: 500; }
+
+/* provenance badges */
+.alp__prov { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+.alp__badge {
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.12em; padding: 0.25rem 0.5rem; border-radius: var(--radius);
+  border: 1px solid var(--color-border-light); color: var(--color-text-muted);
+}
+.alp__badge--stale, .alp__badge--backfilled { color: var(--color-warm); border-color: var(--color-warm); }
+.alp__cell-badge {
+  display: inline-block; margin-left: 0.5rem; font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-warm);
+}
+/* Warm is for PROVENANCE: stale, caught up late. "not held" is ordinary data,
+   already said by the dashes and by the drift, so it stays quiet. */
+.alp__cell-badge--quiet { color: var(--color-text-muted); }
+
+/* ── sections ──────────────────────────────────────────────────────────── */
+.alp__sec { margin-top: 3rem; }
+.alp__sec-head {
+  display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
+  gap: 0.5rem 1rem; margin-bottom: 0.25rem;
+}
+.alp__h2 {
+  font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
+  font-size: clamp(1.15rem, 3vw, 1.9rem); line-height: 1.05; letter-spacing: -0.01em;
+  margin: 0; color: var(--color-text);
+}
+/* No max-width. A section description runs the width of the section it
+   describes: a measure-capped paragraph in a full-width band leaves a hole
+   on the right that reads as an unfinished layout rather than as a choice. */
+.alp__sub { margin: 0 0 1.25rem; color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6; }
+.alp__sub b { color: var(--color-text-soft); font-weight: 500; }
+.alp__sub code {
+  font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
+  background: var(--color-surface); padding: 0.25rem 0.25rem;
+}
+.alp__sub--after { margin: 1.25rem 0 0; }
+.alp__empty { color: var(--color-text-muted); font-size: 0.875rem; margin: 0 0 1.25rem; }
+/* TWO link treatments on this page, and only two.
+   .alp__link  — inline, inside prose or a table row. It inherits the type of
+                 whatever it sits in, so a link in a mono table reads as table
+                 text; only the colour and the Beam-at-rest rule mark it.
+   .alp__nav   — a place to go: the section action, the addresses, the row of
+                 links under the last review. Mono, tracked, quiet until you
+                 reach for it, and Beam arrives on hover as a LINE.
+   Before this there were three, and .alp__link rendered three different ways
+   depending on what its container happened to impose on it. */
+.alp__link {
+  color: var(--color-accent); text-decoration: none;
+  border-bottom: 1px solid var(--color-accent-line);
+  transition: border-color 150ms var(--ease-out-expo);
+}
+.alp__link:hover { border-bottom-color: var(--color-accent); }
+/* A link inside a data table is a ROW NAME first. Cyan text there competes
+   with the series chip beside it and reads as interface sitting in a column of
+   figures, so the name keeps reading ink and Beam arrives only on hover. */
+table.alp__tbl .alp__link {
+  color: var(--color-text); border-bottom-color: var(--color-border-light);
+}
+table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color: var(--color-accent); }
+.alp__nav {
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.13em; color: var(--color-text-soft); text-decoration: none;
+  /* Beam at rest, which is the token's whole reason for existing: a rule that
+     marks a control without shouting. At border-light these read as labels
+     rather than as links. */
+  border-bottom: 1px solid var(--color-accent-line); padding-bottom: 0.25rem;
+  transition: color 150ms var(--ease-out-expo), border-color 150ms var(--ease-out-expo);
+}
+.alp__nav:hover, .alp__nav:focus-visible { color: var(--color-text); border-bottom-color: var(--color-accent); }
+.alp__nav:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+/* The contract is one more fact about the weights, so it reads as a rail item
+   and not as a link sitting in a row of labels. Beam arrives on hover, which
+   is the treatment every non-navigational link on this page now takes. */
+.alp__nav--addr {
+  color: inherit; text-decoration: none;
+  transition: color 150ms var(--ease-out-expo);
+}
+/* An address is case-sensitive: EIP-55 checksums live in its capitalisation.
+   inline-block so the rule under it hugs the address instead of running the
+   width of the track, and a step down in size so 18 characters sit inside one
+   track rather than over the edge of the rail. */
+.alp__nav--addr b {
+  display: inline-block; max-width: 100%; font-size: 0.8rem; letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--color-border-light);
+  transition: border-color 150ms var(--ease-out-expo);
+}
+.alp__nav--addr:hover b, .alp__nav--addr:focus-visible b { border-bottom-color: var(--color-accent); }
+.alp__nav--addr:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+
+/* the answer strip: the figures a section exists to give */
+/* What a depositor keeps is money, so it is Pool green like the figure beside
+   it. It was warm, which is a second saturated accent doing work the label
+   already does. */
+/* charts */
+/* ── motion, and the skeleton that removes the layout shift ─────────────── */
+/* 100/300/500: 150ms for feedback, 300ms for a layout change like the
+   disclosure. Exponential easing, never bounce. Only opacity and
+   grid-template-rows move; nothing here animates width, height or margin. */
+.alp__fade { animation: alp-in 300ms var(--ease-out-expo) both; }
+@keyframes alp-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Placeholder blocks, still and quiet. They carry the row count and the
+   geometry so the page does not resize under the reader when the feeds land.
+   No shimmer: a pulsing block is a decoration this brand does not spend, and a
+   still one reads as "not here yet" just as clearly. */
+.alp__sk { pointer-events: none; }
+.alp__sk-b { display: block; background: var(--color-surface-light); }
+.alp__skring {
+  width: 100%; max-width: 300px; aspect-ratio: 1; margin-inline: auto;
+  border-radius: 50%; border: 33px solid var(--color-surface-light);
+}
+.alp__skrows { display: grid; gap: 0; }
+.alp__skrow {
+  display: grid; grid-template-columns: 0.7rem 1fr; gap: 0 0.8rem; align-items: start;
+  padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--color-border);
+}
+.alp__skrow:first-child { border-top: 1px solid var(--color-border); }
+.alp__skrow i { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; }
+.alp__skrow b { width: 11rem; height: 0.95rem; margin: 0.1rem 0 0.5rem; }
+.alp__skrow span { width: 16rem; height: 0.72rem; margin-bottom: 0.35rem; }
+.alp__skled { border: 1px solid var(--color-border); }
+.alp__skline { height: 2.6rem; border-bottom: 1px solid var(--color-border); }
+.alp__skline:last-child { border-bottom: 0; }
+.alp__skline--head { height: 2.15rem; background: var(--color-surface); border-bottom-color: var(--color-border-light); }
+.alp__skcards { display: grid; gap: 1rem; }
+.alp__skcard { height: 16.6rem; border: 1px solid var(--color-border); background: var(--color-deep); }
+
+/* The vault disclosure. `details` cannot transition on its own — its children
+   start at display:none, so a transition has no value to leave from and the
+   panel snaps open. The toggle is intercepted instead: open first, then run
+   the row from 0fr to 1fr, and on close run it down before the element
+   actually closes. Rows, not height: grid-template-rows is the one height-ish
+   property that does not force a layout pass every frame. */
+.alp__hold-anim {
+  display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows 300ms var(--ease-out-expo);
+}
+.alp__hold.is-open .alp__hold-anim { grid-template-rows: 1fr; }
+/* Three levels, and each one has a job: the grid row animates, the clip hides
+   the overflow, the body carries the padding. Put the padding on the clipped
+   element instead and the row never collapses past it — the panel rests about
+   29px open, which reads as a rendering bug. */
+.alp__hold-clip { overflow: hidden; min-height: 0; }
+.alp__off i { display: inline-block; font-style: normal; transition: transform 300ms var(--ease-out-expo); }
+.alp__hold.is-open .alp__off i { transform: rotate(180deg); }
+.alp__hold > summary { transition: color 150ms var(--ease-out-expo); }
+.alp__hold > summary:hover { color: var(--color-text); }
+
+@media (prefers-reduced-motion: reduce) {
+  .alp__fade { animation: none; }
+  .alp__hold-anim, .alp__off i, .alp__link, .alp__nav, .alp__hold-sum,
+  .alp__card, .alp__stk > span, .alp__names > span { transition: none !important; }
 }
 
-/* Pie card */
-.alloc-pie-card {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 300px;
+/* The one tooltip on the page, shared by the donut's slices and by every
+   sleeve bar. Name on top, then label/value rows that line up. */
+.alp__tip {
+  position: fixed; pointer-events: none; opacity: 0; transition: opacity 0.1s;
+  white-space: normal; min-width: 11rem; max-width: 16rem;
+  background: var(--color-surface); border: 1px solid var(--color-border-light);
+  padding: 0.5rem 0.75rem 0.6rem; font-family: var(--font-mono); font-size: 0.7rem;
+  color: var(--color-text); z-index: 2;
 }
-.alloc-pie {
-  position: relative;
-  width: 100%;
-  height: 280px;
+.alp__tip b {
+  display: flex; align-items: baseline; gap: 0.5rem; font-weight: 500;
+  font-family: var(--font-sans); font-size: 0.875rem; color: var(--color-text);
+  margin-bottom: 0.5rem;
 }
-.alloc-pie canvas { width: 100% !important; height: 100% !important; }
-
-/* Bucket card */
-.alloc-bucket { display: flex; flex-direction: column; gap: 1rem; }
-.alloc-bucket__top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
+.alp__tip b i { flex: 0 0 auto; width: 0.5rem; height: 0.5rem; transform: translateY(-0.05em); }
+.alp__tip span {
+  display: flex; justify-content: space-between; gap: 1.5rem;
+  font-variant-numeric: tabular-nums; line-height: 1.7;
 }
-.alloc-bucket__info { min-width: 0; }
-.alloc-bucket__pct {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-family: var(--font-sans);
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: var(--color-accent);
-  line-height: 1;
+.alp__tip em {
+  font-style: normal; text-transform: uppercase; letter-spacing: 0.1em;
+  font-size: 0.85em; color: var(--color-text-muted);
 }
-.alloc-bucket__title {
-  font-family: var(--font-mono);
-  font-size: 0.875rem;
-  color: var(--color-text);
-  margin: 0.85rem 0 0.4rem;
-}
-.alloc-bucket__desc {
-  font-size: 0.75rem;
-  line-height: 1.5;
-  color: var(--color-text-muted);
-  margin: 0;
-}
-.alloc-bucket__pie {
-  position: relative;
-  width: 96px;
-  height: 96px;
-  flex-shrink: 0;
-}
-.alloc-bucket__pie canvas { width: 96px !important; height: 96px !important; }
-
-/* Dots */
-.alloc-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.alloc-dot--sm { width: 6px; height: 6px; }
-
-/* Mini legend */
-.alloc-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 0.85rem;
-}
-.alloc-legend__item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  color: var(--color-text-muted);
-}
-
-/* Tables */
-.alloc-tablecard { padding: 0; overflow: hidden; }
-.alloc-table__scroll { overflow-x: auto; }
-.alloc-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  white-space: nowrap;
-}
-.alloc-table thead tr {
-  background: var(--color-surface-light);
-  border-bottom: 1px solid var(--color-border);
-}
-.alloc-table th {
-  padding: 0.85rem 1.25rem;
-  font-weight: 500;
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  color: var(--color-text-muted);
-}
-.alloc-table th.alloc-l, .alloc-table td.alloc-sym, .alloc-table tbody td:first-child { text-align: left; }
-.alloc-table th.alloc-r, .alloc-table td.alloc-r { text-align: right; }
-.alloc-table tbody td {
-  padding: 0.85rem 1.25rem;
+/* The rule between two denominators. */
+.alp__tip .alp__tip-sep {
+  margin-top: 0.35rem; padding-top: 0.35rem;
   border-top: 1px solid var(--color-border);
-  color: var(--color-text);
 }
-.alloc-table tbody tr:first-child td { border-top: none; }
-.alloc-sym { display: flex; align-items: center; gap: 0.5rem; }
-.alloc-table td.alloc-val { color: var(--color-accent); }
-.alloc-table td.alloc-warn { color: var(--color-warn); }
-.alloc-link { color: var(--color-accent); text-decoration: none; }
-.alloc-link:hover { text-decoration: underline; }
-
-/* Table footer band */
-.alloc-tfoot {
-  background: var(--color-void);
-  border-top: 1px solid var(--color-border);
-  padding: 0.85rem 1.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-.alloc-tfoot__row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-.alloc-tfoot__label {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--color-text-muted);
-}
-.alloc-tfoot__value {
-  font-family: var(--font-mono);
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: var(--color-accent);
-}
-.alloc-tfoot__row--sub span {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  color: var(--color-text-muted);
+.alp__tip .alp__tip-soft {
+  display: block; margin-top: 0.5rem; color: var(--color-text-muted);
+  font-family: var(--font-sans); font-size: 0.8rem; line-height: 1.5;
 }
 
-/* Buyback total row */
-.alloc-table--buyback tfoot .alloc-table__total td {
-  border-top: 2px solid var(--color-border);
-  background: var(--color-void);
-  font-weight: 700;
-}
 
-/* Sleeves */
-.alloc-sleeves__head {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-text-muted);
-  margin: 2.5rem 0 1rem;
+/* the seam banner — the window between the reference series and today */
+/* Beacon, as a POINT: a 6px mark, not a glyph set at type size. */
+/* ── one card per sleeve ───────────────────────────────────────────────── */
+/* One card per row, never a gallery. Two up halves the width the merged vault
+   table has to render in, and that table is seven columns: name, balance,
+   price, value, policy, in vault, drift. At half width it scrolls sideways
+   inside the card, which turns the comparison the section exists for into a
+   thing you have to drag to read. Full width, it fits. */
+.alp__cards { display: grid; gap: 1rem; }
+/* One line, brightened. The card is not itself clickable, so it gets an edge
+   that acknowledges the pointer and nothing that implies a click. */
+.alp__card {
+  background: var(--color-deep); border: 1px solid var(--color-border);
+  display: flex; flex-direction: column;
+  transition: border-color 150ms var(--ease-out-expo);
 }
-.alloc-sleeve { margin-bottom: 1rem; }
-.alloc-sleeve__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--color-border);
+.alp__card:hover { border-color: var(--color-border-light); }
+.alp__card-top {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem 1.25rem;
+  flex-wrap: wrap; padding: 1rem 1.25rem 0.75rem; border-bottom: 1px solid var(--color-border);
 }
-.alloc-sleeve__name {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  color: var(--color-text);
+.alp__card-name { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
+.alp__card-name i { flex: 0 0 auto; width: 0.6rem; height: 0.6rem; transform: translateY(-0.05em); }
+.alp__card-name b {
+  font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
+  font-size: 1.05rem; letter-spacing: 0.01em; color: var(--color-text);
 }
-.alloc-sleeve__totalwrap {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.1rem;
+.alp__card-w { text-align: right; }
+.alp__card-w b {
+  font-family: var(--font-mono); font-weight: 500; font-size: 1.15rem;
+  color: var(--color-text); font-variant-numeric: tabular-nums;
 }
-.alloc-sleeve__total {
-  font-family: var(--font-mono);
-  font-size: 0.9rem;
-  font-weight: 700;
-  color: var(--color-accent);
+.alp__card-w small {
+  display: block; font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.14em; color: var(--color-text-muted);
 }
-.alloc-sleeve__type {
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-text-muted);
-}
-.alloc-caption {
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-  margin: 1.25rem 0 0;
-}
+.alp__card-body { padding: 1rem 1.25rem 1.25rem; display: flex; flex-direction: column; flex: 1 1 auto; }
+.alp__card-what { margin: 0 0 1rem; color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6; }
 
-/* Buyback total-spent chip */
-.alloc-spent {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  background: var(--color-void);
+/* The policy bar, drawn to the SLEEVE's own hundred rather than to its share
+   of the book, so a 5% sleeve holding seven names is as readable as a 95% one.
+   The 2px separators are the surface showing through, not a border colour: a
+   stacked bar needs a gap between fills, and a line would read as a rule. */
+.alp__stk {
+  display: flex; height: 1.6rem; background: var(--color-surface-light);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 1rem 1.25rem;
-  margin-bottom: 1.75rem;
 }
-.alloc-spent__label {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
+.alp__stk > span {
+  display: block; height: 100%;
+  transition: opacity 150ms var(--ease-out-expo);
+}
+.alp__stk > span + span { border-left: 2px solid var(--color-deep); }
+.alp__stk > span.dim { opacity: 0.32; }
+.alp__names > span { transition: color 150ms var(--ease-out-expo); }
+.alp__names > span.is-hot { color: var(--color-text); }
+.alp__names > span.is-hot b { color: var(--color-text-soft); }
+.alp__names > span.dim { opacity: 0.42; }
+.alp__stk.zero { opacity: 0.45; }
+.alp__names { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; margin-top: 0.75rem; font-size: 0.8rem; }
+.alp__names > span { display: inline-flex; align-items: baseline; gap: 0.5rem; color: var(--color-text-soft); }
+.alp__names i { flex: 0 0 auto; width: 0.45rem; height: 0.45rem; transform: translateY(-0.05em); }
+.alp__names b {
+  font-family: var(--font-mono); font-weight: 400; color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The vault rail: the same four-fact rail the weights carry at the top of the
+   page, in the same grid, so a reader learns one object and reads it twice.
+   It was a chip, a code tag and three flex stats on one line: four type
+   treatments for four facts of equal weight, and the row spread itself across
+   whatever width was going. The "vault live" chip went with them — this rail
+   renders only where a vault exists, so it was labelling its own presence. */
+.alp__vrail {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.75rem 1.5rem;
+  margin-top: 1rem; padding-top: 0.9rem; border-top: 1px solid var(--color-border);
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted);
+}
+.alp__vrail b {
+  display: block; margin-top: 0.25rem; font-weight: 500; font-size: 0.95rem;
+  text-transform: none; letter-spacing: 0; color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+/* An ERC-4626 share symbol is case-carrying: rmUSDC is not RMUSDC. */
+.alp__vtok { letter-spacing: 0.02em; }
+
+/* the holdings disclosure */
+.alp__hold { margin-top: 1rem; border: 1px solid var(--color-border); }
+.alp__hold-sum {
+  width: 100%; cursor: pointer; display: flex; align-items: center;
+  justify-content: space-between; gap: 0.75rem 1rem; flex-wrap: wrap;
+  padding: 0.5rem 0.75rem; background: var(--color-surface);
+  border: 0; border-bottom: 1px solid transparent; text-align: left;
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-soft);
+  transition: background-color 150ms var(--ease-out-expo), color 150ms var(--ease-out-expo);
+}
+.alp__hold-sum:hover { background: var(--color-surface-light); color: var(--color-text); }
+.alp__hold-sum:active { background: var(--color-surface); }
+.alp__hold-sum:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.alp__off { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--color-text-muted); }
+.alp__hold.is-open .alp__hold-sum { border-bottom-color: var(--color-border); }
+.alp__hold-body { padding: 0.75rem 0.75rem 1rem; }
+.alp__hold-note {
+  margin: 0.75rem 0 0; padding-top: 0.75rem; border-top: 1px solid var(--color-border);
+  font-size: 0.8rem; color: var(--color-text-muted); line-height: 1.55;
+}
+.alp__hold-foot {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 1rem;
+  margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.6rem;
   color: var(--color-text-muted);
 }
-.alloc-spent__value {
-  font-family: var(--font-mono);
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: var(--color-accent);
-}
 
-@media (min-width: 768px) {
-  .a2 { padding: 0 2rem 5rem; }
-  .a2-hero__inner { padding: 2.5rem 2rem; }
-  .a2-hero__title { font-size: 3.25rem; }
-  .a2-h2 { font-size: 2rem; }
-  .alloc-buckets { grid-template-columns: 1fr 1fr; }
-  /* flex-start, not center: centring made the taller money card push the
-     headline 8px down, so /allocation's h1 sat at 168px while every other hero
-     sat at 160 — the drift spa.spec's "one size, one typeface and one offset"
-     invariant exists to catch. It has failed on this page since that test
-     landed (#405, 2026-07-31) against a layout from #61 (2026-07-07). The card
-     keeps its centred look via align-self below; only the headline is pinned. */
-  .alloc-hero__inner { flex-direction: row; align-items: flex-start; }
-  .alloc-aum { align-self: center; }
+/* tables */
+/* Six and seven columns do not fit a phone. They scroll inside their own
+   container rather than the page, and the hint says so instead of leaving it
+   to be discovered. */
+.alp__tblwrap { overflow-x: auto; border: 1px solid var(--color-border); }
+table.alp__tbl {
+  width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.7rem;
+  min-width: 40rem; font-variant-numeric: tabular-nums;
 }
+table.alp__tbl th {
+  text-align: right; font-size: 0.6rem; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--color-text-muted); padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border-light); background: var(--color-surface);
+}
+table.alp__tbl th:first-child, table.alp__tbl td:first-child { text-align: left; }
+table.alp__tbl td {
+  text-align: right; padding: 0.5rem 1rem; border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-soft);
+}
+table.alp__tbl tbody tr:last-child td { border-bottom: 0; }
+table.alp__tbl tr.tot td { color: var(--color-text); border-top: 1px solid var(--color-border-light); font-weight: 500; }
+table.alp__tbl .idle { color: var(--color-text-muted); }
+/* After tr.tot, and more specific than it: the vault-vs-Aave column stays green
+   on the total row too, which is the row a reader checks first. */
+table.alp__tbl td.alp__gain, table.alp__tbl tr.tot td.alp__gain { color: var(--color-green); }
+/* The change ledger and the vault table both live in .alp__tbl. `q` is the
+   quiet column a figure is measured against; `note` is prose and must be
+   allowed to wrap, which the mono default forbids. */
+table.alp__tbl td.q { color: var(--color-text-muted); }
+table.alp__tbl--led { min-width: 34rem; }
+/* Without a width on the first column the browser hands it every spare pixel
+   and the figures end up a screen away from the sleeve they describe. */
+table.alp__tbl--led th:first-child { width: 40%; }
+table.alp__tbl--wide { min-width: 48rem; }
+table.alp__tbl tr.out td { color: var(--color-text-muted); }
+table.alp__tbl tr.out .alp__dot { opacity: 0.4; }
+.alp__dot {
+  display: inline-block; width: 0.45rem; height: 0.45rem; margin-right: 0.5rem;
+  vertical-align: 0.05em;
+}
+/* Direction is the GLYPH first and the colour second, so the column survives
+   greyscale, forced-colors and colourblindness. Beacon appears here as one
+   arrow at type size, which is the point size the covenant allows it. */
+.alp__mv { display: inline-flex; align-items: baseline; gap: 0.25rem; justify-content: flex-end; }
+.alp__mv i { font-style: normal; font-size: 0.78em; line-height: 1; }
+/* Up and down read the same way in both tables: the change ledger and the
+   vault's drift column. --color-warn is the red the palette already carries.
+   Beacon no longer marks notes anywhere here: the only warm hues left are
+   CATEGORICAL series colours, which mean a sleeve or a name and nothing else. */
+.alp__mv.up, .alp__dft.up { color: var(--color-green); }
+.alp__mv.down, .alp__dft.down { color: var(--color-warn); }
+.alp__mv.flat, .alp__dft.flat { color: var(--color-text-muted); }
+.alp__dft { display: inline-flex; align-items: baseline; gap: 0.25rem; justify-content: flex-end; }
+.alp__dft i { font-style: normal; font-size: 0.78em; line-height: 1; }
 
-@media (min-width: 1024px) {
-  .a2 { padding: 0 2rem 6rem; }
-  .a2-hero__title { font-size: 3.75rem; }
-  .alloc-grid3 { grid-template-columns: 1fr 2fr; }
-}
-</style>
+/* exposure */
+/* The same shape as /skills' own .sk__cta, which is where this button goes:
+   Beam as a LINE (the border) and as label type, never as a filled mass, and
+   never over a figure. The site's shared .btn-primary is a filled cyan block;
+   this page does not add another one. */
+/* notes */</style>

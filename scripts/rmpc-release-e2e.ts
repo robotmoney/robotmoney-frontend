@@ -34,6 +34,7 @@
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitteeIdentitySubcommands } from "./lib/rmpc-fetch.ts";
 import { admin, enqueueLifecycleJob, runRegimeClassify, waitForSessionState } from "./lib/swarm/session.ts";
@@ -69,7 +70,7 @@ function producerRail() {
   }
   const configuredComposeFiles = process.env.COMPOSE_FILE?.split(":").filter(Boolean) ?? [];
   return {
-    repoRoot: new URL("..", import.meta.url).pathname,
+    repoRoot: fileURLToPath(new URL("..", import.meta.url)),
     composeProject,
     composeFiles: configuredComposeFiles.length > 0 ? configuredComposeFiles : [...DEFAULT_COMPOSE_FILES],
     composeSpawnEnv: { ...process.env } as Record<string, string>,

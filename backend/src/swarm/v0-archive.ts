@@ -13,6 +13,7 @@
 // is the only caller that writes the parsed rows to Postgres.
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 // v2 (2026-08-05): adds `snapshots` and `briefs`. v1 carried members/subjects/
 // sessions only, because it was extracted from robotmoney-site — a FORK 2015
@@ -184,11 +185,12 @@ export interface V0ArchiveManifest {
 // The committed fixture location (same convention as
 // analytics/extract/edgar-seed.ts's DEFAULT_EDGAR_SEED_PATH) — overridable via
 // V0_ARCHIVE_PATH/V0_ARCHIVE_MANIFEST_PATH for tests.
-export const DEFAULT_V0_ARCHIVE_PATH = new URL("../../seed-data/v0-committee-archive.json.gz", import.meta.url).pathname;
-export const DEFAULT_V0_ARCHIVE_MANIFEST_PATH = new URL(
-  "../../seed-data/v0-committee-archive.manifest.json",
-  import.meta.url,
-).pathname;
+export const DEFAULT_V0_ARCHIVE_PATH = fileURLToPath(
+  new URL("../../seed-data/v0-committee-archive.json.gz", import.meta.url),
+);
+export const DEFAULT_V0_ARCHIVE_MANIFEST_PATH = fileURLToPath(
+  new URL("../../seed-data/v0-committee-archive.manifest.json", import.meta.url),
+);
 
 function resolveArchivePath(explicit?: string): string {
   return explicit || process.env.V0_ARCHIVE_PATH || DEFAULT_V0_ARCHIVE_PATH;

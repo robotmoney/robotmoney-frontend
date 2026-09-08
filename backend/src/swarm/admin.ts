@@ -194,6 +194,17 @@ export async function updateSubjectAdmin(
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
+
+    // subject_name is denormalized onto swarm_sessions (migration
+    // 0001_backends.sql) and nothing else backfills it, so a rename that
+    // stops at swarm_subjects leaves every past session displaying the old
+    // name on member track records (issue #779). Backfilling here, inside
+    // the same transaction as the swarm_subjects UPDATE above, makes the
+    // rename atomic across both places the name is stored.
+    if (patch.name != null && patch.name !== row.name) {
+      await tx`UPDATE swarm_sessions SET subject_name = ${merged.name} WHERE subject_id = ${id}`;
+    }
+
     await audit(actor, "subject_update", { subjectId: id }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
   });
@@ -1289,7 +1300,7 @@ export function judgeModeWarnings(mode: JudgeMode): string[] {
 }
 
 export async function setJudgeConfigAdmin(
-  patch: { mode?: JudgeMode; minTakes?: number; model?: string | null },
+  patch: { mode?: JudgeMode; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean },
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   let judge: JudgeConfig;
@@ -1300,10 +1311,13 @@ export async function setJudgeConfigAdmin(
   }
   // Audited WITH the warnings, not just beside them: "who turned the judge on,
   // and what were they told at the time" is the second question asked of any
-  // prose that turns out to be wrong.
+  // prose that turns out to be wrong. `thirdPartyEnabled` rides the same audit
+  // row as `mode` — issue #796 wants this "audited admin action, matching how
+  // `swarm_judge_config.mode` already behaves," not a second audit surface.
   const warnings = judgeModeWarnings(judge.mode);
   await audit(actor, "judge_config", {
-    mode: judge.mode, minTakes: judge.minTakes, model: judge.model, warnings,
+    mode: judge.mode, minTakes: judge.minTakes, model: judge.model,
+    thirdPartyEnabled: judge.thirdPartyEnabled, warnings,
   });
   return { ok: true, status: 200, judge, warnings };
 }

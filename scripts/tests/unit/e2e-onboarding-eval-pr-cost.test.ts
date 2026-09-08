@@ -15,11 +15,16 @@
 //   - a PR carrying the `real-eval` label DOES run the eval (that is the
 //     debugging escape hatch — without it a change to this gate cannot be
 //     exercised before merge, and only breaks `main` afterwards);
-//   - a push to the default branch runs it;
+//   - issue #803: a plain PUSH to the default branch does NOT run it any
+//     more — a stochastic model call with a ~50/50 30-minute-attempt timeout
+//     rate (#304) used to turn an otherwise-green push red for a reason
+//     unrelated to the code that landed, on a report nobody reads until the
+//     next push;
 //   - the NIGHTLY `schedule` mirror of this same workflow runs it (issue #373:
 //     swarm-opencode-nightly.yml, which used to be the eval's scheduled
-//     home, is retired — nightly is now a mirror of the merge-to-main set, so
-//     the schedule route must spend exactly what the push route spends);
+//     home, is retired — nightly is now this measurement's only
+//     continuously-recurring route, since #803 took push out of the
+//     expression);
 //   - a `workflow_dispatch` runs it only when the `real_eval` input asked;
 //   - labelling a PR with anything ELSE does not boot the ~40-minute live
 //     stack (the job `if:` drops that event before a runner is allocated);
@@ -395,8 +400,9 @@ const CTX = {
 // ---------------------------------------------------------------------------
 
 /**
- * The spend expression must resolve to "" for every ordinary PR run and to "1"
- * for exactly the three opt-in routes.
+ * The spend expression must resolve to "" for every ordinary PR run and every
+ * plain push (issue #803), and to "1" for exactly the three opt-in/scheduled
+ * routes.
  */
 export function realEvalSpendIsOptIn(expr: string): string | null {
   const cases: Array<[string, Ctx, string]> = [
@@ -406,7 +412,10 @@ export function realEvalSpendIsOptIn(expr: string): string | null {
     ["a workflow_dispatch that did not ask for the eval", CTX.dispatchOff, ""],
     [`a pull_request labelled '${OPT_IN_LABEL}'`, CTX.prOptedIn, "1"],
     [`a labeled event adding '${OPT_IN_LABEL}'`, CTX.prLabeledOptIn, "1"],
-    ["a push to the default branch", CTX.push, "1"],
+    // Issue #803: a plain push to the default branch must NOT spend the eval
+    // any more — that route's ~50/50 timeout rate (#304) turned an unrelated
+    // push red on a report nobody reads before the next push.
+    ["a push to the default branch", CTX.push, ""],
     ["a push to a release branch", CTX.pushRelease, ""],
     ["the nightly schedule mirror", CTX.schedule, "1"],
     ["a workflow_dispatch with real_eval=true", CTX.dispatchOn, "1"],
@@ -494,6 +503,37 @@ export function prSummaryNamesTheNightly(workflow: string): string | null {
 }
 
 /**
+ * Issue #803: a plain push to the default branch must ALSO get a loud,
+ * accurate summary saying the eval was not run — the same withholding
+ * discipline `prSummaryNamesTheNightly` enforces for pull_request runs,
+ * applied to the route that used to spend the eval unconditionally.
+ */
+export function pushSummaryExplainsWhyNotRun(workflow: string): string | null {
+  let step: string;
+  try {
+    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e.yml");
+  } catch {
+    return "no step writes to GITHUB_STEP_SUMMARY";
+  }
+  if (!/IS_PUSH\b/.test(step)) {
+    return "the summary step does not branch on whether this is a push run";
+  }
+  const marker = /\[\s*"\$IS_PUSH"\s*=\s*"true"\s*\]/.exec(step);
+  if (!marker) return "the summary step never tests $IS_PUSH in its shell body";
+  const pushBranch = step.slice(marker.index);
+  if (!/NOT RUN/.test(pushBranch)) {
+    return "the push-run summary does not state plainly that the eval was not run here";
+  }
+  if (!/nightly schedule mirror/i.test(pushBranch) || !pushBranch.includes("37 4 * * *")) {
+    return "the push-run summary does not name this workflow's own nightly schedule mirror (cron '37 4 * * *') as the eval's scheduled home";
+  }
+  if (!pushBranch.includes(OPT_IN_LABEL)) {
+    return `the push-run summary does not tell the reader how to opt a PR in with the '${OPT_IN_LABEL}' label`;
+  }
+  return null;
+}
+
+/**
  * Holds when the "did not run" notice is gated on the SAME expression that
  * gates the spend. Otherwise the notice can drift into lying — claiming a
  * deliberate skip on a run that in fact spent an eval.
@@ -566,6 +606,12 @@ describe("e2e.yml spends no onboarding eval on an unlabelled pull_request", () =
     expect(prSummaryNamesTheNightly(e2eYml)).toBeNull();
   });
 
+  // Issue #803: the plain-push route lost its eval spend, so it needs the
+  // same loud "why not" notice a pull_request run has always gotten.
+  test("the push-path summary says the eval did not run and names the nightly", () => {
+    expect(pushSummaryExplainsWhyNotRun(e2eYml)).toBeNull();
+  });
+
   test("the summary notice is driven by the same expression as the spend", () => {
     expect(noticeTracksTheSpend(e2eYml)).toBeNull();
   });
@@ -578,6 +624,13 @@ describe("e2e.yml spends no onboarding eval on an unlabelled pull_request", () =
         /onboarding eval ALWAYS runs|unconditionally "1"|UNCONDITIONALLY for every PR/i.test(l),
       );
     expect(offenders).toEqual([]);
+  });
+
+  // Issue #803's whole point: a plain push to main must not silently keep
+  // spending the eval it was moved off of.
+  test("a push to the default branch spends zero model tokens", () => {
+    const expr = unwrap(soleMappingValue(e2eYml, "ONBOARDING_REAL_EVAL"), "ONBOARDING_REAL_EVAL");
+    expect(evalExpression(expr, CTX.push)).toBe("");
   });
 });
 
@@ -765,17 +818,20 @@ describe("the coverage that replaces the per-PR eval is really there", () => {
   });
 
   // Issue #373 retired swarm-opencode-nightly.yml. Its measurement was the
-  // SAME real-inference admission this workflow already spent on a push to
+  // SAME real-inference admission this workflow used to spend on a push to
   // main, so the nightly it held became this workflow's own `schedule:` — and
   // the coverage that replaces the per-PR eval must therefore be found HERE, in
-  // e2e.yml, or it is nowhere.
+  // e2e.yml, or it is nowhere. Issue #803 later took the spend OFF push, which
+  // makes this schedule route this measurement's ONLY continuously-recurring
+  // home — dropping it here would leave nothing recurring at all.
   test("this workflow itself carries the retired nightly's 04:37 slot", () => {
     const on = (Bun.YAML.parse(e2eYml) as { on?: unknown; true?: unknown });
     const triggers = (on.on ?? on.true) as Record<string, unknown>;
     expect(Object.keys(triggers)).toContain("schedule");
     expect(JSON.stringify(triggers.schedule)).toContain("37 4 * * *");
-    // Nightly must reproduce the merge signal, which means a schedule run
-    // spends the admission a push spends — asserted by CTX.schedule above.
+    // The schedule route must still spend the admission — asserted by
+    // CTX.schedule in realEvalSpendIsOptIn above; a plain push must NOT
+    // (CTX.push there resolves to "").
     expect(realEvalSpendIsOptIn(unwrap(soleMappingValue(e2eYml, "ONBOARDING_REAL_EVAL"), "ONBOARDING_REAL_EVAL"))).toBeNull();
   });
 

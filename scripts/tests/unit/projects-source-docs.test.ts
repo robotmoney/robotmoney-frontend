@@ -11,7 +11,7 @@
 // addresses the config defaults (backend/src/config.ts resolveVaultAdapters),
 // so the old "non-functional placeholders" claim must never reappear.
 //
-// Runs in the required unit.yml root job via `bun run test`.
+// Runs in the required unit.yml root job via `bun run test:unit`.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

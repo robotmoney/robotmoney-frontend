@@ -1,6 +1,11 @@
 # Unit tier of the test pyramid: typecheck + scripts/tests/unit — no Docker, no
 # network, no model. Every test in this class must run on a bare checkout with
-# only bun installed.
+# only bun installed. This claim is ENFORCED below (issue #819), not merely
+# asserted here and trusted to hold: the job never invokes a selector broader
+# than scripts/tests/unit, and it makes the real `docker` binary unreachable
+# before any test step runs, so a future Docker-dependent test placed here
+# fails loudly instead of silently passing because a runner happened to have
+# Docker installed.
 #
 # CI taxonomy class: feature-correctness. Per the taxonomy gating matrix this
 # runs on EVERY PR (draft AND ready) — cheap enough to gate early, and the unit
@@ -35,6 +40,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # AC (issue #819): the tier's own "no Docker" claim is ENFORCED here, not
+      # merely asserted in the header above and trusted to hold as the test set
+      # grows. GitHub's ubuntu-latest images ship a real Docker daemon and CLI,
+      # so nothing today would fail if a future PR quietly added a
+      # Docker-dependent test under scripts/tests/unit — it would just silently
+      # pass because Docker happened to be there. Removing the binary from PATH
+      # before any test step runs means such a test fails LOUDLY ("docker:
+      # command not found") instead of depending on nobody making that mistake.
+      - name: Make Docker unreachable (this tier's own claim, enforced not trusted)
+        run: |
+          set -euo pipefail
+          docker_bin="$(command -v docker || true)"
+          if [ -n "$docker_bin" ]; then
+            sudo mv "$docker_bin" "${docker_bin}.blocked-by-unit-ci"
+          fi
+          sudo systemctl stop docker.service docker.socket 2>/dev/null || true
+          if command -v docker >/dev/null 2>&1; then
+            echo "docker is still reachable on PATH after blocking it — the unit tier's no-Docker claim would not be enforced" >&2
+            exit 1
+          fi
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
@@ -52,8 +77,13 @@ jobs:
       - name: Install deps
         working-directory: backend
         run: bun install --frozen-lockfile
+      # Typecheck only. `bun run test` (the run-everything alias, `bun test
+      # scripts/tests`) used to be chained on here — issue #819: it recurses
+      # into scripts/tests/integration/, the Docker-backed class this workflow's
+      # own header excludes, which is why a Docker test could redden this gate.
+      # `test:unit` below is the only selector this job runs.
       - name: Check root scripts
-        run: bun run typecheck && bun run test
+        run: bun run typecheck
       # The unit class must hold on a bare checkout — no Docker, no network.
       # The greps are the "exit 0 is not tested" evidence: bun's own summary must
       # report a NON-ZERO pass count and a zero fail count, so a run that
@@ -62,10 +92,42 @@ jobs:
       - name: Unit cost class (scripts/tests/unit)
         run: |
           set -o pipefail
-          bun run test:unit 2>&1 | tee /tmp/test-unit.log
+          bun run test:unit -- --reporter=junit --reporter-outfile=/tmp/test-unit.junit.xml 2>&1 | tee /tmp/test-unit.log
           sed -E 's/\x1b\[[0-9;]*m//g' /tmp/test-unit.log > /tmp/test-unit.plain
           grep -qE '^ *[1-9][0-9]* pass$' /tmp/test-unit.plain
           grep -qE '^ *0 fail$' /tmp/test-unit.plain
+      # Test plan (issue #819): prove it from this job's OWN output, not
+      # merely from the selector's directory scoping — a scripts/tests/
+      # integration file must never actually execute inside test:unit.
+      #
+      # This checks the JUnit report's `file="..."` attributes (each
+      # testsuite/testcase carries the real originating file path), NOT a
+      # grep over the console log's free text. An earlier version of this
+      # guard grepped /tmp/test-unit.plain directly and false-positived on
+      # scripts/tests/unit/harness-selftest.test.ts, whose test titles
+      # legitimately quote package.json's test:integration selector string
+      # ("bun test scripts/tests/integration") to prove that mechanism —
+      # prose that mentions the path is not evidence a file under that path
+      # ran. `file=` is populated from actual provenance, so it can't be
+      # spoofed by a test's own name/description text.
+      #
+      # The existence/non-empty check below is this step's own
+      # self-verification, mirroring the Docker-unreachability step above: a
+      # missing or empty JUnit file makes `grep` exit 2 ("no such file"), the
+      # same exit code as "ran fine, found no match" — and since this sits in
+      # an `if` condition, `set -e` never fires. Without the check, a
+      # reporter-flag/version drift or a crashed reporter silently exits 0
+      # here, having verified nothing at all.
+      - name: No integration-tier file executed here (checked against the JUnit report)
+        run: |
+          if [ ! -s /tmp/test-unit.junit.xml ]; then
+            echo "no JUnit report was produced by test:unit (missing or empty /tmp/test-unit.junit.xml) — cannot verify the tier boundary" >&2
+            exit 1
+          fi
+          if grep -q 'file="scripts/tests/integration' /tmp/test-unit.junit.xml; then
+            echo "a scripts/tests/integration file appeared in the unit job's test:unit JUnit report — the tier boundary broke" >&2
+            exit 1
+          fi
       # Pins fail-red-on-empty-selection: the two selectors above are just
       # directory paths, so a future rename must break CI rather than silently
       # collect zero files in both classes.

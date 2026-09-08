@@ -42,6 +42,7 @@
 import type postgresTypes from "postgres";
 import {
   config,
+  pinnedPoolForToken,
   resolveBaseRpcSource,
   resolvePropWallets,
   resolveTrackedAssets,
@@ -55,7 +56,12 @@ import {
   type DayBlockOutcome,
   type ResolvedDayBlock,
 } from "../chain/block-resolver.ts";
-import { loadHistoricalPrices, type HistoricalPriceTable } from "../chain/historical-prices.ts";
+import {
+  resolveAddressFloors,
+  type AddressFloor,
+  type AddressFloorCache,
+} from "../chain/address-floor-resolver.ts";
+import { loadHistoricalPrices, resolvePoolForToken, type HistoricalPriceTable } from "../chain/historical-prices.ts";
 import {
   readChainAmountsAtBlocks,
   readChainAmountsBatched,
@@ -72,6 +78,7 @@ import {
   sleeveManifestKey,
   type WalletSnapshotManifest,
 } from "./wallet-snapshot-manifest.ts";
+import { assetPricesDisagree, writeAssetPrice, type AssetPriceDisagreement, type AssetPriceSource } from "./asset-prices.ts";
 
 type Db = postgresTypes.Sql<{}>;
 
@@ -99,11 +106,15 @@ export function maxDaysPerRun(): number {
 
 /** How many times a day may fail before it stops being retried.
  *
- *  A day can be unrepairable for a permanent reason — most obviously one that
- *  precedes a tracked target's deployment, where the honest read is "no contract
- *  here" and there is no value to write. Retrying such a day on every scheduled
- *  run would spend a metered RPC budget forever to re-learn the same fact. After
- *  the ceiling the day is marked 'exhausted': still an unrepaired gap, still
+ *  A day can be unrepairable for a permanent reason. The most common one — a
+ *  day preceding a tracked address's on-chain deployment — is now caught
+ *  proactively by the earliest-valid-block floor (issue #760, above) and
+ *  routed to 'skipped' before it ever reaches this ceiling, at zero attempt
+ *  cost. This ceiling remains for reasons the floor cannot see in advance: an
+ *  address deployed but permanently unreadable some other way, say. Retrying
+ *  such a day on every scheduled run would spend a metered RPC budget forever
+ *  to re-learn the same fact. After the ceiling the day is marked 'exhausted':
+ *  still an unrepaired gap, still
  *  reported by GET /api/admin/gaps, just no longer retried. Nothing is
  *  interpolated and nothing is marked handled. */
 export function maxAttemptsPerDay(): number {
@@ -188,6 +199,12 @@ function isoDay(ms: number): string {
 
 function utcMidnightMs(date: string): number {
   return Date.parse(`${date}T00:00:00Z`);
+}
+
+/** The instant a UTC daily candle for `date` closes — one day after `date`'s
+ *  own midnight (issue #849's asset_prices dual-write; `observed_at`). */
+function dayCloseInstant(date: string): Date {
+  return new Date(utcMidnightMs(date) + 86_400_000);
 }
 
 /** The newest day that is fully CLOSED as of `now`. A day still in progress has
@@ -388,6 +405,41 @@ export function dayBlockCache(db: Db): DayBlockCache {
   };
 }
 
+// ── The permanent address→floor cache, backed by Postgres (issue #760) ──────
+
+export function addressFloorCache(db: Db): AddressFloorCache {
+  return {
+    async get(address) {
+      const rows = await db<{ floor_block: string }[]>`
+        SELECT floor_block FROM chain_address_floors WHERE address = ${address}
+      `;
+      const row = rows[0];
+      return row ? Number(row.floor_block) : null;
+    },
+    async set(address, floorBlock) {
+      await db`
+        INSERT INTO chain_address_floors (address, floor_block)
+        VALUES (${address}, ${floorBlock})
+        ON CONFLICT (address) DO UPDATE SET
+          floor_block = EXCLUDED.floor_block,
+          resolved_at = now()
+      `;
+    },
+  };
+}
+
+/** Tracked assets whose block-addressed reads use CODE PRESENCE as the
+ *  silent-zero signal (§6.1) — i.e. every leg actually read via a contract
+ *  call at `address`. Excludes 'native' (ETH's balance comes from
+ *  eth_getBalance against a WALLET address, which returns a genuine zero for
+ *  any account, never the "no code here" shape isEmptyReturnData exists to
+ *  catch — `address` on the ETH row is only WETH's PRICING address, not a
+ *  balanceOf target, see config.ts) and assets with no address at all
+ *  (SP500, valuationKind 'config'). */
+function floorEligibleAssets(assets: readonly TrackedAsset[]): (TrackedAsset & { address: string })[] {
+  return assets.filter((a): a is TrackedAsset & { address: string } => a.address !== null && a.valuationKind !== "native");
+}
+
 // ── The per-day executor ─────────────────────────────────────────────────────
 
 export type BackfillDayStatus = "filled" | "skipped" | "failed" | "exhausted" | "blocked";
@@ -429,6 +481,26 @@ export interface WalletBackfillDeps {
     readOpts: ChainReadOptions,
   ): Promise<Map<string, Map<string, ChainAmount>>>;
   loadPrices(assets: TrackedAsset[], fromDate: string, toDate: string): Promise<HistoricalPriceTable>;
+  /** The per-address earliest-valid-block floor (issue #760). Optional so a
+   *  caller injecting only the required deps above — every existing test does
+   *  — still drives the real executor with no floor check at all, exactly the
+   *  prior behaviour: an omitted dep here changes nothing. Production supplies
+   *  the real chain-backed resolver, so a day preceding a tracked address's
+   *  deployment is skipped rather than fought to `exhausted`. */
+  resolveAddressFloors?(
+    addresses: readonly string[],
+    opts: RpcCallOptions,
+    cache: AddressFloorCache,
+  ): Promise<Map<string, AddressFloor>>;
+  /** Which GeckoTerminal pool answered for a gecko-priced asset — metadata for
+   *  the asset_prices dual-write (issue #849; markets §5.6), never load-bearing
+   *  for the amounts write it rides alongside. Optional so a caller injecting
+   *  only the required deps above — every existing test does — still drives
+   *  the real executor with `pool_key` left NULL, exactly the prior behaviour
+   *  (this dep did not exist before). Production supplies a real resolver that
+   *  reuses `loadPrices`'s already-warm pool cache, so this costs no additional
+   *  request in the ordinary case. */
+  resolvePoolKey?(asset: TrackedAsset): Promise<string | null>;
 }
 
 export const defaultWalletBackfillDeps: WalletBackfillDeps = {
@@ -437,6 +509,19 @@ export const defaultWalletBackfillDeps: WalletBackfillDeps = {
   readChainAmounts: readChainAmountsBatched,
   readChainAmountsAtBlocks,
   loadPrices: loadHistoricalPrices,
+  resolveAddressFloors: (addresses, opts, cache) => resolveAddressFloors(addresses, opts, cache),
+  async resolvePoolKey(asset) {
+    if (asset.priceKind !== "gecko" || !asset.address) return null;
+    const pinned = pinnedPoolForToken(asset.address);
+    if (pinned) return pinned;
+    try {
+      return await resolvePoolForToken(asset.address);
+    } catch {
+      // Metadata only: an unresolvable pool here must never fail the day the
+      // amounts write already succeeded for.
+      return null;
+    }
+  },
 };
 
 const AGG = (symbol: string): string => `agg:${symbol}`;
@@ -772,7 +857,7 @@ export async function backfillWalletWindow(
 
   // 1. dates → blocks. Permanent cache, so a re-run over the same window is free.
   const resolvedByDate = await resolveWindowBlocks(db, closed, deps, now);
-  const readable: { date: string; resolved: ResolvedDayBlock }[] = [];
+  let readable: { date: string; resolved: ResolvedDayBlock }[] = [];
   for (const date of closed) {
     const r = resolvedByDate.get(date);
     if (!r || !r.ok) {
@@ -788,6 +873,48 @@ export async function backfillWalletWindow(
     readable.push({ date, resolved: r.resolved });
   }
   if (readable.length === 0) return settle();
+
+  // 1.5. Per-address earliest-valid-block floor (issue #760; markets §6.1,
+  //      §8.1). A day whose resolved block precedes a tracked address's floor
+  //      PREDATES that contract's deployment — not a failure, a certainty —
+  //      so it is skipped, with NO attempt charged, before either the shared
+  //      price load or the shared chain read is issued for it. The floor is a
+  //      CHAIN fact (chain/address-floor-resolver.ts) checked unconditionally
+  //      against every tracked address, independent of that asset's
+  //      configured `deployedAt` — a CONFIGURATION fact that can predate,
+  //      postdate, or (today) coincide with the real deployment block; this is
+  //      exactly the gap #749's deployedAt filtering left open (§8.1). Skipping
+  //      here never silences GET /api/admin/gaps: that endpoint derives from
+  //      the sample tables via expectedKeys/deployedAt, never from
+  //      wallet_backfill_state, so a genuinely uncovered day still shows as a
+  //      gap. `resolveAddressFloors` is optional so a caller injecting only
+  //      the required deps — every existing test does — takes this branch's
+  //      prior (unchanged) behaviour: no floor check at all.
+  if (deps.resolveAddressFloors) {
+    const opts = { rpcUrl: config.baseRpcUrl };
+    const floorAssets = floorEligibleAssets(assets);
+    const addresses = [...new Set(floorAssets.map((a) => a.address))];
+    const floors = addresses.length > 0
+      ? await deps.resolveAddressFloors(addresses, opts, addressFloorCache(db))
+      : new Map<string, AddressFloor>();
+    const stillReadable: { date: string; resolved: ResolvedDayBlock }[] = [];
+    for (const { date, resolved } of readable) {
+      const below = floorAssets.filter((a) => {
+        const floor = floors.get(a.address);
+        return floor !== undefined && resolved.blockNumber < floor.floorBlock;
+      });
+      if (below.length > 0) {
+        const detail = `below earliest-valid-block floor: ${below
+          .map((a) => `${a.symbol} (${a.address}) floors at block ${floors.get(a.address)!.floorBlock}`)
+          .join(", ")}`;
+        out.set(date, await skipDay(db, date, detail, resolved.blockNumber));
+        continue;
+      }
+      stillReadable.push({ date, resolved });
+    }
+    readable = stillReadable;
+    if (readable.length === 0) return settle();
+  }
 
   // 2. Prices for the WHOLE window in ONE load, spanning its first to last day.
   //    A load failure fails every day it covers — the same refusal the per-day
@@ -1041,6 +1168,22 @@ async function repairResolvedDay(
   let status: BackfillDayStatus = "filled";
   let detail: string | null = null;
 
+  // The asset_prices dual-write (issue #849; markets §5.6) — resolved OUTSIDE
+  // the transaction below, once per symbol, since `resolvePoolKey` may reach
+  // the network (a fallback pool ranking for an unpinned asset) and a
+  // transaction holding `lockWalletSnapshotDate` is the wrong place to make a
+  // caller wait on that. Metadata only: a resolution failure never fails the
+  // day the amounts write already succeeded for (defaultWalletBackfillDeps
+  // catches internally; this map simply ends up with `null` for that symbol).
+  const poolKeyBySymbol = new Map<string, string | null>();
+  if (deps.resolvePoolKey) {
+    for (const r of reads) {
+      if (!r.key.startsWith("agg:") || poolKeyBySymbol.has(r.asset.symbol)) continue;
+      poolKeyBySymbol.set(r.asset.symbol, await deps.resolvePoolKey(r.asset));
+    }
+  }
+  let priceDisagreements: AssetPriceDisagreement[] = [];
+
   try {
     await db.begin(async (tx) => {
       const txDb = tx as unknown as Db;
@@ -1048,6 +1191,7 @@ async function repairResolvedDay(
       sleeveRows = 0;
       status = "filled";
       detail = null;
+      priceDisagreements = [];
 
       // Serialize every repair/live writer for this date. Row locks alone do
       // not cover a missing natural key that a concurrent sampler could insert
@@ -1102,6 +1246,23 @@ async function repairResolvedDay(
             FROM wallet_sleeve_samples
            WHERE sample_date = ${date}
         `;
+        // Captured BEFORE the delete so the asset_prices dual-write below can
+        // report a disagreement against the sample row a prior pass wrote for
+        // this (date, symbol) — D41 phase 2's "a check reports rows that
+        // disagree", read literally as sample row vs. price row. `before`
+        // above answers "is this snapshot complete"; this answers "what did it
+        // already say", which `before` never needed to know. Quarantined rows
+        // are excluded (QUARANTINED_PROVENANCE): they are exactly the rows
+        // whose price describes a different asset, so a "disagreement" against
+        // one would be noise, not a finding.
+        const priorSampleRows = await tx<{ symbol: string; price_usd: string | null }[]>`
+          SELECT symbol, price_usd FROM wallet_balance_samples
+           WHERE sample_date = ${date} AND provenance <> ${QUARANTINED_PROVENANCE}
+        `;
+        const priorSamplePriceBySymbol = new Map(
+          priorSampleRows.map((row) => [row.symbol, row.price_usd === null ? null : Number(row.price_usd)]),
+        );
+
         await tx`DELETE FROM wallet_balance_samples WHERE sample_date = ${date}`;
         await tx`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${date}`;
 
@@ -1117,6 +1278,48 @@ async function repairResolvedDay(
               (${date}, ${r.asset.symbol}, ${amount.amount}, ${priceUsd}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
           `;
           balanceRows += 1;
+
+          // The literal "sample row vs. price row" reading of D41 phase 2's
+          // verify step: what a PRIOR pass wrote to wallet_balance_samples for
+          // this (date, symbol), captured above before the delete, compared
+          // against what this pass just computed. Reported, never a reason to
+          // change what gets written — the freshly-verified chain read/price
+          // is authoritative here regardless (nothing reads asset_prices yet).
+          const priorSamplePrice = priorSamplePriceBySymbol.get(r.asset.symbol);
+          if (priorSamplePrice != null && assetPricesDisagree(priorSamplePrice, priceUsd)) {
+            priceDisagreements.push({
+              priceDate: date,
+              symbol: r.asset.symbol,
+              previousPriceUsd: priorSamplePrice,
+              freshPriceUsd: priceUsd,
+              against: "sample_row",
+            });
+          }
+
+          // D41 phase 2 — dual-write the price row alongside the sample row,
+          // once per (date, symbol) from the AGGREGATE leg (sleeve rows carry
+          // no symbol the aggregate does not already have — see
+          // ops/wallet-snapshot-manifest.ts). `source` is the PROVIDER, never
+          // the provenance vocabulary above: SP500 (`priceKind: 'yahoo'`)
+          // never reaches here at all, because `reads` is built from
+          // `manifest.balanceAssets`, which already excludes `valuationKind
+          // === 'config'` (markets §3.2, §5.6).
+          const source: AssetPriceSource = r.asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
+          const poolKey = source === "pinned" ? null : (poolKeyBySymbol.get(r.asset.symbol) ?? null);
+          const disagreement = await writeAssetPrice(txDb, {
+            priceDate: date,
+            symbol: r.asset.symbol,
+            priceUsd,
+            source,
+            poolKey,
+            tokenAddress: source === "pinned" ? null : r.asset.address,
+            observedAt: dayCloseInstant(date),
+            fetchedAt: now,
+            configIdentity: source === "pinned"
+              ? "pinned:usd:1.00"
+              : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
+          });
+          if (disagreement) priceDisagreements.push(disagreement);
         }
 
         for (const t of sleeveTargets) {
@@ -1178,6 +1381,18 @@ async function repairResolvedDay(
       now,
       resolved.blockNumber,
     );
+  }
+
+  // A price disagreement is a reconciliation finding, never a refusal: this is
+  // the EXPAND half of the cutover (issue #849) and nothing reads asset_prices
+  // yet, so it is reported alongside the day's own detail rather than failing
+  // a write the amounts side already committed successfully.
+  if (priceDisagreements.length > 0) {
+    const summary = priceDisagreements
+      .map((d) => `${d.symbol} vs ${d.against}: existing=${d.previousPriceUsd} fresh=${d.freshPriceUsd}`)
+      .join("; ");
+    detail = detail ? `${detail}; asset_prices disagreement: ${summary}` : `asset_prices disagreement: ${summary}`;
+    console.warn(`wallet-backfill: ${date} asset_prices disagreement — ${summary}`);
   }
 
   return {

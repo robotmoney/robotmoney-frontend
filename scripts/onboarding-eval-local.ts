@@ -2,6 +2,7 @@
 // canonical suite entrypoint; `bun run onboarding-eval` remains as a thin,
 // backwards-compatible one-case entrypoint.
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ROUTES } from "@robotmoney/contract";
 import { makeDockerRunner, purgeSmokeEvalContainers } from "./lib/smoke-volumes.ts";
 import {
@@ -73,7 +74,7 @@ export function resolveAdmissionEvalModelConfig(env: Record<string, string | und
 }
 
 export async function runAdmissionEvalCase(options: AdmissionEvalCaseOptions = {}): Promise<AdmissionEvalCaseResult> {
-const repoRoot = options.repoRoot ?? new URL("..", import.meta.url).pathname;
+const repoRoot = options.repoRoot ?? fileURLToPath(new URL("..", import.meta.url));
 const env = options.env ?? process.env;
 // This preflight is intentionally before credentials, stack construction, and
 // every Docker call.

@@ -3,6 +3,7 @@
 import { ROUTES } from "@robotmoney/contract";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveAdmissionEvalModelConfig } from "./onboarding-eval-local.ts";
 import { admin, DEMO_MEMBERS, DEMO_SUBJECTS, runRegimeClassify, runSession } from "./lib/swarm/session.ts";
 import { resolveSmokeCadence } from "./lib/smoke-schedule.ts";
@@ -99,7 +100,7 @@ export function cleanupKeptSwarmEval(
 export async function runSwarmAuthoringEvalCase(
   options: SwarmEvalCaseOptions = {},
 ): Promise<SwarmEvalCaseResult> {
-  const repoRoot = options.repoRoot ?? new URL("..", import.meta.url).pathname;
+  const repoRoot = options.repoRoot ?? fileURLToPath(new URL("..", import.meta.url));
   const env = options.env ?? process.env;
   // Pre-flight check: fails before stack bring-up if credentials or model selection are missing/keyless.
   const modelConfig = resolveAdmissionEvalModelConfig(env);
@@ -221,7 +222,7 @@ if (import.meta.main) {
   const project = projectArg >= 0 ? argv[projectArg + 1] : undefined;
   if (argv.includes("--cleanup")) {
     if (!project) throw new Error("--cleanup requires --project <compose-project>");
-    const repoRoot = new URL("..", import.meta.url).pathname;
+    const repoRoot = fileURLToPath(new URL("..", import.meta.url));
     cleanupKeptSwarmEval(repoRoot, project);
     console.log(`[swarm-eval] cleaned kept project=${project}`);
     process.exit(0);

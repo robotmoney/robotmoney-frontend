@@ -76,9 +76,15 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     }
   });
 
-  test("unit.yml runs typecheck + test and has NO draft guard", () => {
+  test("unit.yml runs typecheck + the scoped test:unit selector only, and has NO draft guard", () => {
     const unit = read("unit.yml");
-    expect(unit).toContain("bun run typecheck && bun run test");
+    expect(unit).toContain("bun run typecheck");
+    expect(unit).toContain("bun run test:unit");
+    // Issue #819: the bare run-everything alias (`bun run test`, which used to
+    // recurse into the Docker-backed scripts/tests/integration/) must never
+    // run here — verified against parsed step bodies, not raw file text, in
+    // scripts/tests/unit/unit-workflow-tier-boundary.test.ts (a whole-file
+    // check would false-positive on this very file's own prose about it).
     // Unit is feature-correctness: runs on every PR including drafts.
     expect(unit).not.toMatch(/github\.event\.pull_request\.draft/);
   });
@@ -98,8 +104,12 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     // to the post-split workflow that now owns it. Matched via includes() —
     // simple and correct for all commands that don't have substring collisions.
     const stepMap: Record<string, string> = {
-      // unit.yml
-      "bun run typecheck && bun run test": "unit.yml",
+      // unit.yml. Issue #819 split the pre-split monolith's compound
+      // "typecheck && test" step into a bare typecheck (the `&& bun run test`
+      // half recursed into the Docker-backed scripts/tests/integration/,
+      // which is exactly the bug that issue fixed) plus the already-scoped
+      // test:unit selector.
+      "bun run typecheck": "unit.yml",
       "bun run test:unit": "unit.yml",
       // repo-guards.yml
       "bash scripts/checks/check-no-test-imports-in-runtime.sh": "repo-guards.yml",
@@ -118,6 +128,14 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       "bun run test:integration": "integration.yml",
     };
 
+    // backend.yml independently runs the literal command "bun run typecheck"
+    // under working-directory: backend — a known, deliberate collision with
+    // unit.yml's root-level typecheck step, verified separately below. Every
+    // other command in the map is expected to be unique to its owning file.
+    const KNOWN_COMMAND_COLLISIONS: Record<string, string[]> = {
+      "bun run typecheck": ["backend.yml"],
+    };
+
     const postSplitFiles = allWorkflows();
     for (const [command, expectedFile] of Object.entries(stepMap)) {
       const filesContaining = postSplitFiles.filter((f) =>
@@ -131,7 +149,8 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
         (f) =>
           f !== expectedFile &&
           !f.includes("nightly") &&
-          !f.includes("smoke"),
+          !f.includes("smoke") &&
+          !(KNOWN_COMMAND_COLLISIONS[command] ?? []).includes(f),
       );
       expect(
         unexpected,
@@ -139,9 +158,11 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       ).toEqual([]);
     }
 
-    // Backend typecheck runs under working-directory: backend (distinct from
-    // unit.yml's root-level typecheck && test compound). Verified separately
-    // because "bun run typecheck" is a substring of unit.yml's compound command.
+    // Backend typecheck runs under working-directory: backend — asserted here
+    // by structure (not just substring presence, which KNOWN_COMMAND_COLLISIONS
+    // above already tolerates) so the two typecheck invocations stay
+    // distinguishable as "same command, different cwd" rather than drifting
+    // into an accidental single shared step.
     const backendYml = read("backend.yml");
     expect(backendYml).toMatch(/working-directory:\s*backend[\s\S]*?run:\s*bun run typecheck/);
   });
