@@ -299,3 +299,25 @@ test("a subject's session card carries the consensus and the decision, as /swarm
   // interleaves every subject.
   await expect(card.locator(".sv__take-body")).toContainText("held the 95/5/0/0 frame");
 });
+
+// The archive fallback was keyed on the REQUEST failing. This route answers
+// 200 with a `null` body for an id it does not have, so the promise resolved,
+// camelSubject(null) returned null, and the fallback never ran: the page read
+// "Subject not found" for every subject absent from the database, with the
+// checked-in manifest describing it one fetch away. That is the whole local
+// demo stack, where /swarm/subjects/robotmoney-allocation was unreachable.
+test("a subject the API answers 200 null for still renders from the archive", async ({ page }) => {
+  await page.route("**/api/swarm/subjects/woon", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "null" }));
+  // Everything else fails, so only the null-body path is under test here.
+  await page.route(/\/api\/swarm\/(?!subjects\/woon$).*/, (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
+
+  await page.goto("/index.html");
+  await navigate(page, "/swarm/subjects/woon");
+
+  // The archive manifest's own name, which is how we know the render came
+  // from it and not from the (null) API answer.
+  await expect(page.locator(".sv__detail-title")).toHaveText("Woon Treasury");
+  await expect(page.locator(".sv__error")).toHaveCount(0);
+});
