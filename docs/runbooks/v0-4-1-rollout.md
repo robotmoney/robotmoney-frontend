@@ -2,7 +2,7 @@
 
 > Operator procedure for upgrading production from **v0.4.0** to **v0.4.1**.
 > The candidate currently under test is **`v0.4.1-rc.3`** at commit
-> `3f70517e3cbd16e4bef5575aae1d62dc9e33436e` on `releases-0.4.x`.
+> `ebee27c9c8fd18a49da0f3143df1ac4482bde365` on `releases-0.4.x`.
 > Re-resolve the tag and SHA when a later RC is cut; this document is not
 > authority for a moving branch.
 
