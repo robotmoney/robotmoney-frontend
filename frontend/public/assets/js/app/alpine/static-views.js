@@ -1064,8 +1064,18 @@ export function registerStaticViews(Alpine) {
       // time it lands. Same guard memberProfile applies for the same reason.
       const routeAtEntry = location.pathname;
       try {
-        this.subject = await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject)
-          .catch(() => loadArchiveSubject(id));
+        // The archive fallback has to cover a subject the API ANSWERED for and
+        // does not have, not just a request that failed. This route replies
+        // 200 with a `null` body for an unknown id, so the promise resolves,
+        // camelSubject(null) returns null, and a .catch() never runs: the page
+        // read "Subject not found" for every subject missing from the database
+        // while the checked-in manifest describing it sat one fetch away. That
+        // is every subject on a stack seeded without them, which is what the
+        // local demo stack is.
+        const fromApi = await api.get(path(ROUTES.swarm.subject, { id }))
+          .then(camelSubject)
+          .catch(() => null);
+        this.subject = fromApi || await loadArchiveSubject(id).catch(() => null);
         if (!this.subject) throw new Error("Subject not found");
         // Route-level SEO titleizes the last URL segment, which for a slug like
         // "robotmoney-allocation" reads "Robotmoney Allocation". Name the tab
