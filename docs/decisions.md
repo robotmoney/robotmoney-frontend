@@ -3221,10 +3221,19 @@ a deliberate act.
 
 **One operator action this requires.** With the production assertion now strict,
 a `--static-port` boot whose environment does not export
-`SWARM_SCHEDULES_ENABLED` refuses to start, naming the fix in its message.
-`.env.example` ships the value (`0`). This is the intended trade: a one-time,
-loud, self-describing boot failure in exchange for never again running a third
-cadence that cannot judge.
+`SWARM_SCHEDULES_ENABLED` refuses to start, naming the fix — and the repo-root
+`.env` to make it in — in its message. `.env.example` ships the value (`0`).
+
+This strictness is not what stands between production and the third-cadence
+hazard: `docker-compose.smoke.yml` pins the api container's own
+`SWARM_SCHEDULES_ENABLED` to `"0"` unconditionally, and no shell export can
+override it, so that hazard is already foreclosed before this check ever runs.
+What the check actually buys is parity and overlay-independence — it keeps the
+operator's own `.env` (the surface every runbook and credential check reads)
+from silently disagreeing with what the container is really running, and it
+keeps working as a safety net even if that overlay pin is ever refactored
+away. The trade is a one-time, loud, self-describing boot failure in exchange
+for an `.env` that is never quietly out of sync with reality.
 
 ### Amendment (issue #817) — the soak's one live surface reports the judging
 

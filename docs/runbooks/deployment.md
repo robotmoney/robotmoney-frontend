@@ -538,6 +538,14 @@ frontend, never committed (`.env` stays gitignored):
   `projects pipelines require PROJECTS_SOURCE=live in prod`) rather than serve
   the vendored fixture directory as production data. Leave unset in smoke/dev
   (offline fixture source); the ephemeral CI env is always hermetic regardless.
+- **`SWARM_SCHEDULES_ENABLED=0`** — not a secret, but **required in prod**: a
+  `--static-port` boot refuses to start unless this is exported as exactly
+  `"0"` (`assertProductionConstants`, `scripts/lib/smoke-schedule.ts`), naming
+  the repo-root `.env` in its refusal message. The host driver
+  (`scripts/lib/swarm/session.ts`), not the backend crons, is production's
+  scheduler, and the shipped crons carry no judge step. See
+  rollout-procedure.md §7 for why this host-side check exists alongside the
+  overlay's own container-level pin of the same variable.
 - Any swarm signing secrets as applicable.
 
 The frontend's only input is `API_BASE_URL` in `config.js` (`""` = same origin on
