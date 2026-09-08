@@ -1641,7 +1641,7 @@ verifying reproducibility. #808 made a divergence genuinely ambiguous on top of
 that: it widened what the digest commits to, so a judgement written before that
 change is EXPECTED to fail a raw comparison against today's formula, and one
 written after it is not. `swarm_session_judgements.digest_scheme` (migration
-0051) is the discriminator — every row is stamped, at write time, with
+0052) is the discriminator — every row is stamped, at write time, with
 `judge.ts`'s `DIGEST_SCHEME` constant — so the replay can tell them apart
 without guessing from a timestamp:
 

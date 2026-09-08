@@ -240,7 +240,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — twenty migrations
+### 2.2 🔴 The database delta — twenty-one migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -891,7 +891,7 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  20 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  21 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
@@ -912,6 +912,7 @@ for this release:
          0049_swarm_recommendations_signing_key.sql
          0050_swarm_member_keys_append_only.sql
          0051_swarm_vault_recommendation_type_repair.sql
+         0052_swarm_judgement_digest_scheme.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql

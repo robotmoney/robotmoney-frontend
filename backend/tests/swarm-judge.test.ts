@@ -1084,7 +1084,7 @@ test("the replay CLI names the non-reproducible vector, prints the D42 list, and
 // compared. Same "paired assertion, plus the discriminator" discipline as
 // 9b's weight checks: a healthy row the replay must leave alone, a real
 // defect it must name, AND a row whose divergence is expected history rather
-// than a fault (D44, migration 0051's `digest_scheme`).
+// than a fault (D44, migration 0052's `digest_scheme`).
 
 test("the replay COMPARES the stored inputs_digest rather than printing it bare — reproduced, then a real mismatch after an amendment", async () => {
   const { session, members } = await aggregatedSession("digest-repro", 3);

@@ -3415,7 +3415,7 @@ itself has not been executed.
 ## D44 — `digest_scheme`: a recorded marker, not a cutover date, discriminates which canonical form wrote an `inputs_digest` (issue #829, third instance of the shape #766 fixed)
 
 **Decision.** `swarm_session_judgements` gains a `digest_scheme` column
-(migration 0051), written on every insert with `judge.ts`'s new `DIGEST_SCHEME`
+(migration 0052), written on every insert with `judge.ts`'s new `DIGEST_SCHEME`
 constant. `swarm-judge-replay` (`judge-replay.ts`) uses it, not a hardcoded
 merge-commit timestamp, to decide whether a recomputed `inputs_digest` that
 fails to match the stored value is a real finding or expected history: a row

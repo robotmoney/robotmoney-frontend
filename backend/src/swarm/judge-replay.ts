@@ -56,7 +56,7 @@ import { getJudgeConfig, judgeInputFromFrozen, latestJudgement } from "./judge-s
 //      digest commits to, which made a divergence EXPECTED for any row
 //      written before that change and unremarkable for one written after —
 //      and the tool could not tell an operator which they were looking at.
-//      `digest_scheme` (migration 0051) is the discriminator: a row stamped
+//      `digest_scheme` (migration 0052) is the discriminator: a row stamped
 //      with the scheme this code implements NOW that fails to reproduce is a
 //      real finding (`mismatch`, fails the run); a row stamped with anything
 //      else is expected history (`historical_divergence`, reports and exits

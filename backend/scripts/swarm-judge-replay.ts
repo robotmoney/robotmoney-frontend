@@ -43,7 +43,7 @@
 //   `swarm_session_judgements.inputs_digest`, rather than printing the
 //   recomputed value bare — the third instance of the #766 shape, and the
 //   worst of the three: a printed digest column reads as a check that ran even
-//   when nothing was ever compared. `digest_scheme` (migration 0051, D44)
+//   when nothing was ever compared. `digest_scheme` (migration 0052, D44)
 //   discriminates the two ways a divergence happens: a row stamped with the
 //   scheme this code implements NOW that still fails to reproduce is a real
 //   finding (`DIGEST-MISMATCH`, fails the run); a row stamped with an older
