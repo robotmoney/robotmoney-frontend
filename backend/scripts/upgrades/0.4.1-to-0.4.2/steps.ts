@@ -2,14 +2,14 @@ import { APP_CODE, RESTORE_CODE, postflightCode, preflightCode } from "../../lib
 import type { RolloutStep } from "../../lib/rollout-manifest.ts";
 import { TAG_GLOB } from "./release.ts";
 
-const DIR = "0.4.0-to-0.4.1";
+const DIR = "0.4.1-to-0.4.2";
 export { TAG_GLOB };
 
 export const STEPS: RolloutStep[] = [
   {
     id: "P2.rc-tag", phase: "P2 release identity", section: "§1", title: "an RC tag points at HEAD",
     hostRole: "any", actor: "operator", requires: [], dependsOn: [], derived: true,
-    verify: "git tag --points-at HEAD -l 'v0.4.1-rc.*'",
+    verify: "git tag --points-at HEAD -l 'v0.4.2-rc.*'",
   },
   {
     id: "P3.backup", phase: "P3 backup", section: "§3", title: "encrypted replica dump captured",
@@ -18,18 +18,18 @@ export const STEPS: RolloutStep[] = [
     verify: "bun run smoke:capture",
   },
   {
-    id: "P3.gate-c", phase: "P3 backup", section: "§3", title: "dump restores and matches the v0.4.0 schema",
+    id: "P3.gate-c", phase: "P3 backup", section: "§3", title: "dump restores and matches the v0.4.1 schema",
     hostRole: "stage", actor: "script", requires: ["P3.backup"],
     dependsOn: [...preflightCode(DIR), ...RESTORE_CODE, `backend/scripts/upgrades/${DIR}/restore-check.ts`], ttlHours: 48,
     verify: `bun backend/scripts/upgrades/${DIR}/restore-check.ts $RM_BACKUP_DIR --emit-receipt`,
   },
   {
-    id: "P4.preflight-live", phase: "P4 preflight", section: "§4", title: "live v0.4.0 database is safe for a code-only rollout",
+    id: "P4.preflight-live", phase: "P4 preflight", section: "§4", title: "live v0.4.1 database is safe to migrate",
     hostRole: "stage", actor: "script", requires: ["P3.gate-c"], dependsOn: preflightCode(DIR), ttlHours: 2,
     verify: `bun backend/scripts/upgrades/${DIR}/preflight.ts --emit-receipt`,
   },
   {
-    id: "P5.rehearsal", phase: "P5 rehearsal", section: "§5", title: "RC boots and postflight passes on the smoke-twin",
+    id: "P5.rehearsal", phase: "P5 rehearsal", section: "§5", title: "RC migrates and postflight passes on the smoke-twin",
     hostRole: "stage", actor: "script", requires: ["P3.gate-c"], dependsOn: [...APP_CODE, `backend/scripts/upgrades/${DIR}/stage-rehearsal.ts`], ttlHours: 48,
     verify: `bun backend/scripts/upgrades/${DIR}/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt`,
   },
