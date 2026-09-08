@@ -480,12 +480,13 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
           ? String(rawSessionId).slice(0, 100)
           : "";
         const force = b.force === true;
+        const jobPayload = force ? { ...payload, force: true } : payload;
         const dedupeKey = sessionId && !force && queueAction === "judge"
           ? `swarm:${sessionId}:judge`
           : null;
         const rows = await sql`
           INSERT INTO jobs (kind, payload, dedupe_key)
-          VALUES (${kind}, ${sql.json(jsonValue(payload))}, ${dedupeKey})
+          VALUES (${kind}, ${sql.json(jsonValue(jobPayload))}, ${dedupeKey})
           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
           RETURNING id, kind`;
         if (rows[0]) return { status: 200, body: { jobId: rows[0].id, kind: rows[0].kind, deduped: false } };

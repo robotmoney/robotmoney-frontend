@@ -2888,3 +2888,67 @@ test("#918 an unseeded environment degrades safely: judged_by stays 'robotmoney-
   expect(adminUnseeded.inForce.judgedBy).toBe("robotmoney-in-house");
   expect(adminUnseeded.inForce.judgedByMemberId).toBeNull();
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issue #928 — judgeSession() retry against an already-judged session returns
+// the existing judgement without invoking the model again or inserting a duplicate row.
+
+test("#928 judgeSession retry against an already-judged session returns existing judgement without calling model again or duplicating row", async () => {
+  const { session, members } = await aggregatedSession("judge-928-retry");
+  await setJudgeConfig({ mode: "enforce" });
+
+  let modelCalls = 0;
+  const countingTransport: JudgeTransport = {
+    model: "test/judge-counting",
+    complete: async () => {
+      modelCalls++;
+      return goodAnswer(members[0]!.id, members[1]!.id);
+    },
+  };
+
+  // First invocation judges the session and moves it to 'judged' state.
+  const first = await judgeSession(session.id, {
+    transport: countingTransport,
+    beforeRecord: async (tx) => {
+      await tx`UPDATE swarm_sessions SET state = 'judged' WHERE id = ${session.id}`;
+      return { ok: true, status: 200 };
+    },
+  });
+  expect(first.ok).toBe(true);
+  expect(modelCalls).toBe(1);
+  const rowsAfterFirst = await judgementRows(session.id);
+  expect(rowsAfterFirst.length).toBe(1);
+  const firstJudgementId = first.judgementId;
+
+  // Second invocation (retry/re-dequeue with same judge/party):
+  // Should detect that the session is already judged, return existing judgement,
+  // NOT call the model again, and NOT insert a second row in swarm_session_judgements.
+  const second = await judgeSession(session.id, {
+    transport: countingTransport,
+  });
+
+  expect(second.ok).toBe(true);
+  expect(second.judgementId).toBe(firstJudgementId);
+  expect(modelCalls, "model was not called on retry").toBe(1);
+  const rowsAfterSecond = await judgementRows(session.id);
+  expect(rowsAfterSecond.length, "no duplicate row inserted").toBe(1);
+  expect(second.outcome?.opinion.rationale).toBe(first.outcome?.opinion.rationale);
+});
+
+test("#928 judgeSessionAdmin retry against an already-judged session is idempotent", async () => {
+  const { session, members } = await aggregatedSession("judge-928-admin-retry");
+  await setJudgeConfig({ mode: "enforce" });
+
+  const first = await admin.judgeSessionAdmin(session.id, undefined) as any;
+  expect(first.ok).toBe(true);
+  const rowsAfterFirst = await judgementRows(session.id);
+  expect(rowsAfterFirst.length).toBe(1);
+
+  // Calling judgeSessionAdmin again on the already-judged session
+  const second = await admin.judgeSessionAdmin(session.id, undefined) as any;
+  expect(second.ok).toBe(true);
+  expect(second.judge.judgementId).toBe(first.judge.judgementId);
+  const rowsAfterSecond = await judgementRows(session.id);
+  expect(rowsAfterSecond.length, "no duplicate judgement row inserted on admin retry").toBe(1);
+});
+

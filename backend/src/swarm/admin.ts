@@ -1205,7 +1205,12 @@ export async function aggregateSessionAdmin(sessionId: string, expectedVersion: 
 //
 // A judge that falls back to template prose is still a successful judging — see
 // swarm/judge.ts on why failure is an outcome here rather than an error.
-export async function judgeSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
+export async function judgeSessionAdmin(
+  sessionId: string,
+  expectedVersion: number | undefined,
+  actor: Actor = ADMIN_ACTOR,
+  opts: { force?: boolean } = {},
+) {
   const config = await getJudgeConfig();
   if (config.mode === "off") return err(409, "judge_disabled");
   const pre = await preflightTransition(sessionId, "judged", expectedVersion);
@@ -1230,6 +1235,7 @@ export async function judgeSessionAdmin(sessionId: string, expectedVersion: numb
   const result = await judgeSession(sessionId, {
     config,
     judgeMemberId,
+    force: opts.force,
     // Runs inside the judge's transaction, after its advisory lock and before
     // the judgement row is written. A refusal here rolls the whole thing back.
     beforeRecord: async (tx) => {
