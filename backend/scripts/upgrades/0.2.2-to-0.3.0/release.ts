@@ -39,6 +39,14 @@
  * rather than one this release creates fresh. `CREATE TRIGGER` is
  * catalog-only DDL — it reads and rewrites no row — so this is still a lock,
  * never a write.
+ *
+ * `0051` (issue #780) is a plain `UPDATE` on `swarm_subjects` — the same shape
+ * as `0047`'s backfill on `swarm_sessions` — repairing the two subjects
+ * (`robotmoney-vault`, `robotmoney-allocation`) that
+ * `ensureSmokeSubjectFixtures`'s pre-fix upsert clobbered to
+ * `recommendation_type = 'position_actions'`. `rm_append_only_guard()` fires
+ * BEFORE DELETE OR TRUNCATE only, so an UPDATE on an already-protected table
+ * cannot trip it.
  */
 export const THIS_RELEASE_MIGRATIONS = [
   "0032_wallet_balance_samples_strategy_nav_idle_only.sql",
@@ -60,6 +68,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0048_swarm_judge_third_party_flag.sql",
   "0049_swarm_recommendations_signing_key.sql",
   "0050_swarm_member_keys_append_only.sql",
+  "0051_swarm_vault_recommendation_type_repair.sql",
 ] as const;
 
 /**
@@ -203,6 +212,11 @@ export const MIGRATION_TOUCHED_TABLES = [
   // roster when the migration runs, so the guard cannot fire on either.
   "swarm_recommendations",
   "swarm_member_keys",
+  // 0051 (issue #780): UPDATEs the two rows ensureSmokeSubjectFixtures's
+  // pre-fix upsert clobbered. Already append-only protected (0032); the same
+  // "locked, not written" shape as swarm_sessions above — the guard only
+  // fires on DELETE/TRUNCATE, so an UPDATE cannot trip it.
+  "swarm_subjects",
 ] as const;
 
 /**

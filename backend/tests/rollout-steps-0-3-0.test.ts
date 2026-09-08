@@ -186,13 +186,13 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // tripwire on the roster's terminal entry, so that growing the release is a
   // deliberate act somebody had to write down here as well as in release.ts —
   // NOT a lever for shrinking scope. 0042 joined via #754, 0043 via #835, 0044
-  // via #761, 0045 via #760, 0046 via #849, 0047 via #779, 0048 via #796, and
-  // 0049/0050 via #697: in each case the drift guard below named the landed
-  // file as undeclared, and the fix was to DECLARE it (never to raise the
-  // numeric floor).
+  // via #761, 0045 via #760, 0046 via #849, 0047 via #779, 0048 via #796,
+  // 0049/0050 via #697, and 0051 via #780: in each case the drift guard below
+  // named the landed file as undeclared, and the fix was to DECLARE it (never
+  // to raise the numeric floor).
   test("the release inventory includes the earliest-valid-block floor migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(19);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0050_swarm_member_keys_append_only.sql");
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(20);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0051_swarm_vault_recommendation_type_repair.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");
@@ -235,6 +235,9 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     // rather than one this release creates fresh.
     expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_member_keys");
     expect(APPEND_ONLY_TABLES).toContain("swarm_member_keys");
+    // 0051 (issue #780): repairs the two subjects ensureSmokeSubjectFixtures's
+    // pre-fix upsert clobbered to recommendation_type = 'position_actions'.
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_subjects");
   });
 
   // ───────────────────────────────────────────────────────────────────────────

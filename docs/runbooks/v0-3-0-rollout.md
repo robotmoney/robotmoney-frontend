@@ -240,7 +240,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — eighteen migrations
+### 2.2 🔴 The database delta — twenty migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -269,6 +269,7 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0048_swarm_judge_third_party_flag.sql` | `ALTER TABLE swarm_judge_config ADD COLUMN third_party_enabled boolean NOT NULL DEFAULT false;` + a `COMMENT` — the admin-flippable, no-redeploy gate for third-party (graduated-member) judging, layered onto the `mode`/`min_takes`/`model` row `0039` seeds (issue #796) | Additive column with a constant default, catalog-only on PG 11+; no historical row is rewritten |
 | `0049_swarm_recommendations_signing_key.sql` | `ALTER TABLE swarm_recommendations ADD COLUMN signing_key_id bigint REFERENCES swarm_member_keys(id) ON DELETE SET NULL` — records the exact key row that verified a take at submission time, so a read path can resolve the SIGNING key rather than the member's currently-active one (issue #697) | Additive, nullable, **no default, no backfill — a documented cutover point** |
 | `0050_swarm_member_keys_append_only.sql` | Install the statement- and row-level `rm_append_only_guard()` triggers on `swarm_member_keys` (issue #697) | Triggers on a table this release did **not** create — see §2.2.1 |
+| `0051_swarm_vault_recommendation_type_repair.sql` | `UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id IN ('robotmoney-vault', 'robotmoney-allocation') AND recommendation_type = 'position_actions'` — repairs the two subjects `ensureSmokeSubjectFixtures`'s pre-fix upsert clobbered on every smoke session start (issue #780) | **No DDL — a pure, idempotent data write, restricted to two known-affected rows** |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable
@@ -889,7 +890,7 @@ pass. The harness, receipt format and verdict wording are
 for this release:
 
 ```
-[WARN] schema-migrations  18 migration(s) will be applied on the next boot:
+[WARN] schema-migrations  20 migration(s) will be applied on the next boot:
          0032_wallet_balance_samples_strategy_nav_idle_only.sql
          0033_wallet_backfill.sql
          0034_job_schedules_catchup_policy.sql
@@ -909,6 +910,7 @@ for this release:
          0048_swarm_judge_third_party_flag.sql
          0049_swarm_recommendations_signing_key.sql
          0050_swarm_member_keys_append_only.sql
+         0051_swarm_vault_recommendation_type_repair.sql
        NOTE: 1 of these sort BEFORE the newest applied file
              (0033_swarm_member_uuid_ids.sql):
          0032_wallet_balance_samples_strategy_nav_idle_only.sql

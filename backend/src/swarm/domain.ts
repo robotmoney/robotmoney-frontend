@@ -1534,9 +1534,9 @@ export async function ensureSmokeSubjectFixtures(subjectId: string, name: string
   await sql`INSERT INTO swarm_subjects (id, status, name, thesis_blurb, recommendation_type)
             VALUES (${subjectId}, 'active', ${name}, ${thesis}, ${recommendationType})
             ON CONFLICT (id) DO UPDATE SET
-              name = EXCLUDED.name,
+              name = COALESCE(swarm_subjects.name, EXCLUDED.name),
               thesis_blurb = COALESCE(swarm_subjects.thesis_blurb, EXCLUDED.thesis_blurb),
-              recommendation_type = EXCLUDED.recommendation_type`;
+              recommendation_type = COALESCE(swarm_subjects.recommendation_type, EXCLUDED.recommendation_type)`;
 
   const basket = subjectBasket(subjectId);
   await sql`INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)
