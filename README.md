@@ -157,14 +157,19 @@ a pasted panel works unedited:
 # either this…
 DATABASE_URL=postgres://user:password@host:25060/defaultdb?sslmode=require
 
-# …or exactly what DigitalOcean's "Connection details" panel gives you
-username = doadmin
+# …or the panel's details after selecting the scoped rm_app user
+username = rm_app
 password = …
 host     = private-dbaas-….g.db.ondigitalocean.com
 port     = 25060
 database = defaultdb
 sslmode  = require
 ```
+
+Use a scoped runtime role here, never `doadmin`. `doadmin` is a break-glass
+bootstrap identity and must not live on an application host. Migrations use a
+separate, short-lived `MIGRATE_DATABASE_URL` connection that assumes the
+non-login `rm_owner` role; see the deployment runbook.
 
 The **switch** stays a CLI argument (same hard rule as `--pg-data` and
 `--static-port`): pointing a smoke at a persistent database is a property of one

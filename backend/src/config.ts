@@ -696,6 +696,10 @@ const RM_ENV = process.env.RM_ENV ?? "prod";
 if (!(VALID_ENVS as readonly string[]).includes(RM_ENV)) {
   throw new Error(`invalid RM_ENV "${RM_ENV}" — expected one of ${VALID_ENVS.join(" | ")}`);
 }
+const databaseUrl = required("DATABASE_URL");
+if (RM_ENV === "prod" && new URL(databaseUrl).username === "doadmin") {
+  throw new Error("DATABASE_URL must use the rm_app runtime role in production, never doadmin");
+}
 
 export const config = {
   env: RM_ENV as (typeof VALID_ENVS)[number],
@@ -704,7 +708,7 @@ export const config = {
   allowInsecure: process.env.RM_ALLOW_INSECURE === "1" || RM_ENV === "ephemeral",
   // Trust X-Forwarded-For for client-ip (rate limiting) only behind a known proxy.
   trustProxy: process.env.TRUST_PROXY === "1",
-  databaseUrl: required("DATABASE_URL"),
+  databaseUrl,
   apiPort: Number(process.env.API_PORT ?? 8787),
   // If set, the API process also serves this static directory (the built
   // frontend) — a single-box deployment with no reverse proxy.

@@ -17,6 +17,10 @@ import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { config } from "../config.ts";
 
+if (config.env === "prod" && !process.env.WORKER_DATABASE_URL) {
+  throw new Error("missing required env var: WORKER_DATABASE_URL (production workers must use rm_worker)");
+}
+
 // Server-side timeouts, applied as startup parameters so EVERY statement and
 // transaction on this pool inherits them. The worker drains its lane serially
 // in one process, so an unbounded statement (a hung bulk upsert, a lock wait)

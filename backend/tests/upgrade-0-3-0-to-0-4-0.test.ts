@@ -15,6 +15,8 @@ describe("v0.3.0 to v0.4.0 upgrade checks", () => {
       "0042_swarm_consensus_receipts.sql",
       "0043_swarm_member_judges.sql",
       "0044_wallet_backfill_leg_terminal.sql",
+      "0053_database_role_taxonomy.sql",
+      "0054_rm_worker_allowlist.sql",
     ]);
     for (const migration of THIS_RELEASE_MIGRATIONS) {
       expect(existsSync(join(root, "backend/migrations", migration))).toBe(true);

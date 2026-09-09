@@ -7,6 +7,8 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0042_swarm_consensus_receipts.sql",
   "0043_swarm_member_judges.sql",
   "0044_wallet_backfill_leg_terminal.sql",
+  "0053_database_role_taxonomy.sql",
+  "0054_rm_worker_allowlist.sql",
 ] as const;
 export const PRIOR_RELEASE_MIGRATIONS = [
   "0032_append_only_history.sql",

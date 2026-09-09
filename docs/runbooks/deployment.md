@@ -488,9 +488,25 @@ custom-domain certificate, provisioned via `DO_API_TOKEN` — no key to store.)
 
 From the cluster's **Connection Details**: host, port (`25060`), database, user,
 password, `sslmode=require`, and the **CA certificate** (download). Assemble into
-**`DATABASE_URL`**; ship the CA as **`DO_DB_CA_CERT`** if your client needs the
-file. For the HA cluster, prefer the **connection-pool** URI (PgBouncer) if
-enabled. Migrations (D9) run with this credential.
+**`DATABASE_URL`** for `rm_app`; ship the CA as **`DO_DB_CA_CERT`** if your
+client needs the file. `doadmin` is break-glass only and never belongs on a
+persistent host. Set `WORKER_DATABASE_URL` to `rm_worker`. For a one-shot
+deployment migration, supply `MIGRATE_DATABASE_URL` only to that command; its
+login must be allowed to `SET ROLE rm_owner`, the non-login owner of tables and
+functions. For the HA cluster, prefer the **connection-pool** URI (PgBouncer)
+if enabled.
+
+### 4.3.1 Role-taxonomy cutover (human-run)
+
+The first cutover is deliberately not automated against production. A reviewed
+operator invokes `scripts/ops/provision-db-role-taxonomy.sh` with a
+password-free bootstrap URL; `psql` prompts interactively and the helper never
+stores, prints, logs, or accepts credentials as command-line arguments. It
+creates/repairs `rm_owner`, `rm_app`, `rm_worker`, and `rm_readonly`, then
+prompts for each runtime password. Run the normal migration command once with
+the short-lived migration credential, verify the role probes, then install only
+the `rm_app` and `rm_worker` URLs on the host. Keep the bootstrap credential in
+the DO dashboard or an operator vault.
 
 ### 4.4 Droplet access — pick a deploy mechanism
 
