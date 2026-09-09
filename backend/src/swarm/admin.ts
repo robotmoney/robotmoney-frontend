@@ -26,7 +26,7 @@ import { deriveMemberHandle } from "./handle.ts";
 // Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
 // an env var, because the swarm is live and an operator must be able to take
 // the judge off published sessions without restarting anything.
-import { getJudgeConfig, judgeSession, latestJudgement, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
+import { getJudgeConfig, judgeSession, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt } from "./consensus-receipt.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
@@ -1422,34 +1422,36 @@ function toJudgementAdmin(
 }
 
 export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): Promise<AdminResult> {
-  const session = (await sql`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { id: string; state: string }
-    | undefined;
-  if (!session) return err(404, "session not found");
-  const rows = await listJudgements(sessionId, limit);
-  // `latestJudgement()` and nothing else decides which opinion is IN FORCE —
-  // its ORDER BY id (not created_at) is the only ordering that agrees with the
-  // order the session was actually written in, and re-deriving that here would
-  // be a second copy of a rule that has already been got wrong once.
-  const latest = await latestJudgement(sessionId);
-  // …but "newest row" is not "what the session carries" (issue #806). The
-  // append-only record and the session are two different stores, and the
-  // sanctioned `judged -> window_closed -> aggregated` re-run rewrites the
-  // second without touching the first. Read the session's own fingerprint once
-  // and reconcile every row against it, so `inForce` can report SUPERSEDED
-  // rather than "applied to the session" for prose the session no longer has.
-  const carried = await sessionJudgeFingerprint(sql, sessionId);
-  return {
-    ok: true,
-    status: 200,
-    sessionId,
-    state: session.state,
-    // What the session itself carries, so an operator can see the two stores
-    // side by side rather than inferring the disagreement from a boolean.
-    sessionJudge: carried,
-    inForce: latest ? toJudgementAdmin(latest as Record<string, unknown>, carried) : null,
-    judgements: rows.map((r) => toJudgementAdmin(r, carried)),
-  };
+  return sql.begin(async (tx) => {
+    const session = (await tx`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+      | { id: string; state: string }
+      | undefined;
+    if (!session) return err(404, "session not found");
+    const rows = await listJudgements(sessionId, limit, tx);
+    // `listJudgements(sessionId, limit)` already returns the newest rows sorted
+    // by `id DESC` (the only ordering that agrees with the order the session was
+    // actually written in), so `latest` is simply `rows[0] ?? null` rather than
+    // a separate query.
+    const latest = rows[0] ?? null;
+    // …but "newest row" is not "what the session carries" (issue #806). The
+    // append-only record and the session are two different stores, and the
+    // sanctioned `judged -> window_closed -> aggregated` re-run rewrites the
+    // second without touching the first. Read the session's own fingerprint once
+    // and reconcile every row against it, so `inForce` can report SUPERSEDED
+    // rather than "applied to the session" for prose the session no longer has.
+    const carried = await sessionJudgeFingerprint(tx, sessionId);
+    return {
+      ok: true,
+      status: 200,
+      sessionId,
+      state: session.state,
+      // What the session itself carries, so an operator can see the two stores
+      // side by side rather than inferring the disagreement from a boolean.
+      sessionJudge: carried,
+      inForce: latest ? toJudgementAdmin(latest as Record<string, unknown>, carried) : null,
+      judgements: rows.map((r) => toJudgementAdmin(r, carried)),
+    };
+  });
 }
 
 // Publish the consensus receipt for a judged session (issue #754).
