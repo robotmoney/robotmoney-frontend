@@ -181,6 +181,8 @@ export interface JudgeSessionResult {
 export interface JudgeSessionOptions extends JudgeOptions {
   /** Existing member acting as judge. Omit only for the built-in worker. */
   judgeMemberId?: string;
+  /** Explicit forced re-judging (e.g. manual lever in #806). Bypasses already-judged retry short-circuit. */
+  force?: boolean;
   /**
    * The mode/threshold/model, read ONCE by the caller and passed down. Without
    * this the config is read twice — by the caller's gate and again here — and
@@ -223,10 +225,61 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
   if (config.mode === "off") {
     return { ok: false, status: 409, error: "judge_disabled", sessionId, mode: config.mode };
   }
+
+  // Idempotent retry on an already-judged session (issue #928).
+  // When a retry or re-dequeue occurs (e.g. worker restart after commit or admin retry),
+  // return the existing judgement without calling the model again or inserting a duplicate row.
+  // We check before the model call: if the session is already in 'judged' state, has a judgement
+  // recorded by the same judging party, AND the mode matches the current config mode, return it.
+  // A differing mode (e.g. enforce -> shadow) or opts.force indicates an intentional re-judging.
+  const checkParty = async () => {
+    if (opts.force) return null;
+    const sessionRow = (await sql<{ state: string }[]>`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+    if (sessionRow?.state === "judged") {
+      const existingJudgement = await latestJudgement(sessionId);
+      if (existingJudgement && existingJudgement.mode === config.mode) {
+        const expectedJudgedBy = judgeMemberId ?? "robotmoney-in-house";
+        const partyMatches = existingJudgement.judged_by === expectedJudgedBy ||
+          (judgeMemberId != null && existingJudgement.judged_by_member_id === judgeMemberId);
+        if (partyMatches) {
+          return existingJudgement;
+        }
+      }
+    }
+    return null;
+  };
+
+  const existingBefore = await checkParty();
+  if (existingBefore) {
+    return {
+      ok: true,
+      status: 200,
+      sessionId,
+      mode: existingBefore.mode as JudgeMode,
+      judgementId: String(existingBefore.id),
+      applied: existingBefore.applied === true,
+      ...(existingBefore.applied_skipped_reason ? { appliedSkippedReason: String(existingBefore.applied_skipped_reason) } : {}),
+      outcome: {
+        opinion: existingBefore.opinion as any,
+        source: existingBefore.source as any,
+        ...(existingBefore.fallback_reason ? { fallbackReason: String(existingBefore.fallback_reason) } : {}),
+        model: (existingBefore.model as string | null) ?? null,
+        promptHash: String(existingBefore.prompt_hash),
+        inputsDigest: String(existingBefore.inputs_digest),
+        takeCount: Number(existingBefore.take_count),
+        minTakes: Number(existingBefore.min_takes),
+        drops: {
+          positions: Number(existingBefore.dropped_positions ?? 0),
+          disagreements: Number(existingBefore.dropped_disagreements ?? 0),
+        },
+      },
+    };
+  }
+
   const input = await buildJudgeInput(sessionId, config.minTakes);
   if (!input) return { ok: false, status: 404, error: "session not found", sessionId, mode: config.mode };
 
-  const outcome = await judge(input, { model: config.model, ...judgeOpts });
+  let outcome = await judge(input, { model: config.model, ...judgeOpts });
 
   let refusal: { ok: boolean; status: number; error?: string } | undefined;
   let recorded: { id: string | number; applied: boolean; skipped?: string } | undefined;
@@ -236,6 +289,44 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     // `_xact_` form releases at COMMIT/ROLLBACK, so a crashed judge cannot leave
     // a session locked.
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))`;
+
+    // Re-check inside the lock in case a concurrent judge committed while the model was thinking
+    const sessionInLock = (await tx<{ state: string }[]>`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+    if (!opts.force && sessionInLock?.state === "judged") {
+      const existingInLock = (await tx`
+        SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
+               take_count, min_takes, applied, applied_skipped_reason,
+               dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at
+        FROM swarm_session_judgements WHERE session_id = ${sessionId}
+        ORDER BY id DESC LIMIT 1`)[0] as Record<string, unknown> | undefined;
+      if (existingInLock && existingInLock.mode === config.mode) {
+        const expectedJudgedBy = judgeMemberId ?? "robotmoney-in-house";
+        const partyMatches = existingInLock.judged_by === expectedJudgedBy ||
+          (judgeMemberId != null && existingInLock.judged_by_member_id === judgeMemberId);
+        if (partyMatches) {
+          outcome = {
+            opinion: existingInLock.opinion as any,
+            source: existingInLock.source as any,
+            ...(existingInLock.fallback_reason ? { fallbackReason: String(existingInLock.fallback_reason) } : {}),
+            model: (existingInLock.model as string | null) ?? null,
+            promptHash: String(existingInLock.prompt_hash),
+            inputsDigest: String(existingInLock.inputs_digest),
+            takeCount: Number(existingInLock.take_count),
+            minTakes: Number(existingInLock.min_takes),
+            drops: {
+              positions: Number(existingInLock.dropped_positions ?? 0),
+              disagreements: Number(existingInLock.dropped_disagreements ?? 0),
+            },
+          };
+          recorded = {
+            id: existingInLock.id as string | number,
+            applied: existingInLock.applied === true,
+            ...(existingInLock.applied_skipped_reason ? { skipped: String(existingInLock.applied_skipped_reason) } : {}),
+          };
+          return;
+        }
+      }
+    }
     if (judgeMemberId) {
       // Read inside the write transaction: an admin revocation that committed
       // while the model was thinking is observed before any judgement row can
