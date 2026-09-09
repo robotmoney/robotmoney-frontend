@@ -229,14 +229,15 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
   // Idempotent retry on an already-judged session (issue #928).
   // When a retry or re-dequeue occurs (e.g. worker restart after commit or admin retry),
   // return the existing judgement without calling the model again or inserting a duplicate row.
-  // We check before the model call: if the session is already in 'judged' state and has a judgement
-  // recorded by the same judging party, return it.
+  // We check before the model call: if the session is already in 'judged' state, has a judgement
+  // recorded by the same judging party, AND the mode matches the current config mode, return it.
+  // A differing mode (e.g. enforce -> shadow) or opts.force indicates an intentional re-judging.
   const checkParty = async () => {
     if (opts.force) return null;
     const sessionRow = (await sql<{ state: string }[]>`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0];
     if (sessionRow?.state === "judged") {
       const existingJudgement = await latestJudgement(sessionId);
-      if (existingJudgement) {
+      if (existingJudgement && existingJudgement.mode === config.mode) {
         const expectedJudgedBy = judgeMemberId ?? "robotmoney-in-house";
         const partyMatches = existingJudgement.judged_by === expectedJudgedBy ||
           (judgeMemberId != null && existingJudgement.judged_by_member_id === judgeMemberId);
@@ -298,7 +299,7 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
                dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at
         FROM swarm_session_judgements WHERE session_id = ${sessionId}
         ORDER BY id DESC LIMIT 1`)[0] as Record<string, unknown> | undefined;
-      if (existingInLock) {
+      if (existingInLock && existingInLock.mode === config.mode) {
         const expectedJudgedBy = judgeMemberId ?? "robotmoney-in-house";
         const partyMatches = existingInLock.judged_by === expectedJudgedBy ||
           (judgeMemberId != null && existingInLock.judged_by_member_id === judgeMemberId);
