@@ -145,6 +145,11 @@
              invisible. x-if removes the section entirely when the gated
              list is empty, matching "hidden" to what a reader (and a test)
              can actually find on the page. -->
+        <!-- Gated on having a panel to hold. The grid carries a 2rem bottom
+             margin, so on a subject with neither wallets nor NFT contracts it
+             was an empty container reserving space above whatever came next —
+             the same x-show trap as the panels inside it, one level up. -->
+        <template x-if="trackedWallets().length || nftContracts().length">
         <div class="sv__rail-grid sv__rail-grid--compact">
           <template x-if="trackedWallets().length">
             <section class="sv__panel">
@@ -172,6 +177,7 @@
             </section>
           </template>
         </div>
+        </template>
 
         <!-- The operator's brief TO THE SWARM: how to review this subject,
              what not to default to, which sibling subject owns the holdings
@@ -325,11 +331,14 @@
                   <a class="sv__session-title" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
                 </div>
 
-                <div class="sv__spread" role="img" :aria-label="`Stances: ${spreadLabel(s)}`" x-show="stanceSpread(s).length">
-                  <template x-for="r in stanceSpread(s)" :key="r.stance">
-                    <i :style="`flex:${r.n};background:${stanceColor(r.stance)}`"></i>
-                  </template>
-                </div>
+                <!-- No stance spread bar. /swarm keeps one because its list
+                     interleaves every subject and the bar is how a reader
+                     scans a column of unlike rows. Here the row IS the
+                     decision, and a second full-width proportion bar directly
+                     above the target ring read as the card's headline while
+                     saying something the Consensus badge below already says in
+                     a word. The tally still feeds that badge, the quorum and
+                     the mean confidence. -->
 
                 <div class="sv__session-body">
                   <!-- The kicker is gated on there being a consensus to put
@@ -354,24 +363,23 @@
                     <template x-if="recommendation(s)">
                       <dl class="sv__rec">
                         <dt>Recommendation</dt>
-                        <!-- The mix, drawn. Four numbers on a line ("95 / 3 /
-                             0 / 2") make the reader map each one back onto a
-                             sleeve name they are holding in their head, and
-                             the relationship between them — the whole point of
-                             a target mix — is not visible at all. One 100%
-                             band, a segment per sleeve, in the colours
-                             /allocation's donut uses. A sleeve at zero keeps
-                             its legend row and draws no segment: it is a real
-                             decision, not a missing one. -->
+                        <!-- The mix, drawn. Four numbers on a line ("95 / 3 / 0 / 2") make
+                             the reader map each one back onto a sleeve name they are
+                             holding in their head, and the relationship between them —
+                             the whole point of a target mix — is not visible at all.
+                             A ring reads as parts of one whole at a glance.
+
+                             pathLength="100" makes an arc's length its percentage, so the
+                             geometry never drifts out of step with the radius. rotate(-90)
+                             starts the ring at twelve o'clock instead of three. A sleeve at
+                             0% draws no arc and keeps its legend row: 0% is a decision, and
+                             a minimum-length arc would be a lie. -->
                         <template x-if="recommendation(s).kind === 'weights'">
                           <div>
-                            <dd>
-                              <div class="sv__wbar" role="img" :aria-label="`Target weights: ${sessionWeightsLabel(s)}`">
-                                <template x-for="w in recommendation(s).rows" :key="w.key">
-                                  <i data-mark="series" x-show="w.pct > 0"
-                                     :style="`flex:${w.pct};background:${w.colour}`"></i>
-                                </template>
-                              </div>
+                            <dd class="sv__wmix">
+                              <span class="sv__wdonut-host" role="img"
+                                :aria-label="`Target weights: ${sessionWeightsLabel(s)}`"
+                                x-html="weightDonutSvg(s)"></span>
                               <ul class="sv__wkeys">
                                 <template x-for="w in recommendation(s).rows" :key="w.key">
                                   <li :class="w.pct > 0 ? '' : 'is-zero'">

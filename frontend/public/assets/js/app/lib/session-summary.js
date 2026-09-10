@@ -166,6 +166,58 @@ export const sessionSummary = {
       .filter((r) => Number.isFinite(r.pct));
     return rows.length ? rows : null;
   },
+  // The mix as donut arcs. Drawn on a circle carrying pathLength="100", so an
+  // arc's length IS its percentage: no circumference, no radius in the
+  // arithmetic, and the geometry cannot drift out of step with the SVG's own
+  // dimensions the way a 2*PI*r computation does the moment someone retunes
+  // the radius.
+  //
+  // A sleeve at 0% draws nothing at all. It keeps its row in the legend, where
+  // "0%" is a decision a reader can read; a zero-length arc on a ring is just
+  // an absence, and a minimum-length one would be a lie.
+  /** @param {any} s */
+  weightArcs(s) {
+    const rows = this.sessionWeights(s);
+    if (!rows) return [];
+    const drawn = rows.filter((r) => Number(r.pct) > 0);
+    // Surface between neighbouring arcs, in the same 100-unit space. Taken out
+    // of the arc rather than added to the sweep, so the ring still closes and
+    // a 2% sliver stays its own object instead of bleeding into 95%.
+    const gap = drawn.length > 1 ? 1.2 : 0;
+    let at = 0;
+    return drawn.map((r) => {
+      const len = Number(r.pct);
+      const arc = Math.max(0.8, len - gap);
+      const seg = { key: r.key, label: r.label, colour: r.colour, dash: `${arc} ${100 - arc}`, offset: -at };
+      at += len;
+      return seg;
+    });
+  },
+  // The ring itself, as markup.
+  //
+  // Built here rather than with x-for in the template because a <template>
+  // element inside <svg> is parsed into the SVG namespace, where it is an
+  // unknown element and Alpine's x-for never runs — the ring came out with one
+  // arc. x-html is the idiom this codebase already uses for inline SVG
+  // (portfolioMark on /swarm). Nothing user-supplied is interpolated: the
+  // numbers are computed above and the colours are CATEGORICAL constants. The
+  // readable label is an aria-label on the host element, where it is escaped.
+  /** @param {any} s */
+  weightDonutSvg(s) {
+    const arcs = this.weightArcs(s);
+    if (!arcs.length) return "";
+    const ring = (/** @type {string} */ stroke, /** @type {string} */ extra) =>
+      `<circle cx="21" cy="21" r="15.9155" fill="none" stroke="${stroke}" stroke-width="4"${extra}></circle>`;
+    // The track is drawn first and stays visible wherever the arcs do not
+    // reach, so a framework whose weights do not sum to 100 shows as an
+    // unclosed ring instead of being rescaled to look complete.
+    const track = ring("var(--color-border)", "");
+    const segs = arcs.map((a) =>
+      ring(a.colour, ` pathLength="100" stroke-dasharray="${a.dash}" stroke-dashoffset="${a.offset}" data-mark="series"`),
+    ).join("");
+    return `<svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false">`
+      + `<g transform="rotate(-90 21 21)">${track}${segs}</g></svg>`;
+  },
   /** @param {any} s */
   sessionWeightsLabel(s) {
     const rows = this.sessionWeights(s);

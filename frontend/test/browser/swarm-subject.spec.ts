@@ -162,10 +162,11 @@ test("public subject profile renders holdings, wallets, NFT contracts and the sw
   const first = page.locator(".sv__session-card").first();
 
   // The consensus is DERIVED from the takes here. The static archive stores no
-  // aggregate stances, quorum or mean confidence, so every archived card drew
-  // a blank spread bar and no consensus at all — over stances sitting on the
-  // takes in the same object.
-  await expect(first.locator(".sv__spread > i").first()).toBeVisible();
+  // aggregate stances, quorum or mean confidence, so every archived card had no
+  // consensus at all — over stances sitting on the takes in the same object.
+  // No stance spread bar on this page: it competed with the target ring, which
+  // IS the decision, while saying what the badge below says in a word.
+  await expect(first.locator(".sv__spread")).toHaveCount(0);
   await expect(first.locator(".sv__session-kicker")).toHaveText("Consensus");
   await expect(first.locator(".sv__card-verdict")).toContainText("took part");
   await expect(first.locator(".sv__card-verdict")).toContainText("mean confidence");
@@ -360,8 +361,6 @@ test("a subject's session card carries the consensus and the decision, as /swarm
   await expect(card.locator(".sv__session-title"))
     .toHaveAttribute("href", `/swarm/sessions/${session.id}`);
 
-  // One bar segment per stance that was actually filed.
-  await expect(card.locator(".sv__spread > i")).toHaveCount(2);
   // The consensus, in the same three parts /swarm prints.
   await expect(card.locator(".sv__stance-badge")).toHaveText("constructive");
   await expect(card).toContainText("5 of 7 took part");
@@ -379,15 +378,18 @@ test("a subject's session card carries the consensus and the decision, as /swarm
   // A sleeve at zero keeps its row, marked as held there on purpose...
   await expect(keys.nth(2)).toContainText("Protocol Tokens 0%");
   await expect(keys.nth(2)).toHaveClass(/is-zero/);
-  // ...and draws no band, so the bar never shows a sliver for nothing.
-  await expect(card.locator(".sv__wbar > i:visible")).toHaveCount(2);
+  // ...and draws no arc, so the ring never shows a sliver for nothing. Two
+  // sleeves are funded here, so two arcs sit on the track.
+  const arcs = card.locator(".sv__wdonut circle[pathLength]");
+  await expect(arcs).toHaveCount(2);
+  // An arc's length IS its percentage, because the circle carries
+  // pathLength="100" — the geometry cannot drift out of step with the radius.
+  await expect(arcs.first()).toHaveAttribute("stroke-dasharray", /^93\.8 /);
   // Colour follows the sleeve's published POSITION, so it is the hue this
   // sleeve wears on /allocation's donut and a weight change never repaints the
   // sleeves that did not move.
-  const first = await card.locator(".sv__wbar > i").first()
-    .evaluate((el) => getComputedStyle(el).backgroundColor);
-  expect(first).toBe("rgb(16, 185, 129)"); // CATEGORICAL[0], #10b981
-  await expect(card.locator(".sv__wbar")).toHaveAttribute("aria-label", /Conservative DeFi Yield 95%/);
+  await expect(arcs.first()).toHaveAttribute("stroke", "#10b981"); // CATEGORICAL[0]
+  await expect(card.locator(".sv__wdonut-host")).toHaveAttribute("aria-label", /Conservative DeFi Yield 95%/);
   // The foot /swarm carries: the takes expander and the way through to the
   // session itself.
   const takesBtn = card.locator(".sv__takes-btn");
