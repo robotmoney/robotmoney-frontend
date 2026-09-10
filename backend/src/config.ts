@@ -399,6 +399,16 @@ export function warnIfStrategyVaultsUnconfigured(
 export const SP500_SIZE = 0.6330; // contracts held; owner-stated, last set 2026-03
 export const SP500_TICKER = "^GSPC";
 
+// issue #862 (RM-116), option 3 — the floor. SP500_SIZE is ASSERTED owner data,
+// never read from a wallet or venue API (the `config` valuationKind above), and
+// nothing detects when it goes stale. This is not a fix for that: it is a
+// timestamp of when the size was last confirmed, serialised per-holding
+// (WalletHolding.sizeVerifiedAt) so a reader can see the leg is stated, not
+// read, instead of a live-looking dollar figure with no provenance at all.
+// Bump this date by hand, in a reviewed diff, whenever SP500_SIZE is next
+// reconfirmed against the venue — same rule as the size itself.
+export const SP500_SIZE_VERIFIED_AT = "2026-03-01";
+
 // --- ROBOTMONEY token / WETH / buyback feed ----------------------------------
 // Exposed to the token-metrics + token-buyback dashboards (and any other module)
 // so the real Base addresses live in ONE place. All baked as real defaults so a

@@ -18,6 +18,7 @@ import {
   config,
   SP500_SIZE,
   SP500_TICKER,
+  SP500_SIZE_VERIFIED_AT,
 } from "../../src/config.ts";
 import {
   fetchWalletBalances,
@@ -347,6 +348,25 @@ test("AC2: each valuation kind is exercised per-asset — erc20, native, aave aT
   expect(bySym.SP500!.amount).toBeCloseTo(0.633, 6);
   expect(bySym.SP500!.priceUsd).toBeCloseTo(4600, 6);
   expect(bySym.SP500!.valueUsd).toBeCloseTo(0.633 * 4600, 6);
+});
+
+test("issue #862: only the config-valued SP500 leg carries sizeVerifiedAt — every read leg leaves it absent", async () => {
+  setBaseEnv();
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  mockChain(stubFixtures());
+
+  const r = await fetchWalletBalances();
+  const bySym = Object.fromEntries(r.holdings.map((h) => [h.symbol, h]));
+
+  // SP500's amount is asserted, never read — sizeVerifiedAt discloses the last
+  // confirmation date so a consumer can render "position size as of <date>".
+  expect(bySym.SP500!.sizeVerifiedAt).toBe(SP500_SIZE_VERIFIED_AT);
+  // Every other leg's amount really is READ (erc20/native/aave/strategy) — the
+  // field must stay absent, never `null`/`false`-by-omission-confused-with-set.
+  for (const sym of ["USDC", "WETH", "ETH", "ROBOTMONEY", "BNKR", "ZYFAI-SS1", "GIZA-SS1"]) {
+    expect(bySym[sym]!.sizeVerifiedAt).toBeUndefined();
+  }
 });
 
 test("AC3: a forced single-leg failure degrades that holding to its last-persisted sample marked 'stale'; other legs stay live", async () => {
@@ -690,6 +710,13 @@ test("AC8 (issue #118): the request path serves PERSISTED samples and makes ZERO
     expect(bySym[sym]!.provenance).toBe("stale");
     expect(bySym[sym]!.valueUsd).toBeNull();
   }
+  // issue #862: sizeVerifiedAt is derived from config, not the samples table —
+  // it is disclosed even here, where SP500 has no persisted row at all and its
+  // VALUE is honestly null/stale. Every other leg (a real read) leaves it
+  // absent, on the request path exactly as on the live path.
+  expect(bySym.SP500!.sizeVerifiedAt).toBe(SP500_SIZE_VERIFIED_AT);
+  expect(bySym.WETH!.sizeVerifiedAt).toBeUndefined();
+  expect(bySym.USDC!.sizeVerifiedAt).toBeUndefined();
   // Ordering + metadata come from resolveTrackedAssets (samples table has neither).
   expect(r.holdings.map((h) => h.symbol)).toEqual(resolveTrackedAssets().map((a) => a.symbol));
   expect(r.holdings).toHaveLength(8);
