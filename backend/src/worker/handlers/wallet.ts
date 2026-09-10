@@ -16,6 +16,12 @@
 // D41 phase 4 (issue #927): the live sampler now dual-writes price data to
 // `asset_prices` and no longer writes `price_usd` to `wallet_balance_samples`,
 // mirroring the change #851 made to `repairResolvedDay`.
+//
+// PR #946 review fix: sampleWalletSleeves (below) now does its OWN
+// asset_prices dual-write too, rather than relying on sampleWalletBalances —
+// a separate, independently-scheduled job — to have covered the same
+// (date, symbol) that tick. See the comment on sampleWalletSleeves for why
+// that reliance was a false invariant.
 import { sql } from "../../db/worker-client.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../../chain/wallet-balances.ts";
 import {
@@ -43,6 +49,17 @@ import { resolvePoolForToken } from "../../chain/historical-prices.ts";
  *  own midnight (issue #927's asset_prices dual-write; `observed_at`). */
 function dayCloseInstant(date: string): Date {
   return new Date(Date.parse(`${date}T00:00:00Z`) + 86_400_000);
+}
+
+// Shared by both samplers' dual-write gate: only a genuinely fresh-this-tick
+// read is eligible to be written into asset_prices under TODAY's date. A
+// degraded ('stale'/'seed') leg is carrying an OLD price forward, and
+// dual-writing that under today's date would misrepresent today's eventual
+// close once it becomes a closed day tomorrow. 'stub'/'live' both count as
+// fresh (deterministic test fixture vs. a real provider read — neither is a
+// degrade); only 'stale'/'seed' are excluded.
+function isFreshThisTick(provenance: string): boolean {
+  return provenance === "live" || provenance === "stub";
 }
 
 export async function sampleWalletBalances(payload: Record<string, unknown> = {}): Promise<unknown> {
@@ -83,8 +100,8 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
   // already failed to price fresh this tick keeps this cron silent (no pool
   // lookups at all) for exactly the symbols that are failing. 'stub'/'live'
   // both count as fresh (deterministic test fixture vs. a real provider read
-  // — neither is a degrade); only 'stale'/'seed' are excluded.
-  const isFreshThisTick = (p: string): boolean => p === "live" || p === "stub";
+  // — neither is a degrade); only 'stale'/'seed' are excluded. (isFreshThisTick
+  // is shared with sampleWalletSleeves below — see its module-level def above.)
   const poolKeyBySymbol = new Map<string, string | null>();
   for (const h of holdings) {
     if (!isFreshThisTick(h.provenance)) continue;
@@ -201,6 +218,26 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
 
   const chainAmounts = await readChainAmountsBatched(reads, "sampleWalletSleeves");
   const sampleDate = new Date().toISOString().slice(0, 10);
+  // Review finding (PR #946, RELIABILITY_CROSS_JOB_ATOMICITY_FALSE_INVARIANT):
+  // this sampler used to rely ENTIRELY on sampleWalletBalances — a separate,
+  // independently-scheduled job (wallet.sample_balances vs wallet.sample_sleeves
+  // in db/seed.ts, each its own transaction, no ordering/joint-success
+  // guarantee) — to have already dual-written asset_prices for the same
+  // (date, symbol) that tick. Because the two jobs are independent, a symbol
+  // could price fresh in the sleeve leg on a tick where the balance leg's read
+  // for that same symbol degraded or simply didn't run, leaving a sleeve row
+  // with no covering asset_prices row — the read-side fallback would still
+  // catch it, but the write-side invariant this file's tests claim ("a
+  // cleanly-sampled day can never trigger the fallback") was false for that
+  // shape. Fixed by giving this sampler its OWN dual-write, gated the same way
+  // sampleWalletBalances gates its own (isFreshThisTick), so each job is
+  // independently correct and neither depends on the other's success this
+  // tick. `writeAssetPrice`'s ON CONFLICT DO UPDATE upsert makes it harmless
+  // for both jobs to write the same (date, symbol) — dualWrittenSymbols below
+  // just avoids redundant writes for a symbol common to several sleeves in the
+  // SAME tick, not a correctness requirement.
+  const poolKeyBySymbol = new Map<string, string | null>();
+  const dualWrittenSymbols = new Set<string>();
   return sql.begin(async (tx) => {
     await lockWalletSnapshotDate(tx, sampleDate);
     let persisted = 0;
@@ -223,14 +260,11 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
       // LIVE leg becomes 'backfilled' on a same-bucket catch-up.
       const provenance = sleeveReplay === "same-bucket-catchup" && valued.provenance === "live" ? "backfilled" : valued.provenance;
 
-      // D41 phase 4 (issue #927): price_usd is NOT written here, mirroring both
-      // sampleWalletBalances above and repairResolvedDay's already-shipped
-      // (#851) sleeve write. No sleeve symbol is ever outside the aggregate
-      // set (#948: every wallet reads every chain-readable tracked asset via
-      // sleeveSymbols(def)), so whatever asset_prices row the balance leg's
-      // dual-write produces for this (date, symbol) already covers this
-      // sleeve row too — a second, sleeve-specific dual-write would just
-      // duplicate that write. value_usd still carries the fused product.
+      // D41 phase 4 (issue #927): price_usd is NOT written to
+      // wallet_sleeve_samples, mirroring both sampleWalletBalances above and
+      // repairResolvedDay's already-shipped (#851) sleeve write. asset_prices
+      // is the sole write target for price data; value_usd still carries the
+      // fused amount*price product.
       await tx`
         INSERT INTO wallet_sleeve_samples
           (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
@@ -242,6 +276,54 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
           provenance = EXCLUDED.provenance,
           sampled_at = EXCLUDED.sampled_at
       `;
+
+      // Own dual-write (see the block comment above `sql.begin`): gated on
+      // isFreshThisTick(valued.provenance) for the exact reason
+      // sampleWalletBalances' gate is — a degraded ('stale'/'seed') leg is
+      // carrying an OLD price forward, and writing that under TODAY's date
+      // would misrepresent today's eventual close once it becomes a closed
+      // day tomorrow. One write per (date, symbol) per tick: several sleeves
+      // can share a symbol (issue #948 — every wallet reads every
+      // chain-readable tracked asset), so dualWrittenSymbols skips the
+      // repeats rather than reissuing an upsert that would just overwrite
+      // itself with an equivalent price.
+      if (
+        isFreshThisTick(valued.provenance) &&
+        Number.isFinite(valued.priceUsd) &&
+        valued.priceUsd > 0 &&
+        !dualWrittenSymbols.has(asset.symbol)
+      ) {
+        dualWrittenSymbols.add(asset.symbol);
+        const priceSourceKind: AssetPriceSource = asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
+        let poolKey: string | null = null;
+        if (priceSourceKind === "geckoterminal" && asset.address) {
+          if (poolKeyBySymbol.has(asset.symbol)) {
+            poolKey = poolKeyBySymbol.get(asset.symbol) ?? null;
+          } else {
+            try {
+              poolKey = await resolvePoolForToken(asset.address);
+            } catch {
+              poolKey = null;
+            }
+            poolKeyBySymbol.set(asset.symbol, poolKey);
+          }
+        }
+        const now = new Date();
+        await writeAssetPrice(tx as any, {
+          priceDate: sampleDate,
+          symbol: asset.symbol,
+          priceUsd: valued.priceUsd,
+          source: priceSourceKind,
+          poolKey,
+          tokenAddress: priceSourceKind === "pinned" ? null : (asset.address ?? null),
+          observedAt: dayCloseInstant(sampleDate),
+          fetchedAt: now,
+          configIdentity: priceSourceKind === "pinned"
+            ? "pinned:usd:1.00"
+            : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
+        });
+      }
+
       persisted += 1;
     }
 

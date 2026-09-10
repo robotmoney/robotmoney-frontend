@@ -10,12 +10,27 @@
 // the fallback would turn that into missing/null values across the UI until
 // the backfill catches up, which is a worse regression than the coverage gap
 // this issue exists to close. So this file proves the narrower, ACTUALLY TRUE
-// claim instead: for any day this sampler cleanly writes GOING FORWARD, the
+// claim instead: for any day EITHER sampler cleanly writes GOING FORWARD, the
 // fallback's firing condition (a wallet_balance_samples/wallet_sleeve_samples
 // row for a priced symbol with NO matching asset_prices row) can never occur,
 // because writeAssetPrice runs in the SAME transaction as the sample-row
 // insert, for every symbol that priced fresh this tick (see wallet.ts's
 // isFreshThisTick gate) — atomically, not eventually.
+//
+// PR #946 review fix (RELIABILITY_CROSS_JOB_ATOMICITY_FALSE_INVARIANT): the
+// original version of this file "proved" the sleeve-row claim only by calling
+// sampleWalletBalances and sampleWalletSleeves back-to-back, synchronously, in
+// one test body — a sequencing production never guarantees, since the two are
+// separate, independently-scheduled jobs (wallet.sample_balances vs
+// wallet.sample_sleeves in db/seed.ts, each its own transaction, no
+// ordering/joint-success guarantee). That made the invariant true only in the
+// test, not in production, where a tick could run the sleeve job without the
+// balance job (or with the balance job's read for that symbol degraded) and
+// leave a sleeve row with no covering asset_prices row. sampleWalletSleeves
+// now performs its OWN dual-write (mirroring sampleWalletBalances' pattern),
+// so each job is independently correct. The second test below proves exactly
+// that: it calls sampleWalletSleeves ALONE, never sampleWalletBalances, for
+// this tick.
 //
 // This is a WRITE-SIDE invariant, not a data-completeness assumption: it
 // holds the instant this code ships, for every day it samples from then on.
@@ -85,9 +100,19 @@ test("AC3: a cleanly-sampled day's balance rows can never trigger the closed-day
   expect(uncovered.map((r) => r.symbol), "symbol(s) missing an asset_prices row for this clean sample: proves the fallback IS reachable").toEqual([]);
 });
 
-test("AC3: a cleanly-sampled day's sleeve rows can never trigger the closed-day fallback — every sleeve symbol is covered by the same balance-leg dual-write", async () => {
-  await sampleWalletBalances({});
+test("AC3: a cleanly-sampled day's sleeve rows can never trigger the closed-day fallback — sampleWalletSleeves dual-writes asset_prices ON ITS OWN, with no help from sampleWalletBalances that tick", async () => {
+  // THE POINT OF THIS TEST: call ONLY sampleWalletSleeves. sampleWalletBalances
+  // — a separate, independently-scheduled job in production — never runs in
+  // this tick, so any asset_prices coverage found below can only have come
+  // from sampleWalletSleeves' own dual-write, not from the balance leg's.
   const { sampleDate } = (await sampleWalletSleeves({})) as { sampleDate: string };
+
+  // Sanity: sampleWalletBalances genuinely never ran this tick — otherwise
+  // the proof below would be vacuous (covering rows could have come from it).
+  const [balanceCount] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${sampleDate}
+  `;
+  expect(balanceCount!.n, "sampleWalletBalances must not have run for this test to prove anything").toBe(0);
 
   const [sleeveCount] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM wallet_sleeve_samples WHERE sample_date = ${sampleDate}
@@ -95,13 +120,12 @@ test("AC3: a cleanly-sampled day's sleeve rows can never trigger the closed-day 
   expect(sleeveCount!.n).toBeGreaterThan(0);
 
   // THE PROOF: no sleeve row for this date lacks a matching asset_prices row
-  // — computeWalletSleeves's fallback-firing condition is empty. Sleeve
-  // symbols are never outside the aggregate set (issue #948), so this row
-  // exists because the BALANCE leg's dual-write already wrote it — the
-  // sleeve sampler needs no dual-write of its own (and, per the write-site
-  // test in price-usd-write-site-and-read-sites.test.ts, no longer writes
-  // price_usd at all — mirroring repairResolvedDay's already-shipped #851
-  // change).
+  // — computeWalletSleeves's fallback-firing condition is empty — even though
+  // sampleWalletBalances never ran this tick. This is only true because
+  // sampleWalletSleeves now performs its own writeAssetPrice dual-write in the
+  // same transaction as its sample-row insert (PR #946's review fix for
+  // RELIABILITY_CROSS_JOB_ATOMICITY_FALSE_INVARIANT), not because it is
+  // riding on a sibling job's success.
   const uncovered = await sql<{ symbol: string }[]>`
     SELECT wss.symbol
       FROM wallet_sleeve_samples wss

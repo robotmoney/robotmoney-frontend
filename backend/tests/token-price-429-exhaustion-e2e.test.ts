@@ -75,6 +75,16 @@ beforeEach(async () => {
   _resetWalletBalancesCacheForTests();
   _resetRateLimitStateForTests();
   await sql`DELETE FROM wallet_balance_samples`;
+  // This file does not opt into useCleanDatabase (tests/support/clean-db.ts),
+  // so it shares the ONE database every other non-opted-in file shares for the
+  // whole `bun test` run. AC2 below asserts asset_prices has ZERO rows for
+  // WETH/today under a persistent-429 sampleWalletBalances run — a fresh
+  // assertion, not one this file's own writes could ever satisfy trivially,
+  // so it must start from a table this file actually cleaned, not one an
+  // unrelated earlier file (any test exercising sampleWalletSleeves's D41/#946
+  // dual-write, or sampleWalletBalances succeeding fresh on a WETH price) left
+  // a same-day WETH row in.
+  await sql`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
 });
 
 afterEach(async () => {
@@ -85,6 +95,9 @@ afterEach(async () => {
   _resetWalletBalancesCacheForTests();
   _resetRateLimitStateForTests();
   await sql`DELETE FROM wallet_balance_samples`;
+  // Symmetric with beforeEach: don't leave a row for a LATER shared-database
+  // file to trip over either.
+  await sql`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
 });
 
 // Transport mock: Base RPC (Multicall3 aggregate3) answers healthily so every
