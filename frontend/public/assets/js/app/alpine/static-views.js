@@ -1062,6 +1062,7 @@ export function registerStaticViews(Alpine) {
     error: null,
     subject: null,
     snapshots: [],
+    brief: null,
     snapshot: null,
     sessions: [],
     // How many days of history the concentration chart reads. The API returns
@@ -1116,6 +1117,10 @@ export function registerStaticViews(Alpine) {
         this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
         this.sessions = await this.loadSessions(id);
+        // The brief the last session opened with. Guarded like the rest: the
+        // page describes the handover with or without it, and only the
+        // figures depend on having a real one.
+        this.brief = await this.loadBrief(id).catch(() => null);
       } catch (e) {
         this.error = e.message || "Subject not found";
       } finally {
@@ -1155,6 +1160,99 @@ export function registerStaticViews(Alpine) {
     // filtered to this subject first and only the visible page of it is expanded.
     // Same shape as memberProfile.scanSessions: guarded per session, with the
     // shipped static archive behind it for dates that predate the live API.
+    // The brief is what a member is handed when a session opens: the regime
+    // read, the framework, the research, the subject and what the last three
+    // sessions concluded. It is fetched for the MOST RECENT session, because
+    // "what does the swarm get" is a question about the current shape of the
+    // handover, and the newest one is the best evidence of it.
+    async loadBrief(id) {
+      const date = this.sessions[0]?.date;
+      if (!date) return null;
+      const qs = `?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(id)}`;
+      try {
+        const res = await api.get(`${ROUTES.swarm.brief}${qs}`);
+        if (res && !res.error) return res;
+      } catch (_) { /* fall through to the archive */ }
+      return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
+    },
+    briefDate() { return this.brief?.date ? this.formatDate(this.brief.date, "long") : ""; },
+    // What the brief is made of, in the order it is assembled. The prose is
+    // fixed — this is the shape of EVERY session's brief, not one session's —
+    // and the figures are read off the last real brief when there is one, so a
+    // reader can see both what is handed over and how much of it there was.
+    // `href` points at the page that owns each input, so "where does the
+    // regime read come from" is one click rather than a question.
+    briefParts() {
+      const b = this.brief;
+      const n = (/** @type {any} */ v) => (Array.isArray(v) ? v.length : null);
+      const count = (/** @type {number|null} */ v, /** @type {string} */ one, /** @type {string} */ many) =>
+        v == null ? "" : `${v} ${v === 1 ? one : many}`;
+      const regime = b?.regime;
+      const buckets = n(b?.allocation?.buckets);
+      const articles = n(b?.research?.articles);
+      const history = n(b?.regime_history ?? b?.regimeHistory);
+      const recent = n(b?.recent_sessions ?? b?.recentSessions);
+      const snap = b?.subject_snapshot ?? b?.subjectSnapshot ?? null;
+      const positions = n(snap?.positions);
+      return [
+        {
+          key: "regime",
+          label: "The market regime",
+          href: "/regime",
+          text: regime
+            ? `Composite ${Number(regime.composite).toFixed(3)}, bucketed ${String(regime.regime || "").replace(/_/g, " ")}, with the macro, on-chain and factor reads behind it, their percentiles and their correlations.`
+            : "The composite score and its bucket, with the macro, on-chain and factor reads behind it, their percentiles and their correlations.",
+        },
+        {
+          key: "history",
+          label: "Recent regime history",
+          href: "/regime",
+          text: history
+            ? `${count(history, "reading", "readings")}, so a member reads the direction and not only the level.`
+            : "Trailing readings, so a member reads the direction and not only the level.",
+        },
+        {
+          key: "framework",
+          label: "The allocation framework",
+          href: "/allocation",
+          text: buckets
+            ? `${count(buckets, "sleeve", "sleeves")} with their target weights, the assets inside each, the protocols each may use, and how each is meant to behave by regime.`
+            : "The sleeves with their target weights, the assets inside each, the protocols each may use, and how each is meant to behave by regime.",
+        },
+        {
+          key: "research",
+          label: "Published research",
+          href: "/blog",
+          text: articles
+            ? `${count(articles, "summary", "summaries")} of Robot Money's own research, each with its key findings.`
+            : "Summaries of Robot Money's own research, each with its key findings.",
+        },
+        {
+          key: "subject",
+          label: "This subject",
+          href: "",
+          text: "Its name, its operator, the thesis it is held to, and the notes below.",
+        },
+        {
+          key: "holdings",
+          label: "Holdings",
+          href: "",
+          text: positions
+            ? `${count(positions, "position", "positions")} and the wallets they sit in, priced on the day.`
+            : this.isFramework()
+              ? "None. This subject is a framework, so there is no book to hand over."
+              : "The positions and the wallets they sit in, priced on the day.",
+        },
+        {
+          key: "sessions",
+          label: "Recent sessions",
+          href: "/swarm",
+          text: recent
+            ? `The last ${recent}, each with what the swarm concluded, so nobody re-argues a settled point.`
+            : "The most recent sessions, each with what the swarm concluded, so nobody re-argues a settled point.",
+        },
+      ];
+    },
     async loadSessions(id) {
       const pick = (list) => list
         .filter((s) => (s.subjectId ?? s.subject_id) === id && s.state === "published")

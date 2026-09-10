@@ -32,10 +32,27 @@ const STANCE_ORDER = ["bullish", "constructive", "neutral", "cautious", "bearish
 const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
 
 export const sessionSummary = {
+  // The stance tally. The live pipeline aggregates it onto the record; the
+  // static archive never did, and its sessions carry the stances only on the
+  // takes themselves. Reading both is what puts the spread bar, the consensus
+  // lean and the mean confidence on an archived session — they were blank on
+  // every one of them, over data sitting in the same object.
+  /** @param {any} s */
+  stanceCounts(s) {
+    const agg = s?.swarmRecommendation?.stances;
+    if (agg && Object.keys(agg).length) return agg;
+    /** @type {Record<string, number>} */
+    const out = {};
+    for (const t of takeRowsOf(s)) {
+      const k = String(t?.stance || "").toLowerCase();
+      if (k) out[k] = (out[k] || 0) + 1;
+    }
+    return out;
+  },
   /** @param {any} s */
   stanceSpread(s) {
     /** @type {Record<string, unknown>} */
-    const st = s?.swarmRecommendation?.stances || {};
+    const st = this.stanceCounts(s) || {};
     const n = (/** @type {string} */ k) => Number(st[k]) || 0;
     const keys = [...STANCE_ORDER.filter(n), ...Object.keys(st).filter((k) => !STANCE_ORDER.includes(k) && n(k))];
     const total = keys.reduce((a, k) => a + n(k), 0);
@@ -73,12 +90,23 @@ export const sessionSummary = {
   /** @param {any} s */
   meanConfidenceText(s) {
     const c = s?.swarmRecommendation?.meanConfidence;
-    return Number.isFinite(c) ? `${Math.round(Number(c) * 100)}% mean confidence` : "";
+    if (Number.isFinite(c)) return `${Math.round(Number(c) * 100)}% mean confidence`;
+    const vals = takeRowsOf(s)
+      .map((/** @type {any} */ t) => Number(t?.confidence))
+      .filter((/** @type {number} */ n) => Number.isFinite(n));
+    if (!vals.length) return "";
+    const mean = vals.reduce((/** @type {number} */ a, /** @type {number} */ n) => a + n, 0) / vals.length;
+    return `${Math.round(mean * 100)}% mean confidence`;
   },
+  // "N of M took part" needs a roster size, which only the live record has.
+  // An archived session knows how many filed and not how many could have, so
+  // it says the half it can stand behind rather than inventing a denominator.
   /** @param {any} s */
   quorumText(s) {
     const q = s?.swarmRecommendation?.quorum;
-    return q ? `${q.submitted} of ${q.active} took part` : "";
+    if (q) return `${q.submitted} of ${q.active} took part`;
+    const n = takeRowsOf(s).length;
+    return n ? `${n} took part` : "";
   },
   // How many takes this session collected. The quorum is the authority when
   // the record has one; a row that carries its own count comes next (the
@@ -126,7 +154,10 @@ export const sessionSummary = {
     if (!rec) return null;
     if (rec.type === "bucket_weights") {
       const w = this.sessionWeights(s);
-      return w ? { kind: "weights", text: w } : null;
+      // The weights are the decision; the rationale is why. A card carrying
+      // "95 / 3 / 0 / 2" alone made the reader open the session to find out
+      // what moved, which is the one thing the row exists to tell them.
+      return w ? { kind: "weights", text: w, note: rec.rationale || "" } : null;
     }
     const acts = (Array.isArray(rec.actions) ? rec.actions : [])
       .filter(/** @param {any} a */ (a) => a && a.action);
@@ -134,3 +165,12 @@ export const sessionSummary = {
     return rec.rationale ? { kind: "text", text: rec.rationale } : null;
   },
 };
+
+// The take bodies a surface has already fetched, when it has. A subject
+// profile carries them on the row (it built the card out of the same
+// response); /swarm loads them on demand and passes nothing here, which is
+// correct — a live session's record already holds the aggregates below.
+/** @param {any} s */
+function takeRowsOf(s) {
+  return /** @type {any[]} */ (Array.isArray(s?.takeRows) ? s.takeRows : []);
+}

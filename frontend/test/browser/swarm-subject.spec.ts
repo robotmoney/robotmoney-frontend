@@ -121,7 +121,7 @@ test("public subject profile renders holdings, wallets, NFT contracts and the sw
   // declares 4. They ride in a disclosure that says so and starts CLOSED: open
   // and headed "Structural notes", they read as the page annotating itself.
   const brief = page.locator(".sp-brief");
-  await expect(brief.locator(".sp-brief__sum")).toContainText("Brief to the swarm · 4 notes");
+  await expect(brief.locator(".sp-brief__sum")).toContainText("What the swarm is given");
   await expect(brief.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "false");
   // Closed means closed to a reader AND to the keyboard: the region collapses
   // to nothing and is inert, so the notes are not tab-reachable behind it.
@@ -132,9 +132,25 @@ test("public subject profile renders holdings, wallets, NFT contracts and the sw
   // ...and opens to the notes themselves, with what they are for said plainly.
   await brief.locator(".sp-brief__sum").click();
   await expect(brief.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "true");
-  await expect(brief).toContainText("Instructions the operator gives the agents");
-  await expect(brief.locator("li")).toHaveCount(4);
+  await expect(brief).toContainText("Written by the operator");
+  await expect(brief.locator(".sp-brief__notes li")).toHaveCount(4);
   await expect(brief).toContainText("RoboFarm, RecycleMachine, ClawMachine");
+
+  // It answers "what does the swarm actually get" in general, then prints the
+  // figures off the last real brief. Seven parts, every one that has a page of
+  // its own linking to it — the regime read in particular, which is the input
+  // readers ask about and which nothing on this page used to acknowledge.
+  await expect(brief.locator(".sp-brief__part")).toHaveCount(7);
+  await expect(brief.locator('.sp-brief__lnk[href="/regime"]').first()).toBeVisible();
+  await expect(brief.locator('.sp-brief__lnk[href="/allocation"]')).toBeVisible();
+  await expect(brief.locator('.sp-brief__lnk[href="/swarm"]')).toBeVisible();
+  await expect(brief.locator('.sp-brief__lnk[href="/blog"]')).toBeVisible();
+  // Figures come off the archived 2026-06-25 brief, not from prose: it carries
+  // eight regime readings and five research summaries.
+  await expect(brief).toContainText("8 readings");
+  await expect(brief).toContainText("5 summaries");
+  // woon HAS a book, so the holdings line counts it rather than saying none.
+  await expect(brief).toContainText(/\d+ positions/);
 
   // Sessions: all 9 archived, published woon sessions.
   await expect(page.locator(".sv__session-card")).toHaveCount(9);
@@ -144,6 +160,16 @@ test("public subject profile renders holdings, wallets, NFT contracts and the sw
   // without the bodies carried onto the row this reported "These takes could
   // not be loaded" over takes already in memory.
   const first = page.locator(".sv__session-card").first();
+
+  // The consensus is DERIVED from the takes here. The static archive stores no
+  // aggregate stances, quorum or mean confidence, so every archived card drew
+  // a blank spread bar and no consensus at all — over stances sitting on the
+  // takes in the same object.
+  await expect(first.locator(".sv__spread > i").first()).toBeVisible();
+  await expect(first.locator(".sv__session-kicker")).toHaveText("Consensus");
+  await expect(first.locator(".sv__card-verdict")).toContainText("took part");
+  await expect(first.locator(".sv__card-verdict")).toContainText("mean confidence");
+
   const btn = first.locator(".sv__takes-btn");
   await expect(btn).not.toBeDisabled();
   await btn.click();
@@ -402,17 +428,58 @@ test("a subject the API answers 200 null for still renders from the archive", as
 test("a session with no consensus to report prints no Consensus kicker", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
-  await page.route("**/api/swarm/**", (route) =>
-    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
-  );
+  // A row the index lists but whose detail fetch fails: the card still renders
+  // from what the index carries, with no stances, no quorum, no confidence and
+  // no takes to derive any of them from. This is the case the gate is for. An
+  // ARCHIVED session is no longer one — its takes carry stances, and the card
+  // derives the consensus from them.
+  const row = {
+    id: "8e1f0c22-4a55-4f30-b7c1-2d9e6a4b1f88",
+    date: "2026-09-02",
+    subject_id: "robotmoney-allocation",
+    state: "published",
+    swarm_recommendation: { type: "bucket_weights", weights: { conservative_defi_yield: 0.95, agent_tokens: 0.05 } },
+  };
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname, search } = new URL(route.request().url());
+    if (pathname === "/api/swarm/sessions") {
+      return route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({ sessions: [row], nextCursor: null }),
+      });
+    }
+    // The detail resolves — with the decision, and with NO takes and none of
+    // the aggregates. That is the shape the kicker has to survive.
+    if (pathname === "/api/swarm/sessions/2026-09-02/robotmoney-allocation") {
+      return route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({ session: row, takes: [] }),
+      });
+    }
+    if (pathname === "/api/swarm/subjects/robotmoney-allocation") {
+      return route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({
+          id: "robotmoney-allocation", name: "Robot Money Allocation",
+          source: { type: "framework" }, wallets: [], structural_notes: [],
+        }),
+      });
+    }
+    void search;
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
 
   await page.goto("/swarm/subjects/robotmoney-allocation");
-  await expect(page.locator(".sv__session-card").first()).toBeVisible();
+  const card = page.locator(".sv__session-card").first();
+  await expect(card).toBeVisible();
 
-  // The rows are here, and they do carry the decision...
-  await expect(page.locator(".sv__rec").first()).toContainText("Target weights");
-  // ...but not a consensus, so the kicker is absent rather than empty.
-  await expect(page.locator(".sv__session-kicker", { hasText: "Consensus" })).toHaveCount(0);
+  // The row is here, and it does carry the decision...
+  await expect(card.locator(".sv__rec")).toContainText("Target weights");
+  // ...but nothing to say about the consensus, so the kicker is absent rather
+  // than a label standing over empty space.
+  await expect(card.locator(".sv__session-kicker")).toHaveCount(0);
+  // And the spread bar has nothing to draw either.
+  await expect(card.locator(".sv__spread > i")).toHaveCount(0);
 
   await expectNoBrowserErrors(errors);
 });

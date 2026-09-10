@@ -190,26 +190,62 @@
              x-if on .length: camelSubject defaults the field to [], which is
              truthy, so a plain gate would put an empty disclosure on every
              subject that declares none. -->
-        <template x-if="structuralNotes().length">
-          <div class="sp-brief" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-            <button type="button" class="sp-brief__sum" :aria-expanded="open ? 'true' : 'false'"
-                    aria-controls="subject-brief" @click="open = !open">
-              <span x-text="`Brief to the swarm · ${structuralNotes().length} note${structuralNotes().length === 1 ? '' : 's'}`"></span>
-              <i aria-hidden="true">⌄</i>
-            </button>
-            <div class="sp-brief__anim" id="subject-brief" role="region"
-                 aria-label="Brief to the swarm" :inert="!open">
-              <div class="sp-brief__clip">
-                <div class="sp-brief__body">
-                  <p class="sv__body-copy sp-note">Instructions the operator gives the agents that review this subject. Sent with every session brief.</p>
-                  <ul class="sv__bullet-list">
-                    <template x-for="n in structuralNotes()" :key="n"><li x-text="n"></li></template>
-                  </ul>
-                </div>
+        <!-- What a member is handed when a session on this subject opens.
+             It answers a question readers actually ask ("what does the swarm
+             get?"), so it describes the brief in GENERAL — the shape is the
+             same every session — and prints the figures off the most recent
+             real one. Every input that has a page of its own links to it.
+
+             The structural notes live inside it rather than beside it: they
+             are one part of the handover, not a separate fact about the
+             subject, and standing alone under a bare "Structural notes"
+             heading they read as the page annotating itself.
+
+             Collapsed by default. Mirrors /allocation's .alp__hold idiom (a
+             button carrying aria-expanded, an inert region, a 0fr/1fr grid
+             row) rather than <details>, whose content renders at full size
+             the first time and so has no previous height to transition
+             from. -->
+        <div class="sp-brief" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+          <button type="button" class="sp-brief__sum" :aria-expanded="open ? 'true' : 'false'"
+                  aria-controls="subject-brief" @click="open = !open">
+            <span>What the swarm is given</span>
+            <i aria-hidden="true">⌄</i>
+          </button>
+          <div class="sp-brief__anim" id="subject-brief" role="region"
+               aria-label="What the swarm is given" :inert="!open">
+            <div class="sp-brief__clip">
+              <div class="sp-brief__body">
+                <p class="sv__body-copy sp-note">
+                  Every session on this subject opens with a brief, rebuilt that day from live data. It is the same seven parts each time.
+                  <span x-show="briefDate()">Figures below are from the most recent one, built <b x-text="briefDate()"></b>.</span>
+                </p>
+                <dl class="sp-brief__parts">
+                  <template x-for="part in briefParts()" :key="part.key">
+                    <div class="sp-brief__part">
+                      <dt>
+                        <template x-if="part.href">
+                          <a class="sp-brief__lnk" :href="part.href" x-text="part.label"></a>
+                        </template>
+                        <template x-if="!part.href"><span x-text="part.label"></span></template>
+                      </dt>
+                      <dd x-text="part.text"></dd>
+                    </div>
+                  </template>
+                </dl>
+                <template x-if="structuralNotes().length">
+                  <div class="sp-brief__notes">
+                    <p class="sv__panel-label">Notes for this subject</p>
+                    <p class="sv__body-copy sp-note">Written by the operator, and handed over with everything above.</p>
+                    <ul class="sv__bullet-list">
+                      <template x-for="n in structuralNotes()" :key="n"><li x-text="n"></li></template>
+                    </ul>
+                  </div>
+                </template>
               </div>
             </div>
           </div>
-        </template>
+        </div>
 
         <!-- /swarm's Sessions section, on a page that already knows the
              subject. Same section head, same card, same foot, same takes
@@ -276,7 +312,10 @@
                       <dl class="sv__rec">
                         <dt>Recommendation</dt>
                         <template x-if="recommendation(s).kind === 'weights'">
-                          <dd>Target weights <b class="sv__rec-n" x-text="recommendation(s).text"></b></dd>
+                          <div>
+                            <dd>Target weights <b class="sv__rec-n" x-text="recommendation(s).text"></b></dd>
+                            <dd class="sv__rec-more" x-show="recommendation(s).note" x-text="recommendation(s).note"></dd>
+                          </div>
                         </template>
                         <template x-if="recommendation(s).kind === 'text'">
                           <dd x-text="recommendation(s).text"></dd>
@@ -425,6 +464,21 @@
     .sp-brief.is-open .sp-brief__anim { grid-template-rows: 1fr; }
     .sp-brief__clip { overflow: hidden; min-height: 0; }
     .sp-brief__body { padding: 0.75rem; }
+    .sp-brief__parts { margin: 0.75rem 0 0; display: grid; gap: 0.6rem; }
+    .sp-brief__part { display: grid; grid-template-columns: 11rem 1fr; gap: 0.25rem 1.25rem; }
+    .sp-brief__part dt {
+      font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
+      letter-spacing: 0.14em; color: var(--color-text-muted); padding-top: 0.15rem;
+    }
+    .sp-brief__part dd { margin: 0; font-size: 0.85rem; line-height: 1.55; color: var(--color-text-soft); }
+    .sp-brief__lnk { color: var(--color-text-soft); text-decoration: none; border-bottom: 1px solid var(--color-border); }
+    .sp-brief__lnk:hover { color: var(--color-text); border-bottom-color: var(--color-text-soft); }
+    .sp-brief__notes {
+      margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border);
+    }
+    @media (max-width: 40rem) {
+      .sp-brief__part { grid-template-columns: 1fr; gap: 0.15rem; }
+    }
     @media (prefers-reduced-motion: reduce) {
       .sp-brief__anim, .sp-brief__sum i { transition: none; }
     }
