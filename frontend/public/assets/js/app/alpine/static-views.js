@@ -17,6 +17,7 @@ import { operatorName } from "../lib/operator.js";
 import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
 import { sessionSummary } from "../lib/session-summary.js";
 import { sessionTakes } from "../lib/session-takes.js";
+import { allocationFramework } from "../lib/allocation-framework.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -1058,6 +1059,7 @@ export function registerStaticViews(Alpine) {
     ...helpers,
     ...sessionSummary,
     ...sessionTakes(),
+    ...allocationFramework(),
     loading: true,
     error: null,
     subject: null,
@@ -1121,6 +1123,11 @@ export function registerStaticViews(Alpine) {
         // page describes the handover with or without it, and only the
         // figures depend on having a real one.
         this.brief = await this.loadBrief(id).catch(() => null);
+        // A FRAMEWORK subject IS the published allocation, so its own page
+        // opens with the weights in force. Any other subject is a book that
+        // the framework does not describe, and asking for it there would put
+        // the vault's targets on a page about somebody else's treasury.
+        if (this.isFramework()) await this.loadAllocationFw();
       } catch (e) {
         this.error = e.message || "Subject not found";
       } finally {

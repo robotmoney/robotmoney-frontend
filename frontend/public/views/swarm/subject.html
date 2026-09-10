@@ -190,6 +190,49 @@
              x-if on .length: camelSubject defaults the field to [], which is
              truthy, so a plain gate would put an empty disclosure on every
              subject that declares none. -->
+        <!-- The weights in force, first, on the page about them. /swarm
+             carries this card because the allocation is the flagship product;
+             here it is the subject itself, and a reader was being shown six
+             sessions ABOUT the weights before being shown the weights.
+
+             Same .sv__alloc markup and CSS as /swarm, minus its header: the
+             eyebrow and title there name which subject the card is for, and
+             this page's own H1 already said it. The link goes the other way
+             too — /swarm points here for the history, so here points at the
+             product page. -->
+        <template x-if="isFramework() && allocationTargets().length">
+          <div class="sv__alloc sp-alloc">
+            <div class="sv__alloc-reg">
+              <p class="sv__alloc-label">
+                <span x-show="allocationAsOf()">Unchanged since <span x-text="allocationAsOf()"></span></span>
+                <span x-show="!allocationAsOf()">Target weights</span>
+              </p>
+              <div class="sv__sleeves">
+                <div class="sv__sleeve sv__sleeve--head" aria-hidden="true">
+                  <span>Sleeve</span>
+                  <span>Target</span>
+                </div>
+                <template x-for="t in allocationTargets()" :key="t.label">
+                  <div class="sv__sleeve">
+                    <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
+                    <!-- The track is drawn for a published zero and absent for
+                         a null, so an empty track can only mean 0% and never
+                         "no target published". The empty span keeps the third
+                         column in place when there is no track. -->
+                    <template x-if="sleeveBar(t) !== null">
+                      <span class="sv__sleeve-track"><i :style="`width:${sleeveBar(t)}%`"></i></span>
+                    </template>
+                    <template x-if="sleeveBar(t) === null"><span></span></template>
+                    <span class="sv__sleeve-v" x-text="t.pct === null ? '—' : `${t.pct}%`"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <p class="sv__sleeve-note" x-show="allocationNote()" x-text="allocationNote()"></p>
+            <a class="sv__cov-lnk" href="/allocation">See the allocation page &rarr;</a>
+          </div>
+        </template>
+
         <!-- What a member is handed when a session on this subject opens.
              It answers a question readers actually ask ("what does the swarm
              get?"), so it describes the brief in GENERAL — the shape is the
@@ -425,6 +468,14 @@
     .sp-key { display: inline-block; width: 0.5rem; height: 0.5rem; background: var(--k, var(--color-border));
               vertical-align: baseline; margin-right: 0.5rem; }
     .sp-sessions { margin-top: 2.5rem; }
+    .sp-alloc { margin-bottom: 1.5rem; }
+    /* The card is the whole page here, not a column beside a feed, so the
+       register fills it: 34rem of table in an 80rem card left the hole on the
+       right that a measure cap leaves in a full-width band. */
+    .sp-alloc .sv__sleeves { max-width: none; }
+    /* And the rule that separated the register from the card's own heading has
+       nothing above it any more — this page's H1 is the heading. */
+    .sp-alloc .sv__alloc-reg { margin-top: 0; padding-top: 0; border-top: 0; }
     /* An external link, in the second of the two link treatments this site
        uses: reading ink with a quiet rule, and Beam arriving on hover. It was
        cyan at rest, which put the accent on a hostname. */

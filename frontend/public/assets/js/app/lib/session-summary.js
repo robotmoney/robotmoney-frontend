@@ -166,13 +166,6 @@ export const sessionSummary = {
       .filter((r) => Number.isFinite(r.pct));
     return rows.length ? rows : null;
   },
-  // The same figures as one line, for a caption, an aria-label or anywhere a
-  // bar cannot go.
-  /** @param {any} s */
-  sessionWeightsText(s) {
-    const rows = this.sessionWeights(s);
-    return rows ? rows.map((r) => Math.round(r.pct)).join(" / ") : null;
-  },
   /** @param {any} s */
   sessionWeightsLabel(s) {
     const rows = this.sessionWeights(s);
