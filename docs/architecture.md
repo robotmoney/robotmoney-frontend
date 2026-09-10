@@ -5022,7 +5022,7 @@ transitions, and explain every mutation from the audit log.
 
 ## Network topology — DNS, origins & vendors
 
-How `robotmoney.net` presents several independent product surfaces as one
+How `robotmoney.network` presents several independent product surfaces as one
 seamless site, organized by a clean **separation of concerns** — both across
 infrastructure tiers and across **two vendors**. This document is cross-cutting:
 it spans the **marketing** site, **this repo** (Investment Swarm + analytics),
@@ -5116,7 +5116,7 @@ Each surface is its own hostname, resolved by a plain DNS record:
 
 | Hostname | Surface | Tier → home | Source |
 |----------|---------|-------------|--------|
-| `robotmoney.net`, `www.` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
+| `robotmoney.network`, `www.` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
 | `swarm.robotmoney.net` | IC + analytics (REST — the only member surface, D21) | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
 | `app.robotmoney.net` | Dapp | API → **DO droplet** (`rmpc` + gateway) | `robotmoney-core` |
 
@@ -5136,7 +5136,7 @@ within a surface).
 
 ## 4. DNS & TLS — how each hostname resolves
 
-- **Marketing** (`robotmoney.net` via CNAME-flattening, and `www`) → a **DNS-only**
+- **Marketing** (`robotmoney.network` via CNAME-flattening, and `www`) → a **DNS-only**
   (grey-cloud) CNAME to the **DO Spaces CDN endpoint**. This is the CDN's native
   host-based usage: DO delivers, caches, and terminates TLS with its **custom-domain
   certificate**. Cloudflare does *not* sit in the data path here, so there is **no
