@@ -6,7 +6,7 @@
      session.html so a holdings read looks identical wherever it appears. -->
 <section class="cv cv--detail" x-data="subjectProfile()">
   <div class="sv__body sv__body--narrow">
-    <a href="/swarm" class="sv__back">← /swarm</a>
+    <a href="/swarm" class="sv__back">/swarm</a>
 
     <p class="sv__loading" x-show="loading">Loading subject…</p>
     <!-- x-if, not x-show: x-show only toggles CSS display and leaves the node
@@ -258,35 +258,48 @@
         <div class="sp-brief" x-data="{ open: false }" :class="open ? 'is-open' : ''">
           <button type="button" class="sp-brief__sum" :aria-expanded="open ? 'true' : 'false'"
                   aria-controls="subject-brief" @click="open = !open">
-            <span>What the swarm is given</span>
-            <i aria-hidden="true">⌄</i>
+            <span class="sp-brief__sum-k">What the swarm is given</span>
+            <!-- The bar says what is inside before it is opened. Closed, it was
+                 a mono label a reader had no reason to click. -->
+            <span class="sp-brief__sum-m">
+              <span x-text="`${briefParts().length} parts`"></span>
+              <span x-show="briefDate()" x-text="`· built ${briefDate()}`"></span>
+              <i aria-hidden="true">⌄</i>
+            </span>
           </button>
           <div class="sp-brief__anim" id="subject-brief" role="region"
                aria-label="What the swarm is given" :inert="!open">
             <div class="sp-brief__clip">
               <div class="sp-brief__body">
-                <p class="sv__body-copy sp-note">
-                  Every session on this subject opens with a brief, rebuilt that day from live data. It is the same seven parts each time.
-                  <span x-show="briefDate()">Figures below are from the most recent one, built <b x-text="briefDate()"></b>.</span>
+                <p class="sp-brief__intro">
+                  Every session on this subject opens with a brief, rebuilt that day from live data. It is the same parts each time.
                 </p>
-                <dl class="sp-brief__parts">
+                <!-- Label, figure, then the line of prose. Seven sentences of
+                     equal weight was a wall: a reader after "how much
+                     research?" should land on "5 summaries" without reading a
+                     clause. Two columns so the parts fill the width instead of
+                     running one long line each. -->
+                <ul class="sp-brief__parts">
                   <template x-for="part in briefParts()" :key="part.key">
-                    <div class="sp-brief__part">
-                      <dt>
+                    <li class="sp-brief__part">
+                      <p class="sp-brief__k">
                         <template x-if="part.href">
                           <a class="sp-brief__lnk" :href="part.href" x-text="part.label"></a>
                         </template>
                         <template x-if="!part.href"><span x-text="part.label"></span></template>
-                      </dt>
-                      <dd x-text="part.text"></dd>
-                    </div>
+                      </p>
+                      <p class="sp-brief__v" x-text="part.value"></p>
+                      <p class="sp-brief__t" x-text="part.text"></p>
+                    </li>
                   </template>
-                </dl>
+                </ul>
                 <template x-if="structuralNotes().length">
                   <div class="sp-brief__notes">
-                    <p class="sv__panel-label">Notes for this subject</p>
-                    <p class="sv__body-copy sp-note">Written by the operator, and handed over with everything above.</p>
-                    <ul class="sv__bullet-list">
+                    <p class="sp-brief__notes-h">
+                      Notes for this subject
+                      <span>Written by the operator, and handed over with everything above.</span>
+                    </p>
+                    <ul>
                       <template x-for="n in structuralNotes()" :key="n"><li x-text="n"></li></template>
                     </ul>
                   </div>
@@ -341,24 +354,6 @@
                      the mean confidence. -->
 
                 <div class="sv__session-body">
-                  <!-- The kicker is gated on there being a consensus to put
-                       under it, not just on each fact separately: an archive
-                       row carries the recommendation but no stances, quorum or
-                       confidence, and printed "Consensus" over nothing. -->
-                  <template x-if="hasConsensus(s)">
-                    <div class="sv__session-consensus">
-                      <p class="sv__session-kicker">Consensus</p>
-                      <div class="sv__card-verdict">
-                        <span class="sv__stance-badge" x-show="lean(s)" :style="leanBadgeStyle(s)">
-                          <i x-show="leanStance(s)" :style="leanDotStyle(s)"></i>
-                          <span x-text="leanLabel(s)"></span>
-                        </span>
-                        <span x-text="quorumText(s)"></span>
-                        <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
-                      </div>
-                    </div>
-                  </template>
-
                   <div class="sv__session-payload">
                     <template x-if="recommendation(s)">
                       <dl class="sv__rec">
@@ -408,7 +403,32 @@
                       </dl>
                     </template>
                     <p class="sv__rec-empty" x-show="!recommendation(s)">No recommendation was published for this session.</p>
-                  </div>
+                    </div>
+
+                  <!-- The consensus sits to the RIGHT of the decision, and AFTER
+                       it in the DOM, so the reading order matches the visual one:
+                       a screen reader and the single-column phone layout both meet
+                       what the session decided before how the room split. The
+                       recommendation is what the row exists to report; the
+                       consensus is how much weight to put behind it.
+
+                       The kicker is gated on there being a consensus to put under
+                       it, not just on each fact separately: an archive row carries
+                       the recommendation but no stances, quorum or confidence, and
+                       printed "Consensus" over nothing. -->
+                  <template x-if="hasConsensus(s)">
+                    <div class="sv__session-consensus">
+                      <p class="sv__session-kicker">Consensus</p>
+                      <div class="sv__card-verdict">
+                        <span class="sv__stance-badge" x-show="lean(s)" :style="leanBadgeStyle(s)">
+                          <i x-show="leanStance(s)" :style="leanDotStyle(s)"></i>
+                          <span x-text="leanLabel(s)"></span>
+                        </span>
+                        <span x-text="quorumText(s)"></span>
+                        <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
+                      </div>
+                    </div>
+                  </template>
                 </div>
 
                 <div class="sv__session-foot">
@@ -524,44 +544,93 @@
                        color: var(--color-text-muted); }
     .sp-note { font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.5rem; }
 
-    /* Brief to the swarm. Mirrors /allocation's .alp__hold: the same tokens,
-       the same 0fr/1fr grid transition, the same flat edges. */
+    /* What the swarm is given. Mirrors /allocation's .alp__hold: the same
+       tokens, the same 0fr/1fr grid transition, the same flat edges. */
     .sp-brief { margin-top: 1rem; border: 1px solid var(--color-border); }
     .sp-brief__sum {
       width: 100%; cursor: pointer; display: flex; align-items: center;
       justify-content: space-between; gap: 0.5rem 1rem;
-      padding: 0.5rem 0.75rem; background: var(--color-surface);
+      padding: 0.7rem 0.9rem; background: var(--color-surface);
       border: 0; border-bottom: 1px solid transparent; text-align: left;
-      font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-      letter-spacing: 0.12em; color: var(--color-text-soft);
       transition: background-color 150ms var(--ease-out-expo), color 150ms var(--ease-out-expo);
     }
-    .sp-brief__sum:hover { background: var(--color-surface-light); color: var(--color-text); }
+    .sp-brief__sum-k {
+      font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
+      letter-spacing: 0.14em; color: var(--color-text);
+    }
+    .sp-brief__sum-m {
+      display: flex; align-items: center; gap: 0.4rem;
+      font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--color-text-muted);
+    }
+    .sp-brief__sum:hover { background: var(--color-surface-light); }
+    .sp-brief__sum:hover .sp-brief__sum-m { color: var(--color-text-soft); }
     .sp-brief__sum:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
-    .sp-brief__sum i { transition: transform 300ms var(--ease-out-expo); }
+    .sp-brief__sum-m i { transition: transform 300ms var(--ease-out-expo); font-style: normal; }
     .sp-brief.is-open .sp-brief__sum { border-bottom-color: var(--color-border); }
-    .sp-brief.is-open .sp-brief__sum i { transform: rotate(180deg); }
+    .sp-brief.is-open .sp-brief__sum-m i { transform: rotate(180deg); }
     .sp-brief__anim {
       display: grid; grid-template-rows: 0fr;
       transition: grid-template-rows 300ms var(--ease-out-expo);
     }
     .sp-brief.is-open .sp-brief__anim { grid-template-rows: 1fr; }
     .sp-brief__clip { overflow: hidden; min-height: 0; }
-    .sp-brief__body { padding: 0.75rem; }
-    .sp-brief__parts { margin: 0.75rem 0 0; display: grid; gap: 0.6rem; }
-    .sp-brief__part { display: grid; grid-template-columns: 11rem 1fr; gap: 0.25rem 1.25rem; }
-    .sp-brief__part dt {
-      font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
-      letter-spacing: 0.14em; color: var(--color-text-muted); padding-top: 0.15rem;
+    .sp-brief__body { padding: 1rem 0.9rem 1.1rem; }
+    .sp-brief__intro {
+      margin: 0 0 1rem; font-size: 0.85rem; line-height: 1.55; color: var(--color-text-muted);
     }
-    .sp-brief__part dd { margin: 0; font-size: 0.85rem; line-height: 1.55; color: var(--color-text-soft); }
-    .sp-brief__lnk { color: var(--color-text-soft); text-decoration: none; border-bottom: 1px solid var(--color-border); }
+
+    /* Two columns, so seven parts fill the width instead of running seven long
+       lines down the left. Each part is label / figure / line, in that reading
+       order, so the figure is what the eye lands on. */
+    /* Spacing, not cells. Drawing the grid with hairlines meant the two empty
+       slots on the last row of seven read as broken boxes, and seven identical
+       bordered tiles is the icon-heading-text grid this house does not build. */
+    .sp-brief__parts {
+      list-style: none; margin: 0; padding: 0; display: grid; gap: 1.15rem 2.5rem;
+      grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+    }
+    .sp-brief__part { min-width: 0; }
+    .sp-brief__k {
+      margin: 0; font-family: var(--font-mono); font-size: 0.58rem;
+      text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted);
+    }
+    .sp-brief__v {
+      /* No capitalize: it title-cased the figures into "8 Readings" and
+         "5 Summaries". */
+      margin: 0.25rem 0 0; font-family: var(--font-mono); font-size: 0.92rem;
+      font-variant-numeric: tabular-nums; color: var(--color-text);
+    }
+    .sp-brief__t {
+      margin: 0.3rem 0 0; font-size: 0.78rem; line-height: 1.5; color: var(--color-text-muted);
+    }
+    .sp-brief__lnk { color: inherit; text-decoration: none; border-bottom: 1px solid var(--color-border); }
     .sp-brief__lnk:hover { color: var(--color-text); border-bottom-color: var(--color-text-soft); }
-    .sp-brief__notes {
-      margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border);
+
+    /* The operator's notes are prose, and prose in a wide panel needs either a
+       cap or a second column. A second column: it fills the width AND keeps the
+       lines short, instead of trading one problem for the other. */
+    .sp-brief__notes { margin-top: 1.1rem; }
+    .sp-brief__notes-h {
+      margin: 0 0 0.6rem; font-family: var(--font-mono); font-size: 0.58rem;
+      text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted);
     }
-    @media (max-width: 40rem) {
-      .sp-brief__part { grid-template-columns: 1fr; gap: 0.15rem; }
+    .sp-brief__notes-h span {
+      display: block; margin-top: 0.3rem; font-family: var(--font-sans);
+      font-size: 0.78rem; letter-spacing: 0; text-transform: none;
+    }
+    .sp-brief__notes ul {
+      margin: 0; padding: 0; list-style: none;
+      display: grid; gap: 0.5rem 2rem;
+      grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+    }
+    .sp-brief__notes li {
+      position: relative; padding-left: 0.85rem;
+      font-size: 0.78rem; line-height: 1.5; color: var(--color-text-muted);
+    }
+    .sp-brief__notes li::before {
+      content: ""; position: absolute; left: 0; top: 0.5em;
+      width: 4px; height: 1px; background: var(--color-text-muted);
     }
     @media (prefers-reduced-motion: reduce) {
       .sp-brief__anim, .sp-brief__sum i { transition: none; }

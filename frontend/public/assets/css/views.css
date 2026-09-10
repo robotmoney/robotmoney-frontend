@@ -242,7 +242,6 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .sv__hero-fade { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(6,8,12,0.25), rgba(6,8,12,0.72) 70%, var(--color-void)); pointer-events: none; }
 .sv__hero .sv__detail-title .text-gradient { font-family: var(--font-display); font-weight: 700; background: none; -webkit-text-fill-color: currentColor; color: inherit; }
 .sv__feed-title { margin: 0 0 0.6rem; font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.8rem; }
-.sv__back:hover { color: var(--color-accent); }
 /* Backdrop chip: ONE border, a dim label and a bright value. The rule this
    replaces was `.sv__fact-row span`, which also matched the value <span>
    nested inside each chip and drew it a second box whose right edge landed on
@@ -447,7 +446,24 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .sv__panel { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); }
 .sv__panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .sv__panel-label { margin: 0; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
-.sv__back { display: inline-block; margin-bottom: 2rem; }
+/* The way back, as a control rather than a raw path with a rule under it. It
+   borrows the .sv__fact chip's shape, which is the vocabulary the page already
+   speaks two blocks further down, and drops the underline that made a
+   navigation affordance read as body copy with a link in it. The arrow is
+   drawn here rather than typed into five views, and steps left on hover. */
+.sv__back { display: inline-flex; align-items: center; gap: 0.45rem;
+  margin-bottom: 2rem; padding: 0.34rem 0.65rem 0.34rem 0.55rem;
+  border: 1px solid var(--color-border); text-decoration: none;
+  color: var(--color-text-muted);
+  transition: color 150ms var(--ease-out-expo), border-color 150ms var(--ease-out-expo); }
+.sv__back::before { content: "\2190"; display: inline-block;
+  transition: transform 150ms var(--ease-out-expo); }
+.sv__back:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.sv__back:hover::before { transform: translateX(-2px); }
+.sv__back:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .sv__back, .sv__back::before { transition: none; }
+}
 .sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; }
 .sv__list { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
 .sv__person-row, .sv__subject-row { display: flex; align-items: flex-start; gap: 0.8rem; min-width: 0; }
@@ -797,7 +813,12 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* Full-width spread under the title, then consensus left and recommendation
    right. The card used to stack a 26rem bar over a coloured "lean" word over
    a 68ch rec, which left the right half of a 1232px card empty. */
-.sv__session-body { display: grid; grid-template-columns: minmax(14rem, 0.85fr) minmax(0, 1.4fr);
+/* Decision first, then how much weight to put behind it. The consensus led
+   for a while and took the wider half while carrying three short facts, so the
+   card opened on a stance badge and the reader found the recommendation second.
+   The payload is the left, dominant column now, and the DOM order matches — see
+   the comment on .sv__session-consensus in the views. */
+.sv__session-body { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(12rem, 0.75fr);
   gap: 1rem 2rem; align-items: start; margin-top: 0.95rem; }
 .sv__session-consensus { min-width: 0; display: grid; gap: 0.5rem; align-content: start; }
 .sv__session-payload { min-width: 0; }
