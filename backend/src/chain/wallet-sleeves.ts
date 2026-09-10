@@ -15,6 +15,7 @@ import {
   QUARANTINED_PROVENANCE,
   readChainAmountsBatched,
   SLEEVE_DEFS,
+  sleeveSymbols,
   type ChainAmount,
   type KeyedAssetRead,
   type Provenance,
@@ -86,7 +87,7 @@ async function computeWalletSleeves(
   for (let i = 0; i < SLEEVE_DEFS.length && i < wallets.length; i++) {
     const def = SLEEVE_DEFS[i]!;
     const address = wallets[i]!.toLowerCase();
-    const walletAssets = def.symbols
+    const walletAssets = sleeveSymbols(def)
       .map((s) => bySymbol.get(s))
       .filter((a): a is TrackedAsset => a != null && (a.valuationKind === "native" || !isPlaceholderAddress(a.address)));
 

@@ -237,7 +237,7 @@ function amountFrom(raw: bigint, decimals: number): number {
 }
 
 // The sleeve layout: which prop wallet (BY INDEX into resolvePropWallets())
-// holds which symbols, and what that sleeve is called.
+// is read for which symbols, and what that sleeve is called.
 //
 // This lived as THREE separate copies — the sampler
 // (worker/handlers/wallet.ts), the read path (chain/wallet-sleeves.ts) and now
@@ -247,16 +247,50 @@ function amountFrom(raw: bigint, decimals: number): number {
 // phantom gap in the sleeve series rather than as an obvious bug. It belongs
 // here for the same reason everything else in this file does: it must stay
 // identical across the feeds.
+//
+// issue #861: SLEEVE_DEFS used to fix a per-symbol WHITELIST per wallet
+// (`symbols: [...]`), which is how the ZyfAI strategy wallet's 9.59 WETH stayed
+// invisible per-wallet while `fetchWalletBalances()`'s aggregate view — which
+// reads every tracked asset across every wallet — counted it, a $28k gap
+// between the two feeds' own totals. The chain does not care which wallet we
+// EXPECTED to hold a token, so the per-wallet feed is now a DISCOVERY: every
+// wallet is read for every chain-readable tracked asset, and only the
+// strategy leg stays wallet-specific.
 export interface SleeveDef {
   name: string;
   type: string;
-  symbols: string[];
+  /** Strategy legs are wallet-specific: only this wallet's smart-account NAV. */
+  strategySymbols: string[];
 }
+
+// Every wallet is read for every chain-readable asset. Derived from the
+// tracked-asset list so a new asset is picked up on every wallet without
+// editing this file.
+//
+// `config` legs (SP500) are excluded deliberately: they have no wallet to be
+// read in. `aave` legs are excluded the same way `symbols` used to exclude
+// them — an opt-in prop-wallet leg (resolveAaveATokens), not part of the
+// fixed common set.
+function commonSleeveSymbols(env: Record<string, string | undefined> = process.env): string[] {
+  return resolveTrackedAssets(env)
+    .filter((a) => a.valuationKind === "erc20" || a.valuationKind === "native")
+    .map((a) => a.symbol);
+}
+
 export const SLEEVE_DEFS: SleeveDef[] = [
-  { name: "Bankr", type: "primary", symbols: ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"] },
-  { name: "Stablecoin Strategy 1", type: "strategy", symbols: ["ZYFAI-SS1"] },
-  { name: "Stablecoin Strategy 2", type: "strategy", symbols: ["GIZA-SS1"] },
+  { name: "Bankr", type: "primary", strategySymbols: [] },
+  { name: "Stablecoin Strategy 1", type: "strategy", strategySymbols: ["ZYFAI-SS1"] },
+  { name: "Stablecoin Strategy 2", type: "strategy", strategySymbols: ["GIZA-SS1"] },
 ];
+
+/** What one sleeve is actually read for: the common chain-readable set plus
+ * this sleeve's wallet-specific strategy leg(s), if any. */
+export function sleeveSymbols(
+  def: SleeveDef,
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  return [...commonSleeveSymbols(env), ...def.strategySymbols];
+}
 
 // A key's resolved chain amount: either a token amount, or a failure flag that
 // makes the caller degrade THAT key (a reverted sub-call, or the whole batch
