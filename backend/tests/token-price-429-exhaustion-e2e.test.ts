@@ -229,13 +229,31 @@ test("smoke-readiness gate reaches ready under persistent 429s: the boot's cold-
 
     // The sampler persisted TODAY's WETH row as the carried-forward persisted
     // sample, honestly marked 'stale' (never relabelled live, never dropped).
-    const [sample] = await sql<{ provenance: string; price_usd: string; value_usd: string }[]>`
+    // Issue #927: sampleWalletBalances no longer writes price_usd on ordinary
+    // (including degraded-to-stale) samples — price_usd is NULL here, and
+    // value_usd alone carries the fused amount*price product; the API-level
+    // priceUsd assertion below proves lastPersistedHolding()'s value_usd/amount
+    // derivation still recovers 2500 for a caller that needs a price.
+    const [sample] = await sql<{ provenance: string; price_usd: string | null; value_usd: string }[]>`
       SELECT provenance, price_usd, value_usd FROM wallet_balance_samples
        WHERE symbol = 'WETH' AND sample_date = current_date
     `;
     expect(sample!.provenance).toBe("stale");
-    expect(Number(sample!.price_usd)).toBe(2500);
+    expect(sample!.price_usd).toBeNull();
     expect(Number(sample!.value_usd)).toBe(3750);
+
+    // The sampler must NOT dual-write this degraded, carried-forward price
+    // into asset_prices under TODAY's date: it is an OLD price (yesterday's,
+    // per seedYesterdayWethSample), not a fresh observation of today, and
+    // asset_prices' daily-close slot for today would misrepresent today's
+    // eventual close once it becomes a closed day tomorrow if it did. This is
+    // also the counters.gecko == EXPECTED_GECKO_ATTEMPTS assertion above's
+    // other half: a degraded leg must never trigger pool-key resolution
+    // either, or a sustained outage would retry pool discovery every tick.
+    const [priceRow] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date
+    `;
+    expect(priceRow!.n).toBe(0);
 
     // The request-path endpoint the gate's post-READY frontend check hits
     // (GET /api/dashboards/wallet-balances → persisted reader, zero price

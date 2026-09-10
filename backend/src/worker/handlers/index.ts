@@ -8,6 +8,7 @@ import * as projects from "./projects.ts";
 import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "./wallet.ts";
+import { backfillAssetPricesForCleanDays } from "../../ops/asset-prices.ts";
 
 // `jobId` is the claimed job's row id (loop.ts passes `job.id`). It is optional
 // and source-compatible: existing handlers that only take `payload` remain
@@ -49,6 +50,17 @@ export const handlers: Record<string, JobHandler> = {
   "ops.repair_gaps": repairGaps,
   "wallet.backfill_window": backfillWalletWindow,
   "wallet.backfill_day": backfillWalletDay,
+  // Retroactive asset_prices coverage backfill (issue #927): the live
+  // sampler's dual-write (below) only covers days sampled AFTER this ships,
+  // so existing history still has the #849 coverage gap until something
+  // walks it. SELF-HEALING MEANS SCHEDULED, NOT MANUAL, same as
+  // `ops.repair_gaps` above — a one-shot script run by hand would never
+  // reach a day added by a future rebuild or an outage backfill, so this is
+  // a cron row (db/seed.ts) instead. Bounded per run
+  // (ops/asset-prices.ts::ASSET_PRICE_BACKFILL_MAX_DAYS_PER_RUN); an
+  // already-covered day is never re-selected, so a caught-up deployment's
+  // run is just the anti-join query.
+  "ops.backfill_asset_prices": () => backfillAssetPricesForCleanDays(),
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
   // swarm session lifecycle

@@ -124,11 +124,11 @@ test("the guard's column-list pattern actually matches an INSERT that DOES write
 // unrelated change.
 const ALLOWED_READERS: Record<string, string> = {
   "chain/wallet-balances.ts":
-    "lastPersistedHolding's stale-degrade fallback (a live read failed) reads the last persisted price_usd directly; loadHistory uses the sample's fused value_usd only for today's row (is_closed = false), and asset_prices join for closed days (issue #927)",
+    "lastPersistedHolding's stale-degrade fallback (a live read failed) reads the last persisted price_usd when present, deriving value_usd/amount instead for a post-#927 row that has it NULL; loadHistory reads the sample's fused value_usd for today's row (is_closed = false) and falls back to it for a closed day asset_prices has not covered yet, joining asset_prices for a covered closed day",
   "chain/wallet-sleeves.ts":
-    "computeWalletSleeves uses the sample's fused price_usd/value_usd only for today's row (is_closed = false), and asset_prices join for closed days (issue #927)",
+    "computeWalletSleeves reads the sample's fused price_usd/value_usd for today's row (is_closed = false) and falls back to them for a closed day asset_prices has not covered yet, joining asset_prices for a covered closed day; the sleeve sampler still writes price_usd (out of #927's scope), so this site never needs the derived-price trick the balance sites do",
   "chain/wallet-valuation.ts":
-    "recentPersistedPrice uses the sample's price_usd only for today's row (is_closed = false), and asset_prices join for closed days (issue #927); WHERE clause still filters on wbs.price_usd IS NOT NULL to find eligible rows",
+    "recentPersistedPrice reads the sample's price_usd when present, deriving value_usd/amount instead for a post-#927 row that has it NULL (else this stale-degrade path — issue #173 — would go permanently unreachable the moment a deployment picks up #927); joins asset_prices for a covered closed day",
   "ops/wallet-backfill.ts":
     "repairResolvedDay reads the PRIOR row's price_usd (before its own delete) purely for the sample-row-vs-price-row disagreement check (D41 phase 2's verify step); the evidence-table INSERT...SELECT also copies whatever price_usd a replaced row already had. Neither writes a fresh price_usd (see the test above)",
   "ops/asset-prices.ts":
