@@ -60,6 +60,22 @@
             <template x-if="snapshot">
               <span class="sv__fact"><em>holdings</em><b x-text="fmtUsd(snapshot?.totalValueUsd)"></b></span>
             </template>
+            <!-- The regime the last session was given, in the same two chips
+                 session.html carries. Macro and on-chain stay off: they are the
+                 panels behind the composite, and the backdrop below shows all
+                 three against their own history, where the comparison is the
+                 point. Sits beside "last reviewed", and the backdrop carries
+                 the date on its face, so neither chip claims to be today. -->
+            <template x-if="briefRegime()?.composite !== null && briefRegime()">
+              <span class="sv__fact"><em>composite</em><b x-text="fmtNum(briefRegime()?.composite, 3)"></b></span>
+            </template>
+            <template x-if="briefRegime()?.regime">
+              <span class="sv__fact">
+                <em>regime</em>
+                <i class="sv__fact-dot" :style="`background:${regimeColor(briefRegime()?.regime)}`" aria-hidden="true"></i>
+                <b x-text="regimeLabel(briefRegime()?.regime)"></b>
+              </span>
+            </template>
           </div>
         </header>
 
