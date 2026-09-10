@@ -26,6 +26,16 @@ services:
       robotmoney.env: ${RM_STACK_ENV_CLASS}
       robotmoney.env.hash: ${RM_STACK_ENV_HASH}
 
+  # Static/SPA/docs origin (issue #892) — a standing core service like
+  # postgres/api, so it gets the same reap-by-label treatment (see this file's
+  # header) rather than going unlabeled the way the one-shot member-agent
+  # template and analytics-producer's smoke override do not need to.
+  website-server:
+    labels:
+      robotmoney.smoke.project: ${SMOKE_PROJECT}
+      robotmoney.env: ${RM_STACK_ENV_CLASS}
+      robotmoney.env.hash: ${RM_STACK_ENV_HASH}
+
   api:
     labels:
       robotmoney.smoke.project: ${SMOKE_PROJECT}

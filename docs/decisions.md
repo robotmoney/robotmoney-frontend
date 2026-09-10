@@ -1681,6 +1681,21 @@ for `preview/*` hosting, unchanged.
 - **Leave `docker-compose.yml` mounting `frontend/public` and rely only on the
   handler change** — the handler can only serve a per-route file that exists;
   with the raw source tree mounted, none ever would.
+
+**Amendment (2026-09-10, issue #892).** The `api` process no longer serves
+`STATIC_DIR` at all — `serveStatic`/`routeShell`/`docsShell` and
+`backend/src/api/static.ts` are deleted. A sibling `website-server` service
+(plain `nginx:alpine`, `website-server/Dockerfile` +
+`website-server/nginx.conf`) now owns the bind mount and replicates
+`routeShell`'s fallback order (`<route>/index.html` → `_shell.html` →
+`index.html`) as a `try_files` rule, proxying `/api/` and `/health` through to
+`api` so a single-box deployment still presents as one origin. This decision's
+core claim — one prerender, one metadata table, `STATIC_DIR` is an assembled
+directory never the raw source tree — is unchanged; only WHICH process serves
+it changed. `docsShell`'s docs-fragment inlining turned out to already be
+redundant with the general per-route prerender loop (every docs route has
+been in `sitemap.xml` since before this amendment), so no prerender behavior
+changed either — deleting it removed dead request-time code, not a feature.
 ---
 
 ## D30 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)

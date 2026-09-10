@@ -7,7 +7,8 @@
 // not one figure, and the two pages indistinguishable apart from the <title>.
 // 27 of the 37 sitemap routes were in that state, including the home page and
 // every blog post. Only /docs read correctly, because backend/src/api/static.ts's
-// docsShell already did this one thing at request time for that one subtree.
+// docsShell used to do this one thing at request time for that one subtree
+// (deleted, issue #892 — nothing does it at request time any more).
 //
 // None of that is visible in a browser, which is exactly why it survived: the
 // site looks perfect to every human who opens it. It is only visible to a
@@ -115,12 +116,12 @@ describe("prerendered routes carry their own content", () => {
 });
 
 describe("_shell.html, the fallback for routes that cannot be prerendered", () => {
-  // backend/src/api/static.ts answers an unknown client route by serving
-  // index.html, which since the inlining above carries the HOME PAGE'S BODY.
-  // Falling back to it would answer /swarm/members/<id> with the front page.
-  // This file is the shell with an empty mount, for static.ts to use instead
-  // (issue #870). Emitted ahead of that change on purpose: its fallback is
-  // index.html when this file is absent, so either side can land first.
+  // An unknown client route falling back to index.html would answer, e.g.,
+  // /swarm/members/<id> with the front page: since the inlining above,
+  // index.html carries the HOME PAGE'S BODY, not an empty shell. This file is
+  // the shell with an empty mount instead — originally consumed by
+  // backend/src/api/static.ts's routeShell() (issue #870), now by
+  // website-server/nginx.conf's try_files fallback chain (issue #892).
   const shellPath = join(dir, "_shell.html");
 
   test("it exists and keeps an EMPTY view mount", () => {

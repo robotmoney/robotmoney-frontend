@@ -114,7 +114,8 @@ const VIEW_MOUNT = '<main id="view"></main>';
 // pages indistinguishable apart from the <title>. 28 of the 38 routes in
 // sitemap.xml were in that state, including the home page and every blog post.
 // Only /docs read correctly, because backend/src/api/static.ts's docsShell
-// already does this one thing at request time for that one subtree. This
+// (deleted, issue #892 — nothing inlines a fragment at request time any more)
+// used to do this one thing at request time for that one subtree. This
 // generalises it to every route and moves it to build time.
 //
 // `viewFor` is the client router's own resolver (assets/js/app/routes.js),
@@ -126,7 +127,7 @@ const VIEW_MOUNT = '<main id="view"></main>';
 // and carry no <html>/<body>/<!doctype>. Verified over every sitemap route;
 // prerenderView throws rather than silently shipping a shell if that changes.
 // The docs fragments do contain <main>, which nests, but that is exactly what
-// docsShell already ships in production today, so it is not a new condition.
+// docsShell used to ship in production, so it is not a new condition.
 async function prerenderView(html: string, route: string): Promise<string> {
   const viewPath = viewFor(route);
   const fragment = Bun.file(join(siteDir, viewPath.replace(/^\//, "")));
@@ -166,8 +167,10 @@ function shellFor(route: string): string {
     .replace("<!--AGENT-DATA-->", () => routeDataBlock(route));
 }
 
-// The shell to answer an UNKNOWN client route with, written for
-// backend/src/api/static.ts (issue #870).
+// The shell to answer an UNKNOWN client route with, originally written for
+// backend/src/api/static.ts (issue #870); its fallback logic is now
+// website-server/nginx.conf's job instead (issue #892 — static.ts is
+// deleted), which relies on this file the same way.
 //
 // Its fallback is index.html, which was harmless while index.html was an empty
 // shell and is not any more: this prerender fills the view mount, so index.html

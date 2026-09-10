@@ -38,7 +38,7 @@
 //
 // ENV CONTRACT (all RM_* injected explicitly by the harness at
 // `docker compose run` time — a container inherits nothing):
-//   RM_API_URL        swarm REST base (compose-internal, e.g. http://api:8787)
+//   RM_API_URL        swarm REST base (compose-internal, e.g. http://website-server:8080 — proxied to `api` by website-server/nginx.conf, issue #892)
 //   RM_MEMBER_ID      the member id this client acts as
 //   RM_MEMBER_NAME / RM_MEMBER_LENS / RM_MEMBER_BIAS   persona facts
 //   RM_SESSION_DATE / RM_SUBJECT_ID / RM_SESSION_ID    session coordinates

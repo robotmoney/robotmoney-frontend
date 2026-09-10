@@ -39,6 +39,7 @@ import {
   buildEvalOnboardingPrompt,
   buildMemberAgentArgv,
   classifyOutcome,
+  DEFAULT_API_URL_INTERNAL,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_INFERENCE_MODEL,
   deriveSteps,
@@ -88,7 +89,7 @@ describe("onboarding-eval pure helpers", () => {
   });
 
   test("the eval prompt changes only the canonical prompt's skill URL", () => {
-    const localSkillUrl = `http://api:8787${LOCAL_SWARM_ONBOARDING_SKILL_PATH}`;
+    const localSkillUrl = `${DEFAULT_API_URL_INTERNAL}${LOCAL_SWARM_ONBOARDING_SKILL_PATH}`;
     const evalPrompt = buildEvalOnboardingPrompt();
     expect(evalPrompt).toBe(buildOnboardingPrompt(localSkillUrl));
     expect(evalPrompt).toBe(ONBOARDING_PROMPT.replace(SWARM_ONBOARDING_SKILL_URL, localSkillUrl));

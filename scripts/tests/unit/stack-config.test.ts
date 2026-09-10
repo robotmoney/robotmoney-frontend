@@ -57,8 +57,8 @@ function cfg(overrides: Partial<StackConfig> = {}): StackConfig {
 }
 
 describe("stack profiles", () => {
-  test("core is exactly postgres + api — no worker lane, no member-agent", () => {
-    expect(servicesFor("core")).toEqual(["postgres", "api"]);
+  test("core is exactly postgres + api + website-server — no worker lane, no member-agent", () => {
+    expect(servicesFor("core")).toEqual(["postgres", "api", "website-server"]);
     for (const lane of WORKER_LANE_SERVICES) expect(servicesFor("core")).not.toContain(lane);
     expect(servicesFor("core")).not.toContain("member-agent");
   });

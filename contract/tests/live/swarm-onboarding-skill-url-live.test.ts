@@ -70,12 +70,12 @@ const repoSkill = readFileSync(join(import.meta.dir, "../../..", SKILL_REL), "ut
 // scripts/lib/onboarding-eval.ts builds `localSkillUrl` by taking
 // `LOCAL_SWARM_ONBOARDING_SKILL_PATH` (SWARM_ONBOARDING_SKILL_URL's own
 // pathname) and prefixing the eval stack's own `apiBaseUrl` — i.e. the eval
-// fetches this exact same repo file from the same job's own API container,
-// which serves `frontend/public/` straight out of the checkout that job
-// already has on disk (`STATIC_DIR`, backend/src/api/static.ts). There is no
-// separate deploy, build artifact, or CDN cache between "the file in this
-// checkout" and "what the eval's container fetches" — the two are the same
-// bytes by construction, in the same process, every run.
+// fetches this exact same repo file from the same job's own website-server
+// container (issue #892), which serves `frontend/public/`'s assembled
+// `_static/` straight out of the checkout that job already has on disk. There
+// is no separate deploy, build artifact, or CDN cache between "the file in
+// this checkout" and "what the eval's container fetches" — the two are the
+// same bytes by construction, in the same process, every run.
 //
 // The failure class this issue exists to close is specifically a DIVERGENCE
 // between the repo and something deployed independently of it (a stale or
