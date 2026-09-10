@@ -211,36 +211,39 @@
           </div>
         </template>
 
+        <!-- /swarm's Sessions section, on a page that already knows the
+             subject. Same section head, same card, same foot, same takes
+             panel, same CSS (all of it in views.css, none of it page-local),
+             so a session a reader opens here is the object they opened there.
+             Two differences, both because this list is one subject deep: the
+             card title is the DATE rather than the subject name, which would
+             be the same string on every row, and there are no subject filter
+             chips to filter by. -->
         <section class="sp-sessions">
-          <div class="sv__sessions-head">
-            <p class="sv__panel-label">Sessions (<span x-text="sessions.length"></span>)</p>
+          <div class="sv__sec">
+            <div>
+              <h2 class="sv__sec-h">Sessions</h2>
+              <p class="sv__sec-sub">Every session the swarm has held on this subject.</p>
+            </div>
+            <span class="sv__session-count" x-text="`${sessions.length} listed`"></span>
           </div>
 
           <p class="sv__empty" x-show="!sessions.length" x-cloak>
-            No published session yet. Every session the swarm holds on this portfolio lands here.
+            No published session yet. Every session the swarm holds on this subject lands here.
           </p>
 
-          <div class="sv__session-list sv__session-list--compact">
+          <div class="sv__session-list">
             <!-- Keyed on the SESSION id: a subject may convene more than once
-                 a day, so (date, subjectId) is no longer unique. -->
+                 a day, so (date, subjectId) is no longer unique, and Alpine
+                 renders NOTHING for a duplicate key. -->
             <template x-for="s in sessions" :key="s.id">
-              <!-- The /swarm card, on a page where the subject is already
-                   known. There the title is the subject's name, because that
-                   list interleaves every subject; here the DATE is the
-                   identity, and the name would be the same string on every
-                   row. Everything under it is the same markup reading the same
-                   helpers, so one session does not tell two stories depending
-                   on which page you reached it from. -->
               <article class="sv__session-card">
                 <div class="sv__session-top">
-                  <!-- Link the exact session by id when the row has one (live
-                       API), and fall back to the dated URL for static-archive
-                       rows, whose synthetic id is the `${date}-${subjectId}`
-                       composite. -->
-                  <a class="sv__session-title"
-                     :href="s.id && s.id !== `${s.date}-${s.subjectId}` ? `/swarm/sessions/${encodeURIComponent(s.id)}` : `/swarm/${s.date}/${encodeURIComponent(s.subjectId)}`"
-                     x-text="formatDate(s.date, 'short')"></a>
-                  <span class="sv__date" x-text="takeCountLabel(s)"></span>
+                  <!-- /swarm puts the date opposite the title because its
+                       title is the subject's name. Here the title IS the date,
+                       and the take count now sits on the expander in the foot,
+                       so nothing goes opposite. -->
+                  <a class="sv__session-title" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
                 </div>
 
                 <div class="sv__spread" role="img" :aria-label="`Stances: ${spreadLabel(s)}`" x-show="stanceSpread(s).length">
@@ -289,15 +292,44 @@
                         </template>
                       </dl>
                     </template>
+                    <p class="sv__rec-empty" x-show="!recommendation(s)">No recommendation was published for this session.</p>
                   </div>
                 </div>
 
-                <!-- The reasoning, under the decision it explains. /swarm drops
-                     it: five lines of synthesis on every row of an interleaved
-                     list buries the one line a reader came for. Here the list
-                     is one subject deep and the reasoning is the reason to
-                     stay on the page. -->
-                <div class="sv__take-body" x-show="s.synthesis" x-html="linkified(s.synthesis || '')"></div>
+                <div class="sv__session-foot">
+                  <button type="button" class="sv__takes-btn" @click="toggleTakes(s)"
+                          :aria-expanded="takesState(s) ? 'true' : 'false'"
+                          :disabled="!takesCount(s)">
+                    <span class="sv__takes-caret" :class="{ 'is-open': takesState(s) }" aria-hidden="true">&rsaquo;</span>
+                    <span x-text="takesCount(s) === 1 ? '1 take' : `${takesCount(s)} takes`"></span>
+                  </button>
+                  <a class="sv__live-lnk" :href="sessionHref(s)">See full session &rarr;</a>
+                </div>
+
+                <div class="sv__takes-panel" x-show="takesState(s)" x-cloak>
+                  <p class="sv__unset" x-show="takesState(s)?.loading">Loading takes...</p>
+                  <p class="sv__unset" x-show="takesState(s)?.error" x-text="takesState(s)?.error"></p>
+                  <template x-for="t in (takesState(s)?.takes || [])" :key="t.id">
+                    <div class="sv__take-row">
+                      <div class="sv__take-row-head">
+                        <a class="sv__take-who sv__take-name" :href="`/swarm/members/${encodeURIComponent(t.memberId)}`" x-text="t.memberName || t.memberId"></a>
+                        <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
+                          <i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="t.stance"></span>
+                        </span>
+                        <span class="mp-conf" x-show="Number.isFinite(Number(t.confidence))">
+                          confidence <b x-text="fmtPct(t.confidence)"></b>
+                        </span>
+                      </div>
+                      <p class="sv__take-line" x-text="takeLine(t)"></p>
+                    </div>
+                  </template>
+                  <p class="sv__take-absent" x-show="absentOf(s).length">
+                    <span class="sv__take-absent-k">Did not file</span>
+                    <template x-for="a in absentOf(s)" :key="a.id">
+                      <a class="sv__take-absent-who" :href="a.href" x-text="a.name"></a>
+                    </template>
+                  </p>
+                </div>
               </article>
             </template>
           </div>

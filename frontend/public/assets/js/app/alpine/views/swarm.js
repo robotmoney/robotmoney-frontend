@@ -19,6 +19,7 @@ import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { sessionSummary } from "../../lib/session-summary.js";
+import { sessionTakes } from "../../lib/session-takes.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 
@@ -73,6 +74,7 @@ export function registerSwarmView(Alpine) {
   // ── Investment Swarm ──────────────────────────────────────────────────
   Alpine.data("swarmView", () => ({
     ...sessionSummary,
+    ...sessionTakes(),
     loading: true,
     error: null,
     members: [],
@@ -89,8 +91,6 @@ export function registerSwarmView(Alpine) {
     now: Date.now(),
     liveTimer: null,
     liveTakes: null,
-    // sessionId -> { loading, error, takes } for the cards a reader expanded.
-    openTakes: {},
     // The published allocation: four sleeves and the weight each is held to.
     // Guarded, and the panel degrades by omission — it keeps its claim and
     // drops its register rather than printing a dash where a weight would be.
@@ -345,15 +345,6 @@ export function registerSwarmView(Alpine) {
     // "3 min ago" for a window that has already shut. Returns "" for one that
     // has not, so the open branch keeps the countdown and this one stays empty.
     liveClosedAgo() { return timeAgo(this.liveSession()?.windowClosesAt, this.now); },
-    // Link by SESSION ID. Two rows sharing a (date, subject) are two different
-    // sessions — a subject may convene more than once a day — and the dated URL
-    // resolves to the later of them, so linking by it would leave the earlier
-    // session unreachable and make the pair look like one page listed twice.
-    // The dated form remains the fallback for any row without an id (the static
-    // archive), and remains valid as a URL in its own right.
-    sessionHref(s) {
-      return s?.id ? `/swarm/sessions/${encodeURIComponent(s.id)}` : `/swarm/${s.date}/${s.subjectId}`;
-    },
 
     // ── portfolios ───────────────────────────────────────────────────────
     // A framework subject has no portfolio to scrape: it IS the allocation
@@ -584,87 +575,6 @@ export function registerSwarmView(Alpine) {
       return Number.isFinite(n) ? `${Math.round(n * 100)}%` : "";
     },
 
-    // ── takes, on demand ─────────────────────────────────────────────────
-    // Not preloaded: the list route carries counts but no bodies, and fetching
-    // every session's takes to render a list nobody has asked to see would be
-    // one request per card on every page load.
-    takesState(s) { return this.openTakes[s?.id] || null; },
-    async toggleTakes(s) {
-      const id = s?.id;
-      if (!id) return;
-      if (this.openTakes[id]) {
-        const { [id]: _drop, ...rest } = this.openTakes;
-        this.openTakes = rest;
-        return;
-      }
-      this.openTakes = { ...this.openTakes, [id]: { loading: true, error: "", takes: [] } };
-      try {
-        const d = await this.fetchSessionDetail(s);
-        const takes = (d?.takes || []).slice().sort((a, b) => Number(b?.confidence || 0) - Number(a?.confidence || 0));
-        this.openTakes = { ...this.openTakes, [id]: { loading: false, error: "", takes } };
-      } catch (_) {
-        this.openTakes = { ...this.openTakes, [id]: { loading: false, error: "These takes could not be loaded.", takes: [] } };
-      }
-    },
-    // By id first, because a portfolio may convene twice in a day and the
-    // dated form resolves to the later one. The dated form is the fallback for
-    // a row with no id, and for the static archive.
-    async fetchSessionDetail(s) {
-      if (s?.id) {
-        try {
-          const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
-          if (Array.isArray(d?.takes)) return d;
-        } catch (_) { /* fall through to the dated form */ }
-      }
-      return api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }));
-    },
-    // One line, not the whole memo: the memo is a click away on the session.
-    //
-    // Take bodies are sectioned "**REGIME** / **ALLOCATION** / **SUBJECT**"
-    // bullet lists, and the regime section opens every take with the same
-    // read of the same market — expanding a session would print four rows
-    // that agree about the composite and say nothing about the portfolio.
-    // SUBJECT is the member's read of the thing actually under review, so
-    // that is the bullet the row carries when it exists.
-    takeLine(t) {
-      const raw = String(t?.body || "");
-      if (!raw.trim()) return "";
-      const sections = raw.split(/\n(?=\*\*)/);
-      const pick = sections.find((sec) => /^\*\*\s*SUBJECT/i.test(sec.trim())) || sections[0] || raw;
-      const bullets = pick
-        .replace(/^\*\*[^*]*\*\*/, "")
-        .split("\n")
-        .map((l) => l.replace(/^[-*\u2022]\s*/, "").replace(/[*_`#>]/g, "").replace(/\s+/g, " ").trim())
-        .filter(Boolean);
-      // Skip a bullet that only restates the row it sits in. These sections
-      // open with "<subject> through a <lens> lens: <stance> at <n>
-      // confidence", and the row already prints the stance and the figure —
-      // so the excerpt would spend its one line saying nothing new.
-      const stance = String(t?.stance || "").toLowerCase();
-      const clean = bullets.find((l) => {
-        const low = l.toLowerCase();
-        return !(stance && low.includes(stance) && low.includes("confidence"));
-      }) || bullets[0] || "";
-      return clean.length > 190 ? `${clean.slice(0, 187).trimEnd()}...` : clean;
-    },
-    // The public roster is status=active only, so a member deactivated after
-    // this session is missing from `members` and we still print the id rather
-    // than drop them. A link to that id still resolves: the member route
-    // matches handle or id.
-    memberById(id) {
-      return this.members.find((m) => m.id === id || m.handle === id) || null;
-    },
-    memberHref(id) {
-      const m = this.memberById(id);
-      return `/swarm/members/${encodeURIComponent(m?.handle || id)}`;
-    },
-    absentOf(s) {
-      return (s?.swarmRecommendation?.absent || []).filter(Boolean).map((id) => ({
-        id,
-        name: this.memberById(id)?.name || id,
-        href: this.memberHref(id),
-      }));
-    },
     // One ramp, in lib/stance.js. This used to hold a second copy of the five
     // colours, so the same stance could be painted differently here than on a
     // member profile.

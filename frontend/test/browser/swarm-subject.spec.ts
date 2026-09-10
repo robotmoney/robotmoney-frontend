@@ -139,6 +139,20 @@ test("public subject profile renders holdings, wallets, NFT contracts and the sw
   // Sessions: all 9 archived, published woon sessions.
   await expect(page.locator(".sv__session-card")).toHaveCount(9);
 
+  // And their takes open from the archive too. The expander's fallback is a
+  // fetch against the API, which has no row for an archived session — so
+  // without the bodies carried onto the row this reported "These takes could
+  // not be loaded" over takes already in memory.
+  const first = page.locator(".sv__session-card").first();
+  const btn = first.locator(".sv__takes-btn");
+  await expect(btn).not.toBeDisabled();
+  await btn.click();
+  await expect(first.locator(".sv__take-row").first()).toBeVisible();
+  await expect(first.locator(".sv__take-line").first()).not.toHaveText("");
+  // :visible, not a count — the loading and error lines are x-show, so both
+  // are in the DOM either way. What matters is that neither is on screen.
+  await expect(first.locator(".sv__unset:visible")).toHaveCount(0);
+
   await expectNoBrowserErrors(errors);
 });
 
@@ -288,8 +302,26 @@ test("a subject's session card carries the consensus and the decision, as /swarm
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions: [session], nextCursor: null }) }));
   await page.route("**/api/swarm/sessions", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions: [session], nextCursor: null }) }));
-  await page.route("**/api/swarm/sessions/2026-09-01/robotmoney-allocation", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ session, takes: [{}, {}, {}, {}, {}] }) }));
+  // Counted so the expander can be shown NOT to re-fetch what the page already
+  // holds: this same response is what built the card.
+  let detailFetches = 0;
+  await page.route("**/api/swarm/sessions/2026-09-01/robotmoney-allocation", (route) => {
+    detailFetches += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        session,
+        takes: [
+          { id: "t1", member_id: "athena", member_name: "Athena", stance: "constructive", confidence: 0.8,
+            body: "**SUBJECT**\n- Conservative DeFi still carries the book at this size." },
+          { id: "t2", member_id: "woon", member_name: "Woon", stance: "cautious", confidence: 0.4,
+            body: "**SUBJECT**\n- The agent sleeve is thin enough to ignore." },
+          { id: "t3" }, { id: "t4" }, { id: "t5" },
+        ],
+      }),
+    });
+  });
 
   await page.goto("/index.html");
   await navigate(page, "/swarm/subjects/robotmoney-allocation");
@@ -310,9 +342,34 @@ test("a subject's session card carries the consensus and the decision, as /swarm
   await expect(card).toContainText("62% mean confidence");
   // What it DECIDED, in the subject's own units.
   await expect(card.locator(".sv__rec-n")).toHaveText("95 / 5 / 0 / 0");
-  // And the reasoning under it, which /swarm drops because its list
-  // interleaves every subject.
-  await expect(card.locator(".sv__take-body")).toContainText("held the 95/5/0/0 frame");
+  // The foot /swarm carries: the takes expander and the way through to the
+  // session itself.
+  const takesBtn = card.locator(".sv__takes-btn");
+  await expect(takesBtn).toHaveText(/5 takes/);
+  await expect(takesBtn).toHaveAttribute("aria-expanded", "false");
+  await expect(card.locator(".sv__live-lnk")).toHaveAttribute("href", `/swarm/sessions/${session.id}`);
+
+  // The page already fetched this session's full detail to build the card, so
+  // opening the takes must not buy the same response twice.
+  const before = detailFetches;
+  await takesBtn.click();
+  await expect(takesBtn).toHaveAttribute("aria-expanded", "true");
+  const rows = card.locator(".sv__take-row");
+  await expect(rows).toHaveCount(5);
+  expect(detailFetches).toBe(before);
+
+  // Loudest first, and each row is a member, a stance and one line of what
+  // they actually said — not the whole memo.
+  await expect(rows.first()).toContainText("Athena");
+  await expect(rows.first().locator(".sv__stance-badge")).toHaveText("constructive");
+  await expect(rows.first()).toContainText("confidence");
+  await expect(rows.first().locator(".sv__take-line"))
+    .toHaveText("Conservative DeFi still carries the book at this size.");
+  await expect(rows.nth(1)).toContainText("Woon");
+
+  // And it closes again.
+  await takesBtn.click();
+  await expect(takesBtn).toHaveAttribute("aria-expanded", "false");
 });
 
 // The archive fallback was keyed on the REQUEST failing. This route answers
