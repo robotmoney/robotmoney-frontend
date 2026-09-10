@@ -27,7 +27,12 @@
              information, and it indented the headline and its copy away from
              the left edge every other block on this page sits on. -->
         <header class="sv__detail-head">
-          <p class="sv__eyebrow sv__eyebrow--quiet"><span x-text="subjectKind()">portfolio</span><span x-show="subject.operator"> · operator <span x-text="subject.operator"></span></span></p>
+          <!-- The operator is named only when it is not this house. See
+               operatorOf(): "· operator robotmoney" under a headline reading
+               ROBOT MONEY ALLOCATION said nothing twice, while peaq running
+               Woon Treasury is the fact the slot exists for. x-if, not x-show,
+               so the suppressed case leaves no node behind. -->
+          <p class="sv__eyebrow sv__eyebrow--quiet"><span x-text="subjectKind()">portfolio</span><template x-if="operatorLabel()"><span> · operator <span x-text="operatorLabel()"></span></span></template></p>
           <h1 class="sv__detail-title" x-text="subject.name"></h1>
           <p class="sv__lede sv__lede--compact" x-show="subject.thesisBlurb" x-text="subject.thesisBlurb"></p>
           <p class="sp-links" x-show="subject.homepage || subject.xHandle">
@@ -150,17 +155,12 @@
           </template>
         </div>
 
-        <!-- camelSubject defaults this to [], which is truthy — a plain
-             x-show on the field renders an empty panel on every subject that
-             has none. Gate on length, and render the list it actually is. -->
-        <template x-if="structuralNotes().length">
-          <section class="sv__panel">
-            <p class="sv__panel-label">Structural notes</p>
-            <ul class="sv__bullet-list">
-              <template x-for="n in structuralNotes()" :key="n"><li x-text="n"></li></template>
-            </ul>
-          </section>
-        </template>
+        <!-- No "Structural notes" panel. The field is still on the subject
+             record and still editable in /admin, because it is the operator's
+             brief TO THE SWARM: how to review this subject, what not to
+             default to, which sibling subject owns the holdings question. It
+             is instructions for the agents, and printing it to a reader turned
+             the page into an annotated design file explaining itself. -->
 
         <section class="sp-sessions">
           <div class="sv__sessions-head">
@@ -201,17 +201,23 @@
                 </div>
 
                 <div class="sv__session-body">
-                  <div class="sv__session-consensus">
-                    <p class="sv__session-kicker">Consensus</p>
-                    <div class="sv__card-verdict">
-                      <span class="sv__stance-badge" x-show="lean(s)" :style="leanBadgeStyle(s)">
-                        <i x-show="leanStance(s)" :style="leanDotStyle(s)"></i>
-                        <span x-text="leanLabel(s)"></span>
-                      </span>
-                      <span x-text="quorumText(s)"></span>
-                      <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
+                  <!-- The kicker is gated on there being a consensus to put
+                       under it, not just on each fact separately: an archive
+                       row carries the recommendation but no stances, quorum or
+                       confidence, and printed "Consensus" over nothing. -->
+                  <template x-if="hasConsensus(s)">
+                    <div class="sv__session-consensus">
+                      <p class="sv__session-kicker">Consensus</p>
+                      <div class="sv__card-verdict">
+                        <span class="sv__stance-badge" x-show="lean(s)" :style="leanBadgeStyle(s)">
+                          <i x-show="leanStance(s)" :style="leanDotStyle(s)"></i>
+                          <span x-text="leanLabel(s)"></span>
+                        </span>
+                        <span x-text="quorumText(s)"></span>
+                        <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
+                      </div>
                     </div>
-                  </div>
+                  </template>
 
                   <div class="sv__session-payload">
                     <template x-if="recommendation(s)">
