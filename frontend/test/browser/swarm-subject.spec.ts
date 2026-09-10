@@ -367,7 +367,27 @@ test("a subject's session card carries the consensus and the decision, as /swarm
   await expect(card).toContainText("5 of 7 took part");
   await expect(card).toContainText("62% mean confidence");
   // What it DECIDED, in the subject's own units.
-  await expect(card.locator(".sv__rec-n")).toHaveText("95 / 5 / 0 / 0");
+  // Drawn, not spelled: one band per sleeve, in /allocation's own colours, with
+  // the figures beside their names. "95 / 5 / 0 / 0" made a reader map four
+  // numbers back onto four names they were holding in their head.
+  const keys = card.locator(".sv__wkeys li");
+  await expect(keys).toHaveCount(4);
+  await expect(keys.nth(0)).toContainText("Conservative DeFi Yield");
+  await expect(keys.nth(0)).toContainText("95%");
+  await expect(keys.nth(1)).toContainText("Agent Tokens");
+  await expect(keys.nth(1)).toContainText("5%");
+  // A sleeve at zero keeps its row, marked as held there on purpose...
+  await expect(keys.nth(2)).toContainText("Protocol Tokens 0%");
+  await expect(keys.nth(2)).toHaveClass(/is-zero/);
+  // ...and draws no band, so the bar never shows a sliver for nothing.
+  await expect(card.locator(".sv__wbar > i:visible")).toHaveCount(2);
+  // Colour follows the sleeve's published POSITION, so it is the hue this
+  // sleeve wears on /allocation's donut and a weight change never repaints the
+  // sleeves that did not move.
+  const first = await card.locator(".sv__wbar > i").first()
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(first).toBe("rgb(16, 185, 129)"); // CATEGORICAL[0], #10b981
+  await expect(card.locator(".sv__wbar")).toHaveAttribute("aria-label", /Conservative DeFi Yield 95%/);
   // The foot /swarm carries: the takes expander and the way through to the
   // session itself.
   const takesBtn = card.locator(".sv__takes-btn");
@@ -474,7 +494,7 @@ test("a session with no consensus to report prints no Consensus kicker", async (
   await expect(card).toBeVisible();
 
   // The row is here, and it does carry the decision...
-  await expect(card.locator(".sv__rec")).toContainText("Target weights");
+  await expect(card.locator(".sv__wkeys li").first()).toContainText("Conservative DeFi Yield 95%");
   // ...but nothing to say about the consensus, so the kicker is absent rather
   // than a label standing over empty space.
   await expect(card.locator(".sv__session-kicker")).toHaveCount(0);

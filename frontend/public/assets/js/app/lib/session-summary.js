@@ -19,6 +19,7 @@
 // changes /swarm's archive links, which is its own change with its own
 // evidence, not a side effect of this one.
 import { stanceColor, stanceStyle } from "./stance.js";
+import { CATEGORICAL } from "./chart-theme.js";
 
 // Fixed reading direction, so a spread bar means the same thing on every
 // surface. A stance this build does not know keeps its count and sorts last
@@ -30,6 +31,16 @@ const STANCE_ORDER = ["bullish", "constructive", "neutral", "cautious", "bearish
 // in this order rather than the object's, so "95 / 5 / 0 / 0" names the same
 // four sleeves every time.
 const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
+
+// Named, not humanised from the key: "real world assets" is the transform a
+// slug gives you and "Real World Assets" is what the framework publishes.
+/** @type {Record<string, string>} */
+const BUCKET_LABELS = {
+  conservative_defi_yield: "Conservative DeFi Yield",
+  agent_tokens: "Agent Tokens",
+  protocol_tokens: "Protocol Tokens",
+  real_world_assets: "Real World Assets",
+};
 
 export const sessionSummary = {
   // The stance tally. The live pipeline aggregates it onto the record; the
@@ -132,6 +143,16 @@ export const sessionSummary = {
   hasConsensus(s) {
     return !!(this.lean(s) || this.quorumText(s) || this.meanConfidenceText(s));
   },
+  // The weights as ROWS, not a string. "95 / 3 / 0 / 2" is four numbers a
+  // reader has to map back onto four sleeve names they are holding in their
+  // head; the relationship between them, which is the whole point of a target
+  // mix, is not visible at all. Rows carry the name, the share and the colour,
+  // so a card can draw the mix instead of spelling it.
+  //
+  // The colour is CATEGORICAL keyed on POSITION IN THE PUBLISHED ORDER, the
+  // same index /allocation's donut uses, so a sleeve is the same colour on
+  // both pages and a weight change never repaints the sleeves that did not
+  // move.
   /** @param {any} s */
   sessionWeights(s) {
     const rec = s?.swarmRecommendation;
@@ -140,8 +161,22 @@ export const sessionSummary = {
     /** @type {Record<string, number>} */
     const by = {};
     for (const [k, v] of Object.entries(rec.weights)) by[norm(k)] = Number(v) * 100;
-    const vals = BUCKET_ORDER.map((k) => by[norm(k)]).filter((v) => Number.isFinite(v));
-    return vals.length ? vals.map((v) => Math.round(v)).join(" / ") : null;
+    const rows = BUCKET_ORDER
+      .map((key, i) => ({ key, label: BUCKET_LABELS[key], pct: by[norm(key)], colour: CATEGORICAL[i % CATEGORICAL.length] }))
+      .filter((r) => Number.isFinite(r.pct));
+    return rows.length ? rows : null;
+  },
+  // The same figures as one line, for a caption, an aria-label or anywhere a
+  // bar cannot go.
+  /** @param {any} s */
+  sessionWeightsText(s) {
+    const rows = this.sessionWeights(s);
+    return rows ? rows.map((r) => Math.round(r.pct)).join(" / ") : null;
+  },
+  /** @param {any} s */
+  sessionWeightsLabel(s) {
+    const rows = this.sessionWeights(s);
+    return rows ? rows.map((r) => `${r.label} ${Math.round(r.pct)}%`).join(", ") : "";
   },
   // What the session DECIDED. The card printed the synthesis paragraph here,
   // which is the reasoning: five lines of it, identical in shape on every row,
@@ -153,11 +188,11 @@ export const sessionSummary = {
     const rec = s?.swarmRecommendation;
     if (!rec) return null;
     if (rec.type === "bucket_weights") {
-      const w = this.sessionWeights(s);
+      const rows = this.sessionWeights(s);
       // The weights are the decision; the rationale is why. A card carrying
-      // "95 / 3 / 0 / 2" alone made the reader open the session to find out
-      // what moved, which is the one thing the row exists to tell them.
-      return w ? { kind: "weights", text: w, note: rec.rationale || "" } : null;
+      // the numbers alone made the reader open the session to find out what
+      // moved, which is the one thing the row exists to tell them.
+      return rows ? { kind: "weights", rows, note: rec.rationale || "" } : null;
     }
     const acts = (Array.isArray(rec.actions) ? rec.actions : [])
       .filter(/** @param {any} a */ (a) => a && a.action);
