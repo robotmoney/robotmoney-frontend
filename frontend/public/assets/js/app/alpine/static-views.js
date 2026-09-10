@@ -1183,80 +1183,82 @@ export function registerStaticViews(Alpine) {
       return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
     },
     briefDate() { return this.brief?.date ? this.formatDate(this.brief.date, "long") : ""; },
-    // What the brief is made of, in the order it is assembled. The prose is
-    // fixed — this is the shape of EVERY session's brief, not one session's —
-    // and the figures are read off the last real brief when there is one, so a
-    // reader can see both what is handed over and how much of it there was.
-    // `href` points at the page that owns each input, so "where does the
+    // What the brief is made of, in the order it is assembled.
+    //
+    // Each part is a LABEL, a scannable VALUE and a line of prose — not one
+    // sentence with the figure buried in it. Seven sentences of equal weight
+    // is a wall: the reader who wants "how much research?" should find "5
+    // summaries" without reading a clause. The prose is fixed, because this is
+    // the shape of EVERY session's brief; the values are read off the last
+    // real brief, and fall back to a word rather than a number when there is
+    // none. `href` points at the page that owns each input, so "where does the
     // regime read come from" is one click rather than a question.
     briefParts() {
       const b = this.brief;
       const n = (/** @type {any} */ v) => (Array.isArray(v) ? v.length : null);
-      const count = (/** @type {number|null} */ v, /** @type {string} */ one, /** @type {string} */ many) =>
+      const plural = (/** @type {number|null} */ v, /** @type {string} */ one, /** @type {string} */ many) =>
         v == null ? "" : `${v} ${v === 1 ? one : many}`;
       const regime = b?.regime;
-      const buckets = n(b?.allocation?.buckets);
-      const articles = n(b?.research?.articles);
-      const history = n(b?.regime_history ?? b?.regimeHistory);
-      const recent = n(b?.recent_sessions ?? b?.recentSessions);
+      const composite = Number(regime?.composite);
       const snap = b?.subject_snapshot ?? b?.subjectSnapshot ?? null;
       const positions = n(snap?.positions);
+      const notes = this.structuralNotes().length;
+      const recent = n(b?.recent_sessions ?? b?.recentSessions);
       return [
         {
           key: "regime",
-          label: "The market regime",
+          label: "Market regime",
           href: "/regime",
-          text: regime
-            ? `Composite ${Number(regime.composite).toFixed(3)}, bucketed ${String(regime.regime || "").replace(/_/g, " ")}, with the macro, on-chain and factor reads behind it, their percentiles and their correlations.`
-            : "The composite score and its bucket, with the macro, on-chain and factor reads behind it, their percentiles and their correlations.",
+          value: Number.isFinite(composite)
+            ? `${composite.toFixed(3)} · ${String(regime.regime || "").replace(/_/g, " ")}`
+            : "Composite",
+          text: "The composite score and its bucket, with the macro, on-chain and factor reads behind it, their percentiles and their correlations.",
         },
         {
           key: "history",
-          label: "Recent regime history",
+          label: "Regime history",
           href: "/regime",
-          text: history
-            ? `${count(history, "reading", "readings")}, so a member reads the direction and not only the level.`
-            : "Trailing readings, so a member reads the direction and not only the level.",
+          value: plural(n(b?.regime_history ?? b?.regimeHistory), "reading", "readings") || "Trailing",
+          text: "So a member reads the direction and not only the level.",
         },
         {
           key: "framework",
-          label: "The allocation framework",
+          label: "Allocation framework",
           href: "/allocation",
-          text: buckets
-            ? `${count(buckets, "sleeve", "sleeves")} with their target weights, the assets inside each, the protocols each may use, and how each is meant to behave by regime.`
-            : "The sleeves with their target weights, the assets inside each, the protocols each may use, and how each is meant to behave by regime.",
+          value: plural(n(b?.allocation?.buckets), "sleeve", "sleeves") || "Targets",
+          text: "Their target weights, the assets inside each, the protocols each may use, and how each is meant to behave by regime.",
         },
         {
           key: "research",
           label: "Published research",
           href: "/blog",
-          text: articles
-            ? `${count(articles, "summary", "summaries")} of Robot Money's own research, each with its key findings.`
-            : "Summaries of Robot Money's own research, each with its key findings.",
+          value: plural(n(b?.research?.articles), "summary", "summaries") || "Summaries",
+          text: "Robot Money's own research, each with its key findings.",
         },
         {
           key: "subject",
           label: "This subject",
           href: "",
-          text: "Its name, its operator, the thesis it is held to, and the notes below.",
+          value: notes ? `Thesis · ${plural(notes, "note", "notes")}` : "Thesis",
+          text: "Its name, its operator and the thesis it is held to, with the operator's notes below.",
         },
         {
           key: "holdings",
           label: "Holdings",
           href: "",
-          text: positions
-            ? `${count(positions, "position", "positions")} and the wallets they sit in, priced on the day.`
-            : this.isFramework()
-              ? "None. This subject is a framework, so there is no book to hand over."
-              : "The positions and the wallets they sit in, priced on the day.",
+          value: positions
+            ? plural(positions, "position", "positions")
+            : this.isFramework() ? "None" : "Positions",
+          text: this.isFramework() && !positions
+            ? "This subject is a framework, so there is no book to hand over."
+            : "The positions and the wallets they sit in, priced on the day.",
         },
         {
           key: "sessions",
           label: "Recent sessions",
           href: "/swarm",
-          text: recent
-            ? `The last ${recent}, each with what the swarm concluded, so nobody re-argues a settled point.`
-            : "The most recent sessions, each with what the swarm concluded, so nobody re-argues a settled point.",
+          value: recent ? `Last ${recent}` : "Recent",
+          text: "Each with what the swarm concluded, so nobody re-argues a settled point.",
         },
       ];
     },
