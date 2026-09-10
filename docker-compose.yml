@@ -277,6 +277,16 @@ services:
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
       SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}
+      # Absolute origin swarm notification emails link back to (see
+      # config.ts::resolveSwarmPublicBaseUrl). Passed through with NO inline
+      # literal default — issue #894's assertSwarmNotificationSafety() refuses
+      # to boot this api process once SWARM_SCHEDULES_ENABLED is on (the
+      # default just below) unless this is set explicitly on the host, so a
+      # deployment can no longer silently fall back to the production-shaped
+      # default in config.ts. A real single-box deployment that wants the
+      # schedules on must set SWARM_PUBLIC_BASE_URL in its own .env to the
+      # origin it is actually reachable at.
+      SWARM_PUBLIC_BASE_URL: ${SWARM_PUBLIC_BASE_URL:-}
       # Swarm session-lifecycle cron cadence (issue #208). Read at
       # `bun run migrate` time (seed() -> resolveSwarmSchedules) — this is
       # the SINGLE-BOX/prod compose file, so it explicitly enables the daily

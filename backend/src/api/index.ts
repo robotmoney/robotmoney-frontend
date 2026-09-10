@@ -3,7 +3,7 @@
 // the sibling `website-server` nginx image (issue #892), which proxies /api/
 // and /health here so a single-box deployment still presents as one origin.
 import { ROUTES } from "@robotmoney/contract";
-import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
+import { config, assertNoVaultAddressCollision, assertSwarmNotificationSafety, warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
@@ -31,6 +31,13 @@ function json(data: unknown, status = 200): Response {
 // vault share. Fail-closed at startup — a misconfiguration must never serve a
 // live-looking double-counted number.
 assertNoVaultAddressCollision();
+
+// Config-time notification-safety guard (issue #894): refuse to boot if the
+// swarm session-lifecycle schedules are enabled without an explicit
+// SWARM_PUBLIC_BASE_URL — otherwise a staging deployment would silently mail
+// applicants a link back to production. Fail-closed at startup, same as the
+// collision guard above.
+assertSwarmNotificationSafety();
 
 // Config-time completeness WARNING (issue #642, decision D37): an empty
 // STRATEGY_VAULT_*_ADDRESS list makes ZYFAI-SS1/GIZA-SS1 NAV idle-USDC-only,
