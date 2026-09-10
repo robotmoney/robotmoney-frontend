@@ -71,6 +71,15 @@ export interface SwarmMember {
   avatar: unknown;
   appliedAt: string | null;
   activatedAt: string | null;
+  /**
+   * Newest `received_at` across the member's swarm_recommendations rows
+   * (issue #782) — when the agent last ACTED, not when a session was held,
+   * and not the same fact as `status: "active"` (a live seat, not
+   * participation). Null until the member's first take, or for a payload
+   * built from a query that never joined it (e.g. getMember's single-row
+   * read).
+   */
+  lastTakeAt: string | null;
 }
 
 export interface SwarmSubject {

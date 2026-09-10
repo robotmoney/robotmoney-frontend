@@ -961,6 +961,50 @@ test("GET /api/swarm/members exposes rosterCap, seatsFilled, and seatsAvailable,
   expect(afterDeactivate.seatsAvailable).toBe(ic.SWARM_ROSTER_CAP);
 });
 
+test("GET /api/swarm/members exposes lastTakeAt (#782): null until a member's first take, then the newest received_at across revisions — not status:'active' or the session's convened_at", async () => {
+  const getMembersRoute = async () => {
+    const req = new Request(`http://test${ROUTES.swarm.members}`);
+    const res = await handleSwarm(req, new URL(req.url));
+    expect(res?.status).toBe(200);
+    return (res!.body as { members: any[] }).members;
+  };
+
+  const subj = rid("lastTake");
+  await ic.ensureSubject(subj, "Last Take Subject");
+  const m = await activeMember();
+
+  // A live seat with zero takes must not be confused with a participating one.
+  const before = (await getMembersRoute()).find((x) => x.id === m.id);
+  expect(before.status).toBe("active");
+  expect(before.lastTakeAt).toBeNull();
+
+  const session = await ic.openSession(subj);
+  const date = sessionDate(session);
+  await ic.publishBrief(session.id, 60);
+  const first = { memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance: "neutral", confidence: 0.5, body: "x".repeat(80) };
+  const firstSig = await signMessage(canonicalizeSubmission(first), m.privateKey);
+  expect((await ic.submitRecommendation(m.token, { ...first, signature: firstSig })).status).toBe(201);
+
+  const firstReceivedAt = (
+    await sql<{ t: Date }[]>`SELECT max(received_at) AS t FROM swarm_recommendations WHERE member_id = ${m.id}`
+  )[0].t;
+  const afterFirst = (await getMembersRoute()).find((x) => x.id === m.id);
+  expect(afterFirst.lastTakeAt).toBe(firstReceivedAt.toISOString());
+
+  // An amendment (issue #573 revision, same session) is a NEW row with its own
+  // received_at — lastTakeAt must track the newest one, not the first.
+  const amendment = { ...first, nonce: rid("n2"), stance: "bullish" };
+  const amendmentSig = await signMessage(canonicalizeSubmission(amendment), m.privateKey);
+  expect((await ic.submitRecommendation(m.token, { ...amendment, signature: amendmentSig })).status).toBe(201);
+
+  const latestReceivedAt = (
+    await sql<{ t: Date }[]>`SELECT max(received_at) AS t FROM swarm_recommendations WHERE member_id = ${m.id}`
+  )[0].t;
+  expect(latestReceivedAt.getTime()).toBeGreaterThan(firstReceivedAt.getTime());
+  const afterAmendment = (await getMembersRoute()).find((x) => x.id === m.id);
+  expect(afterAmendment.lastTakeAt).toBe(latestReceivedAt.toISOString());
+});
+
 test("POST /api/swarm/signing-payload and submit reject unknown stances and unknown top-level fields with 400 and clear error string", async () => {
   const m = await activeMember();
 

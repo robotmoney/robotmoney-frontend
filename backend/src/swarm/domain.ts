@@ -152,8 +152,26 @@ export const TAKES_AMENDABLE_STATES: ReadonlySet<string> = new Set([
 ]);
 
 // ── Reads ─────────────────────────────────────────────────────────────────
+// Issue #782: `status: 'active'` on a member row means the SEAT is live, not
+// that the agent is participating — the members table needs a real activity
+// signal to tell a live swarm from a static roster. The lateral gives each
+// member its own newest take instant without a second round trip per member
+// or a GROUP BY over the whole roster; `received_at` (not the session's
+// convened_at) because the question is when the agent acted, and max() over
+// it already collapses revisions (`r.revision`) to the latest one.
+// swarm_recommendations_member_received_idx (migration 0055) keeps this cheap
+// as the take count grows.
 export async function getMembers() {
-  const rows = await sql`SELECT * FROM swarm_members WHERE status = 'active' ORDER BY id`;
+  const rows = await sql`
+    SELECT m.*, t.last_take_at
+      FROM swarm_members m
+      LEFT JOIN LATERAL (
+        SELECT max(received_at) AS last_take_at
+          FROM swarm_recommendations
+         WHERE member_id = m.id
+      ) t ON true
+     WHERE m.status = 'active'
+     ORDER BY m.id`;
   return rows.map(toMember);
 }
 export async function countActiveMembers(): Promise<number> {

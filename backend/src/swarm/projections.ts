@@ -43,6 +43,10 @@ export function toMember(row: Row): SwarmMember {
     avatar: row.avatar ?? null,
     appliedAt: instant(row.applied_at),
     activatedAt: instant(row.activated_at),
+    // Issue #782: null until a member's first take, and null (rather than
+    // omitted) for any row read by a query that never joined it — same
+    // fallback convention `instant` already gives every other field here.
+    lastTakeAt: instant(row.last_take_at),
   };
 }
 
