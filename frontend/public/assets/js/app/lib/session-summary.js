@@ -80,11 +80,19 @@ export const sessionSummary = {
     const q = s?.swarmRecommendation?.quorum;
     return q ? `${q.submitted} of ${q.active} took part` : "";
   },
+  // How many takes this session collected. The quorum is the authority when
+  // the record has one; a row that carries its own count comes next (the
+  // sessions list route serves one, and the static archive has nothing else);
+  // the stance spread is the last resort. Getting this wrong is visible: the
+  // expander is disabled at 0, so an archive session with three signed takes
+  // read "0 takes" and would not open.
   /** @param {any} s */
   takesCount(s) {
-    const q = s?.swarmRecommendation?.quorum;
-    const n = Number(q?.submitted);
-    return Number.isFinite(n) ? n : this.stanceSpread(s).reduce((a, r) => a + r.n, 0);
+    const q = Number(s?.swarmRecommendation?.quorum?.submitted);
+    if (Number.isFinite(q)) return q;
+    const own = Number(s?.takes);
+    if (Number.isFinite(own)) return own;
+    return this.stanceSpread(s).reduce((a, r) => a + r.n, 0);
   },
   // Whether the session record carries a consensus AT ALL. The three facts
   // under the kicker are each individually gated, so a session with none of

@@ -16,6 +16,7 @@ import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
 import { sessionSummary } from "../lib/session-summary.js";
+import { sessionTakes } from "../lib/session-takes.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -1056,6 +1057,7 @@ export function registerStaticViews(Alpine) {
   Alpine.data("subjectProfile", () => ({
     ...helpers,
     ...sessionSummary,
+    ...sessionTakes(),
     loading: true,
     error: null,
     subject: null,
@@ -1197,6 +1199,11 @@ export function registerStaticViews(Alpine) {
             synthesis: full?.synthesis || "",
             swarmRecommendation: full?.swarmRecommendation || null,
             takes: (detail.takes || []).length,
+            // The BODIES, not just the count. This response is already in
+            // hand, so the expander reads them from the row instead of
+            // re-fetching the detail it was built from. See
+            // lib/session-takes.js toggleTakes().
+            takeRows: (detail.takes || []).map(camelTake),
           };
         } catch (_) {
           if (archivePreferred(s.date)) {
@@ -1207,6 +1214,12 @@ export function registerStaticViews(Alpine) {
                 synthesis: archive.session?.synthesis || "",
                 swarmRecommendation: archive.session?.swarmRecommendation || null,
                 takes: (archive.takes || []).length,
+                // loadArchiveSession already camelTakes these. Without them
+                // the expander falls through to fetchSessionDetail, which asks
+                // an API that has no row for an archived session and answers
+                // "These takes could not be loaded" over takes that are
+                // sitting in memory.
+                takeRows: archive.takes || [],
               };
             } catch (_) { /* fall through */ }
           }
