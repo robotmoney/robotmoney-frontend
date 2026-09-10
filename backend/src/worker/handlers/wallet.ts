@@ -12,6 +12,10 @@
 // job, and the worker's queue-scoped pool (db/worker-client.ts, issue #106)
 // must not be dragged into the migrate one-shot's import graph (a queried
 // second pool would keep `bun run migrate` from ever exiting).
+//
+// D41 phase 4 (issue #927): the live sampler now dual-writes price data to
+// `asset_prices` and no longer writes `price_usd` to `wallet_balance_samples`,
+// mirroring the change #851 made to `repairResolvedDay`.
 import { sql } from "../../db/worker-client.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../../chain/wallet-balances.ts";
 import {
@@ -32,6 +36,18 @@ import {
 } from "../../chain/wallet-valuation.ts";
 import { classifySlot, declineReplayedSlot } from "./slot.ts";
 import { lockWalletSnapshotDate } from "../../ops/wallet-snapshot-manifest.ts";
+import {
+  writeAssetPrice,
+  type AssetPriceSource,
+  ASSET_PRICE_TIME_BASIS,
+} from "../../ops/asset-prices.ts";
+import { resolvePoolForToken } from "../../chain/historical-prices.ts";
+
+/** The instant a UTC daily candle for `date` closes — one day after `date`'s
+ *  own midnight (issue #927's asset_prices dual-write; `observed_at`). */
+function dayCloseInstant(date: string): Date {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + 86_400_000);
+}
 
 export async function sampleWalletBalances(payload: Record<string, unknown> = {}): Promise<unknown> {
   // issue #614 AC4: a slot replayed for a bucket (UTC calendar day here)
@@ -50,6 +66,25 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
   _resetWalletBalancesCacheForTests();
   const { holdings } = await fetchWalletBalances();
   const sampleDate = new Date().toISOString().slice(0, 10); // UTC calendar day
+  const assets = resolveTrackedAssets();
+  const assetBySymbol = new Map(assets.map((a) => [a.symbol, a]));
+
+  // D41 phase 4 (issue #927): resolve pool keys for the asset_prices dual-write,
+  // once per symbol, outside the transaction (resolvePoolForToken may reach the
+  // network). Metadata only: a resolution failure never fails the day the
+  // amounts write already succeeded for.
+  const poolKeyBySymbol = new Map<string, string | null>();
+  for (const h of holdings) {
+    const asset = assetBySymbol.get(h.symbol);
+    if (asset?.priceKind === "gecko" && asset.address && !poolKeyBySymbol.has(h.symbol)) {
+      try {
+        poolKeyBySymbol.set(h.symbol, await resolvePoolForToken(asset.address));
+      } catch {
+        poolKeyBySymbol.set(h.symbol, null);
+      }
+    }
+  }
+
   return sql.begin(async (tx) => {
     await lockWalletSnapshotDate(tx, sampleDate);
     let persisted = 0;
@@ -68,19 +103,47 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
       // non-strategy leg, and any leg whose read failed) persists as NULL:
       // not-applicable/not-known, never a fabricated `false`. See migration 0032.
       const strategyNavIdleOnly = h.strategyNavIdleOnly ?? null;
+      const asset = assetBySymbol.get(h.symbol);
+      const priceUsd = h.priceUsd;
+      // D41 phase 4 (issue #927): price_usd is NOT written to wallet_balance_samples.
+      // asset_prices is the sole write target for price data now that #850 switched
+      // every read site to the join; leaving this column NULL on a live-sampled row
+      // is deliberate, not an oversight, and value_usd still carries the fused
+      // amount*price product a caller may need before the join lands its row.
       await tx`
         INSERT INTO wallet_balance_samples
-          (sample_date, symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at)
+          (sample_date, symbol, amount, value_usd, provenance, strategy_nav_idle_only, sampled_at)
         VALUES
-          (${sampleDate}, ${h.symbol}, ${h.amount}, ${h.priceUsd}, ${h.valueUsd}, ${provenance}, ${strategyNavIdleOnly}, now())
+          (${sampleDate}, ${h.symbol}, ${h.amount}, ${h.valueUsd}, ${provenance}, ${strategyNavIdleOnly}, now())
         ON CONFLICT (sample_date, symbol) DO UPDATE SET
           amount     = EXCLUDED.amount,
-          price_usd  = EXCLUDED.price_usd,
           value_usd  = EXCLUDED.value_usd,
           provenance = EXCLUDED.provenance,
           strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only,
           sampled_at = EXCLUDED.sampled_at
       `;
+
+      // D41 phase 4 — dual-write the price row alongside the sample row,
+      // once per (date, symbol) from the aggregate leg.
+      if (asset && priceUsd != null && Number.isFinite(priceUsd) && priceUsd > 0) {
+        const source: AssetPriceSource = asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
+        const poolKey = source === "pinned" ? null : (poolKeyBySymbol.get(h.symbol) ?? null);
+        const now = new Date();
+        await writeAssetPrice(tx as any, {
+          priceDate: sampleDate,
+          symbol: h.symbol,
+          priceUsd,
+          source,
+          poolKey,
+          tokenAddress: source === "pinned" ? null : (asset.address ?? null),
+          observedAt: dayCloseInstant(sampleDate),
+          fetchedAt: now,
+          configIdentity: source === "pinned"
+            ? "pinned:usd:1.00"
+            : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
+        });
+      }
+
       persisted += 1;
     }
     return { sampleDate, persisted };
@@ -144,12 +207,11 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
 
       await tx`
         INSERT INTO wallet_sleeve_samples
-          (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+          (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
         VALUES
-          (${sampleDate}, ${walletAddress}, ${asset.symbol}, ${valued.amount}, ${valued.priceUsd}, ${valued.valueUsd}, ${provenance}, now())
+          (${sampleDate}, ${walletAddress}, ${asset.symbol}, ${valued.amount}, ${valued.valueUsd}, ${provenance}, now())
         ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
           amount     = EXCLUDED.amount,
-          price_usd  = EXCLUDED.price_usd,
           value_usd  = EXCLUDED.value_usd,
           provenance = EXCLUDED.provenance,
           sampled_at = EXCLUDED.sampled_at
@@ -160,4 +222,3 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
     return { sampleDate, persisted };
   });
 }
-

@@ -140,11 +140,10 @@ export const MAX_PERSISTED_PRICE_AGE_MS = 5 * 60_000;
 // freshness window, e.g. a backfill/repair commit landing within minutes of
 // UTC midnight for the day it just closed. For that row, and only that row,
 // the price it reports comes from `asset_prices` rather than the sample's own
-// (soon-to-be-retired, D41 phase 4) `price_usd` column — falling back to the
-// sample's own price when `asset_prices` has no row yet, exactly as
-// wallet-balances.ts::loadHistory does, for the identical #849 known-gap
-// reason (a cleanly-sampled closed day is not guaranteed to have dual-written
-// into `asset_prices` yet).
+// (soon-to-be-retired, D41 phase 4) `price_usd` column. D41 phase 4 (issue #927)
+// closed the coverage gap: `asset_prices` now has a row for every cleanly-sampled
+// closed day, so the join always has what it needs for closed days. Today's row
+// uses its fused `price_usd`.
 async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number; sampledAt: string } | null> {
   const rows = await sql<{ price_usd: string | null; sampled_at: Date; asset_price_usd: string | null; is_closed: boolean }[]>`
     SELECT wbs.price_usd, wbs.sampled_at,
@@ -176,11 +175,6 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
   const sampledAt = row.sampled_at instanceof Date ? row.sampled_at : new Date(row.sampled_at);
   const sampledAtMs = sampledAt.getTime();
   if (Date.now() - sampledAtMs > MAX_PERSISTED_PRICE_AGE_MS) return null; // too old — not eligible
-  // Same JS-side multiplication discipline as loadHistory/computeWalletSleeves:
-  // this reader returns a PRICE, not a value, so there is no product to worry
-  // about here — only which column's price_usd to read — but the join is
-  // still read in JS rather than folded into the WHERE/SELECT arithmetic so a
-  // future caller that DOES multiply against it inherits the same exactness.
   const priceUsd = row.is_closed && row.asset_price_usd != null ? Number(row.asset_price_usd) : Number(row.price_usd);
   return { priceUsd, sampledAt: sampledAt.toISOString() };
 }

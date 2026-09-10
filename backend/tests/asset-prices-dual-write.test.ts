@@ -161,4 +161,9 @@ test("the live sampler never writes to asset_prices — it writes a fused spot r
   // ...and none of it reached asset_prices, at any date.
   const [priceCount] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM asset_prices`;
   expect(priceCount!.n).toBe(0);
+  // D41 phase 4 (issue #927): the live sampler no longer writes price_usd.
+  const [priceUsdNull] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${today} AND price_usd IS NOT NULL
+  `;
+  expect(priceUsdNull!.n).toBe(0);
 });

@@ -91,13 +91,17 @@ async function computeWalletSleeves(
       .map((s) => bySymbol.get(s))
       .filter((a): a is TrackedAsset => a != null && (a.valuationKind === "native" || !isPlaceholderAddress(a.address)));
 
-    // D41 phase 3 (issue #850): a CLOSED day's price is a read-time join
-    // against `asset_prices`; today's own row keeps its fused price/value —
-    // see the extended rationale on wallet-balances.ts::loadHistory, which
-    // this mirrors exactly (same LEFT JOIN, same COALESCE-shaped fallback for
-    // #849's known cleanly-sampled-day gap, same JS-side multiplication so a
-    // covered day reproduces the ORIGINAL value_usd bit-for-bit rather than
-    // Postgres `numeric` arithmetic's differently-rounded product).
+// D41 phase 3 (issue #850): a CLOSED day's price is a read-time join
+// against `asset_prices`; today's own row keeps its fused price/value —
+// see the extended rationale on wallet-balances.ts::loadHistory, which
+// this mirrors exactly (same LEFT JOIN). D41 phase 4 (issue #927) closed
+// the coverage gap: `asset_prices` now has a row for every cleanly-sampled
+// closed day, so the join always has what it needs for closed days. Today's
+// row uses its fused `value_usd`. The multiplication happens in JS, not SQL:
+// `asset_prices.price_usd` is dual-written/seeded from the exact same JS
+// double that produced the sample row's `value_usd`, so the JS product
+// reproduces it bit-for-bit rather than Postgres `numeric` arithmetic's
+// differently-rounded product.
     const rows = await sql<
       {
         symbol: string;
@@ -155,6 +159,9 @@ async function computeWalletSleeves(
       }
 
       const amountNum = row.amount == null ? null : Number(row.amount);
+      // D41 phase 4 (issue #927): asset_prices now has full coverage for cleanly-sampled
+      // closed days. Closed days always use the joined price; today's row uses its
+      // fused values (D41: "today's live point keeps its fused row").
       const useJoin = row.is_closed && row.asset_price_usd != null && amountNum != null;
       const priceUsd = useJoin ? Number(row.asset_price_usd) : row.price_usd == null ? null : Number(row.price_usd);
       const valueUsd = useJoin

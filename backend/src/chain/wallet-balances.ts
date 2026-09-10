@@ -266,21 +266,16 @@ function dominantProvenance(seen: Set<Provenance>): Provenance {
 // `asset_prices` rather than the sample row's own `value_usd`; TODAY's row is
 // the one exception and keeps its fused value (D41: "today's live point keeps
 // its fused row"). The LEFT JOIN is deliberately permissive rather than an
-// INNER JOIN or a hard read-from-asset_prices-only rewrite: issue #849's own
-// dev notes record that a CLEANLY-sampled closed day never dual-writes into
-// `asset_prices` (only a day that needed repair does), so the table is known
-// to still have gaps for ordinary, correctly-sampled history. Falling back to
-// the sample row's own `value_usd` when the join has no row for that
-// (date, symbol) is what keeps every existing response byte-identical during
-// that gap — it is not the live/close COALESCE trap markets §5.6 point 1
-// forbids, because both sides describe the SAME closed day's settled price,
-// never a live spot standing in for one. The multiplication itself happens in
-// JS, not SQL: `asset_prices.price_usd` is dual-written/seeded from the exact
-// same JS double that produced the sample row's `value_usd`
-// (ops/asset-prices.ts::writeAssetPrice, migration 0046's seed step), so
-// `Number(amount) * Number(joinedPrice)` reproduces that IEEE-754 product
-// exactly — a SQL-side `amount * price_usd` would instead run as arbitrary-
-// precision `numeric` arithmetic and could differ in its last digits.
+// INNER JOIN. D41 phase 4 (issue #927) closed the coverage gap: `asset_prices`
+// now has a row for every cleanly-sampled closed day, so the join always has
+// what it needs for closed days. Today's row uses its fused `value_usd`.
+// The multiplication happens in JS, not SQL: `asset_prices.price_usd` is
+// dual-written/seeded from the exact same JS double that produced the sample
+// row's `value_usd` (ops/asset-prices.ts::writeAssetPrice, migration 0046's
+// seed step), so `Number(amount) * Number(joinedPrice)` reproduces that
+// IEEE-754 product exactly — a SQL-side `amount * price_usd` would instead run
+// as arbitrary-precision `numeric` arithmetic and could differ in its last
+// digits.
 async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyProvenance: Record<Provenance, number> }> {
   const rows = await sql<{
     sample_date: Date;
@@ -315,7 +310,10 @@ async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyPr
       point = { date, byAsset: {}, totalUsd: 0, provenance: "stub", _seen: new Set() };
       byDate.set(date, point);
     }
-    const v = r.is_closed && r.asset_price_usd != null && r.amount != null
+    // D41 phase 4 (issue #927): asset_prices now has full coverage for cleanly-sampled
+    // closed days. Closed days always use the joined price; today's row uses its
+    // fused value_usd (D41: "today's live point keeps its fused row").
+    const v = r.is_closed && r.amount != null && r.asset_price_usd != null
       ? Number(r.amount) * Number(r.asset_price_usd)
       : Number(r.value_usd);
     point.byAsset[r.symbol] = v;

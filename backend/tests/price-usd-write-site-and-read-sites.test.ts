@@ -1,4 +1,5 @@
-// D41 phase 4, repair-write-site slice (issue #851; markets §5.6, §8.1, §9).
+// D41 phase 4, repair-write-site slice (issue #851; markets §5.6, §8.1, §9) and
+// live-sampler slice (issue #927).
 //
 // The fixture assertions in wallet-backfill.test.ts prove the BEHAVIOUR (a
 // repaired row's price_usd comes back NULL). This file is the static
@@ -22,6 +23,11 @@
 // a fresh asset_prices row in the same transaction. This test pins today's
 // known set of read/write sites so that set can only grow through a reviewed
 // diff, never silently.
+//
+// Issue #927 closes the #849 coverage gap by making the live sampler dual-write
+// to asset_prices and stop writing price_usd to wallet_balance_samples. After
+// #927, the three #850 read sites no longer need the closed-day fallback;
+// only today's row (is_closed = false) uses the sample's fused value_usd.
 import { expect, test } from "bun:test";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -77,6 +83,22 @@ test("repairResolvedDay's sample-row inserts no longer name price_usd as a writt
   }
 });
 
+test("sampleWalletBalances' sample-row insert no longer names price_usd as a written column", () => {
+  const sampler = src("worker/handlers/wallet.ts");
+
+  const balanceInserts = insertColumnLists(sampler, "wallet_balance_samples");
+
+  // Sanity: the walk actually found the live-write statement this test
+  // is about, not zero.
+  expect(balanceInserts.length, "must find the wallet_balance_samples INSERT in sampleWalletBalances").toBeGreaterThan(0);
+
+  for (const cols of balanceInserts) {
+    expect(cols.split(",").map((c) => c.trim())).not.toContain("price_usd");
+    // value_usd stays: only price_usd is dropped, per #927's scope.
+    expect(cols).toContain("value_usd");
+  }
+});
+
 test("the guard's column-list pattern actually matches an INSERT that DOES write price_usd", () => {
   // A guard that never fires on the shape it is meant to catch is a guard
   // that has silently stopped working (the same failure mode
@@ -102,25 +124,29 @@ test("the guard's column-list pattern actually matches an INSERT that DOES write
 // unrelated change.
 const ALLOWED_READERS: Record<string, string> = {
   "chain/wallet-balances.ts":
-    "lastPersistedHolding's stale-degrade fallback (a live read failed) reads the last persisted price_usd directly, and loadHistory's is_closed comment references the column it deliberately does NOT select",
+    "lastPersistedHolding's stale-degrade fallback (a live read failed) reads the last persisted price_usd directly; loadHistory uses the sample's fused value_usd only for today's row (is_closed = false), and asset_prices join for closed days (issue #927)",
   "chain/wallet-sleeves.ts":
-    "computeWalletSleeves falls back to the sample row's own price_usd when asset_prices has no row yet for a closed day (the #849 coverage gap)",
+    "computeWalletSleeves uses the sample's fused price_usd/value_usd only for today's row (is_closed = false), and asset_prices join for closed days (issue #927)",
   "chain/wallet-valuation.ts":
-    "recentPersistedPrice's WHERE clause and fallback read wbs.price_usd directly for the same #849 coverage-gap reason",
+    "recentPersistedPrice uses the sample's price_usd only for today's row (is_closed = false), and asset_prices join for closed days (issue #927); WHERE clause still filters on wbs.price_usd IS NOT NULL to find eligible rows",
   "ops/wallet-backfill.ts":
     "repairResolvedDay reads the PRIOR row's price_usd (before its own delete) purely for the sample-row-vs-price-row disagreement check (D41 phase 2's verify step); the evidence-table INSERT...SELECT also copies whatever price_usd a replaced row already had. Neither writes a fresh price_usd (see the test above)",
   "ops/asset-prices.ts":
     "mentions wallet_balance_samples only in prose comments (writeAssetPrice's own price_usd reads/writes are all against asset_prices, never a sample table); flagged by this test's file-level substring check rather than a real reference",
 };
 
-// Writers are tracked separately: worker/handlers/wallet.ts (the live
-// sampler) and db/seed.ts (the pre-launch history backfill) both still write
-// price_usd, deliberately untouched by #851's repair-only scope.
+// Writers are tracked separately: db/seed.ts (the pre-launch history backfill)
+// writes price_usd as an explicit NULL for every seeded row already, so it is
+// not a live source of non-null price_usd. The live sampler's BALANCE sampler
+// (worker/handlers/wallet.ts::sampleWalletBalances) no longer writes price_usd
+// after issue #927 (it dual-writes to asset_prices instead). The SLEEVE sampler
+// (sampleWalletSleeves) still writes price_usd to wallet_sleeve_samples — that
+// is out of scope for #927 and tracked separately.
 const ALLOWED_WRITERS: Record<string, string> = {
-  "worker/handlers/wallet.ts":
-    "the live sampler; #851 scoped phase 4 to the repair write site only, because the live sampler's write is exactly what the #849 coverage gap still depends on",
   "db/seed.ts":
     "the pre-launch prop-wallet history backfill; writes price_usd as an explicit NULL for every seeded row already, so it is not a live source of non-null price_usd",
+  "worker/handlers/wallet.ts":
+    "the sleeve sampler (sampleWalletSleeves) still writes price_usd to wallet_sleeve_samples; the balance sampler (sampleWalletBalances) no longer writes price_usd after #927 — tracked here because the file contains both",
 };
 
 const SAMPLE_TABLES = ["wallet_balance_samples", "wallet_sleeve_samples"];
