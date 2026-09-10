@@ -208,6 +208,11 @@
              product page. -->
         <template x-if="isFramework() && allocationTargets().length">
           <div class="sv__alloc sp-alloc">
+            <!-- The heading follows the PROVENANCE, because both wordings are
+                 wrong in the other state: these weights are the seeded row
+                 today, and the note at the foot of this very card says no
+                 session has changed them. See allocationTitle(). -->
+            <p class="sv__alloc-t" x-text="allocationTitle()">Target weights in force</p>
             <div class="sv__alloc-reg">
               <p class="sv__alloc-label">
                 <span x-show="allocationAsOf()">Unchanged since <span x-text="allocationAsOf()"></span></span>
@@ -501,9 +506,6 @@
        register fills it: 34rem of table in an 80rem card left the hole on the
        right that a measure cap leaves in a full-width band. */
     .sp-alloc .sv__sleeves { max-width: none; }
-    /* And the rule that separated the register from the card's own heading has
-       nothing above it any more — this page's H1 is the heading. */
-    .sp-alloc .sv__alloc-reg { margin-top: 0; padding-top: 0; border-top: 0; }
     /* An external link, in the second of the two link treatments this site
        uses: reading ink with a quiet rule, and Beam arriving on hover. It was
        cyan at rest, which put the accent on a hostname. */
