@@ -140,14 +140,29 @@ export const MAX_PERSISTED_PRICE_AGE_MS = 5 * 60_000;
 // freshness window, e.g. a backfill/repair commit landing within minutes of
 // UTC midnight for the day it just closed. For that row, and only that row,
 // the price it reports comes from `asset_prices` rather than the sample's own
-// (soon-to-be-retired, D41 phase 4) `price_usd` column — falling back to the
-// sample's own price when `asset_prices` has no row yet, exactly as
-// wallet-balances.ts::loadHistory does, for the identical #849 known-gap
-// reason (a cleanly-sampled closed day is not guaranteed to have dual-written
-// into `asset_prices` yet).
+// `price_usd` column.
+//
+// Issue #927: the live sampler no longer writes `price_usd` on ordinary
+// samples, so TODAY's row (the common case above) has `price_usd IS NULL`
+// from the moment it is written — `asset_prices` never covers today either
+// (it is keyed by CLOSED-day UTC candles). Requiring `price_usd IS NOT NULL`
+// here would make this whole stale-degrade path (#173: serve a recent sample
+// when the live provider read fails) permanently unreachable the instant a
+// deployment picks up #927, which is a live-read-failure regression, not a
+// cleanup. `value_usd` is still written by every sampler row (#927 only drops
+// `price_usd`), and it is the exact same JS double `amount * price` the
+// sampler computed at sample time — so a row missing `price_usd` derives it
+// back out as `value_usd / amount` instead.
 async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number; sampledAt: string } | null> {
-  const rows = await sql<{ price_usd: string | null; sampled_at: Date; asset_price_usd: string | null; is_closed: boolean }[]>`
-    SELECT wbs.price_usd, wbs.sampled_at,
+  const rows = await sql<{
+    price_usd: string | null;
+    amount: string | null;
+    value_usd: string | null;
+    sampled_at: Date;
+    asset_price_usd: string | null;
+    is_closed: boolean;
+  }[]>`
+    SELECT wbs.price_usd, wbs.amount, wbs.value_usd, wbs.sampled_at,
            ap.price_usd AS asset_price_usd,
            (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
       FROM wallet_balance_samples wbs
@@ -156,7 +171,7 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
        AND ap.price_date = wbs.sample_date
        AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
      WHERE wbs.symbol = ${symbol}
-       AND wbs.price_usd IS NOT NULL
+       AND (wbs.price_usd IS NOT NULL OR (wbs.value_usd IS NOT NULL AND wbs.amount IS NOT NULL AND wbs.amount <> 0))
        AND wbs.sampled_at <= now()
        -- A quarantined row's price may describe a DIFFERENT ASSET (migration
        -- 0036) — excluded unconditionally, never served even via the join.
@@ -172,16 +187,17 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
      LIMIT 1
   `;
   const row = rows[0];
-  if (!row || row.price_usd == null) return null;
+  if (!row) return null;
+  const derivedPriceUsd = row.price_usd != null
+    ? Number(row.price_usd)
+    : row.value_usd != null && row.amount != null && Number(row.amount) !== 0
+      ? Number(row.value_usd) / Number(row.amount)
+      : null;
+  if (derivedPriceUsd == null) return null;
   const sampledAt = row.sampled_at instanceof Date ? row.sampled_at : new Date(row.sampled_at);
   const sampledAtMs = sampledAt.getTime();
   if (Date.now() - sampledAtMs > MAX_PERSISTED_PRICE_AGE_MS) return null; // too old — not eligible
-  // Same JS-side multiplication discipline as loadHistory/computeWalletSleeves:
-  // this reader returns a PRICE, not a value, so there is no product to worry
-  // about here — only which column's price_usd to read — but the join is
-  // still read in JS rather than folded into the WHERE/SELECT arithmetic so a
-  // future caller that DOES multiply against it inherits the same exactness.
-  const priceUsd = row.is_closed && row.asset_price_usd != null ? Number(row.asset_price_usd) : Number(row.price_usd);
+  const priceUsd = row.is_closed && row.asset_price_usd != null ? Number(row.asset_price_usd) : derivedPriceUsd;
   return { priceUsd, sampledAt: sampledAt.toISOString() };
 }
 

@@ -259,6 +259,30 @@ test("recentPersistedPrice: TODAY's fresh sample keeps reading its own price_usd
   expect(quote.priceUsd).toBe(2600.75);
 });
 
+// Issue #927: sampleWalletBalances stopped writing price_usd on ordinary
+// samples, so TODAY's own row — recentPersistedPrice's near-exclusive case,
+// per the freshness bound — now has price_usd NULL from the moment it is
+// written. Without deriving a price from value_usd/amount, this whole
+// stale-degrade path (#173) would go permanently unreachable for any row
+// sampled after a deployment picks up #927; this is the RED CONTROL for that
+// regression (it fails against a tree that requires wbs.price_usd IS NOT NULL
+// unconditionally).
+test("recentPersistedPrice: a row with price_usd NULL (post-#927 shape) derives its price from value_usd/amount instead of going unreachable", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.PRICE_SOURCE = "live";
+  mockPriceHostFailure();
+  const asset = resolveTrackedAssets().find((a) => a.symbol === "WETH")!;
+
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES (${TODAY}, 'WETH', 2, NULL, 5401.5, 'live', now())
+  `;
+
+  const quote = await persistedFallbackWalletPriceReader.read(asset, "live", "live");
+  expect(quote.kind).toBe("persisted");
+  expect(quote.priceUsd).toBeCloseTo(2700.75, 6); // 5401.5 / 2
+});
+
 // ── the 0038 freeze point composes with the read-time join ──────────────────
 //
 // markets §5.6 point 3 / D41: "the join is the CANDIDATE; 0038 is the freeze
