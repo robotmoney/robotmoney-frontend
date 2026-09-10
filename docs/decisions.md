@@ -3414,10 +3414,28 @@ wins when it matches; the wildcard is the fallback for everyone else.
 
 **Not yet done (tracked in issue #871).** `WEBAUTHN_ORIGIN`/`WEBAUTHN_RP_ID`
 still need to be pointed at the frontend's real deployed domain once it is no
-longer same-origin; `contract/` still needs to actually be published as a
-versioned package; the frontend's sibling container, its DO placement, and its
+longer same-origin; the frontend's sibling container, its DO placement, and its
 DNS record are still design, not shipped; and the `git filter-repo` split
 itself has not been executed.
+
+**Amendment (issue #884).** `contract/` now has a real publish path, ahead of
+and independent from the split itself. `contract/package.json` declares
+`publishConfig.registry` (GitHub Packages, `npm.pkg.github.com`) and
+`contract/.npmrc` carries the scope->registry mapping and `_authToken`
+interpolation that `bun publish` (unlike npm, it does not read
+`publishConfig.registry`) actually uses. `.github/workflows/contract.yml`
+packages `contract/` (`bun pm pack`) on every run — a required check, not
+schedule-only — and `contract-package.test.ts` installs the produced tarball
+into a directory outside the monorepo and imports its main export, so a
+monorepo-relative path or a missing `files`/`exports` entry fails loudly
+before it could reach a real consumer. The actual publish step lives in the
+separate `.github/workflows/contract-publish.yml`, triggered only by a
+`contract-v*` tag push (its own namespace, independent of this repo's
+whole-app `v*` release tags) — nothing publishes on a PR or a plain merge.
+`backend/` and `frontend/` still import `contract/` via the in-repo `file:`
+path (out of scope here, tracked with the rest of the split in issue #871);
+this only makes the published artifact available, it does not yet have any
+consumer.
 
 ---
 
