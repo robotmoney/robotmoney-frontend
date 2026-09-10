@@ -86,6 +86,16 @@ export const sessionSummary = {
     const n = Number(q?.submitted);
     return Number.isFinite(n) ? n : this.stanceSpread(s).reduce((a, r) => a + r.n, 0);
   },
+  // Whether the session record carries a consensus AT ALL. The three facts
+  // under the kicker are each individually gated, so a session with none of
+  // them printed the word "Consensus" over empty space — which is every
+  // static-archive row on a subject profile: those carry the recommendation
+  // but no stances, no quorum and no mean confidence. A label with nothing
+  // under it reads as a figure that failed to load.
+  /** @param {any} s */
+  hasConsensus(s) {
+    return !!(this.lean(s) || this.quorumText(s) || this.meanConfidenceText(s));
+  },
   /** @param {any} s */
   sessionWeights(s) {
     const rec = s?.swarmRecommendation;

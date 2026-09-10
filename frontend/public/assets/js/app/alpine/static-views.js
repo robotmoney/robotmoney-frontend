@@ -254,18 +254,6 @@ export function camelSubject(raw) {
   };
 }
 
-// Tolerates both shapes the field arrives in: a list of notes, or a single
-// paragraph from an older manifest. Exported (and used by subjectProfile's
-// structuralNotes() below) so scripts/tests/unit/frontend-routes.test.ts can
-// assert the gate is on .length, not truthiness — camelSubject defaults a
-// missing field to [], which is itself truthy, so a plain `x-show` on the
-// raw value would render an empty panel on every subject that has none.
-export function structuralNotesOf(subject) {
-  const raw = subject?.structuralNotes;
-  if (Array.isArray(raw)) return raw.filter(Boolean);
-  return raw ? [raw] : [];
-}
-
 function normalizeSnapshot(raw) {
   if (!raw) return null;
   return {
@@ -361,6 +349,11 @@ export function withinBucketWeightsFrom(rec) {
   })).filter((b) => b.items.length);
 }
 
+// The subject operator this site IS. Compared lower-cased: the field is a
+// free-text slug an admin types, and "RobotMoney" is the same house as
+// "robotmoney".
+const HOUSE_OPERATOR = "robotmoney";
+
 // Exported so scripts/tests/unit/frontend-routes.test.ts can assert the
 // verification-badge WORDING directly, not just the badge's state attribute.
 // The three-state distinction below (verified / unverified / archived) is a
@@ -375,6 +368,15 @@ export const helpers = {
   // scrape", which both pages were contradicting by printing "portfolio".
   subjectKindOf(subject) {
     return subject?.source?.type === "framework" ? "framework" : "portfolio";
+  },
+  // The operator worth naming is the one the reader does not already know.
+  // Every Robot Money subject is operated by Robot Money, so "· operator
+  // robotmoney" sat under a headline reading ROBOT MONEY ALLOCATION and said
+  // nothing twice. An outside operator is the opposite: peaq runs Woon
+  // Treasury, and naming it is the only reason this slot exists.
+  operatorOf(subject) {
+    const op = String(subject?.operator || "").trim();
+    return op.toLowerCase() === HOUSE_OPERATOR ? "" : op;
   },
   // Strip punctuation before taking initials. Operators name their agents
   // freely, and "woon (test)" was rendering as "W(" — the second word's first
@@ -1194,6 +1196,7 @@ export function registerStaticViews(Alpine) {
     // contradicting one line above them by calling it a portfolio.
     isFramework() { return this.subject?.source?.type === "framework"; },
     subjectKind() { return this.subjectKindOf(this.subject); },
+    operatorLabel() { return this.operatorOf(this.subject); },
     // Newest first, so the head's chip names the most recent review. The
     // prose line this replaced named the OLDEST ("since August 2026"), which
     // is the less useful of the two: a reader wants to know how current the
@@ -1446,9 +1449,6 @@ export function registerStaticViews(Alpine) {
         name: n.name || n.label || String(n.address || "").slice(0, 10),
         chain: n.chain || "",
       }));
-    },
-    structuralNotes() {
-      return structuralNotesOf(this.subject);
     },
     takeCountLabel(s) {
       const n = Number(s?.takes || 0);

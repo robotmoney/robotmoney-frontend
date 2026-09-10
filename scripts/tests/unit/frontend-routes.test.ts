@@ -15,7 +15,6 @@ import {
   loadArchiveMember,
   loadArchiveSession,
   loadArchiveSnapshot,
-  structuralNotesOf,
   takeHref,
   withinBucketWeightsFrom,
 } from "../../../frontend/public/assets/js/app/alpine/static-views.js";
@@ -470,27 +469,24 @@ describe("frontend route resolution", () => {
     expect(noNft.nftContracts).toEqual([]);
   });
 
-  // subject.html gates the "Structural notes" panel on `x-show="structuralNotes().length"`,
-  // not on the raw field's truthiness. camelSubject defaults a missing
-  // structural_notes field to `[]`, which is itself truthy in JS — a plain
-  // `x-show="subject.structuralNotes"` would render an empty panel on every
-  // subject that declares none. structuralNotesOf must gate on .length.
-  test("structuralNotesOf gates on .length, not truthiness of the raw field", () => {
-    expect(structuralNotesOf({ structuralNotes: [] })).toEqual([]);
-    expect(structuralNotesOf({ structuralNotes: [] }).length).toBe(0);
-    expect(structuralNotesOf(camelSubject({ id: "robotmoney-vault" }))).toEqual([]);
+  // The eyebrow names an operator only when it is not this house. Every Robot
+  // Money subject declares `operator: "robotmoney"`, so the slot rendered
+  // "· operator robotmoney" beneath a headline already reading ROBOT MONEY
+  // ALLOCATION. An outside operator is the whole point of the slot: peaq runs
+  // Woon Treasury, and that must keep printing.
+  test("operatorOf names an outside operator and suppresses this house", () => {
+    expect(helpers.operatorOf({ operator: "peaq" })).toBe("peaq");
+    expect(helpers.operatorOf({ operator: "robotmoney" })).toBe("");
 
-    // A real list of notes passes through, filtered of any falsy entries.
-    expect(structuralNotesOf({ structuralNotes: ["a", "", "b", null] })).toEqual(["a", "b"]);
+    // The field is free text an admin types, so the house is matched
+    // case- and whitespace-insensitively rather than by exact string.
+    expect(helpers.operatorOf({ operator: "RobotMoney" })).toBe("");
+    expect(helpers.operatorOf({ operator: "  robotmoney  " })).toBe("");
 
-    // Older manifests carry a single paragraph instead of a list; that still
-    // renders as one note rather than being dropped.
-    expect(structuralNotesOf({ structuralNotes: "a single paragraph note" })).toEqual([
-      "a single paragraph note",
-    ]);
-
-    // No subject at all (still loading / not found) must not throw.
-    expect(structuralNotesOf(null)).toEqual([]);
+    // A subject that declares no operator renders no separator, and no
+    // subject at all (still loading / not found) must not throw.
+    expect(helpers.operatorOf({})).toBe("");
+    expect(helpers.operatorOf(null)).toBe("");
   });
 
   // issue #359: camelTake used to derive `id` with a member-id fallback

@@ -49,7 +49,7 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
   expect(errors.filter((e) => !EXPECTED_NETWORK_NOISE.test(e))).toEqual([]);
 }
 
-test("public subject profile renders holdings, wallets, NFT contracts, and structural notes from fetched (archive) data", async ({ page }) => {
+test("public subject profile renders holdings, wallets and NFT contracts from fetched (archive) data", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
   // Force every swarm API call to fail so subjectProfile.init() and its
@@ -117,13 +117,12 @@ test("public subject profile renders holdings, wallets, NFT contracts, and struc
   await expect(nftPanel).toContainText("RecycleMachine");
   await expect(nftPanel).toContainText("ClawMachine");
 
-  // Structural notes: woon.json declares 4. This is the .length-gated panel
-  // (structuralNotesOf) — asserting it renders here is the positive
-  // counterpart to frontend-routes.test.ts's empty-array unit case.
-  const notesPanel = page.locator(".sv__panel", { hasText: "Structural notes" });
-  await expect(notesPanel).toBeVisible();
-  await expect(notesPanel.locator("li")).toHaveCount(4);
-  await expect(notesPanel).toContainText("RoboFarm, RecycleMachine, ClawMachine");
+  // No structural notes panel, on the subject that declares the most of them
+  // (woon.json carries 4). They are the operator's brief TO THE SWARM — how to
+  // review this subject, what not to default to — and they ship to the agents
+  // in the session brief, which is where they belong. On the reader's page
+  // they turned the profile into an annotated design file explaining itself.
+  await expect(page.locator(".sv__panel", { hasText: "Structural notes" })).toHaveCount(0);
 
   // Sessions: all 9 archived, published woon sessions.
   await expect(page.locator(".sv__session-card")).toHaveCount(9);
@@ -144,14 +143,14 @@ test("public subject profile hides the NFT panel for an archived subject with no
     route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
   );
 
-  // robotmoney-vault's manifest declares one wallet, four structural notes and
-  // no nft_contracts key at all.
+  // robotmoney-vault's manifest declares one wallet and no nft_contracts key
+  // at all, so the wallets panel below is the positive control: the NFT
+  // absence is a gate firing, not a page that never drew its panels.
   await page.goto("/swarm/subjects/robotmoney-vault");
 
   await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Vault");
   await expect(page.locator(".sv__panel", { hasText: "NFT contracts" })).toHaveCount(0);
   await expect(page.locator(".sv__panel", { hasText: "Tracked wallets" })).toBeVisible();
-  await expect(page.locator(".sv__panel", { hasText: "Structural notes" })).toBeVisible();
 
   await expectNoBrowserErrors(errors);
 });
@@ -180,7 +179,11 @@ test("public subject profile hides the wallets panel for a subject serving an em
   await expect(page.locator(".sv__detail-title")).toHaveText("Mav Treasury");
   await expect(page.locator(".sv__panel", { hasText: "Tracked wallets" })).toHaveCount(0);
   await expect(page.locator(".sv__panel", { hasText: "NFT contracts" })).toHaveCount(0);
-  await expect(page.locator(".sv__panel", { hasText: "Structural notes" })).toBeVisible();
+  // mav gates off every panel there is, so the positive control has to sit
+  // past them: the sessions empty state proves the body rendered the whole
+  // way down, and the absences above are gates firing rather than a page
+  // that never drew.
+  await expect(page.locator(".sv__empty")).toBeVisible();
 
   await expectNoBrowserErrors(errors);
 });
@@ -320,4 +323,27 @@ test("a subject the API answers 200 null for still renders from the archive", as
   // from it and not from the (null) API answer.
   await expect(page.locator(".sv__detail-title")).toHaveText("Woon Treasury");
   await expect(page.locator(".sv__error")).toHaveCount(0);
+});
+
+// A label with nothing under it reads as a figure that failed to load. Every
+// static-archive session row carries the recommendation but no stances, no
+// quorum and no mean confidence, and the three facts under the kicker were
+// each gated separately — so the word "Consensus" printed over empty space on
+// every archived row of every subject.
+test("a session with no consensus to report prints no Consensus kicker", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+
+  await page.route("**/api/swarm/**", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
+  );
+
+  await page.goto("/swarm/subjects/robotmoney-allocation");
+  await expect(page.locator(".sv__session-card").first()).toBeVisible();
+
+  // The rows are here, and they do carry the decision...
+  await expect(page.locator(".sv__rec").first()).toContainText("Target weights");
+  // ...but not a consensus, so the kicker is absent rather than empty.
+  await expect(page.locator(".sv__session-kicker", { hasText: "Consensus" })).toHaveCount(0);
+
+  await expectNoBrowserErrors(errors);
 });
