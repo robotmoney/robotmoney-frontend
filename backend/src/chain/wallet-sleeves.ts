@@ -160,9 +160,20 @@ async function computeWalletSleeves(
       // A closed day uses the joined price once asset_prices has a row for
       // it (issue #927 converges this over time); until then, and always
       // for today's own row, it falls back to the fused sample values (D41:
-      // "today's live point keeps its fused row").
+      // "today's live point keeps its fused row"). Issue #927 also stopped
+      // this sampler from writing price_usd (mirroring repairResolvedDay's
+      // already-shipped #851 change — every sleeve symbol is a subset of the
+      // aggregate set since #948, so the balance leg's dual-write already
+      // covers it), so the non-join branch derives price from value_usd/amount
+      // when price_usd is NULL rather than reporting it null next to a
+      // perfectly good value.
       const useJoin = row.is_closed && row.asset_price_usd != null && amountNum != null;
-      const priceUsd = useJoin ? Number(row.asset_price_usd) : row.price_usd == null ? null : Number(row.price_usd);
+      const fallbackPriceUsd = row.price_usd != null
+        ? Number(row.price_usd)
+        : row.value_usd != null && amountNum != null && amountNum !== 0
+          ? Number(row.value_usd) / amountNum
+          : null;
+      const priceUsd = useJoin ? Number(row.asset_price_usd) : fallbackPriceUsd;
       const valueUsd = useJoin
         ? amountNum! * Number(row.asset_price_usd)
         : row.value_usd == null ? null : Number(row.value_usd);

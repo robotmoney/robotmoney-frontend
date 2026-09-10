@@ -223,18 +223,21 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
       // LIVE leg becomes 'backfilled' on a same-bucket catch-up.
       const provenance = sleeveReplay === "same-bucket-catchup" && valued.provenance === "live" ? "backfilled" : valued.provenance;
 
-      // Unlike sampleWalletBalances above, the sleeve sampler still writes
-      // price_usd (issue #927 scoped the write-side stop to sampleWalletBalances
-      // only — see AC2 — leaving wallet_sleeve_samples's own price_usd write
-      // untouched; it is tracked separately, not part of this gap).
+      // D41 phase 4 (issue #927): price_usd is NOT written here, mirroring both
+      // sampleWalletBalances above and repairResolvedDay's already-shipped
+      // (#851) sleeve write. No sleeve symbol is ever outside the aggregate
+      // set (#948: every wallet reads every chain-readable tracked asset via
+      // sleeveSymbols(def)), so whatever asset_prices row the balance leg's
+      // dual-write produces for this (date, symbol) already covers this
+      // sleeve row too — a second, sleeve-specific dual-write would just
+      // duplicate that write. value_usd still carries the fused product.
       await tx`
         INSERT INTO wallet_sleeve_samples
-          (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+          (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
         VALUES
-          (${sampleDate}, ${walletAddress}, ${asset.symbol}, ${valued.amount}, ${valued.priceUsd}, ${valued.valueUsd}, ${provenance}, now())
+          (${sampleDate}, ${walletAddress}, ${asset.symbol}, ${valued.amount}, ${valued.valueUsd}, ${provenance}, now())
         ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
           amount     = EXCLUDED.amount,
-          price_usd  = EXCLUDED.price_usd,
           value_usd  = EXCLUDED.value_usd,
           provenance = EXCLUDED.provenance,
           sampled_at = EXCLUDED.sampled_at
