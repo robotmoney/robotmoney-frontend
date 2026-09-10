@@ -227,6 +227,7 @@ const reclaimable = ownsData(requestedDataPath);
 // pgPort stays NULL for an --external-pg boot: no container, so no published
 // port ever exists (distinct from 0, which would read as "not discovered yet").
 let apiPort = 0;
+let webPort = 0;
 let pgPort: number | null = 0;
 let backendUrl = "";
 
@@ -609,18 +610,17 @@ log(
 // knows a host port and it learned it from the daemon rather than guessing.
 function applyHostPorts(ports: StackHostPorts): void {
   apiPort = ports.apiPort;
+  // Issue #892: website-server, not api, is the static/SPA origin — BACKEND_URL resolves against its port.
+  webPort = ports.webPort;
   pgPort = ports.pgPort;
-  backendUrl = hostBackendUrl(apiPort);
+  backendUrl = hostBackendUrl(webPort);
   state.services = serviceRoutes(backendUrl);
   log(
-    `host ports (Docker-assigned): api=:${apiPort}${staticPortMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  ` +
+    `host ports (Docker-assigned): api=:${apiPort} web=:${webPort}${staticPortMode ? " (web STAGE-PINNED — cloudflared origin)" : ""}  ` +
       `pg=${pgPort === null ? `${dataPath.kind.toUpperCase()} (${redactedDbUrl}) — no container, no published port` : `:${pgPort}`}`,
   );
-  if (!staticPortMode && apiPort === STAGE_WEB_PORT) {
-    // Possible but rare: Docker draws from the host's ephemeral range, which
-    // CONTAINS 48787 — it can only happen while no stage smoke holds it. Not
-    // fatal (nothing is broken; cloudflared would simply route the stage
-    // hostname at this smoke), but it must never be a silent surprise.
+  if (!staticPortMode && webPort === STAGE_WEB_PORT) {
+    // Rare (ephemeral range contains 48787); webPort since the stage pin moved to website-server.
     log(
       `WARNING: Docker assigned this NON-stage smoke the tunnel origin :${STAGE_WEB_PORT}. ` +
         `stage.robotmoney-labs.dev will resolve to THIS stack until it is torn down.`,
