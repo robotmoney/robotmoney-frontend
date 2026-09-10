@@ -51,6 +51,26 @@ export function allocationFramework() {
       if (t?.pct === null || !Number.isFinite(pct)) return null;
       return Math.max(0, Math.min(100, pct));
     },
+    // Did a SESSION set these weights, or the seed?
+    //
+    // Keyed on the framework row's own provenance.sessionId — the same test
+    // /allocation's state chip uses. NOT the DTO's top-level `managed`, which
+    // is true today and is about the VAULT being managed, not about who wrote
+    // the targets. Reading that field would have the card claim a swarm
+    // recommendation directly above its own note saying no session has made
+    // one.
+    allocationIsFromSession() {
+      return !!this.allocationFw?.provenance?.sessionId;
+    },
+    // The card's heading, which has to stay true in both states. "Latest swarm
+    // recommendation" is the right words for weights a session published and
+    // the wrong ones for the seeded row in force today, so the heading follows
+    // the provenance rather than being typed into the markup.
+    allocationTitle() {
+      return this.allocationIsFromSession()
+        ? "Latest swarm recommendation"
+        : "Target weights in force";
+    },
     allocationAsOf() {
       const d = this.allocationFw?.asOf;
       // formatDate belongs to the surface (both spread the same `helpers`),

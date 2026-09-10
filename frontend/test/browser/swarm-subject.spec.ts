@@ -636,3 +636,43 @@ test("the allocation subject opens with the weights in force, and no other subje
 
   await expectNoBrowserErrors(errors);
 });
+
+// The card's heading has to stay true in both states. "Latest swarm
+// recommendation" is right for weights a session published and wrong for the
+// seeded row in force today — and the card's own note says, two lines below,
+// that no session has changed them. So the heading follows provenance, and it
+// follows provenance.sessionId rather than the DTO's top-level `managed`,
+// which is true today and is about the VAULT being managed.
+test("the allocation card names who set the weights, and never overclaims", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+
+  /** @type {any} */
+  let framework = {
+    asOf: "2026-06-02",
+    managed: true, // true today, and NOT about who wrote the targets
+    strategy: [
+      { label: "Conservative DeFi Yield", targetPct: 95 },
+      { label: "Agent Tokens", targetPct: 5 },
+    ],
+  };
+  await page.route("**/api/dashboards/allocation", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(framework) }),
+  );
+  await page.route("**/api/swarm/**", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
+  );
+
+  // Seeded: no provenance, so no claim of a recommendation — even though the
+  // feed says managed: true.
+  await page.goto("/swarm/subjects/robotmoney-allocation");
+  await expect(page.locator(".sv__alloc-t")).toHaveText("Target weights in force");
+  await expect(page.locator(".sv__alloc")).toContainText("No session has changed these weights yet");
+
+  // A session wrote them: now it IS the latest swarm recommendation.
+  framework = { ...framework, provenance: { sessionId: "3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41" } };
+  await page.goto("/swarm");
+  await page.goto("/swarm/subjects/robotmoney-allocation");
+  await expect(page.locator(".sv__alloc-t")).toHaveText("Latest swarm recommendation");
+
+  await expectNoBrowserErrors(errors);
+});
