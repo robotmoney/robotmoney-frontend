@@ -55,71 +55,39 @@
           </div>
         </header>
 
-        <!-- Market backdrop. Was two panels: "Regime context" and "Brief" —
-             neither of which said what it was, and the Brief held one derived
-             sentence ("Subject: X. Regime: Y.") already carried by the <h1> and
-             a backdrop chip, in half the page width. One panel now, with a line
-             saying what a reader is looking at and why it is on this page. -->
-        <template x-if="session.regimeSummary || briefExtra()">
-          <section class="sv__panel sv__backdrop" x-show="session.regimeSummary">
-            <div class="sv__panel-head">
-              <p class="sv__panel-label">Market backdrop</p>
-              <span class="sv__tag" x-text="formatDate(session.date, 'short')"></span>
+        <!-- The regime read this session opened with. It used to be a
+             "Market backdrop" panel of its own, drawn only here, while a
+             subject profile listed "the regime read" as a line of prose in its
+             brief card. The panel's own copy said what it was: one of the
+             parts of the brief. One component now, drawn the same way on both
+             pages, differing only in whose reading it is fed. See
+             lib/session-brief.js. -->
+        <template x-if="backdrop">
+          <section class="sv__panel mb mb--panel">
+            <div class="mb__head">
+              <p class="mb__label">Market regime</p>
+              <span class="mb__scope" x-text="backdropScopeLine()"></span>
             </div>
-            <p class="sv__panel-note">
-              The regime read attached to this session's brief: the same market context
-              every member was given before writing their take.
-            </p>
-            <div class="sv__backdrop-grid">
-              <div>
-                <!-- THE READ, in words, first. This block used to open with a
-                     bare "Composite 0.544" — a number with no scale, no unit and
-                     no interpretation, while the payload has carried `regime`
-                     ("risk_on") and `composite_percentile` all along. A reader
-                     cannot tell whether 0.544 is high; the swarm's own synthesis
-                     text says "risk_on at the 71st percentile", so the panel now
-                     says exactly that and keeps the raw figure as support. -->
-                <p class="sv__regime-call" x-show="session.regimeSummary?.regime">
-                  <i :style="`background:${regimeColor(session.regimeSummary?.regime)}`" aria-hidden="true"></i>
-                  <span x-text="regimeLabel(session.regimeSummary?.regime)"></span>
+            <div class="mb__grid">
+              <div class="mb__read">
+                <p class="mb__call">
+                  <i :style="`background:${regimeColor(backdrop?.regime)}`" aria-hidden="true"></i>
+                  <span x-text="regimeLabel(backdrop?.regime)"></span>
                 </p>
-                <div class="sv__metric-line">
-                  <span>Composite</span>
-                  <b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b>
-                </div>
-                <div class="sv__bar" x-show="session.regimeSummary?.composite != null">
-                  <i :style="`width:${clampPct((session.regimeSummary?.composite || 0) * 100)}%;background:${regimeColor(session.regimeSummary?.regime)}`"></i>
-                </div>
-                <!-- What that 0-to-1 position is worth against its own record.
-                     Without it the bar says "a bit over halfway" and a reader has
-                     no way to know that halfway is historically HIGH. -->
-                <p class="sv__panel-sub" x-show="session.regimeSummary?.compositePercentile != null"
-                   x-text="`${ordinal(session.regimeSummary?.compositePercentile)} percentile of its own history`"></p>
-                <div class="sv__sparkline" x-show="(session.regimeSummary?.history || []).length >= 2" x-html="regimeSparkline()"></div>
-                <p class="sv__panel-sub" x-show="(session.regimeSummary?.history || []).length >= 2"
-                   x-text="`composite, trailing ${(session.regimeSummary?.history || []).length} sessions · bands mark risk-off below 0.33 and risk-on above 0.67`"></p>
+                <p class="mb__pct" x-show="backdrop?.compositePercentile !== null">
+                  <b x-text="ordinal(backdrop?.compositePercentile)"></b>
+                  <span>percentile of its own history</span>
+                </p>
+                <p class="mb__raw" x-text="`composite ${fmtNum(backdrop?.composite, 3)}`"></p>
+                <div class="mb__trailwrap" x-show="regimeTrailSvg()" x-html="regimeTrailSvg()"></div>
+                <p class="mb__cap" x-show="trailCaption()" x-text="trailCaption()"></p>
               </div>
-              <div>
-                <p class="sv__panel-sub" x-show="panelInputs().length >= 2">Panels · percentile against own history, 50th marked</p>
-                <div class="sv__panel-divergence" x-show="panelInputs().length >= 2" x-html="panelDivergenceBars()"></div>
-                <!-- The finding, not just the three bars: when one panel reads
-                     the opposite way from the composite, that disagreement is
-                     what the members argue about in the takes below, and the
-                     panel should name it rather than leave it to be spotted. -->
-                <p class="sv__panel-sub sv__dissent" x-show="dissentingPanels().length"
-                   x-text="dissentLine()"></p>
-                <div class="sv__panel-bars" x-show="panelInputs().length === 1">
-                  <template x-for="p in panelInputs()" :key="p.label">
-                    <div class="sv__panel-bar">
-                      <span x-text="p.label"></span>
-                      <div><i :style="`width:${clampPct(p.pct * 100)}%`"></i></div>
-                      <b x-text="`${Math.round(p.pct * 100)}%`"></b>
-                    </div>
-                  </template>
-                </div>
+              <div class="mb__figure">
+                <div x-html="regimeRailSvg()"></div>
+                <p class="mb__finding" x-text="regimeFinding()"></p>
+                <p class="mb__cap" x-show="briefExtra()" x-text="briefExtra()"></p>
               </div>
             </div>
-            <p class="sv__body-copy" x-show="briefExtra()" x-text="briefExtra()"></p>
           </section>
         </template>
 

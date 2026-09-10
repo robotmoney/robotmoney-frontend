@@ -66,14 +66,14 @@
                  three against their own history, where the comparison is the
                  point. Sits beside "last reviewed", and the backdrop carries
                  the date on its face, so neither chip claims to be today. -->
-            <template x-if="briefRegime()?.composite !== null && briefRegime()">
-              <span class="sv__fact"><em>composite</em><b x-text="fmtNum(briefRegime()?.composite, 3)"></b></span>
+            <template x-if="backdrop && backdrop.composite !== null">
+              <span class="sv__fact"><em>composite</em><b x-text="fmtNum(backdrop?.composite, 3)"></b></span>
             </template>
-            <template x-if="briefRegime()?.regime">
+            <template x-if="backdrop?.regime">
               <span class="sv__fact">
                 <em>regime</em>
-                <i class="sv__fact-dot" :style="`background:${regimeColor(briefRegime()?.regime)}`" aria-hidden="true"></i>
-                <b x-text="regimeLabel(briefRegime()?.regime)"></b>
+                <i class="sv__fact-dot" :style="`background:${regimeColor(backdrop?.regime)}`" aria-hidden="true"></i>
+                <b x-text="regimeLabel(backdrop?.regime)"></b>
               </span>
             </template>
           </div>
@@ -283,7 +283,7 @@
             <!-- The bar says what is inside before it is opened. Closed, it was
                  a mono label a reader had no reason to click. -->
             <span class="sp-brief__sum-m">
-              <span x-text="`${briefParts().length} parts`"></span>
+              <span x-text="`${briefPartCount()} parts`"></span>
               <span x-show="briefDate()" x-text="`· built ${briefDate()}`"></span>
               <i aria-hidden="true">⌄</i>
             </span>
@@ -295,6 +295,39 @@
                 <p class="sp-brief__intro">
                   Every session on this subject opens with a brief, rebuilt that day from live data. It is the same parts each time.
                 </p>
+                <!-- The regime read is a PART OF THE BRIEF, and the biggest
+                     one, so it lives in this card rather than in a "Market
+                     backdrop" panel of its own on another page. Drawn, not
+                     listed: four percentiles against their own history is a
+                     comparison, and a line of prose is the wrong instrument
+                     for it. Shared with session.html — see lib/session-brief.js. -->
+                <template x-if="backdrop">
+                  <section class="mb">
+                    <div class="mb__head">
+                      <p class="mb__label">Market regime</p>
+                      <span class="mb__scope" x-text="backdropScopeLine()"></span>
+                    </div>
+                    <div class="mb__grid">
+                      <div class="mb__read">
+                        <p class="mb__call">
+                          <i :style="`background:${regimeColor(backdrop?.regime)}`" aria-hidden="true"></i>
+                          <span x-text="regimeLabel(backdrop?.regime)"></span>
+                        </p>
+                        <p class="mb__pct" x-show="backdrop?.compositePercentile !== null">
+                          <b x-text="ordinal(backdrop?.compositePercentile)"></b>
+                          <span>percentile of its own history</span>
+                        </p>
+                        <p class="mb__raw" x-text="`composite ${fmtNum(backdrop?.composite, 3)}`"></p>
+                        <div class="mb__trailwrap" x-show="regimeTrailSvg()" x-html="regimeTrailSvg()"></div>
+                        <p class="mb__cap" x-show="trailCaption()" x-text="trailCaption()"></p>
+                      </div>
+                      <div class="mb__figure">
+                        <div x-html="regimeRailSvg()"></div>
+                        <p class="mb__finding" x-text="regimeFinding()"></p>
+                      </div>
+                    </div>
+                  </section>
+                </template>
                 <!-- Label, figure, then the line of prose. Seven sentences of
                      equal weight was a wall: a reader after "how much
                      research?" should land on "5 summaries" without reading a

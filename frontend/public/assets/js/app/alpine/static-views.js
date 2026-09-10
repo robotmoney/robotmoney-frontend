@@ -18,6 +18,7 @@ import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
 import { sessionSummary } from "../lib/session-summary.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
+import { sessionBrief } from "../lib/session-brief.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -116,7 +117,7 @@ function camelSession(raw) {
     // The API serves regimeSummary with a camelCase OUTER key but snake_case
     // INNER keys (macro_percentile, macro_regime, …); the archive JSON uses
     // snake_case throughout. Normalize inner keys from either source so
-    // panelInputs()/regime labels read a consistent camelCase shape.
+    // the rail and regime labels read a consistent camelCase shape.
     regimeSummary: (() => {
       const rs = raw.regimeSummary || raw.regime_summary;
       if (!rs) return null;
@@ -1060,6 +1061,7 @@ export function registerStaticViews(Alpine) {
     ...sessionSummary,
     ...sessionTakes(),
     ...allocationFramework(),
+    ...sessionBrief(),
     loading: true,
     error: null,
     subject: null,
@@ -1128,6 +1130,14 @@ export function registerStaticViews(Alpine) {
         // the framework does not describe, and asking for it there would put
         // the vault's targets on a page about somebody else's treasury.
         if (this.isFramework()) await this.loadAllocationFw();
+        // The newest session's own regime read first, and the brief's copy of
+        // it as the fallback: an archive-only subject reaches the brief but not
+        // always the session detail, and they carry the same reading under two
+        // spellings. normalizeRegime settles that.
+        this.setBackdrop(this.sessions[0]?.regimeSummary || this.brief?.regime || null, {
+          date: this.sessions[0]?.date || this.brief?.date || "",
+          scope: "latest",
+        });
       } catch (e) {
         this.error = e.message || "Subject not found";
       } finally {
@@ -1182,28 +1192,6 @@ export function registerStaticViews(Alpine) {
       } catch (_) { /* fall through to the archive */ }
       return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
     },
-    // The regime read the last session was given, normalised into the shape
-    // session.html's chips already speak. The brief is snake_case where the
-    // session DTO is camel, so this is where the two meet rather than in the
-    // markup.
-    //
-    // It is explicitly the LAST SESSION'S reading, not today's: the chip sits
-    // beside "last reviewed <date>", and the backdrop below carries the date
-    // on its face, so nothing here claims to be current.
-    briefRegime() {
-      const r = this.brief?.regime;
-      if (!r) return null;
-      const composite = Number(r.composite);
-      return {
-        composite: Number.isFinite(composite) ? composite : null,
-        regime: r.regime || "",
-        macroRegime: r.macro_regime || r.macroRegime || "",
-        onchainRegime: r.onchain_regime || r.onchainRegime || "",
-        factorRegime: r.factor_regime || r.factorRegime || "",
-        compositePercentile: Number(r.composite_percentile ?? r.compositePercentile),
-        asOf: r.asof || r.asOf || this.brief?.date || "",
-      };
-    },
     briefDate() { return this.brief?.date ? this.formatDate(this.brief.date, "long") : ""; },
     // What the brief is made of, in the order it is assembled.
     //
@@ -1215,6 +1203,14 @@ export function registerStaticViews(Alpine) {
     // real brief, and fall back to a word rather than a number when there is
     // none. `href` points at the page that owns each input, so "where does the
     // regime read come from" is one click rather than a question.
+    // The brief is seven parts. Two of them — the regime read and its trailing
+    // history — are DRAWN above rather than listed, because they are the
+    // largest thing in the brief and a line of prose was the wrong instrument
+    // for them. The count still says seven, because that is what a member is
+    // handed.
+    briefPartCount() {
+      return this.briefParts().length + (this.backdrop ? 2 : 0);
+    },
     briefParts() {
       const b = this.brief;
       const n = (/** @type {any} */ v) => (Array.isArray(v) ? v.length : null);
@@ -1227,22 +1223,6 @@ export function registerStaticViews(Alpine) {
       const notes = this.structuralNotes().length;
       const recent = n(b?.recent_sessions ?? b?.recentSessions);
       return [
-        {
-          key: "regime",
-          label: "Market regime",
-          href: "/regime",
-          value: Number.isFinite(composite)
-            ? `${composite.toFixed(3)} · ${String(regime.regime || "").replace(/_/g, " ")}`
-            : "Composite",
-          text: "The composite score and its bucket, with the macro, on-chain and factor reads behind it, their percentiles and their correlations.",
-        },
-        {
-          key: "history",
-          label: "Regime history",
-          href: "/regime",
-          value: plural(n(b?.regime_history ?? b?.regimeHistory), "reading", "readings") || "Trailing",
-          text: "So a member reads the direction and not only the level.",
-        },
         {
           key: "framework",
           label: "Allocation framework",
@@ -1327,6 +1307,11 @@ export function registerStaticViews(Alpine) {
             ...s,
             synthesis: full?.synthesis || "",
             swarmRecommendation: full?.swarmRecommendation || null,
+            // The regime read this session was given. camelSession already
+            // built it out of a response this loop is already making, and the
+            // row threw it away — so the subject page had no regime at all
+            // while the session page drew a whole panel from it.
+            regimeSummary: full?.regimeSummary || null,
             takes: (detail.takes || []).length,
             // The BODIES, not just the count. This response is already in
             // hand, so the expander reads them from the row instead of
@@ -1342,6 +1327,7 @@ export function registerStaticViews(Alpine) {
                 ...s,
                 synthesis: archive.session?.synthesis || "",
                 swarmRecommendation: archive.session?.swarmRecommendation || null,
+                regimeSummary: archive.session?.regimeSummary || null,
                 takes: (archive.takes || []).length,
                 // loadArchiveSession already camelTakes these. Without them
                 // the expander falls through to fetchSessionDetail, which asks
@@ -1920,6 +1906,7 @@ export function registerStaticViews(Alpine) {
 
   Alpine.data("swarmSessionDetail", () => ({
     ...helpers,
+    ...sessionBrief(),
     loading: true,
     error: null,
     source: null,
@@ -1996,6 +1983,9 @@ export function registerStaticViews(Alpine) {
       const detail = await loadArchiveSession(date, subject);
       this.source = "archive";
       this.session = detail.session;
+      // Same component the subject profile draws, fed this session's own
+      // reading rather than the newest one. See lib/session-brief.js.
+      this.setBackdrop(this.session?.regimeSummary, { date: this.session?.date, scope: "session" });
       this.takes = detail.takes;
       this.subject = await loadArchiveSubject(subject).catch(() => null);
       this.snapshot = await loadArchiveSnapshot(subject, date);
@@ -2039,6 +2029,9 @@ export function registerStaticViews(Alpine) {
       ]);
       this.source = "api";
       this.session = camelSession(detail.session);
+      // Same component the subject profile draws, fed this session's own
+      // reading rather than the newest one. See lib/session-brief.js.
+      this.setBackdrop(this.session?.regimeSummary, { date: this.session?.date, scope: "session" });
       this.takes = (detail.takes || []).map(camelTake);
       this.members = (memberData.members || []).map(camelMember);
       this.subject = subjectData ? camelSubject(subjectData) : null;
@@ -2146,33 +2139,6 @@ export function registerStaticViews(Alpine) {
       const n = Array.isArray(body?.researchSignals) ? body.researchSignals.length : 0;
       return n ? `${n} research signal${n === 1 ? "" : "s"} were attached to the brief members received.` : "";
     },
-    panelInputs() {
-      const r = this.session?.regimeSummary;
-      if (!r) return [];
-      return [
-        ["macro", r.macroPercentile, r.macroRegime],
-        ["onchain", r.onchainPercentile, r.onchainRegime],
-        ["factor", r.factorPercentile, r.factorRegime],
-      ].filter(([, pct]) => typeof pct === "number").map(([label, pct, regime]) => ({ label, pct, regime }));
-    },
-    // Panels reading the opposite way from the composite. This is the single
-    // most-argued fact on a session page — the 2026-06-19 vault synthesis opens
-    // on "on-chain at the 10th percentile dissents from a 71st-percentile
-    // composite" — and the panel drew three bars that left the reader to notice
-    // it. risk_on vs risk_off only; a neutral panel is not a dissent.
-    dissentingPanels() {
-      const head = String(this.session?.regimeSummary?.regime || "").replace(/-/g, "_");
-      if (head !== "risk_on" && head !== "risk_off") return [];
-      const opposite = head === "risk_on" ? "risk_off" : "risk_on";
-      return this.panelInputs().filter((p) => String(p.regime || "").replace(/-/g, "_") === opposite);
-    },
-    dissentLine() {
-      const out = this.dissentingPanels();
-      if (!out.length) return "";
-      const names = out.map((p) => `${p.label} at the ${this.ordinal(p.pct)}`).join(" and ");
-      const head = this.regimeLabel(this.session?.regimeSummary?.regime);
-      return `${names} — ${out.length === 1 ? "dissents" : "dissent"} from a ${head} composite`;
-    },
     briefSummary() {
       const body = this.brief?.body || this.brief;
       if (!body) return "No brief available.";
@@ -2228,37 +2194,6 @@ export function registerStaticViews(Alpine) {
     },
     humanize(id) {
       return humanizeLabel(id);
-    },
-    // Inline-SVG panel-divergence bars (macro/onchain/factor percentiles) with a
-    // dashed 50th-percentile reference line — mirrors the reference
-    // PanelDivergenceBars. Consumes panelInputs() (pct is 0-1). Renders nothing
-    // below 2 panels so it never shows an empty axis.
-    panelDivergenceBars() {
-      const rows = this.panelInputs().filter((p) => Number.isFinite(Number(p.pct)));
-      if (rows.length < 2) return "";
-      const W = 240, labelW = 56, barW = W - labelW, rowH = 16, rowGap = 4;
-      const H = rows.length * rowH + (rows.length - 1) * rowGap + 6;
-      const tick = (p) => labelW + p * barW;
-      const body = rows.map((r, i) => {
-        const y = i * (rowH + rowGap);
-        const pct = this.clampPct(r.pct * 100) / 100;
-        const ty = (y + rowH * 0.7).toFixed(1);
-        // Each panel's bar takes its OWN regime colour. Drawn in one flat accent
-        // these three bars said only "how high", so a panel reading risk-off
-        // looked exactly like the two reading risk-on and the disagreement the
-        // members are arguing about was invisible in the figure.
-        const fill = this.regimeColor(r.regime);
-        return `<g>
-          <text x="0" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace" style="text-transform:uppercase;letter-spacing:0.05em">${this.escapeHtml(r.label)}</text>
-          <rect x="${labelW}" y="${y + 4}" width="${barW}" height="${rowH - 8}" fill="transparent" stroke="var(--color-border)"/>
-          <rect x="${labelW}" y="${y + 4}" width="${(pct * barW).toFixed(1)}" height="${rowH - 8}" fill="${fill}" fill-opacity="0.75"/>
-          <text x="${labelW + barW + 4}" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.ordinal(r.pct)}</text>
-        </g>`;
-      }).join("");
-      return `<svg viewBox="0 0 ${W + 32} ${H}" role="img" aria-label="Panel percentile divergence with 50th-percentile reference">
-        ${body}
-        <line x1="${tick(0.5).toFixed(1)}" x2="${tick(0.5).toFixed(1)}" y1="2" y2="${H - 2}" stroke="var(--color-border)" stroke-dasharray="2 2"/>
-      </svg>`;
     },
     // Normalize a bucket_weights recommendation into rows the bar chart can draw.
     // Prefers explicit bucket rows (name/target/actual/recommended) if the
@@ -2530,31 +2465,6 @@ export function registerStaticViews(Alpine) {
         buckets.some((b) => b.actual != null) ? { key: "actual", label: "actual" } : null,
         { key: "recommended", label: "recommended" },
       ].filter(Boolean);
-    },
-    // The composite's trailing run. The two dashed rules are the regime
-    // thresholds — 0.33 and 0.67 — and they used to be drawn unnamed, so the
-    // line's most important property (which BAND it is in, and how close it sits
-    // to crossing out of it) was invisible. Naming them turns the sparkline from
-    // a shape into a reading.
-    regimeSparkline() {
-      const h = this.session?.regimeSummary?.history || [];
-      if (h.length < 2) return "";
-      const W = 260, H = 58, pad = 5, gutter = 26;
-      const x = (i) => gutter + (i / (h.length - 1)) * (W - gutter - pad);
-      const y = (v) => H - pad - Number(v || 0) * (H - pad * 2);
-      const pts = h.map((d, i) => `${x(i).toFixed(1)},${y(d.composite).toFixed(1)}`).join(" ");
-      const band = (v, label) => `<line x1="${gutter}" x2="${W - pad}" y1="${y(v)}" y2="${y(v)}" stroke="var(--color-border)" stroke-dasharray="2 3"/>
-        <text x="0" y="${(y(v) + 3).toFixed(1)}" fill="var(--color-text-muted)" font-size="8"
-          font-family="ui-monospace,monospace">${label}</text>`;
-      const last = h[h.length - 1];
-      // The end dot takes the regime's own colour, so the line lands on the same
-      // reading the headline states rather than on a flat accent.
-      const dot = this.regimeColor(last.regime || this.session?.regimeSummary?.regime);
-      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Regime composite over the trailing ${h.length} sessions, against the 0.33 risk-off and 0.67 risk-on thresholds">
-        ${band(0.67, "0.67")}${band(0.33, "0.33")}
-        <polyline fill="none" stroke="var(--color-accent)" stroke-width="1.6" points="${pts}"/>
-        <circle cx="${x(h.length - 1)}" cy="${y(last.composite)}" r="2.8" fill="${dot}"/>
-      </svg>`;
     },
     // The aggregator currently fills `consensus` with every take body verbatim
     // and `disagreements[].positions[].view` with two of those same bodies

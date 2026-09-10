@@ -140,17 +140,32 @@ test("public subject profile renders holdings, wallets, NFT contracts and the sw
   // figures off the last real brief. Seven parts, every one that has a page of
   // its own linking to it — the regime read in particular, which is the input
   // readers ask about and which nothing on this page used to acknowledge.
-  await expect(brief.locator(".sp-brief__part")).toHaveCount(7);
-  await expect(brief.locator('.sp-brief__lnk[href="/regime"]').first()).toBeVisible();
+  // Five parts LISTED, and the head still says seven: the regime read and its
+  // trailing history are the other two, and they are DRAWN below rather than
+  // described, because four percentiles against their own history is a
+  // comparison and a line of prose is the wrong instrument for it.
+  await expect(brief.locator(".sp-brief__part")).toHaveCount(5);
+  await expect(brief.locator(".sp-brief__sum")).toContainText("7 parts");
   await expect(brief.locator('.sp-brief__lnk[href="/allocation"]')).toBeVisible();
   await expect(brief.locator('.sp-brief__lnk[href="/swarm"]')).toBeVisible();
   await expect(brief.locator('.sp-brief__lnk[href="/blog"]')).toBeVisible();
-  // Figures come off the archived 2026-06-25 brief, not from prose: it carries
-  // eight regime readings and five research summaries.
-  await expect(brief).toContainText("8 readings");
   await expect(brief).toContainText("5 summaries");
   // woon HAS a book, so the holdings line counts it rather than saying none.
   await expect(brief).toContainText(/\d+ positions/);
+
+  // The regime read, drawn — the same component the session page uses. One row
+  // per reading on ONE percentile axis, which is what makes them comparable;
+  // the panel this replaced drew the composite as a bar on a RAW 0-1 scale
+  // directly above a caption giving its percentile, two figures for one
+  // reading on two undeclared axes.
+  const rail = brief.locator(".mb__rail");
+  await expect(rail).toBeVisible();
+  await expect(rail.locator("rect[data-mark]")).toHaveCount(4);
+  // Always a sentence, including when nothing dissents.
+  await expect(brief.locator(".mb__finding")).not.toHaveText("");
+  // Scope says whose reading it is. This is the ONLY copy that differs from
+  // the session page's render of the same component.
+  await expect(brief.locator(".mb__scope")).toContainText("most recent session");
 
   // Sessions: all 9 archived, published woon sessions.
   await expect(page.locator(".sv__session-card")).toHaveCount(9);
