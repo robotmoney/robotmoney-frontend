@@ -6,11 +6,9 @@
 // docs/technical/markets-asset-pricing-ingest.md §8.1.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import { backfillAssetPricesForCleanDays, lastClosedPriceDay } from "../src/ops/asset-prices.ts";
-import { loadHistoricalPrices } from "../src/chain/historical-prices.ts";
-import type { HistoricalPriceTable } from "../src/chain/historical-prices.ts";
+import { backfillAssetPricesForCleanDays } from "../src/ops/asset-prices.ts";
+import { loadHistoricalPrices, type HistoricalPriceTable } from "../src/chain/historical-prices.ts";
 import { resolveTrackedAssets, resolvePropWallets } from "../src/config.ts";
-import type { ChainAmount, KeyedAssetRead } from "../src/chain/wallet-valuation.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -18,6 +16,7 @@ useCleanDatabase(import.meta.file);
 const D1 = "2026-04-05";
 const D2 = "2026-04-06";
 const NOW = new Date("2026-04-07T09:00:00Z"); // D1 and D2 are closed
+const BLOCK = 1_234_567;
 const BLOCK_TS = Math.floor(Date.parse(`${D1}T23:59:58Z`) / 1000);
 const blockHash = (n: number): string => `0x${n.toString(16).padStart(64, "0")}`;
 const resolvedBlock = (date: string) => ({
