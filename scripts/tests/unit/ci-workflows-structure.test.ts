@@ -267,6 +267,40 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     }
   });
 
+  // ── tag-triggered publish provenance (issue #884 SEC-1 fix) ────────────────
+  test("contract-publish.yml refuses to publish a tag whose commit isn't reachable from origin/main", () => {
+    // Tag creation only requires repo write access, not a review, so any
+    // contributor with write access could point a `contract-v*` tag at a
+    // commit that never went through a PR/branch protection. The publish job
+    // must fetch full history (fetch-depth: 0) and hard-fail (::error + a
+    // non-zero exit, not a skip) before the `bun publish` step if the tagged
+    // commit is not an ancestor of origin/main.
+    const wf = read("contract-publish.yml");
+    expect(
+      wf,
+      "contract-publish.yml's checkout uses fetch-depth: 0 so the ancestor check below has origin/main + full history available",
+    ).toMatch(/uses:\s*actions\/checkout@v4[\s\S]*?fetch-depth:\s*0/);
+    expect(
+      wf,
+      "contract-publish.yml checks the tagged commit is an ancestor of origin/main",
+    ).toMatch(/git merge-base --is-ancestor .*origin\/main/);
+    expect(
+      wf,
+      "contract-publish.yml fails loudly (::error + exit) rather than skipping when the ancestor check fails",
+    ).toMatch(/::error::[\s\S]*?\n\s*exit 1/);
+
+    const publishStepIndex = wf.indexOf("bun publish");
+    const ancestorCheckIndex = wf.indexOf("--is-ancestor");
+    expect(
+      ancestorCheckIndex,
+      "contract-publish.yml's ancestor check appears before its bun publish step",
+    ).toBeGreaterThan(-1);
+    expect(
+      publishStepIndex,
+      "contract-publish.yml's ancestor check appears before its bun publish step",
+    ).toBeGreaterThan(ancestorCheckIndex);
+  });
+
   // ── committed rollout evidence (issue #937) ────────────────────────────────
   test("backend.yml's pull_request paths-filter names the committed-evidence tree", () => {
     // The evidence tree lives OUTSIDE backend/ by construction: it must match no
