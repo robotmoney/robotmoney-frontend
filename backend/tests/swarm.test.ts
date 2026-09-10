@@ -1005,6 +1005,56 @@ test("GET /api/swarm/members exposes lastTakeAt (#782): null until a member's fi
   expect(afterAmendment.lastTakeAt).toBe(latestReceivedAt.toISOString());
 });
 
+// Issue #782 follow-up (review finding DATA_STALE_DERIVED_STATE-1): getMembers()'s
+// LEFT JOIN LATERAL only ever ran on the roster-list query. getMember() (via
+// resolveMemberRow) and updateMemberProfile()'s UPDATE...RETURNING never
+// selected last_take_at at all, so instant(undefined) silently produced
+// lastTakeAt: null for every single-member read regardless of real take
+// history — indistinguishable from "never took a position". This exercises
+// both call sites, over the real routes, the same way the getMembers test
+// above exercises that one.
+test("GET /api/swarm/members/:id and the profile-update RETURNING path also expose a real lastTakeAt (#782 follow-up), not just getMembers()", async () => {
+  const subj = rid("lastTakeSingle");
+  await ic.ensureSubject(subj, "Last Take Single Subject");
+  const m = await activeMember();
+
+  // Before any take, both single-member paths agree with getMembers(): null.
+  const beforeGet = await ic.getMember(m.id);
+  expect(beforeGet?.lastTakeAt).toBeNull();
+  const beforeRoute = await handleSwarm(
+    new Request(`http://test${routePath(ROUTES.swarm.member, { id: m.id })}`),
+    new URL(`http://test${routePath(ROUTES.swarm.member, { id: m.id })}`),
+  );
+  expect(beforeRoute?.status).toBe(200);
+  expect((beforeRoute!.body as any).lastTakeAt).toBeNull();
+
+  const session = await ic.openSession(subj);
+  const date = sessionDate(session);
+  await ic.publishBrief(session.id, 60);
+  const take = { memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance: "neutral", confidence: 0.5, body: "x".repeat(80) };
+  const sig = await signMessage(canonicalizeSubmission(take), m.privateKey);
+  expect((await ic.submitRecommendation(m.token, { ...take, signature: sig })).status).toBe(201);
+
+  const receivedAt = (
+    await sql<{ t: Date }[]>`SELECT max(received_at) AS t FROM swarm_recommendations WHERE member_id = ${m.id}`
+  )[0].t;
+
+  // getMember() / GET /api/swarm/members/:id — resolveMemberRow's join.
+  const afterGet = await ic.getMember(m.id);
+  expect(afterGet?.lastTakeAt).toBe(receivedAt.toISOString());
+  const afterRoute = await handleSwarm(
+    new Request(`http://test${routePath(ROUTES.swarm.member, { id: m.id })}`),
+    new URL(`http://test${routePath(ROUTES.swarm.member, { id: m.id })}`),
+  );
+  expect((afterRoute!.body as any).lastTakeAt).toBe(receivedAt.toISOString());
+
+  // updateMemberProfile()'s UPDATE...RETURNING path — a disjoint FROM-subquery
+  // join, not the resolveMemberRow one above, so it needs its own assertion.
+  const updated = await ic.updateMemberProfile(m.token, m.id, { tagline: "still taking positions" });
+  expect(updated.status).toBe(200);
+  expect((updated as any).member.lastTakeAt).toBe(receivedAt.toISOString());
+});
+
 test("POST /api/swarm/signing-payload and submit reject unknown stances and unknown top-level fields with 400 and clear error string", async () => {
   const m = await activeMember();
 

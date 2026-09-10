@@ -246,12 +246,22 @@ export async function assertRosterCapacity(
  * `(id = $ref) DESC`: that one asks "is this proposed NAME already spoken for",
  * and it deliberately prefers the id namespace to tell the two 409s apart.
  */
+// Issue #782 follow-up: this row feeds toMember() directly via getMember(),
+// so it needs the same last_take_at lateral getMembers() joins — otherwise
+// a single-member lookup silently reports lastTakeAt: null regardless of
+// actual take history, indistinguishable from "never took a position".
 async function resolveMemberRow(ref: string) {
   return (await sql`
-    SELECT * FROM swarm_members
-    WHERE handle = ${ref} OR id = ${ref}
-    ORDER BY (handle = ${ref}) DESC
-    LIMIT 1`)[0];
+    SELECT m.*, t.last_take_at
+      FROM swarm_members m
+      LEFT JOIN LATERAL (
+        SELECT max(received_at) AS last_take_at
+          FROM swarm_recommendations
+         WHERE member_id = m.id
+      ) t ON true
+     WHERE m.handle = ${ref} OR m.id = ${ref}
+     ORDER BY (m.handle = ${ref}) DESC
+     LIMIT 1`)[0];
 }
 export async function getMember(id: string) {
   const row = await resolveMemberRow(id);
@@ -2276,13 +2286,22 @@ export async function updateMemberProfile(token: string, memberRef: string, patc
     operator: patch.operator !== undefined ? patch.operator : row.operator,
     avatar: patch.avatar !== undefined ? patch.avatar : row.avatar,
   };
+  // Issue #782 follow-up: RETURNING * only ever sees swarm_members columns, so
+  // without this FROM-subquery join the response's lastTakeAt was silently
+  // always null (see resolveMemberRow's note above — this RETURNING row, not
+  // that resolver's, is what toMember() below actually serializes).
   const updated = await sql`
-    UPDATE swarm_members SET
+    UPDATE swarm_members m SET
       tagline = ${merged.tagline}, mandate = ${merged.mandate}, biases = ${sql.json(merged.biases as any)},
       voice_md = ${merged.voice_md}, mode = ${merged.mode}, operator = ${merged.operator},
       avatar = ${sql.json(merged.avatar as any)}, updated_at = now()
-    WHERE id = ${memberId}
-    RETURNING *`;
+    FROM (
+      SELECT max(received_at) AS last_take_at
+        FROM swarm_recommendations
+       WHERE member_id = ${memberId}
+    ) t
+    WHERE m.id = ${memberId}
+    RETURNING m.*, t.last_take_at`;
   // Issue #925: name the changed fields, matching admin.ts's updateMemberAdminTx
   // audit style. Previously this logged only `{ memberId }` — an admin
   // investigating a suspected self-service forgery after the fact had no
