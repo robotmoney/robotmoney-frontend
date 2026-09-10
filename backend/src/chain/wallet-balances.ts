@@ -16,6 +16,7 @@ import {
   resolvePropWallets,
   resolveTrackedAssets,
   SP500_SIZE,
+  SP500_SIZE_VERIFIED_AT,
   type BaseRpcSource,
   type PriceSource,
   type TrackedAsset,
@@ -53,6 +54,13 @@ export interface WalletHolding {
   // contract/src/dashboards.d.ts for the full contract and why this is a
   // separate field rather than a new provenance value.
   strategyNavIdleOnly?: boolean;
+  // issue #862 (RM-116): set ONLY on a `config` leg (SP500) to the ISO date its
+  // asserted size (config.ts SP500_SIZE) was last confirmed against the venue
+  // — SP500_SIZE_VERIFIED_AT, echoed as-is, never persisted or recomputed per
+  // sample. Absent on every other holding, whose amount really is READ. Lets a
+  // consumer disclose "position size as of <date>" instead of presenting an
+  // asserted six-month-old number identically to a live one.
+  sizeVerifiedAt?: string | null;
 }
 
 export interface WalletHistoryPoint {
@@ -202,6 +210,10 @@ async function valueAsset(
     color: asset.color,
     priceSource: PRICE_VENDOR[asset.priceKind] ?? asset.priceKind,
     ...strategyNavDisclosure(asset, chainAmount),
+    // issue #862: disclose the asserted-size leg regardless of how this
+    // sample turns out (live/stale) — SP500's SIZE is never a chain read
+    // either way, so the confirmation date applies unconditionally.
+    ...(asset.valuationKind === "config" ? { sizeVerifiedAt: SP500_SIZE_VERIFIED_AT } : {}),
   };
   const valued = await valueLeg(asset, chainAmount, source, priceSource);
   if (valued.ok) {
@@ -407,6 +419,10 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
       // ABSENT rather than becoming `false`: "not known" is not "positions
       // contributed".
       ...(row?.strategy_nav_idle_only == null ? {} : { strategyNavIdleOnly: row.strategy_nav_idle_only }),
+      // issue #862: same disclosure as computeWalletBalances' valueAsset()
+      // above, derived from config (never persisted) so the request path
+      // needs no schema change and stays zero-RPC.
+      ...(a.valuationKind === "config" ? { sizeVerifiedAt: SP500_SIZE_VERIFIED_AT } : {}),
     };
     if (!row) {
       // No scheduled sample yet for this symbol → honest 'stale' with null

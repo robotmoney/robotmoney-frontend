@@ -58,7 +58,13 @@ function walletStub() {
     totalUsd: HISTORY[HISTORY.length - 1]!.totalUsd,
     source: "stub",
     priceSource: "stub",
-    holdings: SERIES.map((s) => ({ symbol: s.symbol, chain: "base", group: "Stable", color: s.color, amount: 1, priceUsd: 1, valueUsd: 1, priceSource: "pinned", provenance: "stub" })),
+    holdings: SERIES.map((s) => ({
+      symbol: s.symbol, chain: "base", group: "Stable", color: s.color, amount: 1, priceUsd: 1, valueUsd: 1, priceSource: "pinned", provenance: "stub",
+      // issue #862: only the SP500 holding carries sizeVerifiedAt (config.ts
+      // SP500_SIZE_VERIFIED_AT, echoed as-is) — every other leg's amount is a
+      // real read and must leave the field absent.
+      ...(s.symbol === "SP500" ? { sizeVerifiedAt: "2026-03-01" } : {}),
+    })),
     history: HISTORY,
     historyProvenance: { live: 1, stub: 0, stale: 0, seed: 4, backfilled: 1 },
   };
@@ -183,6 +189,23 @@ test("performance view discloses the unrecoverable gap window (issue #614 AC5)",
   await expect(seam).toBeVisible();
   const text = await seam.textContent();
   expect(text).toMatch(/\d+ days? in this range (is|are) in process of being retrieved/); // the ~91-day gap
+});
+
+// issue #862 (RM-116): SP500's position size is an owner-asserted constant,
+// never read from a wallet or venue API — until it is read, the Wallet Total
+// figure (which sums it in) must not present it identically to every other,
+// genuinely-read leg. The stub's SP500 holding carries sizeVerifiedAt
+// "2026-03-01" (see walletStub() above); this must render a visible
+// disclosure alongside the wallet total, not silently sum it in.
+test("performance view discloses that SP500's position size is asserted, not read (issue #862)", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/performance");
+
+  const seam = page.locator(".a2-seam");
+  await expect(seam).toBeVisible();
+  const text = await seam.textContent();
+  expect(text).toMatch(/SP500 position size is asserted, not read from a live position — last confirmed March 2026\./);
 });
 
 test("the served performance view no longer bakes the frozen walletPerfView series (issue #84)", async ({ page }) => {
