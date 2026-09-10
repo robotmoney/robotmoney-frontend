@@ -314,7 +314,10 @@
                     <dl class="sv__rec">
                       <dt>Recommendation</dt>
                       <template x-if="recommendation(s).kind === 'weights'">
-                        <dd>Target weights <b class="sv__rec-n" x-text="recommendation(s).text"></b></dd>
+                        <div>
+                          <dd>Target weights <b class="sv__rec-n" x-text="recommendation(s).text"></b></dd>
+                          <dd class="sv__rec-more" x-show="recommendation(s).note" x-text="recommendation(s).note"></dd>
+                      </div>
                       </template>
                       <template x-if="recommendation(s).kind === 'text'">
                         <dd x-text="recommendation(s).text"></dd>
