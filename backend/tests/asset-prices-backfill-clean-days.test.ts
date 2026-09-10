@@ -9,6 +9,7 @@ import { sql } from "../src/db/client.ts";
 import { backfillAssetPricesForCleanDays } from "../src/ops/asset-prices.ts";
 import { loadHistoricalPrices, type HistoricalPriceTable } from "../src/chain/historical-prices.ts";
 import { resolveTrackedAssets, resolvePropWallets } from "../src/config.ts";
+import { SLEEVE_DEFS, sleeveSymbols } from "../src/chain/wallet-valuation.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -63,10 +64,29 @@ function happyHistoricalDeps(): { loadPrices: (assets: any[], fromDate: string, 
   };
 }
 
+// issue #861 (#948): every wallet is now read for every chain-readable tracked
+// asset (sleeveSymbols(def)), not a fixed per-wallet whitelist — only the
+// strategy leg stays wallet-specific. A "complete day" fixture must cover
+// exactly that set, or resolveWalletSnapshotManifest sees it as incomplete
+// and the backfill correctly (but, for this fixture, wrongly) skips it.
+async function insertCompleteSleeveSamples(date: string, provenance: string, sampledAt: string): Promise<void> {
+  const wallets = resolvePropWallets();
+  for (let i = 0; i < SLEEVE_DEFS.length && i < wallets.length; i++) {
+    const wallet = wallets[i];
+    for (const symbol of sleeveSymbols(SLEEVE_DEFS[i]!)) {
+      await sql`
+        INSERT INTO wallet_sleeve_samples
+          (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+        VALUES
+          (${date}, ${wallet}, ${symbol}, 5, 2, 10, ${provenance}, ${sampledAt})
+      `;
+    }
+  }
+}
+
 test("backfillAssetPricesForCleanDays writes asset_prices for a complete clean day", async () => {
   // Insert a complete clean day in wallet_balance_samples and wallet_sleeve_samples
   const assets = resolveTrackedAssets().filter((a) => a.valuationKind !== "config");
-  const wallets = resolvePropWallets();
 
   // Write complete balance samples for D1
   for (const asset of assets) {
@@ -79,22 +99,7 @@ test("backfillAssetPricesForCleanDays writes asset_prices for a complete clean d
   }
 
   // Write complete sleeve samples for D1
-  for (let i = 0; i < 3; i++) {
-    const wallet = wallets[i];
-    const sleeveSymbols = i === 0
-      ? ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"]
-      : i === 1
-      ? ["ZYFAI-SS1"]
-      : ["GIZA-SS1"];
-    for (const symbol of sleeveSymbols) {
-      await sql`
-        INSERT INTO wallet_sleeve_samples
-          (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
-        VALUES
-          (${D1}, ${wallet}, ${symbol}, 5, 2, 10, 'live', ${new Date(BLOCK_TS * 1000).toISOString()})
-      `;
-    }
-  }
+  await insertCompleteSleeveSamples(D1, "live", new Date(BLOCK_TS * 1000).toISOString());
 
   // Ensure asset_prices is empty for D1
   const before = await sql`SELECT count(*)::int AS n FROM asset_prices WHERE price_date = ${D1}`;
@@ -153,7 +158,6 @@ test("backfillAssetPricesForCleanDays skips incomplete days", async () => {
 test("backfillAssetPricesForCleanDays skips quarantined days", async () => {
   // Insert a complete day but with quarantined provenance
   const assets = resolveTrackedAssets().filter((a) => a.valuationKind !== "config");
-  const wallets = resolvePropWallets();
   for (const asset of assets) {
     await sql`
       INSERT INTO wallet_balance_samples
@@ -162,22 +166,7 @@ test("backfillAssetPricesForCleanDays skips quarantined days", async () => {
         (${D1}, ${asset.symbol}, 5, 2, 10, 'backfilled-quarantined', ${new Date(BLOCK_TS * 1000).toISOString()})
     `;
   }
-  for (let i = 0; i < 3; i++) {
-    const wallet = wallets[i];
-    const sleeveSymbols = i === 0
-      ? ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"]
-      : i === 1
-      ? ["ZYFAI-SS1"]
-      : ["GIZA-SS1"];
-    for (const symbol of sleeveSymbols) {
-      await sql`
-        INSERT INTO wallet_sleeve_samples
-          (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
-        VALUES
-          (${D1}, ${wallet}, ${symbol}, 5, 2, 10, 'backfilled-quarantined', ${new Date(BLOCK_TS * 1000).toISOString()})
-      `;
-    }
-  }
+  await insertCompleteSleeveSamples(D1, "backfilled-quarantined", new Date(BLOCK_TS * 1000).toISOString());
 
   const result = await backfillAssetPricesForCleanDays(sql, NOW, happyHistoricalDeps());
 
@@ -213,7 +202,6 @@ test("backfillAssetPricesForCleanDays does not process today or future days", as
 test("backfillAssetPricesForCleanDays handles multiple days", async () => {
   // Insert complete clean days for D1 and D2
   const assets = resolveTrackedAssets().filter((a) => a.valuationKind !== "config");
-  const wallets = resolvePropWallets();
 
   for (const date of [D1, D2]) {
     for (const asset of assets) {
@@ -224,22 +212,7 @@ test("backfillAssetPricesForCleanDays handles multiple days", async () => {
           (${date}, ${asset.symbol}, 5, 2, 10, 'live', ${new Date(BLOCK_TS * 1000).toISOString()})
       `;
     }
-    for (let i = 0; i < 3; i++) {
-      const wallet = wallets[i];
-      const sleeveSymbols = i === 0
-        ? ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"]
-        : i === 1
-        ? ["ZYFAI-SS1"]
-        : ["GIZA-SS1"];
-      for (const symbol of sleeveSymbols) {
-        await sql`
-          INSERT INTO wallet_sleeve_samples
-            (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
-          VALUES
-            (${date}, ${wallet}, ${symbol}, 5, 2, 10, 'live', ${new Date(BLOCK_TS * 1000).toISOString()})
-        `;
-      }
-    }
+    await insertCompleteSleeveSamples(date, "live", new Date(BLOCK_TS * 1000).toISOString());
   }
 
   // NOW is 2026-04-07, so cutoff is 2026-04-06. Only D1 (2026-04-05) is < cutoff.
