@@ -26,6 +26,7 @@ import {
   persistedFallbackWalletPriceReader,
   readChainAmountsBatched,
   SLEEVE_DEFS,
+  sleeveSymbols,
   valueLeg,
   type KeyedAssetRead,
 } from "../../chain/wallet-valuation.ts";
@@ -107,7 +108,7 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
   for (let i = 0; i < SLEEVE_DEFS.length && i < wallets.length; i++) {
     const def = SLEEVE_DEFS[i]!;
     const address = wallets[i]!;
-    const walletAssets = def.symbols
+    const walletAssets = sleeveSymbols(def)
       .map((s) => bySymbol.get(s))
       .filter((a): a is TrackedAsset => a != null && (a.valuationKind === "native" || !isPlaceholderAddress(a.address)));
     for (const a of walletAssets) {

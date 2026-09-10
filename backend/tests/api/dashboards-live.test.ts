@@ -236,7 +236,10 @@ test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; tot
   expect(r.wallets).toHaveLength(3);
   const bankr = r.wallets.find((w) => w.type === "primary")!;
   expect(isPlaceholderAddress(resolveTrackedAssets().find((a) => a.symbol === "BNKR")!.address)).toBe(false);
-  expect(bankr.holdings.map((h) => h.symbol)).toEqual(["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"]);
+  // issue #861: holding order now follows resolveTrackedAssets()' order
+  // (commonSleeveSymbols is derived from it), not the old hand-written
+  // SLEEVE_DEFS literal order.
+  expect(bankr.holdings.map((h) => h.symbol)).toEqual(["USDC", "WETH", "ETH", "ROBOTMONEY", "BNKR"]);
   for (const w of r.wallets) {
     for (const h of w.holdings) {
       expect(h.provenance).toBe("stub");
@@ -245,7 +248,15 @@ test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; tot
     const sum = Math.round(w.holdings.reduce((a, h) => a + (h.valueUsd ?? 0), 0) * 100) / 100;
     expect(w.totalUsd).toBeCloseTo(sum, 6);
   }
-  expect(r.wallets.filter((w) => w.type === "strategy").map((w) => w.holdings.map((h) => h.symbol))).toEqual([["ZYFAI-SS1"], ["GIZA-SS1"]]);
+  // issue #861: strategy sleeves now read the same common chain-readable set as
+  // the primary sleeve (discovery, not a whitelist), PLUS their own
+  // wallet-specific strategy leg — a strategy wallet's non-strategy holdings
+  // (e.g. WETH) must no longer be invisible to the per-wallet feed.
+  const common = ["USDC", "WETH", "ETH", "ROBOTMONEY", "BNKR"];
+  expect(r.wallets.filter((w) => w.type === "strategy").map((w) => w.holdings.map((h) => h.symbol))).toEqual([
+    [...common, "ZYFAI-SS1"],
+    [...common, "GIZA-SS1"],
+  ]);
 });
 
 test("wallet-sleeves: ONE reverted sub-call degrades ONLY that holding to stale; every other leg stays valued (per-leg honesty in the batch)", async () => {
@@ -272,7 +283,18 @@ test("wallet-sleeves: ONE reverted sub-call degrades ONLY that holding to stale;
   }
   expect(bankr.stale).toBe(true);
   expect(r.stale).toBe(true);
-  for (const w of r.wallets.filter((w) => w.type === "strategy")) expect(w.stale).toBe(false);
+  // issue #861: the strategy wallets now read WETH too (discovery, not a
+  // whitelist), so a WETH-wide revert (targets the TOKEN contract, not one
+  // wallet) degrades their WETH holding exactly like Bankr's — they are no
+  // longer blind to it, so they are no longer falsely non-stale either.
+  for (const w of r.wallets.filter((w) => w.type === "strategy")) {
+    const strategyWeth = w.holdings.find((h) => h.symbol === "WETH")!;
+    expect(strategyWeth.provenance).toBe("stale");
+    expect(w.stale).toBe(true);
+    // ...but its OWN strategy leg is unaffected — only WETH degraded.
+    const ownLeg = w.holdings.find((h) => h.symbol.endsWith("-SS1"))!;
+    expect(ownLeg.provenance).toBe("stub");
+  }
 });
 
 test("wallet-sleeves: a THROWN batch (forced RPC failure) degrades every holding to value null + provenance 'stale' (never fabricated)", async () => {
