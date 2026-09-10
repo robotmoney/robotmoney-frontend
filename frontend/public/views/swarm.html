@@ -313,24 +313,23 @@
                   <template x-if="recommendation(s)">
                     <dl class="sv__rec">
                       <dt>Recommendation</dt>
-                      <!-- The mix, drawn. Four numbers on a line ("95 / 3 / 0 /
-                           2") make the reader map each one back onto a sleeve
-                           name they are holding in their head, and the
-                           relationship between them — the whole point of a
-                           target mix — is not visible at all. One 100% band, a
-                           segment per sleeve, in the colours /allocation's
-                           donut uses. A sleeve at zero keeps its legend row and
-                           draws no segment: it is a real decision, not a
-                           missing one. -->
+                      <!-- The mix, drawn. Four numbers on a line ("95 / 3 / 0 / 2") make
+                           the reader map each one back onto a sleeve name they are
+                           holding in their head, and the relationship between them —
+                           the whole point of a target mix — is not visible at all.
+                           A ring reads as parts of one whole at a glance.
+
+                           pathLength="100" makes an arc's length its percentage, so the
+                           geometry never drifts out of step with the radius. rotate(-90)
+                           starts the ring at twelve o'clock instead of three. A sleeve at
+                           0% draws no arc and keeps its legend row: 0% is a decision, and
+                           a minimum-length arc would be a lie. -->
                       <template x-if="recommendation(s).kind === 'weights'">
                         <div>
-                          <dd>
-                            <div class="sv__wbar" role="img" :aria-label="`Target weights: ${sessionWeightsLabel(s)}`">
-                              <template x-for="w in recommendation(s).rows" :key="w.key">
-                                <i data-mark="series" x-show="w.pct > 0"
-                                   :style="`flex:${w.pct};background:${w.colour}`"></i>
-                              </template>
-                            </div>
+                          <dd class="sv__wmix">
+                            <span class="sv__wdonut-host" role="img"
+                              :aria-label="`Target weights: ${sessionWeightsLabel(s)}`"
+                              x-html="weightDonutSvg(s)"></span>
                             <ul class="sv__wkeys">
                               <template x-for="w in recommendation(s).rows" :key="w.key">
                                 <li :class="w.pct > 0 ? '' : 'is-zero'">
