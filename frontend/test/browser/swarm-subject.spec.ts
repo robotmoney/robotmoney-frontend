@@ -575,3 +575,62 @@ test("a framework subject renders no book, even when the API serves it one", asy
 
   await expectNoBrowserErrors(errors);
 });
+
+// The subject IS the published allocation, so its page opens with the weights
+// in force. A reader landing here was shown six sessions ABOUT the weights
+// before being shown the weights. Same .sv__alloc card /swarm carries, minus
+// the eyebrow and title that name which subject it is for — this page's own H1
+// already said that.
+test("the allocation subject opens with the weights in force, and no other subject does", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+
+  let frameworkFetches = 0;
+  await page.route("**/api/dashboards/allocation", (route) => {
+    frameworkFetches += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        asOf: "2026-06-02",
+        strategy: [
+          { label: "Conservative DeFi Yield", targetPct: 95 },
+          { label: "Agent Tokens", targetPct: 5 },
+          { label: "Protocol Tokens", targetPct: 0 },
+          { label: "Real World Assets", targetPct: 0 },
+        ],
+      }),
+    });
+  });
+  await page.route("**/api/swarm/**", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
+  );
+
+  await page.goto("/swarm/subjects/robotmoney-allocation");
+  const card = page.locator(".sv__alloc");
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("Unchanged since");
+
+  const rows = card.locator(".sv__sleeve:not(.sv__sleeve--head)");
+  await expect(rows).toHaveCount(4);
+  await expect(rows.first()).toContainText("Conservative DeFi Yield");
+  await expect(rows.first()).toContainText("95%");
+
+  // A published zero draws an empty TRACK rather than no track: an absent
+  // target renders an em dash and no track, and the two must not look alike.
+  await expect(rows.nth(2)).toContainText("0%");
+  await expect(rows.nth(2).locator(".sv__sleeve-track")).toHaveCount(1);
+  await expect(card).toContainText("targets, not gaps");
+
+  // /swarm points here for the history, so this points at the product page.
+  await expect(card.locator('a[href="/allocation"]')).toBeVisible();
+
+  // A subject that is NOT the framework is a book the framework does not
+  // describe: it gets no card, and never asks for one.
+  frameworkFetches = 0;
+  await page.goto("/swarm/subjects/robotmoney-vault");
+  await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Vault");
+  await expect(page.locator(".sv__alloc")).toHaveCount(0);
+  expect(frameworkFetches).toBe(0);
+
+  await expectNoBrowserErrors(errors);
+});

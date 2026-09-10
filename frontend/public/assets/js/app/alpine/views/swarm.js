@@ -20,6 +20,7 @@ import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { sessionSummary } from "../../lib/session-summary.js";
 import { sessionTakes } from "../../lib/session-takes.js";
+import { allocationFramework } from "../../lib/allocation-framework.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 
@@ -75,6 +76,7 @@ export function registerSwarmView(Alpine) {
   Alpine.data("swarmView", () => ({
     ...sessionSummary,
     ...sessionTakes(),
+    ...allocationFramework(),
     loading: true,
     error: null,
     members: [],
@@ -94,7 +96,6 @@ export function registerSwarmView(Alpine) {
     // The published allocation: four sleeves and the weight each is held to.
     // Guarded, and the panel degrades by omission — it keeps its claim and
     // drops its register rather than printing a dash where a weight would be.
-    allocationFw: null,
     destroy() {
       if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
     },
@@ -172,7 +173,7 @@ export function registerSwarmView(Alpine) {
     // move out of the vault's row. Measuring one contract's holdings against
     // the policy is the conflation this section now exists to undo.
     async loadAllocation() {
-      this.allocationFw = await api.get(ROUTES.dashboards.allocation).catch(() => null);
+      await this.loadAllocationFw();
     },
 
     // ── the published allocation ─────────────────────────────────────────
@@ -190,52 +191,6 @@ export function registerSwarmView(Alpine) {
     // book that crossed their 99.5% coverage test would have silently sprouted
     // columns measuring a contract against a policy, inside the block built to
     // separate the two.
-    allocationTargets() {
-      const rows = this.allocationFw?.strategy;
-      if (!Array.isArray(rows) || !rows.length) return [];
-      return rows.map((r, i) => ({
-        // "Sleeve" is the published word for one of the four allocation rows;
-        // `buckets` stays the manifest's own field name and is not renamed.
-        label: r?.label || `Sleeve ${i + 1}`,
-        pct: Number.isFinite(Number(r?.targetPct)) ? Number(r.targetPct) : null,
-        hue: CATEGORICAL[i % CATEGORICAL.length],
-      }));
-    },
-    // Bar width, clamped to the scale. A framework whose weights do not sum to
-    // 100 draws tracks that do not fill; it is never normalised to its own
-    // sum, which would rescale an incomplete policy to look complete.
-    //
-    // null is not 0. A published zero gets an empty track and a muted figure;
-    // an absent target gets no track and an em dash. The two must not look
-    // alike, so the track is what separates them.
-    sleeveBar(t) {
-      const pct = Number(t?.pct);
-      if (t?.pct === null || !Number.isFinite(pct)) return null;
-      return Math.max(0, Math.min(100, pct));
-    },
-    allocationAsOf() {
-      const d = this.allocationFw?.asOf;
-      return d ? this.formatDate(d) : "";
-    },
-    // The note carries what the register cannot, and nothing it cannot back.
-    //
-    // "No session has changed these weights yet" is read from the code rather
-    // than from the feed: `allocation_framework` has exactly one writer, the
-    // seed, and this row has not moved since it was written. When a real
-    // writer lands, this sentence is the whole of the change.
-    allocationNote() {
-      if (!this.allocationFw) return "The published target could not be read.";
-      const zeros = this.allocationTargets().filter((t) => t.pct === 0).length;
-      const head = "No session has changed these weights yet.";
-      if (!zeros) return head;
-      // Counted, not written into the string. The framework is 95/5/0/0 today,
-      // and a hardcoded "two" becomes false the first time a weight is edited.
-      const word = ["", "one", "two", "three", "four"][zeros] || String(zeros);
-      return zeros === 1
-        ? `${head} The ${word} sleeve at zero is a target, not a gap.`
-        : `${head} The ${word} sleeves at zero are targets, not gaps.`;
-    },
-
     // ── the allocation's own sessions ────────────────────────────────────
     // The framework subject is not a portfolio row, but its sessions are in
     // the feed. The panel count reads the same published set the list does.
