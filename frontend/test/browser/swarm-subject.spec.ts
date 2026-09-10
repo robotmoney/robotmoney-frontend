@@ -49,7 +49,7 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
   expect(errors.filter((e) => !EXPECTED_NETWORK_NOISE.test(e))).toEqual([]);
 }
 
-test("public subject profile renders holdings, wallets and NFT contracts from fetched (archive) data", async ({ page }) => {
+test("public subject profile renders holdings, wallets, NFT contracts and the swarm brief from fetched (archive) data", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
   // Force every swarm API call to fail so subjectProfile.init() and its
@@ -117,12 +117,24 @@ test("public subject profile renders holdings, wallets and NFT contracts from fe
   await expect(nftPanel).toContainText("RecycleMachine");
   await expect(nftPanel).toContainText("ClawMachine");
 
-  // No structural notes panel, on the subject that declares the most of them
-  // (woon.json carries 4). They are the operator's brief TO THE SWARM — how to
-  // review this subject, what not to default to — and they ship to the agents
-  // in the session brief, which is where they belong. On the reader's page
-  // they turned the profile into an annotated design file explaining itself.
-  await expect(page.locator(".sv__panel", { hasText: "Structural notes" })).toHaveCount(0);
+  // The structural notes are the operator's brief TO THE SWARM, and woon.json
+  // declares 4. They ride in a disclosure that says so and starts CLOSED: open
+  // and headed "Structural notes", they read as the page annotating itself.
+  const brief = page.locator(".sp-brief");
+  await expect(brief.locator(".sp-brief__sum")).toContainText("Brief to the swarm · 4 notes");
+  await expect(brief.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "false");
+  // Closed means closed to a reader AND to the keyboard: the region collapses
+  // to nothing and is inert, so the notes are not tab-reachable behind it.
+  const region = brief.locator(".sp-brief__anim");
+  await expect(region).toHaveAttribute("inert", /.*/);
+  expect(await region.boundingBox().then((b) => b?.height ?? 0)).toBeLessThan(1);
+
+  // ...and opens to the notes themselves, with what they are for said plainly.
+  await brief.locator(".sp-brief__sum").click();
+  await expect(brief.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "true");
+  await expect(brief).toContainText("Instructions the operator gives the agents");
+  await expect(brief.locator("li")).toHaveCount(4);
+  await expect(brief).toContainText("RoboFarm, RecycleMachine, ClawMachine");
 
   // Sessions: all 9 archived, published woon sessions.
   await expect(page.locator(".sv__session-card")).toHaveCount(9);
@@ -344,6 +356,78 @@ test("a session with no consensus to report prints no Consensus kicker", async (
   await expect(page.locator(".sv__rec").first()).toContainText("Target weights");
   // ...but not a consensus, so the kicker is absent rather than empty.
   await expect(page.locator(".sv__session-kicker", { hasText: "Consensus" })).toHaveCount(0);
+
+  await expectNoBrowserErrors(errors);
+});
+
+// A framework subject has no book, and this one says so in its own brief: "no
+// portfolio to scrape — the subject IS the allocation.json framework state".
+// Production published a $42,688 holdings table on it anyway. The numbers come
+// from ensureSmokeSubjectFixtures() (backend/src/swarm/domain.ts), which writes
+// a deterministic fake basket into swarm_subject_snapshots for every subject
+// that is not woon or mav, and which a release cutover runs against the
+// production database. The top position read "ROBOT 50%" — not a token, but
+// `subjectId.slice(0, 5).toUpperCase()` of "robotmoney-allocation".
+//
+// Cleaning that row up is a data fix elsewhere. This is the page refusing to
+// print a book for a subject that declares it holds nothing, whatever the API
+// hands it.
+test("a framework subject renders no book, even when the API serves it one", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+
+  let snapshotsRequested = false;
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (/\/api\/swarm\/subjects\/fw$/.test(pathname)) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "fw", name: "Framework Subject", thesis_blurb: "",
+          wallets: [], nft_contracts: [], structural_notes: [],
+          source: { type: "framework" },
+        }),
+      });
+    }
+    if (/\/snapshots$/.test(pathname)) {
+      snapshotsRequested = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          snapshots: [
+            {
+              date: "2026-08-05", total_value_usd: 42688,
+              positions: [{ token: "FW", chain: "base", value_usd: 42688 }],
+              notable: ["FW 100% is the anchor position."],
+            },
+            {
+              date: "2026-08-06", total_value_usd: 42688,
+              positions: [{ token: "FW", chain: "base", value_usd: 42688 }],
+              notable: ["FW 100% is the anchor position."],
+            },
+          ],
+        }),
+      });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/swarm/subjects/fw");
+  await expect(page.locator(".sv__detail-title")).toHaveText("Framework Subject");
+
+  // No holdings table, no notable list, no concentration chart, and no
+  // holdings figure among the facts.
+  await expect(page.locator(".sp-holdings")).toHaveCount(0);
+  await expect(page.locator(".sv__notables")).toHaveCount(0);
+  await expect(page.locator(".sp-chart__svg svg")).toHaveCount(0);
+  await expect(page.locator(".sv__fact-row")).not.toContainText("holdings");
+  // Two snapshots would otherwise be enough to draw the chart, so this is a
+  // gate firing rather than a fixture too thin to render.
+  await expect(page.locator(".sv__fact-row")).toContainText("sessions");
+
+  // And the request is never made: a subject with no book has none to fetch.
+  expect(snapshotsRequested).toBe(false);
 
   await expectNoBrowserErrors(errors);
 });

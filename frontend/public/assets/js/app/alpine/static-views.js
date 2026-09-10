@@ -254,6 +254,18 @@ export function camelSubject(raw) {
   };
 }
 
+// Tolerates both shapes the field arrives in: a list of notes, or a single
+// paragraph from an older manifest. Exported (and used by subjectProfile's
+// structuralNotes() below) so scripts/tests/unit/frontend-routes.test.ts can
+// assert the gate is on .length, not truthiness — camelSubject defaults a
+// missing field to [], which is itself truthy, so a plain `x-show` on the
+// raw value would open an empty disclosure on every subject that has none.
+export function structuralNotesOf(subject) {
+  const raw = subject?.structuralNotes;
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  return raw ? [raw] : [];
+}
+
 function normalizeSnapshot(raw) {
   if (!raw) return null;
   return {
@@ -1087,7 +1099,19 @@ export function registerStaticViews(Alpine) {
         }
         // Each side-fetch is guarded on its own: a subject with no snapshot yet
         // still has sessions worth reading, and vice versa.
-        this.snapshots = await this.loadSnapshots(id);
+        //
+        // A FRAMEWORK subject has no book, so it does not get one — the fetch
+        // is skipped rather than the render being gated downstream. Its own
+        // structural notes open with "no portfolio to scrape", and yet
+        // /swarm/subjects/robotmoney-allocation published a $42,688 holdings
+        // table on production: ensureSmokeSubjectFixtures() writes a
+        // deterministic fake basket into swarm_subject_snapshots for any
+        // subject that is not woon or mav, and a release cutover runs it
+        // against the production database. The top line read "ROBOT 50%",
+        // which is not a token — it is `subjectId.slice(0, 5).toUpperCase()`.
+        // Whatever is in that table, this page is the wrong place to find out:
+        // the subject declares it holds nothing.
+        this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
         this.sessions = await this.loadSessions(id);
       } catch (e) {
@@ -1197,6 +1221,7 @@ export function registerStaticViews(Alpine) {
     isFramework() { return this.subject?.source?.type === "framework"; },
     subjectKind() { return this.subjectKindOf(this.subject); },
     operatorLabel() { return this.operatorOf(this.subject); },
+    structuralNotes() { return structuralNotesOf(this.subject); },
     // Newest first, so the head's chip names the most recent review. The
     // prose line this replaced named the OLDEST ("since August 2026"), which
     // is the less useful of the two: a reader wants to know how current the

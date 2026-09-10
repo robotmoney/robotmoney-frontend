@@ -48,12 +48,18 @@
                subject, asserted a book that does not exist. -->
           <div class="sv__fact-row">
             <span class="sv__fact"><em>sessions</em><b x-text="sessions.length"></b></span>
-            <span class="sv__fact" x-show="lastReviewedLabel()">
-              <em>last reviewed</em><b x-text="lastReviewedLabel()"></b>
-            </span>
-            <span class="sv__fact" x-show="snapshot && !isFramework()">
-              <em>holdings</em><b x-text="fmtUsd(snapshot?.totalValueUsd)"></b>
-            </span>
+            <!-- x-if, not x-show: a hidden chip still carries its label and
+                 an em-dash value into the page's text, so "holdings —" was
+                 reachable on a subject that has no book. The holdings gate is
+                 `snapshot` alone: a framework subject is never given one (see
+                 subjectProfile.init), so there is one place to reason about
+                 whether this figure exists. -->
+            <template x-if="lastReviewedLabel()">
+              <span class="sv__fact"><em>last reviewed</em><b x-text="lastReviewedLabel()"></b></span>
+            </template>
+            <template x-if="snapshot">
+              <span class="sv__fact"><em>holdings</em><b x-text="fmtUsd(snapshot?.totalValueUsd)"></b></span>
+            </template>
           </div>
         </header>
 
@@ -64,61 +70,73 @@
              colour is assetDot()'s, so it is the same colour this token takes on
              /allocation and in the holdings table below — see concentrationArea()
              for why bands rather than lines. -->
-        <section class="sv__panel sp-chart" x-show="concentrationArea()">
-          <div class="sv__panel-head">
-            <p class="sv__panel-label">Concentration · top positions as % of NAV</p>
-            <span class="sv__tag" x-text="spanLabel()"></span>
-          </div>
-          <!-- Legend beside the figure, not inside it: it is real text (so it
-               selects, wraps, and scales with the reader's font size) and it
-               carries each band's CURRENT share, which is the number a reader
-               wants first and the old panel made them hunt for in the table. -->
-          <div class="sp-chart__body">
-            <div class="sp-chart__svg" x-html="concentrationArea()"></div>
-            <ul class="sp-legend">
-              <template x-for="l in concentrationLegend()" :key="l.token">
-                <li>
-                  <i class="sp-legend__key" :style="`--k:${l.color}`" aria-hidden="true"></i>
-                  <span class="sp-legend__token" x-text="l.token"></span>
-                  <span class="sp-legend__pct" x-text="l.pct"></span>
-                </li>
-              </template>
-            </ul>
-          </div>
-        </section>
+        <!-- x-if, not x-show: x-show leaves the section in the DOM at
+     display:none, so a subject with no book still has a holdings
+     table for a reader's find-in-page, a screen reader's tree and a
+     test's locator to reach. -->
+        <template x-if="concentrationArea()">
+          <section class="sv__panel sp-chart">
+            <div class="sv__panel-head">
+              <p class="sv__panel-label">Concentration · top positions as % of NAV</p>
+              <span class="sv__tag" x-text="spanLabel()"></span>
+            </div>
+            <!-- Legend beside the figure, not inside it: it is real text (so it
+                 selects, wraps, and scales with the reader's font size) and it
+                 carries each band's CURRENT share, which is the number a reader
+                 wants first and the old panel made them hunt for in the table. -->
+            <div class="sp-chart__body">
+              <div class="sp-chart__svg" x-html="concentrationArea()"></div>
+              <ul class="sp-legend">
+                <template x-for="l in concentrationLegend()" :key="l.token">
+                  <li>
+                    <i class="sp-legend__key" :style="`--k:${l.color}`" aria-hidden="true"></i>
+                    <span class="sp-legend__token" x-text="l.token"></span>
+                    <span class="sp-legend__pct" x-text="l.pct"></span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </section>
+        </template>
 
         <!-- Same markup as session.html's portfolio read, deliberately: the two
              surfaces show the same kind of thing and must not teach two
              different readings of it. -->
-        <section class="sv__portfolio" x-show="snapshot">
-          <div class="sv__panel-head">
-            <p class="sv__panel-label">Holdings · <span x-text="fmtUsd(snapshot?.totalValueUsd)"></span> total</p>
-            <span class="sv__tag" x-text="snapshot?.date"></span>
-          </div>
-          <div class="sp-holdings">
-            <div class="sv__table-wrap">
-              <table class="sv__data-table">
-                <thead><tr><th>Token</th><th>Chain</th><th class="sv__num">Value</th><th class="sv__num">Share</th></tr></thead>
-                <tbody>
-                  <template x-for="p in positionRows().slice(0, 8)" :key="`${p.token}-${p.chain}`">
-                    <tr>
-                      <td><i class="sp-key" :style="`--k:${seriesColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></td>
-                      <td x-text="p.chain"></td>
-                      <td class="sv__num" x-text="fmtUsd(p.value_usd)"></td>
-                      <td class="sv__num" x-text="fmtPct1(p.share)"></td>
-                    </tr>
-                  </template>
-                </tbody>
-              </table>
+        <!-- x-if, not x-show: x-show leaves the section in the DOM at
+     display:none, so a subject with no book still has a holdings
+     table for a reader's find-in-page, a screen reader's tree and a
+     test's locator to reach. -->
+        <template x-if="snapshot">
+          <section class="sv__portfolio">
+            <div class="sv__panel-head">
+              <p class="sv__panel-label">Holdings · <span x-text="fmtUsd(snapshot?.totalValueUsd)"></span> total</p>
+              <span class="sv__tag" x-text="snapshot?.date"></span>
             </div>
-          </div>
-          <div class="sv__notables" x-show="(snapshot?.notable || []).length">
-            <p class="sv__panel-label">Notable</p>
-            <ul>
-              <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
-            </ul>
-          </div>
-        </section>
+            <div class="sp-holdings">
+              <div class="sv__table-wrap">
+                <table class="sv__data-table">
+                  <thead><tr><th>Token</th><th>Chain</th><th class="sv__num">Value</th><th class="sv__num">Share</th></tr></thead>
+                  <tbody>
+                    <template x-for="p in positionRows().slice(0, 8)" :key="`${p.token}-${p.chain}`">
+                      <tr>
+                        <td><i class="sp-key" :style="`--k:${seriesColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></td>
+                        <td x-text="p.chain"></td>
+                        <td class="sv__num" x-text="fmtUsd(p.value_usd)"></td>
+                        <td class="sv__num" x-text="fmtPct1(p.share)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="sv__notables" x-show="(snapshot?.notable || []).length">
+              <p class="sv__panel-label">Notable</p>
+              <ul>
+                <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
+              </ul>
+            </div>
+          </section>
+        </template>
 
         <!-- x-if wraps every optional panel below, not x-show: x-show only
              sets display:none and leaves the section in the DOM, so a
@@ -155,12 +173,43 @@
           </template>
         </div>
 
-        <!-- No "Structural notes" panel. The field is still on the subject
-             record and still editable in /admin, because it is the operator's
-             brief TO THE SWARM: how to review this subject, what not to
-             default to, which sibling subject owns the holdings question. It
-             is instructions for the agents, and printing it to a reader turned
-             the page into an annotated design file explaining itself. -->
+        <!-- The operator's brief TO THE SWARM: how to review this subject,
+             what not to default to, which sibling subject owns the holdings
+             question. It ships to the agents in every session brief. It used
+             to sit open, in a panel headed "Structural notes", where it read
+             as the page annotating itself in front of the reader. Collapsed,
+             and labelled with what it is for.
+
+             Mirrors /allocation's .alp__hold idiom (a button carrying
+             aria-expanded, an inert region, and a 0fr/1fr grid row) rather
+             than <details>, whose content renders at full size the first time
+             and so has no previous height to transition from. Page-local here
+             as it is there; one shared component is worth extracting when a
+             third page wants it.
+
+             x-if on .length: camelSubject defaults the field to [], which is
+             truthy, so a plain gate would put an empty disclosure on every
+             subject that declares none. -->
+        <template x-if="structuralNotes().length">
+          <div class="sp-brief" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+            <button type="button" class="sp-brief__sum" :aria-expanded="open ? 'true' : 'false'"
+                    aria-controls="subject-brief" @click="open = !open">
+              <span x-text="`Brief to the swarm · ${structuralNotes().length} note${structuralNotes().length === 1 ? '' : 's'}`"></span>
+              <i aria-hidden="true">⌄</i>
+            </button>
+            <div class="sp-brief__anim" id="subject-brief" role="region"
+                 aria-label="Brief to the swarm" :inert="!open">
+              <div class="sp-brief__clip">
+                <div class="sp-brief__body">
+                  <p class="sv__body-copy sp-note">Instructions the operator gives the agents that review this subject. Sent with every session brief.</p>
+                  <ul class="sv__bullet-list">
+                    <template x-for="n in structuralNotes()" :key="n"><li x-text="n"></li></template>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
 
         <section class="sp-sessions">
           <div class="sv__sessions-head">
@@ -319,5 +368,33 @@
     .sp-wallets code { font-family: var(--font-mono); font-size: 0.72rem;
                        color: var(--color-text-muted); }
     .sp-note { font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.5rem; }
+
+    /* Brief to the swarm. Mirrors /allocation's .alp__hold: the same tokens,
+       the same 0fr/1fr grid transition, the same flat edges. */
+    .sp-brief { margin-top: 1rem; border: 1px solid var(--color-border); }
+    .sp-brief__sum {
+      width: 100%; cursor: pointer; display: flex; align-items: center;
+      justify-content: space-between; gap: 0.5rem 1rem;
+      padding: 0.5rem 0.75rem; background: var(--color-surface);
+      border: 0; border-bottom: 1px solid transparent; text-align: left;
+      font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+      letter-spacing: 0.12em; color: var(--color-text-soft);
+      transition: background-color 150ms var(--ease-out-expo), color 150ms var(--ease-out-expo);
+    }
+    .sp-brief__sum:hover { background: var(--color-surface-light); color: var(--color-text); }
+    .sp-brief__sum:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+    .sp-brief__sum i { transition: transform 300ms var(--ease-out-expo); }
+    .sp-brief.is-open .sp-brief__sum { border-bottom-color: var(--color-border); }
+    .sp-brief.is-open .sp-brief__sum i { transform: rotate(180deg); }
+    .sp-brief__anim {
+      display: grid; grid-template-rows: 0fr;
+      transition: grid-template-rows 300ms var(--ease-out-expo);
+    }
+    .sp-brief.is-open .sp-brief__anim { grid-template-rows: 1fr; }
+    .sp-brief__clip { overflow: hidden; min-height: 0; }
+    .sp-brief__body { padding: 0.75rem; }
+    @media (prefers-reduced-motion: reduce) {
+      .sp-brief__anim, .sp-brief__sum i { transition: none; }
+    }
   </style>
 </section>

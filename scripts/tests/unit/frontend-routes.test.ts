@@ -15,6 +15,7 @@ import {
   loadArchiveMember,
   loadArchiveSession,
   loadArchiveSnapshot,
+  structuralNotesOf,
   takeHref,
   withinBucketWeightsFrom,
 } from "../../../frontend/public/assets/js/app/alpine/static-views.js";
@@ -467,6 +468,28 @@ describe("frontend route resolution", () => {
     const noNft = camelSubject({ id: "robotmoney-vault" });
     if (!noNft) throw new Error("camelSubject unexpectedly returned null");
     expect(noNft.nftContracts).toEqual([]);
+  });
+
+  // The "Brief to the swarm" disclosure gates on .length, not on the raw
+  // field's truthiness. camelSubject defaults a missing structural_notes field
+  // to `[]`, which is itself truthy in JS — a plain gate would put an empty
+  // disclosure on every subject that declares none.
+  test("structuralNotesOf gates on .length, not truthiness of the raw field", () => {
+    expect(structuralNotesOf({ structuralNotes: [] })).toEqual([]);
+    expect(structuralNotesOf(camelSubject({ id: "robotmoney-vault" }))).toEqual([]);
+
+    // A real list passes through, filtered of falsy entries — the count is the
+    // disclosure's own label ("· 4 notes"), so a blank must not be counted.
+    expect(structuralNotesOf({ structuralNotes: ["a", "", "b", null] })).toEqual(["a", "b"]);
+
+    // Older manifests carry a single paragraph instead of a list; that still
+    // renders as one note rather than being dropped.
+    expect(structuralNotesOf({ structuralNotes: "a single paragraph note" })).toEqual([
+      "a single paragraph note",
+    ]);
+
+    // No subject at all (still loading / not found) must not throw.
+    expect(structuralNotesOf(null)).toEqual([]);
   });
 
   // The eyebrow names an operator only when it is not this house. Every Robot
