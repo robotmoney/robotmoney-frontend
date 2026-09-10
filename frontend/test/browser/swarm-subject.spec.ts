@@ -646,8 +646,9 @@ test("the allocation subject opens with the weights in force, and no other subje
 test("the allocation card names who set the weights, and never overclaims", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
-  /** @type {any} */
-  let framework = {
+  // Widened so the second half can add `provenance`: this is a .ts spec, so a
+  // JSDoc cast does not apply to a `let` initializer the way it would in JS.
+  let framework: Record<string, unknown> = {
     asOf: "2026-06-02",
     managed: true, // true today, and NOT about who wrote the targets
     strategy: [

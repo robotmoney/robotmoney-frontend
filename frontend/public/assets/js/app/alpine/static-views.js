@@ -1182,6 +1182,28 @@ export function registerStaticViews(Alpine) {
       } catch (_) { /* fall through to the archive */ }
       return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
     },
+    // The regime read the last session was given, normalised into the shape
+    // session.html's chips already speak. The brief is snake_case where the
+    // session DTO is camel, so this is where the two meet rather than in the
+    // markup.
+    //
+    // It is explicitly the LAST SESSION'S reading, not today's: the chip sits
+    // beside "last reviewed <date>", and the backdrop below carries the date
+    // on its face, so nothing here claims to be current.
+    briefRegime() {
+      const r = this.brief?.regime;
+      if (!r) return null;
+      const composite = Number(r.composite);
+      return {
+        composite: Number.isFinite(composite) ? composite : null,
+        regime: r.regime || "",
+        macroRegime: r.macro_regime || r.macroRegime || "",
+        onchainRegime: r.onchain_regime || r.onchainRegime || "",
+        factorRegime: r.factor_regime || r.factorRegime || "",
+        compositePercentile: Number(r.composite_percentile ?? r.compositePercentile),
+        asOf: r.asof || r.asOf || this.brief?.date || "",
+      };
+    },
     briefDate() { return this.brief?.date ? this.formatDate(this.brief.date, "long") : ""; },
     // What the brief is made of, in the order it is assembled.
     //
