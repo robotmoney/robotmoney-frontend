@@ -430,9 +430,17 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    moves between are built on the same grid. /swarm keeps 80rem because it is
    an index of everything, not one document. Prose inside still takes its own
    ch cap; a container is not a measure. */
-.sv__body--narrow { width: min(100%, 67.5rem); padding-top: 8rem; }
-.sv__lede { max-width: 44rem; margin: 0.75rem 0 0; color: var(--color-text-muted); font-size: 1.05rem; line-height: 1.7; }
-.sv__lede--compact { font-size: 0.95rem; max-width: 42rem; }
+/* Not narrower any more. A detail page (subject, session, member, take) sat
+   at 67.5rem while /swarm sat at 80rem, so moving between a list and one of
+   its rows changed the width of the site. The modifier now means only "no
+   hero above this, so start lower". */
+.sv__body--narrow { padding-top: 8rem; }
+/* One measure, in ch: it tracks the font size, which a rem cap does not, and
+   it is the same measure .sv__body-copy already uses. --compact carried a
+   second, tighter cap, so the same paragraph wrapped differently depending
+   on which page it was on. */
+.sv__lede { max-width: 78ch; margin: 0.75rem 0 0; color: var(--color-text-muted); font-size: 1.05rem; line-height: 1.7; }
+.sv__lede--compact { font-size: 0.95rem; }
 .sv__rail-grid { display: grid; gap: 1.5rem; margin-bottom: 4rem; }
 .sv__rail-grid--compact { margin: 0 0 2rem; }
 .sv__panel { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); }
@@ -829,6 +837,26 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__rec dd b { color: var(--color-text); font-weight: 500; text-transform: uppercase;
   font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; }
 .sv__rec-n { font-variant-numeric: tabular-nums; }
+
+/* Target weights as one 100% band. Same grammar as .sv__spread above — a
+   horizontal proportion bar — at the weight of a figure rather than a hairline,
+   because this one IS the decision the card is reporting. The 1px gaps keep a
+   2% sliver legible against its neighbour; segments are painted from
+   CATEGORICAL by the sleeve's published position, so the colours match
+   /allocation's donut. */
+.sv__wbar { display: flex; gap: 1px; height: 6px; width: 100%; margin: 0.15rem 0 0.6rem; }
+.sv__wbar i { display: block; min-width: 3px; }
+.sv__wkeys { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.3rem 1.1rem; }
+.sv__wkeys li { display: flex; align-items: center; gap: 0.4rem;
+  font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.04em;
+  color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.sv__wkeys li i { width: 7px; height: 7px; flex: none; }
+.sv__wkeys li b { color: var(--color-text); font-weight: 500; }
+/* A sleeve held at zero is a decision, so it keeps its row and reads as one:
+   dimmed, with a hollow key, rather than dropped. */
+.sv__wkeys li.is-zero { color: var(--color-text-muted); opacity: 0.55; }
+.sv__wkeys li.is-zero i { background: none !important; box-shadow: inset 0 0 0 1px var(--color-text-muted); }
+.sv__wkeys li.is-zero b { color: var(--color-text-muted); }
 .sv__rec-more { color: var(--color-text-muted); font-size: 0.8rem; }
 /* Its own class, not a .sv__rec modifier: a selector that matches both the
    recommendation and the notice that there isn't one cannot be asserted on. */
