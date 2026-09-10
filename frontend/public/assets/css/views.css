@@ -256,7 +256,6 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    sized to the stance dots — it shipped square, which quietly filed it with the
    subject marks instead. */
 .sv__fact-dot { width: 0.42rem; height: 0.42rem; flex: 0 0 auto; border-radius: 50%; margin-right: -0.12rem; }
-.sv__bar { margin: 0.6rem 0 1rem; }
 .sv__action-row span { color: var(--color-text); }
 .sv__avatar--large { width: 4.5rem; height: 4.5rem; font-size: 1.4rem; flex: 0 0 auto; }
 .sv__member-hero { display: flex; gap: 1.25rem; align-items: center; }
@@ -860,6 +859,37 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; }
 .sv__rec-n { font-variant-numeric: tabular-nums; }
 
+/* The regime read inside a session brief. Shared by the subject profile and
+   the session page (lib/session-brief.js), so the two cannot draw the same
+   reading two ways. Declared once each, per the duplicate-selector guard. */
+.mb { margin: 0 0 1.25rem; padding-bottom: 1.1rem; border-bottom: 1px solid var(--color-border); }
+.mb__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; }
+.mb__label { margin: 0; font-family: var(--font-mono); font-size: 0.58rem;
+  text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
+.mb__scope { font-size: 0.75rem; color: var(--color-text-muted); }
+.mb__grid { display: grid; grid-template-columns: 1fr; gap: 1.1rem 2.5rem; margin-top: 0.8rem; align-items: start; }
+.mb__read { min-width: 0; }
+.mb__figure { min-width: 0; }
+.mb__call { margin: 0; display: flex; align-items: center; gap: 0.5rem;
+  font-family: var(--font-mono); font-size: 1.05rem; color: var(--color-text); }
+.mb__call i { width: 9px; height: 9px; flex: none; }
+.mb__pct { margin: 0.5rem 0 0; font-size: 0.72rem; color: var(--color-text-muted); }
+.mb__pct b { display: block; font-family: var(--font-mono); font-size: 1.6rem; font-weight: 400;
+  color: var(--color-text); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.mb__raw { margin: 0.35rem 0 0; font-family: var(--font-mono); font-size: 0.7rem;
+  color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.mb__trailwrap { margin-top: 0.9rem; max-width: 15rem; }
+.mb__trail { width: 100%; height: auto; display: block; }
+.mb__rail { width: 100%; height: auto; display: block; max-width: 30rem; }
+.mb__cap { margin: 0.3rem 0 0; font-family: var(--font-mono); font-size: 0.6rem;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); }
+/* The disagreement the takes below argue about, as a sentence at reading size.
+   It was a 0.7rem caption in a stack of four other captions. */
+.mb__finding { margin: 0.7rem 0 0; font-size: 0.82rem; line-height: 1.5; color: var(--color-text-soft); }
+@media (min-width: 48rem) {
+  .mb__grid { grid-template-columns: minmax(11rem, 0.6fr) minmax(0, 1fr); }
+}
+
 /* Target weights as a ring: parts of one whole, read at a glance. The track
    behind the arcs is what a 0% sleeve leaves visible, so an incomplete
    framework shows as an unclosed ring rather than being rescaled to look
@@ -951,42 +981,18 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    derived sentence restating the <h1> and a backdrop chip. A note says what
    the section IS — neither old heading did, and a reader had no way to tell
    whether this was the swarm's reading or the input they were handed. */
-.sv__backdrop { margin: 1.5rem 0 2rem; }
 .sv__panel-note { margin: 0.55rem 0 0; max-width: 46rem; color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; }
-.sv__backdrop-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem 2.5rem; margin-top: 0.4rem; }
-.sv__metric-line { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-top: 0.8rem; font-family: var(--font-mono); color: var(--color-text-muted); }
-.sv__metric-line b { color: var(--color-text); font-size: 1.4rem; }
-.sv__bar, .sv__panel-bar div { height: 0.45rem; background: rgba(255,255,255,0.06); border: 1px solid var(--color-border); overflow: hidden; }
-.sv__bar i, .sv__panel-bar i { display: block; height: 100%; background: var(--color-green); }
 /* The regime read in words, above the figures that support it. Set larger than
    the metric line because it IS the answer — the composite, the bar and the
    sparkline are all evidence for this one word. */
-.sv__regime-call { display: flex; align-items: center; gap: 0.55rem; margin: 0 0 0.85rem;
-                   font-family: var(--font-mono); font-size: 1.05rem; letter-spacing: 0.02em;
-                   color: var(--color-text); }
 /* Beacon is a POINT in the covenant, never a run of type — so the direction is
    carried by a small square beside the word, not by colouring the word itself. */
-.sv__regime-call i { width: 0.5rem; height: 0.5rem; flex: none; }
-.sv__sparkline { margin-top: 1rem; height: 4.25rem; }
-.sv__sparkline svg { width: 100%; height: 100%; display: block; }
 .sv__panel-sub { margin: 1rem 0 0.4rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-muted); }
-/* The dissent line is a finding, not a caption: it keeps the panel-sub scale but
-   drops the uppercase tracking so it reads as a sentence. Written as a compound
-   selector and placed AFTER .sv__panel-sub deliberately — as a bare .sv__dissent
-   earlier in the file it lost the cascade to panel-sub's text-transform and the
-   sentence rendered in caps. */
-.sv__panel-sub.sv__dissent { text-transform: none; letter-spacing: 0; font-size: 0.7rem;
-                             line-height: 1.5; color: var(--color-text-muted); max-width: 34ch; }
-.sv__panel-divergence { overflow-x: auto; }
-.sv__panel-divergence svg { width: 100%; max-width: 17rem; height: auto; display: block; }
 .sv__bucket-bars-svg { overflow-x: auto; }
 /* Wider than the old 34rem: the bars figure now carries its own series names
    and a "% of NAV" value column, and squeezed to 34rem the 10.5px bucket labels
    collided with the series column. */
 .sv__bucket-bars-svg svg { width: 100%; min-width: 26rem; max-width: 42rem; height: auto; display: block; }
-.sv__panel-bars { display: grid; gap: 0.55rem; margin-top: 1rem; }
-.sv__panel-bar { display: grid; grid-template-columns: 4.8rem 1fr 2.5rem; gap: 0.65rem; align-items: center; font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted); }
-.sv__panel-bar b { color: var(--color-text); text-align: right; }
 .sv__portfolio, .sv__recommendation { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); margin-bottom: 2rem; }
 .sv__portfolio-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin: 1.5rem 0; align-items: start; }
 .sv__donut-list { display: grid; gap: 0.55rem; }
@@ -1120,8 +1126,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
      on a two-word stance chip. */
   .sv__disagreement li { grid-template-columns: auto 1fr; gap: 0.2rem 0.7rem; }
   .sv__disagreement .sv__dis-view { grid-column: 1 / -1; }
-  .sv__panel-bar { grid-template-columns: 4.5rem 1fr; }
-  .sv__panel-bar b { display: none; }
 }
 
 /* swarm application form (/swarm/apply) */
@@ -1153,7 +1157,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   .rv__cards.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
   .rv__cards.rv--cols4 { grid-template-columns: repeat(4, 1fr); }
   .sv__rail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sv__backdrop-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   /* .sv__discussion stays single-column at every width. Consensus and
      Disagreements are different KINDS of claim about the session, not a pair to
      compare side by side, and they are wildly unequal in length — two columns
