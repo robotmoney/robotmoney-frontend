@@ -1,6 +1,12 @@
-# Single-box deployment (e.g. one DigitalOcean droplet). No reverse proxy: the
-# `api` process serves BOTH the JSON API and the static frontend (STATIC_DIR),
-# so there's nothing else to run in front of it.
+# Single-box deployment (e.g. one DigitalOcean droplet).
+#
+# Two services answer HTTP: `api` (the JSON API only) and `website-server` (a
+# plain nginx static file server for the assembled marketing/SPA/docs site,
+# issue #892 — website-server/nginx.conf proxies /api/ and /health through to
+# `api` so this stack still presents as one origin, matching frontend/public/
+# config.js's same-origin default and this repo's own local dev/smoke/e2e
+# harness, which loads pages from `backendUrl`). `api` no longer serves any
+# static content or STATIC_DIR; see website-server/Dockerfile.
 #
 # HOST PORTS ARE ASSIGNED BY DOCKER, NEVER BY US. Both published ports below
 # use the container-port-only short form (`- "8787"`), which makes the Docker
@@ -213,6 +219,20 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       RM_ENV: ${RM_ENV:-smoke}
+      # website-server (nginx) now sits in front of `api` for EVERY request in
+      # every composition this file resolves (issue #892) — website-server/
+      # nginx.conf forwards X-Real-IP/X-Forwarded-For/X-Forwarded-Proto to
+      # api:8787. Without this, backend/src/api/index.ts's clientIp falls back
+      # to the raw TCP peer, which is now website-server's docker-network
+      # address for EVERY request — silently collapsing per-IP rate limiting
+      # and the comments/submissions ip_hash audit field to one shared
+      # identity, with no error. A hardcoded literal, not `${TRUST_PROXY:-1}`:
+      # this topology always has website-server in front, so there is no
+      # legitimate operator override to leave room for, and an ambient shell
+      # value must never be able to silently turn this back off.
+      # scripts/tests/integration/smoke-compose-config.test.ts asserts this
+      # resolves to "1" in every composition (base/smoke/stage).
+      TRUST_PROXY: "1"
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS
       # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here
@@ -283,8 +303,6 @@ services:
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
-      # Serve the static frontend from this same process — no Caddy/nginx.
-      STATIC_DIR: /srv/frontend
     ports:
       # HOST side: ABSENT on purpose — the short form publishes the container
       # port on a host port the Docker daemon picks and binds atomically (see
@@ -308,19 +326,6 @@ services:
       # `ports` by APPENDING, so the overlay must override rather than add —
       # otherwise --stage would publish 48787 AND a second ephemeral port.
       - "8787"
-    volumes:
-      # STATIC_DIR is the ASSEMBLED static dir, not the raw source tree.
-      # `frontend/public` holds exactly one `index.html` — the home-page shell —
-      # so mounting it made the api answer every extensionless route with the
-      # home page's <title>/og:*, and every shared robotmoney.net link unfurled
-      # as the home page in Slack/X/LinkedIn/iMessage (issue #480; unfurlers
-      # never run seo.js). `_static` is that same tree PLUS the per-route
-      # `<route>/index.html` files scripts/prerender.ts writes from seo.js's
-      # table; scripts/static-assembly.sh builds it and scripts/stack/stack.ts
-      # runs that before every `compose up`. For a hand-run `docker compose up`,
-      # run `bun run static:assemble` first — Docker creates an EMPTY directory
-      # at a bind path that does not exist, and the api would serve nothing.
-      - ./_static:/srv/frontend:ro
     secrets:
       - analytics_token
     depends_on:
@@ -340,6 +345,34 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
+
+  # Static/SPA/docs file server, split out of the api image (issue #892):
+  # `_static/` is a build output (scripts/static-assembly.sh), never the raw
+  # source tree — see the api service's old volumes comment (git history) for
+  # why mounting `frontend/public` directly breaks every route's metadata.
+  # website-server/nginx.conf proxies /api/ and /health to the api service and
+  # replicates the old routeShell() fallback order for everything else.
+  website-server:
+    build:
+      context: ./website-server
+      dockerfile: Dockerfile
+    volumes:
+      - ./_static:/srv/frontend:ro
+    ports:
+      # Docker-assigned host port, same convention as every other service in
+      # this file (see the header comment) — CONTAINER side is nginx.conf's
+      # fixed `listen 8080`.
+      - "8080"
+    depends_on:
+      - api
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   worker-swarm:
     <<: *worker-base

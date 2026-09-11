@@ -144,11 +144,12 @@ describe("shell discovery links", () => {
   });
 
   test("the docs view mount appears exactly once", () => {
-    // backend/src/api/static.ts inlines docs fragments by replacing the FIRST
-    // occurrence of this exact string. A second copy anywhere above the mount,
-    // including inside a comment, would redirect that replacement and silently
-    // stop docs pages server-rendering, which is the one part of this site that
-    // already reads correctly without JS.
+    // scripts/prerender.ts's prerenderView() inlines every route's fragment —
+    // docs included — by replacing the FIRST occurrence of this exact string.
+    // A second copy anywhere above the mount, including inside a comment,
+    // would redirect that replacement and silently stop docs pages
+    // server-rendering, which is the one part of this site that already reads
+    // correctly without JS.
     expect(shell.split('<main id="view"></main>').length - 1).toBe(1);
   });
 });
@@ -195,12 +196,15 @@ describe("prerendered routes", () => {
     expect(html).toContain(`${ORIGIN}/llms.txt`);
   });
 
-  test("a prerendered docs page leaves nothing for static.ts to inline again", () => {
-    // backend/src/api/static.ts's docsShell inlines a docs fragment at request
-    // time by replacing the empty view mount. Now that the prerender fills that
-    // mount at build time, docsShell finds no match and its replace is a no-op,
-    // which is what keeps the two mechanisms from stacking and serving the docs
-    // body twice. Asserting the absence of the empty mount IS the guard.
+  test("a prerendered docs page has no empty view mount left for anything to inline into", () => {
+    // backend/src/api/static.ts's docsShell USED TO inline a docs fragment at
+    // request time by replacing the empty view mount (deleted, issue #892 —
+    // the website-server nginx image that replaced it ships no app code, so
+    // there is no request-time layer left at all). The prerender is now the
+    // ONLY place a docs fragment is ever inlined, so this guard is really
+    // about there being exactly one inlining, not two stacking: a route whose
+    // build-time fill silently regressed to leaving the mount empty (or ran
+    // twice) both fail here.
     const html = readFileSync(join(dir, "docs/skill/index.html"), "utf8");
     expect(html.includes('<main id="view"></main>')).toBe(false);
     expect(html).toContain("Robot Money Skill");

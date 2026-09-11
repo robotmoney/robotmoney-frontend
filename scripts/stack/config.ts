@@ -25,15 +25,19 @@ import {
 } from "./naming.ts";
 
 // ── Profiles ────────────────────────────────────────────────────────────────
-// `core` is postgres + api: everything apply/approve/claim needs (Postgres CRUD
-// plus signature verification), and nothing else. `full` adds the three worker
-// execution lanes that the standing smoke drives. The member-agent service is
-// deliberately in NEITHER *running* list: it is compose-profile gated
-// (docker-compose.smoke.yml `profiles: ["member-agent"]`) and is only ever
-// started one-shot via `docker compose run`.
+// `core` is postgres + api + website-server: everything apply/approve/claim
+// needs (Postgres CRUD plus signature verification) plus the static/SPA
+// origin every browser- and BACKEND_URL-based consumer of this stack loads
+// pages from (issue #892 — website-server/nginx.conf proxies /api/ and
+// /health to api, so the two together still present as one origin). `full`
+// adds the three worker execution lanes that the standing smoke drives. The
+// member-agent service is deliberately in NEITHER *running* list: it is
+// compose-profile gated (docker-compose.smoke.yml `profiles:
+// ["member-agent"]`) and is only ever started one-shot via `docker compose
+// run`.
 export type StackProfile = "core" | "full";
 
-export const CORE_SERVICES = ["postgres", "api"] as const;
+export const CORE_SERVICES = ["postgres", "api", "website-server"] as const;
 export const WORKER_LANE_SERVICES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
 export const PRODUCER_SERVICES = ["analytics-producer"] as const;
 export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES] as const;
@@ -89,6 +93,8 @@ export const STAGE_COMPOSE_FILE = "docker-compose.stage.yml";
 // chosen by Docker and appears nowhere in this repo's configuration.
 export const API_CONTAINER_PORT = 8787;
 export const POSTGRES_CONTAINER_PORT = 5432;
+// nginx.conf's fixed `listen` (website-server/nginx.conf, issue #892).
+export const WEBSITE_SERVER_CONTAINER_PORT = 8080;
 
 // The host ports Docker assigned to one running stack, read back after `up`.
 // `pgPort` is NULL — not 0, not absent — when the stack runs against an external
@@ -98,6 +104,10 @@ export const POSTGRES_CONTAINER_PORT = 5432;
 // hand back.
 export interface StackHostPorts {
   apiPort: number;
+  // The static/SPA origin (issue #892) — what `hostBackendUrl` resolves for
+  // page loads and BACKEND_URL, since website-server/nginx.conf proxies /api/
+  // and /health through to `apiPort`'s own service.
+  webPort: number;
   pgPort: number | null;
 }
 
@@ -141,8 +151,12 @@ export function internalDatabaseUrl(db: StackDatabase): string {
 // (0.0.0.0) but GitHub Actions' daemon does not publish on IPv6, while Bun's
 // fetch resolves "localhost" to ::1 first — so a localhost health check times
 // out in CI even though the service is up. 127.0.0.1 forces the IPv4 path.
-export function hostBackendUrl(apiPort: number): string {
-  return `http://127.0.0.1:${apiPort}`;
+//
+// Takes a bare port number, not a StackHostPorts, because it is called with
+// BOTH `apiPort` (the api service's own health check, pre-website-server) and
+// `webPort` (issue #892 — every page-load/BACKEND_URL consumer).
+export function hostBackendUrl(port: number): string {
+  return `http://127.0.0.1:${port}`;
 }
 
 // ── Credentials ─────────────────────────────────────────────────────────────

@@ -193,6 +193,9 @@ const PREWARM: readonly RenderArgs[] = [
       knobs: { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1", PG_NAMESPACE_GUARD_TIMEOUT_MS: "15000" },
       files,
     },
+    // "TRUST_PROXY reaches the api container" — a host shell trying to
+    // override the hardcoded literal back off.
+    { knobs: { TRUST_PROXY: "0" }, files },
   ]),
   // "production capability TTLs" — explicit TTLs, base composition only.
   {
@@ -745,6 +748,44 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
         .toBe(`${key}:false`);
     }
   });
+});
+
+// TRUST_PROXY must reach the api container in every composition (issue #892
+// follow-up: a PR #954 pre-merge review finding). website-server (nginx) sits
+// in front of `api` for EVERY request in base, smoke AND stage — see this
+// file's `docker-compose.yml` comment on the api service's TRUST_PROXY key —
+// so backend/src/config.ts's `trustProxy` must resolve true in all three, or
+// backend/src/api/index.ts silently falls back to the raw TCP peer (now
+// website-server's own docker-network address for every request), collapsing
+// per-IP rate limiting and the comments/submissions ip_hash audit field to one
+// shared identity. Same rationale as the boot-guard operator controls above:
+// only a rendered `docker compose config` proves the value is actually
+// DELIVERED, since the api service's `environment:` block is an allowlist and
+// a key missing from it is never sent to the container regardless of what the
+// host shell exports.
+describe("TRUST_PROXY reaches the api container in every composition (issue #892 finding)", () => {
+  const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
+    ["base", BASE_COMPOSE_FILES],
+    ["smoke", DEMO_COMPOSE_FILES],
+    ["stage", STAGE_COMPOSE_FILES],
+  ];
+
+  for (const [label, files] of COMPOSITIONS) {
+    test(`the ${label} composition resolves TRUST_PROXY=1 on the api service`, () => {
+      const env = serviceEnv(composeConfig({}, files), "api");
+      expect(env.TRUST_PROXY).toBe("1");
+    });
+
+    test(`the ${label} composition still resolves TRUST_PROXY=1 even if the host shell tries to unset it`, () => {
+      // A hardcoded literal in docker-compose.yml, not an interpolated
+      // `${TRUST_PROXY:-1}` passthrough — an ambient TRUST_PROXY=0 in the
+      // invoking shell must never be able to turn this back off, since
+      // website-server fronting api is a property of the topology, not an
+      // operator choice.
+      const env = serviceEnv(composeConfig({ TRUST_PROXY: "0" }, files), "api");
+      expect(env.TRUST_PROXY).toBe("1");
+    });
+  }
 });
 
 // Exactly one swarm-lane worker requirement (docs/architecture.md, issue #806 / #891).

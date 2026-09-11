@@ -444,15 +444,18 @@ TypeScript sources directly).
 
 - `src/api/index.ts` — the `Bun.serve` entry: a `/health` check and the API routes
   (`comments`, `dashboards`, `swarm`, `projects`, `admin`, `analytics`), using
-  `postgres` (postgres.js) with raw SQL.
-- **Serves the static frontend too.** When `STATIC_DIR` is set, the same process
-  serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
-  deep links — so the SPA and its API are **same-origin** (no CORS) with no
-  reverse proxy. In production this surface is its own subdomain
-  (`swarm.robotmoney.net`), Cloudflare-proxied for TLS (see the
-  topology's [subdomain map](#3-the-surfaces--subdomain-map)); CORS headers remain for an optional split-origin
-  setup.
+  `postgres` (postgres.js) with raw SQL. This process ships **no static-serving
+  code at all** (issue #892) — see `website-server/` below.
 - `src/worker/` — the always-on task-queue worker (see §7).
+
+**`website-server/`** — a plain `nginx:alpine` image (`website-server/Dockerfile`
++ `website-server/nginx.conf`), split out of the api image (issue #892). Serves
+the assembled `_static/` (bind-mounted, never baked into the image) with a
+`try_files` fallback rule replicating the old `routeShell()`'s order
+(`<route>/index.html` → `_shell.html` → `index.html`), and proxies `/api/` +
+`/health` through to the `api` service so the pair still present as one
+same-origin surface (no CORS, no client change) wherever nothing else fronts
+them — this repo's own local dev/smoke/e2e harness included.
 - `src/db/` — connection pools (`client.ts` for the API/migrations;
   `worker-client.ts` for the worker's queue-scoped access, honoring
   `WORKER_DATABASE_URL` → the restricted `rm_worker` role of migration
@@ -932,17 +935,18 @@ covers what *this repo* ships.
 
 **CI & smoke — single box**, `docker-compose.yml`:
 
-- `postgres` + `api` + the three worker lanes (`worker-swarm` /
-  `worker-analytics` / `worker-research`, §7). The `api` process **also serves
-  the static frontend** (`STATIC_DIR=/srv/frontend`) — one origin, no app-level proxy.
-  `/srv/frontend` is a bind mount of `_static/`, an **assembled** directory
-  (`scripts/static-assembly.sh`: `frontend/public` plus the per-route
-  `<route>/index.html` `scripts/prerender.ts` writes from `seo.js`'s table), not
-  the raw source tree — so a plain `curl` of any sitemap route returns that
-  route's own `<title>`/`og:*` and link unfurlers stop reading every URL as the
-  home page (D29). `scripts/stack/stack.ts`'s `up()` runs the assembly before
-  `docker compose up`; a hand-run `docker compose up` needs
-  `bun run static:assemble` first.
+- `postgres` + `api` + `website-server` + the three worker lanes (`worker-swarm`
+  / `worker-analytics` / `worker-research`, §7). `website-server` (a plain
+  `nginx:alpine`, issue #892) serves the static frontend and proxies `/api/` +
+  `/health` to `api`, so the pair still present as **one origin, no app-level
+  proxy needed by the client**. Its bind mount (`/srv/frontend`) is `_static/`,
+  an **assembled** directory (`scripts/static-assembly.sh`: `frontend/public`
+  plus the per-route `<route>/index.html` `scripts/prerender.ts` writes from
+  `seo.js`'s table), not the raw source tree — so a plain `curl` of any sitemap
+  route returns that route's own `<title>`/`og:*` and link unfurlers stop
+  reading every URL as the home page (D29). `scripts/stack/stack.ts`'s `up()`
+  runs the assembly before `docker compose up`; a hand-run `docker compose up`
+  needs `bun run static:assemble` first.
 - **DB modes** are driven by `DATABASE_URL` + the postgres volume:
   - *ephemeral* (CI): throwaway, `docker compose down -v`.
   - *smoke*: named `pgdata` volume persists across restarts.
@@ -951,16 +955,17 @@ covers what *this repo* ships.
 credentials in [deployment.md](./runbooks/deployment.md)):
 
 - **API tier** — `api` + the worker lanes on a DO droplet at its own subdomain
-  (`swarm.robotmoney.net`); the `api` co-serves this surface's SPA assets at the
-  subdomain root. Cloudflare-proxied; a DO Cloud Firewall limits ingress to
-  Cloudflare IPs.
+  (`swarm.robotmoney.net`); `website-server` co-serves this surface's SPA
+  assets at the subdomain root (issue #892), proxying `/api/` through to `api`.
+  Cloudflare-proxied; a DO Cloud Firewall limits ingress to Cloudflare IPs.
 - **Data tier** — `DATABASE_URL` points at a **DO Managed Postgres HA cluster**
   (no `postgres` container).
 - **Static tier** — marketing's intended end-state is a **DO Spaces CDN** on the
-  apex/`www`, served separately from this `api` (D13). It is not wired yet, so
-  the **cutover host for `robotmoney.net` is the `api` process's assembled
-  `STATIC_DIR`** (D29, [deployment.md](./runbooks/deployment.md) §2.1); the
-  Spaces migration uploads that same assembly and inherits its prerender.
+  apex/`www`, served separately from `api` (D13). It is not wired yet, so the
+  **cutover host for `robotmoney.net` is the assembled `STATIC_DIR`**, now
+  served by `website-server` rather than the `api` process itself (D29,
+  [deployment.md](./runbooks/deployment.md) §2.1); the Spaces migration
+  uploads that same assembly and inherits its prerender.
 - **Config**: the only required env var is `DATABASE_URL`. The frontend's only
   input is `API_BASE_URL` in `config.js` (`""` = same origin on its subdomain).
   Secrets (e.g. `BASE_RPC_URL`) live in the droplet env, not in the frontend;
@@ -5169,8 +5174,9 @@ must **degrade gracefully**; the page never hard-depends on the API.
 Request/response services run on **DigitalOcean Droplets**, one surface per
 subdomain:
 
-- **`swarm.`** — this repo's Bun `api` + `worker`; the `api` co-serves this
-  surface's SPA assets (`STATIC_DIR`) same-origin at the subdomain root.
+- **`swarm.`** — this repo's Bun `api` + `worker`; `website-server` (issue
+  #892) co-serves this surface's SPA assets (`STATIC_DIR`) same-origin at the
+  subdomain root, proxying `/api/` through to `api`.
 - **`app.`** — the `rmpc` daemon + on-chain gateway (`robotmoney-core`).
 
 Ingress is Cloudflare-proxied DNS locked to Cloudflare IPs by a DO Cloud Firewall

@@ -187,9 +187,9 @@ describe("the scheme is actually wired into every spawner", () => {
     const smoke = readFileSync(join(repoRoot, "docker-compose.smoke.yml"), "utf8");
     const classLines = smoke.split("\n").filter((l) => l.includes(`${ENV_CLASS_LABEL}:`));
     const hashLines = smoke.split("\n").filter((l) => l.includes(`${ENV_HASH_LABEL}:`));
-    // postgres, api, the shared worker anchor, member-agent, volume, network.
-    expect(classLines.length).toBe(6);
-    expect(hashLines.length).toBe(6);
+    // postgres, website-server, api, the shared worker anchor, member-agent, volume, network.
+    expect(classLines.length).toBe(7);
+    expect(hashLines.length).toBe(7);
     for (const l of classLines) expect(l).toContain(`\${${ENV_CLASS_COMPOSE_VAR}}`);
     for (const l of hashLines) expect(l).toContain(`\${${ENV_HASH_COMPOSE_VAR}}`);
     expect(smoke).toContain(`${MANAGED_NETWORK_LABEL}: "1"`);

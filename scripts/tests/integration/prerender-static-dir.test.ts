@@ -1,28 +1,39 @@
-// AC4 (issue #480), api-process branch: the CUTOVER HOST actually executes the
-// prerender in its deploy path. This is the end-to-end half of that claim, and
-// the only one that can catch the regression the issue reports — every route on
-// the cutover origin unfurled as the home page because the api answered every
-// extensionless path with `STATIC_DIR/index.html`.
+// AC4 (issue #480) and issue #892 (website-server split): the CUTOVER HOST
+// actually executes the prerender in its deploy path, and that deploy path is
+// a PLAIN STATIC FILE SERVER — no Bun/Node app layer anywhere in the response
+// path. This is the end-to-end half of both claims, and the only one that can
+// catch either regression: #480's was every route on the cutover origin
+// unfurling as the home page because the serving process answered every
+// extensionless path with `STATIC_DIR/index.html`; #892's is a docs route (or
+// any other) shipping a bare shell because inlining silently moved back to
+// request time, or never ran at all once `serveStatic`/`docsShell` were
+// deleted from the api process.
 //
 // It exercises the REAL deploy path, not a stand-in:
 //   1. `scripts/static-assembly.sh` — the same script scripts/stack/stack.ts
 //      runs before `docker compose up`, producing what docker-compose.yml
-//      bind-mounts at /srv/frontend.
-//   2. `backend/src/api/index.ts` — the real api entrypoint (Bun.serve), booted
-//      with STATIC_DIR pointed at that assembly, answering over real HTTP.
+//      bind-mounts into the website-server container at /srv/frontend.
+//   2. `website-server/Dockerfile` — the real website-server image, built from
+//      this repo's tree and run as a real container with `_static/` bind-
+//      mounted read-only, answering over real HTTP. No Bun process anywhere in
+//      the serving path (AC2): nginx serves the file directly.
 //   3. A plain GET with no JavaScript anywhere — exactly what Slack, X,
 //      LinkedIn, iMessage, WhatsApp, Telegram and Discord issue.
 //
 // LOUD, NEVER SKIPPED. There is no environment gate and no early return: a
-// missing assembly, an api that will not boot, or a route that falls back to
-// the home-page shell all fail red. The only external resources are `bash` and
-// `bun`, both of which the integration job has by definition.
+// missing assembly, an image that will not build/start, or a route that falls
+// back to the home-page shell all fail red. The only external resources are
+// `bash`, `bun` and `docker`, all of which the integration job has by
+// definition (docker is a hard dependency of this repo's test harness — the
+// backend suite boots ephemeral Postgres through it).
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { metaFor } from "../../../frontend/public/assets/js/app/seo.js";
+import { viewFor } from "../../../frontend/public/assets/js/app/routes.js";
+import { publishableFragment } from "../../lib/prerender-view.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const ORIGIN = "https://robotmoney.network";
@@ -31,8 +42,9 @@ const ORIGIN = "https://robotmoney.network";
 const ROUTE = "/research/late-cycle-signals";
 
 let staticDir: string;
-let api: ReturnType<typeof Bun.spawn> | undefined;
+let containerId: string | undefined;
 let baseUrl: string;
+const IMAGE_TAG = "rm-website-server-prerender-test";
 
 function escapeAttr(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
@@ -42,81 +54,114 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-// The api prints `api listening on :<port>` once Bun.serve has bound. API_PORT=0
-// makes the kernel choose, so the port is READ BACK from the process rather than
-// drawn in advance — the same reason docker-compose.yml lets Docker assign.
-async function readListeningPort(proc: ReturnType<typeof Bun.spawn>, timeoutMs: number): Promise<number> {
-  const deadline = Date.now() + timeoutMs;
-  const decoder = new TextDecoder();
-  let seen = "";
-  const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
-  while (Date.now() < deadline) {
-    const chunk = await Promise.race([
-      reader.read(),
-      Bun.sleep(deadline - Date.now()).then(() => ({ done: true, value: undefined as Uint8Array | undefined })),
-    ]);
-    if (chunk.value) seen += decoder.decode(chunk.value, { stream: true });
-    const m = seen.match(/api listening on :(\d+)/);
-    if (m) {
-      reader.releaseLock();
-      return Number(m[1]);
-    }
-    if (chunk.done) break;
-  }
-  reader.releaseLock();
-  const stderr = proc.stderr instanceof ReadableStream ? await Bun.readableStreamToText(proc.stderr) : "";
-  throw new Error(
-    `api did not report a listening port within ${timeoutMs}ms.\nstdout: ${seen}\nstderr: ${stderr}`,
-  );
+function sitemapRoutes(): string[] {
+  const sitemap = readFileSync(join(repoRoot, "frontend/public/sitemap.xml"), "utf8");
+  return Array.from(sitemap.matchAll(/<loc>https:\/\/robotmoney\.network([^<]*)<\/loc>/g), (m) => m[1] || "/")
+    .map((r) => (!r || r === "/" ? "/" : r.replace(/\/+$/, "") || "/"));
 }
 
-describe("prerendered STATIC_DIR served by the api process", () => {
+function assembledRoutePath(route: string): string {
+  return route === "/" ? join(staticDir, "index.html") : join(staticDir, route.slice(1), "index.html");
+}
+
+async function waitForReady(url: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastErr: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url);
+      if (res.ok || res.status === 404) return;
+      lastErr = new Error(`unexpected status ${res.status}`);
+    } catch (err) {
+      lastErr = err;
+    }
+    await Bun.sleep(200);
+  }
+  throw new Error(`website-server did not answer ${url} within ${timeoutMs}ms: ${String(lastErr)}`);
+}
+
+describe("prerendered STATIC_DIR served by the website-server image (no Bun in the serving path)", () => {
   beforeAll(async () => {
     staticDir = mkdtempSync(join(tmpdir(), "rm-static-assembly-"));
+    // mkdtempSync's default mode is 0700 — fine for the Bun process that owns
+    // it, but the website-server container's nginx worker processes run as an
+    // unprivileged, DIFFERENT uid and cannot even traverse a 0700 directory
+    // bind-mounted in, which nginx reports as a stat() "Permission denied" on
+    // every route (500, not the loud assembly failure this suite means to
+    // catch). Open the mount point up; scripts/static-assembly.sh's own
+    // `mkdir -p`/`cp -R`/`Bun.write` calls already leave its CONTENTS at the
+    // process umask's normal, world-readable modes.
+    chmodSync(staticDir, 0o755);
     // Fails loudly (non-zero exit → throw) if the assembly cannot be produced.
     execFileSync("bash", [join(repoRoot, "scripts", "static-assembly.sh"), staticDir], {
       cwd: repoRoot,
       stdio: "pipe",
     });
 
-    api = Bun.spawn([process.execPath, join(repoRoot, "backend", "src", "api", "index.ts")], {
-      cwd: join(repoRoot, "backend"),
-      env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        // No database is reachable here: /health degrades to db:"down" and the
-        // static path never touches SQL. config.ts still REQUIRES the var to
-        // exist. Since #602 the entrypoint's handle/id namespace guard DOES try
-        // to query it before binding — it waits out the postgres init-phase race
-        // (checkHandleNamespace's few seconds), then logs "guard could NOT run"
-        // and serves anyway, which is why this boot still reaches the static
-        // assertions below and why readListeningPort's budget allows for it.
-        DATABASE_URL: "postgres://unused:unused@127.0.0.1:1/unused",
-        RM_ENV: "ephemeral",
-        API_PORT: "0",
-        STATIC_DIR: staticDir,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    baseUrl = `http://127.0.0.1:${await readListeningPort(api, 45_000)}`;
+    // Build the REAL website-server image from the repo tree — not a stand-in
+    // static-file server — so a change to nginx.conf that breaks the fallback
+    // rule fails here.
+    execFileSync("docker", ["build", "-t", IMAGE_TAG, join(repoRoot, "website-server")], { stdio: "pipe" });
+
+    // Host port 0 -> Docker assigns one atomically (this repo's own port
+    // convention, docker-compose.yml's header); read it back with `docker
+    // port`. No `api` container is started for this test: nginx.conf's /api/
+    // and /health locations resolve `api` lazily at request time (see its
+    // resolver comment), so the container starts fine without one — this
+    // suite never exercises those routes.
+    const run = execFileSync("docker", [
+      "run", "-d", "--rm",
+      "-p", "127.0.0.1::8080",
+      "-v", `${staticDir}:/srv/frontend:ro`,
+      IMAGE_TAG,
+    ]);
+    containerId = run.toString().trim();
+
+    const portOut = execFileSync("docker", ["port", containerId, "8080"]).toString().trim();
+    const m = portOut.match(/:(\d+)\s*$/);
+    if (!m) throw new Error(`could not parse \`docker port\` output: ${portOut}`);
+    baseUrl = `http://127.0.0.1:${m[1]}`;
+
+    await waitForReady(`${baseUrl}/`, 20_000);
   }, 120_000);
 
   afterAll(() => {
-    api?.kill();
+    if (containerId) execFileSync("docker", ["stop", containerId], { stdio: "pipe" });
     if (staticDir) rmSync(staticDir, { recursive: true, force: true });
   });
 
   it("assembles a per-route index.html into STATIC_DIR for every route in sitemap.xml", () => {
-    const sitemap = readFileSync(join(repoRoot, "frontend/public/sitemap.xml"), "utf8");
-    const routes = Array.from(sitemap.matchAll(/<loc>https:\/\/robotmoney\.network([^<]*)<\/loc>/g), (m) => m[1] || "/");
+    const routes = sitemapRoutes();
     // Zero routes collected is a FAILURE, not a vacuous pass.
     expect(routes.length).toBeGreaterThan(0);
 
-    const missing = routes
-      .map((r) => (!r || r === "/" ? "/" : r.replace(/\/+$/, "") || "/"))
-      .filter((r) => !existsSync(r === "/" ? join(staticDir, "index.html") : join(staticDir, r.slice(1), "index.html")));
+    const missing = routes.filter((r) => !existsSync(assembledRoutePath(r)));
     expect(missing).toEqual([]);
+  });
+
+  // Issue #892 AC1: docs routes are prerendered exactly like every other
+  // sitemap route now (scripts/prerender.ts's `viewFor`/`prerenderView` loop
+  // already covers them — they need no special case), so this asserts the
+  // OUTCOME the deliverable actually cares about: each docs route's own
+  // fragment is inlined into its own full page at build time, not left as a
+  // bare shell for a request-time handler (`docsShell`) that no longer
+  // exists. Exact-equality against `publishableFragment`'s own output — the
+  // same transform scripts/prerender.ts applies — rather than a substring
+  // probe, so a route that silently regressed to someone else's fragment
+  // (or a stale one) fails here too, not just an empty-mount check.
+  it("inlines every docs route's own fragment into its assembled page, not a bare shell (issue #892 AC1)", async () => {
+    const docsRoutes = sitemapRoutes().filter((r) => r === "/docs" || r.startsWith("/docs/"));
+    expect(docsRoutes.length).toBeGreaterThan(0);
+
+    for (const route of docsRoutes) {
+      const assembled = readFileSync(assembledRoutePath(route), "utf8");
+      expect(assembled).not.toContain('<main id="view"></main>');
+
+      const viewPath = viewFor(route).replace(/^\//, "");
+      const rawFragment = await Bun.file(join(repoRoot, "frontend/public", viewPath)).text();
+      const expectedFragment = await publishableFragment(rawFragment);
+      expect(assembled).toContain(`<main id="view">${expectedFragment}</main>`);
+    }
   });
 
   it("returns the route's own title, og:title, og:description and og:url over plain HTTP — never the home-page shell's", async () => {
@@ -143,9 +188,7 @@ describe("prerendered STATIC_DIR served by the api process", () => {
   });
 
   it("serves every sitemap route's own metadata, not just the measured one", async () => {
-    const sitemap = readFileSync(join(repoRoot, "frontend/public/sitemap.xml"), "utf8");
-    const routes = Array.from(sitemap.matchAll(/<loc>https:\/\/robotmoney\.network([^<]*)<\/loc>/g), (m) => m[1] || "/")
-      .map((r) => (!r || r === "/" ? "/" : r.replace(/\/+$/, "") || "/"));
+    const routes = sitemapRoutes();
     expect(routes.length).toBeGreaterThan(0);
 
     const wrong: string[] = [];

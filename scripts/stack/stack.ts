@@ -35,6 +35,7 @@ import {
   POSTGRES_CONTAINER_PORT,
   servicesFor,
   upArgs,
+  WEBSITE_SERVER_CONTAINER_PORT,
   type StackConfig,
   type StackHostPorts,
 } from "./config.ts";
@@ -345,6 +346,9 @@ export function createStack(
     if (discovered) return discovered;
     discovered = {
       apiPort: publishedPort("api", API_CONTAINER_PORT),
+      // Issue #892: the static/SPA origin backendUrl resolves against — always
+      // part of CORE_SERVICES, so this is never "no such service".
+      webPort: publishedPort("website-server", WEBSITE_SERVER_CONTAINER_PORT),
       // No container, no publish, no number to ask the daemon for. Asking anyway
       // would fail with a "no such service" that reads like a broken stack.
       pgPort: externalPostgres ? null : publishedPort("postgres", POSTGRES_CONTAINER_PORT),
@@ -356,10 +360,10 @@ export function createStack(
     if (!discovered) {
       throw new Error(
         "stack.backendUrl was read before the host port was discovered — Docker assigns it when the " +
-          "api container starts, so call up() (or hostPorts()) first",
+          "website-server container starts, so call up() (or hostPorts()) first",
       );
     }
-    return hostBackendUrl(discovered.apiPort);
+    return hostBackendUrl(discovered.webPort);
   }
 
   async function up(upOpts: StackUpOptions = {}): Promise<StackHostPorts> {
@@ -403,11 +407,17 @@ export function createStack(
     emit({
       phase: "ports",
       status: "done",
-      detail: `api=:${ports.apiPort} pg=${ports.pgPort === null ? "external" : `:${ports.pgPort}`}`,
+      detail: `api=:${ports.apiPort} web=:${ports.webPort} pg=${ports.pgPort === null ? "external" : `:${ports.pgPort}`}`,
     });
 
     emit({ phase: "health", status: "start" });
+    // api's own /health directly first: a database-connectivity problem is a
+    // more specific diagnostic there than the same check proxied through
+    // website-server would give.
     await waitForHttp(`${hostBackendUrl(ports.apiPort)}/health`, upOpts.healthTimeoutMs ?? 60_000);
+    // Then website-server itself (issue #892) — the origin backendUrl actually
+    // resolves to, and what every page-load/BACKEND_URL consumer needs up.
+    await waitForHttp(`${hostBackendUrl(ports.webPort)}/health`, upOpts.healthTimeoutMs ?? 60_000);
     emit({ phase: "health", status: "done" });
 
     // Initialization runs LAST, after the API answers /health — never merely
