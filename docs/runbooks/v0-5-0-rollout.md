@@ -36,18 +36,23 @@ preflight until all of these are true:
 
 1. A `release:v0.5.0` tracking issue exists, its scope is frozen, and its
    Phases tasklist is complete — §4.1 requirement.
-2. `releases-0.5.x` has been cut from the agreed main SHA and the release
-   candidate is tagged there, not on `main` — §2 branch rule.
-3. Required checks for that candidate pass — CI gating per policy.
+2. `releases-0.5.x` has been cut from the agreed main SHA — §2 branch rule.
+   **No rc tag exists yet at this point** — see §1's revised order below.
+3. Required checks on that branch tip pass — CI gating per policy.
 
 ## 1. Release identity
 
-Maps to `release-runbooks.md` §3 (version tags and release candidates):
+Maps to `release-runbooks.md` §3 (version tags and release candidates,
+**revised 2026-09-11**: the rc tag is now cut only AFTER stage preflight and
+rehearsal both pass, reversing every release through v0.4.0's tag-first
+order):
 
 - Cut RC tags on `releases-0.5.x`, never on `main` — §2.
 - `v0.5.0` tag lands on the release branch after postflight passes, at the
   same commit as production — §3, consequence 1.
-- RC numbering: `v0.5.0-rc.N` with N counting from 0 — §3.
+- RC numbering: `v0.5.0-rc.N` with N counting from 0 — §3. A rejected stage
+  pass (§3/§5 below) consumes no rc number, since nothing is tagged yet when
+  it happens — only a production postflight failure (§7) does.
 
 ```bash
 git fetch origin --tags
@@ -57,7 +62,10 @@ bun install --force            # repo root; "postinstall" reinstalls backend/ to
 bun install --force --cwd backend
 ```
 
-Record the first SHA as `RC_SHA`. Tag and push per the RC cycle.
+Record this SHA as `RC_SHA` — the commit stage validation runs against.
+**Do not tag it yet.** The actual `git tag`/`git push` happens at the end of
+§5, once every stage acceptance criterion has passed; `RC_SHA` names the
+commit stage is currently validating whether or not a tag exists on it.
 
 > 🔴 **`bun install --force` is not optional here, and re-run it after every
 > `git switch`/`git checkout` that moves `<checkout>` onto different code** —
@@ -194,6 +202,21 @@ is ever actually exercised in anger; this runbook does not script that path
 because it should not be needed — the default response to a failed migration
 is the rehearsed restore of the pre-upgrade dump, executed BEFORE the role
 migration step ever runs, not after.
+
+### 5.1 Cut the RC tag
+
+Only once every criterion above (1–7) passes — a rejected stage pass returns
+to §3/§5 on a fixed commit and consumes no rc number, per §1's revised order:
+
+```bash
+git tag -a v0.5.0-rc.0 "$RC_SHA" -m 'v0.5.0-rc.0'
+git push origin v0.5.0-rc.0
+```
+
+`N` counts from 0 for the first candidate that reaches this point; a
+production postflight failure (§7) is what advances it to `rc.1`, `rc.2`, ...,
+each cut only after ANOTHER full pass through §3/§5 on the patched commit —
+never by re-tagging the same rejected commit.
 
 ## 6. Production cutover
 
