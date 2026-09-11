@@ -692,3 +692,120 @@ test("the allocation card names who set the weights, and never overclaims", asyn
 
   await expectNoBrowserErrors(errors);
 });
+
+// ── The latest review, inside the targets card (RM-121) ───────────────────
+// Live-shaped: the real 2026-09-10 allocation session.
+const LR_ID = "4cf025d6-8b53-4e7b-85a8-3843f2aa1609";
+const LR_ROW = {
+  id: LR_ID, date: "2026-09-10", subjectId: "robotmoney-allocation", subjectName: "Robot Money Allocation", state: "published",
+  regimeSummary: {
+    composite: 0.5978, composite_percentile: 0.8324, regime: "risk_on",
+    macro_percentile: 0.8991, onchain_percentile: 0.5648, factor_percentile: 0.6845,
+    macro_regime: "risk_on", onchain_regime: "neutral", factor_regime: "risk_on",
+  },
+  swarmRecommendation: {
+    type: "position_actions",
+    stances: { bullish: 1, neutral: 1, constructive: 3 },
+    quorum: { active: 7, submitted: 5, absent: 2 },
+    meanConfidence: 0.638,
+  },
+};
+const LR_TAKES = [
+  { id: "t1", member_id: "m1", member_handle: "noop-analyst", member_name: "Noop Analyst", stance: "constructive", confidence: 0.6 },
+  { id: "t2", member_id: "m2", member_handle: "robotmoney", member_name: "Robot Money", stance: "constructive", confidence: 0.62 },
+  { id: "t3", member_id: "m3", member_handle: "athena", member_name: "Athena", stance: "constructive", confidence: 0.62 },
+  { id: "t4", member_id: "m4", member_handle: "woon", member_name: "Woon", stance: "bullish", confidence: 0.67 },
+  { id: "t5", member_id: "m5", member_handle: "shodai", member_name: "ShodAI", stance: "neutral", confidence: 0.68 },
+];
+
+test("the targets card carries the latest review under its note: signal, reasoning, what the swarm was handed", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (u.pathname === "/api/swarm/subjects/robotmoney-allocation") {
+      return json({ id: "robotmoney-allocation", name: "Robot Money Allocation", source: { type: "framework" }, wallets: [], structural_notes: [] });
+    }
+    if (u.pathname === "/api/swarm/sessions") {
+      return json({ sessions: [LR_ROW, { id: "50b833d3-6e85-4b60-8d93-8a140755fe67", date: "2026-09-10", subjectId: "woon", subjectName: "Woon Treasury", state: "published" }], nextCursor: null });
+    }
+    if (u.pathname === "/api/swarm/sessions/2026-09-10/robotmoney-allocation") return json({ session: LR_ROW, takes: LR_TAKES });
+    if (u.pathname === "/api/swarm/brief" && u.searchParams.get("session") === LR_ID) {
+      return json({
+        prompt: { user: "Review the supplied swarm context for Robot Money Allocation on 2026-09-10 and return one take matching takeSchema." },
+        regime: { regime: "risk_on", composite: "0.6044609980607236", macro_regime: "risk_on", onchain_regime: "neutral" },
+        subject: { structuralNotes: ["no portfolio to scrape"] },
+        researchSignals: [{ signalKey: "channel-divergence" }, { signalKey: "late-cycle-signals" }],
+        recentSessions: [{ date: "2026-09-10T00:00:00.000Z", subject_id: "woon" }],
+        takeSchema: { stance: {}, confidence: {}, body: {}, weights: {} },
+      });
+    }
+    if (u.pathname === "/api/dashboards/allocation") {
+      return json({ asOf: "2026-06-02", strategy: [{ label: "Conservative DeFi Yield", targetPct: 95 }, { label: "Agent Tokens", targetPct: 5 }] });
+    }
+    return json({}, 503);
+  });
+  await page.goto("/swarm/subjects/robotmoney-allocation");
+
+  // Inside the targets card, directly after its note.
+  const review = page.locator(".sv__alloc .sr");
+  await expect(review).toBeVisible();
+  const afterNote = await page.locator(".sv__alloc .sv__sleeve-note").evaluate((note) => {
+    let el = note.nextElementSibling;
+    while (el && el.tagName === "TEMPLATE") el = el.nextElementSibling;
+    return el?.classList.contains("sr") ?? false;
+  });
+  expect(afterNote).toBe(true);
+  await expect(review.locator(".sr__meta a")).toHaveAttribute("href", `/swarm/sessions/${LR_ID}`);
+
+  // SIGNAL: a one-word state, then dots on one percentile axis.
+  await expect(review.locator(".sr__k")).toHaveText(["Signal", "Reasoning"]);
+  const signal = review.locator(".sr__col").first();
+  await expect(signal.locator(".sr__state")).toContainText("risk-on");
+  await expect(signal.locator(".sr__state")).toContainText("83rd percentile");
+  await expect(signal.locator(".sig__l")).toHaveText(["Composite", "Macro", "On-chain", "Factor"]);
+  await expect(signal.locator(".sig__v")).toHaveText(["83rd", "90th", "56th", "68th"]);
+  await expect(signal.locator(".sig__row").first().locator(".sig__dot")).toHaveAttribute("style", /left:\s*83\.2%/);
+  // On the published method factor is context, not an input, and is drawn so.
+  await expect(signal.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
+  await expect(signal.locator(".sr__foot")).toContainText("Factor is context");
+  // This reading carries no cuts, and none are hard-coded in their place.
+  await expect(signal.locator(".sig__zone")).toHaveCount(0);
+
+  // REASONING: each member in their stance's column.
+  const reasoning = review.locator(".sr__col").nth(1);
+  await expect(reasoning.locator(".sr__state")).toContainText("constructive");
+  await expect(reasoning.locator(".sr__state")).toContainText("3 of 5");
+  await expect(reasoning.locator(".vote__col.is-lead .vote__m")).toHaveCount(3);
+  await expect(reasoning.locator(".vote__m", { hasText: "Noop Analyst" })).toHaveAttribute("href", "/swarm/members/noop-analyst");
+  await expect(reasoning.locator(".sr__foot")).toContainText("5 of 7 took part");
+
+  // WHAT THE SWARM WAS HANDED: closed, then a record of that brief's parts.
+  const hand = review.locator(".sp-brief");
+  await expect(hand.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "false");
+  await hand.locator(".sp-brief__sum").click();
+  const keys = await hand.locator(".hand__row").evaluateAll((els) => els.map((e) => e.getAttribute("data-part")));
+  expect(keys).toEqual(["instruction", "regime", "research", "recent", "notes", "returns"]);
+  await expect(hand.locator('[data-part="recent"] .hand__pill')).toHaveText(["Sep 10 · Woon Treasury"]);
+
+  await expectNoBrowserErrors(errors);
+});
+
+test("on a v0 archive reading, factor is drawn as the input it was", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.route("**/api/swarm/**", (route) => route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
+  await page.route("**/api/dashboards/allocation", (route) => route.fulfill({
+    status: 200, contentType: "application/json",
+    body: JSON.stringify({ asOf: "2026-06-02", strategy: [{ label: "Conservative DeFi Yield", targetPct: 95 }] }),
+  }));
+  await page.goto("/swarm/subjects/robotmoney-allocation");
+
+  // The 2026-06-24 archive session: its composite averaged macro, on-chain AND
+  // factor, so saying "factor is context" here would be wrong.
+  const signal = page.locator(".sv__alloc .sr .sr__col").first();
+  await expect(signal.locator(".sr__k")).toHaveText("Signal");
+  await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
+  await expect(signal.locator(".sr__foot")).not.toContainText("Factor is context");
+
+  await expectNoBrowserErrors(errors);
+});

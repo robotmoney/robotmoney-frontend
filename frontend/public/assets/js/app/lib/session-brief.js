@@ -53,6 +53,15 @@ export function normalizeRegime(raw) {
     onchainRegime: String(raw.onchainRegime || raw.onchain_regime || ""),
     factorRegime: String(raw.factorRegime || raw.factor_regime || ""),
     history: Array.isArray(raw.history) ? raw.history : [],
+    // The reading's own risk cuts, when it carries them. Prod's regime data
+    // has bucketThresholds: null today (#964), so the latest review draws no
+    // zones rather than hard-coding 0.33 / 0.67 in their place.
+    cuts: (() => {
+      const c = raw.bucketThresholds || raw.bucket_thresholds;
+      return c && num(c.risk_off) !== null && num(c.risk_on) !== null
+        ? { riskOff: /** @type {number} */ (num(c.risk_off)), riskOn: /** @type {number} */ (num(c.risk_on)) }
+        : null;
+    })(),
   };
   return out.composite === null && !out.regime ? null : out;
 }
@@ -65,12 +74,16 @@ export function sessionBrief() {
     // thing that differs between the two renders, so the two cannot drift.
     backdropScope: "session",
     backdropDate: "",
+    // True for a v0 archive reading, whose composite averages macro, on-chain
+    // AND factor. The latest review draws factor as context only when it is.
+    backdropV0: false,
 
-    /** @param {any} summary @param {{date?: string, scope?: string}} opts */
+    /** @param {any} summary @param {{date?: string, scope?: string, v0?: boolean}} opts */
     setBackdrop(summary, opts = {}) {
       this.backdrop = normalizeRegime(summary);
       this.backdropDate = opts.date || "";
       this.backdropScope = opts.scope || "session";
+      this.backdropV0 = Boolean(opts.v0);
       return this.backdrop;
     },
 
@@ -91,6 +104,43 @@ export function sessionBrief() {
       }
       return rows;
     },
+    // ── the latest review's signal (RM-121) ──────────────────────────────
+    // Dots on one percentile axis: every reading is a position in its own
+    // three-year history, not an amount. Composite first, then its inputs.
+    // Factor is drawn apart as context on the published method, where it is
+    // not an input; on a v0 reading it was one, so it is drawn as one.
+    signalRows() {
+      const b = this.backdrop;
+      if (!b) return [];
+      const at = (/** @type {number} */ p) => `${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%`;
+      const rows = [];
+      if (b.compositePercentile !== null) {
+        rows.push({ key: "composite", label: "Composite", pct: b.compositePercentile, regime: b.regime, kind: "lead", at: at(b.compositePercentile) });
+      }
+      for (const [key, label] of [["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Factor"]]) {
+        const pct = b[key];
+        if (pct === null) continue;
+        const kind = key === "factor" && !this.backdropV0 ? "context" : "input";
+        rows.push({ key, label, pct, regime: b[`${key}Regime`], kind, at: at(pct) });
+      }
+      return rows;
+    },
+    // Zones only from the reading's own cuts; none today.
+    signalZones() {
+      const c = this.backdrop?.cuts;
+      if (!c) return [];
+      const at = (/** @type {number} */ p) => `${(p * 100).toFixed(1)}%`;
+      return [
+        { key: "risk_off", label: "risk-off", from: 0, to: c.riskOff },
+        { key: "neutral", label: "neutral", from: c.riskOff, to: c.riskOn },
+        { key: "risk_on", label: "risk-on", from: c.riskOn, to: 1 },
+      ].map((z) => ({ ...z, left: at(z.from), width: at(z.to - z.from) }));
+    },
+    signalCuts() {
+      const c = this.backdrop?.cuts;
+      return c ? [`${(c.riskOff * 100).toFixed(1)}%`, `${(c.riskOn * 100).toFixed(1)}%`] : [];
+    },
+
     // The panels that read the opposite way to the composite. This is the
     // disagreement the members argue about in the takes below, so the card
     // names it rather than leaving it to be spotted in three bars.

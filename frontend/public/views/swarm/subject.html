@@ -256,6 +256,127 @@
               </div>
             </div>
             <p class="sv__sleeve-note" x-show="allocationNote()" x-text="allocationNote()"></p>
+            <!-- THE LATEST REVIEW (RM-121): what the market said (signal) and
+                 how the swarm voted (reasoning), then what it was handed. Each
+                 column opens on a one-word state, then the one chart that fits
+                 its data. Only what the data supports renders. -->
+            <template x-if="latest() && (signalRows().length || voteTotal(latest()))">
+              <section class="sr" aria-labelledby="sr-title">
+                <div class="sr__head">
+                  <h2 class="sr__title" id="sr-title">Latest review</h2>
+                  <p class="sr__meta">
+                    <span x-text="formatDate(latest().date, 'short')"></span>
+                    <a :href="sessionHref(latest())">Open the session &rarr;</a>
+                  </p>
+                </div>
+                <div class="sr__cols">
+                  <template x-if="signalRows().length">
+                    <div class="sr__col">
+                      <p class="sr__k">Signal</p>
+                      <p class="sr__state">
+                        <i :style="`background:${regimeColor(backdrop.regime)}`" aria-hidden="true"></i>
+                        <b x-text="regimeLabel(backdrop.regime)"></b>
+                        <span x-show="backdrop.compositePercentile !== null" x-text="`${ordinal(backdrop.compositePercentile)} percentile`"></span>
+                      </p>
+                      <div class="sig" role="img"
+                           :aria-label="`Percentile against its own three-year history: ${signalRows().map((r) => `${r.label} ${ordinal(r.pct)}`).join(', ')}.`">
+                        <div class="sig__scale" aria-hidden="true">
+                          <span></span>
+                          <span class="sig__ticks">
+                            <template x-for="z in signalZones()" :key="z.key">
+                              <em class="sig__zone" :style="`left:${z.left};width:${z.width}`" x-text="z.label"></em>
+                            </template>
+                            <b style="left:0">0</b><b style="left:50%">50th</b><b style="left:100%">100</b>
+                          </span>
+                          <span></span>
+                        </div>
+                        <template x-for="r in signalRows()" :key="r.key">
+                          <div class="sig__row" :class="`is-${r.kind}`">
+                            <span class="sig__l" x-text="r.label"></span>
+                            <span class="sig__track">
+                              <b class="sig__mid"></b>
+                              <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
+                              <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
+                            </span>
+                            <span class="sig__v" x-text="ordinal(r.pct)"></span>
+                          </div>
+                        </template>
+                      </div>
+                      <p class="sr__foot">Percentile of its own three-year history.<template x-if="!backdropV0"><span> Factor is context, not part of the composite.</span></template></p>
+                    </div>
+                  </template>
+                  <template x-if="voteTotal(latest())">
+                    <div class="sr__col">
+                      <p class="sr__k">Reasoning</p>
+                      <p class="sr__state">
+                        <i x-show="leanStance(latest())" :style="leanDotStyle(latest())" aria-hidden="true"></i>
+                        <b x-text="leanLabel(latest())"></b>
+                        <span x-text="leadShare(latest())"></span>
+                      </p>
+                      <template x-if="hasVoteMembers(latest())">
+                        <div class="vote" role="img" :aria-label="`How members voted: ${spreadLabel(latest())}.`">
+                          <template x-for="c in voteColumns(latest())" :key="c.stance">
+                            <div class="vote__col" :class="{ 'is-lead': c.stance === leanStance(latest()) }">
+                              <div class="vote__stack">
+                                <template x-for="m in c.members" :key="m.key">
+                                  <a class="vote__m" :href="m.href || undefined">
+                                    <i :style="`background:${stanceColor(c.stance)}`" aria-hidden="true"></i><span x-text="m.name"></span>
+                                  </a>
+                                </template>
+                              </div>
+                              <span class="vote__axis" x-text="c.stance"></span>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                      <template x-if="!hasVoteMembers(latest())">
+                        <p class="vote__sq" :aria-label="`How members voted: ${spreadLabel(latest())}.`">
+                          <template x-for="q in voteSquares(latest())" :key="q.key"><i :style="`background:${stanceColor(q.stance)}`"></i></template>
+                        </p>
+                      </template>
+                      <p class="sr__foot">
+                        <span x-text="quorumText(latest())"></span><span x-show="meanConfidenceText(latest())" x-text="` · ${meanConfidenceText(latest())}`"></span>
+                      </p>
+                    </div>
+                  </template>
+                </div>
+                <!-- What the swarm was handed: a record of that session's
+                     brief, one row per part it actually contains. -->
+                <template x-if="handoverParts().length">
+                  <div class="sp-brief" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                    <button type="button" class="sp-brief__sum" :aria-expanded="open ? 'true' : 'false'"
+                            aria-controls="subject-handover" @click="open = !open">
+                      <span class="sp-brief__sum-k">What the swarm was handed</span>
+                      <span class="sp-brief__sum-m"><i aria-hidden="true">⌄</i></span>
+                    </button>
+                    <div class="sp-brief__anim" id="subject-handover" role="region"
+                         aria-label="What the swarm was handed" :inert="!open">
+                      <div class="sp-brief__clip">
+                        <dl class="hand">
+                          <template x-for="part in handoverParts()" :key="part.key">
+                            <div class="hand__row" :data-part="part.key">
+                              <dt x-text="part.label"></dt>
+                              <dd>
+                                <template x-if="part.quote"><q x-text="part.quote"></q></template>
+                                <template x-if="part.pills">
+                                  <span class="hand__pills">
+                                    <i class="hand__dot" x-show="part.dot" :style="`background:${part.dot}`" aria-hidden="true"></i>
+                                    <template x-for="p in part.pills" :key="p.key"><span class="hand__pill" x-text="p.text"></span></template>
+                                  </span>
+                                </template>
+                                <template x-if="part.list">
+                                  <ul><template x-for="n in part.list" :key="n.key"><li x-text="n.text"></li></template></ul>
+                                </template>
+                              </dd>
+                            </div>
+                          </template>
+                        </dl>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </section>
+            </template>
             <a class="sv__cov-lnk" href="/allocation">See the allocation page &rarr;</a>
           </div>
         </template>
@@ -686,5 +807,29 @@
     @media (prefers-reduced-motion: reduce) {
       .sp-brief__anim, .sp-brief__sum i { transition: none; }
     }
+    /* What the swarm was handed: a record of the brief, one row per part it
+       actually contains. */
+    .sr .sp-brief { margin: 0; border: 0; border-top: 1px solid var(--color-border); }
+    .hand { margin: 0; padding: 0.3rem 1.25rem 1rem; }
+    .hand__row { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: 0.3rem 1.5rem;
+      padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); }
+    .hand__row:last-child { border-bottom: 0; }
+    .hand dt { font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--color-text-muted); padding-top: 0.25rem; }
+    .hand dd { margin: 0; min-width: 0; font-size: 0.86rem; color: var(--color-text); }
+    .hand q { color: var(--color-text-soft); }
+    .hand__pills { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+    .hand__dot { width: 8px; height: 8px; flex: none; margin-right: 0.15rem; }
+    .hand__pill { font-family: var(--font-mono); font-size: 0.66rem; border: 1px solid var(--color-border);
+      padding: 0.2rem 0.45rem; color: var(--color-text-soft); white-space: nowrap; }
+    .hand ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+    .hand li { position: relative; padding-left: 0.8rem; font-size: 0.8rem; line-height: 1.45; color: var(--color-text-soft); }
+    .hand li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 4px; height: 1px;
+      background: var(--color-text-muted); }
+
+    /* The latest review sits inside the targets card, under its note: a
+       bordered block of its own, with a heading one step below the card's. */
+    .sp-alloc .sr { margin-top: 1.25rem; }
+    .sp-alloc .sr__title { font-size: 1.05rem; }
   </style>
 </section>

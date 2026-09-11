@@ -27,6 +27,9 @@ import { CATEGORICAL } from "./chart-theme.js";
 // signed.
 const STANCE_ORDER = ["bullish", "constructive", "neutral", "cautious", "bearish"];
 
+// The same five stances as a number line, bearish on the left.
+const VOTE_AXIS = ["bearish", "cautious", "neutral", "constructive", "bullish"];
+
 // The bucket order the allocation framework publishes in. Weights are printed
 // in this order rather than the object's, so "95 / 5 / 0 / 0" names the same
 // four sleeves every time.
@@ -243,6 +246,46 @@ export const sessionSummary = {
       .filter(/** @param {any} a */ (a) => a && a.action);
     if (acts.length) return { kind: "actions", actions: acts.slice(0, 2), more: Math.max(0, acts.length - 2) };
     return rec.rationale ? { kind: "text", text: rec.rationale } : null;
+  },
+  // ── the vote, as a position on a scale (RM-121) ──────────────────────
+  // Each member in their stance's column, bearish to bullish, so a reader
+  // sees how the room leaned and how far apart it sat.
+  /** @param {any} s */
+  voteColumns(s) {
+    const takes = takeRowsOf(s);
+    return VOTE_AXIS.map((stance) => ({
+      stance,
+      members: takes
+        .filter((/** @type {any} */ t) => String(t?.stance || "").toLowerCase() === stance)
+        .map((/** @type {any} */ t, /** @type {number} */ i) => {
+          const ref = t?.memberHandle || t?.memberId || "";
+          return { key: `${ref || t?.memberName || "m"}-${i}`, name: t?.memberName || t?.memberId || "", href: ref ? `/swarm/members/${encodeURIComponent(ref)}` : "" };
+        }),
+    }));
+  },
+  /** @param {any} s */
+  hasVoteMembers(s) { return this.voteColumns(s).some((c) => c.members.length); },
+  // One square per take, for when the names were not fetched.
+  /** @param {any} s */
+  voteSquares(s) {
+    /** @type {Record<string, unknown>} */
+    const c = this.stanceCounts(s) || {};
+    return VOTE_AXIS.flatMap((stance) => Array.from({ length: Number(c[stance]) || 0 }, (_, i) => ({ key: `${stance}-${i}`, stance })));
+  },
+  /** @param {any} s */
+  voteTotal(s) {
+    /** @type {Record<string, unknown>} */
+    const c = this.stanceCounts(s) || {};
+    return Object.values(c).reduce((/** @type {number} */ a, v) => a + (Number(v) || 0), 0);
+  },
+  // "3 of 5" for the leading stance; nothing for a split.
+  /** @param {any} s */
+  leadShare(s) {
+    const l = this.lean(s);
+    if (!l?.stance) return "";
+    /** @type {Record<string, unknown>} */
+    const c = this.stanceCounts(s) || {};
+    return `${Number(c[l.stance]) || 0} of ${this.voteTotal(s)}`;
   },
 };
 
