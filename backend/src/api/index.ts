@@ -16,6 +16,7 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
+import { resolveClientIp } from "./client-ip.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -97,16 +98,11 @@ const server = Bun.serve({
 
     if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
 
-    // Client ip for rate limiting. X-Forwarded-For is client-controlled and only
-    // trustworthy behind a known proxy, so we use it ONLY when TRUST_PROXY=1
-    // (taking the last hop = the proxy's view of the peer); otherwise the raw
-    // socket address. Prevents trivial rate-limit evasion via spoofed XFF.
+    // Client ip for rate limiting. See client-ip.ts's resolveClientIp() for
+    // the trust/parsing rules — TRUST_PROXY=1 only when a known proxy (now
+    // website-server, issue #892) sits in front of this process.
     const peer = server.requestIP(req)?.address || "";
-    let clientIp = peer;
-    if (config.trustProxy) {
-      const fwd = req.headers.get("x-forwarded-for");
-      if (fwd) clientIp = fwd.split(",").map((s) => s.trim()).filter(Boolean).pop() || peer;
-    }
+    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"));
 
     try {
       return withCors(await route(req, url, pathname, clientIp), req, pathname);

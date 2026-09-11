@@ -219,6 +219,20 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       RM_ENV: ${RM_ENV:-smoke}
+      # website-server (nginx) now sits in front of `api` for EVERY request in
+      # every composition this file resolves (issue #892) — website-server/
+      # nginx.conf forwards X-Real-IP/X-Forwarded-For/X-Forwarded-Proto to
+      # api:8787. Without this, backend/src/api/index.ts's clientIp falls back
+      # to the raw TCP peer, which is now website-server's docker-network
+      # address for EVERY request — silently collapsing per-IP rate limiting
+      # and the comments/submissions ip_hash audit field to one shared
+      # identity, with no error. A hardcoded literal, not `${TRUST_PROXY:-1}`:
+      # this topology always has website-server in front, so there is no
+      # legitimate operator override to leave room for, and an ambient shell
+      # value must never be able to silently turn this back off.
+      # scripts/tests/integration/smoke-compose-config.test.ts asserts this
+      # resolves to "1" in every composition (base/smoke/stage).
+      TRUST_PROXY: "1"
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS
       # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here
