@@ -222,13 +222,27 @@
              this page's own H1 already said it. The link goes the other way
              too — /swarm points here for the history, so here points at the
              product page. -->
-        <template x-if="isFramework() && allocationTargets().length">
-          <div class="sv__alloc sp-alloc">
+        <!-- One host for two subjects' needs. On the framework it is the
+             targets card, and the latest review sits inside it under the note.
+             On any other subject there is no targets card, so the same review
+             renders on its own, in the slot "What the swarm is given" used to
+             hold on every subject page. One copy of the review markup either
+             way. -->
+        <template x-if="hasTargetsCard() || hasLatestReview()">
+          <div :class="hasTargetsCard() ? 'sv__alloc sp-alloc' : 'sp-review'">
+            <template x-if="hasTargetsCard()">
+            <div class="sp-alloc__body">
             <!-- The heading follows the PROVENANCE, because both wordings are
                  wrong in the other state: these weights are the seeded row
                  today, and the note at the foot of this very card says no
                  session has changed them. See allocationTitle(). -->
-            <p class="sv__alloc-t" x-text="allocationTitle()">Target weights in force</p>
+            <!-- The link sits beside what it points at, the way the latest
+                 review puts "Open the session" beside its own title. At the
+                 foot of the card it read as an afterthought to the review. -->
+            <div class="sp-alloc__head">
+              <p class="sv__alloc-t" x-text="allocationTitle()">Target weights in force</p>
+              <a class="sv__cov-lnk" href="/allocation">See the allocation page &rarr;</a>
+            </div>
             <div class="sv__alloc-reg">
               <p class="sv__alloc-label">
                 <span x-show="allocationAsOf()">Unchanged since <span x-text="allocationAsOf()"></span></span>
@@ -256,11 +270,13 @@
               </div>
             </div>
             <p class="sv__sleeve-note" x-show="allocationNote()" x-text="allocationNote()"></p>
+            </div>
+            </template>
             <!-- THE LATEST REVIEW (RM-121): what the market said (signal) and
                  how the swarm voted (reasoning), then what it was handed. Each
                  column opens on a one-word state, then the one chart that fits
                  its data. Only what the data supports renders. -->
-            <template x-if="latest() && (signalRows().length || voteTotal(latest()))">
+            <template x-if="hasLatestReview()">
               <section class="sr" aria-labelledby="sr-title">
                 <div class="sr__head">
                   <h2 class="sr__title" id="sr-title">Latest review</h2>
@@ -361,7 +377,12 @@
                                 <template x-if="part.pills">
                                   <span class="hand__pills">
                                     <i class="hand__dot" x-show="part.dot" :style="`background:${part.dot}`" aria-hidden="true"></i>
-                                    <template x-for="p in part.pills" :key="p.key"><span class="hand__pill" x-text="p.text"></span></template>
+                                    <template x-for="p in part.pills" :key="p.key">
+                                      <span class="hand__pill-wrap">
+                                        <template x-if="p.href"><a class="hand__pill hand__pill--link" :href="p.href" x-text="p.text"></a></template>
+                                        <template x-if="!p.href"><span class="hand__pill" x-text="p.text"></span></template>
+                                      </span>
+                                    </template>
                                   </span>
                                 </template>
                                 <template x-if="part.list">
@@ -377,112 +398,8 @@
                 </template>
               </section>
             </template>
-            <a class="sv__cov-lnk" href="/allocation">See the allocation page &rarr;</a>
           </div>
         </template>
-
-        <!-- What a member is handed when a session on this subject opens.
-             It answers a question readers actually ask ("what does the swarm
-             get?"), so it describes the brief in GENERAL — the shape is the
-             same every session — and prints the figures off the most recent
-             real one. Every input that has a page of its own links to it.
-
-             The structural notes live inside it rather than beside it: they
-             are one part of the handover, not a separate fact about the
-             subject, and standing alone under a bare "Structural notes"
-             heading they read as the page annotating itself.
-
-             Collapsed by default. Mirrors /allocation's .alp__hold idiom (a
-             button carrying aria-expanded, an inert region, a 0fr/1fr grid
-             row) rather than <details>, whose content renders at full size
-             the first time and so has no previous height to transition
-             from. -->
-        <div class="sp-brief" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-          <button type="button" class="sp-brief__sum" :aria-expanded="open ? 'true' : 'false'"
-                  aria-controls="subject-brief" @click="open = !open">
-            <span class="sp-brief__sum-k">What the swarm is given</span>
-            <!-- The bar says what is inside before it is opened. Closed, it was
-                 a mono label a reader had no reason to click. -->
-            <span class="sp-brief__sum-m">
-              <span x-text="`${briefPartCount()} parts`"></span>
-              <span x-show="briefDate()" x-text="`· built ${briefDate()}`"></span>
-              <i aria-hidden="true">⌄</i>
-            </span>
-          </button>
-          <div class="sp-brief__anim" id="subject-brief" role="region"
-               aria-label="What the swarm is given" :inert="!open">
-            <div class="sp-brief__clip">
-              <div class="sp-brief__body">
-                <p class="sp-brief__intro">
-                  Every session on this subject opens with a brief, rebuilt that day from live data. It is the same parts each time.
-                </p>
-                <!-- The regime read is a PART OF THE BRIEF, and the biggest
-                     one, so it lives in this card rather than in a "Market
-                     backdrop" panel of its own on another page. Drawn, not
-                     listed: four percentiles against their own history is a
-                     comparison, and a line of prose is the wrong instrument
-                     for it. Shared with session.html — see lib/session-brief.js. -->
-                <template x-if="backdrop">
-                  <section class="mb">
-                    <div class="mb__head">
-                      <p class="mb__label">Market regime</p>
-                      <span class="mb__scope" x-text="backdropScopeLine()"></span>
-                    </div>
-                    <div class="mb__grid">
-                      <div class="mb__read">
-                        <p class="mb__call">
-                          <i :style="`background:${regimeColor(backdrop?.regime)}`" aria-hidden="true"></i>
-                          <span x-text="regimeLabel(backdrop?.regime)"></span>
-                        </p>
-                        <p class="mb__pct" x-show="backdrop?.compositePercentile !== null">
-                          <b x-text="ordinal(backdrop?.compositePercentile)"></b>
-                          <span>percentile of its own history</span>
-                        </p>
-                        <p class="mb__raw" x-text="`composite ${fmtNum(backdrop?.composite, 3)}`"></p>
-                        <div class="mb__trailwrap" x-show="regimeTrailSvg()" x-html="regimeTrailSvg()"></div>
-                        <p class="mb__cap" x-show="trailCaption()" x-text="trailCaption()"></p>
-                      </div>
-                      <div class="mb__figure">
-                        <div x-html="regimeRailSvg()"></div>
-                        <p class="mb__finding" x-text="regimeFinding()"></p>
-                      </div>
-                    </div>
-                  </section>
-                </template>
-                <!-- Label, figure, then the line of prose. Seven sentences of
-                     equal weight was a wall: a reader after "how much
-                     research?" should land on "5 summaries" without reading a
-                     clause. Two columns so the parts fill the width instead of
-                     running one long line each. -->
-                <ul class="sp-brief__parts">
-                  <template x-for="part in briefParts()" :key="part.key">
-                    <li class="sp-brief__part">
-                      <p class="sp-brief__k">
-                        <template x-if="part.href">
-                          <a class="sp-brief__lnk" :href="part.href" x-text="part.label"></a>
-                        </template>
-                        <template x-if="!part.href"><span x-text="part.label"></span></template>
-                      </p>
-                      <p class="sp-brief__v" x-text="part.value"></p>
-                      <p class="sp-brief__t" x-text="part.text"></p>
-                    </li>
-                  </template>
-                </ul>
-                <template x-if="structuralNotes().length">
-                  <div class="sp-brief__notes">
-                    <p class="sp-brief__notes-h">
-                      Notes for this subject
-                      <span>Written by the operator, and handed over with everything above.</span>
-                    </p>
-                    <ul>
-                      <template x-for="n in structuralNotes()" :key="n"><li x-text="n"></li></template>
-                    </ul>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </div>
-        </div>
 
         <!-- /swarm's Sessions section, on a page that already knows the
              subject. Same section head, same card, same foot, same takes
@@ -716,7 +633,8 @@
                        color: var(--color-text-muted); }
     .sp-note { font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.5rem; }
 
-    /* What the swarm is given. Mirrors /allocation's .alp__hold: the same
+    /* The disclosure under the latest review ("What the swarm was handed").
+       Mirrors /allocation's .alp__hold: the same
        tokens, the same 0fr/1fr grid transition, the same flat edges. */
     .sp-brief { margin-top: 1rem; border: 1px solid var(--color-border); }
     .sp-brief__sum {
@@ -747,63 +665,6 @@
     }
     .sp-brief.is-open .sp-brief__anim { grid-template-rows: 1fr; }
     .sp-brief__clip { overflow: hidden; min-height: 0; }
-    .sp-brief__body { padding: 1rem 0.9rem 1.1rem; }
-    .sp-brief__intro {
-      margin: 0 0 1rem; font-size: 0.85rem; line-height: 1.55; color: var(--color-text-muted);
-    }
-
-    /* Two columns, so seven parts fill the width instead of running seven long
-       lines down the left. Each part is label / figure / line, in that reading
-       order, so the figure is what the eye lands on. */
-    /* Spacing, not cells. Drawing the grid with hairlines meant the two empty
-       slots on the last row of seven read as broken boxes, and seven identical
-       bordered tiles is the icon-heading-text grid this house does not build. */
-    .sp-brief__parts {
-      list-style: none; margin: 0; padding: 0; display: grid; gap: 1.15rem 2.5rem;
-      grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
-    }
-    .sp-brief__part { min-width: 0; }
-    .sp-brief__k {
-      margin: 0; font-family: var(--font-mono); font-size: 0.58rem;
-      text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted);
-    }
-    .sp-brief__v {
-      /* No capitalize: it title-cased the figures into "8 Readings" and
-         "5 Summaries". */
-      margin: 0.25rem 0 0; font-family: var(--font-mono); font-size: 0.92rem;
-      font-variant-numeric: tabular-nums; color: var(--color-text);
-    }
-    .sp-brief__t {
-      margin: 0.3rem 0 0; font-size: 0.78rem; line-height: 1.5; color: var(--color-text-muted);
-    }
-    .sp-brief__lnk { color: inherit; text-decoration: none; border-bottom: 1px solid var(--color-border); }
-    .sp-brief__lnk:hover { color: var(--color-text); border-bottom-color: var(--color-text-soft); }
-
-    /* The operator's notes are prose, and prose in a wide panel needs either a
-       cap or a second column. A second column: it fills the width AND keeps the
-       lines short, instead of trading one problem for the other. */
-    .sp-brief__notes { margin-top: 1.1rem; }
-    .sp-brief__notes-h {
-      margin: 0 0 0.6rem; font-family: var(--font-mono); font-size: 0.58rem;
-      text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted);
-    }
-    .sp-brief__notes-h span {
-      display: block; margin-top: 0.3rem; font-family: var(--font-sans);
-      font-size: 0.78rem; letter-spacing: 0; text-transform: none;
-    }
-    .sp-brief__notes ul {
-      margin: 0; padding: 0; list-style: none;
-      display: grid; gap: 0.5rem 2rem;
-      grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
-    }
-    .sp-brief__notes li {
-      position: relative; padding-left: 0.85rem;
-      font-size: 0.78rem; line-height: 1.5; color: var(--color-text-muted);
-    }
-    .sp-brief__notes li::before {
-      content: ""; position: absolute; left: 0; top: 0.5em;
-      width: 4px; height: 1px; background: var(--color-text-muted);
-    }
     @media (prefers-reduced-motion: reduce) {
       .sp-brief__anim, .sp-brief__sum i { transition: none; }
     }
@@ -831,5 +692,13 @@
        bordered block of its own, with a heading one step below the card's. */
     .sp-alloc .sr { margin-top: 1.25rem; }
     .sp-alloc .sr__title { font-size: 1.05rem; }
+    .sp-alloc__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+      gap: 0.4rem 1.5rem; }
+    .sp-alloc__head .sv__cov-lnk { margin-top: 0; }
+    .hand__pill-wrap { display: contents; }
+    .hand__pill--link { color: var(--color-text); text-decoration: none; }
+    .hand__pill--link::after { content: " \2192"; color: var(--color-text-muted); }
+    .hand__pill--link:hover { border-color: var(--color-text-muted); }
+    .hand__pill--link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
   </style>
 </section>

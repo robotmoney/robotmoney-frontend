@@ -117,55 +117,22 @@ test("public subject profile renders holdings, wallets, NFT contracts and the sw
   await expect(nftPanel).toContainText("RecycleMachine");
   await expect(nftPanel).toContainText("ClawMachine");
 
-  // The structural notes are the operator's brief TO THE SWARM, and woon.json
-  // declares 4. They ride in a disclosure that says so and starts CLOSED: open
-  // and headed "Structural notes", they read as the page annotating itself.
-  const brief = page.locator(".sp-brief");
-  await expect(brief.locator(".sp-brief__sum")).toContainText("What the swarm is given");
-  await expect(brief.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "false");
-  // Closed means closed to a reader AND to the keyboard: the region collapses
-  // to nothing and is inert, so the notes are not tab-reachable behind it.
-  const region = brief.locator(".sp-brief__anim");
-  await expect(region).toHaveAttribute("inert", /.*/);
-  expect(await region.boundingBox().then((b) => b?.height ?? 0)).toBeLessThan(1);
-
-  // ...and opens to the notes themselves, with what they are for said plainly.
-  await brief.locator(".sp-brief__sum").click();
-  await expect(brief.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "true");
-  await expect(brief).toContainText("Written by the operator");
-  await expect(brief.locator(".sp-brief__notes li")).toHaveCount(4);
-  await expect(brief).toContainText("RoboFarm, RecycleMachine, ClawMachine");
-
-  // It answers "what does the swarm actually get" in general, then prints the
-  // figures off the last real brief. Seven parts, every one that has a page of
-  // its own linking to it — the regime read in particular, which is the input
-  // readers ask about and which nothing on this page used to acknowledge.
-  // Five parts LISTED, and the head still says seven: the regime read and its
-  // trailing history are the other two, and they are DRAWN below rather than
-  // described, because four percentiles against their own history is a
-  // comparison and a line of prose is the wrong instrument for it.
-  await expect(brief.locator(".sp-brief__part")).toHaveCount(5);
-  await expect(brief.locator(".sp-brief__sum")).toContainText("7 parts");
-  await expect(brief.locator('.sp-brief__lnk[href="/allocation"]')).toBeVisible();
-  await expect(brief.locator('.sp-brief__lnk[href="/swarm"]')).toBeVisible();
-  await expect(brief.locator('.sp-brief__lnk[href="/blog"]')).toBeVisible();
-  await expect(brief).toContainText("5 summaries");
-  // woon HAS a book, so the holdings line counts it rather than saying none.
-  await expect(brief).toContainText(/\d+ positions/);
-
-  // The regime read, drawn — the same component the session page uses. One row
-  // per reading on ONE percentile axis, which is what makes them comparable;
-  // the panel this replaced drew the composite as a bar on a RAW 0-1 scale
-  // directly above a caption giving its percentile, two figures for one
-  // reading on two undeclared axes.
-  const rail = brief.locator(".mb__rail");
-  await expect(rail).toBeVisible();
-  await expect(rail.locator("rect[data-mark]")).toHaveCount(4);
-  // Always a sentence, including when nothing dissents.
-  await expect(brief.locator(".mb__finding")).not.toHaveText("");
-  // Scope says whose reading it is. This is the ONLY copy that differs from
-  // the session page's render of the same component.
-  await expect(brief.locator(".mb__scope")).toContainText("most recent session");
+  // No "What the swarm is given" section any more. Woon is not the framework,
+  // so it has no targets card; the same latest review renders on its own, in
+  // the slot that section held, and its handover is a record of that brief.
+  await expect(page.locator(".sp-brief__sum-k")).toHaveText(["What the swarm was handed"]);
+  const review = page.locator(".sp-review .sr");
+  await expect(review).toBeVisible();
+  await expect(review.locator(".sr__k")).toHaveText(["Signal", "Reasoning"]);
+  const hand = review.locator(".sp-brief");
+  await expect(hand.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "false");
+  await expect(hand.locator(".sp-brief__anim")).toHaveAttribute("inert", /.*/);
+  await hand.locator(".sp-brief__sum").click();
+  await expect(hand.locator('[data-part="notes"] li')).toHaveCount(4);
+  await expect(hand).toContainText("RoboFarm, RecycleMachine, ClawMachine");
+  // A research item links when the site has a page for it, and the archive's
+  // articles all do.
+  await expect(hand.locator('[data-part="research"] a.hand__pill').first()).toHaveAttribute("href", /^\//);
 
   // Sessions: all 9 archived, published woon sessions.
   await expect(page.locator(".sv__session-card")).toHaveCount(9);
@@ -750,12 +717,18 @@ test("the targets card carries the latest review under its note: signal, reasoni
   // Inside the targets card, directly after its note.
   const review = page.locator(".sv__alloc .sr");
   await expect(review).toBeVisible();
+  // After the note, in document order, inside the card.
   const afterNote = await page.locator(".sv__alloc .sv__sleeve-note").evaluate((note) => {
-    let el = note.nextElementSibling;
-    while (el && el.tagName === "TEMPLATE") el = el.nextElementSibling;
-    return el?.classList.contains("sr") ?? false;
+    const sr = note.closest(".sv__alloc")?.querySelector(".sr");
+    if (!sr) return false;
+    return Boolean(note.compareDocumentPosition(sr) & Node.DOCUMENT_POSITION_FOLLOWING);
   });
   expect(afterNote).toBe(true);
+  // The allocation link sits beside the card's title, not at its foot.
+  await expect(page.locator(".sp-alloc__head a.sv__cov-lnk")).toHaveAttribute("href", "/allocation");
+  await expect(page.locator(".sv__alloc > a.sv__cov-lnk")).toHaveCount(0);
+  // One brief section on the page: the old "What the swarm is given" is gone.
+  await expect(page.locator(".sp-brief__sum-k")).toHaveText(["What the swarm was handed"]);
   await expect(review.locator(".sr__meta a")).toHaveAttribute("href", `/swarm/sessions/${LR_ID}`);
 
   // SIGNAL: a one-word state, then dots on one percentile axis.
@@ -787,6 +760,11 @@ test("the targets card carries the latest review under its note: signal, reasoni
   const keys = await hand.locator(".hand__row").evaluateAll((els) => els.map((e) => e.getAttribute("data-part")));
   expect(keys).toEqual(["instruction", "regime", "research", "recent", "notes", "returns"]);
   await expect(hand.locator('[data-part="recent"] .hand__pill')).toHaveText(["Sep 10 · Woon Treasury"]);
+  // Each signal links to its reader page, under that page's own name. The
+  // brief's own href is the JSON route, which is not a page.
+  const research = hand.locator('[data-part="research"] a.hand__pill');
+  await expect(research).toHaveText(["Channel Divergence", "Late-Cycle Signals"]);
+  await expect(research.first()).toHaveAttribute("href", "/research/channel-divergence");
 
   await expectNoBrowserErrors(errors);
 });
@@ -807,5 +785,31 @@ test("on a v0 archive reading, factor is drawn as the input it was", async ({ pa
   await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
   await expect(signal.locator(".sr__foot")).not.toContainText("Factor is context");
 
+  await expectNoBrowserErrors(errors);
+});
+
+// A research item with no page on the site stays text: the brief is not a
+// list of links, and a link that lands on "Page Not Found" is worse than none.
+test("a research signal with no page on the site is not linked", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (u.pathname === "/api/swarm/subjects/robotmoney-allocation") {
+      return json({ id: "robotmoney-allocation", name: "Robot Money Allocation", source: { type: "framework" }, wallets: [], structural_notes: [] });
+    }
+    if (u.pathname === "/api/swarm/sessions") return json({ sessions: [LR_ROW], nextCursor: null });
+    if (u.pathname === "/api/swarm/sessions/2026-09-10/robotmoney-allocation") return json({ session: LR_ROW, takes: LR_TAKES });
+    if (u.pathname === "/api/swarm/brief") {
+      return json({ researchSignals: [{ signalKey: "channel-divergence" }, { signalKey: "made-up-signal" }] });
+    }
+    if (u.pathname === "/api/dashboards/allocation") return json({ asOf: "2026-06-02", strategy: [{ label: "Conservative DeFi Yield", targetPct: 95 }] });
+    return json({}, 503);
+  });
+  await page.goto("/swarm/subjects/robotmoney-allocation");
+  const hand = page.locator(".sr .sp-brief");
+  await hand.locator(".sp-brief__sum").click();
+  await expect(hand.locator('[data-part="research"] a.hand__pill')).toHaveText(["Channel Divergence"]);
+  await expect(hand.locator('[data-part="research"] span.hand__pill')).toHaveText(["Made up signal"]);
   await expectNoBrowserErrors(errors);
 });
