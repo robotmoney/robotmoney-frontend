@@ -63,6 +63,15 @@ services:
       SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-}
       SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
       SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
+      # Absolute origin swarm notification emails link back to (issue #894 /
+      # config.ts::resolveSwarmPublicBaseUrl). Forwarded with NO inline
+      # literal default, same reasoning as docker-compose.yml's own line: the
+      # api process's assertSwarmNotificationSafety() boot guard refuses to
+      # start once SWARM_SCHEDULES_ENABLED is on unless this is set explicitly,
+      # so a staging deployment of this stack can never silently fall back to
+      # the production-shaped default and email a real applicant a broken
+      # cross-environment link.
+      SWARM_PUBLIC_BASE_URL: ${SWARM_PUBLIC_BASE_URL:-}
       # Swarm session-lifecycle cron cadence (issue #208). docker-compose.yml
       # inline-defaults these to the daily 06:00-08:00 UTC sequence; here they
       # are forwarded only, per this file's no-inline-default rule above — an
