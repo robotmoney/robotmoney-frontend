@@ -277,6 +277,48 @@ export const APPEND_ONLY_MIGRATIONS = [
   "0056_analytics_overwrite_events.sql",
 ] as const;
 
+/**
+ * Which of APPEND_ONLY_MIGRATIONS opts each table in. Kept in agreement with
+ * APPEND_ONLY_TABLES and the migrations' own arrays by the same executed test
+ * that already pins those two against each other
+ * (append-only-enforcement.test.ts's "protected arrays" test) — a table added
+ * to one and not this map is a table this check can no longer distinguish
+ * "not migrated here yet" from "disarmed" for.
+ *
+ * THE BUG THIS MAP FIXES (found capturing a fresh prod replica on
+ * 2026-09-11): `checkAppendOnlyGuard` used to gate ONLY on whether 0032 was
+ * recorded, then treated every table that merely EXISTS as "should already
+ * be protected" — but `swarm_member_keys` has existed since long before 0050
+ * opted it in, so a database that has 0032 but genuinely has not reached 0050
+ * yet (an ordinary, expected mid-rollout state, not tampering) got the same
+ * "something removed or disarmed it" refusal as an actually-disarmed one.
+ * Gating each table on ITS OWN migration removes that false positive without
+ * weakening the check for a table whose migration truly has run.
+ */
+export const APPEND_ONLY_TABLE_MIGRATION: Record<(typeof APPEND_ONLY_TABLES)[number], string> = {
+  swarm_members: "0032_append_only_history.sql",
+  swarm_recommendations: "0032_append_only_history.sql",
+  swarm_memos: "0032_append_only_history.sql",
+  swarm_sessions: "0032_append_only_history.sql",
+  swarm_briefs: "0032_append_only_history.sql",
+  swarm_subjects: "0032_append_only_history.sql",
+  swarm_session_events: "0032_append_only_history.sql",
+  swarm_session_members: "0032_append_only_history.sql",
+  swarm_subject_snapshots: "0032_append_only_history.sql",
+  swarm_applications: "0032_append_only_history.sql",
+  audit_log: "0032_append_only_history.sql",
+  agent_activity_log: "0032_append_only_history.sql",
+  regime_snapshots: "0032_append_only_history.sql",
+  schema_migrations: "0032_append_only_history.sql",
+  swarm_session_judgements: "0040_swarm_judgements_append_only.sql",
+  swarm_consensus_receipts: "0042_swarm_consensus_receipts.sql",
+  swarm_member_keys: "0050_swarm_member_keys_append_only.sql",
+  // Added with the remote 0056 work, which landed after this map was first
+  // written: 0056 both CREATES this table and installs its own ENABLE ALWAYS
+  // triggers, so it is its own opt-in migration.
+  analytics_overwrite_events: "0056_analytics_overwrite_events.sql",
+};
+
 /** The two trigger names migration 0032 installs on each protected table. */
 export function triggerNames(table: string): { statement: string; row: string } {
   return { statement: `${table}_append_only`, row: `${table}_append_only_row` };
@@ -452,6 +494,22 @@ async function existingTables(db: AppendOnlyDb, tables: readonly string[]): Prom
     WHERE to_regclass('public.' || t) IS NOT NULL
   `) as unknown as { table_name: string }[];
   return rows.map((r) => r.table_name);
+}
+
+/** Which of APPEND_ONLY_MIGRATIONS this database has recorded as applied. */
+async function appliedAppendOnlyMigrations(db: AppendOnlyDb): Promise<Set<string>> {
+  const rows = (await db`
+    SELECT name FROM schema_migrations WHERE name = ANY(${[...APPEND_ONLY_MIGRATIONS] as string[]})
+  `) as unknown as { name: string }[];
+  return new Set(rows.map((r) => r.name));
+}
+
+/** `existing`, narrowed to tables whose OWN opt-in migration (not just 0032)
+ *  is recorded as applied — see APPEND_ONLY_TABLE_MIGRATION's header for why
+ *  table existence alone is not enough once more than one migration opts
+ *  tables in. */
+function tablesExpectedProtected(existing: readonly string[], appliedMigrations: ReadonlySet<string>): string[] {
+  return existing.filter((t) => appliedMigrations.has(APPEND_ONLY_TABLE_MIGRATION[t as (typeof APPEND_ONLY_TABLES)[number]]));
 }
 
 /**
@@ -708,12 +766,12 @@ async function checkLedgerFamily(db: AppendOnlyDb, family: LedgerImmutableFamily
 export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<AppendOnlyGuardCheck> {
   try {
     const applied = await migrationRecorded(db, APPEND_ONLY_MIGRATION);
-    const tables = await existingTables(db, APPEND_ONLY_TABLES);
+    const existing = await existingTables(db, APPEND_ONLY_TABLES);
     if (!applied) {
       // Not "clean" and not "disarmed": nothing has claimed to install this yet.
       return { status: "not_applied", problems: [] };
     }
-    if (tables.length === 0) {
+    if (existing.length === 0) {
       return {
         status: "disarmed",
         problems: [
@@ -722,6 +780,16 @@ export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<Appe
         ],
       };
     }
+    // Table EXISTENCE is not enough once more than one migration opts tables
+    // in one at a time (APPEND_ONLY_TABLE_MIGRATION): `swarm_member_keys` has
+    // existed since long before 0050 protected it, so a database that has not
+    // reached 0050 yet — an ordinary mid-rollout state — must not be graded
+    // against it, the same way `applied` above excuses a database that has
+    // not reached 0032 yet. LEDGER_IMMUTABLE_FAMILIES already does the
+    // equivalent for itself (checkLedgerFamily's first line); this is the same
+    // rule for the 0032 family, which had only ever gated on 0032 itself.
+    const appliedMigrations = await appliedAppendOnlyMigrations(db);
+    const tables = tablesExpectedProtected(existing, appliedMigrations);
     const problems = [
       ...(await triggerInventory(db, tables, APPEND_ONLY_SPEC)),
       ...(await deleteProbe(db, await probeTables(db, tables), APPEND_ONLY_SPEC)),
