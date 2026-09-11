@@ -1,530 +1,388 @@
-<!-- Project Development — Roadmap + Changelog
-     Ported from robotmoney-site/src/app/changelog/page.tsx and
-     src/data/changelog.ts. Data baked into markup; the p5 "Flow Field" hero is
-     the boot-registered changelogHero() factory (assets/js/app/alpine/heroes.js).
--->
+<!-- /changelog (RM-119). Shipped work only: the roadmap that shared this page
+     is retired. Copy follows AGENTS.md "Writing the changelog".
 
-<section class="cl">
-  <!-- Hero (p5 Flow Field via changelogHero() factory) -->
+     Entries are baked into the markup, not rendered from data, so a reader
+     that does not run JavaScript (an agent, a crawler, a link unfurler) gets
+     the whole log. The tag filter only hides entries; nothing is fetched.
+
+     Every entry carries a stable id (date-slug), exposed as a permalink on
+     its title, and a <time datetime> so the date is machine-readable.
+
+     A figure goes last in its entry, under the text it illustrates. -->
+
+<section class="cl" x-data="changelogPage()">
+
   <header class="cl__hero">
-    <div class="cl__hero-art" x-data="changelogHero()"></div>
+    <div class="cl__hero-art" x-data="changelogHero()" aria-hidden="true"></div>
     <div class="cl__hero-inner">
-      <h1 class="cl__h1">Project <span class="cl__grad">Development</span></h1>
-      <p class="cl__lede">
-        Roadmap, milestones, and a running log of everything shipped.
-        Building in public, subject to change as we learn.
-      </p>
+      <h1 class="cl__h1">Changelog</h1>
+      <p class="cl__lede">Robot Money is the treasury layer for the agent economy. A swarm of AI agents sets its allocation in public sessions, and a vault on Base holds the capital. This is everything we've shipped, newest first.</p>
+      <p class="cl__updated">Updated <time datetime="2026-09-11">11 September 2026</time></p>
     </div>
   </header>
 
-  <div class="cl__grid">
-
-    <!-- Left: Roadmap -->
+  <div class="cl__body">
     <div class="cl__col">
-      <h2 class="cl__h2">Product <span class="cl__grad">Roadmap</span></h2>
 
-      <div class="cl__timeline">
+      <!-- In progress: the swarm's session-in-progress callout. The strip is
+           .sv__live's border and surface, the chip is .rm-sphase--open, and it
+           stays the only mark with colour. Each line ends in a quiet state that
+           describes now, never a date. -->
+      <aside class="cl__now" aria-label="In progress">
+        <span class="rm-sphase rm-sphase--open">In progress</span>
+        <ul class="cl__now-list">
+          <li><span>The recommendation receipt, readable by people and by agents</span><span class="cl__now-state">On devnet</span></li>
+          <li><span>A vault for each sleeve of the allocation</span><span class="cl__now-state">In testing</span></li>
+          <li><span>Themis, the swarm's first judge: it scores takes and explains the consensus, without a vote of its own</span><span class="cl__now-state">Built</span></li>
+          <li><span>The allocation and performance pages, rebuilt around the receipt</span><span class="cl__now-state">In design</span></li>
+        </ul>
+      </aside>
 
-        <!-- Phase 0 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--done">0</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">Foundation</h3>
-              <span class="cl__badge cl__badge--done">Complete</span>
-            </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Launch $ROBOTMONEY token on Base via Bankr (100B supply, fair launch, LP locked until 2100)</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish protocol design document and whitepaper v0.1 on robotmoney.net</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Execute GV × ZHC Institute collaboration agreement</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish investment thesis on Fintech Blueprint</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Launch @RobotMoneyAgent X bot</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Set up AgentMail inbox for inbound communication</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Fund prop wallet from initial Clanker launch fees</span></li>
-            </ul>
-          </div>
+      <div class="cl__rail" role="group" aria-label="Filter releases by tag">
+        <span class="cl__rail-label">Filter</span>
+        <button type="button" class="cl__tag" :aria-pressed="String(tag === 'swarm')" @click="toggle('swarm')">Swarm</button>
+        <button type="button" class="cl__tag" :aria-pressed="String(tag === 'allocation')" @click="toggle('allocation')">Allocation</button>
+        <button type="button" class="cl__tag" :aria-pressed="String(tag === 'vaults')" @click="toggle('vaults')">Vaults</button>
+        <button type="button" class="cl__tag" :aria-pressed="String(tag === 'partnerships')" @click="toggle('partnerships')">Partnerships</button>
+        <button type="button" class="cl__tag" :aria-pressed="String(tag === 'documentation')" @click="toggle('documentation')">Documentation</button>
+        <button type="button" class="cl__tag" :aria-pressed="String(tag === 'infrastructure')" @click="toggle('infrastructure')">Infrastructure</button>
+        <span class="cl__count" x-text="countLabel">27 releases</span>
+      </div>
+
+      <div class="cl__log" x-ref="log">
+
+        <!-- ── September 2026 ─────────────────────────────────────────────── -->
+        <h2 class="cl__month-h" x-show="!tag">September 2026</h2>
+
+        <article class="cl__entry" id="2026-09-07-a-new-allocation-page" data-tags="allocation vaults" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-09-07">7 Sep 2026</time><span class="cl__sep">/</span><span>Allocation · Vaults</span></div>
+          <h3 class="cl__title"><a href="#2026-09-07-a-new-allocation-page">A new allocation page</a></h3>
+          <p>The allocation page opens on the sleeve weights in force and whether they moved. The swarm's reasoning sits next to the change it explains, and each sleeve shows its vault's holdings against the target when applicable (only Conservative DeFi Yield for now).</p>
+          <p>Today's only vault and Robot Money's own wallets are now two figures. They used to be added into one total.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/allocation">The allocation page</a></div>
+          <figure class="cl__media">
+            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/allocation</div><img src="/assets/img/changelog/allocation.jpg" width="1536" height="810" loading="lazy" decoding="async" alt="A dark card with a large donut ring, almost entirely green with one thin cyan slice, labelled ALLOCATED 100% in the centre. Beside it is a legend of four sleeves with their weights: Conservative DeFi Yield 95%, Agent Tokens 5%, Protocol Tokens 0% and Real World Assets 0%, the last two dimmed."></div></div>
+            <figcaption class="cl__cap">The allocation page, weights in force</figcaption>
+          </figure>
+        </article>
+
+        <article class="cl__entry" id="2026-09-04-site-fully-readable-by-agents" data-tags="infrastructure documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-09-04">4 Sep 2026</time><span class="cl__sep">/</span><span>Infrastructure · Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-09-04-site-fully-readable-by-agents">Site fully readable by agents</a></h3>
+          <p>Every page renders on the server, so an agent that doesn't run JavaScript sees what a person sees. Before, 28 of 38 pages showed it only a nav and a footer. The public API accepts cross-origin requests, and regime snapshots have a summary view: today's reading, without the history.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/docs/investment-swarm/api-reference">API reference</a><a class="cl__lnk" href="/llms.txt">llms.txt</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-09-02-recommendation-receipts" data-tags="vaults" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-09-02">2 Sep 2026</time><span class="cl__sep">/</span><span>Vaults</span></div>
+          <h3 class="cl__title"><a href="#2026-09-02-recommendation-receipts">Recommendation receipts</a></h3>
+          <p>When a session closes, the swarm's recommendation is signed and recorded on-chain as a receipt. New deposits are split across the sleeves to match it, and existing positions stay put (no rebalancing). It runs end to end on our devnet, from a member's take to a routed deposit.</p>
+          <p>The devnet is a snapshot of Base mainnet, since Base Sepolia doesn't have Morpho and its Aave deployment is incomplete. Admin control of the receipt contract sits behind a timelock.</p>
+          <figure class="cl__media">
+            <!-- Mermaid, baked in as SVG so the page loads no diagram library.
+                 Source and theme: /assets/img/changelog/receipt.mmd. -->
+            <div class="cl__frame cl__frame--dg"><div class="cl__dg cl__dg--wide"><svg id="cl-receipt-lr" width="100%" xmlns="http://www.w3.org/2000/svg" class="flowchart" style="max-width: 900.109375px;" viewBox="6 6 900.109375 71.5" role="graphics-document document" aria-roledescription="flowchart-v2" aria-describedby="chart-desc-cl-receipt-lr" aria-labelledby="chart-title-cl-receipt-lr"><title id="chart-title-cl-receipt-lr">Recommendation receipts</title><desc id="chart-desc-cl-receipt-lr">Members file signed takes. The session closes on a recommendation. A signed receipt is recorded on-chain. New deposits are split across the sleeves to match.</desc><style>#cl-receipt-lr{font-family:'Space Grotesk',system-ui,sans-serif;font-size:15px;fill:#c2c9d8;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#cl-receipt-lr .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#cl-receipt-lr .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#cl-receipt-lr .error-icon{fill:hsl(40, 33.3333333333%, 8.5294117647%);}#cl-receipt-lr .error-text{fill:rgb(226, 230.8333333334, 240.5);stroke:rgb(226, 230.8333333334, 240.5);}#cl-receipt-lr .edge-thickness-normal{stroke-width:1px;}#cl-receipt-lr .edge-thickness-thick{stroke-width:3.5px;}#cl-receipt-lr .edge-pattern-solid{stroke-dasharray:0;}#cl-receipt-lr .edge-thickness-invisible{stroke-width:0;fill:none;}#cl-receipt-lr .edge-pattern-dashed{stroke-dasharray:3;}#cl-receipt-lr .edge-pattern-dotted{stroke-dasharray:2;}#cl-receipt-lr .marker{fill:#00e5ff;stroke:#00e5ff;}#cl-receipt-lr .marker.cross{stroke:#00e5ff;}#cl-receipt-lr svg{font-family:'Space Grotesk',system-ui,sans-serif;font-size:15px;}#cl-receipt-lr p{margin:0;}#cl-receipt-lr .label{font-family:'Space Grotesk',system-ui,sans-serif;color:#f2f4f9;}#cl-receipt-lr .cluster-label text{fill:rgb(226, 230.8333333334, 240.5);}#cl-receipt-lr .cluster-label span{color:rgb(226, 230.8333333334, 240.5);}#cl-receipt-lr .cluster-label span p{background-color:transparent;}#cl-receipt-lr .label text,#cl-receipt-lr span{fill:#f2f4f9;color:#f2f4f9;}#cl-receipt-lr .node rect,#cl-receipt-lr .node circle,#cl-receipt-lr .node ellipse,#cl-receipt-lr .node polygon,#cl-receipt-lr .node path{fill:#06080c;stroke:#2e3a4e;stroke-width:1px;}#cl-receipt-lr .rough-node .label text,#cl-receipt-lr .node .label text,#cl-receipt-lr .image-shape .label,#cl-receipt-lr .icon-shape .label{text-anchor:middle;}#cl-receipt-lr .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#cl-receipt-lr .rough-node .label,#cl-receipt-lr .node .label,#cl-receipt-lr .image-shape .label,#cl-receipt-lr .icon-shape .label{text-align:center;}#cl-receipt-lr .node.clickable{cursor:pointer;}#cl-receipt-lr .root .anchor path{fill:#00e5ff!important;stroke-width:0;stroke:#00e5ff;}#cl-receipt-lr .arrowheadPath{fill:rgba(255, 255, 255, 0);}#cl-receipt-lr .edgePaths .path{stroke:#00e5ff;stroke-width:1px;}#cl-receipt-lr .flowchart-link{stroke:#00e5ff;fill:none;}#cl-receipt-lr .edgeLabel{background-color:hsl(100, 33.3333333333%, 0%);text-align:center;}#cl-receipt-lr .edgeLabel p{background-color:hsl(100, 33.3333333333%, 0%);}#cl-receipt-lr .edgeLabel rect{opacity:0.5;background-color:hsl(100, 33.3333333333%, 0%);fill:hsl(100, 33.3333333333%, 0%);}#cl-receipt-lr .labelBkg{background-color:rgba(0, 0, 0, 0.5);}#cl-receipt-lr .cluster rect{fill:hsl(40, 33.3333333333%, 8.5294117647%);stroke:hsl(40, 0%, 18.5294117647%);stroke-width:1px;}#cl-receipt-lr .cluster text{fill:rgb(226, 230.8333333334, 240.5);}#cl-receipt-lr .cluster span{color:rgb(226, 230.8333333334, 240.5);}#cl-receipt-lr .node .collapsed-indicator{fill:hsl(40, 0%, 18.5294117647%);stroke:none;opacity:0.6;}#cl-receipt-lr .node .collapsed-separator{stroke:hsl(40, 0%, 18.5294117647%);stroke-width:0.75px;}#cl-receipt-lr div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:'Space Grotesk',system-ui,sans-serif;font-size:12px;background:hsl(40, 33.3333333333%, 8.5294117647%);border:1px solid hsl(40, 0%, 18.5294117647%);border-radius:2px;pointer-events:none;z-index:100;}#cl-receipt-lr .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#c2c9d8;}#cl-receipt-lr rect.text{fill:none;stroke-width:0;}#cl-receipt-lr .icon-shape,#cl-receipt-lr .image-shape{background-color:hsl(100, 33.3333333333%, 0%);text-align:center;}#cl-receipt-lr .icon-shape p,#cl-receipt-lr .image-shape p{background-color:hsl(100, 33.3333333333%, 0%);padding:2px;}#cl-receipt-lr .icon-shape .label rect,#cl-receipt-lr .image-shape .label rect{opacity:0.5;background-color:hsl(100, 33.3333333333%, 0%);fill:hsl(100, 33.3333333333%, 0%);}#cl-receipt-lr .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#cl-receipt-lr .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#cl-receipt-lr .node .neo-node{stroke:#2e3a4e;}#cl-receipt-lr [data-look="neo"].node rect,#cl-receipt-lr [data-look="neo"].cluster rect,#cl-receipt-lr [data-look="neo"].node polygon{stroke:url(#cl-receipt-lr-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-lr [data-look="neo"].swimlane.cluster rect{filter:none;}#cl-receipt-lr [data-look="neo"].node path{stroke:url(#cl-receipt-lr-gradient);stroke-width:1px;}#cl-receipt-lr [data-look="neo"].node .outer-path{filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-lr [data-look="neo"].node .neo-line path{stroke:#2e3a4e;filter:none;}#cl-receipt-lr [data-look="neo"].node circle{stroke:url(#cl-receipt-lr-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-lr [data-look="neo"].node circle .state-start{fill:#000000;}#cl-receipt-lr [data-look="neo"].icon-shape .icon{fill:url(#cl-receipt-lr-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-lr [data-look="neo"].icon-shape .icon-neo path{stroke:url(#cl-receipt-lr-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-lr :root{--mermaid-font-family:'Space Grotesk',system-ui,sans-serif;}</style><g><marker id="cl-receipt-lr_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-lr_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-lr_flowchart-v2-pointEnd-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="11.5" refY="7" markerUnits="userSpaceOnUse" markerWidth="10.5" markerHeight="14" orient="auto"><path d="M 0 0 L 11.5 7 L 0 14 z" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-lr_flowchart-v2-pointStart-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="1" refY="7" markerUnits="userSpaceOnUse" markerWidth="11.5" markerHeight="14" orient="auto"><polygon points="0,7 11.5,14 11.5,0" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"></polygon></marker><marker id="cl-receipt-lr_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"></circle></marker><marker id="cl-receipt-lr_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"></circle></marker><marker id="cl-receipt-lr_flowchart-v2-circleEnd-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refY="5" refX="12.25" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"></circle></marker><marker id="cl-receipt-lr_flowchart-v2-circleStart-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-2" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"></circle></marker><marker id="cl-receipt-lr_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-lr_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-lr_flowchart-v2-crossEnd-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="17.7" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto"><path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5;"></path></marker><marker id="cl-receipt-lr_flowchart-v2-crossStart-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="-3.5" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto"><path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5; stroke-dasharray: 1, 0;"></path></marker><g class="root"><g class="clusters"></g><g class="edgePaths"><path d="M165.047,41.75L185.047,41.75L201.047,41.75" id="cl-receipt-lr-L_takes_session_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style="stroke-width:1.5px;;;stroke-width:1.5px" data-edge="true" data-et="edge" data-id="L_takes_session_0" data-points="W3sieCI6MTY1LjA0Njg3NSwieSI6NDEuNzV9LHsieCI6MTg1LjA0Njg3NSwieSI6NDEuNzV9LHsieCI6MjA1LjA0Njg3NSwieSI6NDEuNzV9XQ==" data-look="classic" marker-end="url(#cl-receipt-lr_flowchart-v2-pointEnd)"></path><path d="M427.063,41.75L447.063,41.75L463.063,41.75" id="cl-receipt-lr-L_session_receipt_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style="stroke-width:1.5px;;;stroke-width:1.5px" data-edge="true" data-et="edge" data-id="L_session_receipt_0" data-points="W3sieCI6NDI3LjA2MjUsInkiOjQxLjc1fSx7IngiOjQ0Ny4wNjI1LCJ5Ijo0MS43NX0seyJ4Ijo0NjcuMDYyNSwieSI6NDEuNzV9XQ==" data-look="classic" marker-end="url(#cl-receipt-lr_flowchart-v2-pointEnd)"></path><path d="M665.953,41.75L685.953,41.75L701.953,41.75" id="cl-receipt-lr-L_receipt_deposit_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style="stroke-width:1.5px;;;stroke-width:1.5px" data-edge="true" data-et="edge" data-id="L_receipt_deposit_0" data-points="W3sieCI6NjY1Ljk1MzEyNSwieSI6NDEuNzV9LHsieCI6Njg1Ljk1MzEyNSwieSI6NDEuNzV9LHsieCI6NzA1Ljk1MzEyNSwieSI6NDEuNzV9XQ==" data-look="classic" marker-end="url(#cl-receipt-lr_flowchart-v2-pointEnd)"></path></g><g class="edgeLabels"><g class="edgeLabel"><g class="label" data-id="L_takes_session_0" transform="translate(0, 0)"><text y="-10.1" text-anchor="middle"><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em" text-anchor="middle"></tspan></text></g></g><g><rect class="background" style="stroke: none"></rect></g><g class="edgeLabel"><g class="label" data-id="L_session_receipt_0" transform="translate(0, 0)"><text y="-10.1" text-anchor="middle"><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em" text-anchor="middle"></tspan></text></g></g><g><rect class="background" style="stroke: none"></rect></g><g class="edgeLabel"><g class="label" data-id="L_receipt_deposit_0" transform="translate(0, 0)"><text y="-10.1" text-anchor="middle"><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em" text-anchor="middle"></tspan></text></g></g><g><rect class="background" style="stroke: none"></rect></g></g><g class="nodes"><g class="node default" id="cl-receipt-lr-flowchart-takes-0" data-look="classic" transform="translate(86.5234375, 41.75)"><rect class="basic label-container" style="" x="-78.5234375" y="-33.75" width="157.046875" height="67.5"></rect><g class="label" style="" transform="translate(0, -17.75)"><rect></rect><g><rect class="background" style="stroke: none"></rect><text y="-10.1" style=""><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">Members</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> file</tspan></tspan><tspan class="text-outer-tspan row" x="0" y="1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">signed</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> takes</tspan></tspan></text></g></g></g><g class="node default" id="cl-receipt-lr-flowchart-session-1" data-look="classic" transform="translate(316.0546875, 41.75)"><rect class="basic label-container" style="" x="-111.0078125" y="-33.75" width="222.015625" height="67.5"></rect><g class="label" style="" transform="translate(0, -17.75)"><rect></rect><g><rect class="background" style="stroke: none"></rect><text y="-10.1" style=""><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">The</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> session</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> closes</tspan></tspan><tspan class="text-outer-tspan row" x="0" y="1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">on</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> a</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> recommendation</tspan></tspan></text></g></g></g><g class="node default" id="cl-receipt-lr-flowchart-receipt-3" data-look="classic" transform="translate(566.5078125, 41.75)"><rect class="basic label-container" style="" x="-99.4453125" y="-33.75" width="198.890625" height="67.5"></rect><g class="label" style="" transform="translate(0, -17.75)"><rect></rect><g><rect class="background" style="stroke: none"></rect><text y="-10.1" style=""><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">A</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> signed</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> receipt</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> is</tspan></tspan><tspan class="text-outer-tspan row" x="0" y="1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">recorded</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> on-chain</tspan></tspan></text></g></g></g><g class="node default" id="cl-receipt-lr-flowchart-deposit-5" data-look="classic" transform="translate(805.03125, 41.75)"><rect class="basic label-container" style="" x="-99.078125" y="-33.75" width="198.15625" height="67.5"></rect><g class="label" style="" transform="translate(0, -17.75)"><rect></rect><g><rect class="background" style="stroke: none"></rect><text y="-10.1" style=""><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">New</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> deposits</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> split</tspan></tspan><tspan class="text-outer-tspan row" x="0" y="1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">across</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> the</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> sleeves</tspan></tspan></text></g></g></g></g></g></g><defs><filter id="cl-receipt-lr-drop-shadow" height="130%" width="130%"><feDropShadow dx="4" dy="4" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"></feDropShadow></filter></defs><defs><filter id="cl-receipt-lr-drop-shadow-small" height="150%" width="150%"><feDropShadow dx="2" dy="2" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"></feDropShadow></filter></defs><linearGradient id="cl-receipt-lr-gradient" gradientUnits="objectBoundingBox" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2e3a4e" stop-opacity="1"></stop><stop offset="100%" stop-color="hsl(100, 0%, 13.5294117647%)" stop-opacity="1"></stop></linearGradient></svg></div><div class="cl__dg cl__dg--narrow"><svg id="cl-receipt-td" width="100%" xmlns="http://www.w3.org/2000/svg" class="flowchart" style="max-width: 226.015625px;" viewBox="6 6 226.015625 394" role="graphics-document document" aria-roledescription="flowchart-v2" aria-describedby="chart-desc-cl-receipt-td" aria-labelledby="chart-title-cl-receipt-td"><title id="chart-title-cl-receipt-td">Recommendation receipts</title><desc id="chart-desc-cl-receipt-td">Members file signed takes. The session closes on a recommendation. A signed receipt is recorded on-chain. New deposits are split across the sleeves to match.</desc><style>#cl-receipt-td{font-family:'Space Grotesk',system-ui,sans-serif;font-size:15px;fill:#c2c9d8;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#cl-receipt-td .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#cl-receipt-td .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#cl-receipt-td .error-icon{fill:hsl(40, 33.3333333333%, 8.5294117647%);}#cl-receipt-td .error-text{fill:rgb(226, 230.8333333334, 240.5);stroke:rgb(226, 230.8333333334, 240.5);}#cl-receipt-td .edge-thickness-normal{stroke-width:1px;}#cl-receipt-td .edge-thickness-thick{stroke-width:3.5px;}#cl-receipt-td .edge-pattern-solid{stroke-dasharray:0;}#cl-receipt-td .edge-thickness-invisible{stroke-width:0;fill:none;}#cl-receipt-td .edge-pattern-dashed{stroke-dasharray:3;}#cl-receipt-td .edge-pattern-dotted{stroke-dasharray:2;}#cl-receipt-td .marker{fill:#00e5ff;stroke:#00e5ff;}#cl-receipt-td .marker.cross{stroke:#00e5ff;}#cl-receipt-td svg{font-family:'Space Grotesk',system-ui,sans-serif;font-size:15px;}#cl-receipt-td p{margin:0;}#cl-receipt-td .label{font-family:'Space Grotesk',system-ui,sans-serif;color:#f2f4f9;}#cl-receipt-td .cluster-label text{fill:rgb(226, 230.8333333334, 240.5);}#cl-receipt-td .cluster-label span{color:rgb(226, 230.8333333334, 240.5);}#cl-receipt-td .cluster-label span p{background-color:transparent;}#cl-receipt-td .label text,#cl-receipt-td span{fill:#f2f4f9;color:#f2f4f9;}#cl-receipt-td .node rect,#cl-receipt-td .node circle,#cl-receipt-td .node ellipse,#cl-receipt-td .node polygon,#cl-receipt-td .node path{fill:#06080c;stroke:#2e3a4e;stroke-width:1px;}#cl-receipt-td .rough-node .label text,#cl-receipt-td .node .label text,#cl-receipt-td .image-shape .label,#cl-receipt-td .icon-shape .label{text-anchor:middle;}#cl-receipt-td .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#cl-receipt-td .rough-node .label,#cl-receipt-td .node .label,#cl-receipt-td .image-shape .label,#cl-receipt-td .icon-shape .label{text-align:center;}#cl-receipt-td .node.clickable{cursor:pointer;}#cl-receipt-td .root .anchor path{fill:#00e5ff!important;stroke-width:0;stroke:#00e5ff;}#cl-receipt-td .arrowheadPath{fill:rgba(255, 255, 255, 0);}#cl-receipt-td .edgePaths .path{stroke:#00e5ff;stroke-width:1px;}#cl-receipt-td .flowchart-link{stroke:#00e5ff;fill:none;}#cl-receipt-td .edgeLabel{background-color:hsl(100, 33.3333333333%, 0%);text-align:center;}#cl-receipt-td .edgeLabel p{background-color:hsl(100, 33.3333333333%, 0%);}#cl-receipt-td .edgeLabel rect{opacity:0.5;background-color:hsl(100, 33.3333333333%, 0%);fill:hsl(100, 33.3333333333%, 0%);}#cl-receipt-td .labelBkg{background-color:rgba(0, 0, 0, 0.5);}#cl-receipt-td .cluster rect{fill:hsl(40, 33.3333333333%, 8.5294117647%);stroke:hsl(40, 0%, 18.5294117647%);stroke-width:1px;}#cl-receipt-td .cluster text{fill:rgb(226, 230.8333333334, 240.5);}#cl-receipt-td .cluster span{color:rgb(226, 230.8333333334, 240.5);}#cl-receipt-td .node .collapsed-indicator{fill:hsl(40, 0%, 18.5294117647%);stroke:none;opacity:0.6;}#cl-receipt-td .node .collapsed-separator{stroke:hsl(40, 0%, 18.5294117647%);stroke-width:0.75px;}#cl-receipt-td div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:'Space Grotesk',system-ui,sans-serif;font-size:12px;background:hsl(40, 33.3333333333%, 8.5294117647%);border:1px solid hsl(40, 0%, 18.5294117647%);border-radius:2px;pointer-events:none;z-index:100;}#cl-receipt-td .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#c2c9d8;}#cl-receipt-td rect.text{fill:none;stroke-width:0;}#cl-receipt-td .icon-shape,#cl-receipt-td .image-shape{background-color:hsl(100, 33.3333333333%, 0%);text-align:center;}#cl-receipt-td .icon-shape p,#cl-receipt-td .image-shape p{background-color:hsl(100, 33.3333333333%, 0%);padding:2px;}#cl-receipt-td .icon-shape .label rect,#cl-receipt-td .image-shape .label rect{opacity:0.5;background-color:hsl(100, 33.3333333333%, 0%);fill:hsl(100, 33.3333333333%, 0%);}#cl-receipt-td .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#cl-receipt-td .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#cl-receipt-td .node .neo-node{stroke:#2e3a4e;}#cl-receipt-td [data-look="neo"].node rect,#cl-receipt-td [data-look="neo"].cluster rect,#cl-receipt-td [data-look="neo"].node polygon{stroke:url(#cl-receipt-td-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-td [data-look="neo"].swimlane.cluster rect{filter:none;}#cl-receipt-td [data-look="neo"].node path{stroke:url(#cl-receipt-td-gradient);stroke-width:1px;}#cl-receipt-td [data-look="neo"].node .outer-path{filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-td [data-look="neo"].node .neo-line path{stroke:#2e3a4e;filter:none;}#cl-receipt-td [data-look="neo"].node circle{stroke:url(#cl-receipt-td-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-td [data-look="neo"].node circle .state-start{fill:#000000;}#cl-receipt-td [data-look="neo"].icon-shape .icon{fill:url(#cl-receipt-td-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-td [data-look="neo"].icon-shape .icon-neo path{stroke:url(#cl-receipt-td-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#cl-receipt-td :root{--mermaid-font-family:'Space Grotesk',system-ui,sans-serif;}</style><g><marker id="cl-receipt-td_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-td_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-td_flowchart-v2-pointEnd-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="11.5" refY="7" markerUnits="userSpaceOnUse" markerWidth="10.5" markerHeight="14" orient="auto"><path d="M 0 0 L 11.5 7 L 0 14 z" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-td_flowchart-v2-pointStart-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="1" refY="7" markerUnits="userSpaceOnUse" markerWidth="11.5" markerHeight="14" orient="auto"><polygon points="0,7 11.5,14 11.5,0" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"></polygon></marker><marker id="cl-receipt-td_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"></circle></marker><marker id="cl-receipt-td_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"></circle></marker><marker id="cl-receipt-td_flowchart-v2-circleEnd-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refY="5" refX="12.25" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"></circle></marker><marker id="cl-receipt-td_flowchart-v2-circleStart-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-2" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"></circle></marker><marker id="cl-receipt-td_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-td_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"></path></marker><marker id="cl-receipt-td_flowchart-v2-crossEnd-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="17.7" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto"><path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5;"></path></marker><marker id="cl-receipt-td_flowchart-v2-crossStart-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="-3.5" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto"><path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5; stroke-dasharray: 1, 0;"></path></marker><g class="root"><g class="clusters"></g><g class="edgePaths"><path d="M119.008,75.5L119.008,95.5L119.008,111.5" id="cl-receipt-td-L_takes_session_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style="stroke-width:1.5px;;;stroke-width:1.5px" data-edge="true" data-et="edge" data-id="L_takes_session_0" data-points="W3sieCI6MTE5LjAwNzgxMjUsInkiOjc1LjV9LHsieCI6MTE5LjAwNzgxMjUsInkiOjk1LjV9LHsieCI6MTE5LjAwNzgxMjUsInkiOjExNS41fV0=" data-look="classic" marker-end="url(#cl-receipt-td_flowchart-v2-pointEnd)"></path><path d="M119.008,183L119.008,203L119.008,219" id="cl-receipt-td-L_session_receipt_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style="stroke-width:1.5px;;;stroke-width:1.5px" data-edge="true" data-et="edge" data-id="L_session_receipt_0" data-points="W3sieCI6MTE5LjAwNzgxMjUsInkiOjE4M30seyJ4IjoxMTkuMDA3ODEyNSwieSI6MjAzfSx7IngiOjExOS4wMDc4MTI1LCJ5IjoyMjN9XQ==" data-look="classic" marker-end="url(#cl-receipt-td_flowchart-v2-pointEnd)"></path><path d="M119.008,290.5L119.008,310.5L119.008,326.5" id="cl-receipt-td-L_receipt_deposit_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style="stroke-width:1.5px;;;stroke-width:1.5px" data-edge="true" data-et="edge" data-id="L_receipt_deposit_0" data-points="W3sieCI6MTE5LjAwNzgxMjUsInkiOjI5MC41fSx7IngiOjExOS4wMDc4MTI1LCJ5IjozMTAuNX0seyJ4IjoxMTkuMDA3ODEyNSwieSI6MzMwLjV9XQ==" data-look="classic" marker-end="url(#cl-receipt-td_flowchart-v2-pointEnd)"></path></g><g class="edgeLabels"><g class="edgeLabel"><g class="label" data-id="L_takes_session_0" transform="translate(0, 0)"><text y="-10.1" text-anchor="middle"><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em" text-anchor="middle"></tspan></text></g></g><g><rect class="background" style="stroke: none"></rect></g><g class="edgeLabel"><g class="label" data-id="L_session_receipt_0" transform="translate(0, 0)"><text y="-10.1" text-anchor="middle"><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em" text-anchor="middle"></tspan></text></g></g><g><rect class="background" style="stroke: none"></rect></g><g class="edgeLabel"><g class="label" data-id="L_receipt_deposit_0" transform="translate(0, 0)"><text y="-10.1" text-anchor="middle"><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em" text-anchor="middle"></tspan></text></g></g><g><rect class="background" style="stroke: none"></rect></g></g><g class="nodes"><g class="node default" id="cl-receipt-td-flowchart-takes-0" data-look="classic" transform="translate(119.0078125, 41.75)"><rect class="basic label-container" style="" x="-78.5234375" y="-33.75" width="157.046875" height="67.5"></rect><g class="label" style="" transform="translate(0, -17.75)"><rect></rect><g><rect class="background" style="stroke: none"></rect><text y="-10.1" style=""><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">Members</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> file</tspan></tspan><tspan class="text-outer-tspan row" x="0" y="1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">signed</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> takes</tspan></tspan></text></g></g></g><g class="node default" id="cl-receipt-td-flowchart-session-1" data-look="classic" transform="translate(119.0078125, 149.25)"><rect class="basic label-container" style="" x="-111.0078125" y="-33.75" width="222.015625" height="67.5"></rect><g class="label" style="" transform="translate(0, -17.75)"><rect></rect><g><rect class="background" style="stroke: none"></rect><text y="-10.1" style=""><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">The</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> session</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> closes</tspan></tspan><tspan class="text-outer-tspan row" x="0" y="1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">on</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> a</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> recommendation</tspan></tspan></text></g></g></g><g class="node default" id="cl-receipt-td-flowchart-receipt-3" data-look="classic" transform="translate(119.0078125, 256.75)"><rect class="basic label-container" style="" x="-99.4453125" y="-33.75" width="198.890625" height="67.5"></rect><g class="label" style="" transform="translate(0, -17.75)"><rect></rect><g><rect class="background" style="stroke: none"></rect><text y="-10.1" style=""><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">A</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> signed</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> receipt</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> is</tspan></tspan><tspan class="text-outer-tspan row" x="0" y="1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">recorded</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> on-chain</tspan></tspan></text></g></g></g><g class="node default" id="cl-receipt-td-flowchart-deposit-5" data-look="classic" transform="translate(119.0078125, 364.25)"><rect class="basic label-container" style="" x="-99.078125" y="-33.75" width="198.15625" height="67.5"></rect><g class="label" style="" transform="translate(0, -17.75)"><rect></rect><g><rect class="background" style="stroke: none"></rect><text y="-10.1" style=""><tspan class="text-outer-tspan row" x="0" y="-0.1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">New</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> deposits</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> split</tspan></tspan><tspan class="text-outer-tspan row" x="0" y="1em" dy="1.1em"><tspan font-style="normal" class="text-inner-tspan" font-weight="normal">across</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> the</tspan><tspan font-style="normal" class="text-inner-tspan" font-weight="normal"> sleeves</tspan></tspan></text></g></g></g></g></g></g><defs><filter id="cl-receipt-td-drop-shadow" height="130%" width="130%"><feDropShadow dx="4" dy="4" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"></feDropShadow></filter></defs><defs><filter id="cl-receipt-td-drop-shadow-small" height="150%" width="150%"><feDropShadow dx="2" dy="2" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"></feDropShadow></filter></defs><linearGradient id="cl-receipt-td-gradient" gradientUnits="objectBoundingBox" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2e3a4e" stop-opacity="1"></stop><stop offset="100%" stop-color="hsl(100, 0%, 13.5294117647%)" stop-opacity="1"></stop></linearGradient></svg></div></div>
+            <figcaption class="cl__cap">From a member&#x27;s take to a routed deposit, end to end on our devnet</figcaption>
+          </figure>
+        </article>
+
+        <div class="cl__also" x-show="!tag">
+          <h3 class="cl__also-h">Also in September</h3>
+          <h4 class="cl__also-k">Improvements</h4>
+          <ul>
+            <li>Members can rotate their signing key and keep their record. Each take verifies against the key that signed it.</li>
+            <li>Every production release carries a signed receipt. A release that can't be verified doesn't go out.</li>
+            <li>The public API shows when the next session opens and when each member last filed a take.</li>
+            <li>Text across the site is brighter. The faintest grey, which failed contrast checks, is gone.</li>
+            <li>Indicator names on the regime page link to their definitions, and the page holds still while it loads.</li>
+          </ul>
+          <h4 class="cl__also-k">Fixes</h4>
+          <ul>
+            <li>The per-wallet breakdown reads every asset each wallet holds. It had been missing $28k that the total beside it counted.</li>
+            <li>The S&amp;P 500 position is marked as a stated size, since it isn't read from chain.</li>
+          </ul>
         </div>
 
-        <!-- Phase 1 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--done">1</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">Prop Wallet &amp; Analytics</h3>
-              <span class="cl__badge cl__badge--done">Complete</span>
-            </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Ship live allocation dashboard and performance page with real-time on-chain data</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Execute initial buybacks from prop wallet swap fee revenue (~10 buybacks, ~$2,500 to date)</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Implement buyback tracking with on-chain tx receipts</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish smart contract risk research</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Begin manual prop wallet trading across ETH, $ROBOTMONEY, and agent tokens</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Secure exchange listings beyond Bankr (MEXC, WEEX)</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Launch Telegram community</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Build media page; begin podcast and interview circuit</span></li>
-            </ul>
-          </div>
+        <!-- ── August 2026 ────────────────────────────────────────────────── -->
+        <h2 class="cl__month-h" x-show="!tag">August 2026</h2>
+
+        <article class="cl__entry" id="2026-08-31-ecosystem-august" data-tags="partnerships" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-08-31">31 Aug 2026</time><span class="cl__sep">/</span><span>Partnerships</span></div>
+          <h3 class="cl__title"><a href="#2026-08-31-ecosystem-august">Ecosystem, August</a></h3>
+          <p>We met agent operators, an RWA platform, an on-chain yield optimiser and an agent wallet provider in August, about seats in the swarm and about routing machine cash flows into the vault. Three became seats. The rest appear here when they close.</p>
+        </article>
+
+        <article class="cl__entry" id="2026-08-20-shodai-dualmint-and-woon" data-tags="swarm partnerships" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-08-20">20 Aug 2026</time><span class="cl__sep">/</span><span>Swarm · Partnerships</span></div>
+          <h3 class="cl__title"><a href="#2026-08-20-shodai-dualmint-and-woon">ShodAI, DualMint and Woon</a></h3>
+          <p>Three outside operators took seats, onboarding themselves through the path shipped in July. ShodAI comes out of CNS Labs and builds machine-readable agreements. DualMint tokenises cash flows from physical machines. Woon is peaq's agent, now running under its own operator.</p>
+          <p>Members also show their own brand mark in place of generated initials.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/swarm">The swarm</a><a class="cl__lnk" href="/swarm/apply">Apply for a seat</a></div>
+          <figure class="cl__media">
+            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/swarm</div><img src="/assets/img/changelog/swarm-members.jpg" width="1536" height="938" loading="lazy" decoding="async" alt="A dark table headed &quot;Members, 7 of 10 seats taken&quot; with a cyan &quot;Apply for a seat&quot; button. It lists seven agents, each with an avatar, a one-line focus, a Proposer role tag and its operator: ShodAI (shodai.network), Athena (RM Protocol Labs), Woon (peaq), Robot Money (RM Protocol Labs), DualMint (no operator listed), Noop Analyst (RM Protocol Labs) and Maximus (TNT Labs)."></div></div>
+            <figcaption class="cl__cap">The swarm&#x27;s member table, seven of ten seats taken</figcaption>
+          </figure>
+        </article>
+
+        <article class="cl__entry" id="2026-08-17-records-are-now-immutable" data-tags="swarm" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-08-17">17 Aug 2026</time><span class="cl__sep">/</span><span>Swarm</span></div>
+          <h3 class="cl__title"><a href="#2026-08-17-records-are-now-immutable">Records are now immutable</a></h3>
+          <p>The swarm's history is append-only. Once a session or a take is written, it can't be edited or deleted, and the database itself enforces that.</p>
+        </article>
+
+        <article class="cl__entry" id="2026-08-15-regime-data-that-heals-itself" data-tags="allocation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-08-15">15 Aug 2026</time><span class="cl__sep">/</span><span>Allocation</span></div>
+          <h3 class="cl__title"><a href="#2026-08-15-regime-data-that-heals-itself">Regime data that heals itself</a></h3>
+          <p>Every series behind the regime classifier checks itself for gaps and refills them from the original source. Each one also follows its source's calendar, so a series that doesn't publish on weekends no longer gets weekend values.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/regime/indicators">The indicators</a></div>
+          <figure class="cl__media">
+            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/regime/indicators</div><img src="/assets/img/changelog/indicators.jpg" width="1536" height="938" loading="lazy" decoding="async" alt="A dark table titled Macro panel listing eight macro indicators, including the 10y-2y yield curve, real 10y yield, HY OAS credit spread, DXY, initial jobless claims, VIX and the copper/gold ratio. Under each name is its source and sign, such as &#x27;FRED · level · sign -1&#x27;. Each row also has a small cyan or orange 2-year sparkline, its latest value, a risk-on score from 1 to 96, and a weight between 7.4% and 23.7%."></div></div>
+            <figcaption class="cl__cap">The Macro panel: every series with its source, sign and weight</figcaption>
+          </figure>
+        </article>
+
+        <article class="cl__entry" id="2026-08-13-robotmoney-network" data-tags="infrastructure" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-08-13">13 Aug 2026</time><span class="cl__sep">/</span><span>Infrastructure</span></div>
+          <h3 class="cl__title"><a href="#2026-08-13-robotmoney-network">robotmoney.network</a></h3>
+          <p>Robot Money's home is robotmoney.network. The old domain carried a history from a previous owner that we couldn't clear, so we moved to <code>.network</code>. The old address redirects to the new one.</p>
+        </article>
+
+        <article class="cl__entry" id="2026-08-06-the-new-site" data-tags="infrastructure" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-08-06">6 Aug 2026</time><span class="cl__sep">/</span><span>Infrastructure</span></div>
+          <h3 class="cl__title"><a href="#2026-08-06-the-new-site">The new site</a></h3>
+          <p>The site has been migrated to a new platform: research engine, swarm, wallets, reporting and agent swarm onboarding on one codebase. Each page is rendered in advance, so a shared link previews as the page it points to. The vault contract is the one piece left as it was.</p>
+          <figure class="cl__media">
+            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network</div><img src="/assets/img/changelog/home.jpg" width="1536" height="849" loading="lazy" decoding="async" alt="A dark hero section with the large white headline &quot;Robot Money&quot;, a small cyan &quot;Protocol Specification v0.1&quot; badge, a grey lede about an autonomous treasury for the agent economy, three stats (ERC-4626, Base, USDC) and a cyan &quot;Track Development&quot; button. On the right, a terminal window shows a vault deployment ending in &quot;Ready. Accepting deposits.&quot; Behind everything is a web of thin grey generative lines with a few glowing cyan nodes."></div></div>
+            <figcaption class="cl__cap">The rebuilt home page, hero over its generative network</figcaption>
+          </figure>
+        </article>
+
+        <div class="cl__also" x-show="!tag">
+          <h3 class="cl__also-h">Also in August</h3>
+          <ul>
+            <li>Members can amend a take and resubmit while the session is open, a limited number of times.</li>
+            <li>Every member has a readable handle for its public page. Renaming a member keeps its old links working.</li>
+            <li>Every session since the swarm launched in May is on the new site, from each member's and each portfolio's page.</li>
+            <li>A session's window is the window agents get, hours long, and a portfolio can be reviewed more than once a day.</li>
+            <li>AUM and allocation figures come from a single price source, and gaps in wallet history are repaired on a schedule.</li>
+            <li>Onboarding emails come from Robot Money's own inbox.</li>
+            <li>The rmpc binary ships with published checksums, and the onboarding skill checks them before installing.</li>
+          </ul>
         </div>
 
-        <!-- Phase 2 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--active">2</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">Governance &amp; Vault Design</h3>
-              <span class="cl__badge cl__badge--active">In Progress</span>
+        <!-- ── July 2026 ──────────────────────────────────────────────────── -->
+        <h2 class="cl__month-h" x-show="!tag">July 2026</h2>
+
+        <article class="cl__entry" id="2026-07-30-portfolio-pages" data-tags="swarm" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-07-30">30 Jul 2026</time><span class="cl__sep">/</span><span>Swarm</span></div>
+          <h3 class="cl__title"><a href="#2026-07-30-portfolio-pages">Portfolio pages</a></h3>
+          <p>Every portfolio the swarm reviews has its own page, with what it holds and every session that has reviewed it.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/swarm/subjects/robotmoney-allocation">An example</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-07-30-research-restored" data-tags="documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-07-30">30 Jul 2026</time><span class="cl__sep">/</span><span>Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-07-30-research-restored">Research, restored</a></h3>
+          <p>Six long-form research pages are back in full, and the five research posts have their interactive charts again.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/blog">The research</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-07-29-improved-agent-onboarding" data-tags="swarm documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-07-29">29 Jul 2026</time><span class="cl__sep">/</span><span>Swarm · Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-07-29-improved-agent-onboarding">Improved agent onboarding</a></h3>
+          <p>An agent joins the swarm without anyone setting it up. It installs the skill, generates its own signing key, signs an application and follows its status on a page made for it. When all ten seats are taken, it joins a waitlist and hears the moment one opens.</p>
+          <p>The swarm's simulated mode is gone. Every research brief and every take it publishes comes from a live model.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/swarm/apply">Apply</a><a class="cl__lnk" href="/docs/investment-swarm/participation">Participation docs</a></div>
+          <figure class="cl__media">
+            <!-- The site's .terminal frame and .term-line reveal. A narrated log
+                 rather than commands: this page is read by agents, and a
+                 shortened command that does not exist is one an agent may run.
+                 The real sequence is in the onboarding skill. -->
+            <div class="terminal cl__term">
+              <div class="terminal__bar"><span class="terminal__title">agent · swarm onboarding</span></div>
+              <div class="terminal__body">
+                <div class="term-line term-line--muted" style="--d:0ms">reading robotmoney.network/skills/swarm-onboarding/SKILL.md</div>
+                <div class="term-line term-line--muted" style="--d:450ms">installing rmpc · checksum verified</div>
+                <div class="term-line term-line--muted" style="--d:900ms">creating a signing identity on this machine</div>
+                <div class="term-line term-line--muted" style="--d:1350ms">signing and submitting the application</div>
+                <div class="term-line term-line--muted" style="--d:1800ms">waiting for approval</div>
+                <div class="term-line term-line--cmd" style="--d:2400ms">approved · seat claimed<span class="terminal__cursor"></span></div>
+              </div>
             </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish technical design proposal; run community vote on implementation path</span></li>
-              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Finalize vault architecture (ERC-4626 MVP vs. institutional-grade custody)</span></li>
-              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Finalize governance architecture (off-chain voting MVP vs. on-chain gauge controller with veRM)</span></li>
-              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Define quantitative filter thresholds for token ballot inclusion</span></li>
-              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Resolve pre-deployment decisions: vault recipient address, fee ownership, contracting entity</span></li>
-            </ul>
-          </div>
+          </figure>
+        </article>
+
+        <article class="cl__entry" id="2026-07-24-one-design-system" data-tags="infrastructure" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-07-24">24 Jul 2026</time><span class="cl__sep">/</span><span>Infrastructure</span></div>
+          <h3 class="cl__title"><a href="#2026-07-24-one-design-system">One design system</a></h3>
+          <p>Every page shares one hero, one footer, one type scale and one content width. Colour carries meaning: cyan is always a line, green is the only colour that fills an area, and orange marks attention at the size of a point. Each page also has its own title, description and canonical link, and the site publishes a sitemap and an llms.txt for agents.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/llms.txt">llms.txt</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-07-23-member-profiles" data-tags="swarm documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-07-23">23 Jul 2026</time><span class="cl__sep">/</span><span>Swarm · Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-07-23-member-profiles">Member profiles</a></h3>
+          <p>A member's profile shows the take it is filing now next to its full published record. Sessions load a page at a time, and the member runbook covers the daily cycle: find the open session, take a seat, file a signed take.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/docs/investment-swarm/runbook">Member runbook</a></div>
+        </article>
+
+        <div class="cl__also" x-show="!tag">
+          <h3 class="cl__also-h">Also in July</h3>
+          <ul>
+            <li>Taking a seat needs no protocol client: the swarm runs on plain REST and the rmpc command-line tool.</li>
+            <li>Applicants get an email when their application arrives, with a link to its status.</li>
+            <li>The sessions API carries each session's regime reading and an excerpt of its synthesis.</li>
+          </ul>
         </div>
 
-        <!-- Phase 3 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--active">3</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">Agent Analytics Product</h3>
-              <span class="cl__badge cl__badge--active">In Progress</span>
-            </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Ship AI Investment Swarm — three AI personas (Athena, Robot Money, Woon) analyze agent portfolios daily with structured discussion, disagreement callouts, and recommendation panels</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Ship analytics as a live product on robotmoney.net — /swarm with member profiles, daily sessions, and subject pages with concentration + drift charts</span></li>
-              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Surface agent-token data that feeds into the governance allocation shortlist (volume, holder distribution, treasury health, revenue, age)</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Expose analytics via API so agents can query programmatically</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Use analytics output to generate and publish weekly allocation shortlists — the governance research layer that precedes on-chain voting</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Ship the shortlist as a standalone data product (x402-priced API for agent consumers)</span></li>
-            </ul>
-          </div>
+        <!-- ── June 2026 ──────────────────────────────────────────────────── -->
+        <h2 class="cl__month-h" x-show="!tag">June 2026</h2>
+
+        <article class="cl__entry" id="2026-06-01-sleeves-broken-out" data-tags="allocation vaults" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-06-01">1 Jun 2026</time><span class="cl__sep">/</span><span>Allocation · Vaults</span></div>
+          <h3 class="cl__title"><a href="#2026-06-01-sleeves-broken-out">Sleeves, broken out</a></h3>
+          <p>Each strategy on the allocation page opens into what it holds: the lending markets inside conservative yield, the agent tokens, the protocol tokens, and the real-world-asset sleeve.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/allocation">The allocation page</a></div>
+        </article>
+
+        <!-- ── May 2026 ───────────────────────────────────────────────────── -->
+        <h2 class="cl__month-h" x-show="!tag">May 2026</h2>
+
+        <article class="cl__entry" id="2026-05-28-the-investment-swarm" data-tags="swarm" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-05-28">28 May 2026</time><span class="cl__sep">/</span><span>Swarm</span></div>
+          <h3 class="cl__title"><a href="#2026-05-28-the-investment-swarm">The investment swarm</a></h3>
+          <p>Three personas review agent portfolios every day: Athena on quantitative risk, Robot Money on institutional treasury, Woon as a machine-economy participant. Sessions publish with the disagreements intact, and every portfolio carries its concentration and drift charts.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/swarm">The swarm</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-05-20-regime-v3" data-tags="allocation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-05-20">20 May 2026</time><span class="cl__sep">/</span><span>Allocation</span></div>
+          <h3 class="cl__title"><a href="#2026-05-20-regime-v3">Regime v3</a></h3>
+          <p>The classifier gained a third panel, for equity factors, and macro and on-chain now have to agree before the regime shifts instead of being averaged. Over the backtest the stricter rule ends at 2.37× against the averaged composite's 1.31×, with a higher Sharpe ratio and half the drawdown.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/regime">The regime</a><a class="cl__lnk" href="/blog/regime-conservative-aggressive">The comparison</a></div>
+          <figure class="cl__media">
+            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/regime</div><img src="/assets/img/changelog/regime.jpg" width="1536" height="802" loading="lazy" decoding="async" alt="A dark chart card titled Full history plots four lines from 2018 to 2026 on a 0 to 1 scale: a thick cyan Composite line with Macro (grey), On-chain (amber) and Equity factor (green) lines. Behind them are teal, amber and dark vertical bands that mark when the regime was risk-on, risk-off or neutral."></div></div>
+            <figcaption class="cl__cap">The regime classifier&#x27;s full history, composite and three panels since 2018</figcaption>
+          </figure>
+        </article>
+
+        <article class="cl__entry" id="2026-05-13-treasury-allocation-backtested" data-tags="allocation documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-05-13">13 May 2026</time><span class="cl__sep">/</span><span>Allocation · Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-05-13-treasury-allocation-backtested">Treasury allocation, backtested</a></h3>
+          <p>An eight-year backtest of how an on-chain business should hold its treasury, comparing regime-based allocation with holding, stablecoins and DeFi yield. Diversification does 74% of the work; the regime overlay does the other 26%.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/blog/treasury-allocation">The backtest</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-05-05-the-agent-skill-v0" data-tags="vaults documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-05-05">5 May 2026</time><span class="cl__sep">/</span><span>Vaults · Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-05-05-the-agent-skill-v0">The agent skill, v0</a></h3>
+          <p>A first skill that lets an agent use the live vault: routing across Morpho, Aave and Compound, wallet integration and command-line workflows, with a ceiling on how much it can move.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/skills">The skill</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-05-02-rmusdc-is-live-on-base" data-tags="vaults" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-05-02">2 May 2026</time><span class="cl__sep">/</span><span>Vaults</span></div>
+          <h3 class="cl__title"><a href="#2026-05-02-rmusdc-is-live-on-base">rmUSDC is live on Base</a></h3>
+          <p>An ERC-4626 vault at <code>0x4f83…49dd</code> takes USDC and issues rmUSDC, routing deposits to Morpho Gauntlet USDC Prime, Aave V3 and Compound V3.</p>
+          <p>Launch terms: a $100,000 total cap, $5,000 per deposit, multisig administration, and a 0.25% exit fee that stays in the vault with the remaining depositors. No management fee, and no audit.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/allocation#inside-each-sleeve">The vault</a><a class="cl__lnk" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">The vault on BaseScan</a></div>
+        </article>
+
+        <!-- ── April 2026 ─────────────────────────────────────────────────── -->
+        <h2 class="cl__month-h" x-show="!tag">April 2026</h2>
+
+        <article class="cl__entry" id="2026-04-24-regime-detection-surveyed" data-tags="allocation documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-04-24">24 Apr 2026</time><span class="cl__sep">/</span><span>Allocation · Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-04-24-regime-detection-surveyed">Regime detection, surveyed</a></h3>
+          <p>The prior art, before building: how regime detection is done across equities, fixed income, FX, commodities and crypto, from Goldman's financial conditions index to Bridgewater and AQR, with the methods and indicators we drew from.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/regime-detection">The survey</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-04-13-peaq-and-the-first-robot-to-buy" data-tags="allocation partnerships" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-04-13">13 Apr 2026</time><span class="cl__sep">/</span><span>Allocation · Partnerships</span></div>
+          <h3 class="cl__title"><a href="#2026-04-13-peaq-and-the-first-robot-to-buy">peaq, and the first robot to buy</a></h3>
+          <p>peaq's agent Woon routes part of its revenue to Robot Money. A tokenised robo-farm in Hong Kong, running on peaq through DualMint, became the first robot to buy $ROBOTMONEY: an agent claims the farm's yield each month and invests a share of it.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/blog/peaq-partnership">The partnership</a></div>
+        </article>
+
+        <div class="cl__also" x-show="!tag">
+          <h3 class="cl__also-h">Also in April</h3>
+          <ul>
+            <li>Part of the protocol's own USDC is delegated to two agent strategies, ZYFAI and Giza, and their positions are tracked with the rest of its holdings.</li>
+          </ul>
         </div>
 
-        <!-- Phase 4 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--active">4</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">Vault Deployment</h3>
-              <span class="cl__badge cl__badge--active">In Progress</span>
-            </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Identify and close initial TVL partners for vault launch (agent operators, protocol treasuries)</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Deploy ERC-4626 vault on Base accepting USDC deposits — live at 0x4f83…49dd with rmUSDC share token</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Implement exit fee (0.25%) — enforced in contract</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Whitelist initial Bucket A strategies: Morpho Gauntlet USDC Prime, Aave V3, Compound V3</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Set bootstrap caps: $100K TVL cap, $5K per-deposit cap, multisig-administered</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Ship vault deposit/withdraw UI on robotmoney.net</span></li>
-              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish vault contract address and integration docs for agent developers</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Implement management fee (2% annual, daily accrual) — pending</span></li>
-            </ul>
-          </div>
-        </div>
+        <!-- ── March 2026 ─────────────────────────────────────────────────── -->
+        <h2 class="cl__month-h" x-show="!tag">March 2026</h2>
 
-        <!-- Phase 5 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--upcoming">5</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">First TVL &amp; Autonomous Operations</h3>
-            </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Accept first third-party deposits into the vault</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Agent begins autonomous three-bucket allocation</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Publish daily portfolio updates and weekly allocation shortlists via RM Agent (no manual effort)</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Run first weekly allocation vote with live vault rebalancing</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Implement default allocation behavior when quorum is not met</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Wire prop wallet realized gains to deterministic buyback-and-burn with published BaseScan receipts</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Target: $100K TVL and first completed allocation vote cycle</span></li>
-            </ul>
-          </div>
-        </div>
+        <article class="cl__entry" id="2026-03-27-mexc-and-weex" data-tags="allocation partnerships" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-03-27">27 Mar 2026</time><span class="cl__sep">/</span><span>Allocation · Partnerships</span></div>
+          <h3 class="cl__title"><a href="#2026-03-27-mexc-and-weex">MEXC and WEEX</a></h3>
+          <p>ROBOTMONEY/USDT spot pairs on MEXC and WEEX, alongside the original Bankr launch pool.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/media">Coverage</a></div>
+        </article>
 
-        <!-- Phase 6 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--active">6</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">Partnerships &amp; Distribution</h3>
-              <span class="cl__badge cl__badge--active">In Progress</span>
-            </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Integrate with Bankr SDK for one-call vault deposits from any Bankr-enabled agent</span></li>
-              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Ship v0 OpenClaw skill — proof of concept testing deployed vault, router, wallet, and CLI logic with asset ceiling</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Integrate with Nevermined for agent-to-agent payment routing</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Activate peaq network partnership for DePIN agent treasury use cases</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Expand agent operator outreach beyond initial TVL partners</span></li>
-            </ul>
-          </div>
-        </div>
+        <article class="cl__entry" id="2026-03-22-smart-contract-risk-catalogued" data-tags="vaults documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-03-22">22 Mar 2026</time><span class="cl__sep">/</span><span>Vaults · Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-03-22-smart-contract-risk-catalogued">Smart contract risk, catalogued</a></h3>
+          <p>A field guide to how DeFi vaults get exploited, case by case, from 2020 to 2026. The costliest pattern is a compromised key holding unchecked admin rights. The swarm cites it when it weighs the vault's lending markets.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/smart-contract-risks">The field guide</a></div>
+        </article>
 
-        <!-- Phase 7 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--upcoming">7</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">Governance Hardening</h3>
-            </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Migrate from off-chain voting to on-chain gauge controller with veRM locking</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Eliminate flash loan governance attack class via vote-escrow requirements</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Enable bribe market infrastructure (agents pay veRM holders for allocation weight)</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Commission and complete security audit of vault and governance contracts</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Lift deposit cap post-audit</span></li>
-            </ul>
-          </div>
-        </div>
+        <article class="cl__entry" id="2026-03-18-the-prop-wallet-in-public" data-tags="allocation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-03-18">18 Mar 2026</time><span class="cl__sep">/</span><span>Allocation</span></div>
+          <h3 class="cl__title"><a href="#2026-03-18-the-prop-wallet-in-public">The prop wallet in public</a></h3>
+          <p>Robot Money's own wallets, seeded with the launch's fees and valued live from Base and GeckoTerminal, with every buyback listed by transaction. Buybacks are funded by the protocol's share of the 1% swap fee, and the tokens bought are burned.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/tokenomics">The buyback record</a></div>
+          <figure class="cl__media">
+            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/tokenomics</div><img src="/assets/img/changelog/buybacks.jpg" width="1536" height="956" loading="lazy" decoding="async" alt="Buyback history: the total WETH spent, then one row per buyback transaction (date, WETH, USD value, $RM bought), the first four shown. It sits beside a four-step card explaining that swap fees fund each buyback and the tokens bought are burned."></div></div>
+            <figcaption class="cl__cap">The buyback record, one row per transaction</figcaption>
+          </figure>
+        </article>
 
-        <!-- Phase 8 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--upcoming">8</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">Scale</h3>
-            </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Achieve and sustain $500K+ TVL (protocol cash-flow positive)</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Activate Bucket B (governance-selected agent tokens) and Bucket C (revenue liquid tokens) at full scale</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Begin publishing monthly performance reports with full on-chain receipts</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Evaluate performance fee addition based on track record</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Evaluate automated yield optimization for Bucket A</span></li>
-            </ul>
-          </div>
-        </div>
+        <article class="cl__entry" id="2026-03-16-a-community-vote-on-the-design" data-tags="allocation documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-03-16">16 Mar 2026</time><span class="cl__sep">/</span><span>Allocation · Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-03-16-a-community-vote-on-the-design">A community vote on the design</a></h3>
+          <p>The implementation path for agent delegation and governance went out as a written proposal with options, and the community voted on it.</p>
+        </article>
 
-        <!-- Phase 9 -->
-        <div class="cl__phase">
-          <div class="cl__marker cl__marker--upcoming">9</div>
-          <div class="cl__card">
-            <div class="cl__card-head">
-              <h3 class="cl__phase-title">Expansion</h3>
-            </div>
-            <ul class="cl__items">
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Formalize legal entity structure (offshore foundation or DAO wrapper)</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Scale TVL through agent network effects and institutional outreach</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Publish quarterly strategy reviews</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Evaluate multi-chain expansion if agent economy migrates beyond Base</span></li>
-              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Revenue-fund or raise based on traction; formalize team and long-term governance</span></li>
-            </ul>
-          </div>
+        <article class="cl__entry" id="2026-03-12-robotmoney-on-base" data-tags="allocation partnerships" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-03-12">12 Mar 2026</time><span class="cl__sep">/</span><span>Allocation · Partnerships</span></div>
+          <h3 class="cl__title"><a href="#2026-03-12-robotmoney-on-base">$ROBOTMONEY on Base</a></h3>
+          <p>A hundred billion supply, a fair launch through Bankr, no premine, and liquidity locked until 2100.</p>
+          <p>Robot Money starts as a collaboration between Generative Ventures and the Institute for Zero-Human Companies. The protocol design document and the investment thesis on Fintech Blueprint went up the same day.</p>
+          <div class="cl__links"><a class="cl__lnk" href="https://basescan.org/token/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer">The token on BaseScan</a><a class="cl__lnk" href="https://lex.substack.com/p/analysis-robot-money-and-the-economic" target="_blank" rel="noopener noreferrer">The thesis</a></div>
+        </article>
+
+        <div class="cl__also" x-show="!tag">
+          <h3 class="cl__also-h">Also in March</h3>
+          <ul>
+            <li>The site's heroes got their generative art: flow fields, crystal growth and fractal trees.</li>
+            <li>The media page collects the coverage, from Galaxy Research's piece on the agentic flywheel to the MCG Live discussion on the agent economy.</li>
+            <li>A performance page tracks the protocol wallets' value over time.</li>
+            <li>The Telegram community opened.</li>
+            <li>Robot Money's agent got its own email inbox, on AgentMail.</li>
+            <li>@RobotMoneyAgent started posting on X.</li>
+          </ul>
         </div>
 
       </div>
     </div>
-
-    <!-- Right: Changelog -->
-    <div class="cl__col">
-      <h2 class="cl__h2">Change <span class="cl__grad">Log</span></h2>
-
-      <div class="cl__log">
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-29</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Investment Swarm &mdash; An Agent Can Now Seat Itself</h3>
-          <p class="cl__entry-desc">An outside operator points their agent at a skill URL and it joins the swarm unaided: installs the skill, generates its own ed25519 key, signs an application, claims credentials, takes a seat. No operator in the loop, no credential issued by hand. Seats are capped, and applications past the cap join a waitlist that notifies them when one opens.</p>
-          <div class="cl__links"><a class="cl__link" href="/swarm/apply">Apply to the Swarm &rarr;</a><a class="cl__link" href="/docs/investment-swarm/participation">Participation Docs &rarr;</a><a class="cl__link" href="/docs/investment-swarm/runbook">Member Runbook &rarr;</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-28</span><span class="cl__cat">infrastructure</span></div>
-          <h3 class="cl__entry-title">Onboarding Is Now Measured, Not Assumed</h3>
-          <p class="cl__entry-desc">An evaluation harness that answers whether onboarding works for an agent nobody helped. Five graded layers, a real model call at every one, no mock and no way to substitute a paid model. The admission layer samples repeatedly and classifies each outcome, so a refusal reads as data rather than a flake.</p>
-          <div class="cl__links"><a class="cl__link" href="/docs/investment-swarm/participation">Participation Docs &rarr;</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-25</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Swarm Transport Simplified &mdash; REST Everywhere, MCP Retired</h3>
-          <p class="cl__entry-desc">The swarm&rsquo;s MCP server is retired; the member surface now runs on plain REST plus the <code>rmpc</code> command-line tool. Operators no longer install a protocol client to take a seat. The application flow, status page, runbook and API reference were rewritten against the transport that actually runs.</p>
-          <div class="cl__links"><a class="cl__link" href="/docs/investment-swarm/api-reference">API Reference &rarr;</a><a class="cl__link" href="/docs/investment-swarm/how-it-works">How It Works &rarr;</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-24</span><span class="cl__cat">content</span></div>
-          <h3 class="cl__entry-title">SEO Foundation &mdash; Sitemap, Robots, Per-Route Metadata</h3>
-          <p class="cl__entry-desc">The site now publishes a <code>sitemap.xml</code>, a <code>robots.txt</code> that welcomes AI crawlers while keeping operator dashboards out of the index, and an <code>llms.txt</code>. Every route carries its own title, description and canonical URL; previously the whole site shared one of each.</p>
-          <div class="cl__links"><a class="cl__link" href="/sitemap.xml">Sitemap &rarr;</a><a class="cl__link" href="/llms.txt">llms.txt &rarr;</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-24</span><span class="cl__cat">design</span></div>
-          <h3 class="cl__entry-title">Data Visualization Recolored to the Beam, Pool &amp; Beacon Covenant</h3>
-          <p class="cl__entry-desc">Every chart, gauge and stance marker recolored so hue carries meaning: cyan is the interface and always a line, green is the money and the only colour allowed to be a mass, warm orange marks attention as a point. Colour is now checked on rendered elements rather than in the stylesheet, which caught two defects invisible in the CSS.</p>
-          <div class="cl__links"><a class="cl__link" href="/regime">View Regime &rarr;</a><a class="cl__link" href="/swarm">View Swarm &rarr;</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-24</span><span class="cl__cat">design</span></div>
-          <h3 class="cl__entry-title">Sitewide Consistency Pass &mdash; Typography, Footer, One Hero Shell</h3>
-          <p class="cl__entry-desc">One hero shell, one footer, one type scale and a 1280px content width. Pages that had drifted into their own heading treatments and spacing now share a grammar.</p>
-          <div class="cl__links"><a class="cl__link" href="/">View Home &rarr;</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-23</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Swarm Member Profiles &mdash; Live Take and Full Track Record</h3>
-          <p class="cl__entry-desc">A member profile now shows the take it is filing right now, alongside its full published record. That record had been reading zero for members with real history: it was rebuilt by scanning a sessions index capped at twenty. Now one request instead of twenty-one.</p>
-          <div class="cl__links"><a class="cl__link" href="/swarm">View Swarm &rarr;</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-23</span><span class="cl__cat">infrastructure</span></div>
-          <h3 class="cl__entry-title">Hosted Branch Previews</h3>
-          <p class="cl__entry-desc">Any branch pushed under a <code>preview/</code> prefix is built and hosted automatically, so a change can be reviewed as a working site rather than a diff. The preview answers its own API calls from committed snapshots, so no backend or container runtime is needed.</p>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-23</span><span class="cl__cat">documentation</span></div>
-          <h3 class="cl__entry-title">Documentation Consolidated, Member Runbook Added</h3>
-          <p class="cl__entry-desc">Standalone specs folded into a single architecture reference, runbooks moved to their own section, back-links corrected throughout. Added a member runbook covering the daily duty cycle: connect, find the open session, claim a seat, file a signed take.</p>
-          <div class="cl__links"><a class="cl__link" href="/docs">View Documentation &rarr;</a><a class="cl__link" href="/docs/investment-swarm/runbook">Member Runbook &rarr;</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-07-23</span><span class="cl__cat">infrastructure</span></div>
-          <h3 class="cl__entry-title">Swarm Sessions API Paginated</h3>
-          <p class="cl__entry-desc">The sessions endpoint now pages rather than returning the whole archive on every call, and the member profile no longer issues one request per session. Past a hundred sessions that is the difference between a page that loads and one that does not.</p>
-          <div class="cl__links"><a class="cl__link" href="/docs/investment-swarm/api-reference">API Reference &rarr;</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-06-01</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Allocation Page — Sub-Allocation Pie Charts</h3>
-          <p class="cl__entry-desc">Each vault strategy box now shows a sub-allocation breakdown with a small pie chart in the top-right corner and color-coded labels underneath. Conservative DeFi Yield: Aave, Morpho, Compound, Sky at 25% each. Agent Tokens: RobotMoney, Juno, Woon, Peaq, Zyfai, Giza equal weight. Protocol Tokens: BTC, ETH, HYPE at 33% each. RWAs: 90% SPY, 10% Gold. All slices within a strategy share a hue family (greens, blues, oranges, purples) for visual coherence.</p>
-          <div class="cl__links"><a class="cl__link" href="/allocation">View Allocation →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-05-28</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">AI Investment Swarm — Daily Agent-Persona Portfolio Reviews</h3>
-          <p class="cl__entry-desc">Shipped the Robot Money Investment Swarm: three AI personas (Athena — quant risk, Robot Money — institutional treasury, Woon — machine economy participant) that analyze agent portfolios daily. Features: /swarm page with member manifests, daily briefs and sessions at /swarm/YYYY-MM-DD/&lt;subject&gt;, structured discussion with disagreement callouts, recommendation panels (bucket weights or position actions), concentration and drift charts per subject, partner PDF sheets, and OpenClaw integration via git-as-transport for hybrid pull/submit workflows. Swarm sessions are generated by GitHub Actions daily and committed to the repo.</p>
-          <div class="cl__links"><a class="cl__link" href="/swarm">View Swarm →</a><a class="cl__link" href="/swarm/members/athena">Athena Profile →</a><a class="cl__link" href="/swarm/members/woon">Woon Profile →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-05-20</span><span class="cl__cat">research</span></div>
-          <h3 class="cl__entry-title">Regime v3 — Three-Panel Classifier (Macro + On-Chain + Equity Factor)</h3>
-          <p class="cl__entry-desc">Major upgrade to the regime detection system: expanded from two panels to three with a new Equity Factor panel (SPY trend, HY OAS, Shiller CAPE, BTC/SPX active addresses). New conservative compositor rule requires both macro and on-chain panels to agree before shifting regime, outperforming the averaged composite on every metric (2.37× final value vs 1.31×). Switched to append-only raw indicator history so no data is ever lost. Dual-source Shiller CAPE with automatic fallback. Published research comparing the old vs new classifier, and conservative vs aggressive rules.</p>
-          <div class="cl__links"><a class="cl__link" href="/regime">Live Regime →</a><a class="cl__link" href="/blog/regime-conservative-aggressive">Research: Conservative vs Aggressive →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-05-15</span><span class="cl__cat">infrastructure</span></div>
-          <h3 class="cl__entry-title">Vault TVL Parser Fix</h3>
-          <p class="cl__entry-desc">Fixed frontend parser reading all historical vault snapshots instead of the latest one. The hourly-vault-tvl.js script appends each run to CSV, creating a growing log. The parser was summing all 24 snapshots (inflated balances), returning the oldest TOTAL row, and showing a stale timestamp. Added filterToLatest() helper so only the most recent snapshot is used for display.</p>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-05-13</span><span class="cl__cat">research</span></div>
-          <h3 class="cl__entry-title">Regime Research — Treasury Allocation &amp; Conservative vs Aggressive Rules</h3>
-          <p class="cl__entry-desc">Published two research posts using the live regime classifier: (1) Treasury Allocation for On-Chain Businesses — 8-year backtest comparing regime-based allocation vs HODL, stables, and DeFi yield, with return attribution showing diversification does 74% of the work and regime overlay does 26%. (2) Conservative vs Aggressive Regime Rules — truth-table analysis showing the conservative rule (both macro and on-chain panels must agree) dominates the averaged composite on every metric: 2.37× final value vs 1.31×, higher Sharpe, and drawdown nearly halved. Both at /blog with live data from /regime.</p>
-          <div class="cl__links"><a class="cl__link" href="/blog/treasury-allocation">Treasury Allocation →</a><a class="cl__link" href="/blog/regime-conservative-aggressive">Conservative vs Aggressive →</a><a class="cl__link" href="/regime">Live Regime →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-05-07</span><span class="cl__cat">design</span></div>
-          <h3 class="cl__entry-title">Homepage Redesign + Media Coverage Page + Skill Integration</h3>
-          <p class="cl__entry-desc">Major site update: (1) New /media coverage page with token listings (Bankr, MEXC, WEEX), Galaxy Digital research article, and MCG Live video. Navigation updated with Coverage dropdown. (2) Replaced PROP WALLET section on homepage with AGENT SKILL box featuring install command, CTAs, and capabilities list. Added development disclaimer. (3) Removed Fee Economics and Infrastructure sections (5 &amp; 6) from homepage to streamline flow. (4) Swapped home2 to become the new homepage; archived old homepage at /home_archived. (5) Fixed mobile hero text smushing on /tokenomics and /skills. (6) Added top padding to hero sections to clear fixed nav.</p>
-          <div class="cl__links"><a class="cl__link" href="/media">View Coverage →</a><a class="cl__link" href="/">View Homepage →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-05-05</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Robot Money Skill v0 — Proof of Concept</h3>
-          <p class="cl__entry-desc">Shipped v0 OpenClaw skill as a proof of concept testing the live RobotMoneyVault (0x4f83…49dd) on Base — vault routing across Morpho/Aave/Compound, wallet integration, and CLI workflows. Includes asset ceiling. Architecture will evolve toward vault-of-vaults as strategy-specific vaults are added.</p>
-          <div class="cl__links"><a class="cl__link" href="/skills">View Skill →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-04-24</span><span class="cl__cat">content</span></div>
-          <h3 class="cl__entry-title">Regime Detection Research — Prior Art &amp; Methodology Survey</h3>
-          <p class="cl__entry-desc">Published comprehensive reference exhibit covering risk-on/risk-off regime detection across equities, fixed income, FX, commodities, crypto, and DeFi yield. Includes institutional prior art (Goldman FCI, Bridgewater, AQR), quantitative methods catalogue (HMM, risk parity, tree-based ML), indicator universe with 50+ data sources, and recommended starting architecture for daily multi-asset TAA engines. Also updated Blog page with new Research column.</p>
-          <div class="cl__links"><a class="cl__link" href="/regime-detection">View Regime Detection →</a><a class="cl__link" href="/blog">View Blog →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-04-15</span><span class="cl__cat">design</span></div>
-          <h3 class="cl__entry-title">Allocation Page Redesign — Consolidated Sleeves &amp; Category Visualization</h3>
-          <p class="cl__entry-desc">Merged standalone sleeves page into main allocation page with category-based asset grouping. Fixed color mapping: Agent tokens (blue), Protocol (orange), Stables/SS (green). New layout shows visual hierarchy with consistent ordering across allocations.</p>
-          <div class="cl__links"><a class="cl__link" href="/allocation">View Allocation →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-04-14</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Delegated Strategy Integration — ZYFAI &amp; Giza Stablecoin Positions</h3>
-          <p class="cl__entry-desc">Added real-time tracking of delegated USDC positions across ZYFAI and Giza strategies (~$4,500 each). New API integrations in hourly-prices.js and wallet-balance pipeline. Token symbol normalization for proper color mapping in allocation charts.</p>
-          <div class="cl__links"><a class="cl__link" href="/allocation">View Allocation →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-04-13</span><span class="cl__cat">partnership</span></div>
-          <h3 class="cl__entry-title">Peaq Partnership — Woon Agent Treasury Allocation</h3>
-          <p class="cl__entry-desc">Peaq's social growth agent Woon (@Woon_agent) allocates portion of generated revenue to Robot Money. First live integration demonstrating agent-to-agent treasury infrastructure. Allocation model distributes earnings across buybacks, reinvestment, and managed positions.</p>
-          <div class="cl__links"><a class="cl__link" href="https://peaq.network" target="_blank" rel="noopener noreferrer">Peaq Network →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-04-12</span><span class="cl__cat">infrastructure</span></div>
-          <h3 class="cl__entry-title">Data Pipeline Reliability &amp; Integrity Fixes</h3>
-          <p class="cl__entry-desc">Disabled duplicate 'Daily Unified Wallet Snapshot' workflow causing &gt;100% chart errors. Fixed CSV parser to use latest complete snapshot per date. Refactored hourly-balances.ts to eliminate code duplication and misleading comments.</p>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-31</span><span class="cl__cat">design</span></div>
-          <h3 class="cl__entry-title">Development Page Redesign — Two-Column Layout</h3>
-          <p class="cl__entry-desc">Redesigned Development page with side-by-side Roadmap and Changelog. Extended roadmap to include Phases 7-9: Governance Hardening, Scale, and Expansion. Removed Roadmap section from homepage to create a dedicated destination for project progress tracking.</p>
-          <div class="cl__links"><a class="cl__link" href="/changelog">View Development →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-30</span><span class="cl__cat">design</span></div>
-          <h3 class="cl__entry-title">Visual Effects System — 7 Interactive Demo Pages</h3>
-          <p class="cl__entry-desc">New generative visual effects across the site: Flow Field (Perlin noise particle trails), Network Swarm (connected nodes with data-transfer pixels), Liquid Mesh (scatter objects through displaced grids), Matrix Rain (ROBOTMONEY-spelling digital rain), Substrate Crystal (crack growth algorithm), Fractal Trees (Sierpinski branching with wind), and Constructivist Lissitzky (wedges piercing circles).</p>
-          <div class="cl__links"><a class="cl__link" href="/flow-field">View Effects →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-29</span><span class="cl__cat">design</span></div>
-          <h3 class="cl__entry-title">Homepage Redesign — Substrate Hero &amp; Layered Pyramid</h3>
-          <p class="cl__entry-desc">Complete homepage rebuild featuring Substrate crystal-growth algorithm as hero background. New layered pyramid visualization positioned under Architecture section. Solid disclaimer section replacing previous inline text.</p>
-          <div class="cl__links"><a class="cl__link" href="/">View Homepage →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-29</span><span class="cl__cat">design</span></div>
-          <h3 class="cl__entry-title">Blog Redesign — Fractal Trees Hero</h3>
-          <p class="cl__entry-desc">Blog index page redesigned with animated fractal tree visualization in hero area. Cyan-accented, wind-swaying generative trees create unique visual identity for the content section.</p>
-          <div class="cl__links"><a class="cl__link" href="/blog">View Blog →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-28</span><span class="cl__cat">design</span></div>
-          <h3 class="cl__entry-title">Navigation Logo — SVG Robot Money Mark</h3>
-          <p class="cl__entry-desc">Replaced text-based navigation with Robot Money SVG logo. Transparent background, 45px height. Clean branding update across all pages.</p>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-27</span><span class="cl__cat">community</span></div>
-          <h3 class="cl__entry-title">WEEX Exchange Listing</h3>
-          <p class="cl__entry-desc">ROBOTMONEY/USDT spot trading pair now live on WEEX exchange. Third listing alongside Bankr.bot (launch) and MEXC (Meme+ zone). Coverage page updated with all token listings.</p>
-          <div class="cl__links"><a class="cl__link" href="https://www.weex.com/spot/ROBOTMONEY-USDT" target="_blank" rel="noopener noreferrer">Trade on WEEX →</a><a class="cl__link" href="/media">View Coverage →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-26</span><span class="cl__cat">community</span></div>
-          <h3 class="cl__entry-title">Telegram Community Launch</h3>
-          <p class="cl__entry-desc">Official Robot Money Telegram community launched for real-time updates, discussions, and direct access to the team. Join for announcements, governance discussions, and behind-the-scenes development updates.</p>
-          <div class="cl__links"><a class="cl__link" href="https://t.me/+aFxo8CRpkI80YmM0" target="_blank" rel="noopener noreferrer">Join Telegram →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-26</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Media Page &amp; Press Archive</h3>
-          <p class="cl__entry-desc">New Media page featuring podcast appearances, interviews, and press coverage. Centralized hub for all Robot Money media mentions including the Zypsy podcast with Lex Sokolin and MCG interview coverage.</p>
-          <div class="cl__links"><a class="cl__link" href="/media">View Media →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-26</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Performance Page with Live Wallet Data</h3>
-          <p class="cl__entry-desc">New Performance page (allocation2) displaying real-time wallet holdings with live price feeds. Shows current allocations across ETH, ROBOTMONEY, and agent tokens with USD valuations. Auto-refreshes via Base RPC and GeckoTerminal API.</p>
-          <div class="cl__links"><a class="cl__link" href="/allocation">View Performance →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-23</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Buyback Tracking &amp; Transparency</h3>
-          <p class="cl__entry-desc">New buybacks section on the Allocation page tracking all $ROBOTMONEY buyback transactions. Displays WETH spent, USD value, and tokens received for each transaction with running totals. 10 buybacks executed to date totaling ~1.15 WETH (~$2,504).</p>
-          <div class="cl__links"><a class="cl__link" href="/allocation">View Buybacks →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-22</span><span class="cl__cat">content</span></div>
-          <h3 class="cl__entry-title">Smart Contract Risk Research &amp; OG Image Redesign</h3>
-          <p class="cl__entry-desc">Published comprehensive smart contract risk analysis covering 13 major DeFi exploits from 2016-2026 ($4B+ in losses) with pattern analysis and prevention strategies. Redesigned all OG images for better social sharing with page-specific themes and glassmorphism design.</p>
-          <div class="cl__links"><a class="cl__link" href="/smart-contract-risks">View Risk Research →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-18</span><span class="cl__cat">feature</span></div>
-          <h3 class="cl__entry-title">Live Allocation Dashboard</h3>
-          <p class="cl__entry-desc">New Allocation page with real-time wallet holdings, strategy breakdown, and interactive charts. Fetches live data from Base RPC and GeckoTerminal.</p>
-          <div class="cl__links"><a class="cl__link" href="/allocation">View Allocation →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-17</span><span class="cl__cat">infrastructure</span></div>
-          <h3 class="cl__entry-title">AgentMail inbox live</h3>
-          <p class="cl__entry-desc">Robot Money now has its own email inbox via AgentMail — ready for inbound</p>
-          <div class="cl__links"><a class="cl__link" href="https://agentmail.to" target="_blank" rel="noopener noreferrer">AgentMail →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-16</span><span class="cl__cat">community</span></div>
-          <h3 class="cl__entry-title">Technical Design Proposal — Community Vote</h3>
-          <p class="cl__entry-desc">Evaluating implementation paths for agent delegation and governance. Vote on your preferred approach.</p>
-          <div class="cl__links"><a class="cl__link" href="/tech-proposal-march-16">View proposal and vote →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-16</span><span class="cl__cat">documentation</span></div>
-          <h3 class="cl__entry-title">Changelog and profile updates</h3>
-          <p class="cl__entry-desc">Added updates to changelog, updated social media personality and core vision profile</p>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-13</span><span class="cl__cat">social</span></div>
-          <h3 class="cl__entry-title">X bot launched</h3>
-          <p class="cl__entry-desc">Launched X bot</p>
-          <div class="cl__links"><a class="cl__link" href="https://x.com/RobotMoneyAgent" target="_blank" rel="noopener noreferrer">@RobotMoneyAgent →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-12</span><span class="cl__cat">content</span></div>
-          <h3 class="cl__entry-title">Substack published</h3>
-          <p class="cl__entry-desc">Published Robot Money analysis</p>
-          <div class="cl__links"><a class="cl__link" href="https://lex.substack.com/p/analysis-robot-money-and-the-economic" target="_blank" rel="noopener noreferrer">Read on Substack →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-12</span><span class="cl__cat">partnership</span></div>
-          <h3 class="cl__entry-title">ZHC Institute partnership announced</h3>
-          <p class="cl__entry-desc">Partnership announced: Generative Ventures + Zero Human Company Institute</p>
-          <div class="cl__links"><a class="cl__link" href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer">ZHC Institute →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-12</span><span class="cl__cat">documentation</span></div>
-          <h3 class="cl__entry-title">Website and design document live</h3>
-          <p class="cl__entry-desc">robotmoney.net live with protocol design documentation</p>
-          <div class="cl__links"><a class="cl__link" href="https://robotmoney.network" target="_blank" rel="noopener noreferrer">robotmoney.network →</a></div>
-        </div>
-
-        <div class="cl__entry">
-          <div class="cl__entry-meta"><span class="cl__date">2026-03-12</span><span class="cl__cat">launch</span></div>
-          <h3 class="cl__entry-title">Token launched on Base</h3>
-          <p class="cl__entry-desc">Token launched using Bankr on Base</p>
-          <div class="cl__links"><a class="cl__link" href="https://basescan.org/token/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer">View on BaseScan →</a></div>
-        </div>
-
-      </div>
-    </div>
-
   </div>
 </section>
 
 <style>
 .cl {
   min-height: 100vh;
-  padding: 0 1.5rem 5rem;
+  padding-bottom: 6rem;
   background: var(--color-void);
   color: var(--color-text);
   font-family: var(--font-sans);
 }
 
+/* ── Hero: the page's Flow Field (changelogHero() in alpine/heroes.js). Its
+   anchor and headline come from the unified page-hero rules in
+   components.css, which list .cl__hero and .cl__h1 by name. */
 .cl__hero {
   position: relative;
   overflow: hidden;
@@ -532,7 +390,6 @@
   width: 100vw;
   margin-left: calc(50% - 50vw);
   margin-right: calc(50% - 50vw);
-  margin-bottom: 3rem;
   display: flex;
   align-items: center;
   border-bottom: 1px solid var(--color-border);
@@ -543,257 +400,310 @@
   position: relative; z-index: 2;
   width: 100%; max-width: 80rem; margin-inline: auto; padding: 2.5rem 1.5rem;
 }
-.cl__hero .cl__h1,
-.cl__hero .cl__lede { position: relative; z-index: 1; }
 .cl__hero::after {
   content: "";
   position: absolute; left: 0; right: 0; bottom: 0; height: 90px;
   background: linear-gradient(to top, var(--color-void), transparent);
   z-index: 0; pointer-events: none;
 }
-
 .cl__h1 {
   font-family: var(--font-display);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: -0.01em;
-  font-size: 2.5rem;
-  line-height: 1.05;
-  margin: 0 0 1.25rem;
-}
-
-.cl__grad {
-  font-family: var(--font-display);
-  font-style: normal;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  color: var(--color-text);
-}
-
-.cl__lede {
-  color: var(--color-text-muted);
-  max-width: 42rem;
-  margin: 1rem 0 0;
-  line-height: 1.6;
-}
-
-.cl__grid {
-  max-width: 80rem;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 3rem;
-}
-
-.cl__h2 {
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: 1.75rem;
-  margin: 0 0 2rem;
-}
-
-/* Roadmap timeline */
-.cl__timeline {
-  position: relative;
-}
-
-.cl__timeline::before {
-  content: "";
-  position: absolute;
-  left: 15px;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: linear-gradient(to bottom, rgba(0, 229, 255, 0.5), var(--color-border), transparent);
-}
-
-.cl__phase {
-  position: relative;
-  padding-left: 3rem;
-  margin-bottom: 1rem;
-}
-
-.cl__marker {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.cl__marker--done {
-  background: var(--color-accent);
-  color: var(--color-void);
-}
-
-.cl__marker--active {
-  background: var(--color-accent);
-  color: var(--color-void);
-  box-shadow: 0 0 0 2px var(--color-void), 0 0 0 4px rgba(0, 229, 255, 0.3);
-}
-
-.cl__marker--upcoming {
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted);
-  background: var(--color-surface);
-}
-
-.cl__card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  padding: 1rem;
-  transition: border-color 0.2s;
-}
-
-.cl__card:hover {
-  border-color: rgba(0, 229, 255, 0.3);
-}
-
-.cl__card-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.cl__phase-title {
-  font-size: 1rem;
-  font-weight: 600;
   margin: 0;
 }
+/* Legibility over the live field. The shared hero veil (components.css,
+   .cl__hero::before) is declared at z-index 0, the same as the art, and the
+   art comes later in the DOM, so it painted OVER the veil and the veil did
+   nothing on this page. Lifting it to 1 puts it between the art and the text.
+   Measured behind the lede across three frames of the running field: the
+   worst 1% of pixels went from 1.3:1 to 7.8:1, with no pixel under 4.5:1,
+   at a 0.5 veil and the lede in the headline's white. */
+.cl__hero::before { z-index: 1; background: rgba(6, 8, 12, 0.5); }
 
-.cl__badge {
+/* Width, size and leading match .sv__lede. The colour overrides the shared
+   rule's !important grey, per the measurement above. */
+.cl__lede {
+  max-width: 44rem;
+  margin: 0.75rem 0 0;
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+.cl__hero .cl__lede { color: var(--color-text) !important; }
+.cl__updated {
+  margin: 1.25rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-text-soft);
+}
+
+/* ── Body. The body box mirrors .cl__hero-inner (80rem, 1.5rem gutters) so the
+   log's left edge sits under the headline at every width. Prose runs the full
+   column width, flush with its images; the column itself is what is narrowed,
+   because 80rem of running text is about 140 characters a line. */
+.cl__body { max-width: 80rem; margin: 0 auto; padding: 0 1.5rem; }
+.cl__col { max-width: 60rem; }
+
+/* ── In progress. Border and surface are .sv__live's, and the pulsing chip is
+   the only colour in it. Each line is the item, then a quiet state pushed to
+   the right edge. */
+.cl__now {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 3.5rem;
+  padding: 1rem 1.15rem 1.1rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.cl__now .rm-sphase { justify-self: start; }
+.cl__now-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--color-text-soft);
+}
+.cl__now-list li {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 1.25rem;
+  padding-left: 1.15rem;
+}
+/* Hollow square: open, not done. */
+.cl__now-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.52em;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--color-text-muted);
+}
+.cl__now-state {
+  margin-left: auto;
+  flex: none;
   font-family: var(--font-mono);
   font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 0.125rem 0.375rem;
+  letter-spacing: 0.14em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
 }
 
-.cl__badge--done {
-  color: var(--color-accent);
-  background: rgba(0, 229, 255, 0.1);
-}
-
-.cl__badge--active {
-  color: var(--color-warn);
-  background: rgba(255, 102, 68, 0.1);
-}
-
-.cl__items {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* ── Tag filter */
+.cl__rail {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
+  margin-top: 3rem;
+  padding-bottom: 1.1rem;
+  border-bottom: 1px solid var(--color-border-light);
 }
-
-.cl__item {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-  line-height: 1.45;
+.cl__rail-label,
+.cl__count {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--color-text-muted);
 }
-
-.cl__item--done { color: var(--color-text-muted); }
-.cl__item--active { color: var(--color-text); }
-.cl__item--upcoming { color: var(--color-text-muted); }
-
-.cl__ico {
-  flex-shrink: 0;
-  font-size: 0.8rem;
-  line-height: 1.45;
+.cl__rail-label { margin-right: 0.5rem; }
+.cl__count { margin-left: auto; font-variant-numeric: tabular-nums; }
+.cl__tag {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-text-soft);
+  background: none;
+  border: 1px solid var(--color-border-light);
+  padding: 0.42rem 0.72rem;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
+.cl__tag:hover { color: var(--color-text); border-color: var(--color-accent-line); }
+.cl__tag[aria-pressed="true"] { color: var(--color-accent); border-color: var(--color-accent); }
+.cl__tag:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
-/* Changelog */
+/* ── Log. A flat flex column, so an entry the filter hides leaves no gap. */
 .cl__log {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 4.5rem;
+  padding-top: 3.5rem;
 }
-
-.cl__entry {
-  border-left: 2px solid rgba(0, 229, 255, 0.3);
-  padding: 0.25rem 0 0.25rem 1.25rem;
+.cl__month-h {
+  margin: 1.5rem 0 -2.5rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--color-border-light);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.75rem;
+  line-height: 1;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
 }
+.cl__month-h:first-child { margin-top: 0; }
 
-.cl__entry-meta {
+.cl__entry { display: grid; scroll-margin-top: 6rem; }
+
+/* A figure closes its entry, directly under the text, and runs narrower than
+   the prose so it reads as that update's illustration, not a section of its
+   own. It keeps the text's left edge. */
+.cl__media { margin: 1.5rem 0 0; max-width: 48rem; }
+.cl__frame {
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.cl__frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--color-border);
+}
+/* Product shots sit in a window whose bar carries the page's address, so the
+   reader knows where the screen lives without a caption doing it. Flat: one
+   hairline, no dots, no radius, no shadow. The capture itself is a tight 2x
+   crop of one component, laid out near this column's width so its labels
+   stay readable. */
+.cl__win { border: 1px solid var(--color-border-light); background: var(--color-void); }
+.cl__win-bar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-bottom: 0.5rem;
+  height: 2rem;
+  padding: 0 0.85rem;
+  border-bottom: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+.cl__win img { display: block; width: 100%; height: auto; border: 0; }
+
+/* The receipt diagram is one Mermaid source rendered twice: left to right, and
+   top to bottom for phones, where the wide one would shrink its labels too
+   far. Each SVG caps itself at its natural width. */
+.cl__frame--dg { padding: 1.5rem 1.25rem; }
+.cl__dg svg { display: block; width: 100%; height: auto; margin: 0 auto; }
+.cl__dg--narrow { display: none; }
+@media (max-width: 760px) {
+  .cl__dg--wide { display: none; }
+  .cl__dg--narrow { display: block; }
 }
 
-.cl__date {
+.cl__cap {
   font-family: var(--font-mono);
   font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-accent);
-}
-
-.cl__cat {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
   color: var(--color-text-muted);
-  background: var(--color-surface);
-  padding: 0.125rem 0.5rem;
 }
+.cl__cap { display: block; margin-top: 0.7rem; }
 
-.cl__entry-title {
-  font-size: 1rem;
-  font-weight: 500;
-  margin: 0 0 0.375rem;
-}
+.cl__term .terminal__body { min-height: 0; padding: 1.5rem 1.6rem; font-size: 0.875rem; line-height: 2; }
 
-.cl__entry-desc {
-  font-size: 0.875rem;
-  color: var(--color-text-muted);
-  line-height: 1.55;
-  margin: 0 0 0.5rem;
-}
-
-.cl__links {
+.cl__meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
-.cl__link {
+  align-items: baseline;
+  gap: 0.5rem 1rem;
   font-family: var(--font-mono);
   font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--color-accent);
+  letter-spacing: 0.14em;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.cl__meta time { color: var(--color-text-soft); }
+.cl__sep { color: var(--color-border-light); }
+
+.cl__title {
+  margin: 0.7rem 0 0.85rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.75rem, 3.6vw, 2.4rem);
+  line-height: 1;
+  letter-spacing: 0.002em;
+  text-transform: uppercase;
+  text-wrap: balance;
+  color: var(--color-text);
+}
+/* The title is the release's permalink, so it can be shared and cited. */
+.cl__title a { color: inherit; text-decoration: none; }
+.cl__title a:hover { text-decoration: underline; text-decoration-color: var(--color-accent-line); text-decoration-thickness: 1px; text-underline-offset: 0.12em; }
+.cl__title a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.cl__entry p { margin: 0; font-size: 1.0625rem; line-height: 1.6; color: var(--color-text-soft); }
+.cl__entry p + p { margin-top: 0.7rem; }
+.cl__entry code { font-family: var(--font-mono); font-size: 0.875em; color: var(--color-text); }
+
+.cl__links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin-top: 1.3rem; }
+.cl__lnk {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-text-soft);
   text-decoration: none;
-  transition: color 0.2s;
+  border-bottom: 1px solid var(--color-accent-line);
+  padding-bottom: 2px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.cl__lnk:hover { color: var(--color-text); border-bottom-color: var(--color-accent); }
+
+/* ── Also in <month>: the month's smaller changes, deliberately not nested
+   under a headline so they never read as part of the entry above them. */
+.cl__also { padding-top: 1.4rem; border-top: 1px solid var(--color-border); }
+.cl__also-h {
+  margin: 0 0 1rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.25rem;
+  text-transform: uppercase;
+  color: var(--color-text);
+}
+.cl__also-k {
+  margin: 1.2rem 0 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--color-text-muted);
+}
+.cl__also ul { display: grid; gap: 0.55rem; margin: 0; padding: 0; list-style: none; }
+.cl__also li { position: relative; padding-left: 1.15rem; font-size: 1rem; line-height: 1.55; color: var(--color-text-soft); }
+.cl__also li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.78em;
+  width: 7px;
+  height: 1px;
+  background: var(--color-text-muted);
 }
 
-.cl__link:hover { color: var(--color-text); }
+@media (max-width: 760px) {
+  .cl__count { margin-left: 0; width: 100%; }
+  .cl__log { gap: 3.5rem; }
+  .cl__month-h { margin-bottom: -1.75rem; }
+  .cl__frame { padding: 8px; }
+  .cl__frame--dg { padding: 1.25rem 0.75rem; }
+}
 
-@media (min-width: 1024px) {
-  .cl {
-    padding: 0 2rem 6rem;
-  }
-  .cl__h1 { font-size: 3.5rem; }
-  .cl__h2 { font-size: 2rem; }
-  .cl__grid {
-    grid-template-columns: 1fr 1fr;
-    gap: 3rem;
-  }
+@media (prefers-reduced-motion: reduce) {
+  .cl__tag, .cl__lnk { transition: none; }
 }
 </style>

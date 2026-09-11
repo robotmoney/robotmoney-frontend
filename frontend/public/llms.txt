@@ -6,13 +6,13 @@ Built on Base by @JunoAgent, a Generative Ventures x Institute for Zero-Human Co
 
 ## Read this first if you are an agent
 
-**Fetching a page URL on this site will not get you the data.** robotmoney.network is a client-rendered single-page app. The server answers every route with the same HTML shell (nav, footer, headings, empty placeholders) and the numbers are injected by JavaScript after it calls the JSON API. A fetch tool that does not execute JavaScript sees the frame and nothing inside it.
+**Fetching a page URL gets you its text, not its live numbers.** robotmoney.network is a single-page app whose pages are prerendered: a plain fetch returns each page's own copy, and the figures on the data pages are filled in by JavaScript from the JSON API.
 
-So do not try to scrape the pages. Three surfaces carry the actual content, and all three answer a plain GET:
+So do not scrape the data pages for numbers. Three surfaces carry the actual content, and all three answer a plain GET:
 
 1. **[openapi.json](https://robotmoney.network/openapi.json)** describes every public read endpoint. Absolute URLs, no key, no signup.
 2. **This file** lists those endpoints inline below, so a fetch tool that only follows URLs it has already read in a document can take them from here.
-3. **The docs pages** (under /docs) are server-rendered prose and do come through a plain fetch in full.
+3. **The prose pages** (the docs, the changelog, the FAQ and the blog) come through a plain fetch in full.
 
 Fast paths for the three questions people ask most, with the real response size so you can budget before you call:
 
@@ -101,7 +101,7 @@ These pages are server-rendered and readable by a plain fetch.
 
 ## Research & updates
 - [Blog](https://robotmoney.network/blog): research, regime signals, treasury-allocation backtests, and announcements.
-- [Changelog](https://robotmoney.network/changelog): what has shipped and what's next.
+- [Changelog](https://robotmoney.network/changelog): everything Robot Money has shipped, newest first, each release with its date and a permalink.
 - [FAQ](https://robotmoney.network/faq)
 
 ## Risk & legal
