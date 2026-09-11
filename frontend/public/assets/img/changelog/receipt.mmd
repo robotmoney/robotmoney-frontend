@@ -1,0 +1,35 @@
+---
+# Source of the recommendation-receipts diagram on /changelog. The page bakes
+# in two renders of it as inline SVG: this one (LR) above 760px, and the same
+# source with "flowchart TD" below. Render with Mermaid 11 in a page that has
+# Space Grotesk loaded, so the boxes are sized to the site's font.
+config:
+  theme: base
+  htmlLabels: false
+  fontFamily: "'Space Grotesk', system-ui, sans-serif"
+  flowchart:
+    curve: linear
+    padding: 16
+    nodeSpacing: 32
+    rankSpacing: 40
+    diagramPadding: 2
+  themeVariables:
+    darkMode: true
+    background: transparent
+    fontFamily: "'Space Grotesk', system-ui, sans-serif"
+    fontSize: 15px
+    primaryColor: "#06080c"
+    primaryTextColor: "#f2f4f9"
+    primaryBorderColor: "#2e3a4e"
+    nodeBorder: "#2e3a4e"
+    mainBkg: "#06080c"
+    lineColor: "#00e5ff"
+    textColor: "#c2c9d8"
+---
+flowchart LR
+  accTitle: Recommendation receipts
+  accDescr: Members file signed takes. The session closes on a recommendation. A signed receipt is recorded on-chain. New deposits are split across the sleeves to match.
+  takes["Members file<br/>signed takes"] --> session["The session closes<br/>on a recommendation"]
+  session --> receipt["A signed receipt is<br/>recorded on-chain"]
+  receipt --> deposit["New deposits split<br/>across the sleeves"]
+  linkStyle default stroke-width:1.5px

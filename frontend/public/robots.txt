@@ -26,8 +26,8 @@ Allow: /
 User-agent: Google-Extended
 Allow: /
 
-# This site renders client-side, so fetching a page returns the shell and none
-# of the data. The two files below are where the content actually is:
+# Pages are prerendered, so a plain fetch returns each page's text. The live
+# figures on the data pages come from the JSON API, described by these two:
 #   /llms.txt      site index plus every public JSON endpoint, absolute URLs
 #   /openapi.json  the callable description of that API, no key required
 # Comments are not a crawl directive, they are a signpost for whoever reads this

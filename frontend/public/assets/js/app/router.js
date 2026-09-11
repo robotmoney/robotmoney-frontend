@@ -152,8 +152,11 @@ function scrollForRoute() {
   if (!target) { window.scrollTo(0, 0); return; }
   // A frame later: the view is in the DOM but not yet laid out, and Alpine has
   // not had its pass, so anything above the target can still change height.
+  // A target that sets its own scroll-margin-top (the changelog's entries,
+  // which clear the fixed nav) keeps it; everything else gets the default.
+  const offset = parseFloat(getComputedStyle(target).scrollMarginTop) || ANCHOR_OFFSET;
   requestAnimationFrame(() => {
-    const top = target.getBoundingClientRect().top + window.scrollY - ANCHOR_OFFSET;
+    const top = target.getBoundingClientRect().top + window.scrollY - offset;
     window.scrollTo(0, Math.max(0, Math.round(top)));
   });
 }
@@ -174,6 +177,9 @@ function onClick(e) {
 
   const url = new URL(href, location.href);
   if (url.origin !== location.origin) return; // external link
+  // A file, not a route (llms.txt, openapi.json, skill.md): let the browser
+  // load it. Same rule as website-server/nginx.conf's file location.
+  if (/\.(?!html$)[a-z0-9]+$/i.test(url.pathname)) return;
   if (url.hash && url.pathname === location.pathname) return; // in-page anchor
 
   e.preventDefault();
