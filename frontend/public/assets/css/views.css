@@ -256,34 +256,12 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    sized to the stance dots — it shipped square, which quietly filed it with the
    subject marks instead. */
 .sv__fact-dot { width: 0.42rem; height: 0.42rem; flex: 0 0 auto; border-radius: 50%; margin-right: -0.12rem; }
-.sv__action-row span { color: var(--color-text); }
 .sv__avatar--large { width: 4.5rem; height: 4.5rem; font-size: 1.4rem; flex: 0 0 auto; }
 .sv__member-hero { display: flex; gap: 1.25rem; align-items: center; }
 .sv__metadata-grid { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
 .sv__metadata-grid div { border-top: 1px solid var(--color-border); padding-top: 0.65rem; }
 .sv__metadata-grid span { display: block; color: var(--color-text-muted); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; }
 .sv__metadata-grid b { display: block; margin-top: 0.25rem; color: var(--color-text); font-family: var(--font-mono); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
-/* Swarm verdict. Replaces the .sv__aggregate box whose largest element was
-   "3/5" — turnout, not a finding. The call leads, the proportional bar shows
-   the weight behind it, and the procedural numbers (quorum, mean confidence,
-   who was absent) drop to a footer where they belong. */
-.sv__verdict { margin: 0.6rem 0 0; }
-.sv__verdict-call { display: flex; align-items: center; gap: 0.6rem; margin: 0;
-  font-family: var(--font-display, var(--font-mono)); font-size: 1.55rem; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.01em; color: var(--color-text); }
-.sv__verdict-call i { width: 0.55rem; height: 0.55rem; flex: 0 0 auto; border-radius: 50%; }
-/* A split is a real result, but it is not a call — it reads muted so it can
-   never be mistaken for the swarm endorsing a position. */
-.sv__verdict-call.is-split { font-size: 1.25rem; color: var(--color-text-muted); }
-.sv__verdict-detail { margin: 0.4rem 0 0; color: var(--color-text-muted); font-size: 0.86rem; line-height: 1.6; }
-.sv__verdict-bar { display: flex; gap: 2px; height: 6px; margin: 1rem 0 0.75rem; }
-.sv__verdict-bar i { display: block; height: 100%; min-width: 2px; }
-.sv__stances { display: flex; flex-wrap: wrap; gap: 0.9rem; font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-muted); }
-.sv__verdict-meta { display: flex; flex-wrap: wrap; gap: 1.75rem; margin: 1.25rem 0 0;
-  padding-top: 0.9rem; border-top: 1px solid var(--color-border); }
-.sv__verdict-meta div { min-width: 0; }
-.sv__verdict-meta dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
-.sv__verdict-meta dd { margin: 0.3rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; color: var(--color-text-muted); overflow-wrap: anywhere; }
 
 .sv__takes { display: flex; flex-direction: column; gap: 1rem; }
 .sv__take { position: relative; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1.25rem; --vfy-inset: 1.25rem; }
@@ -828,7 +806,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    Disagreements panel reused the badge markup but not the badge class, so it
    never picked up a size. An invisible dot is worse than none, because the
    colour is the only thing distinguishing two members' positions there. */
-.sv__stance-dotline i, .sv__stance-chip i, .sv__stance-badge i, .sv__dis-stance i { width: 0.42rem; height: 0.42rem; border-radius: 50%; display: inline-block; }
+.sv__stance-dotline i, .sv__stance-badge i, .sv__dis-stance i { width: 0.42rem; height: 0.42rem; border-radius: 50%; display: inline-block; }
 
 /* ── A session's outcome, on the index ────────────────────────────────────
    The card used to be a date, a row of stance pills, and five lines of the
@@ -858,37 +836,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__rec dd b { color: var(--color-text); font-weight: 500; text-transform: uppercase;
   font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; }
 .sv__rec-n { font-variant-numeric: tabular-nums; }
-
-/* The regime read inside a session brief. Shared by the subject profile and
-   the session page (lib/session-brief.js), so the two cannot draw the same
-   reading two ways. Declared once each, per the duplicate-selector guard. */
-.mb { margin: 0 0 1.25rem; padding-bottom: 1.1rem; border-bottom: 1px solid var(--color-border); }
-.mb__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; }
-.mb__label { margin: 0; font-family: var(--font-mono); font-size: 0.58rem;
-  text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
-.mb__scope { font-size: 0.75rem; color: var(--color-text-muted); }
-.mb__grid { display: grid; grid-template-columns: 1fr; gap: 1.1rem 2.5rem; margin-top: 0.8rem; align-items: start; }
-.mb__read { min-width: 0; }
-.mb__figure { min-width: 0; }
-.mb__call { margin: 0; display: flex; align-items: center; gap: 0.5rem;
-  font-family: var(--font-mono); font-size: 1.05rem; color: var(--color-text); }
-.mb__call i { width: 9px; height: 9px; flex: none; }
-.mb__pct { margin: 0.5rem 0 0; font-size: 0.72rem; color: var(--color-text-muted); }
-.mb__pct b { display: block; font-family: var(--font-mono); font-size: 1.6rem; font-weight: 400;
-  color: var(--color-text); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-.mb__raw { margin: 0.35rem 0 0; font-family: var(--font-mono); font-size: 0.7rem;
-  color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
-.mb__trailwrap { margin-top: 0.9rem; max-width: 15rem; }
-.mb__trail { width: 100%; height: auto; display: block; }
-.mb__rail { width: 100%; height: auto; display: block; max-width: 30rem; }
-.mb__cap { margin: 0.3rem 0 0; font-family: var(--font-mono); font-size: 0.6rem;
-  text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); }
-/* The disagreement the takes below argue about, as a sentence at reading size.
-   It was a 0.7rem caption in a stack of four other captions. */
-.mb__finding { margin: 0.7rem 0 0; font-size: 0.82rem; line-height: 1.5; color: var(--color-text-soft); }
-@media (min-width: 48rem) {
-  .mb__grid { grid-template-columns: minmax(11rem, 0.6fr) minmax(0, 1fr); }
-}
 
 /* A REVIEW as a chain: signal, reasoning, outcome (RM-121). Shared by the
    subject profile's latest review and the session page's signal. Each column
@@ -987,6 +934,128 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__wkeys li.is-zero { opacity: 0.55; }
 .sv__wkeys li.is-zero i { background: none !important; box-shadow: inset 0 0 0 1px var(--color-text-muted); }
 .sv__wkeys li.is-zero b { color: var(--color-text-muted); }
+/* ── The review band's lower half ────────────────────────────────────────
+   Shared by the subject page's latest review and the session page. */
+/* OUTCOME: what the session recommended, under the signal and the reasoning.
+   The ring is the session cards' own; the register beside it is the targets
+   card's, one column per figure the data supports (--n). */
+.sr__out { padding: 1.1rem 1.25rem 1.25rem; border-top: 1px solid var(--color-border); }
+.sr__mix { display: flex; flex-wrap: wrap; align-items: center; gap: 1.25rem 2.25rem; }
+.sv__sleeves.sr__reg { flex: 1 1 26rem; max-width: 40rem;
+  grid-template-columns: minmax(0, 1fr) repeat(var(--n, 1), minmax(4.75rem, max-content)); }
+.sr__reg .sv__sleeve-v.is-ref { color: var(--color-text-muted); }
+.sr__gap { white-space: nowrap; color: var(--color-text-muted); }
+.sr__gap.is-up, .sr__gap.is-down { color: var(--color-text); }
+/* Actions a v0 session's members wrote: the position, the verb, the reason. */
+.sr__acts { margin: 0; display: grid; }
+.sr__act { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: 0.3rem 1.25rem;
+  padding: 0.6rem 0; border-bottom: 1px solid var(--color-border); }
+.sr__act:last-child { border-bottom: 0; }
+.sr__act dt { font-family: var(--font-mono); font-size: 0.78rem; color: var(--color-text); }
+.sr__act dd { margin: 0; font-size: 0.84rem; line-height: 1.5; color: var(--color-text-soft); }
+.sr__act dd b { display: inline-block; margin-right: 0.6rem; font-family: var(--font-mono); font-weight: 500;
+  font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text); }
+.sr__why { margin: 1rem 0 0; font-size: 0.9rem; line-height: 1.65; color: var(--color-text-soft); }
+/* Inside each sleeve: one small register per sleeve, two to a row. */
+.sr__within { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.sr__within-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem 2.5rem; margin-top: 0.8rem; }
+.sr__within-h { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.3rem; font-size: 0.82rem;
+  color: var(--color-text); }
+.sr__within .sv__sleeves { max-width: none; }
+.sr__within .sv__sleeve { padding: 0.24rem 0; }
+.sr__within .sv__sleeve-n, .sr__within .sv__sleeve-v { font-size: 0.76rem; }
+.sr__within .sv__sleeve-track { height: 4px; }
+@media (min-width: 62rem) {
+  .sr__within-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .sv__sleeves.sr__reg { grid-template-columns: minmax(0, 1fr) repeat(var(--n, 1), minmax(3.6rem, max-content)); }
+  .sr__reg .sv__sleeve--head { font-size: 0.5rem; letter-spacing: 0.1em; }
+  .sr__act { grid-template-columns: minmax(0, 1fr); }
+}
+/* "What the swarm was handed", the disclosure at the foot of the review
+   band on the subject page and the session page. Mirrors /allocation's
+   .alp__hold: the same tokens, the same 0fr/1fr grid transition, the same
+   flat edges. */
+.sp-brief { margin-top: 1rem; border: 1px solid var(--color-border); }
+.sp-brief__sum {
+  width: 100%; cursor: pointer; display: flex; align-items: center;
+  justify-content: space-between; gap: 0.5rem 1rem;
+  padding: 0.7rem 0.9rem; background: var(--color-surface);
+  border: 0; border-bottom: 1px solid transparent; text-align: left;
+  transition: background-color 150ms var(--ease-out-expo), color 150ms var(--ease-out-expo);
+}
+.sp-brief__sum-k {
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.14em; color: var(--color-text);
+}
+.sp-brief__sum-m {
+  display: flex; align-items: center; gap: 0.4rem;
+  font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--color-text-muted);
+}
+.sp-brief__sum:hover { background: var(--color-surface-light); }
+.sp-brief__sum:hover .sp-brief__sum-m { color: var(--color-text-soft); }
+.sp-brief__sum:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.sp-brief__sum-m i { transition: transform 300ms var(--ease-out-expo); font-style: normal; }
+.sp-brief.is-open .sp-brief__sum { border-bottom-color: var(--color-border); }
+.sp-brief.is-open .sp-brief__sum-m i { transform: rotate(180deg); }
+.sp-brief__anim {
+  display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows 300ms var(--ease-out-expo);
+}
+.sp-brief.is-open .sp-brief__anim { grid-template-rows: 1fr; }
+.sp-brief__clip { overflow: hidden; min-height: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .sp-brief__anim, .sp-brief__sum i { transition: none; }
+}
+/* What the swarm was handed: a record of the brief, one row per part it
+   actually contains. */
+.sr .sp-brief { margin: 0; border: 0; border-top: 1px solid var(--color-border); }
+.hand { margin: 0; padding: 0.3rem 1.25rem 1rem; }
+.hand__row { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: 0.3rem 1.5rem;
+  padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); }
+.hand__row:last-child { border-bottom: 0; }
+.hand dt { font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--color-text-muted); padding-top: 0.25rem; }
+.hand dd { margin: 0; min-width: 0; font-size: 0.86rem; color: var(--color-text); }
+.hand q { color: var(--color-text-soft); }
+.hand__pills { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+.hand__pill { font-family: var(--font-mono); font-size: 0.66rem; border: 1px solid var(--color-border);
+  padding: 0.2rem 0.45rem; color: var(--color-text-soft); white-space: nowrap; }
+.hand ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+.hand li { position: relative; padding-left: 0.8rem; font-size: 0.8rem; line-height: 1.45; color: var(--color-text-soft); }
+.hand li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 4px; height: 1px;
+  background: var(--color-text-muted); }
+/* The header's chip row and the targets card's register, reused as they
+   are, one size down. */
+.hand .sv__fact-row { margin-top: 0; }
+.hand .sv__sleeves { max-width: 30rem; }
+.hand .sv__sleeve { padding: 0.22rem 0; }
+.hand .sv__sleeve-n, .hand .sv__sleeve-v { font-size: 0.76rem; }
+.hand .sv__sleeve-track { height: 4px; }
+.hand__links li { font-size: 0.84rem; color: var(--color-text); }
+/* The links take the site's convention (.rm-link); the arrow says each is a page. */
+.hand__links a::after { content: " \2192"; color: var(--color-text-muted); }
+/* A 10rem label column leaves a phone a sliver for the value, so the label
+   goes on top. Same breakpoint the register drops its bars at. */
+@media (max-width: 720px) {
+  .hand { padding: 0.2rem 1rem 0.85rem; }
+  .hand__row { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+  .hand dt { padding-top: 0; }
+}
+.hand__pill-wrap { display: contents; }
+.hand__pill--link { color: var(--color-text); text-decoration: none; }
+.hand__pill--link::after { content: " \2192"; color: var(--color-text-muted); }
+.hand__pill--link:hover { border-color: var(--color-text-muted); }
+.hand__pill--link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+/* The holdings table, on the subject page and the session page. The series
+   key matches the chart's band for the same token: a filled square, not a
+   rule, because the figure is a stack of areas and the key has to look like
+   the thing it points at. */
+.sp-holdings { margin-top: 1rem; }
+.sp-key { display: inline-block; width: 0.5rem; height: 0.5rem; background: var(--k, var(--color-border));
+          vertical-align: baseline; margin-right: 0.5rem; }
 .sv__rec-more { color: var(--color-text-muted); font-size: 0.8rem; }
 /* Its own class, not a .sv__rec modifier: a selector that matches both the
    recommendation and the notice that there isn't one cannot be asserted on. */
@@ -1054,7 +1123,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; max-width: 82ch; }
 .sv__bullet-list li { color: var(--color-text-muted); font-size: 0.88rem; }
 .sv__bullet-list li::before { content: "· "; color: var(--color-text-muted); }
-.sv__discussion { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 1.5rem 0 2rem; }
 /* Market backdrop. One panel, not two: the old "Brief" half held a single
    derived sentence restating the <h1> and a backdrop chip. A note says what
    the section IS — neither old heading did, and a reader had no way to tell
@@ -1065,75 +1133,24 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    sparkline are all evidence for this one word. */
 /* Beacon is a POINT in the covenant, never a run of type — so the direction is
    carried by a small square beside the word, not by colouring the word itself. */
-.sv__panel-sub { margin: 1rem 0 0.4rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-muted); }
-.sv__bucket-bars-svg { overflow-x: auto; }
-/* Wider than the old 34rem: the bars figure now carries its own series names
-   and a "% of NAV" value column, and squeezed to 34rem the 10.5px bucket labels
-   collided with the series column. */
-.sv__bucket-bars-svg svg { width: 100%; min-width: 26rem; max-width: 42rem; height: auto; display: block; }
-.sv__portfolio, .sv__recommendation { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); margin-bottom: 2rem; }
-.sv__portfolio-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin: 1.5rem 0; align-items: start; }
-.sv__donut-list { display: grid; gap: 0.55rem; }
-.sv__donut-row { display: grid; grid-template-columns: 2.5rem 1fr auto; gap: 0.6rem; align-items: center; font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-text-muted); }
-.sv__donut-row i { width: 2.1rem; height: 2.1rem; border-radius: 50%; background: conic-gradient(var(--c) calc(var(--p) * 1%), rgba(255,255,255,0.06) 0); border: 1px solid var(--color-border); position: relative; }
-.sv__donut-row i::after { content: ""; position: absolute; inset: 0.42rem; border-radius: 50%; background: var(--color-void); }
-.sv__donut-row span { color: var(--color-text); }
-.sv__donut-row b { color: var(--color-text-muted); font-weight: 500; }
+.sv__portfolio { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); margin-bottom: 2rem; }
 .sv__table-wrap { overflow-x: auto; }
 .sv__data-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.72rem; }
 .sv__data-table th { color: var(--color-text-muted); text-align: left; font-weight: 400; padding: 0.35rem 0.55rem; border-bottom: 1px solid var(--color-border); }
 .sv__data-table td { padding: 0.45rem 0.55rem; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--color-text-muted); text-align: left; }
 .sv__data-table td:first-child { color: var(--color-text); }
 .sv__num { text-align: right !important; }
-/* The bars' key. Each swatch is drawn with the SAME treatment as the bar it
-   names — open outline, muted fill, accent fill — so the mapping is visual
-   rather than positional. */
-.sv__bars-key { list-style: none; margin: 0.6rem 0 0; padding: 0; display: flex;
-                flex-wrap: wrap; gap: 0.3rem 1.1rem;
-                font-family: var(--font-mono); font-size: 0.66rem; }
-.sv__bars-key li { display: flex; align-items: center; gap: 0.4rem; }
-.sv__bars-key span { color: var(--color-text-muted); }
-.sv__bars-key__swatch { width: 0.7rem; height: 0.4rem; flex: none; }
-.sv__bars-key__swatch.is-target { border: 1px solid var(--color-text-muted); }
-/* Not type but a SAMPLE of the actual bar, so its job is to composite to what
-   that bar composites to. bucketWeightsBars() in static-views.js now draws that
-   bar as --color-text-muted at fill-opacity 0.45, so the swatch carries the
-   same pair; left at 0.9 it would have been brighter than the series it names,
-   which is the one thing a key may not be. */
-.sv__bars-key__swatch.is-actual { background: var(--color-text-muted); opacity: 0.45; }
-.sv__bars-key__swatch.is-recommended { background: var(--color-accent); }
-.sv__bars-key li:last-child span { color: var(--color-accent); }
-/* The bucket table repeats the bars as numbers. Sits directly under the figure
-   it restates, so it reads as one block rather than a second exhibit. */
-.sv__bucket-table { margin-top: 0.9rem; }
-.sv__bucket-table .sv__data-table { font-variant-numeric: tabular-nums; }
-/* Recommended is the column the panel exists to publish — it takes the accent
-   the R bar already uses above, so the eye lands in the same place in both. */
-.sv__num--rec { color: var(--color-accent) !important; }
-.sv__bucket-table td.sv__num--rec { color: var(--color-accent); }
-/* The move being asked for. Direction is carried by the ↑/↓ glyph in the text,
-   not by colour alone, so it survives a monochrome read; the colours only
-   reinforce it. Green = add, sand = trim — never red/green as the sole signal. */
-.sv__gap.is-up { color: var(--color-green); }
-.sv__gap.is-down { color: var(--color-warm, #e8a640); }
 .sv__notables { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
 .sv__notables ul { margin: 0.75rem 0 0; padding-left: 1rem; color: var(--color-text-muted); font-size: 0.82rem; line-height: 1.55; }
-.sv__stance-chip { display: inline-flex; align-items: center; gap: 0.35rem; }
-.sv__rich-rec { display: grid; gap: 1rem; }
-.sv__rec-actions { display: grid; gap: 0.5rem; }
-.sv__action-row { display: grid; grid-template-columns: 7rem 5rem 1fr; gap: 0.75rem; align-items: start; border-top: 1px solid var(--color-border); padding-top: 0.65rem; font-size: 0.82rem; }
-.sv__action-row span, .sv__action-row b { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; }
-.sv__action-row b { color: var(--color-text); }
-.sv__action-row p { margin: 0; color: var(--color-text-muted); line-height: 1.5; }
-/* Cyan seams the top edge instead of washing the whole plane: the covenant
-   makes cyan a LINE, never a mass, and a tinted field is a mass. */
-.sv__panel--accent { border-color: var(--color-border); border-top-color: var(--color-accent); }
 /* The stance chip. nowrap so it cannot break mid-label and pull the view
    column out of alignment on a narrow panel. */
 .sv__dis-stance { display: inline-flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
 .sv__dis-nostance { color: var(--color-text-muted); font-style: italic; }
-.sv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
-  color: var(--color-accent) !important; text-transform: none !important; }
+.sv__disagreement .sv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
+  color: var(--color-text); text-transform: none; text-decoration: underline;
+  text-decoration-color: var(--color-border-light); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.sv__disagreement .sv__dis-read:hover, .sv__disagreement .sv__dis-read:focus-visible {
+  color: var(--color-text); text-decoration-color: var(--color-accent); }
 .sv__disagreements { display: grid; gap: 1.6rem; margin-top: 1rem; }
 .sv__disagreement h3 { margin: 0 0 0.7rem; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text); }
 .sv__disagreement ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; }
@@ -1181,9 +1198,10 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__take-h:first-child { margin-top: 0; }
 .sv__take-body strong { color: var(--color-text); font-weight: 700; }
 
-.sv__synthesis { margin-top: 2rem; border-left: 2px solid var(--color-accent); padding-left: 1.4rem; }
-.sv__synthesis div { margin: 0.75rem 0 0; color: var(--color-text); font-family: var(--font-sans); line-height: 1.75; font-size: 1.05rem; }
-.sv__synthesis p { margin: 0 0 0.75rem; }
+/* A session's synthesis: the paragraph a v0 session wrote, at reading size.
+   No accent rail: cyan is a line this brand draws on a figure, not a margin. */
+.sv__synthesis { margin: 1.1rem 0 0; font-size: 0.95rem; line-height: 1.7; color: var(--color-text); }
+.sv__synthesis p { margin: 0 0 0.8rem; }
 @media (max-width: 720px) {
   /* Two columns, not one: identity keeps the left and cadence keeps the right.
      The blurb goes full width underneath. */
@@ -1198,7 +1216,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   .sv__body--narrow { padding-top: 6.5rem; }
   .sv__session-top, .sv__take-head { align-items: flex-start; }
   .sv__session-body { grid-template-columns: 1fr; gap: 1.15rem; }
-  .sv__action-row { grid-template-columns: 1fr; }
   /* Member and stance share the top line, view below across both — three 6.5rem
      columns do not survive a phone, and stacking all three wasted a full line
      on a two-word stance chip. */
@@ -1235,13 +1252,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   .rv__cards.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
   .rv__cards.rv--cols4 { grid-template-columns: repeat(4, 1fr); }
   .sv__rail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  /* .sv__discussion stays single-column at every width. Consensus and
-     Disagreements are different KINDS of claim about the session, not a pair to
-     compare side by side, and they are wildly unequal in length — two columns
-     forced a ragged bottom and implied they carry equal weight. Now that echoed
-     prose is suppressed, Consensus is often empty too, which left a lone
-     column stranded in half the grid. They read as a sequence. */
-  .sv__portfolio-grid { grid-template-columns: 0.75fr 1.25fr; }
   .sv__metadata-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -1462,18 +1472,3 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .adm-meta-grid dd { margin: 0; }
 .adm-bullet-list { list-style: disc; margin: 0 0 1rem; padding-left: 1.25rem; font-size: 0.85rem; }
 
-/* Within-bucket weights. The bucket bars say how much goes to each bucket; this
-   says what is inside them. Rows are a name and a number, tabular so the column
-   of percentages reads down. No fills: the figure is the point, not a bar. */
-.sv__within { margin-top: 1rem; }
-.sv__within-bucket { margin-top: 0.75rem; }
-.sv__within-name { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
-                   text-transform: uppercase; color: var(--color-text-muted); margin: 0 0 0.35rem; }
-.sv__within-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px;
-                   background: var(--color-border); border: 1px solid var(--color-border); }
-.sv__within-list li { display: flex; justify-content: space-between; align-items: baseline;
-                      gap: 1rem; background: var(--color-surface); padding: 0.4rem 0.65rem;
-                      font-size: 0.85rem; color: var(--color-text-muted); }
-.sv__within-list b { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
-                     color: var(--color-text); font-weight: 600; }
-@media (min-width: 640px) { .sv__within-list { grid-template-columns: 1fr 1fr; } }

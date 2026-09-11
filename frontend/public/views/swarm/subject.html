@@ -403,7 +403,7 @@
                                   <ul class="hand__links">
                                     <template x-for="l in part.links" :key="l.key">
                                       <li>
-                                        <template x-if="l.href"><a :href="l.href" x-text="l.text"></a></template>
+                                        <template x-if="l.href"><a class="rm-link" :href="l.href" x-text="l.text"></a></template>
                                         <template x-if="!l.href"><span x-text="l.text"></span></template>
                                       </li>
                                     </template>
@@ -615,18 +615,14 @@
        one rule was painting a raw #7E889E through a --color-muted variable
        that does not exist. */
 
-    .sp-holdings { margin-top: 1rem; }
-    /* The series key, matching the chart's band for the same token. A filled
-       square, not a rule: the figure is a stack of areas, and the key has to
-       look like the thing it points at. */
-    .sp-key { display: inline-block; width: 0.5rem; height: 0.5rem; background: var(--k, var(--color-border));
-              vertical-align: baseline; margin-right: 0.5rem; }
     .sp-sessions { margin-top: 2.5rem; }
     .sp-alloc { margin-bottom: 1.5rem; }
     /* The card is the whole page here, not a column beside a feed, so the
        register fills it: 34rem of table in an 80rem card left the hole on the
-       right that a measure cap leaves in a full-width band. */
-    .sp-alloc .sv__sleeves { max-width: none; }
+       right that a measure cap leaves in a full-width band. The card's own
+       register only: the review band inside the card draws registers of its
+       own, and they keep theirs. */
+    .sp-alloc__body .sv__sleeves { max-width: none; }
     /* An external link, in the second of the two link treatments this site
        uses: reading ink with a quiet rule, and Beam arriving on hover. It was
        cyan at rest, which put the accent on a hostname. */
@@ -667,80 +663,6 @@
                        color: var(--color-text-muted); }
     .sp-note { font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.5rem; }
 
-    /* The disclosure under the latest review ("What the swarm was handed").
-       Mirrors /allocation's .alp__hold: the same
-       tokens, the same 0fr/1fr grid transition, the same flat edges. */
-    .sp-brief { margin-top: 1rem; border: 1px solid var(--color-border); }
-    .sp-brief__sum {
-      width: 100%; cursor: pointer; display: flex; align-items: center;
-      justify-content: space-between; gap: 0.5rem 1rem;
-      padding: 0.7rem 0.9rem; background: var(--color-surface);
-      border: 0; border-bottom: 1px solid transparent; text-align: left;
-      transition: background-color 150ms var(--ease-out-expo), color 150ms var(--ease-out-expo);
-    }
-    .sp-brief__sum-k {
-      font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
-      letter-spacing: 0.14em; color: var(--color-text);
-    }
-    .sp-brief__sum-m {
-      display: flex; align-items: center; gap: 0.4rem;
-      font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.1em;
-      text-transform: uppercase; color: var(--color-text-muted);
-    }
-    .sp-brief__sum:hover { background: var(--color-surface-light); }
-    .sp-brief__sum:hover .sp-brief__sum-m { color: var(--color-text-soft); }
-    .sp-brief__sum:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
-    .sp-brief__sum-m i { transition: transform 300ms var(--ease-out-expo); font-style: normal; }
-    .sp-brief.is-open .sp-brief__sum { border-bottom-color: var(--color-border); }
-    .sp-brief.is-open .sp-brief__sum-m i { transform: rotate(180deg); }
-    .sp-brief__anim {
-      display: grid; grid-template-rows: 0fr;
-      transition: grid-template-rows 300ms var(--ease-out-expo);
-    }
-    .sp-brief.is-open .sp-brief__anim { grid-template-rows: 1fr; }
-    .sp-brief__clip { overflow: hidden; min-height: 0; }
-    @media (prefers-reduced-motion: reduce) {
-      .sp-brief__anim, .sp-brief__sum i { transition: none; }
-    }
-    /* What the swarm was handed: a record of the brief, one row per part it
-       actually contains. */
-    .sr .sp-brief { margin: 0; border: 0; border-top: 1px solid var(--color-border); }
-    .hand { margin: 0; padding: 0.3rem 1.25rem 1rem; }
-    .hand__row { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: 0.3rem 1.5rem;
-      padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); }
-    .hand__row:last-child { border-bottom: 0; }
-    .hand dt { font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase;
-      color: var(--color-text-muted); padding-top: 0.25rem; }
-    .hand dd { margin: 0; min-width: 0; font-size: 0.86rem; color: var(--color-text); }
-    .hand q { color: var(--color-text-soft); }
-    .hand__pills { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
-    .hand__pill { font-family: var(--font-mono); font-size: 0.66rem; border: 1px solid var(--color-border);
-      padding: 0.2rem 0.45rem; color: var(--color-text-soft); white-space: nowrap; }
-    .hand ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
-    .hand li { position: relative; padding-left: 0.8rem; font-size: 0.8rem; line-height: 1.45; color: var(--color-text-soft); }
-    .hand li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 4px; height: 1px;
-      background: var(--color-text-muted); }
-    /* The header's chip row and the targets card's register, reused as they
-       are, one size down. Same specificity as .sp-alloc .sv__sleeves above
-       and later in the sheet, so the cap wins inside the card too. */
-    .hand .sv__fact-row { margin-top: 0; }
-    .hand .sv__sleeves { max-width: 30rem; }
-    .hand .sv__sleeve { padding: 0.22rem 0; }
-    .hand .sv__sleeve-n, .hand .sv__sleeve-v { font-size: 0.76rem; }
-    .hand .sv__sleeve-track { height: 4px; }
-    .hand__links li { font-size: 0.84rem; color: var(--color-text); }
-    .hand__links a { color: var(--color-text); text-decoration: none; border-bottom: 1px solid var(--color-border); }
-    .hand__links a::after { content: " \2192"; color: var(--color-text-muted); }
-    .hand__links a:hover { border-bottom-color: var(--color-text-muted); }
-    .hand__links a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-    /* A 10rem label column leaves a phone a sliver for the value, so the label
-       goes on top. Same breakpoint the register drops its bars at. */
-    @media (max-width: 720px) {
-      .hand { padding: 0.2rem 1rem 0.85rem; }
-      .hand__row { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
-      .hand dt { padding-top: 0; }
-    }
-
     /* The latest review sits inside the targets card, under its note: a
        bordered block of its own, with a heading one step below the card's. */
     .sp-alloc .sr { margin-top: 1.25rem; }
@@ -748,10 +670,5 @@
     .sp-alloc__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
       gap: 0.4rem 1.5rem; }
     .sp-alloc__head .sv__cov-lnk { margin-top: 0; }
-    .hand__pill-wrap { display: contents; }
-    .hand__pill--link { color: var(--color-text); text-decoration: none; }
-    .hand__pill--link::after { content: " \2192"; color: var(--color-text-muted); }
-    .hand__pill--link:hover { border-color: var(--color-text-muted); }
-    .hand__pill--link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
   </style>
 </section>

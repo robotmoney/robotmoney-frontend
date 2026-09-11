@@ -15,8 +15,7 @@ import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
-import { sessionSummary } from "../lib/session-summary.js";
-import { isKnownPage, metaFor } from "../seo.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel } from "../lib/session-summary.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
@@ -354,7 +353,7 @@ function humanizeLabel(id) {
 
 // Pure transform behind the Alpine `withinBucketWeights()` method (below):
 // normalizes a swarmRecommendation's per-bucket constituent weights into
-// the { bucket, items: [{ name, weight }] } rows session.html's `.sv__within`
+// the { bucket, items: [{ name, weight }] } rows session.html's `.sr__within`
 // block iterates. Exported so scripts/tests/unit/frontend-routes.test.ts can
 // assert AC2 (within-bucket weights render, matching production) without a
 // browser — the same reason camelTake/takeHref are exported above.
@@ -1145,7 +1144,7 @@ export function registerStaticViews(Alpine) {
         this.setBackdrop(this.sessions[0]?.regimeSummary || this.brief?.regime || null, {
           date: this.sessions[0]?.date || this.brief?.date || "",
           scope: "latest",
-          v0: !this.latestIsLive(),
+          v0: this.readingIsV0(this.latest()),
         });
       } catch (e) {
         this.error = e.message || "Subject not found";
@@ -1209,116 +1208,6 @@ export function registerStaticViews(Alpine) {
     hasLatestReview() {
       const l = this.latest();
       return Boolean(l) && (this.signalRows().length > 0 || this.voteTotal(l) > 0);
-    },
-    // A live reading follows the published regime method; the static archive
-    // (through ARCHIVE_LAST_DATE) and anything imported from it do not.
-    latestIsLive() {
-      const l = this.latest();
-      if (!l) return false;
-      return String(l.date || "").slice(0, 10) > ARCHIVE_LAST_DATE
-        && !(l.takeRows || []).some((/** @type {any} */ t) => t.archival);
-    },
-    subjectNameOf(id) { return this.subjectNames[id] || id; },
-    // What the swarm was handed when the latest session opened, part by part,
-    // from that session's brief. A part renders only if the brief contains it:
-    // the live brief and the v0 archive brief have different shapes.
-    handoverParts() {
-      const b = this.brief?.body || this.brief;
-      if (!b || typeof b !== "object") return [];
-      const txt = (/** @type {unknown} */ v) => (typeof v === "string" ? v.trim() : "");
-      // A pill is text, or text with an href when the site has a page there.
-      const pills = (/** @type {string} */ key, /** @type {Array<string | {text: string, href?: string}>} */ list) =>
-        list
-          .map((x) => (typeof x === "string" ? { text: x, href: "" } : { text: x.text, href: x.href || "" }))
-          .filter((x) => x.text)
-          .map((x, i) => ({ key: `${key}-${i}`, text: x.text, href: x.href && isKnownPage(x.href) ? x.href : "" }));
-      const day = (/** @type {unknown} */ v) => {
-        const d = new Date(`${String(v || "").slice(0, 10)}T00:00:00Z`);
-        return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
-      };
-      const human = (/** @type {unknown} */ k) => {
-        const t = String(k || "").replace(/[_-]+/g, " ").trim();
-        return t ? t[0].toUpperCase() + t.slice(1) : "";
-      };
-      const parts = [];
-      const inst = txt(b.prompt?.user);
-      if (inst) parts.push({ key: "instruction", label: "Instruction", quote: inst });
-      const r = b.regime;
-      if (r && (r.regime || r.composite != null)) {
-        // session.html's chips, word for word: composite is a number and has
-        // no dot; regime, macro and onchain are readings and each wears its own.
-        const comp = Number(r.composite);
-        const macro = r.macro_regime || r.macroRegime;
-        const onchain = r.onchain_regime || r.onchainRegime;
-        const reading = (/** @type {string} */ k, /** @type {unknown} */ v) => ({ k, v: this.regimeLabel(v), dot: this.regimeColor(v) });
-        const facts = [
-          Number.isFinite(comp) ? { k: "composite", v: comp.toFixed(3), dot: "" } : null,
-          r.regime ? reading("regime", r.regime) : null,
-          macro ? reading("macro", macro) : null,
-          onchain ? reading("onchain", onchain) : null,
-        ].filter(Boolean).map((f, i) => ({ key: `regime-${i}`, ...f }));
-        parts.push({ key: "regime", label: "Market regime", facts });
-      }
-      // The weights in force when the session opened, drawn as the targets
-      // card draws the weights in force now. A sleeve keeps the hue it has in
-      // that card, matched by name, so the two registers read against each
-      // other; position is the fallback when the card is not on the page.
-      const buckets = b.allocation?.buckets;
-      if (Array.isArray(buckets) && buckets.length) {
-        const now = this.allocationTargets().map((t) => t.label);
-        const bars = buckets.map((/** @type {any} */ x, /** @type {number} */ i) => {
-          const w = Number(x?.target_weight ?? x?.targetWeight);
-          if (!x?.name || !Number.isFinite(w)) return null;
-          const at = now.indexOf(x.name);
-          return { key: `targets-${i}`, label: x.name, pct: Math.round(w * 100), hue: CATEGORICAL[(at >= 0 ? at : i) % CATEGORICAL.length] };
-        }).filter(Boolean);
-        if (bars.length) parts.push({ key: "targets", label: "Targets", bars });
-      }
-      const signals = b.researchSignals || b.research_signals;
-      const articles = b.research?.articles;
-      if (Array.isArray(signals) && signals.length) {
-        // Each signal has a reader page at /research/<key> when the site
-        // publishes one; the brief's own href is the JSON route, not a page.
-        // A list of links, not pills: each item is a page to read.
-        parts.push({ key: "research", label: "Research signals", links: pills("research", signals.map((/** @type {any} */ x) => {
-          const k = String(x?.signalKey || x?.signal_key || "");
-          const href = k ? `/research/${encodeURIComponent(k)}` : "";
-          // The page's own name when there is a page ("Late-Cycle Signals"),
-          // the key humanised when there is not.
-          const title = href && isKnownPage(href) ? String(metaFor(href).title || "").split(" — ")[0].trim() : "";
-          return { text: title || human(k), href };
-        })) });
-      } else if (Array.isArray(articles) && articles.length) {
-        parts.push({ key: "research", label: "Research", links: pills("research", articles.map((/** @type {any} */ x) => ({ text: txt(x?.title), href: txt(x?.slug) }))) });
-      }
-      const recent = b.recentSessions || b.recent_sessions;
-      if (Array.isArray(recent) && recent.length) {
-        // Each ref links to its session by the dated address, which resolves
-        // for live sessions and archived ones alike. The live brief names the
-        // subject on every ref (they span subjects); the archive brief's refs
-        // are this subject's own and carry no subject at all.
-        const own = b.subject_id || b.subjectId || this.subject?.id || "";
-        parts.push({
-          key: "recent", label: "Recent sessions",
-          pills: pills("recent", recent.map((/** @type {any} */ x) => {
-            const sid = x?.subject_id || x?.subjectId;
-            const d = day(x?.date);
-            const date = String(x?.date || "").slice(0, 10);
-            const href = d && (sid || own) ? `/swarm/${date}/${encodeURIComponent(sid || own)}` : "";
-            return { text: sid ? `${d} · ${this.subjectNameOf(sid)}` : d, href };
-          })),
-        });
-      }
-      const rawNotes = b.subject?.structuralNotes ?? b.subject?.structural_notes;
-      const notes = (Array.isArray(rawNotes) ? rawNotes : rawNotes ? [rawNotes] : []).map(txt).filter(Boolean);
-      if (notes.length) parts.push({ key: "notes", label: "Operator notes", list: notes.map((text, i) => ({ key: `n-${i}`, text })) });
-      const schema = b.takeSchema && typeof b.takeSchema === "object" ? Object.keys(b.takeSchema) : [];
-      if (schema.length) {
-        /** @type {Record<string, string>} */
-        const said = { body: "written take", stance: "stance", confidence: "confidence", weights: "target weights" };
-        parts.push({ key: "returns", label: "Asked to return", pills: pills("returns", schema.map((k) => said[k] || human(k))) });
-      }
-      return parts;
     },
     async loadSessions(id) {
       const pick = (list) => list
@@ -1974,6 +1863,11 @@ export function registerStaticViews(Alpine) {
 
   Alpine.data("swarmSessionDetail", () => ({
     ...helpers,
+    // The review band's vote and the recommendation ring, shared with /swarm
+    // and the subject page. Spread BEFORE this page's own keys, and nothing
+    // below redefines a name it carries: an own method of the same name would
+    // silently replace the one its siblings call through `this`.
+    ...sessionSummary,
     ...sessionBrief(),
     loading: true,
     error: null,
@@ -1990,6 +1884,8 @@ export function registerStaticViews(Alpine) {
     brief: null,
     takes: [],
     members: [],
+    // subject id → name, for the brief's recent-session refs, which carry ids.
+    subjectNames: {},
     async init() {
       // TWO addressing forms reach this view:
       //   /swarm/sessions/<uuid>  — one exact session, the only form that can
@@ -2051,12 +1947,12 @@ export function registerStaticViews(Alpine) {
       const detail = await loadArchiveSession(date, subject);
       this.source = "archive";
       this.session = detail.session;
-      // Same component the subject profile draws, fed this session's own
-      // reading rather than the newest one. See lib/session-brief.js.
-      this.setBackdrop(this.session?.regimeSummary, { date: this.session?.date, scope: "session" });
       this.takes = detail.takes;
+      // Same band the subject profile draws, fed this session's own reading.
+      this.setBackdrop(this.session?.regimeSummary, { date: this.session?.date, v0: this.readingIsV0(this.session) });
       this.subject = await loadArchiveSubject(subject).catch(() => null);
-      this.snapshot = await loadArchiveSnapshot(subject, date);
+      // A framework has no book: see loadApi().
+      this.snapshot = this.isFramework() ? null : await loadArchiveSnapshot(subject, date);
       const ids = [...new Set([...this.takes.map((t) => t.memberId), ...KNOWN_ARCHIVE_MEMBERS])];
       const members = await Promise.all(ids.map((id) => loadArchiveMember(id).catch(() => null)));
       this.members = members.filter(Boolean);
@@ -2072,22 +1968,24 @@ export function registerStaticViews(Alpine) {
     // as before. Everything after the fetch is shared, so the two addressing
     // forms cannot drift into rendering different pages.
     async loadApi(date, subject, preloaded = null) {
-      // Fetch subject + snapshots alongside the session so the live/API path
-      // renders the SAME reference experience as the archive path (charts +
-      // portfolio). Each side-fetch is independently guarded so a missing
-      // subject/snapshot never breaks the takes/session render.
+      // The brief THIS session opened with. Asked for by date, the API answers
+      // with that day's latest brief, which is the right one for the dated
+      // address (it opens the day's latest session) and the wrong one for an
+      // earlier session of the same day reached by its id (#965).
+      const sessionId = preloaded?.session?.id;
+      const briefQuery = sessionId ? { session: sessionId } : { date, subject };
+      // Each side-fetch is independently guarded so a missing subject, snapshot,
+      // brief, roster or framework never breaks the session render.
       const [detail, memberData, brief, subjectData, snapshotData, allocation, framework] = await Promise.all([
         preloaded ?? api.get(path(ROUTES.swarm.session, { date, subject })),
-        api.get(ROUTES.swarm.members),
-        api.get(ROUTES.swarm.brief, { date, subject }).catch(() => null),
+        // Guarded like the rest. It was the one side-fetch that was not, so a
+        // roster that failed to load took the whole session down with it.
+        api.get(ROUTES.swarm.members).catch(() => ({ members: [] })),
+        api.get(ROUTES.swarm.brief, briefQuery).catch(() => null),
         api.get(path(ROUTES.swarm.subject, { id: subject })).catch(() => null),
         api.get(path(ROUTES.swarm.subjectSnapshots, { id: subject })).catch(() => null),
         // The allocation framework supplies the TARGET weight each bucket is
-        // measured against. Without it the bucket chart could only draw
-        // "Recommended", so a session that proposed 97/3 against a 95/5 target
-        // rendered as two bars with nothing to compare them to — the reader
-        // could not see that it deviated at all. Guarded like the other
-        // side-fetches: a missing framework degrades the chart, never the page.
+        // measured against when the brief did not hand the session one.
         api.get(ROUTES.dashboards.allocation).catch(() => null),
         // The published framework manifest, for the two things the dashboard
         // endpoint does not carry: which TOKENS belong to each bucket (without
@@ -2097,16 +1995,59 @@ export function registerStaticViews(Alpine) {
       ]);
       this.source = "api";
       this.session = camelSession(detail.session);
-      // Same component the subject profile draws, fed this session's own
-      // reading rather than the newest one. See lib/session-brief.js.
-      this.setBackdrop(this.session?.regimeSummary, { date: this.session?.date, scope: "session" });
       this.takes = (detail.takes || []).map(camelTake);
-      this.members = (memberData.members || []).map(camelMember);
-      this.subject = subjectData ? camelSubject(subjectData) : null;
-      this.snapshot = pickSnapshotFor(snapshotData?.snapshots, date);
+      this.setBackdrop(this.session?.regimeSummary, { date: this.session?.date, v0: this.readingIsV0(this.session) });
+      this.members = (memberData?.members || []).map(camelMember);
+      // The API answers 200 with a null body for a subject it does not hold,
+      // which is every subject on a stack seeded without them. The checked-in
+      // manifest is what says whether this is a framework, so it is read the
+      // same way subjectProfile reads it.
+      this.subject = (subjectData ? camelSubject(subjectData) : null) || await loadArchiveSubject(subject).catch(() => null);
+      // A FRAMEWORK subject has no book, so it gets none, as on its subject
+      // page. The release smoke writes a fake basket into
+      // swarm_subject_snapshots for every subject that is not woon or mav, so
+      // this page drew "Portfolio read · $42,688" for robotmoney-allocation,
+      // whose own notes open with "no portfolio to scrape", and measured the
+      // recommendation's gaps against that invented book.
+      this.snapshot = this.isFramework() ? null : pickSnapshotFor(snapshotData?.snapshots, date);
       this.brief = brief;
       this.allocation = allocation;
       this.allocationFramework = framework;
+      this.subjectNames = { [this.session?.subjectId]: this.session?.subjectName };
+      const body = brief?.body || brief;
+      if ((body?.recentSessions || []).some((/** @type {any} */ r) => r?.subject_id && r.subject_id !== this.session?.subjectId)) {
+        this.loadSubjectNames();
+      }
+    },
+    // The live brief's recent-session refs name their subjects by id. The
+    // sessions list is the one public read that pairs an id with a name, the
+    // same list the subject page names them from. Not awaited: the refs read
+    // as ids until it lands, and as ids for good if it does not.
+    async loadSubjectNames() {
+      try {
+        const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
+        const names = { ...this.subjectNames };
+        for (const x of all) {
+          const sid = x.subjectId ?? x.subject_id;
+          const name = x.subjectName ?? x.subject_name;
+          if (sid && name && !names[sid]) names[sid] = name;
+        }
+        this.subjectNames = names;
+      } catch (_) { /* ids stand in for names */ }
+    },
+    isFramework() { return this.subject?.source?.type === "framework"; },
+    subjectHref() {
+      const id = this.session?.subjectId || this.subject?.id;
+      return id ? `/swarm/subjects/${encodeURIComponent(id)}` : "/swarm";
+    },
+    // The session in the shape the shared review band reads (lib/
+    // session-summary.js): the record, with its takes on it as `takeRows`.
+    reviewRow() {
+      return this.session ? { ...this.session, takeRows: this.takes } : null;
+    },
+    hasReview() {
+      const row = this.reviewRow();
+      return Boolean(row) && (this.signalRows().length > 0 || this.voteTotal(row) > 0);
     },
     memberLens(memberId) {
       return this.memberById(memberId)?.lens || "swarm member";
@@ -2158,115 +2099,55 @@ export function registerStaticViews(Alpine) {
       return (this.session?.swarmRecommendation?.absent || [])
         .map((id) => this.memberById(id)?.name || id);
     },
-    // Stance distribution, largest first, with each share of the submitted
-    // takes — the proportional bar and the key both read from this so they can
-    // never disagree.
-    stanceSpread() {
-      const stances = this.session?.swarmRecommendation?.stances || {};
-      const total = Object.values(stances).reduce((sum, n) => sum + Number(n || 0), 0);
-      return Object.entries(stances)
-        .map(([stance, n]) => ({ stance, n: Number(n), pct: total ? (Number(n) / total) * 100 : 0 }))
-        .sort((a, b) => b.n - a.n || a.stance.localeCompare(b.stance));
-    },
-    // The recommendation block used to lead with turnout ("3/5", set in the
-    // largest type on the page) and leave the reader to tally the stance chips
-    // themselves. Turnout is procedural; the finding is the modal stance — or,
-    // when nothing outpolls anything else, that there ISN'T one. A split is a
-    // real swarm result and this page stated it nowhere.
-    verdict() {
-      const rows = this.stanceSpread();
-      if (!rows.length) return { label: "No stances recorded", detail: "", color: "#7e889e", split: true };
-      const submitted = rows.reduce((sum, r) => sum + r.n, 0);
-      const tied = rows.filter((r) => r.n === rows[0].n);
-      if (tied.length > 1) {
-        return {
-          label: "Split · no majority",
-          detail: `${tied.map((r) => r.stance).join(", ")} tied at ${rows[0].n} member${rows[0].n === 1 ? "" : "s"} each.`,
-          color: "#7e889e",
-          split: true,
-        };
-      }
-      return {
-        label: rows[0].stance,
-        detail: `${rows[0].n} of ${submitted} submitted take${submitted === 1 ? "" : "s"} took this position.`,
-        color: this.stanceColor(rows[0].stance),
-        split: false,
-      };
-    },
-    quorumText() {
-      const q = this.session?.swarmRecommendation?.quorum;
-      const submitted = q?.submitted ?? this.takes.length;
-      const active = q?.active ?? this.members.length;
-      return `${submitted} of ${active} submitted`;
-    },
-    // The Brief panel rendered "Subject: {name}. Regime: {label}." — the <h1>
-    // and a backdrop chip, restated in a half-width panel that was otherwise
-    // empty. Only the part a reader has not already seen earns the space.
-    briefExtra() {
-      const body = this.brief?.body || this.brief;
-      const n = Array.isArray(body?.researchSignals) ? body.researchSignals.length : 0;
-      return n ? `${n} research signal${n === 1 ? "" : "s"} were attached to the brief members received.` : "";
-    },
-    briefSummary() {
-      const body = this.brief?.body || this.brief;
-      if (!body) return "No brief available.";
-      const subject = body.subject?.name || this.session?.subjectName;
-      const regime = body.regime?.regime ? this.regimeLabel(body.regime.regime) : null;
-      const signals = Array.isArray(body.researchSignals) ? body.researchSignals.length : 0;
-      return [subject ? `Subject: ${subject}.` : "", regime ? `Regime: ${regime}.` : "", signals ? `${signals} research signals attached.` : ""].filter(Boolean).join(" ") || JSON.stringify(body).slice(0, 240);
-    },
-    recommendationKind() {
-      const rec = this.session?.swarmRecommendation;
-      if (!rec) return "none";
-      if (rec.quorum || rec.stances) return "rollup";
-      return rec.type ? String(rec.type).replace(/_/g, " ") : "recommendation";
-    },
     isRollupRecommendation() {
       const rec = this.session?.swarmRecommendation;
       return !!(rec && (rec.quorum || rec.stances));
     },
     // The recommendation's own prose, or "" when it cannot be trusted.
     //
-    // On a rollup the aggregator currently fills `rationale` with the member
-    // take bodies concatenated: measured on 2026-09-25/mav it is 3714 characters
-    // and BYTE-IDENTICAL to session.synthesis. Printing it would repeat the same
-    // text a reader has already scrolled past under the takes, a third time,
-    // under a heading claiming it is the swarm's reasoning. This is the same
-    // judgement synthesisIsEcho() and consensusItems() already make elsewhere on
-    // this page; the fix belongs in the aggregator, and until it lands the page
-    // stays silent rather than pretending three quoted takes are a rationale.
+    // On a rollup the aggregator writes `rationale` from a template over the
+    // stance tally, the mean confidence and the regime percentile
+    // (domain.ts buildRationale), every one of which the review band draws. v0
+    // sessions carry a rationale somebody wrote, and that one is the reason
+    // behind the weights.
     recommendationRationale() {
       const rec = this.session?.swarmRecommendation;
       if (!rec || this.isRollupRecommendation()) return "";
       return rec.rationale || "";
     },
-    // Legacy — present only on sessions published before #752 (D42,
-    // architecture.md §9.7). No session aggregated from now on carries an
-    // `actions` array; when present this is append-only history (two
-    // hardcoded USDC/rmUSDC rows derived from no member input) and the page
-    // labels it as pre-#752 output rather than swarm-derived. See
-    // session.html's `.sv__rec-actions` block.
+    // The recommendation's `actions`, as the payload carries them. Rollups
+    // aggregated between 2026-08-06 and 2026-09-04 carry the same two
+    // hardcoded rows (USDC rotate, rmUSDC add) on every subject, derived from
+    // no member input (pre-#752, D42 §9.7); v0 sessions carry actions their
+    // members wrote. authoredActions() is the half this page draws.
     recommendationActions() {
       return this.session?.swarmRecommendation?.actions || [];
+    },
+    authoredActions() {
+      if (this.isRollupRecommendation()) return [];
+      return this.recommendationActions().filter((a) => a && a.action);
     },
     hasRecommendationDetail() {
       return !!(this.isBucketWeights() || this.recommendationActions().length || this.recommendationRationale());
     },
+    // The largest position first, which the subject page's holdings table
+    // already does. The table takes the first eight, and unsorted that was the
+    // first eight the snapshot happened to list.
     positionRows() {
       const total = this.snapshot?.totalValueUsd || 0;
-      return (this.snapshot?.positions || []).map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }));
+      return (this.snapshot?.positions || [])
+        .map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }))
+        .sort((a, b) => b.share - a.share);
     },
-    donutStyle(p, i) {
-      const colors = ["#00e5ff", "#5fb3a1", "#10b981", "#e8a640", "#ff7a29", "#7e889e", "#6ee7b7"];
-      return `--c:${colors[i % colors.length]};--p:${this.clampPct((p.share || 0) * 100)};`;
-    },
+    // A token's colour is its colour everywhere on the site (assetDot).
+    tokenColor(token) { return assetDot(token); },
     humanize(id) {
       return humanizeLabel(id);
     },
-    // Normalize a bucket_weights recommendation into rows the bar chart can draw.
+    // Normalize a bucket_weights recommendation into rows the outcome can draw.
     // Prefers explicit bucket rows (name/target/actual/recommended) if the
-    // payload carries them; otherwise derives Recommended-only rows from the
-    // weights map (target/actual are unavailable without allocation data).
+    // payload carries them; otherwise derives rows from the weights, joined to
+    // a target and, when the book is known, to where it actually sits.
     // Bucket ids and framework labels are written differently on each side
     // ("conservative_defi_yield" vs "Conservative DeFi Yield" — note DeFi's
     // inner capital, which humanize() cannot reproduce). Comparing on
@@ -2280,35 +2161,66 @@ export function registerStaticViews(Alpine) {
       }
       return out;
     },
+    // The targets THIS session was handed, from its own brief. The v0 brief
+    // carries them (allocation.buckets); the live brief does not yet (#961).
+    // They win over the published framework because they are what the swarm
+    // was actually aiming at: the framework row is the CURRENT one, and it can
+    // postdate the session it is being compared against.
+    briefTargets() {
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const body = this.brief?.body || this.brief;
+      const out = new Map();
+      for (const b of body?.allocation?.buckets || []) {
+        const w = Number(b?.target_weight ?? b?.targetWeight);
+        if (!Number.isFinite(w)) continue;
+        const t = { label: b.name || this.humanize(b.id), target: w };
+        if (b.id) out.set(norm(b.id), t);
+        if (b.name) out.set(norm(b.name), t);
+      }
+      return out;
+    },
+    // "brief" when the session's own brief named the targets, "framework" when
+    // the published framework stands in for them, null when neither did.
+    targetSource() {
+      if (!this.bucketWeights().some((b) => b.target != null)) return null;
+      return this.briefTargets().size ? "brief" : "framework";
+    },
     bucketWeights() {
       const rec = this.session?.swarmRecommendation;
       if (!rec || rec.type !== "bucket_weights") return [];
-      const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+      const num = (v) => (v !== null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null);
       if (Array.isArray(rec.buckets) && rec.buckets.length) {
-        return rec.buckets.map((b) => ({
+        return rec.buckets.map((b, i) => ({
           name: b.name || this.humanize(b.id),
+          hue: bucketHue(b.id || b.name, i),
           target: num(b.target ?? b.target_weight),
           actual: num(b.actual ?? b.actual_weight),
           recommended: num(b.recommended ?? b.weight) ?? 0,
         }));
       }
-      const weights = rec.weights;
-      if (!weights || typeof weights !== "object") return [];
+      // Either shape the weights arrive in: the v0 map or the live array.
+      const entries = weightEntries(rec.weights);
+      if (!entries.length) return [];
+      const handed = this.briefTargets();
       const targets = this.allocationTargets();
       const manifest = this.frameworkBuckets();
       const actuals = this.bucketActuals();
       const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      return Object.entries(weights).map(([id, w]) => {
+      return entries.map(([id, w], i) => {
+        const brief = handed.get(norm(id)) ?? handed.get(norm(this.humanize(id)));
         const framework = targets.get(norm(this.humanize(id))) ?? targets.get(norm(id));
         const bucket = manifest.get(norm(id)) ?? manifest.get(norm(this.humanize(id)));
+        // The live dashboard's target, with the published manifest behind it
+        // so a backendless checkout still has something to compare against.
+        const published = framework ? framework.target : (bucket ? bucket.target : null);
         return {
           // Prefer the framework's own spelling of the bucket name when it is
           // known; humanize() of an id cannot recover "DeFi".
-          name: framework?.label || bucket?.name || this.humanize(id),
-          // The live dashboard's target wins when it answered — it is the
-          // CURRENT framework — with the published manifest behind it so a
-          // backendless checkout still has something to compare against.
-          target: framework ? framework.target : (bucket ? bucket.target : null),
+          name: framework?.label || bucket?.name || brief?.label || this.humanize(id),
+          hue: bucketHue(id, i),
+          // A brief that named any target names them all, so a sleeve it left
+          // out has no target rather than borrowing the framework's.
+          target: handed.size ? (brief ? brief.target : null) : published,
           actual: bucket ? (actuals.get(bucket.id) ?? null) : null,
           recommended: num(w) ?? 0,
         };
@@ -2359,47 +2271,49 @@ export function registerStaticViews(Alpine) {
     // unqualified claim — see the caller.
     allocationAsOf() { return this.allocation?.asOf || this.allocationFramework?.asOf || null; },
     // Whether the target predates the session it is being compared against.
-    // v0's archive spans 2026-05-25 onward and the framework's asOf is later
-    // than the earliest of them, so a straight join measures a historical
-    // session against a target that did not exist yet — and, because the
-    // framework is admin-editable, an edit today silently rewrites yesterday's
-    // verdict on every archived allocation session.
+    // Only a question for the published framework: v0's archive spans
+    // 2026-05-25 onward and the framework's asOf is later than the earliest of
+    // them, so a straight join measures a historical session against a target
+    // that did not exist yet — and, because the framework is admin-editable, an
+    // edit today silently rewrites yesterday's verdict on every archived
+    // allocation session. A target the brief handed over cannot postdate it.
     targetPostdatesSession() {
+      if (this.targetSource() !== "framework") return false;
       const asOf = this.allocationAsOf();
       const date = this.session?.date;
       return !!(asOf && date && String(date) < String(asOf).slice(0, 10));
     },
-    // Whether the swarm proposed something OTHER than the published target.
-    // Mirrors the reference implementation's half-a-point tolerance, so a
-    // rounding artifact never renders as a deviation.
-    //
-    // Suppressed when the target postdates the session: "deviates from target"
-    // is a judgement on the swarm, and it cannot be made against a target the
-    // swarm could not have been aiming at. The bars still draw, captioned with
-    // the framework's own asOf, so the comparison is visible as a comparison
-    // rather than asserted as a finding.
+    // Whether the swarm proposed something OTHER than the target. Mirrors the
+    // reference implementation's half-a-point tolerance, so a rounding artifact
+    // never renders as a deviation. Suppressed when the target postdates the
+    // session: it is a judgement on the swarm, and it cannot be made against a
+    // target the swarm could not have been aiming at.
     deviatesFromTarget() {
       if (this.targetPostdatesSession()) return false;
       return this.bucketWeights().some((b) => b.target != null && Math.abs(b.recommended - b.target) > 0.005);
     },
-    // Per-constituent weights inside each bucket. The payload has carried
-    // `within_bucket_weights` all along and nothing rendered it, so allocation
-    // sessions answered "95/5/0/0" and stopped — while the page's own copy asks
-    // "within each bucket are the right constituents weighted correctly?".
-    // Production prints this table; this rebuild dropped it.
+    // Per-constituent weights inside each bucket. Each sleeve under its
+    // published name and hue, and each item under the name the brief gave it
+    // ("Morpho", "Compound") when the brief named it.
     withinBucketWeights() {
-      return withinBucketWeightsFrom(this.session?.swarmRecommendation);
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const body = this.brief?.body || this.brief;
+      const named = new Map();
+      for (const b of body?.allocation?.buckets || []) {
+        for (const it of b?.items || []) if (it?.id && it?.name) named.set(norm(it.id), it.name);
+      }
+      return withinBucketWeightsFrom(this.session?.swarmRecommendation).map((b, i) => ({
+        ...b,
+        label: bucketLabel(b.bucket),
+        hue: bucketHue(b.bucket, i),
+        items: b.items.map((it) => ({ ...it, label: named.get(norm(it.name)) || it.name })),
+      }));
     },
     isBucketWeights() {
       const rec = this.session?.swarmRecommendation;
       return !!(rec && rec.type === "bucket_weights" && this.bucketWeights().length);
     },
-    // The bucket table's rows: the recommendation as numbers, and the move it
-    // implies. The bars alone could not carry this panel — a book weighted
-    // 97/3/0/0 draws one long bar and three that round to nothing, so the whole
-    // recommendation was legible only in the value labels, and the reader had to
-    // do the arithmetic that matters (how far is this from where we are?) in
-    // their head.
+    // The outcome's rows: the recommendation, and the move it implies.
     //
     // The gap is measured against ACTUAL where we know it, because that is the
     // move being asked for; against target otherwise, which is a different
@@ -2414,15 +2328,21 @@ export function registerStaticViews(Alpine) {
       });
     },
     // "actual" once any bucket reports where the book actually sits, else
-    // "target" when the framework supplies one, else null — no basis, no column.
+    // "target" when a target is known, else null — no basis, no column.
     gapBasis() {
       const buckets = this.bucketWeights();
       if (buckets.some((b) => b.actual != null)) return "actual";
       if (buckets.some((b) => b.target != null)) return "target";
       return null;
     },
+    hasTargetColumn() { return this.bucketWeights().some((b) => b.target != null); },
+    hasActualColumn() { return this.bucketWeights().some((b) => b.actual != null); },
+    // The number of figure columns in the outcome register, for its grid.
+    outcomeColumns() {
+      return 1 + (this.hasTargetColumn() ? 1 : 0) + (this.hasActualColumn() ? 1 : 0) + (this.gapBasis() ? 1 : 0);
+    },
     // A gap under half a point is rounding, not a proposal — the same tolerance
-    // deviatesFromTarget() uses, so the table and the ⚠ line cannot disagree.
+    // deviatesFromTarget() uses, so the figures and the state cannot disagree.
     fmtGap(gap) {
       if (gap == null) return "—";
       const pp = gap * 100;
@@ -2436,141 +2356,98 @@ export function registerStaticViews(Alpine) {
     fmtWeight(v) {
       return v == null ? "—" : `${Math.round(v * 100)}%`;
     },
-    // Inline-SVG grouped bars per bucket: Target (open outline), Actual (muted
-    // fill), Recommended (accent fill) — mirrors the reference BucketWeightsBars.
-    // Target/Actual rows only appear when at least one bucket supplies them, so
-    // the chart degrades cleanly to Recommended-only when allocation data is
-    // absent. Axis pinned 0-100% for cross-bucket comparability.
-    bucketWeightsBars() {
-      const buckets = this.bucketWeights();
-      if (!buckets.length) return "";
-      const hasTarget = buckets.some((b) => b.target != null);
-      const hasActual = buckets.some((b) => b.actual != null);
-      const series = [
-        hasTarget ? { key: "target", label: "target", fill: "transparent", stroke: "var(--color-text-muted)", txt: "var(--color-text-muted)" } : null,
-        // "actual" is a filled bar rather than type, so it takes the muted tone
-        // knocked back rather than the tone itself: at full strength the slab
-        // would out-shout the recommended bar it exists to be compared against.
-        // The opacity is set so the bar composites to roughly the weight it had
-        // on the retired --color-text-dim rung.
-        hasActual ? { key: "actual", label: "actual", fill: "var(--color-text-muted)", opacity: "0.45", txt: "var(--color-text-muted)" } : null,
-        { key: "recommended", label: "recommended", fill: "var(--color-accent)", txt: "var(--color-accent)" },
-      ].filter(Boolean);
-      // The series are NOT named per row. Repeating "target / actual /
-      // recommended" beside every bucket printed the same three words four
-      // times and left the figure looking like a form; the key lives once,
-      // under the chart, as bucketBarsKey(). The values keep their % suffix,
-      // because that unit is per-number and a key cannot supply it.
-      //
-      // There is also no 0/50/100 tick row. Each bar sits on a full-width track
-      // that IS 100% of NAV, so the scale is already stated by the geometry and
-      // again by the value at the end of every bar — a tick row on top of that
-      // read as a third, competing scale next to the "% of NAV" heading.
-      // The bucket name sits in a left COLUMN beside its bars, not on a line of
-      // its own above them. Dropping the series column had left the bars running
-      // the full width of the panel as ~3px hairlines with the name stranded
-      // above — more air than figure. Beside the name they are shorter, thicker,
-      // and the whole thing reads as the table it is.
-      const W = 580, labelW = 160, valW = 44;
-      const barX = labelW;
-      const barW = W - barX - valW;
-      const subH = 8, subGap = 4, gap = 14;
-      const headY = 8, axisH = 23;
-      const groupH = series.length * subH + (series.length - 1) * subGap;
-      const H = axisH + buckets.length * (groupH + gap) + 2;
-      const x = (v) => barX + this.clampPct(v * 100) / 100 * barW;
-      const mono = 'font-family="ui-monospace,monospace"';
-      const heads = `<text x="0" y="${headY}" fill="var(--color-text-muted)" font-size="8.5" ${mono}
-          style="text-transform:uppercase;letter-spacing:0.06em">Sleeve</text>
-        <text x="${W}" y="${headY}" text-anchor="end" fill="var(--color-text-muted)" font-size="8.5" ${mono}
-          style="text-transform:uppercase;letter-spacing:0.06em">% of NAV</text>`;
-      const rule = `<line x1="0" y1="${axisH - 4}" x2="${W}" y2="${axisH - 4}" stroke="var(--color-border)"/>`;
-      const body = buckets.map((b, i) => {
-        const top = axisH + i * (groupH + gap);
-        const sub = series.map((s, si) => {
-          const v = b[s.key];
-          const barY = top + si * (subH + subGap);
-          const txtY = barY + subH - 1;
-          // The full-width track. Without it a 0% bucket drew nothing at all —
-          // three of four rows on a 97/3/0/0 recommendation were an empty band
-          // and a number, which reads as missing data rather than as zero.
-          const track = `<rect x="${barX}" y="${barY}" width="${barW}" height="${subH}" fill="var(--color-surface)"/>`;
-          if (v == null) {
-            return `${track}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="var(--color-text-muted)" font-size="9" ${mono}>—</text>`;
-          }
-          const w = Math.max(0, x(v) - barX);
-          const rect = s.fill === "transparent"
-            ? `<rect x="${barX}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="transparent" stroke="${s.stroke}"/>`
-            : `<rect x="${barX}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="${s.fill}"${s.opacity ? ` fill-opacity="${s.opacity}"` : ""}/>`;
-          // The order the bars are stacked in IS the key's order, so the two can
-          // be read against each other without either being numbered.
-          return `${track}${rect}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="${s.txt}" font-size="9" ${mono}>${Math.round(v * 100)}%</text>`;
-        }).join("");
-        // Centred against its own group of bars, so the name and the rows it
-        // labels are unambiguously one block.
-        const nameY = top + groupH / 2 + 3.5;
-        return `<g>
-          <text x="0" y="${nameY.toFixed(1)}" fill="var(--color-text)" font-size="10" ${mono}>${this.escapeHtml(b.name)}</text>
-          ${sub}
-        </g>`;
-      }).join("");
-      // The accessible name states the comparison AND the bar order, since a
-      // screen reader gets the figure without the visual key beneath it.
-      const drawn = series.map((s) => s.label).join(", then ");
-      return `<svg viewBox="0 0 ${W} ${H}" role="img"
-        aria-label="Sleeve weights as a percentage of NAV: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}. Bars per sleeve, in order: ${drawn}.">
-        ${heads}${rule}${body}
-      </svg>`;
+    hasOutcome() { return this.isBucketWeights() || this.authoredActions().length > 0; },
+    // The outcome in a word, the way the band states the signal and the
+    // reasoning: whether the swarm moved anything, and how much of it. Only
+    // when there is something to measure against and the comparison is fair.
+    outcomeState() {
+      if (this.isBucketWeights()) {
+        const basis = this.gapBasis();
+        if (!basis || this.targetPostdatesSession()) return null;
+        const rows = this.bucketRows().filter((b) => b.gap != null);
+        if (!rows.length) return null;
+        const moved = rows.filter((b) => this.gapClass(b.gap)).length;
+        const what = basis === "actual" ? "the book" : "the target";
+        return moved
+          ? { label: "Change", detail: `${moved} of ${rows.length} sleeves move from ${what}` }
+          : { label: "No change", detail: `matches ${what}` };
+      }
+      const acts = this.authoredActions();
+      if (!acts.length) return null;
+      const moved = acts.filter((a) => String(a.action).toLowerCase() !== "hold").length;
+      return moved
+        ? { label: "Change", detail: `${moved} of ${acts.length} positions` }
+        : { label: "No change", detail: `holds all ${acts.length} positions` };
     },
-    // The key for the bars above, rendered once under the figure rather than
-    // repeated on all four buckets. Order matches the stacking order inside each
-    // group, so a reader maps top-to-top without a numbered legend.
-    bucketBarsKey() {
-      const buckets = this.bucketWeights();
-      if (!buckets.length) return [];
-      return [
-        buckets.some((b) => b.target != null) ? { key: "target", label: "target" } : null,
-        buckets.some((b) => b.actual != null) ? { key: "actual", label: "actual" } : null,
-        { key: "recommended", label: "recommended" },
-      ].filter(Boolean);
+    // Which target, and whose book, the figures are measured against.
+    outcomeCaption() {
+      const basis = this.gapBasis();
+      if (!basis) return "";
+      const parts = [];
+      if (basis === "actual" && this.snapshot?.date) parts.push(`Actual is the book on ${this.formatDate(this.snapshot.date, "short")}.`);
+      if (this.hasTargetColumn()) {
+        if (this.targetSource() === "brief") {
+          parts.push("Target as handed to this session.");
+        } else if (this.allocationAsOf()) {
+          const when = this.formatDate(this.allocationAsOf(), "short");
+          parts.push(this.targetPostdatesSession()
+            ? `Target as published ${when}, after this session, so it is shown for reference only.`
+            : `Target as published ${when}.`);
+        }
+      }
+      return parts.join(" ");
     },
-    // The aggregator currently fills `consensus` with every take body verbatim
-    // and `disagreements[].positions[].view` with two of those same bodies
-    // (backend swarm/domain.ts: `authoredTakes.map(t => t.body)`). Rendered
-    // literally, one take appears three times on this page under three headings
-    // that each promise synthesis.
-    //
-    // So anything byte-identical to a take already listed above is treated as an
-    // echo and dropped. This is deliberately shape-agnostic: the day the
-    // aggregator emits real synthesis, those items stop matching any body and
-    // appear on their own. Nothing here has to change for that to work.
-    // NB: takes live on the factory root (`this.takes`), not under `session` —
-    // the page's own x-for iterates `takes`.
+    // Anything byte-identical to a take already on this page is an echo, and
+    // dropped. Shape-agnostic: a real synthesis stops matching any body and
+    // appears on its own. Takes live on the factory root (`this.takes`).
     takeBodies() {
       return new Set((this.takes || []).map((t) => this.normText(t.body)).filter(Boolean));
     },
     normText(s) { return String(s || "").replace(/\s+/g, " ").trim(); },
     isEcho(text) { const n = this.normText(text); return !!n && this.takeBodies().has(n); },
-    // Synthesis has the same problem one level up: the aggregator builds it by
-    // joining every take body, so the section headed "Synthesis" reprints the
-    // member takes already listed above it rather than drawing a conclusion
-    // from them. Suppressed when it demonstrably contains every body verbatim;
-    // a genuine synthesis will not, and will render untouched.
+    // Suppressed when it demonstrably contains every take body verbatim; a
+    // genuine synthesis will not, and will render untouched.
     synthesisIsEcho() {
       const bodies = [...this.takeBodies()];
       if (!bodies.length) return false;
       const n = this.normText(this.session?.synthesis);
       return !!n && bodies.every((b) => n.includes(b));
     },
-    takeOf(memberId) { return (this.takes || []).find((t) => t.memberId === memberId); },
+    // The take a disagreement position belongs to. v0 sessions imported into
+    // the database kept v0's slugs in their disagreements ("robotmoney") while
+    // their takes carry the live id and handle ("robot-money"); letters and
+    // digits only lets the two meet.
+    takeOf(memberId) {
+      const takes = this.takes || [];
+      const hit = takes.find((t) => t.memberId === memberId || t.memberHandle === memberId);
+      if (hit) return hit;
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const n = norm(memberId);
+      return n ? takes.find((t) => norm(t.memberHandle) === n || norm(t.memberId) === n) : undefined;
+    },
+    // Where a take card sits on this page, for the index above the cards.
+    takeAnchor(t) { return `take-${String(t?.memberId || t?.id || "").replace(/[^A-Za-z0-9_-]/g, "")}`; },
+    // THE DISCUSSION, when somebody wrote it. A live aggregate's consensus,
+    // disagreements and synthesis are templates over the stance tally, the
+    // quorum, the mean confidence and the regime percentile (domain.ts
+    // buildConsensus, buildDisagreements, buildSynthesis), every one of which
+    // the review band already draws, and a disagreement's views are two take
+    // bodies copied verbatim. A judge may author the disagreements and nothing
+    // else; v0 sessions authored all of it.
     consensusItems() {
+      if (this.isRollupRecommendation()) return [];
       return (this.session?.swarmRecommendation?.consensus || []).filter((c) => !this.isEcho(c));
     },
-    // Kept even when every view is an echo: WHO disagreed, and how far apart
-    // they sat, is real information the takes list does not state anywhere.
-    // Only the duplicated prose is suppressed — see the markup.
     disagreements() {
-      return this.session?.swarmRecommendation?.disagreements || [];
+      const rec = this.session?.swarmRecommendation;
+      if (this.isRollupRecommendation() && !rec?.judge) return [];
+      return rec?.disagreements || [];
+    },
+    showSynthesis() {
+      return !this.isRollupRecommendation() && !!this.session?.synthesis && !this.synthesisIsEcho();
+    },
+    hasDiscussion() {
+      return this.showSynthesis() || this.consensusItems().length > 0 || this.disagreements().length > 0;
     },
   }));
 }

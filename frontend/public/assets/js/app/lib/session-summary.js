@@ -45,6 +45,46 @@ const BUCKET_LABELS = {
   real_world_assets: "Real World Assets",
 };
 
+/** @param {unknown} v */
+const normKey = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// A recommendation's weights as [bucket, weight] pairs, from either shape they
+// arrive in: the v0 archive's map ({conservative_defi_yield: 0.95}) or the live
+// aggregator's array ([{bucket, weight}], the contract's SwarmBucketWeight[]).
+// Object.entries on the array read its indexes as bucket names, so a live
+// bucket_weights session drew sleeves called "0" to "3", every one at 0%.
+/** @param {unknown} weights @returns {Array<[string, unknown]>} */
+export function weightEntries(weights) {
+  if (Array.isArray(weights)) {
+    return weights
+      .filter((w) => w && typeof w === "object" && (w.bucket ?? w.id ?? w.name) != null)
+      .map((w) => [String(w.bucket ?? w.id ?? w.name), w.weight]);
+  }
+  return weights && typeof weights === "object" ? Object.entries(weights) : [];
+}
+
+// A sleeve's colour, by its position in the published order, whichever way the
+// sleeve is spelled ("agent_tokens" or "Agent Tokens"). One lookup for the
+// targets card, the ring, the handover and the session outcome, so a sleeve
+// cannot be two colours on one page.
+/** @param {unknown} idOrName */
+const bucketIndex = (idOrName) => {
+  const n = normKey(idOrName);
+  return BUCKET_ORDER.findIndex((k) => normKey(k) === n || normKey(BUCKET_LABELS[k]) === n);
+};
+/** @param {unknown} idOrName @param {number} [fallback] */
+export function bucketHue(idOrName, fallback = 0) {
+  const i = bucketIndex(idOrName);
+  return CATEGORICAL[(i >= 0 ? i : fallback) % CATEGORICAL.length];
+}
+// The published name, for a sleeve spelled any way at all: humanising
+// "conservative_defi_yield" gives "Conservative Defi Yield", which is not it.
+/** @param {unknown} idOrName */
+export function bucketLabel(idOrName) {
+  const i = bucketIndex(idOrName);
+  return i >= 0 ? BUCKET_LABELS[BUCKET_ORDER[i]] : String(idOrName || "");
+}
+
 export const sessionSummary = {
   // The stance tally. The live pipeline aggregates it onto the record; the
   // static archive never did, and its sessions carry the stances only on the
@@ -115,6 +155,13 @@ export const sessionSummary = {
   // "N of M took part" needs a roster size, which only the live record has.
   // An archived session knows how many filed and not how many could have, so
   // it says the half it can stand behind rather than inventing a denominator.
+  // Whether this session's regime reading used the v0 method, whose composite
+  // averaged macro, on-chain AND factor. Every live aggregate carries a quorum
+  // and no v0 session ever did: not the static archive, and not the v0 sessions
+  // imported into the database, which are dated past the archive and so read
+  // as live to any test on the date.
+  /** @param {any} s */
+  readingIsV0(s) { return !!s && !s.swarmRecommendation?.quorum; },
   /** @param {any} s */
   quorumText(s) {
     const q = s?.swarmRecommendation?.quorum;
@@ -160,12 +207,13 @@ export const sessionSummary = {
   sessionWeights(s) {
     const rec = s?.swarmRecommendation;
     if (rec?.type !== "bucket_weights" || !rec.weights) return null;
-    const norm = (/** @type {unknown} */ v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     /** @type {Record<string, number>} */
     const by = {};
-    for (const [k, v] of Object.entries(rec.weights)) by[norm(k)] = Number(v) * 100;
+    for (const [k, v] of weightEntries(rec.weights)) {
+      if (v !== null && v !== "" && Number.isFinite(Number(v))) by[normKey(k)] = Number(v) * 100;
+    }
     const rows = BUCKET_ORDER
-      .map((key, i) => ({ key, label: BUCKET_LABELS[key], pct: by[norm(key)], colour: CATEGORICAL[i % CATEGORICAL.length] }))
+      .map((key, i) => ({ key, label: BUCKET_LABELS[key], pct: by[normKey(key)] ?? by[normKey(BUCKET_LABELS[key])], colour: CATEGORICAL[i % CATEGORICAL.length] }))
       .filter((r) => Number.isFinite(r.pct));
     return rows.length ? rows : null;
   },
