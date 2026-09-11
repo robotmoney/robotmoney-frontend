@@ -1,0 +1,10 @@
+container:
+  name: robotmoney/robotmoney-api
+  build: build.sh
+  # backend/Dockerfile copies contract/ from OUTSIDE backend/ (the shared HTTP
+  # contract package), so its build context must be the repo root while the
+  # recipe itself lives at backend/Dockerfile. content-root pins the context;
+  # build.sh supplies -f backend/Dockerfile against that context. Without this
+  # line stack defaults content-root to this container.yml's own directory
+  # (stacks/robotmoney-swarm/containers/api), which does not contain the repo.
+  content-root: .
