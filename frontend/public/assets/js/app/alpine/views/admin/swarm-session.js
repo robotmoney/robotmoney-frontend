@@ -110,6 +110,13 @@ export function registerAdminSwarmSession(Alpine) {
     inForce: null,
     judgementsError: null,
     expandedJudgement: null,
+    // The published consensus receipt (issue #754), if one exists. `null`
+    // with no `receiptError` means "not published yet" — the common,
+    // unremarkable case for any session whose judgement was `shadow` or
+    // never reached `enforce` — distinct from a real fetch failure.
+    receipt: null,
+    receiptError: null,
+    receiptRawExpanded: false,
     // Admin member list (issue #922), fetched best-effort purely to resolve a
     // judgement's judgedByMemberId to a display name in judgeIdentity() below
     // — never required for the roster/aggregate/lifecycle data above, which is
@@ -173,6 +180,7 @@ export function registerAdminSwarmSession(Alpine) {
 
         this.session = { ...summary, roster };
         await this.loadJudgements();
+        await this.loadConsensusReceipt();
       } catch (e) {
         if (e.status === 403) this._handle403();
         else this.error = e.message;
@@ -229,6 +237,44 @@ export function registerAdminSwarmSession(Alpine) {
     },
     toggleJudgement(id) {
       this.expandedJudgement = this.expandedJudgement === id ? null : id;
+    },
+
+    // ── Consensus receipt (issue #754) ────────────────────────────────────
+    // The route is public (GET /api/swarm/sessions/:id/consensus-receipt,
+    // read-time-verified — same admin-page-calls-a-public-route shape load()
+    // already uses for the per-member take detail above), and 404 means "not
+    // published yet", not a failure: an off/shadow-judged session, or an
+    // enforce-judged one nobody has published a receipt for yet, is the
+    // ordinary case this page must render quietly rather than as an error.
+    async loadConsensusReceipt() {
+      this.receipt = null;
+      this.receiptError = null;
+      try {
+        this.receipt = await api.adminGet(
+          path(ROUTES.swarm.sessionConsensusReceipt, { id: this.sessionId }),
+          this._token(),
+        );
+      } catch (e) {
+        if (e.status === 403) throw e; // the page-level 403 handler owns this
+        if (e.status === 404) return; // not published — leave receipt null, quietly
+        this.receiptError = e.message;
+      }
+    },
+    toggleReceiptRaw() {
+      this.receiptRawExpanded = !this.receiptRawExpanded;
+    },
+    // `verified` is recomputed by the server on every read (never a stored
+    // column) — the same badge classes the session-state pill uses (ok/err),
+    // reused rather than invented, so "verified" reads the same green as
+    // "published" everywhere else on this page.
+    receiptStateClass() {
+      return this.receipt?.verified ? "adm-badge adm-badge--ok" : "adm-badge adm-badge--err";
+    },
+    // bps -> a "NN.NN%" string, matching the convention `weight_bps` names —
+    // basis points, not a fraction — so this is the one place that math is
+    // done rather than every caller repeating it.
+    receiptWeightPct(bps) {
+      return `${(Number(bps || 0) / 100).toFixed(2)}%`;
     },
     // What actually happened to the session, in one phrase. `mode` alone does
     // not answer it: an `enforce` opinion formed while the session was
