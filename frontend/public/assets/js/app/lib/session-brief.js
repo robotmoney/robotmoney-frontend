@@ -1,33 +1,23 @@
-// What the swarm was handed when a session opened — including the regime read.
+// A session's regime reading and the brief it opened with.
 //
 // The fourth extraction, after session-summary, session-takes and
-// allocation-framework. It exists because the two halves were being drawn as
-// two unrelated blocks: /swarm/sessions/<id> carried a "Market backdrop" panel,
-// and a subject profile carried a "What the swarm is given" list, and the
-// backdrop's own copy said what it was — "the regime read attached to this
-// session's brief". One of the parts, rendered separately, on a different page,
-// in a different vocabulary. One card now, on both pages: the session page
-// shows the brief THAT session opened with, a subject profile shows the most
-// recent one.
+// allocation-framework. The session page and a subject profile draw the same
+// review band from it: the signal (the reading as dots on one percentile
+// axis) and what the swarm was handed (the brief, part by part). The session
+// page feeds it that session's own reading and brief, a subject profile the
+// most recent session's.
 //
 // A factory, because the reading is state.
 import { CATEGORICAL } from "./chart-theme.js";
+import { bucketHue } from "./session-summary.js";
+import { isKnownPage, metaFor } from "../seo.js";
 
-// The three panels behind the composite, in a fixed reading order so the rail
-// means the same thing on every session.
-const PANELS = [
-  { key: "macro", label: "macro" },
-  { key: "onchain", label: "on-chain" },
-  { key: "factor", label: "factor" },
-];
-
-// `helpers` belongs to the SURFACE, not to this module: ordinal, regimeColor,
-// regimeLabel, formatDate and escapeHtml are spread into both factories that
-// spread this one. A cast at the call site, and deliberately NOT a `get hx()`
-// on the returned object — object spread EVALUATES a getter and copies its
-// value, so `...sessionBrief()` would have frozen it to this module's own
-// object, which has none of those helpers on it. It did, and every SVG in the
-// card came out empty.
+// `helpers` belongs to the SURFACE, not to this module: regimeColor and
+// regimeLabel are spread into both factories that spread this one, and so are
+// the brief, subject and subjectNames the handover reads. A cast at the call
+// site, and deliberately NOT a `get hx()` on the returned object — object
+// spread EVALUATES a getter and copies its value, so `...sessionBrief()` would
+// have frozen it to this module's own object, which has none of those on it.
 /** @param {any} self */
 const surface = (self) => /** @type {any} */ (self);
 
@@ -70,40 +60,19 @@ export function sessionBrief() {
   return {
     /** @type {any} */
     backdrop: null,
-    // "session" on a session page, "latest" on a subject profile. The only
-    // thing that differs between the two renders, so the two cannot drift.
-    backdropScope: "session",
     backdropDate: "",
     // True for a v0 archive reading, whose composite averages macro, on-chain
     // AND factor. The latest review draws factor as context only when it is.
     backdropV0: false,
 
-    /** @param {any} summary @param {{date?: string, scope?: string, v0?: boolean}} opts */
+    /** @param {any} summary @param {{date?: string, v0?: boolean}} opts */
     setBackdrop(summary, opts = {}) {
       this.backdrop = normalizeRegime(summary);
       this.backdropDate = opts.date || "";
-      this.backdropScope = opts.scope || "session";
       this.backdropV0 = Boolean(opts.v0);
       return this.backdrop;
     },
 
-    // Composite first, then its three panels. Every row is a percentile
-    // against ITS OWN history, which is what makes them comparable on one
-    // axis — the raw 0-1 composite is comparable to nothing and is printed as
-    // a figure rather than drawn as a bar.
-    regimeRows() {
-      const b = this.backdrop;
-      if (!b) return [];
-      const rows = [];
-      if (b.compositePercentile !== null) {
-        rows.push({ key: "composite", label: "composite", pct: b.compositePercentile, regime: b.regime, lead: true });
-      }
-      for (const p of PANELS) {
-        const pct = b[p.key];
-        if (pct !== null) rows.push({ key: p.key, label: p.label, pct, regime: b[`${p.key}Regime`], lead: false });
-      }
-      return rows;
-    },
     // ── the latest review's signal (RM-121) ──────────────────────────────
     // Dots on one percentile axis: every reading is a position in its own
     // three-year history, not an amount. Composite first, then its inputs.
@@ -141,121 +110,106 @@ export function sessionBrief() {
       return c ? [`${(c.riskOff * 100).toFixed(1)}%`, `${(c.riskOn * 100).toFixed(1)}%`] : [];
     },
 
-    // The panels that read the opposite way to the composite. This is the
-    // disagreement the members argue about in the takes below, so the card
-    // names it rather than leaving it to be spotted in three bars.
-    dissenters() {
-      const b = this.backdrop;
-      if (!b?.regime) return [];
-      return PANELS
-        .filter((p) => b[`${p.key}Regime`] && b[`${p.key}Regime`] !== b.regime && b[p.key] !== null)
-        .map((p) => ({ ...p, pct: b[p.key], regime: b[`${p.key}Regime`] }));
-    },
-    // Always a sentence, including when nothing dissents: the silent-when-
-    // agreeing branch is why the old panel's second column emptied out. No em
-    // dash, per the house copy rule.
-    regimeFinding() {
-      const b = this.backdrop;
-      if (!b) return "";
-      const rows = this.regimeRows().filter((r) => !r.lead);
-      if (!rows.length) return "No panel percentiles were recorded for this session.";
-      const ord = (/** @type {number} */ p) => surface(this).ordinal(p);
-      const d = this.dissenters();
-      const word = surface(this).regimeLabel(b.regime);
-      if (!d.length) return `All three panels read the same way as the composite: ${word}.`;
-      const names = d.map((x) => `${x.label} at the ${ord(x.pct)}`).join(" and ");
-      return `${d.length === 1 ? "One panel dissents" : "Two panels dissent"}: ${names}, against a ${word} composite at the ${ord(b.compositePercentile)}.`;
-    },
-    backdropScopeLine() {
-      const when = this.backdropDate ? surface(this).formatDate(this.backdropDate, "long") : "";
-      return this.backdropScope === "latest"
-        ? `From the most recent session${when ? `, ${when}` : ""}.`
-        : `The brief this session opened with${when ? `, ${when}` : ""}.`;
-    },
-
-    // ── the rail ─────────────────────────────────────────────────────────
-    // Four readings on ONE percentile axis. The card used to draw the
-    // composite as a bar on a RAW 0-1 scale directly above a caption reading
-    // "76th percentile", in the same bar vocabulary as the panel bars beside
-    // it: two figures for one reading, 18 points apart, with nothing telling
-    // the reader which axis each belonged to.
-    //
-    // Length is magnitude and is one green for every row. Direction is a dot,
-    // in the stance colour. They were confounded in a single coloured bar, so
-    // a long green bar could not be read as "high" or as "risk-on".
-    //
-    // The cyan line is the composite's own position, drawn across every panel
-    // row: cyan is a LINE and never fills a figure. Reading a panel against
-    // the composite is the question this figure exists to answer, and it was
-    // left to arithmetic.
-    regimeRailSvg() {
-      const rows = this.regimeRows();
-      if (!rows.length) return "";
-      const W = 320, LABEL = 62, VAL = 30, ROW = 16, GAP = 7, TOP = 14;
-      const BAR = W - LABEL - VAL;
-      const H = TOP + rows.length * ROW + (rows.length - 1) * GAP + 8;
-      const x = (/** @type {number} */ pct) => LABEL + Math.max(0, Math.min(1, pct)) * BAR;
+    // ── what the swarm was handed ────────────────────────────────────────
+    // The session's brief, part by part. A part renders only if the brief
+    // contains it: the live brief and the v0 archive brief have different
+    // shapes. The subject page feeds it the latest session's brief, the session
+    // page its own, and both draw it with the same markup.
+    handoverParts() {
+      const self = surface(this);
+      const b = self.brief?.body || self.brief;
+      if (!b || typeof b !== "object") return [];
+      const txt = (/** @type {unknown} */ v) => (typeof v === "string" ? v.trim() : "");
+      // A pill is text, or text with an href when the site has a page there.
+      const pills = (/** @type {string} */ key, /** @type {Array<string | {text: string, href?: string}>} */ list) =>
+        list
+          .map((x) => (typeof x === "string" ? { text: x, href: "" } : { text: x.text, href: x.href || "" }))
+          .filter((x) => x.text)
+          .map((x, i) => ({ key: `${key}-${i}`, text: x.text, href: x.href && isKnownPage(x.href) ? x.href : "" }));
+      const day = (/** @type {unknown} */ v) => {
+        const d = new Date(`${String(v || "").slice(0, 10)}T00:00:00Z`);
+        return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+      };
+      const human = (/** @type {unknown} */ k) => {
+        const t = String(k || "").replace(/[_-]+/g, " ").trim();
+        return t ? t[0].toUpperCase() + t.slice(1) : "";
+      };
       const parts = [];
-      // Axis first, behind everything.
-      parts.push(`<line x1="${LABEL}" y1="${TOP - 5}" x2="${LABEL + BAR}" y2="${TOP - 5}" stroke="var(--color-border)"/>`);
-      for (const [pct, label, anchor] of [[0, "0", "start"], [0.5, "50th", "middle"], [1, "100th", "end"]]) {
-        parts.push(`<text x="${x(Number(pct))}" y="${TOP - 9}" text-anchor="${anchor}" font-size="7.5" fill="var(--color-text-muted)" font-family="var(--font-mono)" letter-spacing="0.08em">${label}</text>`);
+      const inst = txt(b.prompt?.user);
+      if (inst) parts.push({ key: "instruction", label: "Instruction", quote: inst });
+      const r = b.regime;
+      if (r && (r.regime || r.composite != null)) {
+        // session.html's chips, word for word: composite is a number and has
+        // no dot; regime, macro and onchain are readings and each wears its own.
+        const comp = Number(r.composite);
+        const macro = r.macro_regime || r.macroRegime;
+        const onchain = r.onchain_regime || r.onchainRegime;
+        const reading = (/** @type {string} */ k, /** @type {unknown} */ v) => ({ k, v: self.regimeLabel(v), dot: self.regimeColor(v) });
+        const facts = [
+          r.composite != null && Number.isFinite(comp) ? { k: "composite", v: comp.toFixed(3), dot: "" } : null,
+          r.regime ? reading("regime", r.regime) : null,
+          macro ? reading("macro", macro) : null,
+          onchain ? reading("onchain", onchain) : null,
+        ].filter(Boolean).map((f, i) => ({ key: `regime-${i}`, ...f }));
+        parts.push({ key: "regime", label: "Market regime", facts });
       }
-      // The 50th, full height and BEHIND the fills. It used to be drawn inside
-      // the bars, so it was occluded on every row above the median, which is
-      // most of them.
-      parts.push(`<line x1="${x(0.5)}" y1="${TOP - 5}" x2="${x(0.5)}" y2="${H - 4}" stroke="var(--color-border)" stroke-dasharray="2 3"/>`);
-      rows.forEach((r, i) => {
-        const y = TOP + i * (ROW + GAP);
-        const mid = y + ROW / 2;
-        parts.push(`<text x="0" y="${mid + 3}" font-size="8" fill="var(--color-text-muted)" font-family="var(--font-mono)" letter-spacing="0.1em">${surface(this).escapeHtml(r.label.toUpperCase())}</text>`);
-        parts.push(`<rect x="${LABEL - 10}" y="${mid - 3}" width="6" height="6" fill="${surface(this).regimeColor(r.regime)}"/>`);
-        parts.push(`<rect x="${LABEL}" y="${y + 3}" width="${BAR}" height="${ROW - 6}" fill="none" stroke="var(--color-border)"/>`);
-        parts.push(`<rect data-mark="series" x="${LABEL}" y="${y + 3}" width="${Math.max(1, x(r.pct) - LABEL)}" height="${ROW - 6}" fill="var(--color-green)"/>`);
-        parts.push(`<text x="${W}" y="${mid + 3}" text-anchor="end" font-size="8.5" fill="${r.lead ? "var(--color-text)" : "var(--color-text-muted)"}" font-family="var(--font-mono)">${surface(this).ordinal(r.pct)}</text>`);
-      });
-      // The composite's line, last, on top of the fills.
-      const lead = rows.find((r) => r.lead);
-      if (lead) {
-        parts.push(`<line x1="${x(lead.pct)}" y1="${TOP - 5}" x2="${x(lead.pct)}" y2="${H - 4}" stroke="var(--color-accent)"/>`);
+      // The weights in force when the session opened, drawn as the targets
+      // card draws the weights in force now, each sleeve in its published hue.
+      const buckets = b.allocation?.buckets;
+      if (Array.isArray(buckets) && buckets.length) {
+        const bars = buckets.map((/** @type {any} */ x, /** @type {number} */ i) => {
+          const w = Number(x?.target_weight ?? x?.targetWeight);
+          if (!x?.name || !Number.isFinite(w)) return null;
+          return { key: `targets-${i}`, label: x.name, pct: Math.round(w * 100), hue: bucketHue(x.id || x.name, i) };
+        }).filter(Boolean);
+        if (bars.length) parts.push({ key: "targets", label: "Targets", bars });
       }
-      const read = rows.map((r) => `${r.label} ${surface(this).ordinal(r.pct)}`).join(", ");
-      return `<svg class="mb__rail" viewBox="0 0 ${W} ${H}" role="img" aria-label="Percentile against own history: ${surface(this).escapeHtml(read)}."><g>${parts.join("")}</g></svg>`;
-    },
-
-    // ── the trail ────────────────────────────────────────────────────────
-    // Autoscaled to the window, not pinned to 0-1. The old sparkline plotted a
-    // series spanning about 0.03 on a fixed 0-to-1 axis, so it occupied ~4% of
-    // the plot height and rendered as a dead horizontal stroke — and the
-    // 0.33/0.67 band lines, always off-window, were the only thing with any
-    // shape in the figure.
-    //
-    // The floor matters as much as the autoscale: below a 0.02 span the range
-    // is held open, so a genuinely flat fortnight still reads flat instead of
-    // a 0.001 wobble being sold as a swing. The min and max are printed, so
-    // the amplitude is never implied.
-    regimeTrailSvg() {
-      const hist = (this.backdrop?.history || [])
-        .map((/** @type {any} */ h) => num(h?.composite))
-        .filter((/** @type {number|null} */ v) => v !== null);
-      if (hist.length < 2) return "";
-      const W = 200, H = 42, PAD = 3;
-      let lo = Math.min(...hist), hi = Math.max(...hist);
-      if (hi - lo < 0.02) { const m = (hi + lo) / 2; lo = m - 0.01; hi = m + 0.01; }
-      const y = (/** @type {number} */ v) => PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD * 2);
-      const step = (W - 34) / (hist.length - 1);
-      const pts = hist.map((/** @type {number} */ v, /** @type {number} */ i) => `${(i * step).toFixed(1)},${y(v).toFixed(1)}`);
-      const last = hist[hist.length - 1];
-      return `<svg class="mb__trail" viewBox="0 0 ${W} ${H}" role="img" aria-label="Composite over the last ${hist.length} sessions, ${lo.toFixed(3)} to ${hi.toFixed(3)}.">`
-        + `<polyline fill="none" stroke="var(--color-accent)" stroke-width="1.5" points="${pts.join(" ")}"/>`
-        + `<circle data-mark="series" cx="${((hist.length - 1) * step).toFixed(1)}" cy="${y(last).toFixed(1)}" r="3" fill="${surface(this).regimeColor(this.backdrop?.regime)}"/>`
-        + `<text x="${W}" y="9" text-anchor="end" font-size="7.5" fill="var(--color-text-muted)" font-family="var(--font-mono)">${hi.toFixed(3)}</text>`
-        + `<text x="${W}" y="${H - 2}" text-anchor="end" font-size="7.5" fill="var(--color-text-muted)" font-family="var(--font-mono)">${lo.toFixed(3)}</text>`
-        + `</svg>`;
-    },
-    trailCaption() {
-      const n = (this.backdrop?.history || []).length;
-      return n >= 2 ? `composite, last ${n} sessions` : "";
+      const signals = b.researchSignals || b.research_signals;
+      const articles = b.research?.articles;
+      if (Array.isArray(signals) && signals.length) {
+        // Each signal has a reader page at /research/<key> when the site
+        // publishes one; the brief's own href is the JSON route, not a page.
+        parts.push({ key: "research", label: "Research signals", links: pills("research", signals.map((/** @type {any} */ x) => {
+          const k = String(x?.signalKey || x?.signal_key || "");
+          const href = k ? `/research/${encodeURIComponent(k)}` : "";
+          // The page's own name when there is a page ("Late-Cycle Signals"),
+          // the key humanised when there is not.
+          const title = href && isKnownPage(href) ? String(metaFor(href).title || "").split(" — ")[0].trim() : "";
+          return { text: title || human(k), href };
+        })) });
+      } else if (Array.isArray(articles) && articles.length) {
+        parts.push({ key: "research", label: "Research", links: pills("research", articles.map((/** @type {any} */ x) => ({ text: txt(x?.title), href: txt(x?.slug) }))) });
+      }
+      const recent = b.recentSessions || b.recent_sessions;
+      if (Array.isArray(recent) && recent.length) {
+        // Each ref links to its session by the dated address, which resolves
+        // for live sessions and archived ones alike. The live brief names the
+        // subject on every ref (they span subjects); the archive brief's refs
+        // are this subject's own and carry no subject at all.
+        const own = b.subject_id || b.subjectId || self.subject?.id || "";
+        /** @type {Record<string, string>} */
+        const names = self.subjectNames || {};
+        parts.push({
+          key: "recent", label: "Recent sessions",
+          pills: pills("recent", recent.map((/** @type {any} */ x) => {
+            const sid = x?.subject_id || x?.subjectId;
+            const d = day(x?.date);
+            const date = String(x?.date || "").slice(0, 10);
+            const href = d && (sid || own) ? `/swarm/${date}/${encodeURIComponent(sid || own)}` : "";
+            return { text: sid ? `${d} · ${names[sid] || sid}` : d, href };
+          })),
+        });
+      }
+      const rawNotes = b.subject?.structuralNotes ?? b.subject?.structural_notes;
+      const notes = (Array.isArray(rawNotes) ? rawNotes : rawNotes ? [rawNotes] : []).map(txt).filter(Boolean);
+      if (notes.length) parts.push({ key: "notes", label: "Operator notes", list: notes.map((text, i) => ({ key: `n-${i}`, text })) });
+      const schema = b.takeSchema && typeof b.takeSchema === "object" ? Object.keys(b.takeSchema) : [];
+      if (schema.length) {
+        /** @type {Record<string, string>} */
+        const said = { body: "written take", stance: "stance", confidence: "confidence", weights: "target weights" };
+        parts.push({ key: "returns", label: "Asked to return", pills: pills("returns", schema.map((k) => said[k] || human(k))) });
+      }
+      return parts;
     },
   };
 }

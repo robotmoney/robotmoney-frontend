@@ -1,452 +1,482 @@
-<!-- Swarm session detail, ported from robotmoney-site/src/app/swarm/[date]/[subject]/page.tsx. -->
+<!-- Swarm session detail. It reads in the subject page's vocabulary, because a
+     session and the subject it reviews are two views of one thing: the same
+     header chips, the same review band (signal, reasoning, then what the
+     session recommended and what it was handed), then the takes. -->
 <section class="cv cv--detail" x-data="swarmSessionDetail()">
   <div class="sv__body sv__body--narrow">
-    <a href="/swarm" class="sv__back">/swarm</a>
+    <!-- Up, to the subject this session reviewed: the page that lists every
+         session on it, and links here from its latest review. /swarm is one
+         level further up, in the nav. -->
+    <a :href="subjectHref()" class="sv__back" x-text="session?.subjectName || '/swarm'">/swarm</a>
 
     <p class="sv__loading" x-show="loading">Loading session…</p>
-    <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
+    <template x-if="error"><p class="sv__error" x-text="error"></p></template>
 
     <template x-if="!loading && session">
       <div>
         <header class="sv__detail-head">
           <!-- The kind comes from the subject record, not from a hardcoded
                word: this said "portfolio" on every session, including the ones
-               reviewing a framework that has no portfolio. Quiet, not Beam:
-               the accent is a line this brand draws deliberately, and an
-               eyebrow is a label. -->
+               reviewing a framework that has no portfolio. -->
           <p class="sv__eyebrow sv__eyebrow--quiet"><span x-text="formatDate(session.date, 'long')"></span> · <span x-text="subjectKindOf(subject)">portfolio</span></p>
           <h1 class="sv__detail-title session-title" x-text="session.subjectName"></h1>
-          <p class="sv__lede sv__lede--compact" x-text="subject?.thesisBlurb || `${session.subjectName} swarm review.`"></p>
+          <p class="sv__lede sv__lede--compact" x-show="subject?.thesisBlurb" x-text="subject?.thesisBlurb"></p>
           <!-- Backdrop chips. Label and value are distinct elements: the old
                markup nested a bare <span> inside a bare <span>, and the CSS
                selector matched both, so every value was drawn its own box
                inside the chip's box — the doubled, broken-looking frame. -->
           <div class="sv__fact-row">
-            <span class="sv__fact" x-show="session.regimeSummary">
-              <em>composite</em><b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b>
-            </span>
-            <span class="sv__fact" x-show="session.regimeSummary">
-              <em>regime</em>
-              <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.regime)}`" aria-hidden="true"></i>
-              <b x-text="regimeLabel(session.regimeSummary?.regime)"></b>
-            </span>
-            <span class="sv__fact" x-show="session.regimeSummary?.macroRegime">
-              <em>macro</em>
-              <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.macroRegime)}`" aria-hidden="true"></i>
-              <b x-text="regimeLabel(session.regimeSummary?.macroRegime)"></b>
-            </span>
-            <span class="sv__fact" x-show="session.regimeSummary?.onchainRegime">
-              <em>onchain</em>
-              <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.onchainRegime)}`" aria-hidden="true"></i>
-              <b x-text="regimeLabel(session.regimeSummary?.onchainRegime)"></b>
-            </span>
-            <!-- Always shown, and derived rather than printed raw. It used to
-                 render `session.state` verbatim and only when there was no
-                 regime summary, so a session read "collecting" here while
-                 /swarm correctly read "closed" from the same deadline, and for
-                 most sessions the phase was not shown at all. -->
+            <template x-if="session.regimeSummary">
+              <span class="sv__fact"><em>composite</em><b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b></span>
+            </template>
+            <template x-if="session.regimeSummary">
+              <span class="sv__fact">
+                <em>regime</em>
+                <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.regime)}`" aria-hidden="true"></i>
+                <b x-text="regimeLabel(session.regimeSummary?.regime)"></b>
+              </span>
+            </template>
+            <template x-if="session.regimeSummary?.macroRegime">
+              <span class="sv__fact">
+                <em>macro</em>
+                <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.macroRegime)}`" aria-hidden="true"></i>
+                <b x-text="regimeLabel(session.regimeSummary?.macroRegime)"></b>
+              </span>
+            </template>
+            <template x-if="session.regimeSummary?.onchainRegime">
+              <span class="sv__fact">
+                <em>onchain</em>
+                <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.onchainRegime)}`" aria-hidden="true"></i>
+                <b x-text="regimeLabel(session.regimeSummary?.onchainRegime)"></b>
+              </span>
+            </template>
+            <!-- Always shown, and derived rather than printed raw, so this
+                 chip and /swarm read the same phase from the same deadline. -->
             <span class="sv__fact">
               <em>state</em>
               <!-- span, not <b>: `.sv__fact b` repaints its child --color-text,
-                   which silently overrode the chip's own phase colour and made
-                   the same chip look different here than on /swarm. -->
+                   which silently overrode the chip's own phase colour. -->
               <span :class="phaseClass(session)" x-text="phaseLabel(session)"></span>
             </span>
           </div>
         </header>
 
-        <!-- The regime read this session opened with. It used to be a
-             "Market backdrop" panel of its own, drawn only here, while a
-             subject profile listed "the regime read" as a line of prose in its
-             brief card. The panel's own copy said what it was: one of the
-             parts of the brief. One component now, drawn the same way on both
-             pages, differing only in whose reading it is fed. See
-             lib/session-brief.js. -->
-        <template x-if="backdrop">
-          <section class="sv__panel mb mb--panel">
-            <div class="mb__head">
-              <p class="mb__label">Market regime</p>
-              <span class="mb__scope" x-text="backdropScopeLine()"></span>
-            </div>
-            <div class="mb__grid">
-              <div class="mb__read">
-                <p class="mb__call">
-                  <i :style="`background:${regimeColor(backdrop?.regime)}`" aria-hidden="true"></i>
-                  <span x-text="regimeLabel(backdrop?.regime)"></span>
-                </p>
-                <p class="mb__pct" x-show="backdrop?.compositePercentile !== null">
-                  <b x-text="ordinal(backdrop?.compositePercentile)"></b>
-                  <span>percentile of its own history</span>
-                </p>
-                <p class="mb__raw" x-text="`composite ${fmtNum(backdrop?.composite, 3)}`"></p>
-                <div class="mb__trailwrap" x-show="regimeTrailSvg()" x-html="regimeTrailSvg()"></div>
-                <p class="mb__cap" x-show="trailCaption()" x-text="trailCaption()"></p>
+        <!-- THE REVIEW: the subject page's latest-review band, fed this
+             session. What the market said (signal), how the swarm voted
+             (reasoning), what it recommended (outcome), and the brief it was
+             handed. Each column opens on a one-word state, then the one chart
+             that fits its data. Only what the data supports renders. -->
+        <template x-if="hasReview() || hasOutcome() || handoverParts().length">
+          <section class="sr ss-review" aria-label="The review">
+            <template x-if="hasReview()">
+              <div class="sr__cols">
+                <template x-if="signalRows().length">
+                  <div class="sr__col">
+                    <p class="sr__k">Signal</p>
+                    <p class="sr__state">
+                      <i :style="`background:${regimeColor(backdrop.regime)}`" aria-hidden="true"></i>
+                      <b x-text="regimeLabel(backdrop.regime)"></b>
+                      <template x-if="backdrop.compositePercentile !== null"><span x-text="`${ordinal(backdrop.compositePercentile)} percentile`"></span></template>
+                    </p>
+                    <div class="sig" role="img"
+                         :aria-label="`Percentile against its own three-year history: ${signalRows().map((r) => `${r.label} ${ordinal(r.pct)}`).join(', ')}.`">
+                      <div class="sig__scale" aria-hidden="true">
+                        <span></span>
+                        <span class="sig__ticks">
+                          <template x-for="z in signalZones()" :key="z.key">
+                            <em class="sig__zone" :style="`left:${z.left};width:${z.width}`" x-text="z.label"></em>
+                          </template>
+                          <b style="left:0">0</b><b style="left:50%">50th</b><b style="left:100%">100</b>
+                        </span>
+                        <span></span>
+                      </div>
+                      <template x-for="r in signalRows()" :key="r.key">
+                        <div class="sig__row" :class="`is-${r.kind}`">
+                          <span class="sig__l" x-text="r.label"></span>
+                          <span class="sig__track">
+                            <b class="sig__mid"></b>
+                            <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
+                            <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
+                          </span>
+                          <span class="sig__v" x-text="ordinal(r.pct)"></span>
+                        </div>
+                      </template>
+                    </div>
+                    <p class="sr__foot">Percentile of its own three-year history.<template x-if="!backdropV0"><span> Factor is context, not part of the composite.</span></template></p>
+                  </div>
+                </template>
+                <template x-if="voteTotal(reviewRow())">
+                  <div class="sr__col">
+                    <p class="sr__k">Reasoning</p>
+                    <p class="sr__state">
+                      <template x-if="leanStance(reviewRow())"><i :style="leanDotStyle(reviewRow())" aria-hidden="true"></i></template>
+                      <b x-text="leanLabel(reviewRow())"></b>
+                      <span x-text="leadShare(reviewRow())"></span>
+                    </p>
+                    <template x-if="hasVoteMembers(reviewRow())">
+                      <div class="vote" role="img" :aria-label="`How members voted: ${spreadLabel(reviewRow())}.`">
+                        <template x-for="c in voteColumns(reviewRow())" :key="c.stance">
+                          <div class="vote__col" :class="{ 'is-lead': c.stance === leanStance(reviewRow()) }">
+                            <div class="vote__stack">
+                              <template x-for="m in c.members" :key="m.key">
+                                <a class="vote__m" :href="m.href || undefined">
+                                  <i :style="`background:${stanceColor(c.stance)}`" aria-hidden="true"></i><span x-text="m.name"></span>
+                                </a>
+                              </template>
+                            </div>
+                            <span class="vote__axis" x-text="c.stance"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </template>
+                    <template x-if="!hasVoteMembers(reviewRow())">
+                      <p class="vote__sq" :aria-label="`How members voted: ${spreadLabel(reviewRow())}.`">
+                        <template x-for="q in voteSquares(reviewRow())" :key="q.key"><i :style="`background:${stanceColor(q.stance)}`"></i></template>
+                      </p>
+                    </template>
+                    <p class="sr__foot">
+                      <span x-text="quorumText(reviewRow())"></span><template x-if="meanConfidenceText(reviewRow())"><span x-text="` · ${meanConfidenceText(reviewRow())}`"></span></template>
+                      <!-- Who could have voted and did not. Resolved to names
+                           where the roster knows them; an id it does not know
+                           still prints rather than understating who missed it. -->
+                      <template x-if="absentNames().length">
+                        <span> · absent
+                          <template x-for="id in (session.swarmRecommendation?.absent || [])" :key="id">
+                            <a class="sv__take-absent-who" :href="memberHref(id)" x-text="memberById(id)?.name || id"></a>
+                          </template>
+                        </span>
+                      </template>
+                    </p>
+                  </div>
+                </template>
               </div>
-              <div class="mb__figure">
-                <div x-html="regimeRailSvg()"></div>
-                <p class="mb__finding" x-text="regimeFinding()"></p>
-                <p class="mb__cap" x-show="briefExtra()" x-text="briefExtra()"></p>
+            </template>
+
+            <!-- OUTCOME: what the session recommended, measured against what it
+                 was aiming at. The ring is the one every session card draws
+                 for a recommendation; the register beside it is the targets
+                 card's, carrying the target, the recommendation and the move. -->
+            <template x-if="hasOutcome()">
+              <div class="sr__out">
+                <p class="sr__k">Outcome</p>
+                <template x-if="outcomeState()">
+                  <p class="sr__state"><b x-text="outcomeState().label"></b><span x-text="outcomeState().detail"></span></p>
+                </template>
+                <template x-if="isBucketWeights()">
+                  <div class="sr__mix">
+                    <template x-if="weightDonutSvg(reviewRow())">
+                      <span class="sv__wdonut-host" role="img" :aria-label="`Recommended weights: ${sessionWeightsLabel(reviewRow())}`"
+                            x-html="weightDonutSvg(reviewRow())"></span>
+                    </template>
+                    <div class="sv__sleeves sr__reg" :style="`--n:${outcomeColumns()}`">
+                      <div class="sv__sleeve sv__sleeve--head">
+                        <span>Sleeve</span>
+                        <template x-if="hasTargetColumn()"><span>Target</span></template>
+                        <template x-if="hasActualColumn()"><span>Actual</span></template>
+                        <span>Recommended</span>
+                        <template x-if="gapBasis()"><span x-text="gapBasis() === 'actual' ? 'vs actual' : 'vs target'"></span></template>
+                      </div>
+                      <template x-for="b in bucketRows()" :key="b.name">
+                        <div class="sv__sleeve">
+                          <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${b.hue}`" aria-hidden="true"></i><span x-text="b.name"></span></span>
+                          <template x-if="hasTargetColumn()"><span class="sv__sleeve-v is-ref" x-text="fmtWeight(b.target)"></span></template>
+                          <template x-if="hasActualColumn()"><span class="sv__sleeve-v is-ref" x-text="fmtWeight(b.actual)"></span></template>
+                          <span class="sv__sleeve-v" x-text="fmtWeight(b.recommended)"></span>
+                          <template x-if="gapBasis()"><span class="sv__sleeve-v sr__gap" :class="gapClass(b.gap)" x-text="fmtGap(b.gap)"></span></template>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+                <!-- Actions the members wrote (v0). The hardcoded pair every
+                     rollup carried from 2026-08-06 to 09-04 is not drawn: see
+                     authoredActions(). -->
+                <template x-if="authoredActions().length">
+                  <dl class="sr__acts">
+                    <template x-for="a in authoredActions()" :key="`${a.token}-${a.action}`">
+                      <div class="sr__act">
+                        <dt x-text="a.token"></dt>
+                        <dd><b x-text="a.action"></b><template x-if="a.rationale"><span x-text="a.rationale"></span></template></dd>
+                      </div>
+                    </template>
+                  </dl>
+                </template>
+                <template x-if="outcomeCaption()">
+                  <p class="sr__foot" data-target-asof x-text="outcomeCaption()"></p>
+                </template>
+                <template x-if="recommendationRationale()">
+                  <p class="sr__why" x-text="recommendationRationale()"></p>
+                </template>
+                <!-- Inside each sleeve: the item-level half of an allocation
+                     recommendation, each sleeve as its own small register. -->
+                <template x-if="withinBucketWeights().length">
+                  <div class="sr__within">
+                    <p class="sr__k">Inside each sleeve</p>
+                    <div class="sr__within-grid">
+                      <template x-for="b in withinBucketWeights()" :key="b.bucket">
+                        <div>
+                          <p class="sr__within-h"><i class="sv__bucket-dot" :style="`background:${b.hue}`" aria-hidden="true"></i><span x-text="b.label"></span></p>
+                          <div class="sv__sleeves">
+                            <template x-for="it in b.items" :key="`${b.bucket}-${it.name}`">
+                              <div class="sv__sleeve">
+                                <span class="sv__sleeve-n" x-text="it.label"></span>
+                                <span class="sv__sleeve-track"><i :style="`width:${Math.max(0, Math.min(100, it.weight * 100))}%`"></i></span>
+                                <span class="sv__sleeve-v" x-text="fmtPct1(it.weight)"></span>
+                              </div>
+                            </template>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
               </div>
-            </div>
+            </template>
+
+            <!-- What the swarm was handed: a record of this session's brief,
+                 one row per part it actually contains. -->
+            <template x-if="handoverParts().length">
+              <div class="sp-brief" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                <button type="button" class="sp-brief__sum" :aria-expanded="open ? 'true' : 'false'"
+                        aria-controls="session-handover" @click="open = !open">
+                  <span class="sp-brief__sum-k">What the swarm was handed</span>
+                  <span class="sp-brief__sum-m"><i aria-hidden="true">⌄</i></span>
+                </button>
+                <div class="sp-brief__anim" id="session-handover" role="region"
+                     aria-label="What the swarm was handed" :inert="!open">
+                  <div class="sp-brief__clip">
+                    <dl class="hand">
+                      <template x-for="part in handoverParts()" :key="part.key">
+                        <div class="hand__row" :data-part="part.key">
+                          <dt x-text="part.label"></dt>
+                          <dd>
+                            <template x-if="part.quote"><q x-text="part.quote"></q></template>
+                            <template x-if="part.facts">
+                              <div class="sv__fact-row">
+                                <template x-for="f in part.facts" :key="f.key">
+                                  <span class="sv__fact">
+                                    <em x-text="f.k"></em>
+                                    <template x-if="f.dot"><i class="sv__fact-dot" :style="`background:${f.dot}`" aria-hidden="true"></i></template>
+                                    <b x-text="f.v"></b>
+                                  </span>
+                                </template>
+                              </div>
+                            </template>
+                            <template x-if="part.bars">
+                              <div class="sv__sleeves">
+                                <template x-for="t in part.bars" :key="t.key">
+                                  <div class="sv__sleeve">
+                                    <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
+                                    <span class="sv__sleeve-track"><i :style="`width:${Math.max(0, Math.min(100, t.pct))}%`"></i></span>
+                                    <span class="sv__sleeve-v" x-text="`${t.pct}%`"></span>
+                                  </div>
+                                </template>
+                              </div>
+                            </template>
+                            <template x-if="part.links">
+                              <ul class="hand__links">
+                                <template x-for="l in part.links" :key="l.key">
+                                  <li>
+                                    <template x-if="l.href"><a class="rm-link" :href="l.href" x-text="l.text"></a></template>
+                                    <template x-if="!l.href"><span x-text="l.text"></span></template>
+                                  </li>
+                                </template>
+                              </ul>
+                            </template>
+                            <template x-if="part.pills">
+                              <span class="hand__pills">
+                                <template x-for="p in part.pills" :key="p.key">
+                                  <span class="hand__pill-wrap">
+                                    <template x-if="p.href"><a class="hand__pill hand__pill--link" :href="p.href" x-text="p.text"></a></template>
+                                    <template x-if="!p.href"><span class="hand__pill" x-text="p.text"></span></template>
+                                  </span>
+                                </template>
+                              </span>
+                            </template>
+                            <template x-if="part.list">
+                              <ul><template x-for="n in part.list" :key="n.key"><li x-text="n.text"></li></template></ul>
+                            </template>
+                          </dd>
+                        </div>
+                      </template>
+                    </dl>
+                  </div>
+                </div>
+              </div>
+            </template>
           </section>
         </template>
 
-        <section class="sv__portfolio" x-show="snapshot">
-          <div class="sv__panel-head">
-            <p class="sv__panel-label">Portfolio read · <span x-text="fmtUsd(snapshot?.totalValueUsd)"></span> total</p>
-            <span class="sv__tag" x-text="snapshot?.date"></span>
-          </div>
-          <div class="sv__portfolio-grid">
-            <div class="sv__donut-list">
-              <template x-for="(p, i) in positionRows().slice(0, 7)" :key="`${p.token}-${p.chain}`">
-                <div class="sv__donut-row" :style="donutStyle(p, i)">
-                  <i></i>
-                  <span x-text="p.token"></span>
-                  <b x-text="fmtPct1(p.share)"></b>
-                </div>
-              </template>
+        <!-- The book this session reviewed, in the subject page's holdings
+             markup. A framework subject has none (see loadApi()). -->
+        <template x-if="snapshot">
+          <section class="sv__portfolio">
+            <div class="sv__panel-head">
+              <p class="sv__panel-label">Holdings · <span x-text="fmtUsd(snapshot?.totalValueUsd)"></span> total</p>
+              <span class="sv__tag" x-text="snapshot?.date"></span>
             </div>
-            <div class="sv__table-wrap">
-              <table class="sv__data-table">
-                <thead><tr><th>Token</th><th>Chain</th><th class="sv__num">Value</th><th class="sv__num">Share</th></tr></thead>
-                <tbody>
-                  <template x-for="p in positionRows().slice(0, 8)" :key="`${p.token}-${p.chain}`">
-                    <tr>
-                      <td x-text="p.token"></td>
-                      <td x-text="p.chain"></td>
-                      <td class="sv__num" x-text="fmtUsd(p.value_usd)"></td>
-                      <td class="sv__num" x-text="fmtPct1(p.share)"></td>
-                    </tr>
-                  </template>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div class="sv__notables" x-show="(snapshot?.notable || []).length">
-            <p class="sv__panel-label">Notable</p>
-            <ul>
-              <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
-            </ul>
-          </div>
-        </section>
-
-        <section class="sv__recommendation" x-show="session.swarmRecommendation">
-          <div class="sv__panel-head">
-            <p class="sv__panel-label">Swarm Recommendation</p>
-            <span class="sv__tag" x-text="recommendationKind()"></span>
-          </div>
-          <!-- Verdict first. This block used to open with "3/5" in the largest
-               type on the page — turnout, which is procedural — and left the
-               reader to tally the stance chips to find the actual result. -->
-          <template x-if="isRollupRecommendation()">
-            <div class="sv__verdict">
-              <p class="sv__verdict-call" :class="{ 'is-split': verdict().split }">
-                <i :style="`background:${verdict().color}`" aria-hidden="true"></i>
-                <span x-text="verdict().label"></span>
-              </p>
-              <p class="sv__verdict-detail" x-show="verdict().detail" x-text="verdict().detail"></p>
-              <!-- The distribution as one proportional bar: relative weight is
-                   the thing being read, and counted chips alone don't show it. -->
-              <div class="sv__verdict-bar" role="img" :aria-label="verdict().detail">
-                <template x-for="s in stanceSpread()" :key="s.stance">
-                  <i :style="`width:${s.pct}%;background:${stanceColor(s.stance)}`" :title="`${s.n} ${s.stance}`"></i>
-                </template>
-              </div>
-              <div class="sv__stances">
-                <template x-for="s in stanceSpread()" :key="s.stance">
-                  <span class="sv__stance-chip"><i :style="`background:${stanceColor(s.stance)}`"></i><b x-text="s.n"></b> <span x-text="s.stance"></span></span>
-                </template>
-              </div>
-              <dl class="sv__verdict-meta">
-                <div><dt>quorum</dt><dd x-text="quorumText()"></dd></div>
-                <div x-show="session.swarmRecommendation.meanConfidence != null">
-                  <dt>mean confidence</dt><dd x-text="fmtPct(session.swarmRecommendation.meanConfidence)"></dd>
-                </div>
-                <div x-show="absentNames().length">
-                  <dt>absent</dt>
-                  <dd>
-                    <template x-for="id in (session.swarmRecommendation.absent || [])" :key="id">
-                      <a class="sv__take-absent-who" :href="memberHref(id)" x-text="memberById(id)?.name || id"></a>
-                    </template>
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          </template>
-          <!-- WHAT THE SWARM ACTUALLY RECOMMENDED.
-               This block was wrapped in <template x-if="!isRollupRecommendation()">,
-               and isRollupRecommendation() is true whenever the payload carries
-               `quorum` or `stances` — which every published session does. So the
-               action table never rendered once, on any session, while the API was
-               returning it the whole time: 2 rows, USDC/rotate and rmUSDC/add,
-               each with its own rationale. The page showed turnout and a stance
-               spread and then simply stopped before the verdict.
-               The gate was conflating two independent things. A rollup describes
-               HOW the recommendation was reached; `actions` and `bucket_weights`
-               are WHAT it says, and both are already self-gating (isBucketWeights()
-               requires type === "bucket_weights"; the action row requires a
-               non-empty array). Only `rationale` needed the rollup test, and it
-               needs it for a different reason — see recommendationRationale(). -->
-          <div class="sv__rich-rec" x-show="hasRecommendationDetail()">
-            <div class="sv__bucket-bars" x-show="isBucketWeights()">
-              <!-- The caption used to be an encoding key — "Target open ·
-                   Actual muted · Recommended accent" — which asked the reader
-                   to hold three colour-to-word mappings in their head while
-                   reading the chart, and still never said the numbers were
-                   percentages. Every bar now names itself on its own row and
-                   the value column is headed "% of NAV", so the caption is free
-                   to say what the figure IS instead of how to decode it. -->
-              <p class="sv__panel-sub">Each sleeve as a share of the vault, in percent</p>
-              <div class="sv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
-              <!-- The key, once, under the figure. Naming the series on every
-                   row printed the same three words four times and made the
-                   chart read as a form. Order matches the bars' stacking order
-                   inside each bucket. Names only: what each series means is
-                   already the column heading of the table directly below. -->
-              <ul class="sv__bars-key">
-                <template x-for="k in bucketBarsKey()" :key="k.key">
-                  <li>
-                    <i :class="`sv__bars-key__swatch is-${k.key}`" aria-hidden="true"></i>
-                    <span x-text="k.label"></span>
-                  </li>
-                </template>
-              </ul>
-              <!-- The same recommendation as numbers. The bars answer "which
-                   bucket is biggest" and nothing else: on a 97/3/0/0 book three
-                   of four rows round to no bar at all, so the proposal was
-                   readable only in the value labels — and the move it actually
-                   asks for (recommended minus where the book sits) was left as
-                   arithmetic for the reader. -->
-              <div class="sv__table-wrap sv__bucket-table">
+            <div class="sp-holdings">
+              <div class="sv__table-wrap">
                 <table class="sv__data-table">
-                  <thead>
-                    <tr>
-                      <th>Sleeve</th>
-                      <th class="sv__num" x-show="bucketWeights().some(b => b.target != null)">Target</th>
-                      <th class="sv__num" x-show="bucketWeights().some(b => b.actual != null)">Actual</th>
-                      <th class="sv__num sv__num--rec">Recommended</th>
-                      <!-- Named for what it measures. The gap is against actual
-                           when we know it and target otherwise — two different
-                           questions, so the heading says which one is on screen
-                           rather than letting "Gap" stand for both. -->
-                      <th class="sv__num" x-show="gapBasis()"
-                          x-text="gapBasis() === 'actual' ? 'vs actual' : 'vs target'"></th>
-                    </tr>
-                  </thead>
+                  <thead><tr><th>Token</th><th>Chain</th><th class="sv__num">Value</th><th class="sv__num">Share</th></tr></thead>
                   <tbody>
-                    <template x-for="b in bucketRows()" :key="b.name">
+                    <template x-for="p in positionRows().slice(0, 8)" :key="`${p.token}-${p.chain}`">
                       <tr>
-                        <td x-text="b.name"></td>
-                        <td class="sv__num" x-show="bucketWeights().some(x => x.target != null)" x-text="fmtWeight(b.target)"></td>
-                        <td class="sv__num" x-show="bucketWeights().some(x => x.actual != null)" x-text="fmtWeight(b.actual)"></td>
-                        <td class="sv__num sv__num--rec" x-text="fmtWeight(b.recommended)"></td>
-                        <td class="sv__num sv__gap" :class="gapClass(b.gap)" x-show="gapBasis()" x-text="fmtGap(b.gap)"></td>
+                        <td><i class="sp-key" :style="`--k:${tokenColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></td>
+                        <td x-text="p.chain"></td>
+                        <td class="sv__num" x-text="fmtUsd(p.value_usd)"></td>
+                        <td class="sv__num" x-text="fmtPct1(p.share)"></td>
                       </tr>
                     </template>
                   </tbody>
                 </table>
               </div>
-              <!-- WHICH target. /api/dashboards/allocation serves the single
-                   CURRENT framework row, so the target drawn above is dated,
-                   and for archived sessions it is frequently dated AFTER the
-                   session. Naming its asOf is what keeps the chart a
-                   comparison rather than an unqualified claim. -->
-              <p class="sv__panel-sub sv__target-asof" data-target-asof
-                 x-show="allocationAsOf() && bucketWeights().some(b => b.target != null)">
-                Target as published <span x-text="formatDate(allocationAsOf(), 'short')"></span><span
-                  x-show="targetPostdatesSession()"> — after this session, so it is shown for reference only</span>
-              </p>
-              <!-- The finding a reader is here for: did the swarm propose
-                   something other than the published target? Withheld when the
-                   target postdates the session — see deviatesFromTarget(). -->
-              <p class="sv__panel-sub sv__deviates" x-show="deviatesFromTarget()">
-                ⚠ deviates from target
-              </p>
             </div>
-            <p class="sv__body-copy" x-show="recommendationRationale()" x-text="recommendationRationale()"></p>
-            <!-- Per-constituent weights. The bucket bars above say how much
-                 goes to each bucket; this says what is inside them, which is
-                 the question the allocation subject exists to answer. -->
-            <div class="sv__within" x-show="withinBucketWeights().length">
-              <p class="sv__panel-sub">Within-sleeve weights &middot; per-item recommendations</p>
-              <template x-for="b in withinBucketWeights()" :key="b.bucket">
-                <div class="sv__within-bucket">
-                  <p class="sv__within-name" x-text="b.bucket"></p>
-                  <ul class="sv__within-list">
-                    <template x-for="it in b.items" :key="`${b.bucket}-${it.name}`">
-                      <li><span x-text="it.name"></span><b x-text="fmtPct1(it.weight)"></b></li>
-                    </template>
-                  </ul>
-                </div>
-              </template>
-            </div>
-            <div class="sv__rec-actions" x-show="recommendationActions().length">
-              <p class="sv__panel-sub sv__legacy-note">Pre-#752 legacy output — not swarm-derived (see D42 §9.7). Present only on sessions published before #752; no new session carries it.</p>
-              <template x-for="a in recommendationActions()" :key="`${a.token}-${a.action}`">
-                <div class="sv__action-row">
-                  <span x-text="a.token"></span>
-                  <b x-text="a.action"></b>
-                  <p x-text="a.rationale"></p>
-                </div>
-              </template>
-            </div>
-          </div>
-        </section>
+            <template x-if="(snapshot?.notable || []).length">
+              <div class="sv__notables">
+                <p class="sv__panel-label">Notable</p>
+                <ul>
+                  <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
+                </ul>
+              </div>
+            </template>
+          </section>
+        </template>
 
-        <section class="sv__discussion" x-show="consensusItems().length || disagreements().length">
-          <div class="sv__panel" x-show="consensusItems().length">
-            <p class="sv__panel-label">Consensus</p>
-            <ul class="sv__bullet-list">
-              <!-- inlineMarks, not linkified: consensus entries are single
-                   points, so they take bold/links but must not open block
-                   elements inside a list item. -->
-              <template x-for="item in consensusItems()" :key="item"><li x-html="inlineMarks(item)"></li></template>
-            </ul>
-          </div>
-          <div class="sv__panel sv__panel--accent" x-show="disagreements().length">
-            <p class="sv__panel-label">Disagreements</p>
-            <div class="sv__disagreements">
-              <template x-for="d in disagreements()" :key="d.topic">
-                <article class="sv__disagreement">
-                  <h3 x-text="d.topic"></h3>
-                  <ul>
-                    <template x-for="p in d.positions" :key="`${d.topic}-${p.member_id}`">
-                      <li>
-                        <a :href="memberHref(p.member_id)" x-text="memberById(p.member_id)?.name || p.member_id"></a>
-                        <!-- The stance spread IS the disagreement — it is what the
-                             aggregator sorted on to pick these two members, and it
-                             is stated nowhere else in this panel. When the view is
-                             an echo of a take printed above, show the spread and
-                             link to the take instead of reprinting it. -->
-                        <!-- Stance and view are SEPARATE grid cells, and the
-                             stance cell is always laid out. They used to share
-                             one wrapping flex box, so each member's view began
-                             wherever that member's stance chip happened to end
-                             — "cautious · 68%" and "constructive · 72%" are
-                             different widths — and a long view wrapped as a
-                             block onto its own line. Three rows of the same
-                             disagreement therefore started in three different
-                             places. Fixed columns make the views a column a
-                             reader can scan down. -->
-                        <span class="sv__dis-stance-cell">
-                          <template x-if="takeOf(p.member_id)">
-                            <span class="sv__dis-stance" :style="stanceStyle(takeOf(p.member_id)?.stance)">
-                              <i :style="`background:${stanceColor(takeOf(p.member_id)?.stance)}`"></i>
-                              <span x-text="`${takeOf(p.member_id)?.stance} · ${fmtPct(takeOf(p.member_id)?.confidence)}`"></span>
+        <!-- THE DISCUSSION, when somebody wrote it: a v0 session's synthesis,
+             consensus and disagreements, or a judge's disagreements. A live
+             aggregate's are templates over figures the band already draws. -->
+        <template x-if="hasDiscussion()">
+          <section class="ss-sec">
+            <div class="sv__sec"><div><h2 class="sv__sec-h">Discussion</h2></div></div>
+            <template x-if="showSynthesis()">
+              <div class="sv__synthesis" x-html="linkified(session.synthesis)"></div>
+            </template>
+            <template x-if="consensusItems().length">
+              <div class="ss-block">
+                <p class="sr__k">Consensus</p>
+                <!-- inlineMarks, not linkified: consensus entries are single
+                     points, so they take bold/links but must not open block
+                     elements inside a list item. -->
+                <ul class="ss-list">
+                  <template x-for="item in consensusItems()" :key="item"><li x-html="inlineMarks(item)"></li></template>
+                </ul>
+              </div>
+            </template>
+            <template x-if="disagreements().length">
+              <div class="ss-block">
+                <p class="sr__k">Disagreements</p>
+                <div class="sv__disagreements">
+                  <template x-for="d in disagreements()" :key="d.topic">
+                    <article class="sv__disagreement">
+                      <h3 x-text="d.topic"></h3>
+                      <ul>
+                        <template x-for="p in d.positions" :key="`${d.topic}-${p.member_id}`">
+                          <li>
+                            <a :href="memberHref(p.member_id)" x-text="memberById(p.member_id)?.name || takeOf(p.member_id)?.memberName || p.member_id"></a>
+                            <!-- Stance and view are SEPARATE grid cells, so the
+                                 views are a column a reader can scan down. -->
+                            <span class="sv__dis-stance-cell">
+                              <template x-if="takeOf(p.member_id)">
+                                <span class="sv__dis-stance" :style="stanceStyle(takeOf(p.member_id)?.stance)">
+                                  <i :style="`background:${stanceColor(takeOf(p.member_id)?.stance)}`"></i>
+                                  <span x-text="`${takeOf(p.member_id)?.stance} · ${fmtPct(takeOf(p.member_id)?.confidence)}`"></span>
+                                </span>
+                              </template>
+                              <template x-if="!takeOf(p.member_id)">
+                                <span class="sv__dis-nostance">no take</span>
+                              </template>
                             </span>
-                          </template>
-                          <!-- A member quoted in a disagreement whose take is not
-                               in this response held the cell open as blank. Say
-                               so, so the column stays a column. -->
-                          <template x-if="!takeOf(p.member_id)">
-                            <span class="sv__dis-nostance">no take</span>
-                          </template>
-                        </span>
-                        <span class="sv__dis-view">
-                          <span x-show="!isEcho(p.view)" x-html="inlineMarks(p.view)"></span>
-                          <!-- x-if, not x-show: takeHref() throws "missing path
-                               param: id" if it is evaluated for a member whose
-                               take is not in this response, and x-show still
-                               evaluates the binding. -->
-                          <template x-if="isEcho(p.view) && takeOf(p.member_id)?.id">
-                            <a class="sv__dis-read" x-show="takeHref(takeOf(p.member_id))" :href="takeHref(takeOf(p.member_id))">Read their take →</a>
-                          </template>
-                        </span>
-                      </li>
-                    </template>
-                  </ul>
-                  <p x-show="d.what_settles"><em>Settles when:</em> <span x-text="d.what_settles"></span></p>
+                            <span class="sv__dis-view">
+                              <template x-if="!isEcho(p.view)"><span x-html="inlineMarks(p.view)"></span></template>
+                              <!-- A view that is a take body verbatim links to the
+                                   take on this page instead of reprinting it. -->
+                              <template x-if="isEcho(p.view) && takeOf(p.member_id)">
+                                <a class="sv__dis-read" :href="`#${takeAnchor(takeOf(p.member_id))}`">Read their take →</a>
+                              </template>
+                            </span>
+                          </li>
+                        </template>
+                      </ul>
+                      <template x-if="d.what_settles"><p><em>Settles when:</em> <span x-text="d.what_settles"></span></p></template>
+                    </article>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </section>
+        </template>
+
+        <!-- THE TAKES. The index is the way into five long cards: who took
+             part, how they voted and how sure they were, each row a jump to
+             the card. Keyed on the MEMBER, not the row id (issue #573): a
+             member may file several revisions of a take, each an immutable
+             row with its own uuid, and the member is what this list has one
+             row of. The server resolves latest-per-member (domain.ts
+             withTakes); this is the second, independent guarantee. -->
+        <template x-if="takes.length">
+          <section class="sv__takes-section ss-sec">
+            <div class="sv__sec">
+              <div><h2 class="sv__sec-h">Takes</h2></div>
+              <span class="sv__session-count" x-text="`${takes.length} ${takes.length === 1 ? 'take' : 'takes'}`"></span>
+            </div>
+            <div class="sv__table-wrap session-submissions">
+              <table class="sv__data-table">
+                <thead><tr><th>Member</th><th>Stance</th><th class="sv__num">Confidence</th></tr></thead>
+                <tbody>
+                  <template x-for="t in takes" :key="t.memberId || t.id">
+                    <tr>
+                      <td><a class="rm-link" :href="`#${takeAnchor(t)}`" x-text="t.memberName"></a></td>
+                      <td><span class="ss-stance"><i :style="`background:${stanceColor(t.stance)}`" aria-hidden="true"></i><span x-text="t.stance"></span></span></td>
+                      <td class="sv__num" x-text="fmtPct(t.confidence)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <div class="sv__takes sv__takes--ported">
+              <template x-for="t in takes" :key="t.memberId || t.id">
+                <article class="sv__take sv__take--ported" :id="takeAnchor(t)">
+                  <header class="sv__take-head">
+                    <div class="sv__take-member">
+                      <!-- Seeded `fingerprint || id`, the same expression as the
+                           roster row and the profile hero, so one member is one
+                           mark everywhere. Locked in step by
+                           scripts/tests/unit/member-mark-distinctness.test.ts. -->
+                      <!-- BOTH link sites on this page pass the IMMUTABLE id and
+                           let memberHref resolve the address (issue #598). -->
+                      <a class="sv__avatar sv__avatar--mark" :href="memberHref(t.memberId)" :aria-label="t.memberName"
+                         x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 40, memberById(t.memberId)?.avatar?.path, memberById(t.memberId)?.handle)"></a>
+                      <div>
+                        <a class="sv__member-link" :href="memberHref(t.memberId)" x-text="t.memberName"></a>
+                        <div class="sv__take-lens" x-text="memberLens(t.memberId)"></div>
+                      </div>
+                    </div>
+                    <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
+                      <i :style="`background:${stanceColor(t.stance)}`"></i>
+                      <span x-text="`${t.stance} · ${fmtPct(t.confidence)}`"></span>
+                    </span>
+                    <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !t.verified && !t.archival, 'sv__vfy--arch': t.archival }"
+                          data-verified-badge :data-take-id="t.id" :data-verified-state="verifyLabel(t.verified, t.archival)"
+                          tabindex="0" :aria-label="`${verifyLabel(t.verified, t.archival)}. ${verifyTip(t.verified, t.archival)}`">
+                      <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
+                        <path :d="verifyPath(t.verified, t.archival)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
+                      </svg>
+                      <span class="sv__vfy-label" x-show="!t.verified" x-text="verifyLabel(t.verified, t.archival)"></span>
+                      <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(t.verified, t.archival)"></span>
+                    </span>
+                  </header>
+                  <div class="sv__take-body" x-html="linkified(t.body || '')"></div>
+                  <p class="ss-links" x-show="source === 'api' || t.memoUrl">
+                    <a class="sv__memo-link" x-show="source === 'api'" :href="takeHref(t)" data-take-permalink>Verification receipt →</a>
+                    <a class="sv__memo-link" x-show="t.memoUrl" :href="t.memoUrl" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                  </p>
                 </article>
               </template>
             </div>
-          </div>
-        </section>
-
-        <section class="sv__takes-section" x-show="takes.length">
-          <p class="sv__panel-label">Member submissions</p>
-          <div class="sv__table-wrap session-submissions">
-            <table class="sv__data-table">
-              <thead><tr><th>Member</th><th>Stance</th><th class="sv__num">Confidence</th></tr></thead>
-              <tbody>
-                <!-- KEYED ON THE MEMBER, not the row id (issue #573). A member
-                     may now file several revisions of its take in one session,
-                     each an immutable row with its own uuid; keying on `t.id`
-                     would render one line per revision the moment a
-                     latest-per-member read path regressed. The member is what
-                     this table has one row of, so the member is the key. The
-                     server already resolves latest-per-member (domain.ts
-                     withTakes) — this is the second, independent guarantee, and
-                     an Alpine duplicate-key error if the first ever breaks is
-                     the loud failure we want. -->
-                <template x-for="t in takes" :key="t.memberId || t.id">
-                  <tr><td x-text="t.memberName"></td><td x-text="t.stance"></td><td class="sv__num" x-text="fmtPct(t.confidence)"></td></tr>
-                </template>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="sv__takes-section">
-          <p class="sv__panel-label">Member takes</p>
-          <div class="sv__takes sv__takes--ported">
-            <!-- One card per MEMBER, not per revision — see the submissions
-                 table above for why the key is the member id. -->
-            <template x-for="t in takes" :key="t.memberId || t.id">
-              <article class="sv__take sv__take--ported">
-                <header class="sv__take-head">
-                  <div class="sv__take-member">
-                    <!-- Seeded `fingerprint || id`, the same expression as the
-                         roster row and the profile hero. This site read a bare
-                         `t.memberId`: identical output today, because no
-                         projection carries a fingerprint yet, but the day one
-                         does the roster and hero marks move and the take
-                         attribution does not — splitting one member across two
-                         marks, which is the one thing member-mark.js promises
-                         cannot happen. Locked in step by
-                         scripts/tests/unit/member-mark-distinctness.test.ts. -->
-                    <!-- BOTH link sites on this page pass the IMMUTABLE id and
-                         let memberHref resolve the address (issue #598). This
-                         one used to pre-resolve — `memberHandle || memberId` —
-                         while the disagreement panel below passed the signed id
-                         alone, so the two sites shared no resolution step and
-                         agreed only by coincidence: once the member was renamed
-                         AND deactivated, the roster the panel reads no longer
-                         held it and the page published two addresses for one
-                         member. One argument, one resolver, one address. -->
-                    <a class="sv__avatar sv__avatar--mark" :href="memberHref(t.memberId)" :aria-label="t.memberName"
-                       x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 40, memberById(t.memberId)?.avatar?.path, memberById(t.memberId)?.handle)"></a>
-                    <div>
-                      <a class="sv__member-link" :href="memberHref(t.memberId)" x-text="t.memberName"></a>
-                      <div class="sv__take-lens" x-text="memberLens(t.memberId)"></div>
-                    </div>
-                  </div>
-                  <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
-                    <i :style="`background:${stanceColor(t.stance)}`"></i>
-                    <span x-text="`${t.stance} · ${fmtPct(t.confidence)}`"></span>
-                  </span>
-                  <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !t.verified && !t.archival, 'sv__vfy--arch': t.archival }"
-                        data-verified-badge :data-take-id="t.id" :data-verified-state="verifyLabel(t.verified, t.archival)"
-                        tabindex="0" :aria-label="`${verifyLabel(t.verified, t.archival)}. ${verifyTip(t.verified, t.archival)}`">
-                    <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
-                      <path :d="verifyPath(t.verified, t.archival)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
-                    </svg>
-                    <span class="sv__vfy-label" x-show="!t.verified" x-text="verifyLabel(t.verified, t.archival)"></span>
-                    <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(t.verified, t.archival)"></span>
-                  </span>
-                </header>
-                <div class="sv__take-body" x-html="linkified(t.body || '')"></div>
-                <a class="sv__memo-link" x-show="source === 'api'" :href="takeHref(t)" data-take-permalink>Verification receipt →</a>
-                <a class="sv__memo-link" x-show="t.memoUrl" :href="t.memoUrl" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
-              </article>
-            </template>
-          </div>
-        </section>
-
-        <section class="sv__synthesis" x-show="session.synthesis && !synthesisIsEcho()">
-          <p class="sv__panel-label">Synthesis</p>
-          <div x-html="linkified(session.synthesis)"></div>
-        </section>
+          </section>
+        </template>
       </div>
     </template>
 
@@ -458,4 +488,32 @@
       <p class="rm-disclaimer__body" x-text="text"></p>
     </section>
   </div>
+
+  <style>
+    /* Page-local: the spacing and small parts only this page has. The band,
+       the registers and the handover are shared components in views.css. */
+    .ss-review { margin-top: 2rem; }
+    .ss-review ~ .sv__portfolio { margin-top: 2rem; }
+    /* The absent names read as part of the foot line they sit in, not in the
+       index card's larger byline face. */
+    .sr__foot .sv__take-absent-who { font-size: inherit; font-weight: 400; color: var(--color-text-soft);
+      text-decoration: underline; text-decoration-color: var(--color-border-light); text-underline-offset: 3px; }
+    .sr__foot .sv__take-absent-who:hover, .sr__foot .sv__take-absent-who:focus-visible {
+      color: var(--color-text); text-decoration-color: var(--color-accent); }
+    .ss-sec { margin-top: 2.75rem; }
+    .ss-block { margin-top: 1.75rem; }
+    .ss-list { list-style: none; margin: 0.65rem 0 0; padding: 0; display: grid; gap: 0.45rem; }
+    .ss-list li { position: relative; padding-left: 0.85rem; font-size: 0.9rem; line-height: 1.55; color: var(--color-text-soft); }
+    .ss-list li::before { content: ""; position: absolute; left: 0; top: 0.72em; width: 4px; height: 1px;
+      background: var(--color-text-muted); }
+    .ss-block .sv__disagreements { margin-top: 0.65rem; }
+    .session-submissions { margin-top: 1.1rem; }
+    .ss-stance { display: inline-flex; align-items: center; gap: 0.45rem; }
+    .ss-stance i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+    .sv__takes--ported { margin-top: 1.5rem; }
+    .sv__takes--ported .sv__take { scroll-margin-top: 6rem; }
+    /* The body runs the card's width, like every other block in the column. */
+    .sv__takes--ported .sv__take-body { max-width: none; }
+    .ss-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.75rem; margin: 1.1rem 0 0; }
+  </style>
 </section>
