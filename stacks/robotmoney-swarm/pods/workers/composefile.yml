@@ -57,6 +57,21 @@ x-worker-env: &worker-env
   SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-}
   SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
   SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
+  # worker/index.ts calls the same assertSwarmNotificationSafety() boot guard
+  # as api (issue #894) — resolveSwarmSchedules() reads SWARM_SCHEDULES_ENABLED
+  # and the five cron vars straight from this process's env, so the worker pod
+  # needs the identical forwarding as pods/app/composefile.yml's api service or
+  # the guard would evaluate against an always-empty env here and could never
+  # observe an operator's actual staging configuration. No inline literal
+  # default, same no-baked-default rule as the rest of this file.
+  SWARM_PUBLIC_BASE_URL: ${SWARM_PUBLIC_BASE_URL:-}
+  SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-}
+  SWARM_OPEN_SESSION_CRON: ${SWARM_OPEN_SESSION_CRON:-}
+  SWARM_PUBLISH_BRIEF_CRON: ${SWARM_PUBLISH_BRIEF_CRON:-}
+  SWARM_CLOSE_WINDOW_CRON: ${SWARM_CLOSE_WINDOW_CRON:-}
+  SWARM_AGGREGATE_CRON: ${SWARM_AGGREGATE_CRON:-}
+  SWARM_PUBLISH_CRON: ${SWARM_PUBLISH_CRON:-}
+  SWARM_WINDOW_MINUTES: ${SWARM_WINDOW_MINUTES:-}
 
 services:
   worker-swarm:

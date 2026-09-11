@@ -6,10 +6,20 @@
 // here instead of silently claiming every kind — the compose topology gives
 // each lane its own container (worker-swarm / worker-analytics /
 // worker-research; see docker-compose.yml).
-import { warnIfStrategyVaultsUnconfigured } from "../config.ts";
+import { assertSwarmNotificationSafety, warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { closeDb } from "../db/worker-client.ts";
 import { resolveLane } from "./lanes.ts";
 import { startWorker } from "./runtime.ts";
+
+// Config-time notification-safety guard (issue #894): refuse to boot if the
+// swarm session-lifecycle schedules are enabled without an explicit
+// SWARM_PUBLIC_BASE_URL — otherwise a staging deployment would silently mail
+// applicants a link back to production. Fail-closed at startup, matching the
+// api entrypoint's assertNoVaultAddressCollision()/assertSwarmNotificationSafety()
+// pattern. Every worker lane shares this boot path (the swarm lane is the one
+// that actually enqueues the notification jobs), so the guard runs
+// unconditionally here rather than only for WORKER_LANE=swarm.
+assertSwarmNotificationSafety();
 
 // Empty strategy-vault list → loud warning, never a refusal to boot (issue
 // #642, decision D37). This lane runs the wallet SAMPLER (handlers/wallet.ts),

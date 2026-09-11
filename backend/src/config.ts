@@ -682,6 +682,31 @@ export function resolveSwarmPublicBaseUrl(
   return (env.SWARM_PUBLIC_BASE_URL || SWARM_PUBLIC_BASE_URL_DEFAULT).replace(/\/+$/, "");
 }
 
+// Boot-time guard (issue #894): a staging deployment must never silently link
+// its swarm activation/receipt emails back to the production domain.
+// SWARM_PUBLIC_BASE_URL defaults to the literal production origin when unset
+// (see resolveSwarmPublicBaseUrl above), and SWARM_SCHEDULES_ENABLED is the
+// documented flag staging flips on to exercise the real notification path
+// (see resolveSwarmSchedules above). An operator who enables the schedules
+// without also setting SWARM_PUBLIC_BASE_URL would have this process start
+// emailing real applicants a link back to production, for a member id that
+// does not exist there. Fail-closed, matching assertNoVaultAddressCollision:
+// refuse to boot rather than ship a broken cross-environment link. Called
+// from the API + worker boot, same as that guard.
+export function assertSwarmNotificationSafety(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  const anyScheduleEnabled = resolveSwarmSchedules(env).some((s) => s.enabled);
+  const publicBaseUrlSet = Boolean(env.SWARM_PUBLIC_BASE_URL && env.SWARM_PUBLIC_BASE_URL.trim() !== "");
+  if (anyScheduleEnabled && !publicBaseUrlSet) {
+    throw new Error(
+      "SWARM_SCHEDULES_ENABLED is on but SWARM_PUBLIC_BASE_URL is unset — swarm notification " +
+        `emails would link to the production default (${SWARM_PUBLIC_BASE_URL_DEFAULT}); set ` +
+        "SWARM_PUBLIC_BASE_URL explicitly for this deployment",
+    );
+  }
+}
+
 // --- Swarm notification sender (issue #322) ------------------------------
 // Resolved the same call-time way as resolveSwarmPublicBaseUrl above rather
 // than only baked into the `config` singleton below: applyMember's receipt is

@@ -89,3 +89,17 @@ test("an explicitly set SWARM_PUBLIC_BASE_URL still wins, with trailing slashes 
     "https://staging.example",
   );
 });
+
+// Issue #894: RM_ENV cannot distinguish a stack-deployed staging environment
+// from production (VALID_ENVS is exactly ["ephemeral","smoke","prod"] and a
+// staging deployment must set RM_ENV=prod like every other non-local
+// environment), so resolveSwarmPublicBaseUrl must never let RM_ENV=prod pull
+// it back toward SWARM_PUBLIC_BASE_URL_DEFAULT. The only thing that may ever
+// select the origin is SWARM_PUBLIC_BASE_URL itself.
+test("an explicit non-default SWARM_PUBLIC_BASE_URL is returned verbatim even when RM_ENV=prod, never the production default", () => {
+  const staging = "https://staging.robotmoney.network";
+  expect(resolveSwarmPublicBaseUrl({ SWARM_PUBLIC_BASE_URL: staging, RM_ENV: "prod" })).toBe(staging);
+  expect(resolveSwarmPublicBaseUrl({ SWARM_PUBLIC_BASE_URL: staging, RM_ENV: "prod" })).not.toBe(
+    SWARM_PUBLIC_BASE_URL_DEFAULT,
+  );
+});
