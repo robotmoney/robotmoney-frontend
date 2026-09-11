@@ -5,7 +5,7 @@
 // quo rather than weakening existing coverage. JSDoc-typing this file is a
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
-import { ASSET_DOT, assetDot, subjectDot } from "./views/shared.js";
+import { assetDot, subjectDot, resolveTokenColors } from "./views/shared.js";
 import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
@@ -15,7 +15,8 @@ import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
-import { sessionSummary, weightEntries, bucketHue, bucketLabel } from "../lib/session-summary.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank } from "../lib/session-summary.js";
+import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
@@ -79,6 +80,9 @@ export function loadAllocationFramework() {
           name: b.name || "",
           target: Number.isFinite(Number(b.target_weight)) ? Number(b.target_weight) : null,
           tokens: (b.tokens || []).map((t) => String(t).toUpperCase()),
+          // The sleeve's constituents in POLICY order, which is the order and
+          // the colour /allocation draws them in.
+          items: (b.items || []).map((it) => ({ id: it.id || "", name: it.name || it.id || "" })),
         })),
       }))
       .catch(() => {
@@ -1143,7 +1147,6 @@ export function registerStaticViews(Alpine) {
         // spellings. normalizeRegime settles that.
         this.setBackdrop(this.sessions[0]?.regimeSummary || this.brief?.regime || null, {
           date: this.sessions[0]?.date || this.brief?.date || "",
-          scope: "latest",
           v0: this.readingIsV0(this.latest()),
         });
       } catch (e) {
@@ -1350,32 +1353,7 @@ export function registerStaticViews(Alpine) {
     // right trade: an unmapped symbol has no identity to protect, and within one
     // figure being TELLABLE APART beats being globally stable.
     chartColors() {
-      const tokens = this.chartTokens();
-      const out = {};
-      const used = new Set([OTHER_COLOR]);
-      for (const token of tokens) {
-        const owned = ASSET_DOT[token];
-        if (owned && !used.has(owned)) {
-          out[token] = owned;
-          used.add(owned);
-        }
-      }
-      // Slate is withheld from the fallback pool: the covenant spends it on
-      // muted references and baselines, and a 36%-of-NAV holding is not a
-      // reference — drawn slate it reads as the leftovers bucket. Only a book
-      // deep enough to exhaust every other hue falls back to it.
-      const pool = CATEGORICAL.filter((hue) => hue !== SERIES.slate);
-      for (const token of tokens) {
-        if (out[token]) continue;
-        const hashed = assetDot(token);
-        const free = hashed !== SERIES.slate && !used.has(hashed);
-        const color = free
-          ? hashed
-          : (pool.find((hue) => !used.has(hue)) || CATEGORICAL.find((hue) => !used.has(hue)) || hashed);
-        out[token] = color;
-        used.add(color);
-      }
-      return out;
+      return resolveTokenColors(this.chartTokens(), [OTHER_COLOR]);
     },
     // The snapshots inside the chart window, oldest first.
     //
@@ -2139,8 +2117,20 @@ export function registerStaticViews(Alpine) {
         .map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }))
         .sort((a, b) => b.share - a.share);
     },
-    // A token's colour is its colour everywhere on the site (assetDot).
-    tokenColor(token) { return assetDot(token); },
+    // Keyed the way the subject page keys the same book: named tokens keep the
+    // colour they own and the rest take a free one, resolved over the rows
+    // this table draws, so no two rows share a key.
+    tokenColor(token) {
+      return resolveTokenColors(this.positionRows().slice(0, 8).map((p) => p.token))[token] || assetDot(token);
+    },
+    // The snapshot's notable lines, minus the ones that are the subject's own
+    // operator notes, which the handover already prints under that name.
+    notableItems() {
+      const body = this.brief?.body || this.brief;
+      const raw = body?.subject?.structuralNotes ?? body?.subject?.structural_notes ?? this.subject?.structuralNotes ?? [];
+      const notes = new Set((Array.isArray(raw) ? raw : [raw]).map((n) => this.normText(n)).filter(Boolean));
+      return (this.snapshot?.notable || []).filter((n) => !notes.has(this.normText(n)));
+    },
     humanize(id) {
       return humanizeLabel(id);
     },
@@ -2189,14 +2179,24 @@ export function registerStaticViews(Alpine) {
       const rec = this.session?.swarmRecommendation;
       if (!rec || rec.type !== "bucket_weights") return [];
       const num = (v) => (v !== null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null);
+      // In the published order whatever order the payload keeps: jsonb stores
+      // keys shortest first, so a map read back from the database listed
+      // Conservative DeFi Yield last.
+      const ranked = (rows) => rows
+        .map((r, i) => ({ r, i }))
+        .sort((a, b) => bucketRank(a.r.id || a.r.name) - bucketRank(b.r.id || b.r.name) || a.i - b.i)
+        .map((x) => x.r);
       if (Array.isArray(rec.buckets) && rec.buckets.length) {
-        return rec.buckets.map((b, i) => ({
-          name: b.name || this.humanize(b.id),
+        return ranked(rec.buckets.map((b, i) => ({
+          id: b.id || "",
+          name: b.name || bucketLabel(b.id),
           hue: bucketHue(b.id || b.name, i),
           target: num(b.target ?? b.target_weight),
           actual: num(b.actual ?? b.actual_weight),
-          recommended: num(b.recommended ?? b.weight) ?? 0,
-        }));
+          // A sleeve published with no weight has none. Drawing it as 0% put a
+          // move to zero on the page that the swarm never made.
+          recommended: num(b.recommended ?? b.weight),
+        })));
       }
       // Either shape the weights arrive in: the v0 map or the live array.
       const entries = weightEntries(rec.weights);
@@ -2206,7 +2206,7 @@ export function registerStaticViews(Alpine) {
       const manifest = this.frameworkBuckets();
       const actuals = this.bucketActuals();
       const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      return entries.map(([id, w], i) => {
+      return ranked(entries.map(([id, w], i) => {
         const brief = handed.get(norm(id)) ?? handed.get(norm(this.humanize(id)));
         const framework = targets.get(norm(this.humanize(id))) ?? targets.get(norm(id));
         const bucket = manifest.get(norm(id)) ?? manifest.get(norm(this.humanize(id)));
@@ -2216,15 +2216,16 @@ export function registerStaticViews(Alpine) {
         return {
           // Prefer the framework's own spelling of the bucket name when it is
           // known; humanize() of an id cannot recover "DeFi".
-          name: framework?.label || bucket?.name || brief?.label || this.humanize(id),
+          id,
+          name: framework?.label || bucket?.name || brief?.label || bucketLabel(id),
           hue: bucketHue(id, i),
           // A brief that named any target names them all, so a sleeve it left
           // out has no target rather than borrowing the framework's.
           target: handed.size ? (brief ? brief.target : null) : published,
           actual: bucket ? (actuals.get(bucket.id) ?? null) : null,
-          recommended: num(w) ?? 0,
+          recommended: num(w),
         };
-      });
+      }));
     },
     // The framework's buckets, indexed by both id and name so a weights map
     // keyed "conservative_defi_yield" and a manifest naming it "Conservative
@@ -2283,31 +2284,33 @@ export function registerStaticViews(Alpine) {
       const date = this.session?.date;
       return !!(asOf && date && String(date) < String(asOf).slice(0, 10));
     },
-    // Whether the swarm proposed something OTHER than the target. Mirrors the
-    // reference implementation's half-a-point tolerance, so a rounding artifact
-    // never renders as a deviation. Suppressed when the target postdates the
-    // session: it is a judgement on the swarm, and it cannot be made against a
-    // target the swarm could not have been aiming at.
-    deviatesFromTarget() {
-      if (this.targetPostdatesSession()) return false;
-      return this.bucketWeights().some((b) => b.target != null && Math.abs(b.recommended - b.target) > 0.005);
-    },
-    // Per-constituent weights inside each bucket. Each sleeve under its
-    // published name and hue, and each item under the name the brief gave it
-    // ("Morpho", "Compound") when the brief named it.
+    // Inside each sleeve, as /allocation's sleeve cards draw it: each sleeve
+    // under its published name and hue with its recommended weight, and its
+    // items in POLICY order, each in the colour its position gives it there
+    // (so Morpho is one colour on both pages), under the name the brief or the
+    // published framework gives it rather than the payload's slug.
     withinBucketWeights() {
       const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       const body = this.brief?.body || this.brief;
-      const named = new Map();
-      for (const b of body?.allocation?.buckets || []) {
-        for (const it of b?.items || []) if (it?.id && it?.name) named.set(norm(it.id), it.name);
-      }
-      return withinBucketWeightsFrom(this.session?.swarmRecommendation).map((b, i) => ({
-        ...b,
-        label: bucketLabel(b.bucket),
-        hue: bucketHue(b.bucket, i),
-        items: b.items.map((it) => ({ ...it, label: named.get(norm(it.name)) || it.name })),
-      }));
+      const policyOf = (bucket) => {
+        const n = norm(bucket);
+        const fromBrief = (body?.allocation?.buckets || []).find((b) => norm(b.id) === n || norm(b.name) === n);
+        if (fromBrief?.items?.length) return fromBrief.items.map((it) => ({ id: it.id || "", name: it.name || it.id || "" }));
+        return (this.allocationFramework?.buckets || []).find((b) => norm(b.id) === n || norm(b.name) === n)?.items || [];
+      };
+      const sleeveWeight = new Map(this.bucketWeights().map((b) => [norm(b.id || b.name), b.recommended]));
+      return withinBucketWeightsFrom(this.session?.swarmRecommendation)
+        .map((b, i) => {
+          const policy = policyOf(b.bucket);
+          const items = b.items.map((it, j) => {
+            const at = policy.findIndex((p) => norm(p.id) === norm(it.name) || norm(p.name) === norm(it.name));
+            const order = at >= 0 ? at : policy.length + j;
+            return { ...it, label: at >= 0 ? policy[at].name : it.name, order, colour: CATEGORICAL[order % CATEGORICAL.length] };
+          }).sort((x, y) => x.order - y.order);
+          const w = sleeveWeight.get(norm(b.bucket));
+          return { ...b, label: bucketLabel(b.bucket), hue: bucketHue(b.bucket, i), weight: w == null ? null : w * 100, items, rank: bucketRank(b.bucket) };
+        })
+        .sort((a, b) => a.rank - b.rank);
     },
     isBucketWeights() {
       const rec = this.session?.swarmRecommendation;
@@ -2323,7 +2326,7 @@ export function registerStaticViews(Alpine) {
       const basis = this.gapBasis();
       return this.bucketWeights().map((b) => {
         const from = basis === "actual" ? b.actual : b.target;
-        const gap = from == null ? null : b.recommended - from;
+        const gap = from == null || b.recommended == null ? null : weightChange.weightDelta(b.recommended * 100, from * 100);
         return { ...b, gap };
       });
     },
@@ -2341,21 +2344,14 @@ export function registerStaticViews(Alpine) {
     outcomeColumns() {
       return 1 + (this.hasTargetColumn() ? 1 : 0) + (this.hasActualColumn() ? 1 : 0) + (this.gapBasis() ? 1 : 0);
     },
-    // A gap under half a point is rounding, not a proposal — the same tolerance
-    // deviatesFromTarget() uses, so the figures and the state cannot disagree.
-    fmtGap(gap) {
-      if (gap == null) return "—";
-      const pp = gap * 100;
-      if (Math.abs(pp) < 0.5) return "—";
-      return `${pp > 0 ? "↑ +" : "↓ −"}${Math.abs(pp).toFixed(0)}pp`;
-    },
-    gapClass(gap) {
-      if (gap == null || Math.abs(gap * 100) < 0.5) return "";
-      return gap > 0 ? "is-up" : "is-down";
-    },
-    fmtWeight(v) {
-      return v == null ? "—" : `${Math.round(v * 100)}%`;
-    },
+    // Weights and moves read as /allocation's "What changed" writes them
+    // (lib/weight-change.js): 95%, 14.3%; ▲ +2.00% / ▼ −2.00%, or "—".
+    // Weights here are fractions, so they are scaled to percent first.
+    fmtWeight(v) { return v == null ? "—" : weightChange.fmtPctTrim(v * 100); },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
+    changeGlyph(d) { return weightChange.changeGlyph(d); },
+    changeLabel(d) { return weightChange.changeLabel(d); },
+    changeClass(d) { return weightChange.changeClass(d); },
     hasOutcome() { return this.isBucketWeights() || this.authoredActions().length > 0; },
     // The outcome in a word, the way the band states the signal and the
     // reasoning: whether the swarm moved anything, and how much of it. Only
@@ -2366,7 +2362,7 @@ export function registerStaticViews(Alpine) {
         if (!basis || this.targetPostdatesSession()) return null;
         const rows = this.bucketRows().filter((b) => b.gap != null);
         if (!rows.length) return null;
-        const moved = rows.filter((b) => this.gapClass(b.gap)).length;
+        const moved = rows.filter((b) => this.changeClass(b.gap) !== "flat").length;
         const what = basis === "actual" ? "the book" : "the target";
         return moved
           ? { label: "Change", detail: `${moved} of ${rows.length} sleeves move from ${what}` }
@@ -2376,15 +2372,15 @@ export function registerStaticViews(Alpine) {
       if (!acts.length) return null;
       const moved = acts.filter((a) => String(a.action).toLowerCase() !== "hold").length;
       return moved
-        ? { label: "Change", detail: `${moved} of ${acts.length} positions` }
-        : { label: "No change", detail: `holds all ${acts.length} positions` };
+        ? { label: "Change", detail: `${moved} of the ${acts.length} positions it reviewed` }
+        : { label: "No change", detail: `holds all ${acts.length} positions it reviewed` };
     },
     // Which target, and whose book, the figures are measured against.
     outcomeCaption() {
       const basis = this.gapBasis();
       if (!basis) return "";
       const parts = [];
-      if (basis === "actual" && this.snapshot?.date) parts.push(`Actual is the book on ${this.formatDate(this.snapshot.date, "short")}.`);
+      if (basis === "actual" && this.snapshot?.date) parts.push(`Change is measured against the book on ${this.formatDate(this.snapshot.date, "short")}.`);
       if (this.hasTargetColumn()) {
         if (this.targetSource() === "brief") {
           parts.push("Target as handed to this session.");
@@ -2432,15 +2428,17 @@ export function registerStaticViews(Alpine) {
     // quorum, the mean confidence and the regime percentile (domain.ts
     // buildConsensus, buildDisagreements, buildSynthesis), every one of which
     // the review band already draws, and a disagreement's views are two take
-    // bodies copied verbatim. A judge may author the disagreements and nothing
-    // else; v0 sessions authored all of it.
+    // bodies copied verbatim. A judge rewrites the rationale and the
+    // disagreements, and only a MODEL judge writes its own: the fallback
+    // (judge.source other than "model", the shipped default) writes the same
+    // templates. v0 sessions authored all of it.
     consensusItems() {
       if (this.isRollupRecommendation()) return [];
       return (this.session?.swarmRecommendation?.consensus || []).filter((c) => !this.isEcho(c));
     },
     disagreements() {
       const rec = this.session?.swarmRecommendation;
-      if (this.isRollupRecommendation() && !rec?.judge) return [];
+      if (this.isRollupRecommendation() && rec?.judge?.source !== "model") return [];
       return rec?.disagreements || [];
     },
     showSynthesis() {
