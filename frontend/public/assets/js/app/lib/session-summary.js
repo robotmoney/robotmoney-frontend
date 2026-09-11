@@ -72,6 +72,14 @@ const bucketIndex = (idOrName) => {
   const n = normKey(idOrName);
   return BUCKET_ORDER.findIndex((k) => normKey(k) === n || normKey(BUCKET_LABELS[k]) === n);
 };
+// A sleeve's place in the published order, unknown sleeves last. Payloads do
+// not keep it: Postgres jsonb stores object keys shortest first, so a weights
+// map read back from the database lists Conservative DeFi Yield LAST.
+/** @param {unknown} idOrName */
+export function bucketRank(idOrName) {
+  const i = bucketIndex(idOrName);
+  return i < 0 ? BUCKET_ORDER.length : i;
+}
 /** @param {unknown} idOrName @param {number} [fallback] */
 export function bucketHue(idOrName, fallback = 0) {
   const i = bucketIndex(idOrName);
@@ -82,7 +90,8 @@ export function bucketHue(idOrName, fallback = 0) {
 /** @param {unknown} idOrName */
 export function bucketLabel(idOrName) {
   const i = bucketIndex(idOrName);
-  return i >= 0 ? BUCKET_LABELS[BUCKET_ORDER[i]] : String(idOrName || "");
+  if (i >= 0) return BUCKET_LABELS[BUCKET_ORDER[i]];
+  return String(idOrName || "").replace(/[_-]+/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export const sessionSummary = {
@@ -152,9 +161,6 @@ export const sessionSummary = {
     const mean = vals.reduce((/** @type {number} */ a, /** @type {number} */ n) => a + n, 0) / vals.length;
     return `${Math.round(mean * 100)}% mean confidence`;
   },
-  // "N of M took part" needs a roster size, which only the live record has.
-  // An archived session knows how many filed and not how many could have, so
-  // it says the half it can stand behind rather than inventing a denominator.
   // Whether this session's regime reading used the v0 method, whose composite
   // averaged macro, on-chain AND factor. Every live aggregate carries a quorum
   // and no v0 session ever did: not the static archive, and not the v0 sessions
@@ -162,6 +168,9 @@ export const sessionSummary = {
   // as live to any test on the date.
   /** @param {any} s */
   readingIsV0(s) { return !!s && !s.swarmRecommendation?.quorum; },
+  // "N of M took part" needs a roster size, which only the live record has.
+  // An archived session knows how many filed and not how many could have, so
+  // it says the half it can stand behind rather than inventing a denominator.
   /** @param {any} s */
   quorumText(s) {
     const q = s?.swarmRecommendation?.quorum;
@@ -232,15 +241,20 @@ export const sessionSummary = {
     if (!rows) return [];
     const drawn = rows.filter((r) => Number(r.pct) > 0);
     // Surface between neighbouring arcs, in the same 100-unit space. Taken out
-    // of the arc rather than added to the sweep, so the ring still closes and
-    // a 2% sliver stays its own object instead of bleeding into 95%.
+    // of the LARGEST arc only, so the ring still closes and every small sleeve
+    // is drawn at its true length. Taking it from every arc drew a 2% sleeve
+    // at 0.8 and a 3% one at 1.8: the small sleeves are the moves a reader is
+    // looking for, and they came out 40 to 60% short.
     const gap = drawn.length > 1 ? 1.2 : 0;
+    const largest = drawn.reduce((m, r) => (Number(r.pct) > Number(m?.pct ?? -1) ? r : m), /** @type {any} */ (null));
     let at = 0;
     return drawn.map((r) => {
       const len = Number(r.pct);
-      const arc = Math.max(0.8, len - gap);
+      const arc = r === largest ? Math.max(0.8, len - gap * drawn.length) : len;
       const seg = { key: r.key, label: r.label, colour: r.colour, dash: `${arc} ${100 - arc}`, offset: -at };
-      at += len;
+      // Every arc is followed by its gap, so no two sleeves touch; the gaps
+      // together are what the largest arc gave up.
+      at += arc + gap;
       return seg;
     });
   },

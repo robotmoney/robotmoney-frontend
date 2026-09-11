@@ -8,7 +8,6 @@
 // most recent session's.
 //
 // A factory, because the reading is state.
-import { CATEGORICAL } from "./chart-theme.js";
 import { bucketHue } from "./session-summary.js";
 import { isKnownPage, metaFor } from "../seo.js";
 
@@ -162,7 +161,10 @@ export function sessionBrief() {
           if (!x?.name || !Number.isFinite(w)) return null;
           return { key: `targets-${i}`, label: x.name, pct: Math.round(w * 100), hue: bucketHue(x.id || x.name, i) };
         }).filter(Boolean);
-        if (bars.length) parts.push({ key: "targets", label: "Targets", bars });
+        // "Allocation targets", not "Targets": every v0 brief carried the
+        // allocation framework's weights, and on Woon's or the treasury's page a
+        // bare "Targets" read as that subject's own.
+        if (bars.length) parts.push({ key: "targets", label: "Allocation targets", bars });
       }
       const signals = b.researchSignals || b.research_signals;
       const articles = b.research?.articles;
@@ -178,7 +180,10 @@ export function sessionBrief() {
           return { text: title || human(k), href };
         })) });
       } else if (Array.isArray(articles) && articles.length) {
-        parts.push({ key: "research", label: "Research", links: pills("research", articles.map((/** @type {any} */ x) => ({ text: txt(x?.title), href: txt(x?.slug) }))) });
+        // v0's articles went into one member's prompt, not the swarm's: the
+        // brief's own note says "research is Athena's context".
+        const to = /athena/i.test(String(b.research?._comment || "")) ? "Research, to Athena" : "Research";
+        parts.push({ key: "research", label: to, links: pills("research", articles.map((/** @type {any} */ x) => ({ text: txt(x?.title), href: txt(x?.slug) }))) });
       }
       const recent = b.recentSessions || b.recent_sessions;
       if (Array.isArray(recent) && recent.length) {
@@ -189,16 +194,23 @@ export function sessionBrief() {
         const own = b.subject_id || b.subjectId || self.subject?.id || "";
         /** @type {Record<string, string>} */
         const names = self.subjectNames || {};
-        parts.push({
-          key: "recent", label: "Recent sessions",
-          pills: pills("recent", recent.map((/** @type {any} */ x) => {
-            const sid = x?.subject_id || x?.subjectId;
-            const d = day(x?.date);
-            const date = String(x?.date || "").slice(0, 10);
-            const href = d && (sid || own) ? `/swarm/${date}/${encodeURIComponent(sid || own)}` : "";
-            return { text: sid ? `${d} · ${names[sid] || sid}` : d, href };
-          })),
+        // Two sessions on one subject and day read identically and reach the
+        // same dated address (the day's latest), so the second pill adds
+        // nothing until refs carry their own ids (#965).
+        const seen = new Set();
+        const refs = recent.map((/** @type {any} */ x) => {
+          const sid = x?.subject_id || x?.subjectId;
+          const d = day(x?.date);
+          const date = String(x?.date || "").slice(0, 10);
+          const href = d && (sid || own) ? `/swarm/${date}/${encodeURIComponent(sid || own)}` : "";
+          return { text: sid ? `${d} · ${names[sid] || sid}` : d, href };
+        }).filter((r) => {
+          const k = `${r.text}|${r.href}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
         });
+        parts.push({ key: "recent", label: "Recent sessions", pills: pills("recent", refs) });
       }
       const rawNotes = b.subject?.structuralNotes ?? b.subject?.structural_notes;
       const notes = (Array.isArray(rawNotes) ? rawNotes : rawNotes ? [rawNotes] : []).map(txt).filter(Boolean);
@@ -207,14 +219,12 @@ export function sessionBrief() {
       if (schema.length) {
         /** @type {Record<string, string>} */
         const said = { body: "written take", stance: "stance", confidence: "confidence", weights: "target weights" };
-        parts.push({ key: "returns", label: "Asked to return", pills: pills("returns", schema.map((k) => said[k] || human(k))) });
+        // An optional field is asked for as optional: every live schema marks
+        // weights optional, on subjects whose sessions publish none.
+        const optional = (/** @type {string} */ k) => Boolean(b.takeSchema[k] && typeof b.takeSchema[k] === "object" && b.takeSchema[k].optional);
+        parts.push({ key: "returns", label: "Asked to return", pills: pills("returns", schema.map((k) => `${said[k] || human(k)}${optional(k) ? " (optional)" : ""}`)) });
       }
       return parts;
     },
   };
 }
-
-// Kept beside the module that consumes it: the allocation sleeve colours are
-// CATEGORICAL by published position, and nothing in this file paints a sleeve.
-// Re-exported so a caller does not have to import two modules to draw a brief.
-export { CATEGORICAL };

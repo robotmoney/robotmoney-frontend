@@ -138,7 +138,9 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   const firstCard = takeCards.first();
   await expect(firstCard.locator(".sv__member-link")).not.toHaveText("");
   await expect(firstCard.locator(".sv__take-lens")).not.toHaveText("");
-  await expect(firstCard.locator(".sv__stance-badge")).toHaveText(/\S+ · \d+%/);
+  // Stance and confidence apart, as /swarm's take rows set them.
+  await expect(firstCard.locator(".sv__stance-badge")).toHaveText(/^\s*[a-z]+\s*$/);
+  await expect(firstCard.locator(".mp-conf")).toHaveText(/confidence \d+%/);
 
   await expectNoBrowserErrors(errors);
 });

@@ -366,7 +366,10 @@ test("a subject's session card carries the consensus and the decision, as /swarm
   await expect(arcs).toHaveCount(2);
   // An arc's length IS its percentage, because the circle carries
   // pathLength="100" — the geometry cannot drift out of step with the radius.
-  await expect(arcs.first()).toHaveAttribute("stroke-dasharray", /^93\.8 /);
+  // The small sleeve is drawn at its true length; the gaps between arcs come
+  // out of the largest one alone (95 - 2 x 1.2).
+  await expect(arcs.nth(1)).toHaveAttribute("stroke-dasharray", /^5 /);
+  await expect(arcs.first()).toHaveAttribute("stroke-dasharray", /^92\.6 /);
   // Colour follows the sleeve's published POSITION, so it is the hue this
   // sleeve wears on /allocation's donut and a weight change never repaints the
   // sleeves that did not move.

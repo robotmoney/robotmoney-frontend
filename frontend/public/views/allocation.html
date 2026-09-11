@@ -808,69 +808,15 @@ table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color:
 
 /* the seam banner — the window between the reference series and today */
 /* Beacon, as a POINT: a 6px mark, not a glyph set at type size. */
-/* ── one card per sleeve ───────────────────────────────────────────────── */
-/* One card per row, never a gallery. Two up halves the width the merged vault
-   table has to render in, and that table is seven columns: name, balance,
-   price, value, policy, in vault, drift. At half width it scrolls sideways
-   inside the card, which turns the comparison the section exists for into a
-   thing you have to drag to read. Full width, it fits. */
-.alp__cards { display: grid; gap: 1rem; }
-/* One line, brightened. The card is not itself clickable, so it gets an edge
-   that acknowledges the pointer and nothing that implies a click. */
-.alp__card {
-  background: var(--color-deep); border: 1px solid var(--color-border);
-  display: flex; flex-direction: column;
-  transition: border-color 150ms var(--ease-out-expo);
-}
-.alp__card:hover { border-color: var(--color-border-light); }
-.alp__card-top {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem 1.25rem;
-  flex-wrap: wrap; padding: 1rem 1.25rem 0.75rem; border-bottom: 1px solid var(--color-border);
-}
-.alp__card-name { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
-.alp__card-name i { flex: 0 0 auto; width: 0.6rem; height: 0.6rem; transform: translateY(-0.05em); }
-.alp__card-name b {
-  font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
-  font-size: 1.05rem; letter-spacing: 0.01em; color: var(--color-text);
-}
-.alp__card-w { text-align: right; }
-.alp__card-w b {
-  font-family: var(--font-mono); font-weight: 500; font-size: 1.15rem;
-  color: var(--color-text); font-variant-numeric: tabular-nums;
-}
-.alp__card-w small {
-  display: block; font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.14em; color: var(--color-text-muted);
-}
-.alp__card-body { padding: 1rem 1.25rem 1.25rem; display: flex; flex-direction: column; flex: 1 1 auto; }
+/* One card per sleeve, the ledger and the move glyph are shared with a
+   session's outcome and live in views.css. What stays here is this page's
+   own: the sleeve prose and the hover highlight between a block and its name. */
 .alp__card-what { margin: 0 0 1rem; color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6; }
-
-/* The policy bar, drawn to the SLEEVE's own hundred rather than to its share
-   of the book, so a 5% sleeve holding seven names is as readable as a 95% one.
-   The 2px separators are the surface showing through, not a border colour: a
-   stacked bar needs a gap between fills, and a line would read as a rule. */
-.alp__stk {
-  display: flex; height: 1.6rem; background: var(--color-surface-light);
-  border: 1px solid var(--color-border);
-}
-.alp__stk > span {
-  display: block; height: 100%;
-  transition: opacity 150ms var(--ease-out-expo);
-}
-.alp__stk > span + span { border-left: 2px solid var(--color-deep); }
 .alp__stk > span.dim { opacity: 0.32; }
 .alp__names > span { transition: color 150ms var(--ease-out-expo); }
 .alp__names > span.is-hot { color: var(--color-text); }
 .alp__names > span.is-hot b { color: var(--color-text-soft); }
 .alp__names > span.dim { opacity: 0.42; }
-.alp__stk.zero { opacity: 0.45; }
-.alp__names { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; margin-top: 0.75rem; font-size: 0.8rem; }
-.alp__names > span { display: inline-flex; align-items: baseline; gap: 0.5rem; color: var(--color-text-soft); }
-.alp__names i { flex: 0 0 auto; width: 0.45rem; height: 0.45rem; transform: translateY(-0.05em); }
-.alp__names b {
-  font-family: var(--font-mono); font-weight: 400; color: var(--color-text-muted);
-  font-variant-numeric: tabular-nums;
-}
 
 /* The vault rail: the same four-fact rail the weights carry at the top of the
    page, in the same grid, so a reader learns one object and reads it twice.
@@ -921,57 +867,17 @@ table.alp__tbl .alp__link:hover { color: var(--color-text); border-bottom-color:
 }
 
 /* tables */
-/* Six and seven columns do not fit a phone. They scroll inside their own
-   container rather than the page, and the hint says so instead of leaving it
-   to be discovered. */
-.alp__tblwrap { overflow-x: auto; border: 1px solid var(--color-border); }
-table.alp__tbl {
-  width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.7rem;
-  min-width: 40rem; font-variant-numeric: tabular-nums;
-}
-table.alp__tbl th {
-  text-align: right; font-size: 0.6rem; font-weight: 500; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted); padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--color-border-light); background: var(--color-surface);
-}
-table.alp__tbl th:first-child, table.alp__tbl td:first-child { text-align: left; }
-table.alp__tbl td {
-  text-align: right; padding: 0.5rem 1rem; border-bottom: 1px solid var(--color-border);
-  color: var(--color-text-soft);
-}
-table.alp__tbl tbody tr:last-child td { border-bottom: 0; }
 table.alp__tbl tr.tot td { color: var(--color-text); border-top: 1px solid var(--color-border-light); font-weight: 500; }
 table.alp__tbl .idle { color: var(--color-text-muted); }
 /* After tr.tot, and more specific than it: the vault-vs-Aave column stays green
    on the total row too, which is the row a reader checks first. */
 table.alp__tbl td.alp__gain, table.alp__tbl tr.tot td.alp__gain { color: var(--color-green); }
-/* The change ledger and the vault table both live in .alp__tbl. `q` is the
-   quiet column a figure is measured against; `note` is prose and must be
-   allowed to wrap, which the mono default forbids. */
-table.alp__tbl td.q { color: var(--color-text-muted); }
-table.alp__tbl--led { min-width: 34rem; }
-/* Without a width on the first column the browser hands it every spare pixel
-   and the figures end up a screen away from the sleeve they describe. */
-table.alp__tbl--led th:first-child { width: 40%; }
 table.alp__tbl--wide { min-width: 48rem; }
 table.alp__tbl tr.out td { color: var(--color-text-muted); }
 table.alp__tbl tr.out .alp__dot { opacity: 0.4; }
-.alp__dot {
-  display: inline-block; width: 0.45rem; height: 0.45rem; margin-right: 0.5rem;
-  vertical-align: 0.05em;
-}
-/* Direction is the GLYPH first and the colour second, so the column survives
-   greyscale, forced-colors and colourblindness. Beacon appears here as one
-   arrow at type size, which is the point size the covenant allows it. */
-.alp__mv { display: inline-flex; align-items: baseline; gap: 0.25rem; justify-content: flex-end; }
-.alp__mv i { font-style: normal; font-size: 0.78em; line-height: 1; }
-/* Up and down read the same way in both tables: the change ledger and the
-   vault's drift column. --color-warn is the red the palette already carries.
-   Beacon no longer marks notes anywhere here: the only warm hues left are
-   CATEGORICAL series colours, which mean a sleeve or a name and nothing else. */
-.alp__mv.up, .alp__dft.up { color: var(--color-green); }
-.alp__mv.down, .alp__dft.down { color: var(--color-warn); }
-.alp__mv.flat, .alp__dft.flat { color: var(--color-text-muted); }
+.alp__dft.up { color: var(--color-green); }
+.alp__dft.down { color: var(--color-warn); }
+.alp__dft.flat { color: var(--color-text-muted); }
 .alp__dft { display: inline-flex; align-items: baseline; gap: 0.25rem; justify-content: flex-end; }
 .alp__dft i { font-style: normal; font-size: 0.78em; line-height: 1; }
 

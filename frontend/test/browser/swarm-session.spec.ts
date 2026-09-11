@@ -234,14 +234,14 @@ async function mockSessionApi(
   });
 }
 
-// The outcome is the review band's lower half: a one-word state, the
-// recommendation ring, and the targets card's register carrying the target,
-// the recommendation and the move. Every figure is real text in the register.
+// The outcome leads the review band: a one-word state, the recommendation
+// ring, and /allocation's "What changed" ledger carrying the target, the
+// recommendation and the move, written the way /allocation writes a move
+// (lib/weight-change.js): ▲ +2.00% / ▼ −2.00%, "—" when flat.
 const outcome = (page: Page) => page.locator(".sr__out");
-const register = (page: Page) => page.locator(".sr__out .sr__reg");
-const registerHead = (page: Page) => register(page).locator(".sv__sleeve--head");
-const registerRow = (page: Page, name: string) =>
-  register(page).locator(".sv__sleeve:not(.sv__sleeve--head)").filter({ hasText: name });
+const register = (page: Page) => page.locator(".sr__out .sr__ledger table");
+const registerHead = (page: Page) => register(page).locator("thead");
+const registerRow = (page: Page, name: string) => register(page).locator("tbody tr").filter({ hasText: name });
 
 test("bucket_weights session draws the target from the allocation framework and states the change", async ({ page }) => {
   // 97/3/0/0 recommended against the published 95/5/0/0 target — the exact
@@ -269,14 +269,13 @@ test("bucket_weights session draws the target from the allocation framework and 
   await expect(register(page)).toContainText("3%");
   await expect(registerHead(page)).toContainText(/target/i, { useInnerText: true });
   await expect(registerHead(page)).toContainText(/recommended/i, { useInnerText: true });
-  // Gap is against target here (no snapshot in this mock, so no actual), and
-  // the heading says WHICH basis is on screen rather than a bare "Gap".
-  await expect(registerHead(page)).toContainText(/vs target/i, { useInnerText: true });
+  await expect(registerHead(page)).toContainText(/change/i, { useInnerText: true });
   // The framework's own spelling wins over humanize("conservative_defi_yield"),
   // which cannot recover DeFi's inner capital.
   await expect(register(page)).toContainText("Conservative DeFi Yield");
   await expect(register(page)).not.toContainText("Conservative Defi Yield");
-  await expect(registerRow(page, "Conservative DeFi Yield")).toContainText("+2pp");
+  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("▲+2.00%");
+  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveClass(/\bup\b/);
 
   // The finding a reader is here for, stated the way the band states the
   // signal and the reasoning.
@@ -303,8 +302,9 @@ test("bucket_weights session that matches its target says so, and every move rea
   // Same target, same recommendation: the state must say so, otherwise it
   // says nothing when it does report a change.
   await expect(outcome(page).locator(".sr__state")).toContainText("No change");
-  // …and the gap column agrees with it: a zero move reads "—", not "0pp".
-  await expect(registerRow(page, "Conservative DeFi Yield").locator(".sr__gap")).toHaveText("—");
+  // …and the change column agrees with it: a zero move reads "—", as on /allocation.
+  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("—");
+  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveClass(/\bflat\b/);
 });
 
 // "Actual" is the only figure on this panel that is DERIVED rather than
@@ -345,20 +345,19 @@ test("bucket_weights session derives Actual from the snapshot and measures the g
   // Basis flips to actual the moment we know it: recommended-minus-actual is
   // the MOVE being asked for, which is the question a reader has.
   await expect(registerHead(page)).toContainText(/actual/i, { useInnerText: true });
-  await expect(registerHead(page)).toContainText(/vs actual/i, { useInnerText: true });
+  await expect(outcome(page).locator("[data-target-asof]")).toContainText("Change is measured against the book on");
   const conservative = registerRow(page, "Conservative DeFi Yield");
   await expect(conservative).toContainText("100%");
   // 97 recommended − 100 actual = trim 3 points.
-  await expect(conservative.locator(".sr__gap")).toContainText("−3pp");
+  await expect(conservative.locator(".alp__mv")).toHaveText("▼−3.00%");
   const agent = registerRow(page, "Agent Tokens");
   // 3 recommended − 0 actual = add 3. A bucket whose tokens are simply absent
   // from the book reads 0%, which is true — not "—", which would claim we do
   // not know.
   await expect(agent).toContainText("0%");
-  await expect(agent.locator(".sr__gap")).toContainText("+3pp");
+  await expect(agent.locator(".alp__mv")).toHaveText("▲+3.00%");
   // The book is on the page too, in the subject page's holdings table.
   await expect(page.locator(".sv__portfolio .sv__panel-label")).toContainText("Holdings");
-  await expect(outcome(page).locator("[data-target-asof]")).toContainText("Actual is the book on");
 });
 
 // The allocation subject IS the framework: it holds nothing. The release smoke
@@ -386,7 +385,7 @@ test("a framework session renders no book, even when the API serves one, and mea
   await expect(page.locator(".sv__portfolio")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("$42,688");
   await expect(registerHead(page)).not.toContainText(/actual/i, { useInnerText: true });
-  await expect(registerHead(page)).toContainText(/vs target/i, { useInnerText: true });
+  await expect(registerRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▼−2.00%");
 });
 
 // The live aggregator publishes `weights` as [{bucket, weight}] (the contract's
@@ -414,10 +413,10 @@ test("a live bucket_weights session published as an array reads the same as the 
   await page.goto("/swarm/2026-09-12/robotmoney-allocation");
 
   await expect(page.locator(".sv__error")).toBeHidden();
-  const names = await register(page).locator(".sv__sleeve:not(.sv__sleeve--head) .sv__sleeve-n").allInnerTexts();
-  expect(names.map((n) => n.trim())).toEqual(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
+  // Auto-waiting: the rows land after init resolves.
+  await expect(register(page).locator("tbody tr td:first-child")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
   await expect(registerRow(page, "Agent Tokens")).toContainText("7%");
-  await expect(registerRow(page, "Agent Tokens").locator(".sr__gap")).toContainText("+2pp");
+  await expect(registerRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▲+2.00%");
   // The ring the session cards draw, from the same weights.
   await expect(outcome(page).locator(".sv__wdonut-host")).toHaveAttribute("aria-label", /Agent Tokens 7%/);
 });
@@ -447,7 +446,7 @@ test("bucket_weights session degrades to Recommended-only when the framework is 
   // With no basis to measure against, there is no move to state and no gap
   // column, rather than a row of em-dashes under a verdict.
   await expect(outcome(page).locator(".sr__state")).toHaveCount(0);
-  await expect(outcome(page).locator(".sr__gap")).toHaveCount(0);
+  await expect(outcome(page).locator(".alp__mv")).toHaveCount(0);
 });
 
 // 2026-06-26 … 06-30: after ARCHIVE_LAST_DATE (2026-06-25) and before the old
@@ -806,7 +805,7 @@ test("a live aggregate reached by id draws the band from its own brief and print
   await expect(page.locator(".sr__out")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("hardcoded");
   // No discussion: every line of it restates a figure the band draws.
-  await expect(page.locator(".sv__sec-h")).toHaveText(["Takes"]);
+  await expect(page.locator(".sv__sec-h")).toHaveText(["Member takes"]);
   await expect(page.locator("body")).not.toContainText("Stance split");
   await expect(page.locator(".sv__disagreements")).toHaveCount(0);
   // A framework holds no book.
@@ -848,21 +847,148 @@ test("an archived allocation session measures its outcome against the targets it
     "Recommended weights: Conservative DeFi Yield 95%, Agent Tokens 3%, Protocol Tokens 0%, Real World Assets 2%");
   await expect(registerRow(page, "Agent Tokens")).toContainText("5%");
   await expect(registerRow(page, "Agent Tokens")).toContainText("3%");
-  await expect(registerRow(page, "Agent Tokens").locator(".sr__gap")).toContainText("−2pp");
-  await expect(registerRow(page, "Real World Assets").locator(".sr__gap")).toContainText("+2pp");
+  await expect(registerRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▼−2.00%");
+  await expect(registerRow(page, "Real World Assets").locator(".alp__mv")).toHaveText("▲+2.00%");
   // The target is the one in the session's own brief, so it cannot postdate it.
   await expect(out.locator("[data-target-asof]")).toHaveText("Target as handed to this session.");
   await expect(out.locator(".sr__why")).toContainText("Composite 0.541");
 
-  // Inside each sleeve, under the published names and the brief's item names.
+  // Inside each sleeve, as /allocation's sleeve cards: published names, the
+  // recommended sleeve weight, and the items in POLICY order (Aave, Morpho,
+  // Compound, Sky), each in the colour its position gives it there.
   const within = out.locator(".sr__within");
-  await expect(within.locator(".sr__within-h")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
-  await expect(within.locator(".sv__sleeve").filter({ hasText: "Morpho" })).toContainText("35.0%");
+  await expect(within.locator(".alp__card-name b")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
+  const defi = within.locator(".alp__card").first();
+  await expect(defi.locator(".alp__card-w b")).toHaveText("95%");
+  await expect(defi.locator(".alp__names > span > span")).toHaveText(["Aave", "Morpho", "Compound", "Sky"]);
+  await expect(defi.locator(".alp__names > span").filter({ hasText: "Morpho" }).locator("b")).toHaveText("35%");
+  await expect(defi.locator(".alp__names > span").first().locator("i")).toHaveAttribute("style", /background:\s*#10b981/i);
 
   // The discussion v0 wrote, with each position matched to its take.
-  await expect(page.locator(".sv__sec-h")).toHaveText(["Discussion", "Takes"]);
+  await expect(page.locator(".sv__sec-h")).toHaveText(["Discussion", "Member takes"]);
   await expect(page.locator(".ss-list li")).toHaveCount(4);
   await expect(page.locator(".sv__disagreement")).toHaveCount(3);
   await expect(page.locator(".sv__disagreement li").filter({ hasText: "Cut to 2%" }).locator(".sv__dis-stance")).toContainText("cautious · 68%");
   await expect(page.locator(".sv__take")).toHaveCount(3);
+});
+
+// The session's own headline: the date this page is about, set under the
+// subject's name, and its phase beside it, apart from the regime's chips.
+// Then the outcome, before the signal and the reasoning behind it.
+test("a session page opens on its date and phase, then leads the band with the outcome", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
+
+  await page.goto("/swarm/2026-06-25/woon");
+
+  await expect(page.locator(".sv__error")).toBeHidden();
+  await expect(page.locator(".sv__back")).toHaveAttribute("href", "/swarm/subjects/woon");
+  await expect(page.locator(".ss-when time")).toHaveText("June 25, 2026");
+  await expect(page.locator(".ss-when .rm-sphase")).toHaveText("published");
+  await expect(page.locator(".sv__fact-row").first()).not.toContainText("state");
+
+  // Outcome first, in document order.
+  const leads = await page.locator(".sr").evaluate((band) => {
+    const out = band.querySelector(".sr__out");
+    const cols = band.querySelector(".sr__cols");
+    return Boolean(out && cols && out.compareDocumentPosition(cols) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  expect(leads).toBe(true);
+
+  // The actions Woon's members wrote, counted against the positions they named
+  // (the book holds six; the session reviewed five).
+  const out = page.locator(".sr__out");
+  await expect(out.locator(".sr__state")).toContainText("2 of the 5 positions it reviewed");
+  await expect(out.locator(".sr__act")).toHaveCount(5);
+  await expect(out.locator(".sr__act").first().locator("dt")).toHaveText("WOON");
+  await expect(out.locator(".sr__act").first().locator("dd b")).toHaveText("hold");
+
+  // One key colour per holding, resolved over this table as the subject page
+  // resolves the same book: WOON does not borrow ROBOTMONEY's cyan.
+  const keys = await page.locator(".sp-holdings .sp-key").evaluateAll((els) => els.map((e) => getComputedStyle(e).backgroundColor));
+  expect(keys.length).toBeGreaterThan(3);
+  expect(new Set(keys).size).toBe(keys.length);
+  // Notable leaves out the lines the handover already prints as operator notes.
+  await page.locator(".sr .sp-brief__sum").click();
+  const notes = await page.locator('.hand__row[data-part="notes"] li').allTextContents();
+  const notable = await page.locator(".sv__notables li").allTextContents();
+  expect(notable.length).toBeGreaterThan(0);
+  expect(notable.filter((n) => notes.includes(n))).toEqual([]);
+
+  // The take head: the stance as a word, the confidence beside it.
+  const first = page.locator(".sv__take").first();
+  await expect(first.locator(".sv__stance-badge")).toHaveText("cautious");
+  await expect(first.locator(".mp-conf")).toHaveText("confidence 72%");
+});
+
+// The targets the session's OWN brief handed it are what its outcome is
+// measured against, not today's framework, which is one admin-editable row.
+test("the targets the session's own brief handed it win over today's framework", async ({ page }) => {
+  await page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    if (u.pathname === "/api/swarm/members") return route.fulfill(json(MEMBERS));
+    if (u.pathname === "/api/swarm/sessions/2026-08-03/robotmoney-allocation") {
+      return route.fulfill(json({ session: bucketSession("2026-08-03", { conservative_defi_yield: 0.95, agent_tokens: 0.05, protocol_tokens: 0, real_world_assets: 0 }), takes: TAKES }));
+    }
+    if (u.pathname === "/api/swarm/brief") {
+      return route.fulfill(json({ body: { allocation: { buckets: [
+        { id: "conservative_defi_yield", name: "Conservative DeFi Yield", target_weight: 0.9 },
+        { id: "agent_tokens", name: "Agent Tokens", target_weight: 0.1 },
+        { id: "protocol_tokens", name: "Protocol Tokens", target_weight: 0 },
+        { id: "real_world_assets", name: "Real World Assets", target_weight: 0 },
+      ] } } }));
+    }
+    if (u.pathname === "/api/dashboards/allocation") return route.fulfill(json(ALLOCATION));
+    if (u.pathname.startsWith("/api/")) return route.fulfill(notFound);
+    return route.continue();
+  });
+
+  await page.goto("/swarm/2026-08-03/robotmoney-allocation");
+
+  await expect(registerRow(page, "Conservative DeFi Yield")).toContainText("90%");
+  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("▲+5.00%");
+  await expect(registerRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▼−5.00%");
+  await expect(outcome(page).locator("[data-target-asof]")).toHaveText("Target as handed to this session.");
+});
+
+// v0 sessions imported into the database run past the static archive's last
+// date, with no quorum. Their composite averaged factor in, so factor is an
+// input there; a test on the date alone would call them live.
+test("a v0 session imported past the archive date draws factor as the input it was", async ({ page }) => {
+  const base = positionSession("2026-07-15", "robotmoney-vault", "Robot Money Vault");
+  const { quorum: _q, stances: _s, ...v0 } = base.swarm_recommendation;
+  await mockSessionApi(page, {
+    session: {
+      ...base,
+      swarm_recommendation: v0,
+      regime_summary: {
+        regime: "risk_on", composite: 0.568, composite_percentile: 0.67, macro_percentile: 0.79, onchain_percentile: 0.06,
+        factor_percentile: 0.98, macro_regime: "risk_on", onchain_regime: "risk_off", factor_regime: "risk_on",
+      },
+    },
+    allocation: ALLOCATION,
+  });
+
+  await page.goto("/swarm/2026-07-15/robotmoney-vault");
+
+  const signal = page.locator(".sr__col").first();
+  await expect(signal.locator(".sig__row")).toHaveCount(4);
+  await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
+  await expect(signal.locator(".sr__foot")).not.toContainText("Factor is context");
+});
+
+// A sleeve published with no weight has none: it is not a move to zero.
+test("a sleeve published with no weight is not drawn as a move to zero", async ({ page }) => {
+  await mockSessionApi(page, {
+    session: bucketSession("2026-08-03", { conservative_defi_yield: 0.95, agent_tokens: null as unknown as number, protocol_tokens: 0, real_world_assets: 0 }),
+    allocation: { asOf: "2026-06-02", strategy: [
+      { label: "Conservative DeFi Yield", targetPct: 95 }, { label: "Agent Tokens", targetPct: 5 },
+      { label: "Protocol Tokens", targetPct: 0 }, { label: "Real World Assets", targetPct: 0 },
+    ] },
+  });
+
+  await page.goto("/swarm/2026-08-03/robotmoney-allocation");
+
+  const agent = registerRow(page, "Agent Tokens");
+  await expect(agent.locator("td").nth(2)).toHaveText("—");
+  await expect(agent.locator(".alp__mv")).toHaveText("—");
 });

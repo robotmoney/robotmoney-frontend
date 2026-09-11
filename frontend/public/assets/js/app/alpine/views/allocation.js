@@ -39,6 +39,7 @@
 import { api, ROUTES } from "../../lib/api.js";
 import { PALETTE, CATEGORICAL } from "../../lib/chart-theme.js";
 import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID } from "../../lib/allocation-subject.js";
+import * as weightChange from "../../lib/weight-change.js";
 
 // The ERC-4626 vault on Base. A public on-chain address, source of truth
 // frontend/public/skill.md.
@@ -181,14 +182,9 @@ export function registerAllocationView(Alpine) {
     // Held weights keep the decimal (100.0%, 0.0%) because a holding that
     // reads "0%" and one that reads "0.0%" are different claims about how
     // closely it was measured.
-    fmtPctTrim(v) {
-      if (v == null || !isFinite(v)) return "—";
-      return this.fmtPctTrimBare(v) + "%";
-    },
-    fmtPctTrimBare(v) {
-      if (v == null || !isFinite(v)) return "—";
-      return Number(v).toFixed(1).replace(/\.0$/, "");
-    },
+    // Shared with a session's outcome (lib/weight-change.js).
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
+    fmtPctTrimBare(v) { return weightChange.fmtPctTrimBare(v); },
 
     // ── the allocation in force ─────────────────────────────────────────────
     allocationAsOf() { return this.allocationFw?.asOf || null; },
@@ -384,15 +380,11 @@ export function registerAllocationView(Alpine) {
     // survives colourblindness, greyscale and forced-colors. Up takes Pool
     // green and down takes Beacon, which is what tokens.css already calls a
     // point for loss and attention: here it is one arrow at type size.
-    changeGlyph(d) { return d > 0 ? "▲" : d < 0 ? "▼" : ""; },
-    changeLabel(d) {
-      if (d == null || !isFinite(d) || d === 0) return "—";
-      return (d > 0 ? "+" : "−") + this.fmtPct(Math.abs(Number(d)));
-    },
-    changeClass(d) {
-      if (d == null || !isFinite(d) || d === 0) return "flat";
-      return d > 0 ? "up" : "down";
-    },
+    // One implementation with a session's outcome (lib/weight-change.js), so
+    // the same move cannot read two ways on two pages.
+    changeGlyph(d) { return weightChange.changeGlyph(d); },
+    changeLabel(d) { return weightChange.changeLabel(d); },
+    changeClass(d) { return weightChange.changeClass(d); },
 
 
     // ── one vault per sleeve ────────────────────────────────────────────────
