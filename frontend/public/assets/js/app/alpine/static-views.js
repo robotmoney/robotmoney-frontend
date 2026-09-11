@@ -131,6 +131,10 @@ function camelSession(raw) {
         macroPercentile: rs.macroPercentile ?? rs.macro_percentile,
         onchainPercentile: rs.onchainPercentile ?? rs.onchain_percentile,
         factorPercentile: rs.factorPercentile ?? rs.factor_percentile,
+        // A whitelist drops what it does not name: without these, a reading
+        // that carries its own cuts (#964) could never draw its zones.
+        bucketThresholds: rs.bucketThresholds ?? rs.bucket_thresholds ?? null,
+        method: rs.method ?? null,
         history: rs.history || [],
       };
     })(),
@@ -1067,6 +1071,9 @@ export function registerStaticViews(Alpine) {
     subject: null,
     snapshots: [],
     brief: null,
+    // subject id → name, off the sessions list already fetched, so a brief's
+    // recent-session refs can name their subjects.
+    subjectNames: {},
     snapshot: null,
     sessions: [],
     // How many days of history the concentration chart reads. The API returns
@@ -1137,6 +1144,7 @@ export function registerStaticViews(Alpine) {
         this.setBackdrop(this.sessions[0]?.regimeSummary || this.brief?.regime || null, {
           date: this.sessions[0]?.date || this.brief?.date || "",
           scope: "latest",
+          v0: !this.latestIsLive(),
         });
       } catch (e) {
         this.error = e.message || "Subject not found";
@@ -1183,14 +1191,99 @@ export function registerStaticViews(Alpine) {
     // "what does the swarm get" is a question about the current shape of the
     // handover, and the newest one is the best evidence of it.
     async loadBrief(id) {
-      const date = this.sessions[0]?.date;
+      const latest = this.sessions[0];
+      const date = latest?.date;
       if (!date) return null;
-      const qs = `?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(id)}`;
+      const qs = latest.id && latest.id !== `${date}-${id}`
+        ? `?session=${encodeURIComponent(latest.id)}`
+        : `?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(id)}`;
       try {
         const res = await api.get(`${ROUTES.swarm.brief}${qs}`);
         if (res && !res.error) return res;
       } catch (_) { /* fall through to the archive */ }
       return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
+    },
+    latest() { return this.sessions[0] || null; },
+    // A live reading follows the published regime method; the static archive
+    // (through ARCHIVE_LAST_DATE) and anything imported from it do not.
+    latestIsLive() {
+      const l = this.latest();
+      if (!l) return false;
+      return String(l.date || "").slice(0, 10) > ARCHIVE_LAST_DATE
+        && !(l.takeRows || []).some((/** @type {any} */ t) => t.archival);
+    },
+    subjectNameOf(id) { return this.subjectNames[id] || id; },
+    // What the swarm was handed when the latest session opened, part by part,
+    // from that session's brief. A part renders only if the brief contains it:
+    // the live brief and the v0 archive brief have different shapes.
+    handoverParts() {
+      const b = this.brief?.body || this.brief;
+      if (!b || typeof b !== "object") return [];
+      const txt = (/** @type {unknown} */ v) => (typeof v === "string" ? v.trim() : "");
+      const pills = (/** @type {string} */ key, /** @type {string[]} */ list) =>
+        list.filter(Boolean).map((text, i) => ({ key: `${key}-${i}`, text }));
+      const day = (/** @type {unknown} */ v) => {
+        const d = new Date(`${String(v || "").slice(0, 10)}T00:00:00Z`);
+        return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+      };
+      const human = (/** @type {unknown} */ k) => {
+        const t = String(k || "").replace(/[_-]+/g, " ").trim();
+        return t ? t[0].toUpperCase() + t.slice(1) : "";
+      };
+      const parts = [];
+      const inst = txt(b.prompt?.user);
+      if (inst) parts.push({ key: "instruction", label: "Instruction", quote: inst });
+      const r = b.regime;
+      if (r && (r.regime || r.composite != null)) {
+        const comp = Number(r.composite);
+        parts.push({
+          key: "regime", label: "Market regime", dot: this.regimeColor(r.regime),
+          pills: pills("regime", [
+            r.regime ? this.regimeLabel(r.regime) : "",
+            Number.isFinite(comp) ? `composite ${comp.toFixed(3)}` : "",
+            r.macro_regime || r.macroRegime ? `macro ${this.regimeLabel(r.macro_regime || r.macroRegime)}` : "",
+            r.onchain_regime || r.onchainRegime ? `on-chain ${this.regimeLabel(r.onchain_regime || r.onchainRegime)}` : "",
+          ]),
+        });
+      }
+      const buckets = b.allocation?.buckets;
+      if (Array.isArray(buckets) && buckets.length) {
+        parts.push({
+          key: "targets", label: "Targets",
+          pills: pills("targets", buckets.map((/** @type {any} */ x) => {
+            const w = Number(x?.target_weight ?? x?.targetWeight);
+            return x?.name && Number.isFinite(w) ? `${x.name} ${Math.round(w * 100)}%` : "";
+          })),
+        });
+      }
+      const signals = b.researchSignals || b.research_signals;
+      const articles = b.research?.articles;
+      if (Array.isArray(signals) && signals.length) {
+        parts.push({ key: "research", label: "Research signals", pills: pills("research", signals.map((/** @type {any} */ x) => human(x?.signalKey || x?.signal_key))) });
+      } else if (Array.isArray(articles) && articles.length) {
+        parts.push({ key: "research", label: "Research", pills: pills("research", articles.map((/** @type {any} */ x) => txt(x?.title))) });
+      }
+      const recent = b.recentSessions || b.recent_sessions;
+      if (Array.isArray(recent) && recent.length) {
+        parts.push({
+          key: "recent", label: "Recent sessions",
+          pills: pills("recent", recent.map((/** @type {any} */ x) => {
+            const sid = x?.subject_id || x?.subjectId;
+            const d = day(x?.date);
+            return sid ? `${d} · ${this.subjectNameOf(sid)}` : d;
+          })),
+        });
+      }
+      const rawNotes = b.subject?.structuralNotes ?? b.subject?.structural_notes;
+      const notes = (Array.isArray(rawNotes) ? rawNotes : rawNotes ? [rawNotes] : []).map(txt).filter(Boolean);
+      if (notes.length) parts.push({ key: "notes", label: "Operator notes", list: notes.map((text, i) => ({ key: `n-${i}`, text })) });
+      const schema = b.takeSchema && typeof b.takeSchema === "object" ? Object.keys(b.takeSchema) : [];
+      if (schema.length) {
+        /** @type {Record<string, string>} */
+        const said = { body: "written take", stance: "stance", confidence: "confidence", weights: "target weights" };
+        parts.push({ key: "returns", label: "Asked to return", pills: pills("returns", schema.map((k) => said[k] || human(k))) });
+      }
+      return parts;
     },
     briefDate() { return this.brief?.date ? this.formatDate(this.brief.date, "long") : ""; },
     // What the brief is made of, in the order it is assembled.
@@ -1280,16 +1373,29 @@ export function registerStaticViews(Alpine) {
           subjectId: s.subjectId ?? s.subject_id,
           subjectName: s.subjectName ?? s.subject_name,
         }));
+      const remember = (list) => {
+        const names = { ...this.subjectNames };
+        for (const x of list || []) {
+          const sid = x.subjectId ?? x.subject_id;
+          const name = x.subjectName ?? x.subject_name;
+          if (sid && name && !names[sid]) names[sid] = name;
+        }
+        this.subjectNames = names;
+      };
       let index = [];
       try {
-        index = pick((await api.get(ROUTES.swarm.sessions)).sessions || []);
+        const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
+        remember(all);
+        index = pick(all);
       } catch (_) { /* fall through to the archive */ }
       // Same archive fallback the snapshots take. index.json is snake_case while
       // the API is camelCase, so pick() reads both rather than silently matching
       // nothing and rendering "no published session yet" over a full archive.
       if (!index.length) {
         try {
-          index = pick((await fetchJson("/data/swarm/sessions/index.json")).sessions || []);
+          const all = (await fetchJson("/data/swarm/sessions/index.json")).sessions || [];
+          remember(all);
+          index = pick(all);
         } catch (_) {
           return [];
         }
