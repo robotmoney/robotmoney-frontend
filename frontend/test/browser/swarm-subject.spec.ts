@@ -761,11 +761,13 @@ test("the targets card carries the latest review under its note: signal, reasoni
   await hand.locator(".sp-brief__sum").click();
   const keys = await hand.locator(".hand__row").evaluateAll((els) => els.map((e) => e.getAttribute("data-part")));
   expect(keys).toEqual(["instruction", "regime", "research", "recent", "notes", "returns"]);
-  // The regime in the header's own chips, dot on the regime alone.
+  // The regime in the session page's own chips: every reading wears its dot,
+  // the composite (a number) does not.
   const regime = hand.locator('[data-part="regime"] .sv__fact');
-  await expect(regime.locator("em")).toHaveText(["composite", "regime", "macro", "on-chain"]);
+  await expect(regime.locator("em")).toHaveText(["composite", "regime", "macro", "onchain"]);
   await expect(regime.locator("b")).toHaveText(["0.604", "risk-on", "risk-on", "neutral"]);
-  await expect(regime.locator(".sv__fact-dot")).toHaveCount(1);
+  await expect(regime.first().locator(".sv__fact-dot")).toHaveCount(0);
+  await expect(regime.locator(".sv__fact-dot")).toHaveCount(3);
   // A recent session links to its session, by the dated address.
   const recent = hand.locator('[data-part="recent"] a.hand__pill');
   await expect(recent).toHaveText(["Sep 10 · Woon Treasury"]);

@@ -1245,16 +1245,17 @@ export function registerStaticViews(Alpine) {
       if (inst) parts.push({ key: "instruction", label: "Instruction", quote: inst });
       const r = b.regime;
       if (r && (r.regime || r.composite != null)) {
-        // The header's chips, in the header's order: a label and a value, and
-        // the dot only on the regime itself.
+        // session.html's chips, word for word: composite is a number and has
+        // no dot; regime, macro and onchain are readings and each wears its own.
         const comp = Number(r.composite);
         const macro = r.macro_regime || r.macroRegime;
         const onchain = r.onchain_regime || r.onchainRegime;
+        const reading = (/** @type {string} */ k, /** @type {unknown} */ v) => ({ k, v: this.regimeLabel(v), dot: this.regimeColor(v) });
         const facts = [
           Number.isFinite(comp) ? { k: "composite", v: comp.toFixed(3), dot: "" } : null,
-          r.regime ? { k: "regime", v: this.regimeLabel(r.regime), dot: this.regimeColor(r.regime) } : null,
-          macro ? { k: "macro", v: this.regimeLabel(macro), dot: "" } : null,
-          onchain ? { k: "on-chain", v: this.regimeLabel(onchain), dot: "" } : null,
+          r.regime ? reading("regime", r.regime) : null,
+          macro ? reading("macro", macro) : null,
+          onchain ? reading("onchain", onchain) : null,
         ].filter(Boolean).map((f, i) => ({ key: `regime-${i}`, ...f }));
         parts.push({ key: "regime", label: "Market regime", facts });
       }
