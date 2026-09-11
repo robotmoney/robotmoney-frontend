@@ -132,7 +132,7 @@ test("public subject profile renders holdings, wallets, NFT contracts and the sw
   await expect(hand).toContainText("RoboFarm, RecycleMachine, ClawMachine");
   // A research item links when the site has a page for it, and the archive's
   // articles all do.
-  await expect(hand.locator('[data-part="research"] a.hand__pill').first()).toHaveAttribute("href", /^\//);
+  await expect(hand.locator('[data-part="research"] .hand__links a').first()).toHaveAttribute("href", /^\//);
 
   // Sessions: all 9 archived, published woon sessions.
   await expect(page.locator(".sv__session-card")).toHaveCount(9);
@@ -594,7 +594,9 @@ test("the allocation subject opens with the weights in force, and no other subje
   await expect(card).toBeVisible();
   await expect(card).toContainText("Unchanged since");
 
-  const rows = card.locator(".sv__sleeve:not(.sv__sleeve--head)");
+  // The card's own register, not the handover's copy of the targets further
+  // down the same card.
+  const rows = card.locator(".sv__alloc-reg .sv__sleeve:not(.sv__sleeve--head)");
   await expect(rows).toHaveCount(4);
   await expect(rows.first()).toContainText("Conservative DeFi Yield");
   await expect(rows.first()).toContainText("95%");
@@ -759,10 +761,19 @@ test("the targets card carries the latest review under its note: signal, reasoni
   await hand.locator(".sp-brief__sum").click();
   const keys = await hand.locator(".hand__row").evaluateAll((els) => els.map((e) => e.getAttribute("data-part")));
   expect(keys).toEqual(["instruction", "regime", "research", "recent", "notes", "returns"]);
-  await expect(hand.locator('[data-part="recent"] .hand__pill')).toHaveText(["Sep 10 · Woon Treasury"]);
-  // Each signal links to its reader page, under that page's own name. The
-  // brief's own href is the JSON route, which is not a page.
-  const research = hand.locator('[data-part="research"] a.hand__pill');
+  // The regime in the header's own chips, dot on the regime alone.
+  const regime = hand.locator('[data-part="regime"] .sv__fact');
+  await expect(regime.locator("em")).toHaveText(["composite", "regime", "macro", "on-chain"]);
+  await expect(regime.locator("b")).toHaveText(["0.604", "risk-on", "risk-on", "neutral"]);
+  await expect(regime.locator(".sv__fact-dot")).toHaveCount(1);
+  // A recent session links to its session, by the dated address.
+  const recent = hand.locator('[data-part="recent"] a.hand__pill');
+  await expect(recent).toHaveText(["Sep 10 · Woon Treasury"]);
+  await expect(recent).toHaveAttribute("href", "/swarm/2026-09-10/woon");
+  // Each signal links to its reader page, under that page's own name, in a
+  // list rather than as pills. The brief's own href is the JSON route, which
+  // is not a page.
+  const research = hand.locator('[data-part="research"] .hand__links a');
   await expect(research).toHaveText(["Channel Divergence", "Late-Cycle Signals"]);
   await expect(research.first()).toHaveAttribute("href", "/research/channel-divergence");
 
@@ -784,6 +795,20 @@ test("on a v0 archive reading, factor is drawn as the input it was", async ({ pa
   await expect(signal.locator(".sr__k")).toHaveText("Signal");
   await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
   await expect(signal.locator(".sr__foot")).not.toContainText("Factor is context");
+
+  // That brief carried the targets in force when it opened: drawn as the
+  // card's register, each sleeve in the hue it wears in the card above.
+  const hand = page.locator(".sv__alloc .sr .sp-brief");
+  await hand.locator(".sp-brief__sum").click();
+  const bars = hand.locator('[data-part="targets"] .sv__sleeve');
+  await expect(bars.locator(".sv__sleeve-n")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
+  await expect(bars.locator(".sv__sleeve-v")).toHaveText(["95%", "5%", "0%", "0%"]);
+  await expect(bars.first().locator(".sv__sleeve-track i")).toHaveAttribute("style", /width:\s*95%/);
+  const cardHue = await page.locator(".sp-alloc__body .sv__bucket-dot").first().getAttribute("style");
+  await expect(bars.first().locator(".sv__bucket-dot")).toHaveAttribute("style", cardHue || "missing");
+  // The archive's refs carry no subject; they are this subject's own sessions.
+  await expect(hand.locator('[data-part="recent"] a.hand__pill')).toHaveText(["Jun 21", "Jun 17", "Jun 13"]);
+  await expect(hand.locator('[data-part="recent"] a.hand__pill').first()).toHaveAttribute("href", "/swarm/2026-06-21/robotmoney-allocation");
 
   await expectNoBrowserErrors(errors);
 });
@@ -809,7 +834,7 @@ test("a research signal with no page on the site is not linked", async ({ page }
   await page.goto("/swarm/subjects/robotmoney-allocation");
   const hand = page.locator(".sr .sp-brief");
   await hand.locator(".sp-brief__sum").click();
-  await expect(hand.locator('[data-part="research"] a.hand__pill')).toHaveText(["Channel Divergence"]);
-  await expect(hand.locator('[data-part="research"] span.hand__pill')).toHaveText(["Made up signal"]);
+  await expect(hand.locator('[data-part="research"] .hand__links a')).toHaveText(["Channel Divergence"]);
+  await expect(hand.locator('[data-part="research"] .hand__links li > span')).toHaveText(["Made up signal"]);
   await expectNoBrowserErrors(errors);
 });

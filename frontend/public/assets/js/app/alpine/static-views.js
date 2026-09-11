@@ -1245,33 +1245,41 @@ export function registerStaticViews(Alpine) {
       if (inst) parts.push({ key: "instruction", label: "Instruction", quote: inst });
       const r = b.regime;
       if (r && (r.regime || r.composite != null)) {
+        // The header's chips, in the header's order: a label and a value, and
+        // the dot only on the regime itself.
         const comp = Number(r.composite);
-        parts.push({
-          key: "regime", label: "Market regime", dot: this.regimeColor(r.regime),
-          pills: pills("regime", [
-            r.regime ? this.regimeLabel(r.regime) : "",
-            Number.isFinite(comp) ? `composite ${comp.toFixed(3)}` : "",
-            r.macro_regime || r.macroRegime ? `macro ${this.regimeLabel(r.macro_regime || r.macroRegime)}` : "",
-            r.onchain_regime || r.onchainRegime ? `on-chain ${this.regimeLabel(r.onchain_regime || r.onchainRegime)}` : "",
-          ]),
-        });
+        const macro = r.macro_regime || r.macroRegime;
+        const onchain = r.onchain_regime || r.onchainRegime;
+        const facts = [
+          Number.isFinite(comp) ? { k: "composite", v: comp.toFixed(3), dot: "" } : null,
+          r.regime ? { k: "regime", v: this.regimeLabel(r.regime), dot: this.regimeColor(r.regime) } : null,
+          macro ? { k: "macro", v: this.regimeLabel(macro), dot: "" } : null,
+          onchain ? { k: "on-chain", v: this.regimeLabel(onchain), dot: "" } : null,
+        ].filter(Boolean).map((f, i) => ({ key: `regime-${i}`, ...f }));
+        parts.push({ key: "regime", label: "Market regime", facts });
       }
+      // The weights in force when the session opened, drawn as the targets
+      // card draws the weights in force now. A sleeve keeps the hue it has in
+      // that card, matched by name, so the two registers read against each
+      // other; position is the fallback when the card is not on the page.
       const buckets = b.allocation?.buckets;
       if (Array.isArray(buckets) && buckets.length) {
-        parts.push({
-          key: "targets", label: "Targets",
-          pills: pills("targets", buckets.map((/** @type {any} */ x) => {
-            const w = Number(x?.target_weight ?? x?.targetWeight);
-            return x?.name && Number.isFinite(w) ? `${x.name} ${Math.round(w * 100)}%` : "";
-          })),
-        });
+        const now = this.allocationTargets().map((t) => t.label);
+        const bars = buckets.map((/** @type {any} */ x, /** @type {number} */ i) => {
+          const w = Number(x?.target_weight ?? x?.targetWeight);
+          if (!x?.name || !Number.isFinite(w)) return null;
+          const at = now.indexOf(x.name);
+          return { key: `targets-${i}`, label: x.name, pct: Math.round(w * 100), hue: CATEGORICAL[(at >= 0 ? at : i) % CATEGORICAL.length] };
+        }).filter(Boolean);
+        if (bars.length) parts.push({ key: "targets", label: "Targets", bars });
       }
       const signals = b.researchSignals || b.research_signals;
       const articles = b.research?.articles;
       if (Array.isArray(signals) && signals.length) {
         // Each signal has a reader page at /research/<key> when the site
         // publishes one; the brief's own href is the JSON route, not a page.
-        parts.push({ key: "research", label: "Research signals", pills: pills("research", signals.map((/** @type {any} */ x) => {
+        // A list of links, not pills: each item is a page to read.
+        parts.push({ key: "research", label: "Research signals", links: pills("research", signals.map((/** @type {any} */ x) => {
           const k = String(x?.signalKey || x?.signal_key || "");
           const href = k ? `/research/${encodeURIComponent(k)}` : "";
           // The page's own name when there is a page ("Late-Cycle Signals"),
@@ -1280,16 +1288,23 @@ export function registerStaticViews(Alpine) {
           return { text: title || human(k), href };
         })) });
       } else if (Array.isArray(articles) && articles.length) {
-        parts.push({ key: "research", label: "Research", pills: pills("research", articles.map((/** @type {any} */ x) => ({ text: txt(x?.title), href: txt(x?.slug) }))) });
+        parts.push({ key: "research", label: "Research", links: pills("research", articles.map((/** @type {any} */ x) => ({ text: txt(x?.title), href: txt(x?.slug) }))) });
       }
       const recent = b.recentSessions || b.recent_sessions;
       if (Array.isArray(recent) && recent.length) {
+        // Each ref links to its session by the dated address, which resolves
+        // for live sessions and archived ones alike. The live brief names the
+        // subject on every ref (they span subjects); the archive brief's refs
+        // are this subject's own and carry no subject at all.
+        const own = b.subject_id || b.subjectId || this.subject?.id || "";
         parts.push({
           key: "recent", label: "Recent sessions",
           pills: pills("recent", recent.map((/** @type {any} */ x) => {
             const sid = x?.subject_id || x?.subjectId;
             const d = day(x?.date);
-            return sid ? `${d} · ${this.subjectNameOf(sid)}` : d;
+            const date = String(x?.date || "").slice(0, 10);
+            const href = d && (sid || own) ? `/swarm/${date}/${encodeURIComponent(sid || own)}` : "";
+            return { text: sid ? `${d} · ${this.subjectNameOf(sid)}` : d, href };
           })),
         });
       }
