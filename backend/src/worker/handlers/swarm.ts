@@ -159,9 +159,35 @@ function translateBenignSkip(
   return reason == null ? result : { skipped: reason, sessionId };
 }
 
+// The consensus receipt used to need its own admin call after publish
+// (issue #754's original design: "the judge is off by default, so wiring
+// assembly into the publish path would make every ordinary publish an
+// assembly that refuses" — admin.ts's publishConsensusReceiptAdmin). That
+// reasoning is why this is safe to fold in unconditionally rather than a bug
+// to work around: `publishConsensusReceiptAdmin` already treats every refusal
+// (`not_judged`, `judgement_not_adopted`, ...) as a normal, auditable outcome
+// rather than throwing, so an `off`- or `shadow`-mode session's publish still
+// completes cleanly here, exactly as it did before — it just also records
+// why no receipt exists yet, instead of requiring an operator to ask.
+//
+// STILL REFUSED FOR `shadow`, ON PURPOSE, not something this patch changes: a
+// shadow judgement is deliberately withheld from the session
+// (consensus-receipt.ts's `judgement_not_adopted`), so there is no adopted
+// opinion for a receipt to attest to until the session is judged in
+// `enforce`. This only removes the ADMIN CALL for the case that was always
+// going to succeed — an already-`enforce`-judged, now-published session.
+//
+// NOT folded into `ic.publishSession` itself (domain.ts) for the same reason
+// the admin surface keeps them separate: a receipt is not a state transition,
+// and the HTTP publish route (`publishSessionAdmin`) still returns without
+// one — only this cadence path auto-attempts it, so a caller publishing
+// through the API is unaffected and still gets an explicit `ok`/`error` shape
+// from its own request rather than one folded into someone else's.
 export async function publishSession(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
-  return await ic.publishSession(sessionId);
+  const published = await ic.publishSession(sessionId);
+  const receipt = await admin.publishConsensusReceiptAdmin(sessionId, "worker");
+  return { ...published, consensusReceipt: receipt.ok ? { published: true } : { published: false, reason: receipt.error } };
 }
 
 export async function sendApplicationReceivedNotification(payload: Record<string, unknown>): Promise<unknown> {
