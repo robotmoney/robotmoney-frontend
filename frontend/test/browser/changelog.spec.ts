@@ -96,6 +96,11 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
   });
   expect(title).toBe("Changelog — Robot Money");
 
+  // The filter factory is `changelogPage()`, not an inline object: arrow
+  // functions in an attribute contain `>`, which a naive HTML-to-text strip
+  // treats as a tag closer and leaks Alpine source into the extracted prose.
+  await expect(frame.locator("section.cl")).toHaveAttribute("x-data", "changelogPage()");
+
   await expectNoBrowserErrors(errors);
 });
 

@@ -10,18 +10,7 @@
 
      A figure goes last in its entry, under the text it illustrates. -->
 
-<section class="cl" x-data="{
-  tag: null,
-  has(el) { return !this.tag || el.dataset.tags.split(' ').includes(this.tag) },
-  toggle(t) { this.tag = this.tag === t ? null : t },
-  get shown() { return [...this.$refs.log.querySelectorAll('.cl__entry')].filter((e) => this.has(e)).length },
-  get countLabel() {
-    const n = this.shown;
-    const noun = n === 1 ? ' release' : ' releases';
-    if (!this.tag) return n + noun;
-    return n + noun + ' in ' + this.tag.charAt(0).toUpperCase() + this.tag.slice(1);
-  }
-}">
+<section class="cl" x-data="changelogPage()">
 
   <header class="cl__hero">
     <div class="cl__hero-art" x-data="changelogHero()" aria-hidden="true"></div>
