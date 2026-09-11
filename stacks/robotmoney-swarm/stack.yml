@@ -21,21 +21,29 @@ pods:
 # every other credential whose counterpart lives outside the deployment.
 
 # A secret declared here has NO per-container ACL
-# (docs/technical/stack-orchestrator.md §6): stack exports every referenced
-# secret's value into its own process as STACK_SECRET_<NAME> for the length
-# of a compose `up`, and ANY service in ANY pod that writes
-# `${STACK_SECRET_<NAME>:-}` in its own composefile receives it — nothing
-# stops a pod file from wiring a secret into a service that has no business
-# reading it, unlike docker-compose.yml's explicit per-service allowlist.
+# (docs/technical/stack-orchestrator.md §6), and it is WORSE than "opt-in via
+# ${STACK_SECRET_<NAME>:-}" — verified empirically against stack 2.0.0-47a4772
+# by inspecting a real `stack deploy` deployment directory's generated
+# composefiles: `stack deploy` itself writes an `environment:` entry for
+# EVERY secret declared in this file into EVERY service in EVERY pod
+# composefile, even a service whose SOURCE composefile here never mentions
+# that secret at all (confirmed for `website`, which has no `environment:`
+# block in pods/app/composefile.yml, and for worker-analytics/worker-research/
+# analytics-producer, none of which reference OPENCODE_API_KEY in
+# pods/workers/composefile.yml below). A pod composefile choosing not to
+# reference a secret documents intent only — it is not an isolation boundary
+# stack enforces or even partially respects at deploy time.
 # docker-compose.yml deliberately keeps OPENCODE_API_KEY / SWARM_JUDGE_* off
 # the shared x-worker-env anchor, on worker-swarm's own environment block
 # only, so worker-analytics/worker-research — which never call a model — never
 # see a live inference credential (issue #757 review). This stack's
 # pods/workers/composefile.yml preserves that same scoping by choice, at the
-# composefile-authoring level (stack itself would not have stopped a wider
-# wire-up) — see that file for where each secret is actually referenced.
-# Accepted as a conscious tradeoff of adopting stack (scaffold-stack.md §1.1),
-# not a bug to work around in this issue. ADMIN_TOKEN / AUTOMATION_TOKEN /
+# composefile-authoring level only — every worker lane and website still
+# receive OPENCODE_API_KEY (and every other declared secret) in their actual
+# process environment once deployed via `stack`, regardless of this file's
+# choices. Accepted as a conscious tradeoff of adopting stack
+# (scaffold-stack.md §1.1), not a bug to work around in this issue.
+# ADMIN_TOKEN / AUTOMATION_TOKEN /
 # ANALYTICS_TOKEN are intentionally NOT declared here: their generation
 # ownership (stack `generate` vs. the credential doctor) is an open decision
 # (devops#7 / scaffold-stack.md §0.1) this issue does not resolve.

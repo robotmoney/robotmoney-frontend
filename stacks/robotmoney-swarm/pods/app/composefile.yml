@@ -3,14 +3,21 @@
 # Images are referenced by tag only — never `build:` here (field guide §3).
 # `stack prepare` builds each from its containers/<name>/build.sh.
 #
-# SECRET FORWARDING: a stack.yml secret does not reach a service just by
-# being declared — each service's `environment:` must reference it as
-# ${STACK_SECRET_<NAME>:-}, the exact form the compose deployer exports into
-# its own process before `docker compose up` (verified empirically against
-# stack 2.0.0-47a4772: a composefile line reading bare ${DATABASE_URL:-}
-# resolves EMPTY on this target — only the STACK_SECRET_-prefixed form
-# resolves. This is undocumented upstream and differs from both the
-# scaffold-stack.md sketch and docker-compose.yml's own ${VAR} convention).
+# SECRET FORWARDING: name a stack.yml secret in a service's `environment:`
+# as ${STACK_SECRET_<NAME>:-} — the exact form the compose deployer exports
+# into its own process before `docker compose up` (verified empirically
+# against stack 2.0.0-47a4772: a composefile line reading bare
+# ${DATABASE_URL:-} resolves EMPTY on this target — only the
+# STACK_SECRET_-prefixed form resolves. This is undocumented upstream and
+# differs from both the scaffold-stack.md sketch and docker-compose.yml's own
+# ${VAR} convention). This choice is cosmetic, not a scoping control: `stack
+# deploy` writes its own `<NAME>: ${STACK_SECRET_<NAME>:-}` line for every
+# declared secret into every service of every generated composefile
+# regardless of what this source file says — verified by inspecting a real
+# deployment directory, where `website` (no `environment:` block below at
+# all) and every worker lane still receive all 5 secrets. See stack.yml's
+# header comment for what that means for OPENCODE_API_KEY's intended
+# worker-swarm-only scoping.
 #
 # All other (non-secret) values are forwarded as ${VAR} / ${VAR:-} — the same
 # env-var SET docker-compose.yml already forwards to `api`, but WITHOUT that
@@ -74,9 +81,10 @@ services:
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
       # No STATIC_DIR / _static bind mount here: this stack's app pod carries
-      # a dedicated `website` service for static/SPA serving (once #3/#892
-      # lands); wiring api's own STATIC_DIR would re-add the request-time
-      # static path this stack is deliberately moving off of, and a bind
+      # a dedicated `website` service (website-server/Dockerfile, #892) for
+      # static/SPA serving; wiring api's own STATIC_DIR would re-add the
+      # request-time static path this stack is deliberately moving off of
+      # (backend/src/api/static.ts no longer exists as of #892), and a bind
       # mount's relative host path does not survive being copied into a
       # deployment directory unmodified.
     ports:
@@ -94,8 +102,12 @@ services:
       start_period: 40s
 
   website:
-    # BLOCKED ON #3 (devops) / #892 (this repo) landing frontend/Dockerfile —
-    # see containers/website/build.sh. A plain static file server (no app
-    # layer), so it takes no secrets and no DATABASE_URL.
+    # Built from website-server/Dockerfile (#892) — see
+    # containers/website/build.sh. A plain static file server (no app layer),
+    # so this service's own environment: block deliberately declares no
+    # secrets or DATABASE_URL — note that stack itself still injects every
+    # stack.yml secret's STACK_SECRET_<NAME> into every container's process
+    # regardless (see stack.yml's header comment), so this omission documents
+    # intent, not an actual isolation guarantee.
     image: robotmoney/robotmoney-website:stack
     restart: unless-stopped

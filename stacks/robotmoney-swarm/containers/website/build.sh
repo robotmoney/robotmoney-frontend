@@ -3,14 +3,16 @@
 # assembled `_static/` tree (no app layer), replicating routeShell's
 # prerendered-file -> _shell.html -> index.html fallback order.
 #
-# BLOCKED ON issue #3 (devops) / #892 (this repo): "build: split
-# website-server out of the api image for static/SPA serving". That issue
-# lands frontend/Dockerfile; this script only wires the build once it exists,
-# per #893's own explicit scope ("this task only wires
-# containers/website/build.sh to reference it once it exists, and is
-# sequenced after #3 merges"). Until then this build fails loudly (never
-# silently) with docker's own "no such file" error rather than fabricating a
-# stand-in Dockerfile that would conflict with #892's PR.
+# #892 landed this repo's website-server split as `website-server/Dockerfile`
+# (a plain nginx:alpine recipe), not `frontend/Dockerfile` as this issue's
+# own scope text anticipated before #892 was implemented — verified directly
+# against the merged tree, see website-server/Dockerfile and
+# website-server/nginx.conf. Unlike backend/Dockerfile (api, producer),
+# website-server/Dockerfile only COPYs nginx.conf from its own directory, so
+# its build context is website-server/ itself, not the repo root: passing
+# STACK_CONTENT_ROOT_DIR (repo root) as context would make that COPY fail
+# ("nginx.conf: no such file or directory") because Docker resolves COPY
+# sources against the build context, not the Dockerfile's own directory.
 #
 # Same env-var contract as containers/api/build.sh; see that file's header.
 set -eo pipefail
@@ -19,8 +21,8 @@ source "${STACK_CONTAINER_BASE_DIR}/build-base.sh"
 
 docker build \
   --tag "${STACK_FULL_CONTAINER_IMAGE_TAG}" \
-  --file "${STACK_CONTENT_ROOT_DIR}/frontend/Dockerfile" \
+  --file "${STACK_CONTENT_ROOT_DIR}/website-server/Dockerfile" \
   --build-arg STACK_HOST_UID="${STACK_HOST_UID}" \
   --build-arg STACK_HOST_GID="${STACK_HOST_GID}" \
   ${build_command_args} \
-  "${STACK_CONTENT_ROOT_DIR}"
+  "${STACK_CONTENT_ROOT_DIR}/website-server"
