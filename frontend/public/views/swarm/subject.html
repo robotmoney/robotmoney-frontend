@@ -374,9 +374,43 @@
                               <dt x-text="part.label"></dt>
                               <dd>
                                 <template x-if="part.quote"><q x-text="part.quote"></q></template>
+                                <!-- The header's own chips, so a regime reads
+                                     the same at the top of the page and here. -->
+                                <template x-if="part.facts">
+                                  <div class="sv__fact-row">
+                                    <template x-for="f in part.facts" :key="f.key">
+                                      <span class="sv__fact">
+                                        <em x-text="f.k"></em>
+                                        <template x-if="f.dot"><i class="sv__fact-dot" :style="`background:${f.dot}`" aria-hidden="true"></i></template>
+                                        <b x-text="f.v"></b>
+                                      </span>
+                                    </template>
+                                  </div>
+                                </template>
+                                <!-- The targets card's register, smaller. -->
+                                <template x-if="part.bars">
+                                  <div class="sv__sleeves">
+                                    <template x-for="t in part.bars" :key="t.key">
+                                      <div class="sv__sleeve">
+                                        <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
+                                        <span class="sv__sleeve-track"><i :style="`width:${Math.max(0, Math.min(100, t.pct))}%`"></i></span>
+                                        <span class="sv__sleeve-v" x-text="`${t.pct}%`"></span>
+                                      </div>
+                                    </template>
+                                  </div>
+                                </template>
+                                <template x-if="part.links">
+                                  <ul class="hand__links">
+                                    <template x-for="l in part.links" :key="l.key">
+                                      <li>
+                                        <template x-if="l.href"><a :href="l.href" x-text="l.text"></a></template>
+                                        <template x-if="!l.href"><span x-text="l.text"></span></template>
+                                      </li>
+                                    </template>
+                                  </ul>
+                                </template>
                                 <template x-if="part.pills">
                                   <span class="hand__pills">
-                                    <i class="hand__dot" x-show="part.dot" :style="`background:${part.dot}`" aria-hidden="true"></i>
                                     <template x-for="p in part.pills" :key="p.key">
                                       <span class="hand__pill-wrap">
                                         <template x-if="p.href"><a class="hand__pill hand__pill--link" :href="p.href" x-text="p.text"></a></template>
@@ -680,13 +714,32 @@
     .hand dd { margin: 0; min-width: 0; font-size: 0.86rem; color: var(--color-text); }
     .hand q { color: var(--color-text-soft); }
     .hand__pills { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
-    .hand__dot { width: 8px; height: 8px; flex: none; margin-right: 0.15rem; }
     .hand__pill { font-family: var(--font-mono); font-size: 0.66rem; border: 1px solid var(--color-border);
       padding: 0.2rem 0.45rem; color: var(--color-text-soft); white-space: nowrap; }
     .hand ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
     .hand li { position: relative; padding-left: 0.8rem; font-size: 0.8rem; line-height: 1.45; color: var(--color-text-soft); }
     .hand li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 4px; height: 1px;
       background: var(--color-text-muted); }
+    /* The header's chip row and the targets card's register, reused as they
+       are, one size down. Same specificity as .sp-alloc .sv__sleeves above
+       and later in the sheet, so the cap wins inside the card too. */
+    .hand .sv__fact-row { margin-top: 0; }
+    .hand .sv__sleeves { max-width: 30rem; }
+    .hand .sv__sleeve { padding: 0.22rem 0; }
+    .hand .sv__sleeve-n, .hand .sv__sleeve-v { font-size: 0.76rem; }
+    .hand .sv__sleeve-track { height: 4px; }
+    .hand__links li { font-size: 0.84rem; color: var(--color-text); }
+    .hand__links a { color: var(--color-text); text-decoration: none; border-bottom: 1px solid var(--color-border); }
+    .hand__links a::after { content: " \2192"; color: var(--color-text-muted); }
+    .hand__links a:hover { border-bottom-color: var(--color-text-muted); }
+    .hand__links a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+    /* A 10rem label column leaves a phone a sliver for the value, so the label
+       goes on top. Same breakpoint the register drops its bars at. */
+    @media (max-width: 720px) {
+      .hand { padding: 0.2rem 1rem 0.85rem; }
+      .hand__row { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+      .hand dt { padding-top: 0; }
+    }
 
     /* The latest review sits inside the targets card, under its note: a
        bordered block of its own, with a heading one step below the card's. */
