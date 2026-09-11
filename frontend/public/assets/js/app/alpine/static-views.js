@@ -16,6 +16,7 @@ import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
 import { sessionSummary } from "../lib/session-summary.js";
+import { isKnownPage, metaFor } from "../seo.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
@@ -1204,6 +1205,11 @@ export function registerStaticViews(Alpine) {
       return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
     },
     latest() { return this.sessions[0] || null; },
+    hasTargetsCard() { return this.isFramework() && this.allocationTargets().length > 0; },
+    hasLatestReview() {
+      const l = this.latest();
+      return Boolean(l) && (this.signalRows().length > 0 || this.voteTotal(l) > 0);
+    },
     // A live reading follows the published regime method; the static archive
     // (through ARCHIVE_LAST_DATE) and anything imported from it do not.
     latestIsLive() {
@@ -1220,8 +1226,12 @@ export function registerStaticViews(Alpine) {
       const b = this.brief?.body || this.brief;
       if (!b || typeof b !== "object") return [];
       const txt = (/** @type {unknown} */ v) => (typeof v === "string" ? v.trim() : "");
-      const pills = (/** @type {string} */ key, /** @type {string[]} */ list) =>
-        list.filter(Boolean).map((text, i) => ({ key: `${key}-${i}`, text }));
+      // A pill is text, or text with an href when the site has a page there.
+      const pills = (/** @type {string} */ key, /** @type {Array<string | {text: string, href?: string}>} */ list) =>
+        list
+          .map((x) => (typeof x === "string" ? { text: x, href: "" } : { text: x.text, href: x.href || "" }))
+          .filter((x) => x.text)
+          .map((x, i) => ({ key: `${key}-${i}`, text: x.text, href: x.href && isKnownPage(x.href) ? x.href : "" }));
       const day = (/** @type {unknown} */ v) => {
         const d = new Date(`${String(v || "").slice(0, 10)}T00:00:00Z`);
         return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
@@ -1259,9 +1269,18 @@ export function registerStaticViews(Alpine) {
       const signals = b.researchSignals || b.research_signals;
       const articles = b.research?.articles;
       if (Array.isArray(signals) && signals.length) {
-        parts.push({ key: "research", label: "Research signals", pills: pills("research", signals.map((/** @type {any} */ x) => human(x?.signalKey || x?.signal_key))) });
+        // Each signal has a reader page at /research/<key> when the site
+        // publishes one; the brief's own href is the JSON route, not a page.
+        parts.push({ key: "research", label: "Research signals", pills: pills("research", signals.map((/** @type {any} */ x) => {
+          const k = String(x?.signalKey || x?.signal_key || "");
+          const href = k ? `/research/${encodeURIComponent(k)}` : "";
+          // The page's own name when there is a page ("Late-Cycle Signals"),
+          // the key humanised when there is not.
+          const title = href && isKnownPage(href) ? String(metaFor(href).title || "").split(" — ")[0].trim() : "";
+          return { text: title || human(k), href };
+        })) });
       } else if (Array.isArray(articles) && articles.length) {
-        parts.push({ key: "research", label: "Research", pills: pills("research", articles.map((/** @type {any} */ x) => txt(x?.title))) });
+        parts.push({ key: "research", label: "Research", pills: pills("research", articles.map((/** @type {any} */ x) => ({ text: txt(x?.title), href: txt(x?.slug) }))) });
       }
       const recent = b.recentSessions || b.recent_sessions;
       if (Array.isArray(recent) && recent.length) {
@@ -1284,78 +1303,6 @@ export function registerStaticViews(Alpine) {
         parts.push({ key: "returns", label: "Asked to return", pills: pills("returns", schema.map((k) => said[k] || human(k))) });
       }
       return parts;
-    },
-    briefDate() { return this.brief?.date ? this.formatDate(this.brief.date, "long") : ""; },
-    // What the brief is made of, in the order it is assembled.
-    //
-    // Each part is a LABEL, a scannable VALUE and a line of prose — not one
-    // sentence with the figure buried in it. Seven sentences of equal weight
-    // is a wall: the reader who wants "how much research?" should find "5
-    // summaries" without reading a clause. The prose is fixed, because this is
-    // the shape of EVERY session's brief; the values are read off the last
-    // real brief, and fall back to a word rather than a number when there is
-    // none. `href` points at the page that owns each input, so "where does the
-    // regime read come from" is one click rather than a question.
-    // The brief is seven parts. Two of them — the regime read and its trailing
-    // history — are DRAWN above rather than listed, because they are the
-    // largest thing in the brief and a line of prose was the wrong instrument
-    // for them. The count still says seven, because that is what a member is
-    // handed.
-    briefPartCount() {
-      return this.briefParts().length + (this.backdrop ? 2 : 0);
-    },
-    briefParts() {
-      const b = this.brief;
-      const n = (/** @type {any} */ v) => (Array.isArray(v) ? v.length : null);
-      const plural = (/** @type {number|null} */ v, /** @type {string} */ one, /** @type {string} */ many) =>
-        v == null ? "" : `${v} ${v === 1 ? one : many}`;
-      const regime = b?.regime;
-      const composite = Number(regime?.composite);
-      const snap = b?.subject_snapshot ?? b?.subjectSnapshot ?? null;
-      const positions = n(snap?.positions);
-      const notes = this.structuralNotes().length;
-      const recent = n(b?.recent_sessions ?? b?.recentSessions);
-      return [
-        {
-          key: "framework",
-          label: "Allocation framework",
-          href: "/allocation",
-          value: plural(n(b?.allocation?.buckets), "sleeve", "sleeves") || "Targets",
-          text: "Their target weights, the assets inside each, the protocols each may use, and how each is meant to behave by regime.",
-        },
-        {
-          key: "research",
-          label: "Published research",
-          href: "/blog",
-          value: plural(n(b?.research?.articles), "summary", "summaries") || "Summaries",
-          text: "Robot Money's own research, each with its key findings.",
-        },
-        {
-          key: "subject",
-          label: "This subject",
-          href: "",
-          value: notes ? `Thesis · ${plural(notes, "note", "notes")}` : "Thesis",
-          text: "Its name, its operator and the thesis it is held to, with the operator's notes below.",
-        },
-        {
-          key: "holdings",
-          label: "Holdings",
-          href: "",
-          value: positions
-            ? plural(positions, "position", "positions")
-            : this.isFramework() ? "None" : "Positions",
-          text: this.isFramework() && !positions
-            ? "This subject is a framework, so there is no book to hand over."
-            : "The positions and the wallets they sit in, priced on the day.",
-        },
-        {
-          key: "sessions",
-          label: "Recent sessions",
-          href: "/swarm",
-          value: recent ? `Last ${recent}` : "Recent",
-          text: "Each with what the swarm concluded, so nobody re-argues a settled point.",
-        },
-      ];
     },
     async loadSessions(id) {
       const pick = (list) => list
@@ -1455,7 +1402,6 @@ export function registerStaticViews(Alpine) {
     isFramework() { return this.subject?.source?.type === "framework"; },
     subjectKind() { return this.subjectKindOf(this.subject); },
     operatorLabel() { return this.operatorOf(this.subject); },
-    structuralNotes() { return structuralNotesOf(this.subject); },
     // Newest first, so the head's chip names the most recent review. The
     // prose line this replaced named the OLDEST ("since August 2026"), which
     // is the less useful of the two: a reader wants to know how current the

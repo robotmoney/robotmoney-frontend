@@ -464,6 +464,18 @@ export function metaFor(pathname) {
 }
 
 /**
+ * Whether the site renders a real page at this path, by the same table that
+ * names every page: anything metaFor() does not know falls to the not-found
+ * meta. Lets a surface link a data-supplied path only when it goes somewhere,
+ * rather than keeping a second list of pages that drifts from this one.
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+export function isKnownPage(pathname) {
+  return typeof pathname === "string" && pathname.startsWith("/") && metaFor(pathname) !== NOT_FOUND_META;
+}
+
+/**
  * @param {string} tag
  * @param {string} attr
  * @param {string} key
