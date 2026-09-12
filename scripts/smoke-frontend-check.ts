@@ -200,6 +200,34 @@ async function main() {
     checks.push({ name: "GET /api/dashboards/wallet-balances returns data", ok: false, detail: `${wbRes.status}` });
   }
 
+  // The /regime dashboard's ONLY data source. The view fragment is checked
+  // above, but until issue #967 nothing anywhere — not this file, not a
+  // Playwright spec, none of which un-stub it — ever called the endpoint
+  // behind it against a live stack. So "the page is wired to regimeView()"
+  // was the whole of the regime coverage, and a regime endpoint that answered
+  // with an error, or with something that is not JSON at all, was invisible to
+  // CI. Asked for exactly as the page asks (regime.js: range + the opt-in
+  // backtest blob), and the answer is parsed, not merely status-checked: an
+  // HTML answer at 200 is the failure this check exists for.
+  const regimeUrl = `${BACKEND}${ROUTES.dashboards.regimeSnapshots}?range=4000&include=backtest`;
+  const regimeRes = await fetch(regimeUrl);
+  const regimeType = regimeRes.headers.get("content-type") ?? "";
+  if (regimeRes.ok && regimeType.includes("application/json")) {
+    const regime = await regimeRes.json();
+    const rows = regime.history?.length ?? 0;
+    checks.push({
+      name: `GET ${ROUTES.dashboards.regimeSnapshots} returns a parseable snapshot the /regime page can draw`,
+      ok: regime.latest != null && typeof regime.latest.composite === "number" && rows > 0,
+      detail: `latest.composite=${regime.latest?.composite ?? "none"}, ${rows} history rows, asof=${regime.staleness?.asof ?? "none"}`,
+    });
+  } else {
+    checks.push({
+      name: `GET ${ROUTES.dashboards.regimeSnapshots} returns a parseable snapshot the /regime page can draw`,
+      ok: false,
+      detail: `${regimeRes.status} ${regimeType || "(no content-type)"} from ${regimeUrl} — the /regime page renders this as its error banner`,
+    });
+  }
+
   // Check that the API serves data the views depend on (the swarm view
   // loads its data from these endpoints).
   const sessionsRes = await fetch(`${BACKEND}${ROUTES.swarm.sessions}`);
