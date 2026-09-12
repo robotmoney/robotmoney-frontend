@@ -242,7 +242,10 @@ describe("append-only: every protected table holds data that cannot be removed",
     // Record type pins the key set; nothing but this pins the values, and a
     // wrong filename there fails OPEN — checkAppendOnlyGuard drops the table
     // from its trigger inventory and delete probe and then reports `armed`.
-    expect(APPEND_ONLY_TABLE_MIGRATION, "every protected table must name the migration that declares it").toEqual(declaredBy);
+    expect(
+      APPEND_ONLY_TABLE_MIGRATION as Record<string, string>,
+      "every protected table must name the migration that declares it",
+    ).toEqual(declaredBy);
   });
 
   test("a DELETE through an INHERITANCE PARENT is refused (the row-level trigger's other job)", async () => {
