@@ -51,21 +51,28 @@ function readableDetail(text) {
   return trimmed;
 }
 
-// The message an error RESPONSE carries, if it carries one at all. The API's
-// own convention is `{ error: "..." }`; a route that answers plain text (or
-// mislabels plain text as JSON, which the admin password routes do) is read as
-// text rather than dropped.
-function detailFrom(text) {
+// The API's own error convention, `{ error: "..." }`. Returned SEPARATELY from
+// the display text because it is a token, not prose: admin/shared.js's
+// apiErrorText() hands it to callers that compare it (`=== "stale_version"`)
+// to decide which advice an operator gets. It rides on the error as `reason`.
+function envelopeError(text) {
   try {
     const body = JSON.parse(text);
     if (body && typeof body === "object") {
       const message = body.error ?? body.message;
-      if (typeof message === "string") return readableDetail(message);
+      if (typeof message === "string" && message) return message;
     }
   } catch {
-    // Not JSON — fall through to the text itself.
+    // Not JSON.
   }
-  return readableDetail(text);
+  return null;
+}
+
+// The message an error RESPONSE carries, if it carries one at all. A route that
+// answers plain text (or mislabels plain text as JSON, which the admin password
+// routes do) is read as text rather than dropped.
+function detailFrom(text) {
+  return readableDetail(envelopeError(text) ?? text);
 }
 
 const NOT_THE_API =
@@ -105,6 +112,7 @@ async function request(method, route, { query, body, headers } = {}) {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     const detail = detailFrom(text);
+    const reason = envelopeError(text);
     // 5xx with nothing readable is an infrastructure answer — a proxy's error
     // page, or an empty body — so it is reported as an outage rather than by
     // pasting a document into the banner.
@@ -113,7 +121,7 @@ async function request(method, route, { query, body, headers } = {}) {
       : res.status >= 500
         ? `The API is unavailable — it answered ${res.status}${res.statusText ? ` ${res.statusText}` : ""}.`
         : `API ${res.status}${res.statusText ? `: ${res.statusText}` : ""}`;
-    throw new ApiError(res.status, message, { code: "http", url, detail: text });
+    throw new ApiError(res.status, message, { code: "http", url, detail: text, reason });
   }
 
   if (res.status === 204) return null;
@@ -142,7 +150,9 @@ export class ApiError extends Error {
   // "unreachable" — for callers that want to branch without matching prose.
   // `detail` is the raw body (untruncated, never rendered): the thing you want
   // in the console when a deployment is answering with someone else's page.
-  constructor(status, message, { code = "http", url, detail, contentType, cause } = {}) {
+  // `reason` is the `{ error }` token out of the API's own envelope, kept
+  // unwrapped for the callers that BRANCH on it rather than print it.
+  constructor(status, message, { code = "http", url, detail, contentType, reason, cause } = {}) {
     super(message, cause ? { cause } : undefined);
     this.name = "ApiError";
     this.status = status;
@@ -150,6 +160,7 @@ export class ApiError extends Error {
     this.url = url;
     this.detail = detail;
     this.contentType = contentType;
+    this.reason = reason;
   }
 }
 
