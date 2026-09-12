@@ -52,8 +52,15 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   record("no-new-tables", "PASS", "this release adds columns, an index, and role/grant changes only — no new table to pre-check");
 }
 
-const emit = process.argv.includes("--emit-receipt");
-runPreflightMain({
-  envPath: join(repoRoot, ".env.readonly"), name: "preflight-0.5.0", allowPrivilegedEnvVar: "PREFLIGHT_ALLOW_PRIVILEGED", runChecks,
-  receipt: emit ? { step: "P4.preflight-live", repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, committedEvidenceDir: COMMITTED_EVIDENCE_DIR } : undefined,
-}).then((code) => process.exitCode = code);
+// Only when RUN as a script. `runChecks` is imported by restore-check.ts and by
+// backend/tests/rollout-postflight-0-5-0.test.ts, and without this guard the
+// import alone connected to .env.readonly, ran a full live preflight, and — since
+// `emit` reads the IMPORTING process's argv — emitted a P4.preflight-live receipt
+// for a step nobody ran. 0.2.1-to-0.2.2 and 0.2.2-to-0.3.0 guard it the same way.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const emit = process.argv.includes("--emit-receipt");
+  runPreflightMain({
+    envPath: join(repoRoot, ".env.readonly"), name: "preflight-0.5.0", allowPrivilegedEnvVar: "PREFLIGHT_ALLOW_PRIVILEGED", runChecks,
+    receipt: emit ? { step: "P4.preflight-live", repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, committedEvidenceDir: COMMITTED_EVIDENCE_DIR } : undefined,
+  }).then((code) => process.exitCode = code);
+}

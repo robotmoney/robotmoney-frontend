@@ -146,6 +146,12 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
     idx[0] ? idx[0].indexdef : `${MEMBER_RECEIVED_INDEX.index} does not exist`);
 }
 
-runPostflightMain({ name: "postflight-0.5.0", runChecks,
-  receipt: receiptStep ? { step: receiptStep, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, committedEvidenceDir: COMMITTED_EVIDENCE_DIR } : undefined,
-}).then((code) => process.exitCode = code);
+// Only when RUN as a script — see preflight.ts's guard. rollout-postflight-0-5-0.test.ts
+// imports `runChecks` from here, and without this the import ran the real postflight
+// at test-file load and set process.exitCode = 2, which `bun test` preserves: the
+// suite went red with every test passing.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runPostflightMain({ name: "postflight-0.5.0", runChecks,
+    receipt: receiptStep ? { step: receiptStep, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, committedEvidenceDir: COMMITTED_EVIDENCE_DIR } : undefined,
+  }).then((code) => process.exitCode = code);
+}
