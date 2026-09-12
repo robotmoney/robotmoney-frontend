@@ -165,11 +165,40 @@ export async function resolveSmokeTwinDataPath(
   }
 }
 
-/** What teardown says about a smoke-twin whose container it just removed. */
+/**
+ * What teardown says about a smoke-twin whose container it just removed. */
 export function smokeTwinTeardownNarration(dp: ResolvedDataPath): string | undefined {
   return dp.kind === "smoke-twin"
     ? `smoke-twin container removed; its restored copy of production is KEPT in volume ${dp.volume} — reclaim with: bun run smoke:clean`
     : undefined;
+}
+
+/**
+ * Default the restored twin's consensus judge to ENFORCE before any session sits.
+ *
+ * A restored dump carries whatever swarm_judge_config.mode the production replica
+ * last shipped — normally 'off', which enqueues a judge job and SKIPS it, so a
+ * default twin would publish no validator consensus receipts at all. Enforce is
+ * what makes every judged session genuinely publish one, which is the standing
+ * twin's reason to exist.
+ *
+ * Lives HERE not in smoke-main.ts (which is under a hard size ceiling,
+ * smoke-main-split.test.ts), and runs through the real admin API after the stack
+ * is healthy and BEFORE any session convenes — a fast-cadence twin fires its
+ * first session within minutes — so the CI `--once` rehearsal and the standing
+ * tunnel boot both exercise the same default a cutover sees. The CI judge-role
+ * coverage block later flips modes around ONE judged session and restores what IT
+ * read: enforce, because this ran first.
+ */
+export async function defaultSmokeTwinJudgeMode(
+  backendUrl: string,
+  automationToken: string,
+  log: (m: string) => void = (m) => console.log(`[smoke] ${m}`),
+): Promise<void> {
+  process.env.BACKEND_URL = backendUrl;
+  const session = await import("./swarm/session.ts");
+  await session.setJudgeMode("enforce", automationToken);
+  log("smoke-twin: consensus judge set to ENFORCE — every judged session will publish a receipt.");
 }
 
 /**

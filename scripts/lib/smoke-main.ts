@@ -5,7 +5,7 @@ import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
+import { assertSmokeTwinIsTarget, defaultSmokeTwinJudgeMode, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
 import { teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { provisionSmokeAnalyticsTokenAfterPreflight, removeSmokeAnalyticsToken } from "./smoke-secret.ts";
@@ -149,10 +149,9 @@ const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
 // …and the same argument selects the smoke's CADENCE PROFILE (issue #371) — the
 // swarm interval, the SUBMISSION WINDOW (#570), the subject phase offset and the
 // producer beats. A `--static-port` boot is the standing/public smoke (6 h per
-// subject); every other boot, CI included, keeps today's fast ~2-min values.
-// Every number lives in scripts/lib/smoke-schedule.ts, which also ASSERTS that
-// the constants resolved here are the ones this invocation claims — fatal if not.
-const cadence = resolveSmokeCadenceForBoot({ stage: staticPortMode, env: process.env });
+// subject); the smoke-twin's explicit `--cadence fast` override runs the pinned
+// boot at the fast TEST cadence. Resolved and asserted with the data-path
+// resolve below, which owns the FATAL for both.
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
@@ -208,9 +207,11 @@ if (staticPortMode) await stagePreflight();
 // a bad invocation or a missing DATABASE_URL fails on an untouched host rather
 // than half-way through a bring-up.
 let requestedDataPath: ReturnType<typeof parseDataPath>["dataPath"];
+let cadence: ReturnType<typeof resolveSmokeCadenceForBoot>;
 try {
   const parsed = parseDataPath(process.argv, { envFilePath: join(repoRoot, ".env") });
   requestedDataPath = parsed.dataPath;
+  cadence = resolveSmokeCadenceForBoot({ stage: staticPortMode, cadence: parsed.cadence, env: process.env });
   for (const w of parsed.warnings) console.warn(`[smoke] ${w}`);
 } catch (err) {
   console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
@@ -365,7 +366,7 @@ const analyticsToken = credentials.analyticsToken;
 // Resolve every model/data-path preflight before provisioning a bearer file.
 // A typo or missing funded model key must not leak a temp credential directory
 // for a stack that never reached creation.
-const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode });
+const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile });
 const analyticsTokenFile = provisionSmokeAnalyticsTokenAfterPreflight(project, analyticsToken, () => {
   if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(process.env);
@@ -1165,6 +1166,8 @@ async function main(): Promise<void> {
     preflight: composePostgres ? undefined : classifyDatabase,
     initialize: initializeScenario,
   }));
+
+  if (dataPath.kind === "smoke-twin") await defaultSmokeTwinJudgeMode(backendUrl, automationToken); // the CI block below restores what IT read — enforce, because this ran first
 
   if (process.env.CI && smokeMode) {
     // ── CI SMOKE: the bounded end-to-end verdict (issue #537) ──────────────
