@@ -260,12 +260,16 @@ export const APPEND_ONLY_MIGRATIONS = [
 ] as const;
 
 /**
- * Which of APPEND_ONLY_MIGRATIONS opts each table in. Kept in agreement with
- * APPEND_ONLY_TABLES and the migrations' own arrays by the same executed test
- * that already pins those two against each other
- * (append-only-enforcement.test.ts's "protected arrays" test) — a table added
- * to one and not this map is a table this check can no longer distinguish
- * "not migrated here yet" from "disarmed" for.
+ * Which of APPEND_ONLY_MIGRATIONS opts each table in.
+ *
+ * PINNED IN BOTH DIRECTIONS, because a wrong entry here FAILS OPEN. The key set
+ * is the `Record` type — a table in APPEND_ONLY_TABLES with no entry does not
+ * compile. The VALUES are pinned by append-only-enforcement.test.ts's "protected
+ * arrays" test, which already parses each migration's own `protected text[]`
+ * array and so knows which file declares each table; without that, a filename
+ * that is merely WRONG type-checks, `appliedMigrations.has()` is false forever,
+ * the table drops out of both triggerInventory and deleteProbe, and
+ * checkAppendOnlyGuard reports `armed` for a table carrying no triggers at all.
  *
  * THE BUG THIS MAP FIXES (found capturing a fresh prod replica on
  * 2026-09-11): `checkAppendOnlyGuard` used to gate ONLY on whether 0032 was
@@ -277,7 +281,10 @@ export const APPEND_ONLY_MIGRATIONS = [
  * Gating each table on ITS OWN migration removes that false positive without
  * weakening the check for a table whose migration truly has run.
  */
-export const APPEND_ONLY_TABLE_MIGRATION: Record<(typeof APPEND_ONLY_TABLES)[number], string> = {
+export const APPEND_ONLY_TABLE_MIGRATION: Record<
+  (typeof APPEND_ONLY_TABLES)[number],
+  (typeof APPEND_ONLY_MIGRATIONS)[number]
+> = {
   swarm_members: "0032_append_only_history.sql",
   swarm_recommendations: "0032_append_only_history.sql",
   swarm_memos: "0032_append_only_history.sql",

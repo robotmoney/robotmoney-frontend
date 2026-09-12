@@ -32,7 +32,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
-import { APPEND_ONLY_MIGRATIONS, APPEND_ONLY_TABLES, triggerNames } from "../src/db/append-only-guard.ts";
+import { APPEND_ONLY_MIGRATIONS, APPEND_ONLY_TABLE_MIGRATION, APPEND_ONLY_TABLES, triggerNames } from "../src/db/append-only-guard.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 // Own database, cloned from the migrated template. This file SEEDS the
@@ -225,6 +225,7 @@ describe("append-only: every protected table holds data that cannot be removed",
     // that already ran it). Every declaring file is listed in
     // APPEND_ONLY_MIGRATIONS, and the UNION of their arrays is what must match.
     const inMigrations: string[] = [];
+    const declaredBy: Record<string, string> = {};
     for (const file of APPEND_ONLY_MIGRATIONS) {
       const ddl = readFileSync(join(import.meta.dir, "..", "migrations", file), "utf8");
       const block = ddl.match(/protected text\[\] := ARRAY\[([\s\S]*?)\];/);
@@ -232,9 +233,16 @@ describe("append-only: every protected table holds data that cannot be removed",
       const names = [...block![1]!.replace(/--.*$/gm, "").matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
       expect(names.length, `${file}'s array must not have been parsed as empty`).toBeGreaterThan(0);
       inMigrations.push(...names);
+      for (const name of names) declaredBy[name] = file;
     }
     expect(new Set(inMigrations).size, "no table may be declared by two migrations").toBe(inMigrations.length);
     expect([...inMigrations].sort()).toEqual([...APPEND_ONLY_TABLES].sort());
+
+    // And each table maps to the migration that ACTUALLY declares it. The
+    // Record type pins the key set; nothing but this pins the values, and a
+    // wrong filename there fails OPEN — checkAppendOnlyGuard drops the table
+    // from its trigger inventory and delete probe and then reports `armed`.
+    expect(APPEND_ONLY_TABLE_MIGRATION, "every protected table must name the migration that declares it").toEqual(declaredBy);
   });
 
   test("a DELETE through an INHERITANCE PARENT is refused (the row-level trigger's other job)", async () => {
