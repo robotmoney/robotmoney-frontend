@@ -217,6 +217,11 @@ try {
   console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
+// Twin/stage: seat the FULL restored committee, not just the three committed
+// personas. Enrollment rotates each restored member's key (register rebinds by
+// member id) so every member can sign a real take. Gated to production-shaped
+// (--smoke) boots on the pinned tunnel port or the smoke-twin data path.
+const seatAllRestored = smokeMode && (staticPortMode || requestedDataPath.kind === "smoke-twin");
 // Two DIFFERENT questions, and for a smoke-twin they disagree — see smoke-db-mode.ts.
 // Both read only the mode, so they are known before a smoke-twin has been restored.
 const composePostgres = usesComposePostgres(requestedDataPath);
@@ -1186,7 +1191,7 @@ async function main(): Promise<void> {
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
     const roster = await session.rosterMembers(undefined, automationToken);
     if (roster === null) throw new Error("smoke initializer restored no readable IC roster");
-    const members = adoptRestoredRoster(scenario, roster);
+    const members = adoptRestoredRoster(scenario, roster, undefined, { seatAllActive: seatAllRestored });
     const rail = {
       repoRoot,
       composeProject: project,
@@ -1547,14 +1552,15 @@ async function main(): Promise<void> {
   //
   // Both scenarios reconnect database identities through one helper. It returns
   // a fresh array so a previous run can never contaminate this run's seats.
-  if (smokeMode) log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
+  if (smokeMode && !seatAllRestored) log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
+  if (smokeMode && seatAllRestored) log("twin/stage mode: seating the FULL restored committee — enrollment rotates each member's key (see seatAllActive in smoke-mode.ts)");
   const dbRoster = await e2e.rosterMembers(undefined, automationToken);
   if (dbRoster === null) {
     if (smokeMode) throw new Error("smoke initializer restored no readable IC roster");
     log("roster unreadable at boot — continuing with this run's simulation members");
   } else {
     const before = sessionMembers.length;
-    sessionMembers = adoptRestoredRoster(scenario, dbRoster, sessionMembers);
+    sessionMembers = adoptRestoredRoster(scenario, dbRoster, sessionMembers, { seatAllActive: seatAllRestored });
     if (sessionMembers.length > before) log(`swarm now ${sessionMembers.length} seats (${sessionMembers.length - before} restored identities reconnected)`);
   }
 
