@@ -20,19 +20,24 @@
 # Coordinator direction (mid-review, 2026-07-30): rather than special-casing
 # "HTML/CSS-only" as its own path category, this workflow runs whenever
 # ANY frontend-touching path changes, and each spec here determines for itself
-# whether it can run without live-backend fixtures. Today that is exactly one
-# spec: frontend/test/browser/preview-smoke.spec.ts, which spawns its OWN
-# scripts/preview-server.ts (a static file server; no BACKEND_URL, no Docker,
-# no live backend) and asserts the SPA renders inside the preview wrapper with
-# zero console/page errors, using the same failOnBrowserErrors/
-# expectNoBrowserErrors pattern spa.spec.ts established. Every other spec in
-# that directory documents that it needs the real backend server up (even when
-# its own API calls are mocked, the SPA shell + static assets are served by the
-# live backend at baseURL) and stays exclusively in the `e2e` workflow's
-# `test:browser` step. A future markup/style-only spec written in the
-# deterministic archive-fallback style (the pattern PR #327's
-# swarm-subject.spec.ts introduced: force `/api/**` to fail and assert the
-# static-archive render path) is a natural fit to add here later.
+# whether it can run without live-backend fixtures. Today that is two specs,
+# both of which spawn their OWN scripts/preview-server.ts (a static file
+# server; no BACKEND_URL, no Docker, no live backend):
+#
+#   - preview-smoke.spec.ts asserts the SPA renders inside the preview wrapper
+#     with zero console/page errors, using the same failOnBrowserErrors/
+#     expectNoBrowserErrors pattern spa.spec.ts established.
+#   - api-unreachable.spec.ts renders /regime against the four answers a DOWN
+#     backend actually gives (SPA shell at 200, 5xx HTML, 5xx JSON, refused
+#     connection) and asserts the page names the outage instead of printing a
+#     JSON-parser message (issue #967). It belongs in this tier precisely
+#     because its subject is a backend that is NOT there — waiting ~40 minutes
+#     for a live smoke boot to test an unreachable backend would be perverse.
+#
+# Every other spec in that directory documents that it needs the real backend
+# server up (even when its own API calls are mocked, the SPA shell + static
+# assets are served by the live backend at baseURL) and stays exclusively in
+# the `e2e` workflow's `test:browser` step.
 #
 # CI taxonomy class: feature-correctness. No Docker, no live backend, no
 # network beyond localhost — cheap enough to run on every PR, draft included,
@@ -114,4 +119,7 @@ jobs:
             exit 1
           fi
       - name: Standalone Playwright specs (no live backend required)
-        run: bunx playwright test frontend/test/browser/preview-smoke.spec.ts
+        run: >-
+          bunx playwright test
+          frontend/test/browser/preview-smoke.spec.ts
+          frontend/test/browser/api-unreachable.spec.ts

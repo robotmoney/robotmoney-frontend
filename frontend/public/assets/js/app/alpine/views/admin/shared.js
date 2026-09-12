@@ -1,3 +1,9 @@
+// @ts-nocheck — browser-facing plain JS predating the root tsconfig's checkJs
+// coverage, the same pragma and the same reason as lib/api.js. This module
+// entered the root TS program only when admin-api-error-text.test.ts began
+// importing apiErrorText; it was never typechecked before that, so the pragma
+// preserves the status quo rather than JSDoc-typing a 179-line view helper in
+// passing. Typing it is the same follow-up api.js's header names.
 // Shared admin-surface plumbing (issue #159): the login/token/403 contract every
 // /admin/swarm/* and /admin/audit page follows, plus small formatting
 // helpers. NOT an Alpine.data factory itself — each page's factory spreads
@@ -123,8 +129,15 @@ export function adminAuthState() {
  * better exists.
  */
 export function apiErrorText(e) {
+  // lib/api.js unwraps the API's `{ error }` envelope itself now (issue #968),
+  // so the token is on the error rather than embedded in its message. Callers
+  // COMPARE this value (`=== "stale_version"`), so the token has to come back
+  // bare — with the prefixed message instead, every such branch silently took
+  // its else arm. Pinned in scripts/tests/unit/admin-api-error-text.test.ts.
+  if (typeof e?.reason === "string" && e.reason) return e.reason;
   const raw = String(e?.message ?? "");
   try {
+    // Older shape, kept for any thrower that still embeds the envelope.
     const parsed = JSON.parse(raw.replace(/^API \d+:\s*/, ""));
     if (parsed && typeof parsed.error === "string" && parsed.error) return parsed.error;
   } catch (_) { /* not the JSON envelope */ }

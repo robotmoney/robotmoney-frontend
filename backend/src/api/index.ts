@@ -4,7 +4,7 @@
 // and /health here so a single-box deployment still presents as one origin.
 import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
-import { sql } from "../db/client.ts";
+import { isDatabaseUnavailable, sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { createComment, listComments } from "./routes/comments.ts";
@@ -110,6 +110,18 @@ const server = Bun.serve({
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
       if (err instanceof URIError) return withCors(json({ error: "bad request" }, 400), req, pathname);
+      // The database being unreachable is not a handler bug, and answering it
+      // as one (`500 internal error`) told nobody anything: the page printed
+      // the envelope verbatim, and an operator could not tell an outage from a
+      // defect without shelling into the container (issue #968). 503 is the
+      // honest status — the condition is transient and the api itself is fine
+      // — and the reason is named so the SPA can say "database unavailable"
+      // rather than "internal error". Narrow by construction: a bad query
+      // still reports as a 500 (see isDatabaseUnavailable).
+      if (isDatabaseUnavailable(err)) {
+        console.error("api error (database unavailable):", err);
+        return withCors(json({ error: "database unavailable" }, 503), req, pathname);
+      }
       console.error("api error:", err);
       return withCors(json({ error: "internal error" }, 500), req, pathname);
     }
