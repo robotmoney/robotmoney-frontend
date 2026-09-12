@@ -121,10 +121,27 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   // everywhere, INSERT/UPDATE/DELETE nowhere else. This is the security-
   // relevant half of the release: judge/receipt/append-only tables must stay
   // unwritable by the worker role.
-  const totalTables = (await db`SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace nsp ON nsp.oid = c.relnamespace WHERE nsp.nspname = 'public' AND c.relkind = 'r'`)[0] as { n: number };
-  const workerSelect = (await db`SELECT count(*)::int AS n FROM information_schema.role_table_grants WHERE grantee = 'rm_worker' AND privilege_type = 'SELECT'`)[0] as { n: number };
-  record("worker-read-everything", Number(workerSelect.n) >= Number(totalTables.n) ? "PASS" : "FAIL",
-    `rm_worker has SELECT on ${workerSelect.n} of ${totalTables.n} table(s)`);
+  // Set-compared by NAME, not counted: role_table_grants has one row per
+  // (grantor, grantee, table), so a grant issued by a second grantor — which
+  // 0054's `REVOKE ALL ... FROM rm_worker` does not remove, REVOKE only dropping
+  // the invoker's own grants — inflates the count past the table total and
+  // turns a table rm_worker genuinely cannot read into a PASS. The write check
+  // below already compares sets; this is the same shape.
+  const publicTables = (await db`
+    SELECT c.relname AS table_name FROM pg_class c
+      JOIN pg_namespace nsp ON nsp.oid = c.relnamespace
+     WHERE nsp.nspname = 'public' AND c.relkind = 'r'
+  `) as unknown as { table_name: string }[];
+  const workerSelect = (await db`
+    SELECT DISTINCT table_name FROM information_schema.role_table_grants
+     WHERE grantee = 'rm_worker' AND privilege_type = 'SELECT' AND table_schema = 'public'
+  `) as unknown as { table_name: string }[];
+  const selectable = new Set(workerSelect.map((r) => r.table_name));
+  const unreadable = publicTables.map((r) => r.table_name).filter((t) => !selectable.has(t)).sort();
+  record("worker-read-everything", unreadable.length === 0 ? "PASS" : "FAIL",
+    unreadable.length === 0
+      ? `rm_worker has SELECT on all ${publicTables.length} public table(s)`
+      : `rm_worker cannot SELECT ${unreadable.length} of ${publicTables.length} table(s): ${unreadable.join(", ")}`);
 
   const workerWrites = (await db`
     SELECT DISTINCT table_name FROM information_schema.role_table_grants
