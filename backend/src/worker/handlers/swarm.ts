@@ -183,11 +183,43 @@ function translateBenignSkip(
 // one — only this cadence path auto-attempts it, so a caller publishing
 // through the API is unaffected and still gets an explicit `ok`/`error` shape
 // from its own request rather than one folded into someone else's.
+/**
+ * Refusals that mean "this session legitimately has no receipt yet" — a mode
+ * the operator chose, or ordinary product behaviour with a named remedy — and
+ * so must leave the publish job SUCCESSFUL:
+ *
+ * - `not_judged`           the judge is off, which is the production default
+ * - `judgement_not_adopted` a shadow judgement is withheld from the session by
+ *                           design (consensus-receipt.ts says so explicitly)
+ * - `session_not_reaggregated` a member filed a FIRST take after aggregation —
+ *                           consensus-receipt.ts calls this "ordinary product
+ *                           behaviour rather than corruption"
+ * - `judgement_stale`      an amendment landed between judging and publishing
+ *
+ * EVERY OTHER reason is an assembly failure — `no_takes`, `schema_invalid`,
+ * `semantics_invalid`, `canonicalization_failed`, the `weights_*` family,
+ * `signing_key_unresolved`, `nonce_replayed` — and must degrade the run. An
+ * ALLOWLIST rather than a failure list on purpose: a reason added later degrades
+ * loudly instead of being silently absorbed into a successful publish.
+ */
+const EXPECTED_RECEIPT_REFUSALS = new Set([
+  "not_judged", "judgement_not_adopted", "session_not_reaggregated", "judgement_stale",
+]);
+
 export async function publishSession(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
   const published = await ic.publishSession(sessionId);
   const receipt = await admin.publishConsensusReceiptAdmin(sessionId, "worker");
-  return { ...published, consensusReceipt: receipt.ok ? { published: true } : { published: false, reason: receipt.error } };
+  if (receipt.ok) return { ...published, consensusReceipt: { published: true } };
+  // admin.publishConsensusReceiptAdmin puts the refusal's REASON CODE in `error`.
+  const consensusReceipt = { published: false, reason: receipt.error };
+  if (EXPECTED_RECEIPT_REFUSALS.has(receipt.error)) return { ...published, consensusReceipt };
+  // The `{ok:false}` shape loop.ts's isDegradedResult() looks for. Without it a
+  // broken receipt path reported a SUCCEEDED run carrying a quiet `published:
+  // false`, so the release's headline feature could stop producing receipts in
+  // production with no degraded run and nothing to alert on. Retrying is safe:
+  // ic.publishSession is an idempotent UPDATE.
+  return { ...published, consensusReceipt, ok: false, error: `consensus receipt refused: ${receipt.error}` };
 }
 
 export async function sendApplicationReceivedNotification(payload: Record<string, unknown>): Promise<unknown> {

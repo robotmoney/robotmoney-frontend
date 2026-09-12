@@ -98,5 +98,28 @@ test("swarm.publish still completes cleanly for a shadow-judged session — no r
   // deliberately withheld from the session (consensus-receipt.ts), so there is
   // no opinion the session adopted for a receipt to embed.
   expect(result.consensusReceipt).toEqual({ published: false, reason: "judgement_not_adopted" });
+  // The expected-refusal allowlist leaves the RUN successful: no `ok`, so
+  // loop.ts's isDegradedResult() does not match and the cadence is not retried.
+  expect(result).not.toHaveProperty("ok");
   expect(await receiptRow(sessionId)).toBeNull();
+});
+
+test("a receipt refusal that is NOT an expected one degrades the run instead of reporting success", async () => {
+  // `no_session` stands in for the whole assembly-failure family (no_takes,
+  // schema_invalid, canonicalization_failed, the weights_* reasons): it is the
+  // one that needs no key material to provoke, and it takes the same branch.
+  // Before this, EVERY refusal returned a result with no `ok` field, so
+  // isDegradedResult() never matched and a broken receipt path was recorded as
+  // a SUCCEEDED publish carrying a quiet `published: false` — the feature could
+  // stop producing receipts in production with nothing to alert on.
+  // A well-formed id that matches no row: `swarm_sessions.id` is a uuid, so a
+  // non-uuid string fails in the UPDATE before assembly is ever reached.
+  const result = (await publishSessionJob({ sessionId: crypto.randomUUID() })) as {
+    ok?: boolean;
+    error?: string;
+    consensusReceipt: { published: boolean; reason?: string };
+  };
+  expect(result.consensusReceipt).toEqual({ published: false, reason: "no_session" });
+  expect(result.ok, "loop.ts's isDegradedResult() matches on ok === false").toBe(false);
+  expect(result.error).toContain("no_session");
 });
