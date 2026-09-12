@@ -5,7 +5,7 @@ import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
+import { assertSmokeTwinIsTarget, defaultSmokeTwinJudgeMode, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
 import { teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { provisionSmokeAnalyticsTokenAfterPreflight, removeSmokeAnalyticsToken } from "./smoke-secret.ts";
@@ -39,6 +39,7 @@ import {
   withMemberAbsent,
   bootstrapStepNames,
   isSmokeMode,
+  resolveSeatAllRestored,
   scenarioPlan,
 } from "./smoke-mode.ts";
 import { admissionDelayMs, decideAdmission } from "./swarm/roster-plan.ts";
@@ -149,10 +150,9 @@ const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
 // …and the same argument selects the smoke's CADENCE PROFILE (issue #371) — the
 // swarm interval, the SUBMISSION WINDOW (#570), the subject phase offset and the
 // producer beats. A `--static-port` boot is the standing/public smoke (6 h per
-// subject); every other boot, CI included, keeps today's fast ~2-min values.
-// Every number lives in scripts/lib/smoke-schedule.ts, which also ASSERTS that
-// the constants resolved here are the ones this invocation claims — fatal if not.
-const cadence = resolveSmokeCadenceForBoot({ stage: staticPortMode, env: process.env });
+// subject); the smoke-twin's explicit `--cadence fast` override runs the pinned
+// boot at the fast TEST cadence. Resolved and asserted with the data-path
+// resolve below, which owns the FATAL for both.
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
@@ -208,14 +208,22 @@ if (staticPortMode) await stagePreflight();
 // a bad invocation or a missing DATABASE_URL fails on an untouched host rather
 // than half-way through a bring-up.
 let requestedDataPath: ReturnType<typeof parseDataPath>["dataPath"];
+let cadence: ReturnType<typeof resolveSmokeCadenceForBoot>;
 try {
   const parsed = parseDataPath(process.argv, { envFilePath: join(repoRoot, ".env") });
   requestedDataPath = parsed.dataPath;
+  cadence = resolveSmokeCadenceForBoot({ stage: staticPortMode, cadence: parsed.cadence, env: process.env });
   for (const w of parsed.warnings) console.warn(`[smoke] ${w}`);
 } catch (err) {
   console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
+// Twin/stage: seat the FULL restored committee, not just the three committed
+// personas. Enrollment rotates each restored member's key (register rebinds by
+// member id) so every member can sign a real take. Gated to production-shaped
+// (--smoke) boots on the pinned tunnel port or the smoke-twin data path.
+// Reasoning in smoke-mode.ts, pin in roster-plan.test.ts: `--db external` never qualifies.
+const seatAllRestored = resolveSeatAllRestored({ smoke: smokeMode, stage: staticPortMode, dataPath: requestedDataPath });
 // Two DIFFERENT questions, and for a smoke-twin they disagree — see smoke-db-mode.ts.
 // Both read only the mode, so they are known before a smoke-twin has been restored.
 const composePostgres = usesComposePostgres(requestedDataPath);
@@ -366,7 +374,7 @@ const analyticsToken = credentials.analyticsToken;
 // Resolve every model/data-path preflight before provisioning a bearer file.
 // A typo or missing funded model key must not leak a temp credential directory
 // for a stack that never reached creation.
-const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode });
+const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile });
 const analyticsTokenFile = provisionSmokeAnalyticsTokenAfterPreflight(project, analyticsToken, () => {
   if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(process.env);
@@ -1166,6 +1174,8 @@ async function main(): Promise<void> {
     initialize: initializeScenario,
   }));
 
+  if (dataPath.kind === "smoke-twin") await defaultSmokeTwinJudgeMode(backendUrl, automationToken); // the CI block below restores what IT read — enforce, because this ran first
+
   if (process.env.CI && smokeMode) {
     // ── CI SMOKE: the bounded end-to-end verdict (issue #537) ──────────────
     // A production-shaped boot's checks are NOT the smoke's checks. The smoke's
@@ -1183,7 +1193,7 @@ async function main(): Promise<void> {
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
     const roster = await session.rosterMembers(undefined, automationToken);
     if (roster === null) throw new Error("smoke initializer restored no readable IC roster");
-    const members = adoptRestoredRoster(scenario, roster);
+    const members = adoptRestoredRoster(scenario, roster, undefined, { seatAllActive: seatAllRestored });
     const rail = {
       repoRoot,
       composeProject: project,
@@ -1544,14 +1554,14 @@ async function main(): Promise<void> {
   //
   // Both scenarios reconnect database identities through one helper. It returns
   // a fresh array so a previous run can never contaminate this run's seats.
-  if (smokeMode) log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
+  if (smokeMode) log(seatAllRestored ? "twin/stage mode: seating the FULL restored committee — enrollment rotates each member's key (see seatAllActive in smoke-mode.ts)" : `smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
   const dbRoster = await e2e.rosterMembers(undefined, automationToken);
   if (dbRoster === null) {
     if (smokeMode) throw new Error("smoke initializer restored no readable IC roster");
     log("roster unreadable at boot — continuing with this run's simulation members");
   } else {
     const before = sessionMembers.length;
-    sessionMembers = adoptRestoredRoster(scenario, dbRoster, sessionMembers);
+    sessionMembers = adoptRestoredRoster(scenario, dbRoster, sessionMembers, { seatAllActive: seatAllRestored });
     if (sessionMembers.length > before) log(`swarm now ${sessionMembers.length} seats (${sessionMembers.length - before} restored identities reconnected)`);
   }
 

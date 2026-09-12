@@ -25,7 +25,8 @@ import {
 } from "../../lib/swarm/roster-plan.ts";
 import { NEWCOMER_NAMES } from "../../lib/smoke-newcomers.ts";
 import { personaIdentities, personaIdentity } from "../../lib/swarm/persona-keys.ts";
-import { SMOKE_MEMBERS, adoptionFilter } from "../../lib/smoke-mode.ts";
+import { SMOKE_MEMBERS, adoptRestoredRoster, adoptionFilter, resolveSeatAllRestored, scenarioPlan } from "../../lib/smoke-mode.ts";
+import type { RosterMember } from "../../lib/swarm/session.ts";
 
 const row = (over: Partial<RosterRow> & { name: string }): RosterRow => ({
   id: over.id ?? `id-${over.name.toLowerCase()}`,
@@ -305,5 +306,85 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
     // Every seated persona signs with a key that ALREADY existed — never one
     // invented for it here.
     for (const m of plan.adopt) expect(personaIdentity(m.name)).toBeDefined();
+  });
+});
+
+// ── seat-all: the twin/stage full-committee restoral ─────────────────────────
+// A production-shaped boot on the pinned tunnel port seats the FULL active
+// restored committee, not just the three committed personas. Enrollment then
+// rotates each restored member's key (register rebinds by member id), so every
+// member's agent can sign a real take — the capability these seats exist for.
+// The plain simulation smoke stays on the 3-persona allowlist. These pin the
+// pure half of the gate (smoke-mode.ts's adoptionFilter seatAllActive +
+// adoptRestoredRoster opts) through the same planner smoke-main.ts runs.
+describe("seatAllActive — twin/stage seats the full restored committee", () => {
+  const RESTORED_FULL: RosterMember[] = [
+    { id: "a1", handle: "athena", name: "Athena", lens: null, status: "active" },
+    { id: "r1", handle: "robot-money", name: "Robot Money", lens: null, status: "active" },
+    { id: "n1", handle: "noop-analyst", name: "Noop Analyst", lens: null, status: "active" },
+    { id: "d1", handle: "dualmint", name: "DualMint", lens: null, status: "active" },
+    { id: "m1", handle: "maximus", name: "Maximus", lens: null, status: "active" },
+    { id: "s1", handle: "shodai", name: "ShodAI", lens: null, status: "active" },
+    { id: "w1", handle: "woon", name: "Woon", lens: null, status: "active" },
+    { id: "nat1", handle: "nat", name: "nat", lens: null, status: "inactive" },
+  ];
+
+  test("the seat-all filter adopts every ACTIVE member, committed persona or not", () => {
+    const plan = planAdoptions([...RESTORED_FULL], new Set(), adoptionFilter(true, { seatAllActive: true }));
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "w1"]);
+  });
+
+  test("the allowlist still excludes the same members when seat-all is OFF", () => {
+    const plan = planAdoptions([...RESTORED_FULL], new Set(), adoptionFilter(true));
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["a1", "n1", "r1"]);
+  });
+
+  test("adoptRestoredRoster seats every active restored member and keeps the three committed handles", () => {
+    const seated = adoptRestoredRoster(scenarioPlan(true), RESTORED_FULL, [], { seatAllActive: true });
+    expect(seated.map((m) => m.memberId).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "w1"]);
+    expect(seated.every((m) => m.present)).toBe(true);
+  });
+
+  test("seat-all still THROWS when a committed persona is missing from the restore", () => {
+    const noNoop = RESTORED_FULL.filter((m) => m.handle !== "noop-analyst");
+    expect(() => adoptRestoredRoster(scenarioPlan(true), noNoop, [], { seatAllActive: true })).toThrow(/no 'noop-analyst'/);
+  });
+
+  test("the plain smoke path still seats exactly the three committed personas", () => {
+    const seated = adoptRestoredRoster(scenarioPlan(true), RESTORED_FULL, []);
+    expect(seated.map((m) => m.memberId).sort()).toEqual(["a1", "n1", "r1"]);
+  });
+});
+
+describe("resolveSeatAllRestored — which boots may re-key the committee", () => {
+  // Seat-all drops the persona allowlist AND issue #537's personaIdentity()
+  // check, then enrollment rebinds every seated member's key. So the gate is a
+  // safety boundary, not a convenience: it must key off the DATABASE this boot
+  // owns, never off the flags alone.
+  test("a smoke-twin boot qualifies — a disposable restored copy", () => {
+    expect(resolveSeatAllRestored({ smoke: true, stage: false, dataPath: { kind: "smoke-twin" } })).toBe(true);
+  });
+
+  test("a --stage boot on this boot's own ephemeral postgres qualifies", () => {
+    expect(resolveSeatAllRestored({ smoke: true, stage: true, dataPath: { kind: "ephemeral" } })).toBe(true);
+  });
+
+  test("--db external NEVER qualifies, even with --stage", () => {
+    // The regression this gate exists for: printResumeHint() suggests
+    // `--static-port --db external`, and --static-port is just a CLI flag that
+    // stagePreflight() never checks a database against. Re-keying every active
+    // member of a real restored server is not something a flag should buy.
+    expect(resolveSeatAllRestored({ smoke: true, stage: true, dataPath: { kind: "external" } })).toBe(false);
+    expect(resolveSeatAllRestored({ smoke: true, stage: false, dataPath: { kind: "external" } })).toBe(false);
+  });
+
+  test("a plain simulation boot never qualifies, whatever the database", () => {
+    for (const kind of ["ephemeral", "external", "smoke-twin"] as const) {
+      expect(resolveSeatAllRestored({ smoke: false, stage: true, dataPath: { kind } })).toBe(false);
+    }
+  });
+
+  test("an ordinary ephemeral smoke without --stage still seats only the three personas", () => {
+    expect(resolveSeatAllRestored({ smoke: true, stage: false, dataPath: { kind: "ephemeral" } })).toBe(false);
   });
 });

@@ -29,6 +29,7 @@ import {
   isAppendOnlyRefusal,
   triggerNames,
 } from "../src/db/append-only-guard.ts";
+const MEMBER_KEYS_MIGRATION = "0050_swarm_member_keys_append_only.sql";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -187,6 +188,45 @@ describe("the append-only guard's runtime check", () => {
                 ON CONFLICT (name) DO NOTHING`;
       await sql.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only`);
       await sql.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only_row`);
+    }
+  });
+
+  test("'armed' — not 'disarmed' — for a table whose OWN opt-in migration has not reached this database yet", async () => {
+    // The bug found capturing a fresh production replica on 2026-09-11:
+    // `swarm_member_keys` has existed since long before migration 0050 opted
+    // it into the guard, so a database that has 0032 (the base) but genuinely
+    // has not reached 0050 yet — an ordinary mid-rollout state, e.g.
+    // production sitting on an older release than what's on disk — must not
+    // be graded as if 0050 had already run. Simulated here by removing BOTH
+    // its triggers and its schema_migrations row, i.e. the honest shape of
+    // "never migrated", not merely "disarmed after being armed".
+    const names = triggerNames("swarm_member_keys");
+    await sql.unsafe(`DROP TRIGGER ${names.statement} ON swarm_member_keys`);
+    await sql.unsafe(`DROP TRIGGER ${names.row} ON swarm_member_keys`);
+    await sql.unsafe(`ALTER TABLE schema_migrations DISABLE TRIGGER USER`);
+    try {
+      await sql`DELETE FROM schema_migrations WHERE name = ${MEMBER_KEYS_MIGRATION}`;
+    } finally {
+      await sql.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only`);
+      await sql.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only_row`);
+    }
+    try {
+      const result = await checkAppendOnlyGuard(sql);
+      expect(result.status).toBe("armed");
+      expect(result.problems).toEqual([]);
+    } finally {
+      await sql`INSERT INTO schema_migrations (name) VALUES (${MEMBER_KEYS_MIGRATION})
+                ON CONFLICT (name) DO NOTHING`;
+      await sql.unsafe(
+        `CREATE TRIGGER ${names.statement} BEFORE DELETE OR TRUNCATE ON swarm_member_keys
+         FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard()`,
+      );
+      await sql.unsafe(
+        `CREATE TRIGGER ${names.row} BEFORE DELETE ON swarm_member_keys
+         FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard()`,
+      );
+      await sql.unsafe(`ALTER TABLE swarm_member_keys ENABLE ALWAYS TRIGGER ${names.statement}`);
+      await sql.unsafe(`ALTER TABLE swarm_member_keys ENABLE ALWAYS TRIGGER ${names.row}`);
     }
   });
 
