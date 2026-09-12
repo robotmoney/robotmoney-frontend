@@ -12,6 +12,7 @@
 // NOT in scope here (issue #537's "Out of scope"): the archive import pipeline,
 // storage and read paths (#498/#499 own those), the production live-roster
 // seed/prune contract (#529/#530 own that), and any database migration.
+import { ownsData, type DbMode } from "./smoke-db-mode.ts";
 import { personaIdentity } from "./swarm/persona-keys.ts";
 import { planAdoptions } from "./swarm/roster-plan.ts";
 import type { RosterMember } from "./swarm/session.ts";
@@ -169,6 +170,31 @@ export interface RosterAdoptionOpts {
    * realistic. Never true for a plain simulation boot.
    */
   seatAllActive: boolean;
+}
+
+/**
+ * Whether THIS boot may seat the full restored committee — the one place that
+ * decides it, so the claim can be asserted rather than read off a module body
+ * (the same reason resolveSmokeCadenceForBoot() exists).
+ *
+ * `ownsData()` is the load-bearing term. Seat-all makes adoptionFilter return
+ * `() => true`, which drops the three-persona allowlist AND the
+ * `personaIdentity()` check that issue #537 added, and enrollment then rebinds
+ * every seated member's key and mints a fresh token. `--static-port` is only a
+ * CLI flag — stagePreflight() checks nothing but that the port is free — so
+ * `--smoke --static-port --db external`, which printResumeHint() itself suggests,
+ * would have re-keyed every active member of a REAL restored server. `external`
+ * is the one mode this boot does not own and cannot throw away, so it never
+ * qualifies however the other flags are set.
+ */
+export function resolveSeatAllRestored(boot: {
+  smoke: boolean;
+  stage: boolean;
+  dataPath: { kind: DbMode };
+}): boolean {
+  if (!boot.smoke) return false;
+  if (!ownsData(boot.dataPath)) return false;
+  return boot.stage || boot.dataPath.kind === "smoke-twin";
 }
 
 /**

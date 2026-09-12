@@ -39,6 +39,7 @@ import {
   withMemberAbsent,
   bootstrapStepNames,
   isSmokeMode,
+  resolveSeatAllRestored,
   scenarioPlan,
 } from "./smoke-mode.ts";
 import { admissionDelayMs, decideAdmission } from "./swarm/roster-plan.ts";
@@ -221,7 +222,8 @@ try {
 // personas. Enrollment rotates each restored member's key (register rebinds by
 // member id) so every member can sign a real take. Gated to production-shaped
 // (--smoke) boots on the pinned tunnel port or the smoke-twin data path.
-const seatAllRestored = smokeMode && (staticPortMode || requestedDataPath.kind === "smoke-twin");
+// Reasoning in smoke-mode.ts, pin in roster-plan.test.ts: `--db external` never qualifies.
+const seatAllRestored = resolveSeatAllRestored({ smoke: smokeMode, stage: staticPortMode, dataPath: requestedDataPath });
 // Two DIFFERENT questions, and for a smoke-twin they disagree — see smoke-db-mode.ts.
 // Both read only the mode, so they are known before a smoke-twin has been restored.
 const composePostgres = usesComposePostgres(requestedDataPath);
@@ -1552,8 +1554,7 @@ async function main(): Promise<void> {
   //
   // Both scenarios reconnect database identities through one helper. It returns
   // a fresh array so a previous run can never contaminate this run's seats.
-  if (smokeMode && !seatAllRestored) log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
-  if (smokeMode && seatAllRestored) log("twin/stage mode: seating the FULL restored committee — enrollment rotates each member's key (see seatAllActive in smoke-mode.ts)");
+  if (smokeMode) log(seatAllRestored ? "twin/stage mode: seating the FULL restored committee — enrollment rotates each member's key (see seatAllActive in smoke-mode.ts)" : `smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
   const dbRoster = await e2e.rosterMembers(undefined, automationToken);
   if (dbRoster === null) {
     if (smokeMode) throw new Error("smoke initializer restored no readable IC roster");

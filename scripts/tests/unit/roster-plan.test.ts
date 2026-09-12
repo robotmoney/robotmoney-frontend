@@ -25,7 +25,7 @@ import {
 } from "../../lib/swarm/roster-plan.ts";
 import { NEWCOMER_NAMES } from "../../lib/smoke-newcomers.ts";
 import { personaIdentities, personaIdentity } from "../../lib/swarm/persona-keys.ts";
-import { SMOKE_MEMBERS, adoptRestoredRoster, adoptionFilter, scenarioPlan } from "../../lib/smoke-mode.ts";
+import { SMOKE_MEMBERS, adoptRestoredRoster, adoptionFilter, resolveSeatAllRestored, scenarioPlan } from "../../lib/smoke-mode.ts";
 import type { RosterMember } from "../../lib/swarm/session.ts";
 
 const row = (over: Partial<RosterRow> & { name: string }): RosterRow => ({
@@ -353,5 +353,38 @@ describe("seatAllActive — twin/stage seats the full restored committee", () =>
   test("the plain smoke path still seats exactly the three committed personas", () => {
     const seated = adoptRestoredRoster(scenarioPlan(true), RESTORED_FULL, []);
     expect(seated.map((m) => m.memberId).sort()).toEqual(["a1", "n1", "r1"]);
+  });
+});
+
+describe("resolveSeatAllRestored — which boots may re-key the committee", () => {
+  // Seat-all drops the persona allowlist AND issue #537's personaIdentity()
+  // check, then enrollment rebinds every seated member's key. So the gate is a
+  // safety boundary, not a convenience: it must key off the DATABASE this boot
+  // owns, never off the flags alone.
+  test("a smoke-twin boot qualifies — a disposable restored copy", () => {
+    expect(resolveSeatAllRestored({ smoke: true, stage: false, dataPath: { kind: "smoke-twin" } })).toBe(true);
+  });
+
+  test("a --stage boot on this boot's own ephemeral postgres qualifies", () => {
+    expect(resolveSeatAllRestored({ smoke: true, stage: true, dataPath: { kind: "ephemeral" } })).toBe(true);
+  });
+
+  test("--db external NEVER qualifies, even with --stage", () => {
+    // The regression this gate exists for: printResumeHint() suggests
+    // `--static-port --db external`, and --static-port is just a CLI flag that
+    // stagePreflight() never checks a database against. Re-keying every active
+    // member of a real restored server is not something a flag should buy.
+    expect(resolveSeatAllRestored({ smoke: true, stage: true, dataPath: { kind: "external" } })).toBe(false);
+    expect(resolveSeatAllRestored({ smoke: true, stage: false, dataPath: { kind: "external" } })).toBe(false);
+  });
+
+  test("a plain simulation boot never qualifies, whatever the database", () => {
+    for (const kind of ["ephemeral", "external", "smoke-twin"] as const) {
+      expect(resolveSeatAllRestored({ smoke: false, stage: true, dataPath: { kind } })).toBe(false);
+    }
+  });
+
+  test("an ordinary ephemeral smoke without --stage still seats only the three personas", () => {
+    expect(resolveSeatAllRestored({ smoke: true, stage: false, dataPath: { kind: "ephemeral" } })).toBe(false);
   });
 });
