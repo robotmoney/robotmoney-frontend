@@ -41,8 +41,20 @@ export const SAMPLER_KINDS = [
   "buybacks.refresh",
 ] as const;
 
+// The consensus judge's cadence job. Monitored because the D-A7 ruling makes a
+// judge that cannot be ASKED — no model on `swarm_judge_config`, or no funded
+// OPENCODE_API_KEY in the swarm lane — fail closed with a 503, which the worker
+// records as a degraded `swarm.judge` run. Without this entry that degradation
+// was invisible in the one place an operator looks: the exact shape of the
+// failure that let production publish template prose under the judge's name for
+// months (issue #969, AC-MODEL-01). `judge_disabled` is deliberately NOT this —
+// worker/handlers/swarm.ts translates the shipped `off` default into a clean
+// `succeeded` run precisely so a control working as designed raises nothing.
+export const JUDGE_KIND = "swarm.judge" as const;
+
 export const MONITORED_KINDS = [
   ...PRODUCTION_KINDS,
+  JUDGE_KIND,
   "projects.discover",
   "projects.refresh_coins",
   "projects.refresh_wallets",

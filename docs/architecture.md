@@ -1447,37 +1447,61 @@ Driver-created sessions have no such backlog: the driver enqueues the judging
 inside the run, so every session it starts from now on has one, and no session it
 started before has one no matter how long anyone waits.
 
-**Failure stops the judging (issue #969).** Model unconfigured
-(`model_unconfigured`), a session with no takes at all (`no_takes`), a session
-where **every** take is stance-only so there is no member-authored sentence to
-quote (`no_take_bodies`), request timed out (`model_timeout`), the transport
-refused (`model_unavailable:…`), an empty answer (`empty_response`), prose
-instead of JSON (`not_json`), JSON of the wrong shape (`malformed_json`,
-`not_an_object`, `missing_rationale`, `missing_disagreements`,
-`too_many_disagreements`, `malformed_disagreement`, `malformed_position`,
-`missing_release_safety`, `malformed_release`, `malformed_concerns`), more
-than `MAX_POSITIONS` = 20 positions inside one disagreement
-(`too_many_positions`), the same member named twice inside one disagreement
-(`duplicate_position:<id>`), a disagreement attributed to a member who did not
-submit (`unknown_member:<id>`), a weight-like field anywhere in the response
-(`weight_like_field:<path>`), **a
+**Failure stops the judging (issue #969, narrowed by D-A7).** A judge that was
+never ASKED fails closed; a model that WAS asked and misbehaved falls back
+deterministically. FAIL CLOSED — `JudgeUnavailableError`, no judgement row, no
+consensus receipt, and the caller's 503 lands as a degraded `swarm.judge` run
+that `admin/overview.ts` raises as an alert: no model on the judge config row
+(`model_unconfigured`), no OpenCode Zen credential in the process that must call
+it (`credential_unconfigured` — an absent or empty `OPENCODE_API_KEY`), **a
 malformed `SWARM_JUDGE_TIMEOUT_MS` in the environment**
-(`invalid_timeout_config:…`), and anything else thrown while parsing
-(`unparsable:…`) — each throws rather than producing an opinion.
-`JudgeNothingToJudgeError` carries the two that are not failures at all
-(`no_takes`, `no_take_bodies`): there is no outage and nothing to retry, the
-session simply holds no member-authored sentence for any judge to speak to.
-`JudgeUnavailableError` carries the rest. Either way NO judgement row is
-written, the session stays unjudged, and it publishes no consensus receipt.
-Every reason is capped at 120 characters — bounded inside the error
-constructors, so the two built out of the model's own text cannot escape it.
-No partially-trusted model response ever reaches a session.
+(`invalid_timeout_config:…`), and the three answers Zen gives when the
+CREDENTIAL rather than the model is the problem: an unfunded workspace, i.e. a
+`402` or any body naming credit/balance/quota (`credit_exhausted`), a revoked or
+wrong key, i.e. a `401`/`403` that does not complain about the model
+(`credential_rejected`), and an id this endpoint does not serve, e.g. the
+`opencode/`-prefixed selector Zen answers with `401 ModelError`
+(`model_not_supported`). The first three are CONFIGURATION: no model was called
+at all. The last three DID reach Zen, but none of them is a model that was
+reachable and misbehaved — they are an account or a deployment that cannot do
+the job it claims to do, and answering them with template prose is how an
+exhausted account manufactures a signed consensus receipt indistinguishable from
+a legitimate outage fallback (the QA plan's §4.1 ruling, and a stop condition).
+Substituting template prose for any of the six would be the forgery #969 was
+filed about — `credential_unconfigured` is verbatim the staging state
+AC-MODEL-01 exists to forbid, a keyless free-family model with an empty key
+degrading silently instead of refusing, and `credit_exhausted` is its funded
+twin: a key that authenticates and has no money behind it. DETERMINISTIC
+FALLBACK — a fallback-sourced judgement with a bounded reason, weights
+untouched, provenance visible (AC-FE-05): request timed out (`model_timeout`),
+the transport refused for a reason that is NOT credit, credential or model id —
+a 5xx, a network error, an unreadable answer (`model_unavailable:…`), an empty answer
+(`empty_response`), prose instead of JSON (`not_json`), JSON of the wrong shape
+(`malformed_json`, `not_an_object`, `missing_rationale`,
+`missing_disagreements`, `too_many_disagreements`, `malformed_disagreement`,
+`malformed_position`, `missing_release_safety`, `malformed_release`,
+`malformed_concerns`), more than `MAX_POSITIONS` = 20 positions inside one
+disagreement (`too_many_positions`), the same member named twice inside one
+disagreement (`duplicate_position:<id>`), a disagreement attributed to a member
+who did not submit (`unknown_member:<id>`), a weight-like field anywhere in the
+response (`weight_like_field:<path>`), and anything else thrown while parsing
+(`unparsable:…`) — each discards the response WHOLE, never stripped and never
+merged, and the aggregator's own prose producers supply the opinion. NOT A
+FAILURE AT ALL — `JudgeNothingToJudgeError` carries a session with no takes
+(`no_takes`) and one where **every** take is stance-only so there is no
+member-authored sentence to quote (`no_take_bodies`): no outage, nothing to
+retry, no judgement row. Every reason is capped at 120 characters — bounded
+inside the error constructors and inside `fallbackOutcome()`, so the ones built
+out of the model's own text cannot escape it. No partially-trusted model
+response ever reaches a session.
 
-**This REPLACED the original contract, which was the opposite.** Until #969
-every one of those paths fell back to the same template producers the
+**This NARROWED the original contract, which applied one rule to both classes.**
+Until #969 every one of those paths fell back to the same template producers the
 aggregator uses (`buildRationale`, `buildDisagreements`), recorded a
 `source: 'fallback'` reason, and let the session carry on — bought so that a
-live cadence could never be blocked on the judge. The cost was not visible
+live cadence could never be blocked on the judge. #969 then swung the other way
+and refused ALL of them, which cost the fallback AC-FE-05 requires. D-A7 keeps
+the fallback for the runtime class and the refusal for the configuration class. The cost was not visible
 until it was: a fallback opinion travelled the ordinary write path, so it
 reached the same row, the same `judged` transition and the same **signed**
 consensus receipt as a real one, attributed to the judge. Nothing downstream
@@ -1489,9 +1513,11 @@ and recoverable, instead of publishing signed attestations of prose no judge
 authored, which is neither.
 
 `source = 'fallback'` survives in the `swarm_session_judgements` CHECK and in
-the receipt schema, and only there: the table is append-only, the pre-#969 rows
-are real history, and some of them are embedded in receipts already signed and
-served. Nothing writes a new one. Migration
+the receipt schema, and under D-A7 it is written again — but only for the
+runtime class, where a model really was called and really did misbehave. The
+table is append-only, so the pre-#969 rows stay readable and some of them remain
+embedded in receipts already signed and served; what can no longer produce one
+is a configuration gap. Migration
 `0056_swarm_judge_requires_model.sql` closes the state that produced them —
 `shadow`/`enforce` now require a model in the schema and in `setJudgeConfig()`,
 and the migration switches an already-misconfigured judge **off** on deploy

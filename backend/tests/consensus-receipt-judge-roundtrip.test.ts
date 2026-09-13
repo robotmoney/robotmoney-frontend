@@ -35,7 +35,7 @@ import {
 } from "@robotmoney/contract";
 import {
   judge, JudgeUnavailableError, parseJudgeResponse, templateOpinion,
-  type JudgeInput, type JudgeOpinion, type JudgeOutcome, type JudgeTransport, type ModelJudgeOutcome,
+  type JudgeInput, type JudgeOpinion, type JudgeOutcome, type JudgeTransport,
 } from "../src/swarm/judge.ts";
 
 const FIXTURES = join(import.meta.dir, "../../contract/src/__fixtures__");
@@ -167,11 +167,11 @@ test("the two lower bounds coincide: zero positions is refused by the parser AND
 // receipt — which is precisely the defect: a receipt is a signed attestation,
 // and one carrying template prose under the judge's name attests to a judging
 // that never happened. There is now exactly one source a new receipt can carry.
-test("the model path round-trips into an anchorable receipt, and a refusal yields nothing to anchor", async () => {
+test("model and runtime-fallback opinions both round-trip; a misconfigured judge yields nothing to anchor", async () => {
   // The MODEL path, through the shipped orchestration rather than the parser
   // alone: a transport that returns the one-position answer.
   const transport: JudgeTransport = { model: "test-model", complete: async () => ONE_POSITION_ANSWER };
-  const modelOutcome: ModelJudgeOutcome = await judge(input, { transport, timeoutMs: 5_000 });
+  const modelOutcome = await judge(input, { transport, timeoutMs: 5_000 });
   expect(modelOutcome.source).toBe("model");
   expect(modelOutcome.opinion.disagreements[0].positions).toHaveLength(1);
 
@@ -180,10 +180,26 @@ test("the model path round-trips into an anchorable receipt, and a refusal yield
   expect(receipt.judge.source).toBe("model");
   expect(canonicalizeReceipt(receipt, spec)).toContain('"source":"model"');
 
-  // THE REFUSAL PATH PRODUCES NO OPINION AT ALL. There is nothing to assemble,
-  // which is the point: a session the judge could not speak to publishes no
-  // consensus receipt rather than publishing one nobody authored.
-  await expect(judge(input, { transport: null })).rejects.toThrow(JudgeUnavailableError);
+  // THE RUNTIME-FAILURE PATH still produces an anchorable receipt (AC-FE-05):
+  // a model WAS called and timed out / answered unusably, the deterministic
+  // producers supply the prose, and the provenance says `fallback` in the
+  // canonical bytes so nothing downstream can mistake it for model authorship.
+  const brokenTransport: JudgeTransport = {
+    model: "test-model",
+    complete: async () => { throw new Error("connect ECONNREFUSED"); },
+  };
+  const fallbackOutcome = await judge(input, { transport: brokenTransport, timeoutMs: 5_000 });
+  expect(fallbackOutcome.source).toBe("fallback");
+  expect(fallbackOutcome.fallbackReason).toStartWith("model_unavailable:");
+  const fallbackReceipt = assembleReceipt(fallbackOutcome.opinion, fallbackOutcome.source);
+  assertAnchorable(fallbackReceipt);
+  expect(canonicalizeReceipt(fallbackReceipt, spec)).toContain('"source":"fallback"');
+
+  // THE MISCONFIGURATION PATH PRODUCES NO OPINION AT ALL (D-A7 / AC-MODEL-01).
+  // There is nothing to assemble, which is the point: a deployment that was
+  // never given a model or a credential publishes no consensus receipt rather
+  // than publishing one nobody authored.
+  await expect(judge(input, { transport: null, model: null })).rejects.toThrow(JudgeUnavailableError);
 });
 
 // …but a receipt WRITTEN BEFORE #969 must still read and validate. Those rows
