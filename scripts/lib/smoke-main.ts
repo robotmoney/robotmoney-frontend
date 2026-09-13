@@ -30,6 +30,7 @@ import {
   type OnboardingIdentity,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
+import { preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
 import { startProspectTranscript } from "./smoke-prospect-transcript.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./smoke-newcomers.ts";
 import {
@@ -374,11 +375,10 @@ const analyticsToken = credentials.analyticsToken;
 // A typo or missing funded model key must not leak a temp credential directory
 // for a stack that never reached creation.
 const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile });
-const analyticsTokenFile = provisionSmokeAnalyticsTokenAfterPreflight(project, analyticsToken, () => {
-  if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
-    resolveModelConfig(process.env);
-  }
-});
+// Model + credential before anything is provisioned (AC-MODEL-01) — what the standing stack refuses, and why: scripts/lib/smoke-inference-preflight.ts.
+const inferenceComposeEnv: Record<string, string> = {}; // filled by the preflight; buildSpawnEnv() drops process.env
+const analyticsTokenFile = provisionSmokeAnalyticsTokenAfterPreflight(project, analyticsToken, () =>
+  Object.assign(inferenceComposeEnv, preflightInferenceOrExit({ standingStack: staticPortMode, repoRoot, env: process.env })));
 credentials.analyticsTokenFile = analyticsTokenFile;
 process.env.ANALYTICS_TOKEN_FILE_HOST = analyticsTokenFile;
 delete process.env.ANALYTICS_TOKEN;
@@ -472,7 +472,7 @@ const smokeStackConfig: StackConfig = {
   database,
   credentials,
   environment: stackEnvironment,
-  extraComposeEnv: { ...smokeEnv.composeEnv, ...smokePassthroughEnv(process.env) },
+  extraComposeEnv: { ...smokeEnv.composeEnv, ...smokePassthroughEnv(process.env), ...inferenceComposeEnv },
 };
 
 // --- TUI + logging gating -------------------------------------------------
@@ -1200,7 +1200,7 @@ async function main(): Promise<void> {
       composeFiles: composeFilesRun.split(":"),
       composeSpawnEnv: stack.spawnEnv,
       backendUrl,
-      modelConfig: resolveModelConfig(process.env),
+      modelConfig: resolveModelConfig(process.env, { standingStack: staticPortMode }),
       onboardedHomes: new Map<string, OnboardedMemberHome>(),
       automationToken,
     };
@@ -1592,7 +1592,7 @@ async function main(): Promise<void> {
   // imported same-process swarm driver has no setup-token fallback.
   const sessionRail = {
     ...producerRail,
-    modelConfig: resolveModelConfig(process.env),
+    modelConfig: resolveModelConfig(process.env, { standingStack: staticPortMode }),
     onboardedHomes,
     automationToken,
   };
@@ -1783,7 +1783,7 @@ async function main(): Promise<void> {
         repoRoot,
         composeProject: project,
         identity,
-        model: resolveModelConfig(process.env).model,
+        model: resolveModelConfig(process.env, { standingStack: staticPortMode }).model,
       });
       log(`onboarding ${identity.name} transcript: ${transcript.directory} (tail -f ${join(transcript.directory, "events.ndjson")} while in progress)`);
       try {
