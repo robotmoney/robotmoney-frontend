@@ -152,6 +152,12 @@ export function railFromEnv(env: Record<string, string | undefined> = process.en
     composeProject,
     composeFiles: env.COMPOSE_FILE ? env.COMPOSE_FILE.split(":") : [...DEFAULT_COMPOSE_FILES],
     composeSpawnEnv,
+    // No `standingStack` flag to pass here: this entry point is a CHILD PROCESS
+    // handed the stack's compose env, and knows nothing about the `--static-port`
+    // boot that started it. Its acceptance rule therefore comes from `RM_ENV`
+    // alone — staging runs `RM_ENV=prod` by rule (docs/technical/stack-orchestrator.md
+    // §16), which is what makes resolveModelConfig() refuse a keyless model and
+    // a raw-id override for the member containers it launches (AC-MODEL-01).
     modelConfig: resolveModelConfig(env),
     // This is the ONE place agent.ts reads AUTOMATION_TOKEN from
     // an environment object rather than taking it as an explicit argument —

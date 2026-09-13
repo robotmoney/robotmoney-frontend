@@ -164,7 +164,58 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
     expect(rail.composeFiles).toEqual(["docker-compose.yml", "docker-compose.smoke.yml"]);
     expect("UNDEF" in rail.composeSpawnEnv).toBe(false);
     expect(rail.automationToken).toBe("automation-token");
-    // Keyless selection resolves with no credential.
+    // Keyless selection resolves with no credential — DEVELOPMENT only. This is
+    // the contrast case for the two refusals below: it is legal here precisely
+    // because nothing about this environment claims its output is evidence.
+    expect(rail.modelConfig.apiKeyEnv).toBeNull();
+  });
+
+  // AC-MODEL-01's analyst/proposer half rested on ONE untested line —
+  // scripts/lib/swarm/agent.ts's `modelConfig: resolveModelConfig(env)` — whose
+  // comment claims it "is what makes resolveModelConfig() refuse a keyless model
+  // and a raw-id override for the member containers it launches". The only
+  // railFromEnv model assertion in the repo was the keyless case ABOVE, i.e. the
+  // opposite claim, so a regression that stopped the member containers refusing
+  // a free-family model would have gone entirely unnoticed. These two turn the
+  // comment into a fact the suite defends.
+  //
+  // RM_ENV IS THE SIGNAL HERE, and deliberately the only one: railFromEnv() is a
+  // child process handed the stack's compose env and cannot see the
+  // `--static-port` standing-stack flag. Staging runs RM_ENV=prod (there is no
+  // "staging" value — backend/src/config.ts refuses one), so the boundary these
+  // pin is exactly the one checklist step 1.10 asserts on the host.
+  test("an acceptance path REFUSES a keyless/free-family model", () => {
+    expect(() => railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "free", RM_ENV: "prod" }))
+      .toThrow(/disqualified for acceptance/i);
+    expect(() => railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "free/nemotron-3-ultra", RM_ENV: "prod" }))
+      .toThrow(/disqualified for acceptance/i);
+  });
+
+  test("an acceptance path with the pinned model and NO credential fails closed", () => {
+    expect(() => railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "deepseek", RM_ENV: "prod" }))
+      .toThrow(/OPENCODE_API_KEY/);
+    // The control: the same selection WITH a credential resolves, and resolves
+    // to the pinned paid id rather than substituting anything.
+    const rail = railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "deepseek", RM_ENV: "prod", OPENCODE_API_KEY: "sk-not-real" });
+    expect(rail.modelConfig.model).toBe("opencode/deepseek-v4-flash");
+    expect(rail.modelConfig.apiKeyEnv).toBe("OPENCODE_API_KEY");
+  });
+
+  test("a raw opencode/<id> override is refused on an acceptance path (D22 rule 1)", () => {
+    expect(() => railFromEnv({
+      SMOKE_PROJECT: "p", AGENT_MODEL: "opencode/deepseek-v4-flash", RM_ENV: "prod", OPENCODE_API_KEY: "sk-not-real",
+    })).toThrow();
+  });
+
+  // RM_ENV=smoke is what rm-frontend-stage-1 carried on 2026-09-13 (checklist
+  // §3), so this records the boundary rather than leaving it to be rediscovered:
+  // until step 1.10 changes RM_ENV on that host, a STANDALONE
+  // `bun run scripts/lib/swarm/session.ts` against it still accepts a keyless
+  // model. The stack's own `smoke:stage` boot does not — it refuses before any
+  // container starts (scripts/lib/smoke-inference-preflight.ts).
+  test("RM_ENV=smoke is a development path — the boundary step 1.10 closes", () => {
+    const rail = railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "free", RM_ENV: "smoke" });
+    expect(rail.modelConfig.model).toBe("opencode/nemotron-3-ultra-free");
     expect(rail.modelConfig.apiKeyEnv).toBeNull();
   });
 });
