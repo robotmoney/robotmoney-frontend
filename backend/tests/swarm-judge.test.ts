@@ -25,7 +25,7 @@
 // when a key is absent: the unit under test is the judge's orchestration —
 // what it accepts, what it refuses, what it falls back to — which is exactly
 // the part that must be correct when the model is at its worst.
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as ic from "../src/swarm/domain.ts";
@@ -39,7 +39,8 @@ import { processOneJob } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
-  DIGEST_SCHEME, inputsDigest, JUDGE_PROMPT_HASH, judge, parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
+  DIGEST_SCHEME, inputsDigest, JUDGE_PROMPT_HASH, judge, JudgeNothingToJudgeError, JudgeUnavailableError,
+  parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
   resolveJudgeTransport, templateOpinion, UNTRUSTED_INPUTS_BEGIN, UNTRUSTED_INPUTS_END,
   type JudgeInput, type JudgeTransport,
 } from "../src/swarm/judge.ts";
@@ -125,6 +126,59 @@ function goodAnswer(memberId: string, otherId: string, release: "safe" | "hold" 
     release_safety: { release, concerns: release === "hold" ? ["one dissent unresolved"] : [] },
   });
 }
+
+/**
+ * A REAL judge endpoint, served locally (issue #969).
+ *
+ * WHY THIS EXISTS NOW AND DID NOT BEFORE. Until #969 the whole queue- and
+ * admin-driven half of this file leaned on `swarm_judge_config.model` being
+ * NULL: with no model there was no transport, judge() fell back to template
+ * prose, and the tests got a deterministic result with no network. That is the
+ * exact production defect those tests were unknowingly modelling — a judging
+ * that never happened, recorded as one. The judge now REFUSES without a model,
+ * so a test that drives it through the job queue (where no transport can be
+ * injected) has to give it something real to talk to.
+ *
+ * It answers every prompt with a valid, member-independent opinion: an empty
+ * `disagreements` array is legal and needs no knowledge of the take set.
+ */
+const STUB_JUDGE_ANSWER = JSON.stringify({
+  rationale: "The submitted takes converge; this is the local stub judge's opinion.",
+  disagreements: [],
+  release_safety: { release: "safe", concerns: [] },
+});
+
+let judgeStub: ReturnType<typeof Bun.serve> | null = null;
+let savedJudgeEnv: { baseUrl?: string; apiKey?: string } = {};
+
+/** Model id the stub answers for. Every test that turns the judge ON uses it. */
+const STUB_JUDGE_MODEL = "test/judge-model";
+
+beforeAll(() => {
+  judgeStub = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      // The transport posts OpenAI-shaped chat completions; answer in kind.
+      if (!new URL(req.url).pathname.endsWith("/chat/completions")) {
+        return new Response("not found", { status: 404 });
+      }
+      return Response.json({ choices: [{ message: { content: STUB_JUDGE_ANSWER } }] });
+    },
+  });
+  savedJudgeEnv = { baseUrl: process.env.SWARM_JUDGE_BASE_URL, apiKey: process.env.OPENCODE_API_KEY };
+  process.env.SWARM_JUDGE_BASE_URL = `http://127.0.0.1:${judgeStub.port}`;
+  // resolveJudgeTransport() needs BOTH a credential and a model; the stub
+  // never checks the key, but its absence is one of the refusals under test.
+  process.env.OPENCODE_API_KEY = "test-key-not-a-real-credential";
+});
+
+afterAll(() => {
+  judgeStub?.stop(true);
+  if (savedJudgeEnv.baseUrl === undefined) delete process.env.SWARM_JUDGE_BASE_URL;
+  else process.env.SWARM_JUDGE_BASE_URL = savedJudgeEnv.baseUrl;
+  if (savedJudgeEnv.apiKey === undefined) delete process.env.OPENCODE_API_KEY;
+  else process.env.OPENCODE_API_KEY = savedJudgeEnv.apiKey;
+});
 
 const W = [{ bucket: "agent_tokens", weight: 2 }, { bucket: "protocol", weight: 1 }];
 
@@ -220,7 +274,7 @@ test("turning the judge on and off again is a RUNTIME change: no restart, and of
   const { session, members } = await aggregatedSession("judge-toggle");
   const before = await recOf(session.id);
 
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   expect((await getJudgeConfig()).mode).toBe("enforce");
   const on = await judgeSession(session.id, {
     transport: fixedTransport(goodAnswer(members[0].id, members[1].id)),
@@ -245,7 +299,7 @@ test("turning the judge on and off again is a RUNTIME change: no restart, and of
 test("shadow mode records an opinion and changes NOTHING about the session", async () => {
   const { session, members } = await aggregatedSession("judge-shadow");
   const before = await recOf(session.id);
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
 
   const result = await judgeSession(session.id, {
     transport: fixedTransport(goodAnswer(members[0].id, members[1].id)),
@@ -271,7 +325,7 @@ test("a model response carrying a weight-like field is REJECTED WHOLE, not strip
   const { session, members } = await aggregatedSession("judge-weights");
   const before = await recOf(session.id);
   expect(Array.isArray(before.weights)).toBe(true);
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   const smuggled = JSON.stringify({
     rationale: "Rotate into agent tokens.",
@@ -281,9 +335,9 @@ test("a model response carrying a weight-like field is REJECTED WHOLE, not strip
     weights: [{ bucket: "agent_tokens", weight: 0.99 }, { bucket: "protocol", weight: 0.01 }],
   });
   const result = await judgeSession(session.id, { transport: fixedTransport(smuggled) });
-  expect(result.ok).toBe(true);
-  expect(result.outcome!.source).toBe("fallback");
-  expect(result.outcome!.fallbackReason).toBe("weight_like_field:weights");
+    expect(result.ok).toBe(false);
+  expect(result.error).toBe("judge_unavailable");
+  expect(result.judgeUnavailableReason).toBe("weight_like_field:weights");
 
   const after = await recOf(session.id);
   // The vector did not move…
@@ -292,14 +346,16 @@ test("a model response carrying a weight-like field is REJECTED WHOLE, not strip
   expect(JSON.stringify(after)).not.toContain("Rotate into agent tokens");
   expect(after.rationale).toBe(before.rationale);
   // The refusal is on file with its reason, so a smuggling model is visible.
-  expect((await latestJudgement(session.id) as any).fallback_reason).toBe("weight_like_field:weights");
+  // A REFUSAL WRITES NOTHING (issue #969). This used to read a `fallback_reason`
+  // off a judgement row that was indistinguishable from a real judging.
+  expect(await latestJudgement(session.id)).toBeNull();
 
   expect(members.length).toBeGreaterThan(0);
 });
 
 test("a nested weight-like field is caught too — the scan is not top-level only", async () => {
   const { session } = await aggregatedSession("judge-weights-nested");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   const nested = JSON.stringify({
     rationale: "fine",
     disagreements: [{
@@ -309,14 +365,15 @@ test("a nested weight-like field is caught too — the scan is not top-level onl
     release_safety: { release: "safe", concerns: [] },
   });
   const result = await judgeSession(session.id, { transport: fixedTransport(nested) });
-  expect(result.outcome!.source).toBe("fallback");
-  expect(result.outcome!.fallbackReason).toBe("weight_like_field:disagreements.0.positions.0.allocation");
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("judge_unavailable");
+  expect(result.judgeUnavailableReason).toBe("weight_like_field:disagreements.0.positions.0.allocation");
 });
 
 test("judging never moves a weight vector, whether the model answers well, badly, or not at all", async () => {
   const { session, members } = await aggregatedSession("judge-vector");
   const before = JSON.stringify((await recOf(session.id)).weights);
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   for (const transport of [
     fixedTransport(goodAnswer(members[0].id, members[1].id)),
@@ -331,23 +388,27 @@ test("judging never moves a weight vector, whether the model answers well, badly
 
 // ── 4. Failure is an outcome, never an error ────────────────────────────────
 
-test("a model that times out falls back to template prose and does not fail the session", async () => {
+test("a model that times out STOPS the judging — the session keeps the aggregator's prose, unjudged", async () => {
   const { session } = await aggregatedSession("judge-timeout");
   const templateRationale = (await recOf(session.id)).rationale;
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   const result = await judgeSession(session.id, { transport: hangingTransport(), timeoutMs: 25 });
-  expect(result.ok).toBe(true);
-  expect(result.outcome!.source).toBe("fallback");
-  expect(result.outcome!.fallbackReason).toBe("model_timeout");
-  // The template producers, not an approximation of them.
-  expect(result.outcome!.opinion.rationale).toBe(templateRationale);
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("judge_unavailable");
+  expect(result.judgeUnavailableReason).toBe("model_timeout");
+  // The session is untouched: it still carries the AGGREGATOR's rationale,
+  // which it had before the judge was ever asked. That is the same string the
+  // old fallback would have written — the difference is that nothing now
+  // records it as a judge's opinion, and no judgement row claims one was formed.
   expect((await recOf(session.id)).rationale).toBe(templateRationale);
+  expect(await latestJudgement(session.id)).toBeNull();
+  expect(await stateOf(session.id)).toBe("aggregated");
 });
 
-test("malformed and unusable model output each fall back, each with a reason that names the failure", async () => {
+test("malformed and unusable model output each REFUSE, each with a reason that names the failure", async () => {
   const { session, members } = await aggregatedSession("judge-malformed");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   const cases: [string, string][] = [
     ["", "empty_response"],
     ["I would rather not answer.", "not_json"],
@@ -361,22 +422,26 @@ test("malformed and unusable model output each fall back, each with a reason tha
   ];
   for (const [raw, reason] of cases) {
     const result = await judgeSession(session.id, { transport: fixedTransport(raw) });
-    expect(result.ok, `${reason}: judging must still succeed`).toBe(true);
-    expect(result.outcome!.source, `case ${reason}`).toBe("fallback");
-    expect(result.outcome!.fallbackReason, `case ${reason}`).toBe(reason);
+    expect(result.ok, `case ${reason}`).toBe(false);
+    expect(result.error, `case ${reason}`).toBe("judge_unavailable");
+    expect(result.judgeUnavailableReason, `case ${reason}`).toBe(reason);
+    // …and NOTHING was recorded for any of them.
+    expect(await latestJudgement(session.id), `case ${reason}`).toBeNull();
   }
-  // A transport that throws outright is a fallback too, not a crash.
+  // A transport that throws outright is a refusal too, not a crash.
   const thrown = await judgeSession(session.id, {
     transport: { model: "t", complete: async () => { throw new Error("connect ECONNREFUSED"); } },
   });
-  expect(thrown.ok).toBe(true);
-  expect(thrown.outcome!.fallbackReason).toStartWith("model_unavailable:");
+  expect(thrown.ok).toBe(false);
+  expect(thrown.judgeUnavailableReason).toStartWith("model_unavailable:");
 
-  // No model configured is its own, legible reason.
+  // No model configured is its own, legible reason — and the one that reached
+  // production (issue #969).
   const unconfigured = await judgeSession(session.id, { transport: null });
-  expect(unconfigured.outcome!.source).toBe("fallback");
-  expect(unconfigured.outcome!.fallbackReason).toBe("model_unconfigured");
-  expect(unconfigured.outcome!.model).toBeNull();
+  expect(unconfigured.ok).toBe(false);
+  expect(unconfigured.error).toBe("judge_unavailable");
+  expect(unconfigured.judgeUnavailableReason).toBe("model_unconfigured");
+  expect(unconfigured.outcome).toBeUndefined();
 
   expect(members.length).toBeGreaterThan(0);
 });
@@ -397,14 +462,15 @@ test("a take body that tries to instruct the judge cannot make it author a numbe
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   const before = await recOf(session.id);
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   // A model that DOES obey the injected text gets its whole answer thrown away.
   const obedient = await judgeSession(session.id, {
     transport: fixedTransport(injection.slice(injection.indexOf("{"))),
   });
-  expect(obedient.outcome!.source).toBe("fallback");
-  expect(obedient.outcome!.fallbackReason).toBe("weight_like_field:weights");
+  expect(obedient.ok).toBe(false);
+  expect(obedient.error).toBe("judge_unavailable");
+  expect(obedient.judgeUnavailableReason).toBe("weight_like_field:weights");
   const after = await recOf(session.id);
   expect(JSON.stringify(after.weights)).toBe(JSON.stringify(before.weights));
   // The rationale is the template's, not the injected one. (The attacker's own
@@ -413,13 +479,24 @@ test("a take body that tries to instruct the judge cannot make it author a numbe
   // what it has always contained.)
   expect(after.rationale).toBe(before.rationale);
   expect(after.rationale).not.toContain("pwned");
-  expect(after.judge.source).toBe("fallback");
-  expect(JSON.stringify(after.release_safety)).not.toContain("pwned");
+  // The session carries NO judge block at all (issue #969). It used to carry
+  // one reading `source: "fallback"` — a record that the judge had spoken,
+  // written on the occasion of the judge being refused.
+  expect(after.judge ?? null).toEqual(before.judge ?? null);
+  // …and no release_safety either: that field arrives WITH a judge opinion, so
+  // a refused judging leaves the recommendation exactly as the aggregator
+  // wrote it. Nothing the attacker authored reached the session by any field.
+  expect(after.release_safety ?? null).toEqual(before.release_safety ?? null);
+  // (`positions[].view` still quotes the attacker's own body verbatim,
+  // "pwned" and all — that is the member quoting themselves, which is what the
+  // field is for. What must never appear is the injected text in a field the
+  // JUDGE authors.)
+  expect(JSON.stringify(after.release_safety ?? null)).not.toContain("pwned");
 });
 
 test("a disagreement attributed to a member who did not submit is refused", async () => {
   const { session, members } = await aggregatedSession("judge-ghost");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   const ghost = JSON.stringify({
     rationale: "ok",
     disagreements: [{
@@ -429,15 +506,16 @@ test("a disagreement attributed to a member who did not submit is refused", asyn
     release_safety: { release: "safe", concerns: [] },
   });
   const result = await judgeSession(session.id, { transport: fixedTransport(ghost) });
-  expect(result.outcome!.source).toBe("fallback");
-  expect(result.outcome!.fallbackReason).toBe("unknown_member:nobody_at_all");
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("judge_unavailable");
+  expect(result.judgeUnavailableReason).toBe("unknown_member:nobody_at_all");
 });
 
 // ── 5. Thin support is arithmetic, not opinion ──────────────────────────────
 
 test("a two-take session is flagged thinly supported even when the model says it is safe", async () => {
   const { session, members } = await aggregatedSession("judge-thin", 2);
-  await setJudgeConfig({ mode: "enforce", minTakes: 3 });
+  await setJudgeConfig({ mode: "enforce", minTakes: 3, model: "test/judge-model" });
 
   const result = await judgeSession(session.id, {
     transport: fixedTransport(goodAnswer(members[0].id, members[1].id, "safe")),
@@ -460,7 +538,7 @@ test("a two-take session is flagged thinly supported even when the model says it
 
 test("a session at the threshold is not flagged, and the threshold is settable at runtime", async () => {
   const { session, members } = await aggregatedSession("judge-thin-boundary", 3);
-  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+  await setJudgeConfig({ mode: "shadow", minTakes: 3, model: "test/judge-model" });
   const ok = await judgeSession(session.id, { transport: fixedTransport(goodAnswer(members[0].id, members[1].id)) });
   expect(ok.outcome!.opinion.release_safety.thinly_supported).toBe(false);
   expect(ok.outcome!.opinion.release_safety.release).toBe("safe");
@@ -474,7 +552,7 @@ test("a session at the threshold is not flagged, and the threshold is settable a
 
 test("promptHash pins the instructions and inputsDigest pins exactly the takes and brief consumed", async () => {
   const { session, subj, members, date } = await aggregatedSession("judge-digest");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   const result = await judgeSession(session.id, { transport: fixedTransport(goodAnswer(members[0].id, members[1].id)) });
 
   const input = (await buildJudgeInput(session.id, 3))!;
@@ -641,7 +719,7 @@ test("a position_actions session emits NO hardcoded actions — the literals can
     expect(payload, `the ${literal} literal must not reach a recommendation`).not.toContain(literal);
   }
   // …and judging one does not reintroduce them.
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   await judgeSession(s.id, { transport: fixedTransport(goodAnswer(a.id, b.id)) });
   expect(JSON.stringify(await recOf(s.id))).not.toContain("rmUSDC");
 });
@@ -650,7 +728,7 @@ test("a position_actions session emits NO hardcoded actions — the literals can
 
 test("aggregated → judged → published, with aggregated → published still legal and judged not terminal", async () => {
   const { session, members } = await aggregatedSession("judge-states");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   const judged = await admin.judgeSessionAdmin(session.id, undefined);
   expect(judged.ok).toBe(true);
@@ -682,7 +760,7 @@ test("judging is refused from a state that has not aggregated yet", async () => 
   const { subj, session, date } = await weightedSession("judge-too-early");
   const m = await activeMember();
   await submit(m, date, subj, { weights: W });
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   const tooEarly = await admin.judgeSessionAdmin(session.id, undefined);
   expect(tooEarly.ok).toBe(false);
   expect(tooEarly.status).toBe(409);
@@ -710,7 +788,7 @@ test("replaying published sessions through the judge leaves every weight vector 
     await admin.publishSessionAdmin(id, undefined);
   }
 
-  await setJudgeConfig({ mode: "enforce", minTakes: 3 });
+  await setJudgeConfig({ mode: "enforce", minTakes: 3, model: "test/judge-model" });
   const recent = await recentJudgeableSessions(10);
   expect(recent).toContain(full.session.id);
   expect(recent).toContain(messy.session.id);
@@ -737,12 +815,22 @@ test("replaying published sessions through the judge leaves every weight vector 
 
 test("replay reports thin quorum and absence rather than choking on them", async () => {
   const thin = await aggregatedSession("replay-reports", 1);
-  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
-  const replay = (await replaySessionJudge(thin.session.id, { transport: null }))!;
+  await setJudgeConfig({ mode: "shadow", minTakes: 3, model: "test/judge-model" });
+  const replay = (await replaySessionJudge(thin.session.id, { transport: fixedTransport(STUB_JUDGE_ANSWER) }))!;
   expect(replay.takeCount).toBe(1);
-  expect(replay.outcome.opinion.release_safety.thinly_supported).toBe(true);
-  expect(replay.outcome.source).toBe("fallback");
-  expect(replay.outcome.fallbackReason).toBe("model_unconfigured");
+  expect(replay.outcome!.opinion.release_safety.thinly_supported).toBe(true);
+  expect(replay.judgeRefusal).toBeNull();
+
+  // AND THE REFUSAL IS AN OBSERVATION, NOT A CRASH (issue #969). An auditor
+  // pointed at production has no judge model of its own, so every replay it
+  // runs refuses — the tool must still report the session's takes, verdicts
+  // and digests, because none of those needed an opinion in the first place.
+  const refused = (await replaySessionJudge(thin.session.id, { transport: null }))!;
+  expect(refused.outcome).toBeNull();
+  expect(refused.judgeRefusal).toBe("model_unconfigured");
+  expect(refused.takeCount).toBe(1);
+  expect(refused.judgeWroteNothing, "a refusal writes nothing, just as emphatically").toBe(true);
+
   expect(await replaySessionJudge("00000000-0000-0000-0000-000000000000")).toBeNull();
 });
 
@@ -773,24 +861,60 @@ test("parseJudgeResponse accepts a fenced answer and refuses an over-long or emp
   expect(() => parseJudgeResponse(blank, input)).toThrow("missing_rationale");
 });
 
-test("judge() never throws, whatever the transport does", async () => {
+// ISSUE #969 INVERTED THIS TEST, and the inversion is the point. It used to be
+// "judge() never throws, whatever the transport does" — every failure became a
+// `source: "fallback"` outcome carrying template prose, which then travelled
+// the ordinary write path into a session and a SIGNED consensus receipt. The
+// old assertions are kept here as the exact behaviour that must no longer be
+// possible: a judge that cannot reach a model, or cannot trust what it got
+// back, REFUSES. It does not author prose and sign the judge's name to it.
+test("judge() refuses rather than fabricating when it cannot reach a trustworthy model", async () => {
   const input: JudgeInput = {
     sessionId: "s", date: "2026-08-27", subjectId: "subj", subjectLabel: "Subj",
     brief: null, minTakes: 1, byStance: {}, meanConfidence: null, regimeSummary: null,
     takes: [{ member_id: "m1", member_name: null, revision: 1, stance: "bullish", confidence: 0.6, body: "b" }],
   };
-  for (const transport of [
-    null,
-    { model: "t", complete: async () => { throw new Error("boom"); } } as JudgeTransport,
-    { model: "t", complete: async () => "not json" } as JudgeTransport,
-  ]) {
-    const outcome = await judge(input, { transport, timeoutMs: 50 });
-    expect(outcome.source).toBe("fallback");
-    expect(typeof outcome.fallbackReason).toBe("string");
+  const cases: { transport: JudgeTransport | null; reason: string }[] = [
+    { transport: null, reason: "model_unconfigured" },
+    { transport: { model: "t", complete: async () => { throw new Error("boom"); } }, reason: "model_unavailable" },
+    // A JudgeResponseError's own reason survives onto the refusal — "not_json",
+    // not a generic `unparsable:`; the parser's vocabulary is the operator's.
+    { transport: { model: "t", complete: async () => "not json" }, reason: "not_json" },
+  ];
+  for (const { transport, reason } of cases) {
+    let thrown: unknown;
+    try {
+      await judge(input, { transport, timeoutMs: 50 });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(JudgeUnavailableError);
+    expect((thrown as JudgeUnavailableError).reason.startsWith(reason)).toBe(true);
   }
-  // An empty take set is not worth a model call.
-  const empty = await judge({ ...input, takes: [] }, { transport: fixedTransport("{}") });
-  expect(empty.fallbackReason).toBe("no_takes");
+});
+
+// An empty take set is NOT a failure — there is no outage and nothing to retry,
+// there is simply nothing any judge could speak to. It gets its own error type
+// so the caller can record no judgement without treating the session as broken.
+test("judge() reports an unspeakable session separately from an unavailable judge", async () => {
+  const input: JudgeInput = {
+    sessionId: "s", date: "2026-08-27", subjectId: "subj", subjectLabel: "Subj",
+    brief: null, minTakes: 1, byStance: {}, meanConfidence: null, regimeSummary: null,
+    takes: [{ member_id: "m1", member_name: null, revision: 1, stance: "bullish", confidence: 0.6, body: "b" }],
+  };
+  for (const [takes, reason] of [
+    [[], "no_takes"],
+    [[{ member_id: "m1", member_name: null, revision: 1, stance: "bullish", confidence: 0.6, body: "   " }], "no_take_bodies"],
+  ] as const) {
+    let thrown: unknown;
+    try {
+      await judge({ ...input, takes: [...takes] }, { transport: fixedTransport("{}") });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(JudgeNothingToJudgeError);
+    expect((thrown as JudgeNothingToJudgeError).reason).toBe(reason);
+  }
 });
 
 test("the replay CLI runs against real session rows and reports every vector unchanged", async () => {
@@ -806,7 +930,7 @@ test("the replay CLI runs against real session rows and reports every vector unc
   await ic.closeWindow(messy.session.id);
   await ic.aggregateSession(messy.session.id);
   await admin.publishSessionAdmin(full.session.id, undefined);
-  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+  await setJudgeConfig({ mode: "shadow", minTakes: 3, model: "test/judge-model" });
 
   const proc = Bun.spawnSync(
     ["bun", "run", "scripts/swarm-judge-replay.ts", "--limit", "5", "--json"],
@@ -888,7 +1012,7 @@ test("the replay NAMES a session whose stored vector no longer equals meanTakeWe
   await admin.publishSessionAdmin(healthy.session.id, undefined);
   const movedTakes = await nonReproducibleSession("repro-moved-takes", "takes");
   const movedStored = await nonReproducibleSession("repro-moved-stored", "stored");
-  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+  await setJudgeConfig({ mode: "shadow", minTakes: 3, model: "test/judge-model" });
 
   const ok = (await replaySessionJudge(healthy.session.id, { transport: null }))!;
   expect(ok.weightsVerdict).toBe("reproduced");
@@ -929,7 +1053,7 @@ test("a position_actions session with no vector is `not_applicable`, not a false
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   await admin.publishSessionAdmin(session.id, undefined);
-  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+  await setJudgeConfig({ mode: "shadow", minTakes: 3, model: "test/judge-model" });
 
   const replay = (await replaySessionJudge(session.id, { transport: null }))!;
   expect(replay.weightsStored).toBeNull();
@@ -1036,7 +1160,7 @@ test("the replay CLI names the non-reproducible vector, prints the D42 list, and
     UPDATE swarm_sessions
        SET swarm_recommendation = jsonb_set(swarm_recommendation, '{rationale}', to_jsonb(${preFix}::text))
      WHERE id = ${tied.session.id}`;
-  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
+  await setJudgeConfig({ mode: "shadow", minTakes: 3, model: "test/judge-model" });
 
   const env = { ...process.env, OPENCODE_API_KEY: "", DATABASE_URL: await currentDatabaseUrl() };
   const cwd = fileURLToPath(new URL("..", import.meta.url));
@@ -1088,8 +1212,11 @@ test("the replay CLI names the non-reproducible vector, prints the D42 list, and
 
 test("the replay COMPARES the stored inputs_digest rather than printing it bare — reproduced, then a real mismatch after an amendment", async () => {
   const { session, members } = await aggregatedSession("digest-repro", 3);
-  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
-  const judged = await judgeSession(session.id, { transport: null });
+  await setJudgeConfig({ mode: "shadow", minTakes: 3, model: "test/judge-model" });
+  // A RECORDED judgement is the subject here, so the judging must actually
+  // happen. This used to pass `transport: null` and lean on the fallback row —
+  // a digest audit over an opinion no judge formed (issue #969).
+  const judged = await judgeSession(session.id, { transport: fixedTransport(STUB_JUDGE_ANSWER) });
   expect(judged.ok).toBe(true);
 
   const healthy = (await replaySessionJudge(session.id, { transport: null }))!;
@@ -1159,8 +1286,11 @@ test("a judgement stamped with an earlier digest_scheme is reported as expected 
 
 test("the replay CLI fails on a real (current-scheme) digest mismatch and passes on a historical one", async () => {
   const { session, members } = await aggregatedSession("cli-digest-mismatch", 3);
-  await setJudgeConfig({ mode: "shadow", minTakes: 3 });
-  const judged = await judgeSession(session.id, { transport: null });
+  await setJudgeConfig({ mode: "shadow", minTakes: 3, model: "test/judge-model" });
+  // A RECORDED judgement is the subject here, so the judging must actually
+  // happen. This used to pass `transport: null` and lean on the fallback row —
+  // a digest audit over an opinion no judge formed (issue #969).
+  const judged = await judgeSession(session.id, { transport: fixedTransport(STUB_JUDGE_ANSWER) });
   expect(judged.ok).toBe(true);
   await sql`
     UPDATE swarm_recommendations SET body = 'an amended take, filed after judging'
@@ -1224,18 +1354,28 @@ test("the model is selected by the config row, and unsetting it is what stops mo
   delete process.env.OPENCODE_API_KEY;
   try {
     const withModel = await judgeSession(session.id, { transport: undefined });
-    expect(withModel.ok).toBe(true);
-    expect(withModel.outcome!.source).toBe("fallback");
-    expect(withModel.outcome!.fallbackReason).toBe("model_unconfigured");
+    expect(withModel.ok).toBe(false);
+    expect(withModel.error).toBe("judge_unavailable");
+    expect(withModel.judgeUnavailableReason).toBe("model_unconfigured");
   } finally {
     if (savedKey !== undefined) process.env.OPENCODE_API_KEY = savedKey;
   }
 
-  // `null` clears it; a partial patch leaves it alone.
+  // A partial patch leaves the model alone.
   await setJudgeConfig({ minTakes: 2 });
   expect((await getJudgeConfig()).model).toBe("vendor/some-judge");
-  await setJudgeConfig({ model: null });
+
+  // TAKING THE MODEL AWAY WHILE THE JUDGE IS ON IS NOW REFUSED (issue #969).
+  // This used to be the supported way to "stop model prose" — the judge stayed
+  // nominally on and quietly recorded templates instead, which is precisely
+  // the state production was found in. Stopping the judge is now a single
+  // honest act: turn it off.
+  await expect(setJudgeConfig({ model: null })).rejects.toThrow(/requires a model/);
+  expect((await getJudgeConfig()).model, "the refused write changed nothing").toBe("vendor/some-judge");
+
+  await setJudgeConfig({ mode: "off", model: null });
   expect((await getJudgeConfig()).model).toBeNull();
+  expect((await getJudgeConfig()).mode).toBe("off");
   expect((await getJudgeConfig()).minTakes).toBe(2);
 
   // resolveJudgeTransport needs BOTH a model and a credential; neither alone.
@@ -1270,11 +1410,15 @@ test("the judge switch refuses nonsense and is readable back", async () => {
 
   await expect(setJudgeConfig({ model: "   " })).rejects.toThrow(/invalid judge model/);
 
-  const set = await admin.setJudgeConfigAdmin({ mode: "shadow", minTakes: 4 });
+  // Turning the judge ON without giving it a model is refused too (issue #969)
+  // — the pair is validated as a pair, against the row as it WILL be.
+  await expect(setJudgeConfig({ mode: "shadow" })).rejects.toThrow(/requires a model/);
+
+  const set = await admin.setJudgeConfigAdmin({ mode: "shadow", minTakes: 4, model: STUB_JUDGE_MODEL });
   expect(set.ok).toBe(true);
   const read = await admin.getJudgeConfigAdmin();
-  expect((read as any).judge).toMatchObject({ mode: "shadow", minTakes: 4, model: null });
-  // The REFUSED write leaves no audit row — only the one that took effect.
+  expect((read as any).judge).toMatchObject({ mode: "shadow", minTakes: 4, model: STUB_JUDGE_MODEL });
+  // The REFUSED writes leave no audit row — only the one that took effect.
   const audits = (await sql`SELECT action, scope FROM audit_log WHERE action = 'judge_config'`) as any[];
   expect(audits.length).toBe(1);
   expect(audits[0].scope).toMatchObject({ mode: "shadow", minTakes: 4 });
@@ -1294,7 +1438,7 @@ test("a malformed SWARM_JUDGE_TIMEOUT_MS is an OUTCOME, not a throw — the file
   // string. The pre-existing "never throws" test always injects an explicit
   // timeoutMs, so this path had no coverage at all.
   const { session, members } = await aggregatedSession("judge-bad-timeout");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   const saved = process.env.SWARM_JUDGE_TIMEOUT_MS;
   try {
     // (A blank/whitespace value is NOT malformed — it means "unset", and
@@ -1304,20 +1448,29 @@ test("a malformed SWARM_JUDGE_TIMEOUT_MS is an OUTCOME, not a throw — the file
       process.env.SWARM_JUDGE_TIMEOUT_MS = bad;
       const input = await buildJudgeInput(session.id, 3);
       // No `timeoutMs` injected: this is the production resolution path.
-      const outcome = await judge(input!, { transport: fixedTransport(goodAnswer(members[0].id, members[1].id)) });
-      expect(outcome.source, `"${bad}" must fall back, not throw`).toBe("fallback");
-      expect(outcome.fallbackReason).toContain("invalid_timeout_config");
-      // Still a complete, usable opinion — the templates, exactly as any other
-      // fallback produces.
-      expect(outcome.opinion.rationale.length).toBeGreaterThan(0);
-      expect(outcome.opinion.release_safety.take_count).toBe(3);
+      // A malformed bound is an operator error on a value docker-compose passes
+      // into the swarm lane. It used to become template prose on every session
+      // — a broken configuration that looked exactly like a healthy judging.
+      // Since #969 it stops the judging until someone fixes the string.
+      let thrown: unknown;
+      try {
+        await judge(input!, { transport: fixedTransport(goodAnswer(members[0].id, members[1].id)) });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown, `"${bad}" must refuse, not fabricate`).toBeInstanceOf(JudgeUnavailableError);
+      expect((thrown as JudgeUnavailableError).reason).toContain("invalid_timeout_config");
     }
-    // And a session-level run through the same path still records a row rather
-    // than failing the job.
+    // And a session-level run through the same path records NO row and fails
+    // the job, rather than writing an opinion nothing authored.
     process.env.SWARM_JUDGE_TIMEOUT_MS = "60s";
+    const before = await latestJudgement(session.id);
     const result = await judgeSession(session.id, { transport: fixedTransport(goodAnswer(members[0].id, members[1].id)) });
-    expect(result.ok).toBe(true);
-    expect((await latestJudgement(session.id) as any).fallback_reason).toContain("invalid_timeout_config");
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(503);
+    expect(result.error).toBe("judge_unavailable");
+    expect(result.judgeUnavailableReason).toContain("invalid_timeout_config");
+    expect(await latestJudgement(session.id)).toEqual(before);
   } finally {
     if (saved === undefined) delete process.env.SWARM_JUDGE_TIMEOUT_MS;
     else process.env.SWARM_JUDGE_TIMEOUT_MS = saved;
@@ -1333,7 +1486,7 @@ test("two judges racing one session are SERIALIZED: the record and the session a
   // update(A): latestJudgement() returned B while the session carried A's
   // prose.
   const { session, members } = await aggregatedSession("judge-race");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   const answerA = JSON.stringify({
     rationale: "RATIONALE FROM JUDGE A",
     disagreements: [],
@@ -1389,7 +1542,7 @@ async function until(done: () => boolean, budgetMs: number): Promise<void> {
 
 test("the judge's transaction HOLDS the session's advisory key: pg_locks names it, and a second connection is refused it", async () => {
   const { session, members } = await aggregatedSession("judge-advisory-held");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   // A plain object, not a `let`: the assignments happen inside a callback, and
   // the assertions have to read what the callback actually saw.
@@ -1444,7 +1597,7 @@ test("the judge's transaction HOLDS the session's advisory key: pg_locks names i
 
 test("a second judge BLOCKS on the first one's advisory lock, so the interleave that splits the record from the session cannot form", async () => {
   const { session } = await aggregatedSession("judge-race-forced");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   const answer = (who: string) => JSON.stringify({
     rationale: `RATIONALE FROM JUDGE ${who}`,
@@ -1521,7 +1674,7 @@ test("an opinion formed while a session was publishing does NOT land on the publ
   // the model takes up to 60s, the publish job fires at 10:00 — and the
   // judge's prose landed on a session that is already published and terminal.
   const { session, members } = await aggregatedSession("judge-vs-publish");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   const before = await recOf(session.id);
   await ic.publishSession(session.id);
   expect(await stateOf(session.id)).toBe("published");
@@ -1547,7 +1700,7 @@ test("the transition and the judgement row commit TOGETHER, or not at all", asyn
   // state whose NAME asserts a fact no row supports — and, per the amendment
   // gate finding, a state whose take window had reopened.
   const { session } = await aggregatedSession("judge-atomicity");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   const before = await recOf(session.id);
 
   // The seam judgeSessionAdmin uses: a gate that runs inside the judge's
@@ -1618,7 +1771,7 @@ test("a member cannot put words in another member's mouth: `view` is the attribu
   await submit(victim, date, subj, { stance: "bullish", body: "MY ACTUAL POSITION: conviction is intact.", weights: W });
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   const obedient = JSON.stringify({
     rationale: "The takes diverge on conviction.",
@@ -1671,7 +1824,7 @@ test("a positions[] the model can ask for cheaply cannot be persisted expensivel
   // repeated. Neither costs the model anything to emit.
   const { session, members } = await aggregatedSession("judge-positions-bound", 3);
   const templateRationale = (await recOf(session.id)).rationale;
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   // The size a refused response persists, measured on a response refused for a
   // reason nobody disputes. Every refusal below must cost the same, give or
   // take its own `fallbackReason` — which boundedReason() caps at 120 chars.
@@ -1691,12 +1844,13 @@ test("a positions[] the model can ask for cheaply cannot be persisted expensivel
     member_id: members[i % members.length]!.id, view: "v",
   }));
   const overLong = await judgeSession(session.id, { transport: fixedTransport(answerWith(long)) });
-  expect(overLong.ok, "an over-long positions[] is an outcome, not an error").toBe(true);
-  expect(overLong.outcome!.source).toBe("fallback");
-  expect(overLong.outcome!.fallbackReason).toBe("too_many_positions");
-  expect(overLong.outcome!.fallbackReason!.length).toBeLessThanOrEqual(REASON_MAX_CHARS);
-  // …and the session is back on template prose, at a refusal's size.
-  expect(overLong.outcome!.opinion.rationale).toBe(templateRationale);
+  expect(overLong.ok).toBe(false);
+  expect(overLong.error).toBe("judge_unavailable");
+  expect(overLong.judgeUnavailableReason).toBe("too_many_positions");
+  expect(overLong.judgeUnavailableReason!.length).toBeLessThanOrEqual(REASON_MAX_CHARS);
+  // …the session still carries the AGGREGATOR's prose, untouched, and nothing
+  // expensive was persisted — the cheapest possible outcome, since #969 writes
+  // no judgement row for a refusal at all.
   expect((await recOf(session.id)).rationale).toBe(templateRationale);
   expect(await persistedSize()).toBeLessThanOrEqual(refusedSize + REASON_MAX_CHARS);
 
@@ -1705,14 +1859,14 @@ test("a positions[] the model can ask for cheaply cannot be persisted expensivel
   //    renderer keys on `${topic}-${member_id}`, so it was never renderable.
   const repeated = Array.from({ length: 5 }, () => ({ member_id: members[0]!.id, view: "v" }));
   const dup = await judgeSession(session.id, { transport: fixedTransport(answerWith(repeated)) });
-  expect(dup.ok).toBe(true);
-  expect(dup.outcome!.source).toBe("fallback");
-  expect(dup.outcome!.fallbackReason).toStartWith("duplicate_position:");
-  expect(dup.outcome!.fallbackReason!.length).toBeLessThanOrEqual(REASON_MAX_CHARS);
+  expect(dup.ok).toBe(false);
+  expect(dup.error).toBe("judge_unavailable");
+  expect(dup.judgeUnavailableReason).toStartWith("duplicate_position:");
+  expect(dup.judgeUnavailableReason!.length).toBeLessThanOrEqual(REASON_MAX_CHARS);
   expect(await persistedSize()).toBeLessThanOrEqual(refusedSize + REASON_MAX_CHARS);
-  // The append-only record carries the bounded reason too.
-  expect(String((await latestJudgement(session.id) as any).fallback_reason).length)
-    .toBeLessThanOrEqual(REASON_MAX_CHARS);
+  // NOTHING is persisted for a refusal now — not even the bounded reason. The
+  // cap still holds on the value the caller and the operator log receive.
+  expect(await latestJudgement(session.id)).toBeNull();
 
   // 3. The measurement the issue was opened on, driven at the parser with a
   //    real 10,000-char body: the response is cheap, the opinion would not be.
@@ -1764,14 +1918,14 @@ test("the no-weights CHECK is a real schema backstop: a NESTED weight is refused
   }
 });
 
-test("every fallback reason is BOUNDED, model-controlled text included", async () => {
+test("every REFUSAL reason is BOUNDED, model-controlled text included", async () => {
   // `weight_like_field:<dot-joined path from the model's own keys>` and
   // `unknown_member:<up to 200 chars the model chose>` are interpolated from
   // the response. They land in an unbounded `text` column, in the audit
   // payload, and in the admin API's JSON — so they get the same 120-char cap
   // errorLabel() always had.
   const { session, members } = await aggregatedSession("judge-reason-bound");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   const longKey = "k".repeat(400);
   const answers = [
     // A deep path built entirely out of model-chosen key names.
@@ -1791,12 +1945,14 @@ test("every fallback reason is BOUNDED, model-controlled text included", async (
   ];
   for (const raw of answers) {
     const result = await judgeSession(session.id, { transport: fixedTransport(raw) });
-    expect(result.outcome!.source).toBe("fallback");
-    const reason = result.outcome!.fallbackReason!;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("judge_unavailable");
+    const reason = result.judgeUnavailableReason!;
     expect(reason.length, `"${reason.slice(0, 40)}…" must be capped`).toBeLessThanOrEqual(REASON_MAX_CHARS);
-    // …and the cap survives the round trip to the append-only record.
-    expect(String((await latestJudgement(session.id) as any).fallback_reason).length)
-      .toBeLessThanOrEqual(REASON_MAX_CHARS);
+    // The cap is applied by the error constructor now (issue #969), so it holds
+    // wherever the reason travels — the API result here, and the operator log.
+    // There is no longer a judgement row for it to round-trip through.
+    expect(await latestJudgement(session.id)).toBeNull();
   }
   expect(members.length).toBeGreaterThan(0);
 });
@@ -1820,7 +1976,7 @@ test("one stance-only take degrades ONE position, not the whole judge response",
   await submit(stanceOnly, date, subj, { stance: "bearish", body: "", weights: W });
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   const MODEL_RATIONALE = "MODEL PROSE: the take set converges on rotation, with one dissent on timing.";
   const answer = JSON.stringify({
@@ -1872,10 +2028,13 @@ test("one stance-only take degrades ONE position, not the whole judge response",
   expect(alsoBodied.id).toBeTruthy();
 });
 
-test("a session where EVERY take is stance-only falls back cleanly, with a reason and without a model call", async () => {
+test("a session where EVERY take is stance-only is NOT JUDGED — cleanly, and without a model call", async () => {
   // Nothing in the frozen set is quotable, so there is no disagreement the
-  // judge could author and no sentence it could attribute. Template prose is
-  // the honest answer and `no_take_bodies` is the operator's signal.
+  // judge could author and no sentence it could attribute. Before #969 this
+  // recorded template prose under `no_take_bodies`, which made a session
+  // nobody could speak to look exactly like one somebody had. It is now a
+  // `nothing_to_judge` refusal: no row, no opinion, and no retry — there is no
+  // failure here to recover from, only nothing to say.
   const { subj, session, date } = await weightedSession("judge-all-bodyless");
   for (const stance of ["bullish", "cautious", "bearish"]) {
     const m = await activeMember();
@@ -1883,7 +2042,7 @@ test("a session where EVERY take is stance-only falls back cleanly, with a reaso
   }
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
 
   let calls = 0;
   const counting: JudgeTransport = {
@@ -1894,13 +2053,14 @@ test("a session where EVERY take is stance-only falls back cleanly, with a reaso
     },
   };
   const result = await judgeSession(session.id, { transport: counting });
-  expect(result.ok).toBe(true);
-  expect(result.outcome!.source).toBe("fallback");
-  expect(result.outcome!.fallbackReason).toBe("no_take_bodies");
+  expect(result.ok).toBe(false);
+  // 409, not 503: a worker must not retry a session that will never have
+  // anything to judge.
+  expect(result.status).toBe(409);
+  expect(result.error).toBe("nothing_to_judge");
+  expect(result.judgeUnavailableReason).toBe("no_take_bodies");
   expect(calls, "a session with nothing quotable must not spend a model call").toBe(0);
-  const row = (await latestJudgement(session.id)) as any;
-  expect(String(row.source)).toBe("fallback");
-  expect(String(row.fallback_reason)).toBe("no_take_bodies");
+  expect(await latestJudgement(session.id)).toBeNull();
 });
 
 // ── The judge on the SESSION CADENCE (issue #767) ───────────────────────────
@@ -1988,9 +2148,12 @@ test("cadence, mode `off`: the scheduled judging is ONE clean success — no deg
 
 test("cadence, mode `shadow`: the scheduled judging records a judgement and the session's prose is byte-identical", async () => {
   const { session } = await aggregatedSession("judge-cadence-shadow");
-  const config = await setJudgeConfig({ mode: "shadow" });
+  const config = await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   expect(config.mode).toBe("shadow");
-  expect(config.model, "no model configured — this test never reaches a network").toBeNull();
+  // The model is REQUIRED now (issue #969), and the network it reaches is this
+  // file's own local stub — not a vendor. A test that proved "no judging
+  // happened" by withholding the model was proving the production defect.
+  expect(config.model).toBe(STUB_JUDGE_MODEL);
   // Byte comparison, not a deep equal: `shadow` must not reserialize the
   // recommendation either.
   const before = JSON.stringify(await recOf(session.id));
@@ -2008,8 +2171,8 @@ test("cadence, mode `shadow`: the scheduled judging records a judgement and the 
   const judgement = (await latestJudgement(session.id)) as any;
   expect(judgement, "shadow RECORDS — that is the whole point of the mode").not.toBeNull();
   expect(String(judgement.mode)).toBe("shadow");
-  expect(String(judgement.source)).toBe("fallback");
-  expect(String(judgement.fallback_reason)).toBe("model_unconfigured");
+  expect(String(judgement.source), "a recorded judging was AUTHORED (issue #969)").toBe("model");
+  expect(judgement.fallback_reason).toBeNull();
   expect(await stateOf(session.id)).toBe("judged");
 
   // THE INVARIANT: shadow reaches the record and nothing else.
@@ -2030,7 +2193,7 @@ test("cadence: turning the mode on takes effect on the NEXT drain of an already-
   expect((await runsOf(jobA))[0].output).toEqual({ skipped: "judge_disabled", sessionId: a.session.id });
   expect(await latestJudgement(a.session.id)).toBeNull();
 
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
 
   await drainUntilRun(jobB);
   expect((await runsOf(jobB))[0].status).toBe("succeeded");
@@ -2104,9 +2267,9 @@ test("host-driver path: a session opened the way production opens one carries NO
 
 test("host-driver path, mode `shadow`: the driver's aggregate → judge → publish sequence records a judgement and then publishes", async () => {
   const { session } = await aggregatedSession("judge-driver-shadow");
-  const cfg = await setJudgeConfig({ mode: "shadow" });
+  const cfg = await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   expect(cfg.mode).toBe("shadow");
-  expect(cfg.model, "no model configured — this test never reaches a network").toBeNull();
+  expect(cfg.model).toBe(STUB_JUDGE_MODEL);
 
   // The driver's tail verbatim: it has already seen `aggregated`, so it
   // enqueues the judging, waits for `judged`, and only then enqueues publish.
@@ -2262,7 +2425,7 @@ const judgementRow = async (sessionId: string) =>
 test("a DROPPED position is recorded on the row, and a trimmed response is distinguishable from a genuinely thin one", async () => {
   const thin = await mixedBodySession("judge-drop-thin");
   const trimmed = await mixedBodySession("judge-drop-trimmed");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
 
   // A. The model names two quotable members. Nothing is dropped; the opinion
   //    carries exactly one disagreement.
@@ -2338,7 +2501,7 @@ test("the dedupe slot is claimed AFTER the drop, so two bodyless positions are t
 test("`applied` is a fact on the row, not an inference from the mode: shadow never applies, and an enforce opinion that missed its session says so", async () => {
   // shadow: recorded, never applied.
   const shadow = await aggregatedSession("judge-applied-shadow");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   expect((await judgeSession(shadow.session.id, { transport: fixedTransport(goodAnswer(shadow.members[0]!.id, shadow.members[1]!.id)) })).ok).toBe(true);
   const shadowRow = await judgementRow(shadow.session.id);
   expect(shadowRow.applied).toBe(false);
@@ -2346,7 +2509,7 @@ test("`applied` is a fact on the row, not an inference from the mode: shadow nev
 
   // enforce on a writable session: applied.
   const applied = await aggregatedSession("judge-applied-enforce");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   expect((await judgeSession(applied.session.id, { transport: fixedTransport(goodAnswer(applied.members[0]!.id, applied.members[1]!.id)) })).ok).toBe(true);
   const appliedRow = await judgementRow(applied.session.id);
   expect(appliedRow.applied).toBe(true);
@@ -2378,7 +2541,7 @@ test("`applied` is a fact on the row, not an inference from the mode: shadow nev
 
 test("the admin read path returns a session's judgement history and names which opinion is in force", async () => {
   const { session, members } = await aggregatedSession("judge-read-path");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   await judgeSession(session.id, { transport: fixedTransport(goodAnswer(members[0]!.id, members[1]!.id, "hold")) });
   await judgeSession(session.id, { transport: fixedTransport(goodAnswer(members[0]!.id, members[1]!.id)) });
 
@@ -2441,7 +2604,7 @@ const sessionJudgeOf = async (sessionId: string) =>
 
 test("#806 `applied` is READ BACK from the session, and the test drives judgeSessionAdmin — the production entry point", async () => {
   const { session, members } = await aggregatedSession("judge-806-applied");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   const res = await admin.judgeSessionAdmin(session.id, undefined) as any;
   expect(res.ok).toBe(true);
@@ -2469,7 +2632,7 @@ test("#806 a refused enforce judging leaves NO ROW — it is a rollback, not a r
   // refused by the GATE, inside the judge's transaction, and everything rolls
   // back. `applied_skipped_reason` is not reachable from here at all.
   const { session, members } = await aggregatedSession("judge-806-refused");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   const before = JSON.stringify(await recOf(session.id));
 
   await ic.publishSession(session.id); // the race, resolved before the judging
@@ -2488,7 +2651,7 @@ test("#806 a refused enforce judging leaves NO ROW — it is a rollback, not a r
 
 test("#806 `inForce` reports SUPERSEDED after the legal close -> aggregate that wipes the judge's prose", async () => {
   const { session, members } = await aggregatedSession("judge-806-superseded");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   expect(((await admin.judgeSessionAdmin(session.id, undefined)) as any).ok).toBe(true);
 
   // Before: the record and the session agree, and the panel's sentence is true.
@@ -2524,7 +2687,7 @@ test("#806 `inForce` reports SUPERSEDED after the legal close -> aggregate that 
 
 test("#806 a shadow row is never called superseded — it was never on the session to lose", async () => {
   const { session, members } = await aggregatedSession("judge-806-shadow-not-superseded");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   expect(((await admin.judgeSessionAdmin(session.id, undefined)) as any).ok).toBe(true);
 
   const res = await admin.getSessionJudgementsAdmin(session.id) as any;
@@ -2537,7 +2700,7 @@ test("#806 a shadow row is never called superseded — it was never on the sessi
 
 test("#806 a re-delivered swarm.aggregate cannot rewrite a judged session — it is a clean skip, not an overwrite", async () => {
   const { session, members } = await aggregatedSession("judge-806-aggregate-guard");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
   expect(((await admin.judgeSessionAdmin(session.id, undefined)) as any).ok).toBe(true);
   const judged = JSON.stringify(await recOf(session.id));
   expect(await sessionJudgeOf(session.id)).not.toBeNull();
@@ -2593,7 +2756,7 @@ async function judgeJobFor(sessionId: string): Promise<number> {
 
 test("#806 terminal_state:cancelled — cancelling a session mid-soak writes ZERO degraded runs", async () => {
   const { session, members } = await aggregatedSession("judge-806-cancelled");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   // No race needed, and that is the point: `cancelSessionAdmin` is a bare
   // guardedTransition and there is no `DELETE FROM jobs` anywhere in the
   // backend, so the queued judging survives the cancellation.
@@ -2613,7 +2776,7 @@ test("#806 terminal_state:cancelled — cancelling a session mid-soak writes ZER
 
 test("#806 terminal_state:published — a judging that lost its race writes ZERO degraded runs", async () => {
   const { session, members } = await aggregatedSession("judge-806-published");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   await ic.publishSession(session.id);
 
   const jobId = await judgeJobFor(session.id);
@@ -2641,7 +2804,7 @@ test("#806 terminal_state:published — a judging that lost its race writes ZERO
 // Untranslated, the backoff carries it past the aggregate and it lands.
 test("#806 a judging that arrives before its rollup RETRIES rather than settling — and lands once the aggregate commits", async () => {
   const { session } = await aggregatedSession("judge-806-early");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   // Put the session back where the failed-aggregate sequence leaves it.
   expect((await admin.closeSessionAdmin(session.id, undefined, "admin", "rollup not in yet")).ok).toBe(true);
   expect(await stateOf(session.id)).toBe("window_closed");
@@ -2673,7 +2836,7 @@ test("#806 the judge seam translates NO illegal_transition at all — only an op
   // The rule, asserted directly rather than inferred from one scenario:
   // `published` and `cancelled` can never become judgeable; every other refusal
   // is a judging that has not happened YET.
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   for (const from of ["window_closed", "collecting", "scheduled"]) {
     const { session } = await aggregatedSession(`judge-806-nt-${from.slice(0, 6)}`);
     await sql`UPDATE swarm_sessions SET state = ${from} WHERE id = ${session.id}`;
@@ -2690,7 +2853,7 @@ test("#806 the translation is NOT a blanket amnesty — a failure a retry could 
   // `{ok:false}` it would be green for the wrong reason, and a real failure
   // would stop being visible. `session not found` is the shape that must
   // survive: it is neither an operator's answer nor a session past judging.
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   const jobId = await judgeJobFor(crypto.randomUUID());
   await drainToSettled(jobId);
   expect(await degradedCount(jobId)).toBeGreaterThan(0);
@@ -2700,7 +2863,7 @@ test("#806 the translation is NOT a blanket amnesty — a failure a retry could 
 
 test("#806 two judge enqueues for one session produce ONE job and ONE judgement row", async () => {
   const { session, members } = await aggregatedSession("judge-806-dedupe");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
 
   // The driver restart case: `waitForSubjectSession` exists precisely to
   // re-adopt an in-flight session, and re-adoption re-runs the judge step.
@@ -2751,7 +2914,7 @@ test("#806 a DEAD lifecycle job does not wedge its subject — only the judge ca
 
 test("#806 re-judging is still available, but you have to ASK for it — `force: true`", async () => {
   const { session, members } = await aggregatedSession("judge-806-force");
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
 
   const first = await enqueueOverAdmin("judge", session.id);
   await drainToSettled(first.jobId);
@@ -2773,13 +2936,13 @@ test("#806 flipping the mode off `off` returns the residual hazards — and `off
   const off = await admin.setJudgeConfigAdmin({ mode: "off" }) as any;
   expect(off.warnings, "turning the judge OFF is not a hazard").toEqual([]);
 
-  const shadow = await admin.setJudgeConfigAdmin({ mode: "shadow" }) as any;
+  const shadow = await admin.setJudgeConfigAdmin({ mode: "shadow", model: STUB_JUDGE_MODEL }) as any;
   expect(shadow.warnings.length).toBe(1);
   expect(shadow.warnings[0]).toContain("EXACTLY ONE `swarm`-lane worker");
 
   // `enforce` carries one more, because it is the only mode whose prose reaches
   // the session and therefore the only one that can lose it.
-  const enforce = await admin.setJudgeConfigAdmin({ mode: "enforce" }) as any;
+  const enforce = await admin.setJudgeConfigAdmin({ mode: "enforce", model: STUB_JUDGE_MODEL }) as any;
   expect(enforce.warnings.length).toBe(2);
   expect(enforce.warnings.join(" ")).toContain("NOT permanent");
 
@@ -2828,7 +2991,7 @@ test("#918 judgeSessionAdmin names Themis when the roster is seeded", async () =
   const themisId = await themisIdFrom();
   expect(themisId, "seedLiveRoster() must have seated a themis row").toBeTruthy();
 
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   const { session } = await aggregatedSession("judge-918-admin");
 
   const result = await admin.judgeSessionAdmin(session.id, undefined) as any;
@@ -2854,7 +3017,7 @@ test("#918 the worker-swarm cron path names Themis the same way the direct admin
   const themisId = await themisIdFrom();
   expect(themisId).toBeTruthy();
 
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   const { session } = await aggregatedSession("judge-918-cron");
 
   const jobId = await enqueueJudgeJob(session.id);
@@ -2873,7 +3036,7 @@ test("#918 an unseeded environment degrades safely: judged_by stays 'robotmoney-
   // file, and of useCleanDatabasePerTest's empty database in general.
   expect(await themisIdFrom(), "sanity: this test really is unseeded").toBeUndefined();
 
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   const { session } = await aggregatedSession("judge-918-unseeded");
 
   const result = await admin.judgeSessionAdmin(session.id, undefined) as any;
@@ -2895,7 +3058,7 @@ test("#918 an unseeded environment degrades safely: judged_by stays 'robotmoney-
 
 test("#928 judgeSession retry against an already-judged session returns existing judgement without calling model again or duplicating row", async () => {
   const { session, members } = await aggregatedSession("judge-928-retry");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   let modelCalls = 0;
   const countingTransport: JudgeTransport = {
@@ -2937,7 +3100,7 @@ test("#928 judgeSession retry against an already-judged session returns existing
 
 test("#928 judgeSessionAdmin retry against an already-judged session is idempotent", async () => {
   const { session, members } = await aggregatedSession("judge-928-admin-retry");
-  await setJudgeConfig({ mode: "enforce" });
+  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
 
   const first = await admin.judgeSessionAdmin(session.id, undefined) as any;
   expect(first.ok).toBe(true);

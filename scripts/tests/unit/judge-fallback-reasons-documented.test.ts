@@ -2,7 +2,7 @@
 // to backend/src/swarm/judge.ts. Neither side may gain a reason the other does
 // not have.
 //
-// WHY THIS EXISTS. §9.7's "Failure is an outcome, never an error." paragraph
+// WHY THIS EXISTS. §9.7's "Failure stops the judging" paragraph
 // claims exhaustiveness — it is the only place an operator reading a
 // `fallback_reason` off `swarm_session_judgements` can find out what the value
 // means. It was written by hand in PR #778 (issue #773) and was ALREADY STALE
@@ -47,7 +47,7 @@ const DOC_PATH = "docs/architecture.md";
 // a reason list that drifted into another section would be found by a bare
 // grep but would no longer be where §9.7 promises it is.
 const SECTION_HEADING = "### 9.7 The consensus judge";
-const PARAGRAPH_ANCHOR = "**Failure is an outcome, never an error.**";
+const PARAGRAPH_ANCHOR = "**Failure stops the judging (issue #969).**";
 
 // A reason key: lowercase snake_case, optionally followed by `:` and a
 // runtime-supplied suffix. Deliberately narrow so that camelCase function
@@ -110,30 +110,31 @@ function reachableReasonKeys(source: string): Set<string> {
     );
   }
 
-  // 2. fallback() with a literal.
-  const fallbackLiteralRe = /(?<![\w.$])fallback\(\s*(?:"([^"\\]*)"|`([^`\\]*)`)/g;
+  // 2. A refusal thrown with a literal reason (issue #969 — these replaced the
+  // `fallback(` call sites; the judge no longer produces an outcome on failure).
+  const fallbackLiteralRe = /new Judge(?:Unavailable|NothingToJudge)Error\(\s*(?:"([^"\\]*)"|`([^`\\]*)`)/g;
   let fallbackLiteralCount = 0;
   while ((m = fallbackLiteralRe.exec(source)) !== null) {
     fallbackLiteralCount += 1;
-    collect(m[1] ?? m[2] ?? "", "fallback()");
+    collect(m[1] ?? m[2] ?? "", "thrown refusal");
   }
 
-  // 2b. fallback() with an identifier — only `reason` is understood.
-  const fallbackIdentRe = /(?<![\w.$])fallback\(\s*([A-Za-z_$][\w$]*)\s*,/g;
+  // 2b. A refusal thrown with an identifier — only `reason` is understood.
+  const fallbackIdentRe = /new Judge(?:Unavailable|NothingToJudge)Error\(\s*([A-Za-z_$][\w$]*)\s*,/g;
   let fallbackIdentCount = 0;
   while ((m = fallbackIdentRe.exec(source)) !== null) {
     fallbackIdentCount += 1;
     if (m[1] !== "reason") {
       throw new Error(
-        `${SOURCE_PATH}: fallback() is called with an unrecognised variable \`${m[1]}\` — this scan only follows \`reason\`, so its value cannot be pinned to ${DOC_PATH}.`,
+        `${SOURCE_PATH}: a judge refusal is thrown with an unrecognised variable \`${m[1]}\` — this scan only follows \`reason\`, so its value cannot be pinned to ${DOC_PATH}.`,
       );
     }
   }
 
-  const fallbackSites = countOf(source, /(?<![\w.$])fallback\(/g);
+  const fallbackSites = countOf(source, /new Judge(?:Unavailable|NothingToJudge)Error\(/g);
   if (fallbackLiteralCount + fallbackIdentCount !== fallbackSites) {
     throw new Error(
-      `${SOURCE_PATH}: ${fallbackSites} \`fallback(\` call sites but ${fallbackLiteralCount + fallbackIdentCount} readable (${fallbackLiteralCount} literal, ${fallbackIdentCount} via \`reason\`) — an unreadable reason cannot be pinned to ${DOC_PATH}.`,
+      `${SOURCE_PATH}: ${fallbackSites} judge-refusal throw sites but ${fallbackLiteralCount + fallbackIdentCount} readable (${fallbackLiteralCount} literal, ${fallbackIdentCount} via \`reason\`) — an unreadable reason cannot be pinned to ${DOC_PATH}.`,
     );
   }
 
@@ -153,7 +154,7 @@ function reachableReasonKeys(source: string): Set<string> {
   }
   if (reasonAssignCount !== fallbackIdentCount) {
     throw new Error(
-      `${SOURCE_PATH}: ${fallbackIdentCount} \`fallback(reason, …)\` call sites but ${reasonAssignCount} \`reason =\` assignments — one of them is fed from somewhere this scan does not read.`,
+      `${SOURCE_PATH}: ${fallbackIdentCount} \`new Judge…Error(reason, …)\` throw sites but ${reasonAssignCount} \`reason =\` assignments — one of them is fed from somewhere this scan does not read.`,
     );
   }
 
@@ -204,7 +205,7 @@ describe("§9.7's fallback-reason enumeration is pinned to judge.ts", () => {
   test("every reason reachable in judge.ts is enumerated in §9.7", () => {
     expect(
       missing(reachable, documented),
-      `reachable in ${SOURCE_PATH} but absent from ${DOC_PATH} §9.7 — §9.7 claims exhaustiveness, so add these to its "Failure is an outcome, never an error." paragraph`,
+      `reachable in ${SOURCE_PATH} but absent from ${DOC_PATH} §9.7 — §9.7 claims exhaustiveness, so add these to its "Failure stops the judging" paragraph`,
     ).toEqual([]);
   });
 
@@ -267,16 +268,16 @@ describe("planted violations are caught", () => {
     expect(() => reachableReasonKeys(mutated)).toThrow(/call sites but only/);
   });
 
-  test("a fallback() fed by an unknown variable trips the structural guard", () => {
-    const mutated = source.replace("return fallback(reason, transport.model);", "return fallback(otherReason, transport.model);");
+  test("a refusal fed by an unknown variable trips the structural guard", () => {
+    const mutated = source.replace("throw new JudgeUnavailableError(reason, transport.model);", "throw new JudgeUnavailableError(otherReason, transport.model);");
     expect(mutated).not.toBe(source);
     expect(() => reachableReasonKeys(mutated)).toThrow(/unrecognised variable/);
   });
 
-  test("a `fallback(reason, …)` with no matching assignment trips the structural guard", () => {
+  test("a `new Judge…Error(reason, …)` with no matching assignment trips the structural guard", () => {
     const mutated = source.replace(
-      'if (!transport) return fallback("model_unconfigured", null);',
-      'if (!transport) return fallback("model_unconfigured", null);\n  if (false) return fallback(reason, null);',
+      'if (!transport) throw new JudgeUnavailableError("model_unconfigured", null);',
+      'if (!transport) throw new JudgeUnavailableError("model_unconfigured", null);\n  if (false) throw new JudgeUnavailableError(reason, null);',
     );
     expect(mutated).not.toBe(source);
     expect(() => reachableReasonKeys(mutated)).toThrow(/assignments/);

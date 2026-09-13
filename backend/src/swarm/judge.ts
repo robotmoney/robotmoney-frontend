@@ -15,14 +15,31 @@
 // actually finds in the takes, and an opinion on whether the session is safe to
 // release. All three are prose about numbers someone else computed.
 //
-// FAIL CLOSED, NEVER FAIL LOUD. This runs on a LIVE swarm on a cadence. A model
-// that times out, refuses, returns prose instead of JSON, returns JSON of the
-// wrong shape, or smuggles a weight in, must not stop a session — and must not
-// be allowed to half-land either. Every one of those paths falls back to the
-// SAME template producers the aggregator uses today (buildRationale /
-// buildDisagreements), records WHY it fell back, and carries on. There is no
-// state in which a session is blocked on the judge, and none in which a
-// partially-trusted model response reaches a session.
+// FAIL CLOSED AND FAIL LOUD (issue #969 — this REPLACES the original contract,
+// which was "fail closed, never fail loud"). A model that times out, refuses,
+// returns prose instead of JSON, returns JSON of the wrong shape, or smuggles a
+// weight in, now STOPS THE JUDGING. judge() throws; no judgement row is
+// written; the session stays unjudged and does not publish a consensus receipt.
+//
+// WHY THE ORIGINAL CONTRACT WAS WRONG, stated plainly so it is not restored by
+// someone reading only the old reasoning. It said a live cadence must never be
+// blocked on the judge, and it bought that by falling back to the SAME template
+// producers the aggregator uses (buildRationale / buildDisagreements) and
+// recording a `source: "fallback"` reason. But the fallback opinion then
+// travelled the ordinary write path: same row, same `judged` transition, same
+// SIGNED consensus receipt, attributed to the judge. Nothing downstream could
+// distinguish a judging that happened from one that did not — and in production
+// nothing did. `swarm_judge_config` sat at `mode = 'enforce'` with `model =
+// NULL`, so a transport could never be built, and EVERY enforce-mode opinion
+// the system ever published was a template wearing the judge's name.
+//
+// The trade is now the other way round and deliberately so: a judge outage
+// stalls sessions unpublished, which is visible and recoverable, instead of
+// publishing signed attestations of prose no judge authored, which is neither.
+// Liveness is not worth counterfeiting provenance for.
+//
+// What DOES survive from the original: a partially-trusted model response still
+// never reaches a session. Rejection is still whole-response, never a merge.
 //
 // PINNED INPUTS. `promptHash` is the digest of the instruction template, so a
 // stored opinion says which judge wrote it. `inputsDigest` is the digest of
@@ -119,18 +136,74 @@ export function noDrops(): JudgeDrops {
   return { positions: 0, disagreements: 0 };
 }
 
+/**
+ * The RECORD shape — what `swarm_session_judgements` holds and what reading a
+ * historical row yields. `source: "fallback"` survives HERE, and only here,
+ * because the table is append-only (migration 0040) and rows written before
+ * issue #969 are real history that must stay readable. Nothing writes a new one.
+ */
 export interface JudgeOutcome {
   opinion: JudgeOpinion;
   source: "model" | "fallback";
-  /** Present iff source === "fallback"; the reason the model's answer was not used. */
+  /** Only ever set on a pre-#969 historical row; never produced by judge(). */
   fallbackReason?: string;
   model: string | null;
   promptHash: string;
   inputsDigest: string;
   takeCount: number;
   minTakes: number;
-  /** What the parser dropped out of a model response. Zeroed on every fallback. */
+  /** What the parser dropped out of a model response. */
   drops: JudgeDrops;
+}
+
+/** What judge() produces, and the only thing that may be newly recorded. */
+export interface ModelJudgeOutcome extends JudgeOutcome {
+  source: "model";
+  fallbackReason?: undefined;
+  model: string;
+}
+
+/**
+ * The judge could not be reached, or answered something that could not be
+ * trusted whole. THE SESSION DOES NOT PUBLISH. Previously each of these was a
+ * `source: "fallback"` row carrying template prose under the judge's name; a
+ * signed consensus receipt that embeds an opinion no judge formed is a forgery
+ * with good intentions, so the judging now fails and the caller decides.
+ */
+export class JudgeUnavailableError extends Error {
+  readonly reason: string;
+  readonly model: string | null;
+  /**
+   * The reason is bounded HERE rather than at each throw site. Two of them
+   * interpolate model-controlled text (`unparsable:<label>`,
+   * `weight_like_field:<path>`) and the value is written to a table an operator
+   * reads, so one choke point keeps "nothing unbounded escapes" a property of
+   * the type instead of a promise each call site has to remember.
+   */
+  constructor(reason: string, model: string | null) {
+    const bounded = boundedReason(reason);
+    super(`consensus judge unavailable (${bounded})${model ? ` [model=${model}]` : ""}`);
+    this.name = "JudgeUnavailableError";
+    this.reason = bounded;
+    this.model = model;
+  }
+}
+
+/**
+ * The session holds nothing any judge could speak to — no takes at all, or no
+ * member-authored body among them. Distinct from JudgeUnavailableError because
+ * NOTHING IS WRONG: there is no failure to retry and no outage to report, there
+ * is simply no opinion to be had. The caller records no judgement and the
+ * session publishes no consensus receipt.
+ */
+export class JudgeNothingToJudgeError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    const bounded = boundedReason(reason);
+    super(`nothing for the consensus judge to speak to (${bounded})`);
+    this.name = "JudgeNothingToJudgeError";
+    this.reason = bounded;
+  }
 }
 
 // ── Weight-like rejection ───────────────────────────────────────────────────
@@ -675,67 +748,58 @@ export interface JudgeOptions {
 }
 
 /**
- * Form an opinion. NEVER throws: every failure is an outcome with
- * `source: "fallback"` and a reason. See this file's header for why.
+ * Form an opinion, or REFUSE TO. It never fabricates one.
+ *
+ * Throws `JudgeNothingToJudgeError` when the session holds nothing any judge
+ * could speak to, and `JudgeUnavailableError` on every other path that used to
+ * return template prose under `source: "fallback"`. See this file's header.
  */
-export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise<JudgeOutcome> {
+export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise<ModelJudgeOutcome> {
   const transport = opts.transport === undefined ? resolveJudgeTransport(opts.model ?? null) : opts.transport;
   // ONE `input`, DIGESTED AND DERIVED FROM. Three of the values the digest now
   // covers (`byStance`, `meanConfidence`, and `regimeSummary`'s composite) are
   // read out of the mutable `swarm_recommendation` / `regime_summary` jsonb,
   // which applyOpinion() read-modify-writes after this returns. They are read
-  // ONCE, by buildJudgeInput(), into this frozen argument — and both
-  // inputsDigest() below and templateOpinion() on the fallback path read that
-  // same object, never the database. Re-reading either here would rebuild
-  // #765's defect one layer out: a digest over values that had moved since the
-  // opinion was derived from them.
+  // ONCE, by buildJudgeInput(), into this frozen argument — and inputsDigest()
+  // below reads that same object, never the database. Re-reading it here would
+  // rebuild #765's defect one layer out: a digest over values that had moved
+  // since the opinion was derived from them.
   const base = {
     promptHash: JUDGE_PROMPT_HASH,
     inputsDigest: inputsDigest(input),
     takeCount: input.takes.length,
     minTakes: input.minTakes,
   };
-  // EVERY reason string leaves through here, and every one of them is bounded
-  // on the way out — including the two that interpolate model-controlled text
-  // (`weight_like_field:<path>`, `unknown_member:<id>`). One choke point, so
-  // "nothing unbounded reaches fallback_reason" is not a per-call promise.
-  // A fallback's opinion is template prose built from the frozen take set, so it
-  // drops nothing by construction — its counters are zero, and each fallback
-  // gets its OWN object so a later mutation can never reach across calls.
-  const fallback = (reason: string, model: string | null): JudgeOutcome => ({
-    ...base, opinion: templateOpinion(input), source: "fallback", fallbackReason: boundedReason(reason), model,
-    drops: noDrops(),
-  });
 
-  if (!transport) return fallback("model_unconfigured", null);
-  // A session nobody submitted to has nothing to explain. Not an error — the
-  // templates already say the right thing about an empty session, and spending
-  // a model call to be told so is waste.
-  if (input.takes.length === 0) return fallback("no_takes", transport.model);
-  // A session where EVERY take is stance-only has no member-authored sentence
-  // in it, so there is nothing any disagreement could quote and nothing the
-  // model could attribute — `view` comes from the frozen bodies and from
-  // nowhere else. Answering it would burn a model call to produce an opinion
-  // with an empty `disagreements` array. Template prose says the same thing,
-  // and `no_take_bodies` is the operator's signal that this is why.
+  // NO MODEL, NO JUDGING. This was `model_unconfigured` — the single most
+  // common fallback in practice and the one that reached production, where
+  // `swarm_judge_config.mode` sat at `enforce` with `model` NULL and every
+  // adopted opinion was template prose wearing the judge's name. It is now
+  // unreachable in the first place (setJudgeConfig refuses the combination,
+  // and migration 0053 refuses it in the schema); if it is somehow reached,
+  // it stops here rather than being papered over.
+  if (!transport) throw new JudgeUnavailableError("model_unconfigured", null);
+
+  // NOT failures. A session nobody submitted to, or one where every take is
+  // stance-only, contains no member-authored sentence — there is nothing for
+  // any judge, model or otherwise, to quote or explain. The caller records no
+  // judgement rather than manufacturing one about an empty room.
+  if (input.takes.length === 0) throw new JudgeNothingToJudgeError("no_takes");
   if (!input.takes.some((t) => typeof t.body === "string" && t.body.trim() !== "")) {
-    return fallback("no_take_bodies", transport.model);
+    throw new JudgeNothingToJudgeError("no_take_bodies");
   }
 
-  // THE CONFIG READ IS ITSELF A FAILURE PATH. `resolveJudgeTimeoutMs()` throws
-  // on a malformed SWARM_JUDGE_TIMEOUT_MS, and docker-compose passes that
-  // variable into the container that runs the swarm lane — so one typo (`60s`,
-  // `60_000`, a stray space) used to make judge() throw on EVERY session, from
-  // OUTSIDE the try below. That is exactly the "fail loud" this file's header
-  // says cannot happen: the job retries to `dead` and the API returns 500 on a
-  // live swarm because of an environment string. A bad bound is an outcome
-  // like any other — template prose, a recorded reason, carry on.
+  // A malformed SWARM_JUDGE_TIMEOUT_MS is an operator error on a value
+  // docker-compose passes into the swarm lane. It used to become template
+  // prose on every session; it is now what it always was — a broken
+  // configuration that stops the judging until someone fixes the string.
   let timeoutMs: number;
   try {
     timeoutMs = opts.timeoutMs ?? resolveJudgeTimeoutMs();
   } catch (err) {
-    return fallback(`invalid_timeout_config:${errorLabel(err)}`, transport.model);
+    throw new JudgeUnavailableError(`invalid_timeout_config:${errorLabel(err)}`, transport.model);
   }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let raw: string;
@@ -743,7 +807,7 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
     raw = await transport.complete(renderJudgePrompt(input), controller.signal);
   } catch (err) {
     const reason = controller.signal.aborted ? "model_timeout" : `model_unavailable:${errorLabel(err)}`;
-    return fallback(reason, transport.model);
+    throw new JudgeUnavailableError(reason, transport.model);
   } finally {
     clearTimeout(timer);
   }
@@ -756,8 +820,13 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
     const opinion = parseJudgeResponse(raw, input, drops);
     return { ...base, opinion, source: "model", model: transport.model, drops };
   } catch (err) {
+    // INCLUDES the weight-smuggling rejection. A response carrying a weight-like
+    // field at any depth is refused whole, and refusing it now STOPS the
+    // session instead of quietly substituting a template — so a model that
+    // repeatedly tries to author a number is finally distinguishable from a
+    // healthy one.
     const reason = err instanceof JudgeResponseError ? err.reason : `unparsable:${errorLabel(err)}`;
-    return fallback(reason, transport.model);
+    throw new JudgeUnavailableError(reason, transport.model);
   }
 }
 

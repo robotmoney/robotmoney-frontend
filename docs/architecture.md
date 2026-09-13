@@ -1447,7 +1447,7 @@ Driver-created sessions have no such backlog: the driver enqueues the judging
 inside the run, so every session it starts from now on has one, and no session it
 started before has one no matter how long anyone waits.
 
-**Failure is an outcome, never an error.** Model unconfigured
+**Failure stops the judging (issue #969).** Model unconfigured
 (`model_unconfigured`), a session with no takes at all (`no_takes`), a session
 where **every** take is stance-only so there is no member-authored sentence to
 quote (`no_take_bodies`), request timed out (`model_timeout`), the transport
@@ -1463,12 +1463,39 @@ submit (`unknown_member:<id>`), a weight-like field anywhere in the response
 (`weight_like_field:<path>`), **a
 malformed `SWARM_JUDGE_TIMEOUT_MS` in the environment**
 (`invalid_timeout_config:…`), and anything else thrown while parsing
-(`unparsable:…`) — each falls back to the
-SAME template producers the aggregator uses (`buildRationale`,
-`buildDisagreements`), records the reason on the judgement row, and lets the
-session carry on. Every recorded reason is capped at 120 characters, the two
-built out of the model's own text included. No session is ever blocked on the
-judge, and no partially-trusted model response ever reaches one.
+(`unparsable:…`) — each throws rather than producing an opinion.
+`JudgeNothingToJudgeError` carries the two that are not failures at all
+(`no_takes`, `no_take_bodies`): there is no outage and nothing to retry, the
+session simply holds no member-authored sentence for any judge to speak to.
+`JudgeUnavailableError` carries the rest. Either way NO judgement row is
+written, the session stays unjudged, and it publishes no consensus receipt.
+Every reason is capped at 120 characters — bounded inside the error
+constructors, so the two built out of the model's own text cannot escape it.
+No partially-trusted model response ever reaches a session.
+
+**This REPLACED the original contract, which was the opposite.** Until #969
+every one of those paths fell back to the same template producers the
+aggregator uses (`buildRationale`, `buildDisagreements`), recorded a
+`source: 'fallback'` reason, and let the session carry on — bought so that a
+live cadence could never be blocked on the judge. The cost was not visible
+until it was: a fallback opinion travelled the ordinary write path, so it
+reached the same row, the same `judged` transition and the same **signed**
+consensus receipt as a real one, attributed to the judge. Nothing downstream
+could tell the two apart. In production nothing did — `swarm_judge_config` sat
+at `mode = 'enforce'` with `model = NULL`, a transport could never be built,
+and every enforce-mode opinion the system published was a template wearing the
+judge's name. A judge outage now stalls sessions unpublished, which is visible
+and recoverable, instead of publishing signed attestations of prose no judge
+authored, which is neither.
+
+`source = 'fallback'` survives in the `swarm_session_judgements` CHECK and in
+the receipt schema, and only there: the table is append-only, the pre-#969 rows
+are real history, and some of them are embedded in receipts already signed and
+served. Nothing writes a new one. Migration
+`0056_swarm_judge_requires_model.sql` closes the state that produced them —
+`shadow`/`enforce` now require a model in the schema and in `setJudgeConfig()`,
+and the migration switches an already-misconfigured judge **off** on deploy
+rather than leaving it nominally on.
 
 That list above is EXHAUSTIVE, and it is pinned to the source rather than
 maintained by hand: `scripts/tests/unit/judge-fallback-reasons-documented.test.ts`

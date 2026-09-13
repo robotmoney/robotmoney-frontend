@@ -19,7 +19,10 @@
 import { STANCES } from "@robotmoney/contract";
 import { sql } from "../db/client.ts";
 import { buildRationale, loadFrozenTakeSet, majorityStance, meanTakeWeights } from "./domain.ts";
-import { DIGEST_SCHEME, inputsDigest, judge, type JudgeOptions, type JudgeOutcome } from "./judge.ts";
+import {
+  DIGEST_SCHEME, inputsDigest, judge, JUDGE_PROMPT_HASH, JudgeNothingToJudgeError, JudgeUnavailableError,
+  type JudgeOptions, type JudgeOutcome,
+} from "./judge.ts";
 import { getJudgeConfig, judgeInputFromFrozen, latestJudgement } from "./judge-session.ts";
 
 // WHAT IT USED TO CHECK, AND WHY THAT WAS WORTHLESS (issue #766). The original
@@ -131,7 +134,24 @@ export interface JudgeReplayResult {
   /** Convenience: true unless `digestVerdict === "mismatch"` — a historical divergence is not a fault. */
   digestReproducible: boolean;
 
-  outcome: JudgeOutcome;
+  /**
+   * The opinion the replay's own judge call formed, or NULL when it refused
+   * (issue #969). A refusal is an ordinary observation for an offline audit —
+   * this tool points at production with a read-only role and no judge model of
+   * its own, so `model_unconfigured` is its NORMAL state, not a fault. What the
+   * call is here to demonstrate holds either way: judging writes nothing.
+   */
+  outcome: JudgeOutcome | null;
+  /** Why the replay's judge call refused, or null if it formed an opinion. */
+  judgeRefusal: string | null;
+  /**
+   * The two pinned digests, DERIVED FROM THE INPUT and therefore present even
+   * when the judge refused (issue #969). They are what the audit is actually
+   * about — a refusal takes the opinion away, not the reproducibility of the
+   * bytes the opinion would have been formed over.
+   */
+  promptHash: string;
+  inputsDigest: string;
 }
 
 /**
@@ -206,7 +226,23 @@ export async function replaySessionJudge(
     ? "reproduced"
     : "mismatch";
 
-  const outcome = await judge(input, { model: config.model, ...opts });
+  // THE CALL IS THE SUBJECT OF THE ASSERTION BELOW, not a source of data: the
+  // re-read that follows proves judging did not move the vector. Since #969
+  // judge() refuses rather than fabricating, and an auditor running without a
+  // judge model refuses EVERY time — which is fine, because a refusal writes
+  // nothing just as emphatically as an opinion does. Swallowing it here would
+  // hide it; crashing on it would make the audit unusable against production.
+  let outcome: JudgeOutcome | null = null;
+  let judgeRefusal: string | null = null;
+  try {
+    outcome = await judge(input, { model: config.model, ...opts });
+  } catch (err) {
+    if (err instanceof JudgeUnavailableError || err instanceof JudgeNothingToJudgeError) {
+      judgeRefusal = err.reason;
+    } else {
+      throw err;
+    }
+  }
 
   // ── 2. The kept assertion, under its own name.
   const after = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
@@ -282,6 +318,9 @@ export async function replaySessionJudge(
     digestVerdict,
     digestReproducible: digestVerdict !== "mismatch",
     outcome,
+    judgeRefusal,
+    promptHash: JUDGE_PROMPT_HASH,
+    inputsDigest: inputsDigest(input),
   };
 }
 

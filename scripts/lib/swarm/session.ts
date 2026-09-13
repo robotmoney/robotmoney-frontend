@@ -18,6 +18,13 @@ import type { SmokeCadence } from "../smoke-schedule.ts";
 import type { ScenarioInitializer } from "../smoke-mode.ts";
 import { missingSectionLeadIns } from "./inference.ts";
 import { generateKeyPair } from "./crypto.ts";
+// D22 rule 1's ONE model-selection signal — the same resolver every member
+// agent container runs under. The judge reads its model from a database row
+// (swarm_judge_config.model) rather than the registry, which is exactly how
+// stage and prod ended up with real models on every member and NULL on the
+// judge; the smoke closes that by seeding the row FROM the registry, so the
+// two selection paths cannot disagree on a booted stack (issue #969).
+import { resolveAgentModel } from "../model-registry.ts";
 
 export function backendUrl(): string {
   return process.env.BACKEND_URL ?? "http://localhost:8787";
@@ -296,7 +303,14 @@ async function responseJson<T = any>(response: Response): Promise<T> {
 // something no other consumer of this stream can match on. It is a separate
 // optional field for that reason, and it is absent on every other event.
 export type SessionEvent =
-  | { type: "session"; state: string; sessionId?: number; subject: string; date: string; judgeMode?: string }
+  // `judgeSource` (issue #969) says WHO AUTHORED the opinion — "model", or a
+  // pre-#969 "fallback". The mode alone cannot draw that distinction: `judged
+  // (enforce)` was equally true of a session whose opinion came from a template
+  // because the judge had no model at all.
+  | {
+      type: "session"; state: string; sessionId?: number; subject: string; date: string;
+      judgeMode?: string; judgeSource?: string;
+    }
   | { type: "member"; memberId: string; stage: AgentStage | "absent"; stance?: string; confidence?: number };
 export type SessionProgress = (ev: SessionEvent) => void;
 
@@ -795,6 +809,15 @@ export interface JudgeStepOutcome {
   waitedForJudged: boolean;
   judged: boolean;
   recorded: number | null;
+  /**
+   * WHO AUTHORED THE OPINION — "model", or a pre-#969 "fallback" (issue #969).
+   * `judged (enforce)` was the strongest thing this stream could say, and it is
+   * true of a judging that never happened: before #969 a session with no judge
+   * model recorded template prose and transitioned exactly like a real one.
+   * Null when unreadable, which is reported as unreadable rather than assumed
+   * good.
+   */
+  source?: string | null;
 }
 
 /**
@@ -819,15 +842,19 @@ export interface JudgeStepOutcome {
  * — and an event keyed on the wait's opinion rather than on the record would
  * reproduce, on the stream, exactly the wrong claim the expiry log used to make.
  */
-export function judgedProgress(outcome: JudgeStepOutcome): { judgeMode: string } | null {
+export function judgedProgress(outcome: JudgeStepOutcome): { judgeMode: string; judgeSource?: string } | null {
   if (outcome.mode !== "shadow" && outcome.mode !== "enforce") return null;
   const landed = outcome.judged || (outcome.recorded ?? 0) > 0;
-  return landed ? { judgeMode: outcome.mode } : null;
+  if (!landed) return null;
+  // The source rides along so the TUI can say WHO SPOKE, not merely that the
+  // session reached `judged` (issue #969).
+  return outcome.source ? { judgeMode: outcome.mode, judgeSource: outcome.source } : { judgeMode: outcome.mode };
 }
 
 /** Injection seam for runJudgeStep's effects. Real callers pass none. */
 export interface JudgeStepDeps {
   readMode?: () => Promise<string | null>;
+  readProvenance?: () => Promise<{ source: string | null; fallbackReason: string | null; model: string | null }>;
   enqueue?: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
   waitForJudged?: () => Promise<unknown>;
   countJudgements?: () => Promise<number | null>;
@@ -883,6 +910,8 @@ export async function runJudgeStep(
     ?? ((action: string, payload: Record<string, unknown>) => enqueueLifecycleJob(action, payload, automationToken));
   const waitForJudged = deps.waitForJudged ?? (() => waitForSessionState(date, subjectId, "judged", JUDGE_WAIT_MS));
   const judgementCount = deps.countJudgements ?? (() => countJudgements(sessionId, automationToken));
+  const readProvenance = deps.readProvenance
+    ?? (() => latestJudgementProvenance(sessionId, automationToken).catch(() => ({ source: null, fallbackReason: null, model: null })));
   const log = deps.log ?? ((line: string) => console.log(line));
 
   // Read the switch BEFORE enqueueing, so the branch below is about the mode
@@ -902,8 +931,16 @@ export async function runJudgeStep(
   }
   try {
     await waitForJudged();
-    log(`  judged (mode=${mode})`);
-    return { mode, waitedForJudged: true, judged: true, recorded: null };
+    // WHO SPOKE, not just that something did. A `source` other than "model" on
+    // a post-#969 stack means a pre-#969 row is still in force; either way the
+    // operator reads it here instead of inferring it from the mode.
+    const provenance = await readProvenance();
+    log(
+      `  judged (mode=${mode}, source=${provenance.source ?? "unreadable"}` +
+        `${provenance.model ? `, model=${provenance.model}` : ""}` +
+        `${provenance.fallbackReason ? `, ${provenance.fallbackReason}` : ""})`,
+    );
+    return { mode, waitedForJudged: true, judged: true, recorded: null, source: provenance.source };
   } catch (err) {
     // SAY WHICH FAILURE THIS IS (issue #806). "did not reach 'judged' in time"
     // asserts a slow judge, and on the single-worker swarm lane that is usually
@@ -924,7 +961,8 @@ export async function runJudgeStep(
         `EXPIRED (mode=${mode}) — ${record}; publishing anyway rather than wedging the cadence: ` +
         `${err instanceof Error ? err.message : err}`,
     );
-    return { mode, waitedForJudged: true, judged: false, recorded };
+    const provenance = recorded != null && recorded > 0 ? await readProvenance() : { source: null };
+    return { mode, waitedForJudged: true, judged: false, recorded, source: provenance.source };
   }
 }
 
@@ -1112,6 +1150,47 @@ export async function latestJudgedByMemberId(sessionId: string | number, automat
 }
 
 /**
+ * `POST /api/swarm/admin/judge` — seed the model the judge will actually run.
+ *
+ * WITHOUT THIS THE SMOKE PROVES NOTHING (issue #969). `swarm_judge_config.model`
+ * ships NULL, and a twin restores production's row rather than a fresh one, so
+ * every judged session on every smoke ran with no transport at all: judge()
+ * returned template prose under `source: "fallback"` and the coverage below
+ * still went green, because a fallback row lands, is attributed, and is
+ * counted exactly like a real one.
+ */
+export async function setJudgeModel(model: string, automationToken?: string): Promise<void> {
+  const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    body: JSON.stringify({ model }),
+  });
+  if (!r.ok) {
+    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {model:${model}} -> ${r.status}: ${await r.text()}`);
+  }
+}
+
+/** The in-force judgement's provenance: did a MODEL author it, or a template? */
+export async function latestJudgementProvenance(
+  sessionId: string | number,
+  automationToken?: string,
+): Promise<{ source: string | null; fallbackReason: string | null; model: string | null }> {
+  const r = await fetch(
+    `${backendUrl()}${routePath(ROUTES.swarm.admin.sessionJudgements, { id: String(sessionId) })}`,
+    { headers: getAutomationHeaders(automationToken) },
+  );
+  if (!r.ok) throw new Error(`GET sessionJudgements ${sessionId} -> ${r.status}`);
+  const body = await responseJson<{
+    inForce?: { source?: string | null; fallbackReason?: string | null; model?: string | null } | null;
+  }>(r);
+  return {
+    source: body.inForce?.source ?? null,
+    fallbackReason: body.inForce?.fallbackReason ?? null,
+    model: body.inForce?.model ?? null,
+  };
+}
+
+/**
  * Grants `memberId` the judge role, flips `swarm_judge_config.mode` to
  * `shadow`, runs `runJudgedSession` (expected to be a single `runSession`
  * call whose roster already treats `memberId` as absent — a judge-role member
@@ -1140,6 +1219,13 @@ export async function runJudgeRoleCoverage(
 ): Promise<void> {
   await setMemberRole(memberId, "judge", automationToken);
   console.log(`  ${memberId}: granted judge role via ${ROUTES.swarm.admin.memberRole} (issue #845)`);
+  // SEED THE MODEL BEFORE THE MODE. Since #969 the backend refuses
+  // shadow/enforce while `model` is NULL, so this is no longer merely the
+  // difference between a real judging and a faked one — it is what makes the
+  // setJudgeMode() call below legal at all.
+  const judgeModel = resolveAgentModel();
+  await setJudgeModel(judgeModel, automationToken);
+  console.log(`  judge model: ${judgeModel} (resolveAgentModel, issue #969)`);
   const shippedJudgeMode = await readJudgeMode(automationToken);
   const restoreJudgeMode: "off" | "shadow" | "enforce" =
     shippedJudgeMode === "shadow" || shippedJudgeMode === "enforce" ? shippedJudgeMode : "off";
@@ -1177,6 +1263,22 @@ export async function runJudgeRoleCoverage(
     }
     console.log(
       `  session ${judged.sessionId}: judgedByMemberId=${judgedByMemberId} matches granted persona '${memberId}' (issue #922)`,
+    );
+    // AC: A MODEL AUTHORED IT (issue #969). The three assertions above — a row
+    // landed, it is attributed, it names the granted persona — are ALL true of
+    // a `source: "fallback"` row carrying template prose, which is how this
+    // coverage stayed green on every smoke and every twin while no judge had
+    // ever run. This is the one that could not pass without one.
+    const provenance = await latestJudgementProvenance(judged.sessionId, automationToken);
+    if (provenance.source !== "model") {
+      throw new Error(
+        `session ${judged.sessionId}: judgement source=${provenance.source ?? "null"}` +
+          `${provenance.fallbackReason ? ` (${provenance.fallbackReason})` : ""} — expected "model". ` +
+          "No judge authored this opinion; the smoke must not report coverage for a judging that did not happen (issue #969)",
+      );
+    }
+    console.log(
+      `  session ${judged.sessionId}: judgement authored by model=${provenance.model ?? "unknown"} (source=model, issue #969)`,
     );
   } finally {
     await setJudgeMode(restoreJudgeMode, automationToken);

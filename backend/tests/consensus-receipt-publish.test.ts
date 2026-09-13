@@ -13,7 +13,7 @@
 // real HTTP dispatcher. The database is a clean clone of the migrated schema
 // per file; if Postgres is unavailable the suite fails loudly rather than
 // skipping.
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { ROUTES, canonicalizeSubmission, path } from "@robotmoney/contract";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
@@ -23,6 +23,14 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { setJudgeConfig, judgeSession } from "../src/swarm/judge-session.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt, getConsensusReceipt, verifyAssembledReceipt } from "../src/swarm/consensus-receipt.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// A real judge endpoint, locally served: these tests drive the judging through
+// judgeSessionAdmin, which has no injectable transport. Before issue #969 they
+// leaned on `model` being NULL and anchored the resulting TEMPLATE prose into a
+// signed receipt — the exact thing #969 makes impossible.
+import { installJudgeStub, removeJudgeStub, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
+beforeAll(installJudgeStub);
+afterAll(removeJudgeStub);
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -68,7 +76,7 @@ async function collectingSession(prefix: string, weights: (number[] | null)[], m
   // the session keeps its aggregator-authored prose. A receipt embeds only the
   // opinion the session ADOPTED, so a shadow session has nothing to assemble —
   // asserted directly further down.
-  await setJudgeConfig({ mode, minTakes: 2 });
+  await setJudgeConfig({ mode, minTakes: 2, model: STUB_JUDGE_MODEL });
   const session = await ic.openSession(subjectId);
   await ic.publishBrief(session.id, 60);
   const date = session.date instanceof Date ? session.date.toISOString().slice(0, 10) : String(session.date).slice(0, 10);
@@ -95,8 +103,9 @@ async function advanceToPublished(sessionId: string) {
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
   const aggregated = await admin.aggregateSessionAdmin(sessionId, undefined);
   if (!aggregated.ok) throw new Error(`aggregate failed: ${JSON.stringify(aggregated)}`);
-  // No model is configured, so the judge takes its template-fallback path and
-  // records `source: "fallback"` — a complete, anchorable opinion.
+  // The local stub judge answers, so this records `source: "model"` — a real,
+  // anchorable opinion. It used to record `source: "fallback"` because no model
+  // was configured, which anchored TEMPLATE prose into a signed receipt (#969).
   const judged = await admin.judgeSessionAdmin(sessionId, undefined);
   if (!judged.ok) throw new Error(`judge failed: ${JSON.stringify(judged)}`);
   const published = await admin.publishSessionAdmin(sessionId, undefined);
@@ -180,7 +189,10 @@ test("a judged session publishes a receipt that is fetchable, verified, and byte
   expect(receipt.weights.map((w: any) => w.bucket)).toEqual(CANONICAL_FOUR);
   expect(receipt.weights.reduce((t: number, w: any) => t + w.weight_bps, 0)).toBe(10_000);
   expect(receipt.judge.rationale.length).toBeGreaterThan(0);
-  expect(receipt.judge.source).toBe("fallback");
+  // A NEWLY PUBLISHED RECEIPT ALWAYS SAYS "model" (issue #969). This asserted
+  // "fallback" for as long as the fixture withheld a judge model — which is
+  // what a production receipt said too, for the same reason.
+  expect(receipt.judge.source).toBe("model");
   // THE MODE IS IN THE SIGNED BYTES. A verifier holding only the receipt can
   // tell an opinion the session adopted from one it withheld.
   expect(receipt.judge.mode).toBe("enforce");
@@ -403,7 +415,7 @@ test("refusals reach the operator with a reason: an unjudged session, and a non-
   const threeSubject = rid("recthree");
   await ic.ensureSubject(threeSubject, "three bucket subject");
   await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${threeSubject}`;
-  await setJudgeConfig({ mode: "enforce", minTakes: 2 });
+  await setJudgeConfig({ mode: "enforce", minTakes: 2, model: STUB_JUDGE_MODEL });
   const s3 = await ic.openSession(threeSubject);
   await ic.publishBrief(s3.id, 60);
   const date3 = s3.date instanceof Date ? s3.date.toISOString().slice(0, 10) : String(s3.date).slice(0, 10);
@@ -598,7 +610,7 @@ test("BLOCKER 2: a SHADOW judgement never reaches a receipt, and an enforce one 
   expect((enforced as any).judge.applied).toBe(true);
   const adoptedId = String((enforced as any).judge.judgementId);
 
-  await setJudgeConfig({ mode: "shadow", minTakes: 2 });
+  await setJudgeConfig({ mode: "shadow", minTakes: 2, model: STUB_JUDGE_MODEL });
   const later = await judgeSession(live.sessionId);
   expect(later.ok).toBe(true);
   expect(Number(later.judgementId)).toBeGreaterThan(Number(adoptedId));

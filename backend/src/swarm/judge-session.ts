@@ -22,7 +22,16 @@
 // pre-#766 version of it proved nothing.
 import { sql, type DbHandle } from "../db/client.ts";
 import { loadFrozenTakeSet } from "./domain.ts";
-import { DIGEST_SCHEME, judge, type JudgeInput, type JudgeOptions, type JudgeOutcome, type JudgeTake } from "./judge.ts";
+import {
+  DIGEST_SCHEME,
+  judge,
+  JudgeNothingToJudgeError,
+  JudgeUnavailableError,
+  type JudgeInput,
+  type JudgeOptions,
+  type JudgeOutcome,
+  type JudgeTake,
+} from "./judge.ts";
 import { LIVE_ROSTER_HANDLES } from "./roster-seed.ts";
 
 export type JudgeMode = "off" | "shadow" | "enforce";
@@ -81,6 +90,26 @@ export async function setJudgeConfig(
   }
   if (patch.thirdPartyEnabled !== undefined && typeof patch.thirdPartyEnabled !== "boolean") {
     throw new Error("invalid judge thirdPartyEnabled — expected a boolean");
+  }
+  // A JUDGE THAT IS ON MUST HAVE A MODEL (issue #969). `mode` and `model` are
+  // two columns an operator sets independently, and the combination
+  // `enforce`+NULL is exactly the state production reached: the switch reads
+  // ON, the transport can never be built, and every session it judged adopted
+  // template prose under the judge's name. The pair is now validated as a
+  // PAIR, against the row as it WILL BE rather than as it was — setting the
+  // mode and clearing the model in one patch is refused too. Migration 0053
+  // enforces the same rule in the schema, for writers that never come through
+  // here.
+  if (patch.mode !== undefined || patch.model !== undefined) {
+    const current = await getJudgeConfig();
+    const resultingMode = patch.mode ?? current.mode;
+    const resultingModel = patch.model === undefined ? current.model : (patch.model === null ? null : patch.model.trim());
+    if (resultingMode !== "off" && !resultingModel) {
+      throw new Error(
+        `judge mode "${resultingMode}" requires a model — set { mode, model } together, or leave the judge off. ` +
+          "A judge with no model cannot form an opinion, and it must not record one it did not form.",
+      );
+    }
   }
   // `model: null` UNSETS deliberately, which is why it is passed through
   // separately from the COALESCE-on-undefined the other two fields get: taking
@@ -176,6 +205,14 @@ export interface JudgeSessionResult {
   /** Set iff `enforce` recorded an opinion that did NOT reach the session, and why. */
   appliedSkippedReason?: string;
   outcome?: JudgeOutcome;
+  /**
+   * Set iff the judging was REFUSED rather than performed (issue #969): the
+   * judge could not be reached, or the session held nothing to speak to. No
+   * judgement row was written and the session did not advance. This is the
+   * field that used to be a `fallback_reason` on a row nobody could tell from
+   * a real judging.
+   */
+  judgeUnavailableReason?: string;
 }
 
 export interface JudgeSessionOptions extends JudgeOptions {
@@ -279,7 +316,42 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
   const input = await buildJudgeInput(sessionId, config.minTakes);
   if (!input) return { ok: false, status: 404, error: "session not found", sessionId, mode: config.mode };
 
-  let outcome = await judge(input, { model: config.model, ...judgeOpts });
+  // THE JUDGING EITHER HAPPENS OR IT DOES NOT (issue #969). judge() used to
+  // absorb every failure into a `source: "fallback"` outcome carrying template
+  // prose, which then travelled the identical write path as a real opinion —
+  // same row, same session, same signed consensus receipt. Nothing downstream
+  // could tell the two apart, so nothing did. Both refusals now return BEFORE
+  // the transaction below opens: no judgement row is written, the session does
+  // not advance, and the reason travels to the caller under its own name.
+  //
+  // `outcome` stays widened to JudgeOutcome because the re-entrant paths below
+  // rehydrate it from a row on file, and a row written before this change may
+  // legitimately still read `source: "fallback"` — that history is append-only
+  // (migration 0040) and stays readable. Only the FRESH value is narrowed.
+  let outcome: JudgeOutcome;
+  try {
+    outcome = await judge(input, { model: config.model, ...judgeOpts });
+  } catch (err) {
+    if (err instanceof JudgeNothingToJudgeError) {
+      // Not a failure: the session holds no member-authored sentence, so there
+      // is no opinion to be had and nothing to retry. 409, not 503 — a worker
+      // that retried this would retry it forever.
+      return {
+        ok: false, status: 409, error: "nothing_to_judge", sessionId, mode: config.mode,
+        judgeUnavailableReason: err.reason,
+      };
+    }
+    if (err instanceof JudgeUnavailableError) {
+      // A real outage or a response that could not be trusted whole. 503 so the
+      // job queue retries it; the session stays unjudged and unpublished until
+      // a judge actually answers.
+      return {
+        ok: false, status: 503, error: "judge_unavailable", sessionId, mode: config.mode,
+        judgeUnavailableReason: err.reason,
+      };
+    }
+    throw err;
+  }
 
   let refusal: { ok: boolean; status: number; error?: string } | undefined;
   let recorded: { id: string | number; applied: boolean; skipped?: string } | undefined;
