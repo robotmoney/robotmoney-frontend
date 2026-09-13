@@ -14,7 +14,7 @@
 // two-member session) rather than importing its private helpers, so this file
 // stays a clean regression pin for one thing: the CADENCE PATH
 // (`worker/handlers/swarm.ts publishSession`), not the admin ladder.
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
@@ -23,6 +23,13 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { publishSession as publishSessionJob } from "../src/worker/handlers/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// A real judge endpoint, locally served (issue #969): this file judges through
+// judgeSessionAdmin, which has no injectable transport, and the judge no longer
+// invents an opinion when it has no model to ask.
+import { installJudgeStub, removeJudgeStub, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
+beforeAll(installJudgeStub);
+afterAll(removeJudgeStub);
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -54,7 +61,7 @@ async function judgedButUnpublished(prefix: string, mode: "shadow" | "enforce") 
   const subjectId = rid(prefix);
   await ic.ensureSubject(subjectId, `${prefix} subject`);
   await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
-  await setJudgeConfig({ mode, minTakes: 2 });
+  await setJudgeConfig({ mode, minTakes: 2, model: STUB_JUDGE_MODEL });
   const session = await ic.openSession(subjectId);
   await ic.publishBrief(session.id, 60);
   const date = session.date instanceof Date ? session.date.toISOString().slice(0, 10) : String(session.date).slice(0, 10);
@@ -65,7 +72,8 @@ async function judgedButUnpublished(prefix: string, mode: "shadow" | "enforce") 
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
   const aggregated = await admin.aggregateSessionAdmin(session.id, undefined);
   if (!aggregated.ok) throw new Error(`aggregate failed: ${JSON.stringify(aggregated)}`);
-  // No model configured: the judge takes its template-fallback path.
+  // The local stub judge answers, so this is a real, model-authored opinion —
+  // the only kind a receipt may attest to since issue #969.
   const judged = await admin.judgeSessionAdmin(session.id, undefined);
   if (!judged.ok) throw new Error(`judge failed: ${JSON.stringify(judged)}`);
   return session.id;

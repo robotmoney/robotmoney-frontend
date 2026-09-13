@@ -174,13 +174,24 @@ export function smokeTwinTeardownNarration(dp: ResolvedDataPath): string | undef
 }
 
 /**
- * Default the restored twin's consensus judge to ENFORCE before any session sits.
+ * Default the restored twin's consensus judge to ENFORCE — WITH A MODEL — before
+ * any session sits.
  *
  * A restored dump carries whatever swarm_judge_config.mode the production replica
  * last shipped — normally 'off', which enqueues a judge job and SKIPS it, so a
  * default twin would publish no validator consensus receipts at all. Enforce is
  * what makes every judged session genuinely publish one, which is the standing
  * twin's reason to exist.
+ *
+ * THE MODEL IS NOT OPTIONAL AND IS SET FIRST (issue #969). A restored dump also
+ * carries production's `swarm_judge_config.model`, which is NULL — and `enforce`
+ * with no model is exactly the state that made every published receipt on this
+ * twin's predecessor an attestation of template prose. Since #969 the backend
+ * refuses the combination outright, so setting the mode alone does not merely
+ * produce a fake judging, it now FAILS the boot. The model comes from
+ * resolveAgentModel(), D22 rule 1's single selection signal and the same one
+ * every member agent container runs under, so the judge and the committee it
+ * judges cannot end up on different models.
  *
  * Lives HERE not in smoke-main.ts (which is under a hard size ceiling,
  * smoke-main-split.test.ts), and runs through the real admin API after the stack
@@ -197,8 +208,13 @@ export async function defaultSmokeTwinJudgeMode(
 ): Promise<void> {
   process.env.BACKEND_URL = backendUrl;
   const session = await import("./swarm/session.ts");
+  const { resolveAgentModel } = await import("./model-registry.ts");
+  const model = resolveAgentModel();
+  // Model BEFORE mode: the backend validates the pair against the resulting
+  // row, so `enforce` would be refused while the restored NULL is still in place.
+  await session.setJudgeModel(model, automationToken);
   await session.setJudgeMode("enforce", automationToken);
-  log("smoke-twin: consensus judge set to ENFORCE — every judged session will publish a receipt.");
+  log(`smoke-twin: consensus judge set to ENFORCE with model=${model} — every judged session will publish a receipt a model actually authored.`);
 }
 
 /**

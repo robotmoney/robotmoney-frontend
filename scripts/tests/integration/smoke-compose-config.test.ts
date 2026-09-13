@@ -527,7 +527,12 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
     expect(smokeMain).toContain('"--already-migrated"');
     expect(smokeMain).toContain('"src/producer/index.ts", "seed"');
     expect(smokeMain).not.toContain("v0-seed-bootstrap");
-    expect(smokeMain).toContain("{ stage: staticPortMode }");
+    // `staticPortMode` still reaches the resolvers as the `stage` fact — but it
+    // no longer travels alone: PR be6ac57c added `cadence` alongside it, so the
+    // exact-literal `{ stage: staticPortMode }` this pinned stopped existing and
+    // this assertion went red on the branch tip. Pin the PROPERTY, which is what
+    // it was ever about, rather than the punctuation around it.
+    expect(smokeMain).toMatch(/\bstage:\s*staticPortMode\b/);
     const stackSrc = await Bun.file(join(repoRoot, "scripts/stack/stack.ts")).text();
     expect(stackSrc).toContain("migrateScriptArgs");
     const stackConfigSrc = await Bun.file(join(repoRoot, "scripts/stack/config.ts")).text();
