@@ -277,9 +277,11 @@ services:
       # is a row rather than a `SWARM_JUDGE_MODEL` env var because D22 rule 1
       # keeps model selection to one reviewable signal. What is left here is the
       # shared OpenCode Zen credential (the member agents' existing key, not a
-      # second one), the endpoint, and the per-call bound. All blank by default:
-      # an unconfigured model means template prose and a recorded reason, never
-      # a failed session.
+      # second one), the endpoint, and the per-call bound. All blank by default.
+      # An unconfigured model no longer means template prose and a recorded
+      # reason (issue #969): `shadow`/`enforce` REQUIRE a model, and a judge
+      # that cannot be reached stops the judging rather than authoring prose
+      # under its own name and letting it reach a signed receipt.
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
@@ -351,8 +353,11 @@ services:
       # credential, the endpoint and the per-call bound are declared on this
       # service rather than in the *worker-env anchor above: worker-analytics
       # and worker-research would otherwise receive a live inference credential
-      # they never use. Without them HERE the one process that actually runs
-      # the judge on a schedule falls back to template prose silently.
+      # they never use. Without them HERE the one process that actually runs the
+      # judge on a schedule cannot reach a model at all — which since issue #969
+      # STOPS the judging loudly (503 judge_unavailable, session left unjudged)
+      # instead of falling back to template prose silently, which is what this
+      # comment used to warn about and what production actually did.
       # On/off AND which model are database rows, not env vars; see the api
       # block above.
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
