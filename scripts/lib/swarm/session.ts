@@ -1038,15 +1038,42 @@ export async function runRegimeClassify(
 // let `main()` below grant the role and flip the mode for exactly one
 // session, then restore both.
 
-/** `POST /api/swarm/admin/judge` — the runtime switch (mode ∈ off|shadow|enforce). */
+/**
+ * `POST /api/swarm/admin/judge` — the runtime switch (mode ∈ off|shadow|enforce).
+ *
+ * ENABLING IS ONE REQUEST, MODE AND MODEL TOGETHER (migration 0056). The
+ * constraint is on the PAIR — `shadow`/`enforce` require a model — and the
+ * shipped default is `off` with `model` NULL, so the obvious two-step
+ * ("set the mode, then set the model") is refused by the database at step one.
+ * That is exactly what turned the GitHub e2e red on `off -> shadow`: the test
+ * updated only the mode, against a row whose model was still NULL.
+ *
+ * The guard below is deliberately a REFUSAL IN THIS PROCESS rather than a
+ * fixed-up call site. Patching the one caller that went red would leave the
+ * next one to rediscover it as a 400 from the admin route, or — worse, on a
+ * restored twin whose model happens to be set — to pass locally and fail on a
+ * fresh database. A caller that means to enable the judge knows which model it
+ * wants; one that does not is not ready to enable it.
+ */
 export async function setJudgeMode(
   mode: "off" | "shadow" | "enforce",
   automationToken?: string,
+  model?: string,
 ): Promise<void> {
+  if (mode !== "off" && !model?.trim()) {
+    throw new Error(
+      `setJudgeMode(${mode}) needs the model in the SAME request: migration 0056 constrains the ` +
+        "mode/model pair, so enabling the judge against the shipped NULL model is refused by the " +
+        "database. Resolve the model first (setJudgeModel, or resolveAgentModel()) and pass it here. " +
+        'Only setJudgeMode("off") may omit it.',
+    );
+  }
   const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
-    body: JSON.stringify({ mode }),
+    // Mode + model atomically when enabling: two independent requests permit
+    // another actor (or a stale restored row) to expose an invalid pair.
+    body: JSON.stringify(model ? { mode, model } : { mode }),
   });
   if (!r.ok) {
     throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {mode:${mode}} -> ${r.status}: ${await r.text()}`);
@@ -1229,12 +1256,13 @@ export async function runJudgeRoleCoverage(
   // shadow/enforce while `model` is NULL, so this is no longer merely the
   // difference between a real judging and a faked one — it is what makes the
   // setJudgeMode() call below legal at all.
-  const storedJudgeModel = await setJudgeModel(resolveAgentModel(), automationToken);
+  const selectedJudgeModel = resolveAgentModel();
+  const storedJudgeModel = await setJudgeModel(selectedJudgeModel, automationToken);
   console.log(`  judge model: ${storedJudgeModel} (resolveAgentModel -> wire id, issue #969)`);
   const shippedJudgeMode = await readJudgeMode(automationToken);
   const restoreJudgeMode: "off" | "shadow" | "enforce" =
     shippedJudgeMode === "shadow" || shippedJudgeMode === "enforce" ? shippedJudgeMode : "off";
-  await setJudgeMode("shadow", automationToken);
+  await setJudgeMode("shadow", automationToken, selectedJudgeModel);
   console.log(`  judge mode: ${shippedJudgeMode ?? "unreadable"} -> shadow for this session only (issue #845)`);
   try {
     const judged = await runJudgedSession();
@@ -1286,7 +1314,10 @@ export async function runJudgeRoleCoverage(
       `  session ${judged.sessionId}: judgement authored by model=${provenance.model ?? "unknown"} (source=model, issue #969)`,
     );
   } finally {
-    await setJudgeMode(restoreJudgeMode, automationToken);
+    // Restoring to `shadow`/`enforce` is an ENABLE like any other, so it carries
+    // the model too. Restoring to `off` must not: `off` with a model is legal,
+    // but the row this smoke found may legitimately have had none.
+    await setJudgeMode(restoreJudgeMode, automationToken, restoreJudgeMode === "off" ? undefined : storedJudgeModel);
     await setMemberRole(memberId, "member", automationToken);
     console.log(`  judge mode restored to ${restoreJudgeMode}; ${memberId} role restored to member (issue #845)`);
   }

@@ -55,9 +55,20 @@ END $$;
 -- is append-only (migration 0040) and holds real fallback rows — including the
 -- ones embedded in consensus receipts already published and signed. Narrowing
 -- the domain to 'model' would make history unreadable to defend an invariant
--- that only governs the future. Nothing writes a new fallback row after #969
--- (judge() throws instead), so the column's remaining 'fallback' values are
--- exactly the historical set and stay legible as such.
+-- that only governs the future.
+--
+-- CORRECTED 2026-09-13 (D-A7, checklist §5). As written, this comment said
+-- "nothing writes a new fallback row after #969 (judge() throws instead), so the
+-- column's remaining 'fallback' values are exactly the historical set". That is
+-- NO LONGER TRUE, and an operator triaging a staging row must not read it that
+-- way. D-A7 restored the deterministic fallback for the RUNTIME class — a model
+-- that was reachable and then timed out, refused, or answered with something
+-- unusable — so NEW source='fallback' rows are written again, each carrying a
+-- bounded fallback_reason from docs/architecture.md §9.7's enumeration. What can
+-- no longer produce one is the MISCONFIGURATION class: no model, no credential,
+-- a rejected or unfunded credential, an unsupported model id. Those fail closed
+-- and write NO row at all. So a live 'fallback' row is a survivable runtime
+-- failure, not pre-#969 history — read its fallback_reason to tell which.
 --
 -- Those published receipts are NOT retracted here either. They are
 -- signature-valid attestations of template prose; whether they should remain

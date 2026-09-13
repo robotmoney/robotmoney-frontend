@@ -83,6 +83,7 @@ commit stage is currently validating whether or not a tag exists on it.
 | Vault/allocation subject repair | `swarm_subjects` (0051) self-heals `robotmoney-vault` and `robotmoney-allocation` back to `recommendation_type = 'bucket_weights'` if a prior `ensureSmokeSubjectFixtures` bug (issue #780, fixed in the same PR) had clobbered either to `position_actions`. | None. Idempotent; a no-op if neither subject exists yet or both already read the right value. |
 | Judge digest provenance | `swarm_session_judgements.digest_scheme` (0052) records which canonical form produced a row's `inputs_digest`, so `swarm-judge-replay` can distinguish "this row predates a canonicalization change" from "this row claims the current rule and no longer reproduces." | None for this release — the column exists for the *next* canonical-form change, not this one. |
 | **Database role taxonomy** | **0053** re-owns every table, view, sequence, and function in `public` from the migration/bootstrap login to a new **`rm_owner`** role (`NOLOGIN` — no process may ever authenticate as it), revokes `PUBLIC`'s schema privileges, and re-grants `rm_app`/`rm_readonly` explicitly. **0054** replaces `rm_worker`'s broad/default grant with an explicit table allow-list — `rm_worker` can `SELECT` everywhere but `INSERT`/`UPDATE`/`DELETE` only on the 17 tables it actually queues/samples through. | **Verify BEFORE cutover** that the migration-time connection's role can execute `CREATE ROLE` (DigitalOcean managed Postgres's default admin role has this by default; a scoped-down migration credential may not) — see §3's precondition check. This is the highest-risk step in the release: getting it wrong changes who can read or write every table at once. |
+| Judge model invariant | **0056** requires every `shadow`/`enforce` row to name a model and repairs an invalid enabled/null row to `off`. Model transport failures still produce explicitly-labelled deterministic fallback prose. | Re-enable with `mode` and `model` in one request; never expose an invalid intermediate pair. |
 | Consensus receipt auto-publish | `swarm.publish` (the worker cadence, not the HTTP publish route) now calls the receipt-publish path itself right after a session publishes — no separate admin call needed for an `enforce`-judged session. | None required. Structurally still a no-op for `off`/`shadow`-mode sessions (a `shadow` judgement is deliberately withheld from the session's own record, so there is no adopted opinion for a receipt to attest to) — this is not a bug the patch could or should remove. |
 | Append-only preflight accuracy | `db-preflight`'s guard check no longer reports a table as "disarmed" (implying tampering) merely because its *own* opt-in migration (e.g. `0050` for `swarm_member_keys`) has not reached this database yet — it now gates each table on its own migration, not just `0032`'s. | None. Purely removes a false positive that every `smoke:twin`/`smoke:capture` run against a pre-0.5.0 database was hitting. |
 
@@ -112,6 +113,7 @@ Maps to `release-runbooks.md` §4.2 (pre-upgrade baseline) and §4.3
 0053_database_role_taxonomy.sql
 0054_rm_worker_allowlist.sql
 0055_swarm_recommendations_member_received_idx.sql
+0056_swarm_judge_requires_model.sql
 ```
 
 Before any write, use the read-only replica procedure from
@@ -121,7 +123,7 @@ and manifest — §4.2 requirement.
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -c "
 SELECT name, applied_at FROM schema_migrations
- WHERE name LIKE ANY (ARRAY['0049_%','0050_%','0051_%','0052_%','0053_%','0054_%','0055_%']) ORDER BY name;
+ WHERE name LIKE ANY (ARRAY['0049_%','0050_%','0051_%','0052_%','0053_%','0054_%','0055_%','0056_%']) ORDER BY name;
 SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname IN ('rm_owner','rm_app','rm_worker','rm_readonly');
 "
 ```
@@ -162,11 +164,11 @@ bun backend/scripts/upgrades/0.4.0-to-0.5.0/stage-rehearsal.ts "$RM_BACKUP_DIR" 
 ```
 
 The restore check validates the v0.4.0 starting state. The rehearsal applies
-the seven migrations to the restored smoke-twin, boots real services, and
+the eight migrations to the restored smoke-twin, boots real services, and
 executes the release postflight before teardown. It proves conformance to
 the release acceptance criteria — §4.4 gate:
 
-1. All seven full migration filenames appear once in `schema_migrations`.
+1. All eight full migration filenames appear once in `schema_migrations`.
 2. `swarm_recommendations.signing_key_id` is nullable and its foreign key is
    `ON DELETE SET NULL`; `swarm_session_judgements.digest_scheme` is
    `NOT NULL DEFAULT 'derivation-v1'`.
@@ -183,7 +185,12 @@ the release acceptance criteria — §4.4 gate:
    append-only-protected tables.
 6. `swarm_recommendations_member_received_idx` exists on
    `(member_id, received_at DESC)`.
-7. A judged, `enforce`-mode session that reaches `swarm.publish` on the
+7. `swarm_judge_config_mode_requires_model_check` is installed AND validated,
+   no judge config row reads enabled with a NULL/blank model after the
+   migration, and mode/model enablement is exercised atomically — the
+   preflight reports the same constraint as ABSENT beforehand and WARNs in
+   advance when 0056 is about to switch an enabled judge `off`.
+8. A judged, `enforce`-mode session that reaches `swarm.publish` on the
    real worker cadence gets a `swarm_consensus_receipts` row with no
    separate admin call; a `shadow`-mode session publishes cleanly with no
    receipt and no thrown error.
@@ -240,7 +247,7 @@ bun backend/scripts/upgrades/0.4.0-to-0.5.0/preflight.ts --emit-receipt
 4. Deploy in provider order: database migration, API and every worker lane,
    then static frontend. Do not publish the new SPA before its API — R4
    (deploy provider before consumer).
-5. Confirm the migration log names all seven new files exactly once — per R1
+5. Confirm the migration log names all eight new files exactly once — per R1
    (additive only).
 6. Immediately after the migration step (before the API is serving traffic),
    confirm the API's own runtime role can still connect and query:
@@ -268,8 +275,9 @@ bun backend/scripts/upgrades/0.4.0-to-0.5.0/postflight.ts --emit-receipt=P8.post
 session yet). It is not a blocking condition; only a `FAIL` (an existing
 subject still reading `position_actions`) is.
 
-No judge-mode enablement step is part of THIS release — `swarm_judge_config`
-is unchanged by any of the seven migrations here. If the judge is already in
+Migration 0056 may repair an enabled/null-model judge row to `off`. If the judge
+was enabled before the upgrade, re-enable it only by setting `mode` and `model`
+atomically. If the judge is already in
 `enforce` from a prior release's controlled rollout (see
 [`v0-4-0-rollout.md` §7](./v0-4-0-rollout.md#7-postflight-and-controlled-enablement)),
 confirm after this deploy that a newly published, `enforce`-judged session

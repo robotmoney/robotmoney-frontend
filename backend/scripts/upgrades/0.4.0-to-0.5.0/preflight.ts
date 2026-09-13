@@ -5,8 +5,8 @@ import type { Checker } from "../../lib/checks.ts";
 import { runPreflightMain, type Db } from "../../lib/preflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
-  DIGEST_SCHEME_COLUMN, MEMBER_RECEIVED_INDEX, OWNER_ROLE, PRIOR_RELEASE_MIGRATIONS,
-  SIGNING_KEY_COLUMN, TAG_GLOB, THIS_RELEASE_MIGRATIONS,
+  DIGEST_SCHEME_COLUMN, JUDGE_MODEL_CONSTRAINT, MEMBER_RECEIVED_INDEX, OWNER_ROLE,
+  PRIOR_RELEASE_MIGRATIONS, SIGNING_KEY_COLUMN, TAG_GLOB, THIS_RELEASE_MIGRATIONS,
 } from "./release.ts";
 import { COMMITTED_EVIDENCE_DIR } from "./steps.ts";
 
@@ -42,14 +42,46 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   record("clean-target-role", ownerRole.length ? "FAIL" : "PASS",
     ownerRole.length ? `role ${OWNER_ROLE} already exists` : `role ${OWNER_ROLE} absent before migration`);
 
-  // Every table these seven migrations touch already exists on a v0.4.0
+  // 0056's CHECK constraint, and the state it repairs. Two separate facts, and
+  // BOTH belong in the preflight:
+  //
+  //   - the constraint must be ABSENT, like every other clean-target check
+  //     above — its presence means this database is not a v0.4.0 baseline;
+  //   - the rows it will REPAIR must be counted before the migration runs, so
+  //     the operator knows in advance that a judge reading `enforce` is about
+  //     to be switched `off`. 0056 self-heals silently, and an operator who
+  //     first learns of it from the postflight has already lost the evidence of
+  //     what the row said. This is a WARN, not a FAIL: the repair is correct
+  //     and the upgrade proceeds — but it is never a surprise.
+  const judgeConstraint = (await db`
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = to_regclass('public.swarm_judge_config')
+       AND conname = ${JUDGE_MODEL_CONSTRAINT}
+  `) as unknown as unknown[];
+  record("clean-target-judge-constraint", judgeConstraint.length ? "FAIL" : "PASS",
+    judgeConstraint.length
+      ? `${JUDGE_MODEL_CONSTRAINT} already exists`
+      : "0056's mode/model constraint absent before migration");
+
+  const enabledWithoutModel = (await db`
+    SELECT count(*)::int AS n FROM swarm_judge_config
+     WHERE mode <> 'off' AND (model IS NULL OR btrim(model) = '')
+  `)[0] as { n: number };
+  record("judge-repair-preview", enabledWithoutModel.n ? "WARN" : "PASS",
+    enabledWithoutModel.n
+      ? `${enabledWithoutModel.n} judge config row(s) read enabled with no model — 0056 will switch them to 'off'; ` +
+        "re-enable after the upgrade by setting mode AND model in one request"
+      : "no judge config row is enabled without a model — 0056 has nothing to repair");
+
+  // Every table these eight migrations touch already exists on a v0.4.0
   // database — none of them creates a new TABLE (0049/0052 add columns, 0053/
-  // 0054 change ownership and grants, 0055 adds an index) — so there is no
-  // "clean-target-tables" check to make here the way earlier releases' new
-  // tables needed one. Recorded explicitly so a future migration that DOES
-  // add a table has an obvious existing check to extend instead of a silent
-  // gap, rather than this being an assumption nothing states.
-  record("no-new-tables", "PASS", "this release adds columns, an index, and role/grant changes only — no new table to pre-check");
+  // 0054 change ownership and grants, 0055 adds an index, 0056 adds a CHECK
+  // constraint) — so there is no "clean-target-tables" check to make here the
+  // way earlier releases' new tables needed one. Recorded explicitly so a
+  // future migration that DOES add a table has an obvious existing check to
+  // extend instead of a silent gap, rather than this being an assumption
+  // nothing states.
+  record("no-new-tables", "PASS", "this release adds columns, an index, a CHECK constraint, and role/grant changes only — no new table to pre-check");
 }
 
 // Only when RUN as a script. `runChecks` is imported by restore-check.ts and by

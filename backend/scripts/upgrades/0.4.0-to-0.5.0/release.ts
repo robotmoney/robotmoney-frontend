@@ -6,7 +6,7 @@
 // WHY THIS BOUNDARY, AND NOT ANOTHER ONE. Production, verified directly by a
 // fresh replica capture on 2026-09-11 (a `bun run smoke:twin` boot's own
 // `migrate()` step, which only ever applies what schema_migrations does not
-// already have), is at migration 0048. The seven files below are exactly what
+// already have), is at migration 0048. The eight files below are exactly what
 // that boot applied — nothing on disk past 0048 was already there.
 //
 // `backend/scripts/upgrades/0.3.0-to-0.4.0/release.ts` ALSO lists `0053` and
@@ -33,6 +33,7 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0053_database_role_taxonomy.sql",
   "0054_rm_worker_allowlist.sql",
   "0055_swarm_recommendations_member_received_idx.sql",
+  "0056_swarm_judge_requires_model.sql",
 ] as const;
 
 /**
@@ -87,6 +88,10 @@ export const WORKER_WRITABLE_TABLES = [
 /** 0055's new index — makes getMembers()'s per-member `max(received_at)`
  *  lateral (issue #782, `lastTakeAt`) an index-only walk instead of a scan. */
 export const MEMBER_RECEIVED_INDEX = { table: "swarm_recommendations", index: "swarm_recommendations_member_received_idx" } as const;
+
+/** 0056's pair invariant: an enabled judge always names the model it will try
+ * first; transport failures remain eligible for the deterministic fallback. */
+export const JUDGE_MODEL_CONSTRAINT = "swarm_judge_config_mode_requires_model_check";
 
 /** Selects this release's tags and no others. */
 export const TAG_GLOB = "v0.5.0*";

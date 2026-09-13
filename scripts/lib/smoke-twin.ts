@@ -215,7 +215,10 @@ export async function defaultSmokeTwinJudgeMode(
   // provider prefix, which Zen's REST endpoint answers with 401, so logging the
   // argument instead would name a model no judging will ever use.
   const model = await session.setJudgeModel(resolveAgentModel(), automationToken);
-  await session.setJudgeMode("enforce", automationToken);
+  // The STORED id goes back in the enable request (migration 0056 constrains the
+  // pair, and setJudgeMode refuses to enable without it) — not the registry id,
+  // whose `opencode/` prefix Zen answers with a 401.
+  await session.setJudgeMode("enforce", automationToken, model);
   log(`smoke-twin: consensus judge set to ENFORCE with model=${model} — every judged session will publish a receipt a model actually authored.`);
 }
 

@@ -21,6 +21,7 @@
 // deliberately outside the write path; see that file's header for why the
 // pre-#766 version of it proved nothing.
 import { sql, type DbHandle } from "../db/client.ts";
+import { assertJudgeModelAllowed } from "./judge-model-policy.ts";
 import { loadFrozenTakeSet } from "./domain.ts";
 import {
   DIGEST_SCHEME,
@@ -90,9 +91,13 @@ export async function getJudgeConfig(): Promise<JudgeConfig> {
  *        "message":"Model opencode/deepseek-v4-flash is not supported"}}
  *
  * while the bare `deepseek-v4-flash` returns 200. (Probed directly against
- * https://opencode.ai/zen/v1 on 2026-09-13.) Since #969 that 401 is no longer
- * a silent fallback — it stops the judging and the session never publishes, so
- * a prefix nobody noticed would have wedged every twin and production session.
+ * https://opencode.ai/zen/v1 on 2026-09-13.) That 401 is not a silent fallback:
+ * judge.ts's judgeTransportGap() classifies a body naming the MODEL rather than
+ * the credential as `model_not_supported`, which is the fail-closed class — it
+ * stops the judging and the session never publishes, so a prefix nobody noticed
+ * would have wedged every twin and production session rather than quietly
+ * publishing template prose. (Between #969 and D-A7 that was briefly untrue: the
+ * restored deterministic fallback caught every non-2xx, this 401 included.)
  */
 const JUDGE_MODEL_PROVIDER_PREFIX = "opencode/";
 
@@ -128,6 +133,15 @@ export async function setJudgeConfig(
   }
   if (patch.model !== undefined && patch.model !== null && (typeof patch.model !== "string" || patch.model.trim() === "" || patch.model.length > 200)) {
     throw new Error("invalid judge model — expected a non-empty model id, or null to unset it");
+  }
+  // WHICH model, not merely SOME model (AC-MODEL-01). Migration 0056's CHECK
+  // and the length test above prove the column is non-empty and nothing more,
+  // so a keyless `nemotron-3-ultra-free` satisfied every gate the 0.5.0 rollout
+  // adds and was then posted verbatim to Zen. The free family is refused
+  // everywhere; on an acceptance path only the pinned model is accepted. See
+  // judge-model-policy.ts for why the two rules differ in strength.
+  if (patch.model !== undefined && patch.model !== null && typeof patch.model === "string") {
+    assertJudgeModelAllowed(patch.model);
   }
   if (patch.thirdPartyEnabled !== undefined && typeof patch.thirdPartyEnabled !== "boolean") {
     throw new Error("invalid judge thirdPartyEnabled — expected a boolean");

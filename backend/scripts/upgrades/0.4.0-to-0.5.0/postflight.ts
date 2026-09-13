@@ -4,23 +4,24 @@ import type { Checker } from "../../lib/checks.ts";
 import { runPostflightMain, type Db } from "../../lib/postflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
-  DIGEST_SCHEME_COLUMN, DIGEST_SCHEME_DEFAULT, MEMBER_RECEIVED_INDEX, OWNER_ROLE,
+  DIGEST_SCHEME_COLUMN, DIGEST_SCHEME_DEFAULT, JUDGE_MODEL_CONSTRAINT, MEMBER_RECEIVED_INDEX, OWNER_ROLE,
   REPAIRED_RECOMMENDATION_TYPE, REPAIRED_SUBJECTS, RUNTIME_ROLES, SIGNING_KEY_COLUMN,
   TAG_GLOB, THIS_RELEASE_MIGRATIONS, WORKER_WRITABLE_TABLES,
 } from "./release.ts";
 import { COMMITTED_EVIDENCE_DIR } from "./steps.ts";
+import { isAcceptanceJudgeEnv, isKeylessJudgeModel, PINNED_JUDGE_MODEL } from "../../../src/swarm/judge-model-policy.ts";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(dir, "..", "..", "..", "..");
 const receiptStep = process.argv.find((a) => a.startsWith("--emit-receipt="))?.split("=", 2)[1] ?? (process.argv.includes("--emit-receipt") ? "P8.postflight-prod" : undefined);
 
 export async function runChecks(db: Db, { record }: Checker): Promise<void> {
-  // 1. All seven migrations recorded.
+  // 1. All eight migrations recorded.
   const migrations = (await db`SELECT name FROM schema_migrations WHERE name = ANY(${THIS_RELEASE_MIGRATIONS})`) as unknown as { name: string }[];
   const got = new Set(migrations.map((r) => r.name));
   const missingMigrations = THIS_RELEASE_MIGRATIONS.filter((name) => !got.has(name));
   record("migrations", missingMigrations.length ? "FAIL" : "PASS",
-    missingMigrations.length ? `missing: ${missingMigrations.join(", ")}` : "all seven v0.5.0 migrations recorded");
+    missingMigrations.length ? `missing: ${missingMigrations.join(", ")}` : "all eight v0.5.0 migrations recorded");
 
   // 2. 0049 — signing_key_id, nullable, FK to swarm_member_keys ON DELETE SET NULL.
   const fk = (await db`
@@ -161,6 +162,92 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   const idxOk = idx[0] && /\(member_id,\s*received_at DESC\)/.test(idx[0].indexdef);
   record("member-received-index", idxOk ? "PASS" : "FAIL",
     idx[0] ? idx[0].indexdef : `${MEMBER_RECEIVED_INDEX.index} does not exist`);
+
+  // 9. 0056 — an enabled judge names a model. Checked separately from migration
+  // presence, so a partially applied or hand-run deployment cannot pass on the
+  // strength of a `schema_migrations` row alone.
+  //
+  // `convalidated` is read alongside the definition because a CHECK added
+  // `NOT VALID` has a definition that reads exactly right and enforces nothing
+  // against existing rows. The definition proves the RULE; convalidated proves
+  // the database actually applied it.
+  const judgeConstraint = (await db`
+    SELECT pg_get_constraintdef(oid) AS definition, convalidated
+      FROM pg_constraint
+     WHERE conrelid = 'swarm_judge_config'::regclass
+       AND conname = ${JUDGE_MODEL_CONSTRAINT}
+  `) as unknown as { definition: string; convalidated: boolean }[];
+  const judgeConstraintOk = judgeConstraint.length === 1 &&
+    judgeConstraint[0]!.convalidated === true &&
+    /mode.*off.*model IS NOT NULL/i.test(judgeConstraint[0]!.definition);
+  record("judge-model-constraint", judgeConstraintOk ? "PASS" : "FAIL",
+    judgeConstraint[0]
+      ? `${judgeConstraint[0].definition} (validated=${judgeConstraint[0].convalidated})`
+      : `${JUDGE_MODEL_CONSTRAINT} is absent`);
+
+  // 10. 0056's REPAIR, which is the half the constraint cannot prove. The
+  // constraint is attached AFTER the UPDATE that fixes the offending row, so a
+  // database where the repair silently did nothing — because the table was
+  // absent when 0056 ran, or because a snapshot was restored over it — would
+  // still report a healthy constraint. The state itself is the check:
+  // production reached `mode = 'enforce'` with `model = NULL` and stayed there
+  // for months, and that is exactly what must be impossible afterwards.
+  const enabledWithoutModel = (await db`
+    SELECT count(*)::int AS n FROM swarm_judge_config
+     WHERE mode <> 'off' AND (model IS NULL OR btrim(model) = '')
+  `)[0] as { n: number };
+  record("judge-enabled-implies-model", enabledWithoutModel.n ? "FAIL" : "PASS",
+    enabledWithoutModel.n
+      ? `${enabledWithoutModel.n} judge config row(s) still read enabled with no model after 0056`
+      : "no judge config row is enabled without a model");
+
+  // 11. WHICH model, not merely SOME model (AC-MODEL-01). Checks 9 and 10 prove
+  // the column is non-empty and nothing more, so an enforce-mode judge pointed
+  // at `nemotron-3-ultra-free` satisfies both and disqualifies the entire run:
+  // "a run in which any agent used a free-tier model is not evidence". The
+  // setter refuses it now (judge-model-policy.ts), but the setter is not the
+  // only writer a database has ever had, and this command is what an operator
+  // runs on a database whose history it did not watch.
+  //
+  // TWO STRENGTHS, matching the policy: the free family fails EVERYWHERE, and
+  // the pinned-model requirement applies only where the judgements are evidence
+  // (RM_ENV=prod, which staging and production both run). Elsewhere a non-pinned
+  // id is reported as a WARN carrying the id, so the check is never silent.
+  const judgeModelRow = (await db`
+    SELECT mode, coalesce(btrim(model), '') AS model FROM swarm_judge_config WHERE id = 1
+  `)[0] as { mode: string; model: string } | undefined;
+  const configuredModel = judgeModelRow?.model ?? "";
+  const acceptancePath = isAcceptanceJudgeEnv(process.env);
+  if (!judgeModelRow || judgeModelRow.mode === "off") {
+    record("judge-model-acceptance", "WARN",
+      `judge mode=${judgeModelRow?.mode ?? "(no row)"} — no model is in use, so there is nothing to disqualify`);
+  } else if (isKeylessJudgeModel(configuredModel)) {
+    record("judge-model-acceptance", "FAIL",
+      `judge is ${judgeModelRow.mode} on "${configuredModel}", a keyless free-family model — DISQUALIFIED for acceptance (AC-MODEL-01)`);
+  } else if (configuredModel === PINNED_JUDGE_MODEL) {
+    record("judge-model-acceptance", "PASS", `judge is ${judgeModelRow.mode} on the pinned "${PINNED_JUDGE_MODEL}"`);
+  } else {
+    record("judge-model-acceptance", acceptancePath ? "FAIL" : "WARN",
+      `judge is ${judgeModelRow.mode} on "${configuredModel}", not the pinned "${PINNED_JUDGE_MODEL}"` +
+        (acceptancePath ? " — AC-MODEL-01 requires the pinned model on an acceptance path" : " (not an acceptance path: RM_ENV is not prod)"));
+  }
+
+  // 12. And the same question asked of what was actually PRODUCED, not of what
+  // is configured now: a judgement row naming a free-family model means the run
+  // already ran on one, whatever the config says today. Append-only (0040), so
+  // this cannot be tidied away — which is the point.
+  const freeJudgements = (await db`
+    SELECT coalesce(btrim(model), '') AS model, count(*)::int AS n
+      FROM swarm_session_judgements
+     WHERE model IS NOT NULL AND btrim(model) <> ''
+     GROUP BY 1
+  `) as unknown as { model: string; n: number }[];
+  const disqualifying = freeJudgements.filter((r) => isKeylessJudgeModel(r.model));
+  record("judgements-no-free-model", disqualifying.length ? "FAIL" : "PASS",
+    disqualifying.length
+      ? `judgement rows recorded on keyless free-family models: ${disqualifying.map((r) => `${r.model} x${r.n}`).join(", ")} — those sessions are not acceptance evidence (AC-MODEL-01)`
+      : `no judgement row names a free-family model (${freeJudgements.length} distinct model id(s) on record)`);
+
 }
 
 // Only when RUN as a script — see preflight.ts's guard. rollout-postflight-0-5-0.test.ts
