@@ -25,7 +25,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describeTranscriptError, redactProviderText, transcriptErrors } from "../../agent/transcript.ts";
+import {
+  cliStreamErrorFromStderr, describeTranscriptError, redactProviderText, transcriptErrors,
+} from "../../agent/transcript.ts";
 import { emptyTranscriptCause } from "../../lib/swarm/inference.ts";
 import { classifyInferenceFailure } from "../../agent/inference-failure.ts";
 import {
@@ -336,5 +338,77 @@ describe("redaction — the diagnosis names the fault, never the account or the 
   test("a short or empty planted secret is never used as a redaction needle", () => {
     // Guard against turning every character into "[redacted credential]".
     expect(redactProviderText("balance is low", ["", "ab"])).toBe("balance is low");
+  });
+});
+
+
+// ── The 2026-09-13 staging incident: the cause was on STDERR, and nothing read it ──
+//
+// Every swarm member on rm-frontend-stage-1 produced no take for nine hours, and
+// every diagnosis said `cause=timed-out — raise OPENCODE_TIMEOUT_MS or check
+// provider latency`. The provider had not been slow. It had refused, in one
+// logfmt line on STDERR that no consumer in this repo parsed:
+//
+//   level=ERROR … message="stream error" providerID=opencode
+//   modelID=nemotron-3-ultra-free … mode=primary
+//   error.error="AI_APICallError: Rate limit exceeded. Please try again later."
+//
+// The CLI then held the session open and our runner waited out all 120,000ms.
+// 183 of a 400-run sample ended that way (evidence:
+// fusion-evidence/20260913T-run1/phase1/1.6-staging-agent-fleet-census.txt).
+//
+// These pin the parser. The RUNNER half — that a parsed error ends the call
+// immediately instead of waiting for the deadline — is asserted through the
+// milestone sequence in the same evidence bundle; what is hermetically testable
+// here is that the line is read, that it is read NARROWLY, and that what it
+// yields classifies through the same rules a structured stdout event does.
+describe("a fatal provider stream error on STDERR is read, not waited out", () => {
+  const REAL = String.raw`timestamp=2026-09-13T20:04:33.699Z level=ERROR run=2ed64d00 message="stream error" providerID=opencode modelID=nemotron-3-ultra-free session.id=ses_f63a1043 small=false agent=build mode=primary error.error="AI_APICallError: Rate limit exceeded. Please try again later."`;
+
+  test("the real staging line yields the provider's own sentence", () => {
+    const error = cliStreamErrorFromStderr(REAL);
+    expect(error).not.toBeNull();
+    expect(error!.name).toBe("AI_APICallError");
+    expect(error!.message).toContain("Rate limit exceeded");
+    // Prose is NEVER mined for a typed discriminator (inference-failure.ts rule 1).
+    expect(error!.providerType).toBe("");
+    expect(error!.statusCode).toBeNull();
+  });
+
+  test("it classifies through the SAME rules as a structured stdout event", () => {
+    // No status, no typed discriminator: named, but unclassified — reported as
+    // itself rather than folded into a neighbouring kind.
+    expect(classifyInferenceFailure([cliStreamErrorFromStderr(REAL)!], "").kind).toBe("unclassified-error");
+    // When the CLI DOES print a status, the status decides, exactly as it does
+    // for an stdout error event.
+    const throttled = cliStreamErrorFromStderr(REAL.replace("mode=primary", "mode=primary error.data.statusCode=429"))!;
+    expect(throttled.statusCode).toBe(429);
+    const classified = classifyInferenceFailure([throttled], "");
+    expect(classified.kind).toBe("throttled");
+    expect(classified.retryable).toBe(true);
+    const unfunded = cliStreamErrorFromStderr(REAL.replace("mode=primary", "mode=primary error.data.statusCode=402"))!;
+    expect(classifyInferenceFailure([unfunded], "").kind).toBe("quota-limited");
+  });
+
+  test("it is NARROW — a false positive would kill a run that might still answer", () => {
+    // The auxiliary session-title agent errors harmlessly and constantly; it is
+    // not the primary model stream and must never end the call.
+    expect(cliStreamErrorFromStderr(REAL.replace("mode=primary", "mode=title"))).toBeNull();
+    // Not an error level.
+    expect(cliStreamErrorFromStderr(REAL.replace("level=ERROR", "level=WARN"))).toBeNull();
+    // A different CLI message, even at ERROR level on the primary stream — the
+    // snapshot/git warnings that appear in every single run are the reason this
+    // is keyed on `message="stream error"` and not on the level alone.
+    expect(cliStreamErrorFromStderr(REAL.replace('message="stream error"', 'message="failed to add snapshot files"'))).toBeNull();
+    // No payload to report.
+    expect(cliStreamErrorFromStderr(REAL.replace(/error\.error="[^"]*"/, ""))).toBeNull();
+    // Ordinary INFO lines from the same run.
+    expect(cliStreamErrorFromStderr(String.raw`timestamp=2026-09-13T20:04:33.523Z level=INFO run=2ed64d00 message=stream providerID=opencode modelID=nemotron-3-ultra-free mode=primary`)).toBeNull();
+  });
+
+  test("a credential in the line is redacted before it can reach a log", () => {
+    const withSecret = REAL.replace("Rate limit exceeded.", "Rate limit exceeded for sk-super-secret-key.");
+    const error = cliStreamErrorFromStderr(withSecret, ["sk-super-secret-key"]);
+    expect(error!.message).not.toContain("sk-super-secret-key");
   });
 });

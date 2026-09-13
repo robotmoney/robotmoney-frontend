@@ -30,7 +30,10 @@
 // THROWS — it NEVER falls back to a templated body.
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
-import { assistantTextParts, describeTranscriptError, extractAssistantText, transcriptErrors } from "../../agent/transcript.ts";
+import {
+  assistantTextParts, cliStreamErrorFromStderr, describeTranscriptError, extractAssistantText, transcriptErrors,
+  type TranscriptError,
+} from "../../agent/transcript.ts";
 import {
   classifyInferenceFailure,
   InferenceFailure,
@@ -414,6 +417,11 @@ async function runOpencode(
   let firstText = false;
   let auxiliaryTitleError = false;
   let primaryProviderError = false;
+  // The CLI's own STDERR verdict on the primary stream. Set once; when it is
+  // set the call is OVER — see cliStreamErrorFromStderr() for why waiting out
+  // the remaining time bound buys nothing but a wrong diagnosis.
+  let fatalStreamError: TranscriptError | null = null;
+  let announceFatalStreamError: (() => void) | undefined;
   let stdoutReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let stderrReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
@@ -440,7 +448,30 @@ async function runOpencode(
       }
       return;
     }
-    if (stream !== "stdout") return;
+    if (stream === "stderr") {
+      // THE ONE LINE THE STDOUT SCAN CAN NEVER SEE. A fatal provider stream
+      // error here ends the call — the CLI will not answer, and the wait that
+      // used to follow reported `cause=timed-out` for a provider that had
+      // already refused in its own words.
+      if (!fatalStreamError) {
+        const parsed = cliStreamErrorFromStderr(line, [zenApiKey() ?? ""]);
+        if (parsed && primaryProviderEvidence(line)) {
+          fatalStreamError = parsed;
+          // The primary stream WAS observed — it carried a refusal rather than
+          // text, which is exactly the distinction this milestone exists for.
+          if (!primaryStreamObserved) {
+            primaryStreamObserved = true;
+            emit("primary_stream_observed", "type=cli-stderr-stream-error");
+          }
+          if (!primaryProviderError) {
+            primaryProviderError = true;
+            emit("primary_provider_error", describeTranscriptError(parsed));
+          }
+          announceFatalStreamError?.();
+        }
+      }
+      return;
+    }
     let event: any;
     try { event = JSON.parse(line.trim()); } catch { return; }
     if (!firstNdjson) {
@@ -499,11 +530,17 @@ async function runOpencode(
   const stderrDrain = drainIncrementally(proc.stderr as ReadableStream<Uint8Array>, "stderr");
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), ms); });
-  const outcome = await Promise.race([proc.exited.then(() => "exited" as const), deadline]);
+  // The third way out, beside "it exited" and "the clock ran out": the provider
+  // told us, on stderr, that it is not going to answer.
+  const refusal = new Promise<"provider-error">((resolve) => {
+    announceFatalStreamError = () => resolve("provider-error");
+    if (fatalStreamError) resolve("provider-error");
+  });
+  const outcome = await Promise.race([proc.exited.then(() => "exited" as const), deadline, refusal]);
   if (timer !== undefined) clearTimeout(timer);
   let exitCode: number | null = null;
-  if (outcome === "timeout") {
-    emit("timeout_reached");
+  if (outcome !== "exited") {
+    if (outcome === "timeout") emit("timeout_reached");
     try {
       proc.kill(15);
       emit("kill_signal", "SIGTERM sent to OpenCode process");
@@ -543,6 +580,29 @@ async function runOpencode(
     await Promise.allSettled([stdoutReader?.cancel(), stderrReader?.cancel()]);
   }
   await Promise.race([drains.catch(() => []), Bun.sleep(PIPE_DRAIN_GRACE_MS)]);
+  if (outcome === "provider-error") {
+    // FAIL FAST, AND SAY WHAT IT WAS. Classified through the same rules a
+    // structured stdout error event goes through, so the machine-readable kind
+    // and the prose can never drift apart — and so a status code the CLI
+    // printed still decides the kind, while prose never does.
+    const errors = fatalStreamError ? [fatalStreamError] : [];
+    const classification = classifyInferenceFailure(errors, stderr);
+    const artifact = options.diagnosticArtifactPath ? ` artifact=${options.diagnosticArtifactPath}.` : "";
+    throw new InferenceFailure(
+      `opencode inference stopped early for model '${model}' (${keyLabel()}): the CLI reported a fatal error on ` +
+        `the PRIMARY model stream, so the remaining ${ms}ms of the time bound would have bought nothing but a ` +
+        `wrong diagnosis. NO template fallback.${artifact} ` +
+        renderInferenceDiagnostic(classification, errors, stderr),
+      {
+        kind: classification.kind,
+        provider,
+        model,
+        providerType: classification.error?.providerType ?? "",
+        statusCode: classification.error?.statusCode ?? null,
+        retryable: classification.retryable,
+      },
+    );
+  }
   if (outcome === "timeout") {
     const artifact = options.diagnosticArtifactPath ? ` artifact=${options.diagnosticArtifactPath}.` : "";
     throw new InferenceFailure(

@@ -169,6 +169,66 @@ export function transcriptErrors(transcript: string, secrets: readonly string[] 
 // One dense human line per error, for a log or a thrown message. Names the
 // provider's own verdict (status + retryability) so a reader never has to infer
 // whether a retry could have helped.
+/**
+ * THE FATAL PROVIDER ERROR THE STDOUT SCAN CANNOT SEE.
+ *
+ * `transcriptErrors()` above reads the `--format json` NDJSON stream on STDOUT.
+ * That is where a well-behaved failure lands — but it is not where the opencode
+ * CLI puts a stream error it did not recover from. On 2026-09-13 every swarm
+ * member on `rm-frontend-stage-1` failed like this, and the ONLY record of the
+ * cause was one logfmt line on STDERR:
+ *
+ *   timestamp=… level=ERROR run=2ed64d00 message="stream error"
+ *     providerID=opencode modelID=nemotron-3-ultra-free session.id=…
+ *     small=false agent=build mode=primary
+ *     error.error="AI_APICallError: Rate limit exceeded. Please try again later."
+ *
+ * Nothing parsed it. The CLI then sat there with the session open, our runner
+ * waited out its whole 120 s bound, and the failure was reported as
+ * `cause=timed-out` — "raise OPENCODE_TIMEOUT_MS or check provider latency" —
+ * for a provider that had already said, in its own words, that it would not
+ * answer. 186 of 400 sampled member runs burned two minutes each on that, and
+ * the swarm recorded ZERO analyst takes while every diagnosis pointed at
+ * latency.
+ *
+ * So: read it. Deliberately narrow, because a false positive kills a run that
+ * might still have answered — the line must be ERROR level, must be the CLI's
+ * `stream error` message, must be the PRIMARY model stream (`mode=primary`, not
+ * the auxiliary session-title agent that errors harmlessly), and must carry an
+ * `error.error` payload. Anything less returns null and the old behaviour
+ * stands.
+ *
+ * The returned shape is an ordinary TranscriptError, so it classifies through
+ * the same `classifyInferenceFailure()` rules as a structured stdout event —
+ * including rule 1: a status code is used when the CLI printed one, and prose is
+ * never mined for a typed discriminator.
+ */
+export function cliStreamErrorFromStderr(
+  line: string,
+  secrets: readonly string[] = [],
+): TranscriptError | null {
+  if (!/\blevel=ERROR\b/.test(line)) return null;
+  if (!/\bmessage="stream error"/.test(line)) return null;
+  if (!/\bmode=primary\b/.test(line)) return null;
+  const payload = line.match(/\berror\.error="((?:[^"\\]|\\.)*)"/);
+  if (!payload) return null;
+  const message = payload[1]!.replace(/\\(["\\nrt])/g, (_m, c: string) =>
+    c === "n" ? "\n" : c === "r" ? "\r" : c === "t" ? "\t" : c);
+  // `AI_APICallError: …` — the error CLASS the CLI named, kept apart from the
+  // prose after it. A name is not a provider discriminator and never decides a
+  // kind on its own; it is what an operator recognises in a log.
+  const named = message.match(/^([A-Za-z_][\w.]*Error)\s*:\s*/);
+  const status = line.match(/\berror\.(?:data\.)?statusCode=(\d{3})\b/);
+  return {
+    name: named ? named[1]! : "",
+    providerType: "",
+    message: redactProviderText(message, secrets),
+    statusCode: status ? Number(status[1]) : null,
+    isRetryable: null,
+    url: null,
+  };
+}
+
 export function describeTranscriptError(e: TranscriptError): string {
   const bits = [
     e.providerType || null,
