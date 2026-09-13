@@ -1385,6 +1385,38 @@ test("the model is selected by the config row, and unsetting it is what stops mo
   expect(transport?.model).toBe("vendor/m");
 });
 
+// ISSUE #969, PROBED AGAINST THE LIVE VENDOR 2026-09-13. `swarm_judge_config.model`
+// is posted VERBATIM as the OpenAI-compatible `model` field, which is NOT the
+// `provider/model` selector resolveAgentModel() yields for the opencode CLI:
+//
+//   opencode/deepseek-v4-flash -> 401 ModelError "is not supported"
+//   deepseek-v4-flash          -> 200
+//
+// Before #969 that 401 was a silent fallback to template prose. It is now a hard
+// refusal that leaves the session unpublished, so the prefix would have wedged
+// every judged session on the twin and in production the first time a model was
+// ever configured — which had never happened, which is why nothing caught it.
+test("the judge's model is stored as the WIRE id: the opencode/ provider prefix is stripped", async () => {
+  await setJudgeConfig({ mode: "off", model: null });
+
+  await setJudgeConfig({ model: "opencode/deepseek-v4-flash" });
+  expect((await getJudgeConfig()).model).toBe("deepseek-v4-flash");
+
+  // Already-bare ids pass through untouched…
+  await setJudgeConfig({ model: "deepseek-v4-flash" });
+  expect((await getJudgeConfig()).model).toBe("deepseek-v4-flash");
+
+  // …and only the opencode provider half is stripped, never a slash that is
+  // part of the id itself.
+  await setJudgeConfig({ model: "vendor/some-judge" });
+  expect((await getJudgeConfig()).model).toBe("vendor/some-judge");
+
+  // A bare prefix normalises to empty and is refused like any other blank,
+  // rather than being stored as a model that cannot exist.
+  await expect(setJudgeConfig({ model: "opencode/" })).rejects.toThrow(/invalid judge model/);
+  expect((await getJudgeConfig()).model, "the refused write changed nothing").toBe("vendor/some-judge");
+});
+
 test("no MODEL-named environment variable selects the judge's model", () => {
   // The negative D22 rule 1 asks for, asserted against the shipped source
   // rather than against a comment.

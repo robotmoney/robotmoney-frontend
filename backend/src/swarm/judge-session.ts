@@ -76,9 +76,50 @@ export async function getJudgeConfig(): Promise<JudgeConfig> {
   };
 }
 
+/**
+ * The `opencode/` half of a `provider/model` selector, which this column must
+ * NOT carry (issue #969).
+ *
+ * `swarm_judge_config.model` is posted VERBATIM as the `model` field of an
+ * OpenAI-compatible request to SWARM_JUDGE_BASE_URL. That is a different
+ * contract from the one `resolveAgentModel()` serves: the opencode CLI takes a
+ * `provider/model` selector and splits it itself, so the registry yields
+ * `opencode/deepseek-v4-flash` — and Zen's REST endpoint answers that with
+ *
+ *   401 {"type":"error","error":{"type":"ModelError",
+ *        "message":"Model opencode/deepseek-v4-flash is not supported"}}
+ *
+ * while the bare `deepseek-v4-flash` returns 200. (Probed directly against
+ * https://opencode.ai/zen/v1 on 2026-09-13.) Since #969 that 401 is no longer
+ * a silent fallback — it stops the judging and the session never publishes, so
+ * a prefix nobody noticed would have wedged every twin and production session.
+ */
+const JUDGE_MODEL_PROVIDER_PREFIX = "opencode/";
+
+/**
+ * NORMALISE AT THE WRITE BOUNDARY, so the stored column always equals the wire
+ * id. The alternative — stripping inside resolveJudgeTransport — leaves the
+ * config saying one thing and the judgement row, the receipt and the admin API
+ * recording another, which is the sort of two-value split this file exists to
+ * avoid. An operator may paste either form; exactly one is ever stored.
+ *
+ * This is NOT a model substitution (the thing model-registry.ts refuses to do
+ * silently): it is the same model, addressed the way this endpoint addresses it.
+ */
+export function normalizeJudgeModel(model: string): string {
+  const trimmed = model.trim();
+  return trimmed.startsWith(JUDGE_MODEL_PROVIDER_PREFIX)
+    ? trimmed.slice(JUDGE_MODEL_PROVIDER_PREFIX.length).trim()
+    : trimmed;
+}
+
 export async function setJudgeConfig(
   patch: { mode?: JudgeMode; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean },
 ): Promise<JudgeConfig> {
+  // Before every model check below, so "non-empty" is asserted of the value
+  // that will actually be STORED and SENT — a bare `opencode/` normalises to
+  // the empty string and must be refused like any other blank.
+  if (typeof patch.model === "string") patch = { ...patch, model: normalizeJudgeModel(patch.model) };
   if (patch.mode !== undefined && !["off", "shadow", "enforce"].includes(patch.mode)) {
     throw new Error(`invalid judge mode "${patch.mode}" — expected off | shadow | enforce`);
   }

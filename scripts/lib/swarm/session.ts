@@ -1159,7 +1159,7 @@ export async function latestJudgedByMemberId(sessionId: string | number, automat
  * still went green, because a fallback row lands, is attributed, and is
  * counted exactly like a real one.
  */
-export async function setJudgeModel(model: string, automationToken?: string): Promise<void> {
+export async function setJudgeModel(model: string, automationToken?: string): Promise<string> {
   const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
@@ -1168,6 +1168,12 @@ export async function setJudgeModel(model: string, automationToken?: string): Pr
   if (!r.ok) {
     throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {model:${model}} -> ${r.status}: ${await r.text()}`);
   }
+  // RETURN WHAT WAS STORED, not what was asked for. The backend normalises the
+  // `opencode/` provider prefix off the registry id (normalizeJudgeModel), so a
+  // caller logging its own argument would name a model the judge will never
+  // send — the exact string Zen answers with 401 "is not supported".
+  const body = await responseJson<{ judge?: { model?: string | null } }>(r).catch(() => ({}) as { judge?: { model?: string | null } });
+  return body.judge?.model ?? model;
 }
 
 /** The in-force judgement's provenance: did a MODEL author it, or a template? */
@@ -1223,9 +1229,8 @@ export async function runJudgeRoleCoverage(
   // shadow/enforce while `model` is NULL, so this is no longer merely the
   // difference between a real judging and a faked one — it is what makes the
   // setJudgeMode() call below legal at all.
-  const judgeModel = resolveAgentModel();
-  await setJudgeModel(judgeModel, automationToken);
-  console.log(`  judge model: ${judgeModel} (resolveAgentModel, issue #969)`);
+  const storedJudgeModel = await setJudgeModel(resolveAgentModel(), automationToken);
+  console.log(`  judge model: ${storedJudgeModel} (resolveAgentModel -> wire id, issue #969)`);
   const shippedJudgeMode = await readJudgeMode(automationToken);
   const restoreJudgeMode: "off" | "shadow" | "enforce" =
     shippedJudgeMode === "shadow" || shippedJudgeMode === "enforce" ? shippedJudgeMode : "off";

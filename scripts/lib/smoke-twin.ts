@@ -209,10 +209,12 @@ export async function defaultSmokeTwinJudgeMode(
   process.env.BACKEND_URL = backendUrl;
   const session = await import("./swarm/session.ts");
   const { resolveAgentModel } = await import("./model-registry.ts");
-  const model = resolveAgentModel();
   // Model BEFORE mode: the backend validates the pair against the resulting
   // row, so `enforce` would be refused while the restored NULL is still in place.
-  await session.setJudgeModel(model, automationToken);
+  // The STORED id comes back — the backend strips the registry's `opencode/`
+  // provider prefix, which Zen's REST endpoint answers with 401, so logging the
+  // argument instead would name a model no judging will ever use.
+  const model = await session.setJudgeModel(resolveAgentModel(), automationToken);
   await session.setJudgeMode("enforce", automationToken);
   log(`smoke-twin: consensus judge set to ENFORCE with model=${model} — every judged session will publish a receipt a model actually authored.`);
 }
