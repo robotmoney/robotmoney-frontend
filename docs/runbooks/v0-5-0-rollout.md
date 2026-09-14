@@ -287,7 +287,36 @@ bun backend/scripts/upgrades/0.4.0-to-0.5.0/preflight.ts --emit-receipt
 
 4. Deploy in provider order: database migration, API and every worker lane,
    then static frontend. Do not publish the new SPA before its API — R4
-   (deploy provider before consumer).
+   (deploy provider before consumer). "Then static frontend" is a COMMAND, not
+   a reminder: `_static` is a build output that no image contains, and a deploy
+   that skips it leaves the new API serving the previous release's SPA.
+
+```bash
+# On the deploy host, in the pinned checkout, AFTER the API is up:
+RM_BUILD_COMMIT=$(git rev-parse HEAD) RM_BUILD_TAG=$(git describe --tags --exact-match HEAD) \
+  bun run static:assemble
+```
+
+   The assembly writes `_static/.rm-static-manifest.json` (commit, tag and a
+   content digest of everything it assembled); `/version` reports it as
+   `static`, which is what makes step 4 checkable in §7 instead of assumed.
+
+4a. **Images are built on `pinza` and shipped — never built here** (`AC-ID-05`).
+   On `pinza`, in a checkout at the tag:
+
+```bash
+bun scripts/stack/ship-images.ts --tag v0.5.0-rc.N --host <deploy host>
+```
+
+   It verifies the checkout is the tag with an empty porcelain, builds the six
+   images from the same compose model the stack runs, ships them with
+   `docker save | ssh <host> docker load`, installs
+   `/home/stage-server/fusion-stage/images.override.yaml` and
+   `images.manifest.json` **outside** the checkout, and fails unless every
+   image id on the host equals the one built on `pinza`. The boot then runs
+   with `RM_IMAGES_OVERRIDE=/home/stage-server/fusion-stage/images.override.yaml`,
+   which appends that file to the compose model and passes `--no-build`: a
+   missing image stops the boot by name rather than being compiled here.
 5. Confirm the migration log names all eight new files exactly once — per R1
    (additive only).
 6. Immediately after the migration step (before the API is serving traffic),
@@ -332,6 +361,12 @@ Then run the four checks this release adds:
 # 1. Identity. Must equal the RC tag and full SHA from §1 — no `+dirty` and
 #    no `+unknown` suffix, and neither field null.
 curl -s https://<host>/version
+
+# 1a. The SERVED SPA is that same release. `.static.matches_image` is false
+#     whenever `_static` was assembled from another commit than the API image
+#     was built from — the signature of a deploy that skipped §6 step 4 — and
+#     `.static.digest` null means the directory was never assembled at all.
+curl -s https://<host>/version | jq -e '.static.matches_image == true and (.static.digest | startswith("sha256:"))'
 
 # 2. The allocation is actually present. A published bucket_weights session
 #    (robotmoney-vault / robotmoney-allocation) must carry four weights

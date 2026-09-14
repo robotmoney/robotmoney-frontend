@@ -13,6 +13,8 @@ import {
   buildIdentityFrom,
   resolveBuildIdentityEnv,
 } from "../../stack/build-identity.ts";
+import { createStack, type StackRuntime } from "../../stack/stack.ts";
+import { DEFAULT_STACK_DATABASE, generateStackCredentials } from "../../stack/config.ts";
 
 const SHA = "ebc588b4542de4d5a61aecdba0a967af35afcd6b";
 
@@ -152,18 +154,54 @@ describe("resolveBuildIdentityEnv", () => {
 });
 
 describe("the stack actually wires it into the build", () => {
-  test("scripts/stack/stack.ts resolves the identity before `compose build`", async () => {
-    // stack.ts boots nothing on import but does spawn on use; the wiring is
-    // asserted over source text, the same way smoke-main-split.test.ts grades
-    // scripts/lib/smoke-main.ts.
-    const src = await Bun.file(new URL("../../stack/stack.ts", import.meta.url)).text();
-    const build = src.slice(src.indexOf("async function build("));
-    const resolveAt = build.indexOf("resolveBuildIdentityEnv(");
-    const composeAt = build.indexOf("buildArgs(buildServices)");
-    expect(resolveAt, "build() resolves the identity").toBeGreaterThan(-1);
-    expect(resolveAt, "…and does so BEFORE compose build runs").toBeLessThan(composeAt);
-    // Never inherited from the operator's environment: RM_BUILD_* is absent
-    // from the docker-client allowlist, so a host value cannot reach a child.
+  test("the identity is resolved BEFORE `compose build`, and is what compose is given", async () => {
+    // Graded by EXECUTION, not by source text. The previous version of this
+    // test read stack.ts and asserted the byte offset of
+    // `resolveBuildIdentityEnv(` inside `build()`; moving that call into a
+    // shared `resolveIdentityOnce()` — needed because AC-ID-05's shipped-images
+    // path never calls build() at all, while T26's static manifest still needs
+    // the same commit/tag — broke the test without changing one thing about the
+    // behaviour it claims to protect. That is the C-21 failure mode in
+    // miniature, so this now drives the real stack with a recording runtime.
+    const argv: string[][] = [];
+    const runtime: StackRuntime = {
+      runSync(a) {
+        argv.push(a);
+        if (a[0] === "git" && a[1] === "rev-parse") return { exitCode: 0, stdout: SHA, stderr: "" };
+        if (a[0] === "git" && a[1] === "describe") return { exitCode: 0, stdout: "v0.5.0-rc.2", stderr: "" };
+        if (a.includes("port")) return { exitCode: 0, stdout: "0.0.0.0:49999\n", stderr: "" };
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      async run(a) {
+        argv.push(a);
+        return 0;
+      },
+      async probe() {
+        return { ok: true, detail: "ok" };
+      },
+    };
+    const stack = createStack(
+      {
+        repoRoot: "/nonexistent-checkout",
+        project: "rm_identity_test",
+        profile: "core",
+        composeFiles: ["docker-compose.yml"],
+        database: DEFAULT_STACK_DATABASE,
+        credentials: generateStackCredentials(),
+        environment: { class: "ci", hash: "deadbeef" },
+      },
+      { runtime },
+    );
+    await stack.up();
+    const revParseAt = argv.findIndex((a) => a[0] === "git" && a[1] === "rev-parse");
+    const buildAt = argv.findIndex((a) => a[1] === "compose" && a.includes("build"));
+    expect(revParseAt).toBeGreaterThan(-1);
+    expect(buildAt).toBeGreaterThan(-1);
+    expect(revParseAt).toBeLessThan(buildAt);
+    expect(stack.spawnEnv[BUILD_COMMIT_COMPOSE_VAR]).toBeUndefined(); // the frozen snapshot taken at construction
+  });
+
+  test("RM_BUILD_* is never inherited from the operator's environment", async () => {
     const config = await Bun.file(new URL("../../stack/config.ts", import.meta.url)).text();
     const allowlist = config.slice(config.indexOf("DOCKER_CLIENT_ENV_ALLOWLIST"), config.indexOf("] as const;", config.indexOf("DOCKER_CLIENT_ENV_ALLOWLIST")));
     expect(allowlist).not.toContain("RM_BUILD_");

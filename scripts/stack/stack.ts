@@ -26,6 +26,7 @@ import {
   buildComposeEnv,
   buildSpawnEnv,
   composeArgs,
+  composeFilesWithImagesOverride,
   downArgs,
   hostBackendUrl,
   internalDatabaseUrl,
@@ -44,6 +45,8 @@ import {
   resolveBuildIdentityEnv,
 } from "./build-identity.ts";
 import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
+import { inspectArgs, missingImageRefs, parseImagesOverrideRefs, assertOverrideOutsideCheckout } from "./images.ts";
+import { ensureContractInstallFresh } from "../lib/contract-freshness.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -165,7 +168,13 @@ function decode(buf: unknown): string {
  */
 export interface StackRuntime {
   runSync(argv: string[], io: StackIo): ComposeResult;
-  run(argv: string[], io: StackIo): Promise<number>;
+  /**
+   * `cwd` is optional and defaults to cfg.repoRoot, which is what every compose
+   * call wants. It exists because the contract-freshness repair (R18) runs
+   * `bun install` and an install that ran in the wrong directory would report
+   * success while leaving the stale copy exactly where it was.
+   */
+  run(argv: string[], io: StackIo, cwd?: string): Promise<number>;
   probe(url: string): Promise<{ ok: boolean; detail: string }>;
 }
 
@@ -209,7 +218,13 @@ export function createStack(
   // image must exist before those concurrent session containers launch. Keep
   // that prebuild in the shared stack lifecycle used by both smoke and smoke.
   const defaultBuildServices = buildServicesFor(cfg.profile, { externalPostgres });
-  const prefix = composeArgs(cfg.project, cfg.composeFiles);
+  // AC-ID-05: the images override is appended LAST so it wins the merge, and it
+  // is appended HERE rather than by each caller so that every consumer of this
+  // module — smoke, evals, the rails check — gets the same topology from the
+  // same field.
+  const composeFiles = composeFilesWithImagesOverride(cfg.composeFiles, cfg.imagesOverride);
+  const shippedImages = Boolean(cfg.imagesOverride);
+  const prefix = composeArgs(cfg.project, composeFiles);
 
   // NON-INTERACTIVE, ALWAYS. `docker compose` has questions it will ask on a
   // terminal — the volume-recreate confirmation most of all, which blocks
@@ -233,9 +248,9 @@ export function createStack(
       });
       return { exitCode: r.exitCode ?? -1, stdout: decode(r.stdout), stderr: decode(r.stderr) };
     },
-    async run(argv, io) {
+    async run(argv, io, cwd) {
       const proc = Bun.spawn(argv, {
-        cwd: cfg.repoRoot,
+        cwd: cwd ?? cfg.repoRoot,
         env: spawnEnv,
         stdin: "ignore",
         stdout: (io.stdout ?? "pipe") as "pipe",
@@ -274,21 +289,83 @@ export function createStack(
     emit({ phase: "docker-preflight", status: "done" });
   }
 
-  async function build(buildServices: string[] = defaultBuildServices): Promise<void> {
-    emit({ phase: "build", status: "start", detail: buildServices.join(", ") });
+  // The build identity of cfg.repoRoot, resolved AT MOST ONCE per handle.
+  //
+  // It used to be resolved inside build(). That was the only consumer until
+  // AC-ID-05 gave the stack a path where build() never runs at all (the images
+  // were built on pinza) and T26 gave `_static` — assembled on THIS host, in
+  // every case, shipped images or not — a manifest that has to carry the same
+  // commit/tag the image does. Resolving it here keeps one answer for both, and
+  // still does not spawn at construction time (this module's header forbids it).
+  let identityResolved = false;
+  function resolveIdentityOnce(): void {
+    if (identityResolved) return;
+    identityResolved = true;
     // WHAT SOURCE THIS IMAGE IS (AC-ID-03). Resolved from cfg.repoRoot — the
     // tree compose is about to build — and never inherited from the host
     // environment: RM_BUILD_* are not in DOCKER_CLIENT_ENV_ALLOWLIST, so an
-    // operator cannot hand a stack an identity it does not have. Resolved on
-    // every build so a rebuild after a checkout reports the new commit.
+    // operator cannot hand a stack an identity it does not have.
     const identity = resolveBuildIdentityEnv((argv) => runtime.runSync(argv, { stdout: "pipe", stderr: "pipe" }));
     spawnEnv = { ...spawnEnv, ...identity };
     emit({
-      phase: "build",
-      status: "start",
-      detail: `source ${identity[BUILD_COMMIT_COMPOSE_VAR] || "unavailable"}` +
+      phase: "log",
+      message: `source ${identity[BUILD_COMMIT_COMPOSE_VAR] || "unavailable"}` +
         `${identity[BUILD_TAG_COMPOSE_VAR] ? ` (${identity[BUILD_TAG_COMPOSE_VAR]})` : ""}`,
     });
+  }
+
+  /**
+   * AC-ID-05 — the guard that makes "nothing is built on the staging host" a
+   * fact rather than an intention.
+   *
+   * `--no-build` already makes compose refuse, but its message names one
+   * service at a time and arrives after the postgres phase has started
+   * containers. This asks the daemon for every ref the override file pins,
+   * BEFORE anything is started, and names all the missing ones at once — the
+   * operator's next step is a re-ship, and they should learn the whole list in
+   * one go.
+   *
+   * The refs come from the FILE compose was handed, not from a tag re-derived
+   * here: if those two could disagree, this check would be grading something
+   * other than the boot.
+   */
+  function assertShippedImagesPresent(): void {
+    const overridePath = cfg.imagesOverride!;
+    assertOverrideOutsideCheckout(overridePath, cfg.repoRoot);
+    let text: string;
+    try {
+      text = readFileSync(overridePath, "utf8");
+    } catch (error) {
+      throw new Error(
+        `images override ${overridePath} is not readable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const refs = parseImagesOverrideRefs(text);
+    if (refs.length === 0) {
+      throw new Error(`images override ${overridePath} pins no images — it names no \`image:\` for any service`);
+    }
+    emit({ phase: "build", status: "start", detail: `shipped images (no build): ${refs.length} refs` });
+    const missing = missingImageRefs(refs, (ref) => runtime.runSync(inspectArgs(ref), { stdout: "ignore", stderr: "ignore" }).exitCode === 0);
+    if (missing.length > 0) {
+      throw new Error(
+        `these images are pinned by ${overridePath} and are NOT on this host: ${missing.join(", ")}. ` +
+          `Nothing may be built here (AC-ID-05) — build them on pinza at the RC tag and ship them with ` +
+          `\`bun scripts/stack/ship-images.ts --tag <tag> --host <host>\`.`,
+      );
+    }
+    emit({ phase: "build", status: "done", detail: `shipped images verified: ${refs.join(", ")}` });
+  }
+
+  async function build(buildServices: string[] = defaultBuildServices): Promise<void> {
+    if (shippedImages) {
+      throw new Error(
+        `this stack was given an images-override (${cfg.imagesOverride}), so it builds NOTHING here: its images ` +
+          "were built on pinza at the RC tag and shipped with `docker save | ssh docker load` (AC-ID-05). " +
+          `Build them there and re-ship, or drop the override to build locally.`,
+      );
+    }
+    emit({ phase: "build", status: "start", detail: buildServices.join(", ") });
+    resolveIdentityOnce();
     await composeAsync(buildArgs(buildServices), `compose build ${buildServices.join(" ")}`.trim());
     emit({ phase: "build", status: "done", detail: buildServices.join(", ") });
   }
@@ -390,8 +467,22 @@ export function createStack(
   async function up(upOpts: StackUpOptions = {}): Promise<StackHostPorts> {
     assertFullStackProducerCredential(cfg);
     assertDockerAvailable();
+    // R18 / C-18. Bun COPIES `file:` deps, so `node_modules/@robotmoney/contract`
+    // is a point-in-time copy: the rc.1→rc.2 repin moved the checkout past a
+    // commit touching `contract/` and everything that read a route added since
+    // saw `undefined` until someone ran `bun install --force` by hand. Every
+    // repin has that shape, so the boot repairs it rather than the runbook
+    // asking an operator to remember — and re-verifies, so a repair that did
+    // not work fails here instead of three frames deep in the prerenderer.
+    await ensureContractInstallFresh(cfg.repoRoot, async (argv, cwd) =>
+      runtime.run(argv, defaultIo, cwd),
+    );
+    // Both the static manifest (T26) and any build below report the identity of
+    // THIS tree, and they must not be able to disagree about it.
+    resolveIdentityOnce();
     await assembleStaticDir();
-    await build();
+    if (shippedImages) assertShippedImagesPresent();
+    else await build();
 
     emit({ phase: "postgres", status: "start" });
     if (externalPostgres) {
@@ -401,7 +492,7 @@ export function createStack(
       // diagnostic than anything a pre-flight ping here could synthesize.
       emit({ phase: "postgres", status: "done", detail: "external (managed) — no container started" });
     } else {
-      await composeAsync(upArgs(["postgres"]), "start postgres");
+      await composeAsync(upArgs(["postgres"], { noBuild: shippedImages }), "start postgres");
       await waitForPostgres(upOpts.pgTimeoutMs);
       emit({ phase: "postgres", status: "done" });
     }
@@ -416,7 +507,7 @@ export function createStack(
     // so a compose service added later can never leak into `core`.
     const rest = services.filter((s) => s !== "postgres");
     emit({ phase: "services", status: "start", detail: rest.join(", ") });
-    await composeAsync(upArgs(rest), "start services");
+    await composeAsync(upArgs(rest, { noBuild: shippedImages }), "start services");
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
 
     // Only NOW do the host ports exist. Everything downstream — the health

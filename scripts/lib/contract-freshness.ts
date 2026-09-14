@@ -48,3 +48,69 @@ export async function assertContractInstallFresh(repoRoot: string = DEFAULT_REPO
     );
   }
 }
+
+/**
+ * How `ensureContractInstallFresh` runs the repair. Injected so the boot's
+ * single spawn seam (scripts/stack/stack.ts's StackRuntime) stays the only
+ * place this process creates a child, and so the repair can be graded without
+ * running a real install.
+ */
+export type ContractInstallRunner = (argv: string[], cwd: string) => Promise<number>;
+
+export type ContractFreshness = "fresh" | "repaired" | "not-applicable";
+
+/**
+ * R18 — DETECT AND FIX, then check the fix.
+ *
+ * The rc.1→rc.2 repin (QA checklist C-18) needed `bun install --force` run by
+ * hand: the checkout moved past a commit touching `contract/`, bun's copy of
+ * the `file:` dep stayed at rc.1, and nothing failed until the prerenderer
+ * threw on a route that "existed". Every repin has that shape, so the boot
+ * repairs it rather than a runbook line asking an operator to remember.
+ *
+ * WHY IT RE-VERIFIES RATHER THAN TRUSTING THE EXIT CODE. `bun install` exits 0
+ * in situations that leave this copy untouched (a lockfile it decides is
+ * already satisfied, a workspace resolution that skips the root). The whole
+ * point of this guard is that a stale copy is INVISIBLE, so "the install
+ * returned 0" is not evidence about the file — the file is. A repair that did
+ * not repair fails the boot here, loudly, with the original diagnosis attached.
+ *
+ * WHY A MISSING `contract/` SOURCE IS NOT A FAILURE. This guard is about a
+ * stale COPY of a source that is present. A tree with no `contract/src/routes.js`
+ * at all is not a checkout of this repository (a test's throwaway root, a
+ * vendored subtree), and there is nothing there to keep fresh — reported as
+ * `not-applicable` rather than papered over as `fresh`.
+ */
+export async function ensureContractInstallFresh(
+  repoRoot: string = DEFAULT_REPO_ROOT,
+  run: ContractInstallRunner,
+): Promise<ContractFreshness> {
+  const sourcePath = join(repoRoot, "contract", CONTRACT_RELATIVE);
+  if (!(await Bun.file(sourcePath).exists())) return "not-applicable";
+
+  const first = await assertContractInstallFresh(repoRoot).then(
+    () => null,
+    (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
+  );
+  if (first === null) return "fresh";
+
+  console.warn(`[contract-freshness] ${first.message}`);
+  console.warn("[contract-freshness] repairing: bun install --force");
+  const code = await run(["bun", "install", "--force"], repoRoot);
+  if (code !== 0) {
+    throw new Error(
+      `[contract-freshness] the installed @robotmoney/contract copy is stale or missing and the repair ` +
+        `failed: \`bun install --force\` in ${repoRoot} exited ${code}.\n` +
+        `[contract-freshness] Original diagnosis: ${first.message}`,
+    );
+  }
+  await assertContractInstallFresh(repoRoot).catch((e: unknown) => {
+    throw new Error(
+      `[contract-freshness] \`bun install --force\` exited 0 but node_modules/@robotmoney/contract is STILL ` +
+        `stale or missing — the install did not touch this copy, so nothing importing @robotmoney/contract ` +
+        `can be trusted and this boot stops here.\n` +
+        `[contract-freshness] ${e instanceof Error ? e.message : String(e)}`,
+    );
+  });
+  return "repaired";
+}
