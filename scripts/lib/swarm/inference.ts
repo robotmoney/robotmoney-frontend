@@ -32,7 +32,8 @@ import { RECEIPT_CANONICAL_BUCKET_ORDER, STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
 import {
   assistantTextParts, cliStreamErrorFromStderr, describeTranscriptError, extractAssistantText, transcriptErrors,
-  type TranscriptError,
+  transcriptSpend,
+  type TranscriptError, type TranscriptSpend,
 } from "../../agent/transcript.ts";
 import {
   classifyInferenceFailure,
@@ -554,7 +555,7 @@ function boundedTail(value: string, prompt: string): string {
 async function runOpencode(
   prompt: string,
   options: AuthorTakeOptions = {},
-): Promise<{ text: string; model: string }> {
+): Promise<{ text: string; model: string; spend: TranscriptSpend | null }> {
   const run = resolveInferenceOpenCodeRun();
   const { executable: bin, model, timeoutMs: ms, provider } = run;
   let primaryStreamObserved = false;
@@ -808,12 +809,31 @@ async function runOpencode(
       exitCode!,
     );
   }
-  emit("completion", `assistantTextParts=${assistantTextParts(stdout).length}`);
-  return { text, model };
+  // R19 — what this take COST, read out of the transcript the run already
+  // produced. null when the CLI reported no `step_finish` step; never zeroes.
+  const spend = transcriptSpend(stdout);
+  emit(
+    "completion",
+    `assistantTextParts=${assistantTextParts(stdout).length}` +
+      (spend ? ` tokens=${spend.totalTokens} costUsd=${spend.costUsd}` : " spend=unreported"),
+  );
+  return { text, model, spend };
 }
 
 export interface AuthoredTake extends ParsedTake {
   model: string;
+  /**
+   * What the provider says this take cost (R19), or null when it reported
+   * nothing. Metadata ABOUT the take, never part of it: it is not digested,
+   * not signed, and not shown to any model — the take's bytes are the member's
+   * prose and nothing else.
+   *
+   * ON A RE-SAMPLE this is the spend of the ATTEMPT THAT WAS KEPT, not of every
+   * attempt. A structure-contract retry is a discarded sample, and a figure
+   * that silently summed discarded samples would make one member's take look
+   * three times more expensive than another's identical one.
+   */
+  spend: TranscriptSpend | null;
 }
 
 // Author one swarm member's take with a REAL opencode-zen call.
@@ -880,7 +900,7 @@ export async function authorTake(
           `internal: take for ${p.memberId} passed the structure contract for a bucket_weights session without a weight vector`,
         );
       }
-      return { ...parsed, body, ...(weights ? { weights } : {}), model: authored.model };
+      return { ...parsed, body, ...(weights ? { weights } : {}), model: authored.model, spend: authored.spend };
     }
     shortfall = `omitted the ${missing.join(", ")} section${missing.length === 1 ? "" : "s"}`;
     console.warn(

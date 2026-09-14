@@ -1493,7 +1493,9 @@ a 5xx, a network error, an unreadable answer (`model_unavailable:…`), an empty
 disagreement (`too_many_positions`), the same member named twice inside one
 disagreement (`duplicate_position:<id>`), a disagreement attributed to a member
 who did not submit (`unknown_member:<id>`), a weight-like field anywhere in the
-response (`weight_like_field:<path>`), and anything else thrown while parsing
+response (`weight_like_field:<path>`), a body supplied by the TEST-ONLY fault-injection
+lever described below (`malformed_output` — never parsed and never trusted, whatever
+it contains), and anything else thrown while parsing
 (`unparsable:…`) — each discards the response WHOLE, never stripped and never
 merged, and the aggregator's own prose producers supply the opinion. NOT A
 FAILURE AT ALL — `JudgeNothingToJudgeError` carries a session with no takes
@@ -1523,6 +1525,49 @@ model is not producing acceptance evidence, whatever else is green. The stage
 rehearsal additionally refuses `model_timeout` as RC evidence and fails fast on
 the fail-closed classes by reading the judge lane's own `jobs.last_error`, which
 now carries the class (`judge_unavailable:<reason>`) instead of the bare word.
+
+**The TEST-ONLY fault-injection lever (R13, AC-E2E-06's malformed-output
+clause).** AC-E2E-06 requires an EXECUTED demonstration that a malformed judge
+response yields deterministic fallback prose with its provenance recorded and
+the weight vector untouched — and until the lever existed the only ways to stage
+one were to hope a real model misbehaved or to edit `judge.ts`, i.e. to
+demonstrate a build nobody ships. `swarm_judge_fault_injection` (migration 0058)
+holds one row: a body, a remaining-call count, and an optional session id. When
+it applies, `faultInjectedTransport()` returns that body INSTEAD of calling the
+model, and `judge()` neither parses nor trusts it: every injected call lands on
+the deterministic fallback with `fallback_reason = 'malformed_output'`, no
+usage, and — the property the criterion is actually about — no weights, because
+`meanTakeWeights()` in `domain.ts` is their only author and the fallback path
+receives none. A weight-smuggling body therefore changes nothing but the prose's
+provenance. THREE GATES, ALL REQUIRED: the row is writable only through
+`POST /api/swarm/admin/judge/fault-injection`, which writes an `audit_log`
+`judge_fault_injection` row in the same transaction; the judging process must
+carry `SWARM_JUDGE_FAULT_INJECTION`, so an armed row is inert in any process
+that was not started for it; and on an ACCEPTANCE path — `RM_ENV=prod`, which
+staging and production both run and which an unset `RM_ENV` resolves to under
+D13 — arming is REFUSED (403 `fault_injection_refused`) unless the second
+explicit opt-in `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` is also present.
+Disarming is never refused. Arming it on staging is a RECORDED ACCEPTANCE
+MUTATION: while it is armed the judge is not exercising its model, so nothing it
+writes is evidence about the model, and the pair of audit rows (armed, then
+disarmed) is what bounds that window in an acceptance bundle.
+
+**What a judging COST (R19).** The provider's `usage` object — prompt,
+completion and total tokens, and the cost figure Zen reports — travels back with
+the completion text and is written to `swarm_session_judgements`'
+`usage_input_tokens` / `usage_output_tokens` / `usage_total_tokens` /
+`usage_cost_usd` (migration 0059), so a rollout can report its judge spend from
+its own rows rather than from a vendor dashboard. Every column is NULLABLE
+forever and NULL means NOT RECORDED, never zero: a fallback whose model never
+answered spent nothing, a response that arrived and was discarded still cost
+what it cost (and records it), and a provider that reports no usage must not be
+able to read as a free call. Nothing here recomputes a price from a rate card —
+a spend report that quotes the provider is auditable, one that recomputes is a
+second source of truth. The analyst half records the same figures per member
+run: `scripts/agent/transcript.ts`'s `transcriptSpend()` reads the
+`step_finish` events out of the `opencode run --format json` stream, the
+authored take carries them as `AuthoredTake.spend`, and the per-run
+`manifest.json` under `.agents/swarm-sessions/` carries them as `spend`.
 
 **This NARROWED the original contract, which applied one rule to both classes.**
 Until #969 every one of those paths fell back to the same template producers the

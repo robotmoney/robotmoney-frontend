@@ -9,6 +9,7 @@
 // surface. Where this module's session lifecycle overlaps with domain.ts (e.g.
 // aggregateSessionGuarded still calls domain.aggregateSession for the rich
 // rollup), it composes those functions rather than duplicating them.
+import { createHash } from "node:crypto";
 import { sql, type DbHandle } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import { isRegistrablePublicKey } from "../lib/signing.ts";
@@ -28,6 +29,16 @@ import { deriveMemberHandle } from "./handle.ts";
 // the judge off published sessions without restarting anything.
 import { getJudgeConfig, judgeSession, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt } from "./consensus-receipt.ts";
+// R13 — the TEST-ONLY judge fault-injection lever (AC-E2E-06). Its ONLY writer
+// is the admin path below, so that every transition is an audited admin action
+// exactly as `swarm_judge_config.mode` already is.
+import {
+  assertFaultInjectionAllowed,
+  getJudgeFaultInjection,
+  JudgeFaultInjectionRefused,
+  writeJudgeFaultInjection,
+  type JudgeFaultInjectionState,
+} from "./judge-fault-injection.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
@@ -1401,6 +1412,94 @@ export async function setJudgeConfigAdmin(
     thirdPartyEnabled: judge.thirdPartyEnabled, warnings,
   });
   return { ok: true, status: 200, judge, warnings };
+}
+
+/**
+ * READ the fault lever. Safe on every path and in every environment — knowing
+ * whether the judge is being faulted is exactly what an operator staring at a
+ * run of `malformed_output` judgements needs, and refusing to answer would make
+ * an armed lever harder to find than to arm.
+ *
+ * The body is NOT projected. It is operator-supplied text chosen to be
+ * malformed, it can be 20,000 characters, and a GET that echoes it turns the
+ * admin surface into a place to park a payload. Its length and digest are
+ * enough to say WHICH body is armed.
+ */
+export async function getJudgeFaultInjectionAdmin(): Promise<AdminResult> {
+  const state = await getJudgeFaultInjection();
+  return { ok: true, status: 200, faultInjection: projectFaultInjection(state) };
+}
+
+function projectFaultInjection(state: JudgeFaultInjectionState) {
+  return {
+    enabled: state.enabled,
+    bodyChars: state.body.length,
+    bodyDigest: state.body ? createHash("sha256").update(state.body, "utf8").digest("hex").slice(0, 16) : null,
+    remaining: state.remaining,
+    sessionId: state.sessionId,
+    note: state.note,
+    updatedBy: state.updatedBy,
+    updatedAt: state.updatedAt,
+  };
+}
+
+/**
+ * ARM OR DISARM the fault lever (R13) — the one documented, audited way to make
+ * the judge transport answer with a body an operator chose.
+ *
+ * THE REFUSAL IS THE FEATURE. `assertFaultInjectionAllowed` runs BEFORE the
+ * write and only for `enabled: true`: a process without
+ * `SWARM_JUDGE_FAULT_INJECTION` refuses (403 `fault_injection_refused`), and on
+ * an ACCEPTANCE path — RM_ENV=prod, which staging and production both run, and
+ * which an unset RM_ENV resolves to under D13 — it refuses again unless the
+ * second opt-in `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` is also
+ * present. Disarming is never refused.
+ *
+ * THE AUDIT ROW IS THE ACCEPTANCE ARTIFACT. Arming this on staging is a
+ * RECORDED ACCEPTANCE MUTATION — while it is on, the judge is not exercising
+ * the model, so nothing it writes is evidence about the model — and the pair of
+ * `judge_fault_injection` rows (on, then off) is what an acceptance bundle
+ * cites to bound the window. The BODY never reaches the audit row for the same
+ * reason it never reaches the GET.
+ */
+export async function setJudgeFaultInjectionAdmin(
+  patch: { enabled: boolean; body?: string; remaining?: number; sessionId?: string | null; note?: string | null },
+  actor: Actor = ADMIN_ACTOR,
+): Promise<AdminResult> {
+  if (patch.enabled) {
+    try {
+      assertFaultInjectionAllowed();
+    } catch (e) {
+      if (e instanceof JudgeFaultInjectionRefused) {
+        return { ...err(403, e.message), reason: e.gate, error: "fault_injection_refused", detail: e.message };
+      }
+      throw e;
+    }
+  }
+  let state: JudgeFaultInjectionState;
+  try {
+    state = await writeJudgeFaultInjection(patch, actor);
+  } catch (e) {
+    return err(400, e instanceof Error ? e.message : "invalid judge fault injection");
+  }
+  const projected = projectFaultInjection(state);
+  await audit(actor, "judge_fault_injection", {
+    ...projected,
+    acceptanceMutation: true,
+    testOnly: true,
+  });
+  return {
+    ok: true,
+    status: 200,
+    faultInjection: projected,
+    warnings: state.enabled
+      ? [
+        "TEST-ONLY: the consensus judge is now answering from swarm_judge_fault_injection, not from its model. " +
+        "Judgements written while this is armed are NOT evidence of model behaviour — they are a recorded acceptance " +
+        "mutation. Disarm it ({ enabled: false }) as the last step of the demonstration.",
+      ]
+      : [],
+  };
 }
 
 // ── The soak's read path (issue #767, folded from #768) ────────────────────

@@ -178,6 +178,12 @@ export interface JudgeOutcome {
   minTakes: number;
   /** What the parser dropped out of a model response. */
   drops: JudgeDrops;
+  /**
+   * What the completion COST, as the provider reported it (R19), or null when
+   * it reported nothing — which is every fallback and every refusal, because no
+   * model answered. NULL is "not recorded", never "free". See parseJudgeUsage().
+   */
+  usage?: JudgeUsage | null;
 }
 
 /**
@@ -198,7 +204,12 @@ export interface ModelJudgeOutcome extends JudgeOutcome {
  * the whole point of the D-A7 split. `model` is the id that was actually
  * called, so an operator can tell which model misbehaved.
  */
-function fallbackOutcome(input: JudgeInput, reason: string, model: string | null): JudgeOutcome {
+function fallbackOutcome(
+  input: JudgeInput,
+  reason: string,
+  model: string | null,
+  usage: JudgeUsage | null = null,
+): JudgeOutcome {
   return {
     opinion: templateOpinion(input),
     source: "fallback",
@@ -209,6 +220,10 @@ function fallbackOutcome(input: JudgeInput, reason: string, model: string | null
     takeCount: input.takes.length,
     minTakes: input.minTakes,
     drops: noDrops(),
+    // A response that ARRIVED and was then discarded still cost money, and a
+    // run that cannot see that spend cannot report it (R19). A fallback with no
+    // response at all (timeout, transport throw) passes null.
+    usage,
   };
 }
 
@@ -737,9 +752,78 @@ export function parseJudgeResponse(raw: string, input: JudgeInput, drops: JudgeD
 // they have different operators and different fixes: one is a database row an
 // admin sets, the other is a `.env`/compose credential a deployer sets.
 
+/**
+ * WHAT ONE COMPLETION COST (R19). Every field is independently nullable because
+ * the provider's `usage` object is not a contract: Zen returns token counts on
+ * every 200 and a cost figure on most of them, and a body that carries neither
+ * must still produce an opinion. `null` is "the provider did not say", never 0
+ * — the distinction is the whole reason a spend report can be trusted.
+ */
+export interface JudgeUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  /** Completion cost in USD, as reported. Not computed here from a rate card. */
+  costUsd: number | null;
+}
+
+/**
+ * A completion, with the usage the provider reported beside it.
+ *
+ * `complete()` may still return a bare string — every injected test transport
+ * in this repo does, and a transport that knows nothing about cost should not
+ * have to say so. A string is read as "no usage reported".
+ */
+export interface JudgeCompletion {
+  text: string;
+  usage?: JudgeUsage | null;
+}
+
 export interface JudgeTransport {
   model: string;
-  complete(prompt: string, signal: AbortSignal): Promise<string>;
+  complete(prompt: string, signal: AbortSignal): Promise<string | JudgeCompletion>;
+}
+
+/** One numeric field of a provider `usage` object, or null when it is absent/unusable. */
+function usageNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return value;
+}
+
+/**
+ * The provider's own cost/token report, lifted out of a `/chat/completions`
+ * body — or null when it carried none.
+ *
+ * READ DEFENSIVELY, LIKE THE ERROR BODY. A `usage` object that changes shape
+ * upstream must never be able to fail a judging: the opinion is the product and
+ * the spend figure is bookkeeping beside it. Every unreadable field degrades to
+ * null, and a body with no readable field at all degrades to null entirely
+ * rather than to a row of zeroes that would read as a free call.
+ *
+ * Both spellings of the cost field are accepted because Zen has used both
+ * (`usage.cost` on the chat endpoint, `usage.total_cost` in its usage export);
+ * a rate-card multiplication is deliberately NOT done here — a spend report
+ * that quotes the provider is auditable and one that recomputes is a second
+ * source of truth.
+ */
+export function parseJudgeUsage(body: unknown): JudgeUsage | null {
+  const usage = (body as { usage?: unknown } | null)?.usage;
+  if (usage === null || typeof usage !== "object") return null;
+  const u = usage as Record<string, unknown>;
+  const inputTokens = usageNumber(u.prompt_tokens) ?? usageNumber(u.input_tokens);
+  const outputTokens = usageNumber(u.completion_tokens) ?? usageNumber(u.output_tokens);
+  const totalTokens = usageNumber(u.total_tokens) ??
+    (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null);
+  const costUsd = usageNumber(u.cost) ?? usageNumber(u.total_cost) ?? usageNumber((body as any)?.cost);
+  if (inputTokens === null && outputTokens === null && totalTokens === null && costUsd === null) return null;
+  return { inputTokens, outputTokens, totalTokens, costUsd };
+}
+
+/** Normalise either `complete()` return shape into one. */
+function readCompletion(value: string | JudgeCompletion): { text: string; usage: JudgeUsage | null } {
+  if (typeof value === "string") return { text: value, usage: null };
+  const text = typeof value?.text === "string" ? value.text : "";
+  return { text, usage: value?.usage ?? null };
 }
 
 export const DEFAULT_JUDGE_BASE_URL = "https://opencode.ai/zen/v1";
@@ -876,7 +960,7 @@ export function resolveJudgeTransport(
   const baseUrl = (env.SWARM_JUDGE_BASE_URL ?? "").trim() || DEFAULT_JUDGE_BASE_URL;
   return {
     model: selected,
-    async complete(prompt: string, signal: AbortSignal): Promise<string> {
+    async complete(prompt: string, signal: AbortSignal): Promise<JudgeCompletion> {
       const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
         signal,
@@ -903,7 +987,9 @@ export function resolveJudgeTransport(
       const body = (await res.json()) as { choices?: { message?: { content?: unknown } }[] };
       const content = body?.choices?.[0]?.message?.content;
       if (typeof content !== "string") throw new Error("judge model returned no assistant text");
-      return content;
+      // R19: the spend travels WITH the text, so the judgement row can record
+      // what this opinion cost without a second call to anyone.
+      return { text: content, usage: parseJudgeUsage(body) };
     },
   };
 }
@@ -937,6 +1023,47 @@ export interface JudgeOptions {
   /** The configured model, used only when `transport` is not supplied. */
   model?: string | null;
   timeoutMs?: number;
+  /**
+   * THE TEST-ONLY FAULT LEVER, already authorised (R13, AC-E2E-06).
+   *
+   * judge() does NOT read the database or the environment for it: the caller
+   * (judge-session.ts) resolves it through judge-fault-injection.ts, which owns
+   * the three gates — the audited admin row, the process flag, and the second
+   * acceptance opt-in. Passing a value here is therefore the SAME statement as
+   * "every gate was open", and a caller that never resolves one can never fault
+   * a judging by accident.
+   */
+  faultInjection?: JudgeFaultInjection | null;
+}
+
+/** The authorised lever, as judge() receives it. Structurally the judge-fault-injection.ts type. */
+export interface JudgeFaultInjection {
+  /** The body the transport returns INSTEAD of calling the model. */
+  body: string;
+  note?: string | null;
+}
+
+/**
+ * THE TRANSPORT HONOURS THE LEVER — the model is not called, and the chosen
+ * body is what comes back.
+ *
+ * Wrapping rather than branching inside judge() keeps the substitution at the
+ * one seam that talks to the vendor: `model` still reports the id that WOULD
+ * have been called, so a judgement row written under an injected fault still
+ * names the configured judge, and nothing downstream has to learn a fourth
+ * shape. `usage` is null by construction — an injected body cost nothing, and
+ * R19's spend report must not be able to invent a charge.
+ */
+export function faultInjectedTransport(
+  transport: JudgeTransport,
+  fault: JudgeFaultInjection,
+): JudgeTransport {
+  return {
+    model: transport.model,
+    async complete(): Promise<JudgeCompletion> {
+      return { text: fault.body, usage: null };
+    },
+  };
 }
 
 /**
@@ -954,7 +1081,14 @@ export interface JudgeOptions {
  * file's header for why those two classes answer differently.
  */
 export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise<JudgeOutcome> {
-  const transport = opts.transport === undefined ? resolveJudgeTransport(opts.model ?? null) : opts.transport;
+  const resolved = opts.transport === undefined ? resolveJudgeTransport(opts.model ?? null) : opts.transport;
+  // THE LEVER DOES NOT CREATE A TRANSPORT. A stack with no model and no
+  // credential still fails closed (D-A7) with the lever armed: a fault
+  // injection that could manufacture a judgement on an unconfigured judge would
+  // be a way to fake exactly the outage-vs-misconfiguration distinction this
+  // file exists to keep apart.
+  const fault = resolved && opts.faultInjection ? opts.faultInjection : null;
+  const transport = resolved && fault ? faultInjectedTransport(resolved, fault) : resolved;
   // ONE `input`, DIGESTED AND DERIVED FROM. Three of the values the digest now
   // covers (`byStance`, `meanConfidence`, and `regimeSummary`'s composite) are
   // read out of the mutable `swarm_recommendation` / `regime_summary` jsonb,
@@ -1009,8 +1143,11 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let raw: string;
+  let usage: JudgeUsage | null = null;
   try {
-    raw = await transport.complete(renderJudgePrompt(input), controller.signal);
+    const completion = readCompletion(await transport.complete(renderJudgePrompt(input), controller.signal));
+    raw = completion.text;
+    usage = completion.usage;
   } catch (err) {
     // FIRST: was this a model that failed, or an ACCOUNT/CREDENTIAL that did?
     // They arrive down the same `catch`, and answering both with template prose
@@ -1030,18 +1167,31 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
     clearTimeout(timer);
   }
 
+  // AN INJECTED BODY IS NEVER PARSED AND NEVER TRUSTED (R13). Running it
+  // through parseJudgeResponse would make the lever's outcome a function of
+  // which malformed body an operator happened to paste — a body that happened
+  // to be well-formed would be recorded as MODEL prose the model never wrote,
+  // which is precisely the forgery the D-A7 split exists to make impossible. So
+  // the answer is one deterministic outcome for every injected body:
+  // template prose, `source: "fallback"`, `fallback_reason = "malformed_output"`
+  // (docs/architecture.md §9.7), and — the property AC-E2E-06 is really about —
+  // no weights, because fallbackOutcome() has none to give.
+  if (fault) return fallbackOutcome(input, "malformed_output", transport.model);
+
   try {
     // `drops` is filled BY the parse. It survives onto the outcome so the
     // judgement row can record a partial degradation the response is otherwise
     // silent about (issue #767/#787).
     const drops = noDrops();
     const opinion = parseJudgeResponse(raw, input, drops);
-    return { ...base, opinion, source: "model", model: transport.model, drops };
+    return { ...base, opinion, source: "model", model: transport.model, drops, usage };
   } catch (err) {
     // INCLUDES the weight-smuggling rejection. The response is discarded whole;
     // deterministic prose replaces it and the provenance makes that visible.
     const reason = err instanceof JudgeResponseError ? err.reason : `unparsable:${errorLabel(err)}`;
-    return fallbackOutcome(input, reason, transport.model);
+    // The response ARRIVED and was billed for; it was the CONTENT that could not
+    // be trusted. The spend is recorded even though the prose is discarded (R19).
+    return fallbackOutcome(input, reason, transport.model, usage);
   }
 }
 

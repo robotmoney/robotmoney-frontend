@@ -295,6 +295,44 @@ export async function handleSwarmAdmin(
     return { status: 404, body: { error: "unknown judge admin route" } };
   }
 
+  // ── The TEST-ONLY judge fault-injection lever (R13, AC-E2E-06) ─────────
+  // A sibling of the judge switch above and for the same reason: an acceptance
+  // rehearsal must be able to stage a malformed judge response on a RUNNING
+  // stack, and the shipped artifact must be the thing that is exercised. Every
+  // gate lives below this handler (backend/src/swarm/judge-fault-injection.ts):
+  // the process flag, the acceptance-path second opt-in, and the audit row.
+  if (segs[0] === "judge" && segs[1] === "fault-injection" && segs.length === 2) {
+    if (m === "GET") return fromResult(await admin.getJudgeFaultInjectionAdmin());
+    if (m === "POST") {
+      const b = (await readJsonObject(req)) ?? {};
+      if (typeof b.enabled !== "boolean") return { status: 400, body: { error: "enabled must be a boolean" } };
+      const patch: { enabled: boolean; body?: string; remaining?: number; sessionId?: string | null; note?: string | null } = {
+        enabled: b.enabled,
+      };
+      if (b.body !== undefined) {
+        if (typeof b.body !== "string") return { status: 400, body: { error: "body must be a string" } };
+        patch.body = b.body;
+      }
+      if (b.remaining !== undefined) {
+        const remaining = Number(b.remaining);
+        if (!Number.isInteger(remaining)) return { status: 400, body: { error: "remaining must be an integer" } };
+        patch.remaining = remaining;
+      }
+      if (b.sessionId !== undefined) {
+        if (b.sessionId !== null && typeof b.sessionId !== "string") {
+          return { status: 400, body: { error: "sessionId must be a uuid string, or null" } };
+        }
+        patch.sessionId = b.sessionId;
+      }
+      if (b.note !== undefined) {
+        if (b.note !== null && typeof b.note !== "string") return { status: 400, body: { error: "note must be a string, or null" } };
+        patch.note = b.note;
+      }
+      return fromResult(await admin.setJudgeFaultInjectionAdmin(patch));
+    }
+    return { status: 404, body: { error: "unknown judge admin route" } };
+  }
+
   // ── Audit ─────────────────────────────────────────────────────────────
   if (segs[0] === "audit" && m === "GET") {
     const limitRaw = url.searchParams.get("limit");
