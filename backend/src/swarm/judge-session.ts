@@ -171,18 +171,79 @@ export async function setJudgeConfig(
   // the model away is how an operator stops model prose without stopping the
   // judge recording template opinions.
   const clearModel = patch.model === null;
-  await sql`
-    INSERT INTO swarm_judge_config (id, mode, min_takes, model, third_party_enabled, updated_at)
-    VALUES (1, ${patch.mode ?? DEFAULT_CONFIG.mode}, ${patch.minTakes ?? DEFAULT_CONFIG.minTakes},
-            ${patch.model ? patch.model.trim() : null}, ${patch.thirdPartyEnabled ?? DEFAULT_CONFIG.thirdPartyEnabled}, now())
-    ON CONFLICT (id) DO UPDATE SET
-      mode = COALESCE(${patch.mode ?? null}, swarm_judge_config.mode),
-      min_takes = COALESCE(${patch.minTakes ?? null}::integer, swarm_judge_config.min_takes),
+
+  // ── A PLAIN UPDATE, NOT AN UPSERT — and that is the fix, not a style change.
+  //
+  // THE DEFECT. This used to be `INSERT … ON CONFLICT (id) DO UPDATE`, whose
+  // DO UPDATE arm COALESCEd the model so a mode-only patch would preserve it.
+  // That arm never ran. PostgreSQL evaluates a table CHECK constraint against
+  // the PROPOSED INSERT TUPLE before the arbiter index redirects the statement
+  // to the DO UPDATE arm, and on a mode-only patch the proposed tuple carried
+  // model = NULL (patch.model is undefined -> the VALUES expression yields
+  // null) beside mode = 'enforce'. Migration 0056's
+  // `CHECK (mode = 'off' OR model IS NOT NULL AND btrim(model) <> '')` therefore
+  // fired on a row that was never going to be stored, and `POST
+  // /api/swarm/admin/judge {"mode":"enforce"}` answered 400 with a raw driver
+  // string. The documented `{ mode, model }` pair still worked, so nothing was
+  // unreachable — the COALESCE was simply dead code with a confusing 400 in
+  // front of it.
+  //
+  // WHY NOT "READ THE ROW AND SEND THE RESOLVED MODEL IN VALUES". That is the
+  // obvious repair and it was built and measured against this one (see the RC2
+  // bundle's D3-two-designs-setJudgeConfig): both fix the mode-only patch, but
+  // it is a read-modify-write, and with a second writer landing in the window
+  // it SILENTLY REVERTED that writer's model change. This form cannot: the
+  // COALESCE is evaluated against the row as it stands when the UPDATE runs,
+  // and the CHECK is evaluated on the row the UPDATE actually produces. So the
+  // preserved model is the stored one by construction rather than by a
+  // snapshot taken earlier.
+  //
+  // The INSERT is the empty-table fallback only (migration 0056 seeds id = 1,
+  // so in practice the UPDATE always matches); `DO NOTHING` makes a race
+  // between two cold starts harmless, and the pair validation above has already
+  // refused a first row that would be on-with-no-model.
+  const updated = await sql`
+    UPDATE swarm_judge_config SET
+      mode = COALESCE(${patch.mode ?? null}, mode),
+      min_takes = COALESCE(${patch.minTakes ?? null}::integer, min_takes),
       model = CASE WHEN ${clearModel} THEN NULL
-                   ELSE COALESCE(${patch.model ? patch.model.trim() : null}, swarm_judge_config.model) END,
-      third_party_enabled = COALESCE(${patch.thirdPartyEnabled ?? null}, swarm_judge_config.third_party_enabled),
-      updated_at = now()`;
+                   ELSE COALESCE(${patch.model ? patch.model.trim() : null}, model) END,
+      third_party_enabled = COALESCE(${patch.thirdPartyEnabled ?? null}, third_party_enabled),
+      updated_at = now()
+    WHERE id = 1
+    RETURNING id`.catch(rethrowAsNamedModelRefusal(patch));
+  if ((updated as unknown[]).length === 0) {
+    await sql`
+      INSERT INTO swarm_judge_config (id, mode, min_takes, model, third_party_enabled, updated_at)
+      VALUES (1, ${patch.mode ?? DEFAULT_CONFIG.mode}, ${patch.minTakes ?? DEFAULT_CONFIG.minTakes},
+              ${clearModel ? null : (patch.model ? patch.model.trim() : null)},
+              ${patch.thirdPartyEnabled ?? DEFAULT_CONFIG.thirdPartyEnabled}, now())
+      ON CONFLICT (id) DO NOTHING`.catch(rethrowAsNamedModelRefusal(patch));
+  }
   return getJudgeConfig();
+}
+
+/**
+ * Migration 0056's CHECK, reported in this function's OWN words.
+ *
+ * The pair validation above refuses the on-with-no-model combination before any
+ * statement runs, so the constraint can now only fire on a genuine race — a
+ * second writer clearing the model between that check and this UPDATE. When it
+ * does, the operator gets the named refusal and the remedy, not
+ * `new row for relation "swarm_judge_config" violates check constraint …`.
+ * Every other database error is rethrown untouched.
+ */
+function rethrowAsNamedModelRefusal(patch: { mode?: JudgeMode }) {
+  return (err: unknown): never => {
+    const text = err instanceof Error ? err.message : String(err);
+    if (text.includes("swarm_judge_config_mode_requires_model_check")) {
+      throw new Error(
+        `judge mode "${patch.mode ?? "(unchanged)"}" requires a model — set { mode, model } together, or leave the judge off. ` +
+          "The stored model was taken away by a concurrent write while this patch was in flight; re-send the patch with both fields.",
+      );
+    }
+    throw err instanceof Error ? err : new Error(text);
+  };
 }
 
 // ── Building the judged input from stored state ─────────────────────────────
