@@ -46,3 +46,13 @@ INSERT INTO swarm_judge_fault_injection (id) VALUES (1) ON CONFLICT (id) DO NOTH
 
 COMMENT ON TABLE swarm_judge_fault_injection IS
   'TEST-ONLY judge fault-injection lever (R13/AC-E2E-06). Inert unless SWARM_JUDGE_FAULT_INJECTION is set in the judging process, and refused on an acceptance path (RM_ENV=prod) unless SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN is also set. Every transition writes an audit_log row; enabling it on staging is a recorded acceptance mutation.';
+
+-- EXPLICIT GRANTS, because 0053 removed every default one: a new table starts
+-- inaccessible to every runtime role, and a missing grant fails closed
+-- (0053's "a later migration must name every new runtime capability
+-- explicitly"). The api process ARMS and DISARMS the lever, so it writes; the
+-- worker READS it (worker-swarm runs `swarm.judge`, which resolves the lever
+-- for the session it is judging) and must never be able to arm one.
+GRANT SELECT, INSERT, UPDATE, DELETE ON swarm_judge_fault_injection TO rm_app;
+GRANT SELECT ON swarm_judge_fault_injection TO rm_worker;
+GRANT SELECT ON swarm_judge_fault_injection TO rm_readonly;
