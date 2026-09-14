@@ -1,0 +1,77 @@
+# Project Fusion: the shared consensus-receipt fixtures must stay byte-identical
+# to robotmoney-core (§9A R4, AC-FMT-01).
+#
+# WHY A NEW WORKFLOW RATHER THAN A STEP IN contract.yml. contract.yml is path
+# filtered on contract/** and gates the contract package's own suite. This gate
+# is about a pin held in ANOTHER repository, it must run on releases-* pushes
+# and on tags (where a coordinated cross-repo release actually lands), and its
+# red means something different: not "the contract broke" but "this repo and
+# robotmoney-core no longer agree on the bytes that get anchored". Keeping it
+# separate also keeps its verdict legible in the checks list.
+#
+# WHAT IT PROVES, AND THE PART THAT IS NOT OPTIONAL. `drift` re-hashes
+# contract/src/__fixtures__ against shared-fixtures/vendored/robotmoney-core.manifest.json,
+# a manifest generated from core's own tests/fixtures at a pinned commit. That
+# check needs nothing but this checkout. `self-test` then runs the guard against
+# a reconstruction of the REAL rc.3-era drifted state and asserts it goes red —
+# because a guard whose only evidence is its own exit code on a green tree is
+# the exact thing that let core ship v0.4.0-rc.3 with eight of nine fixtures
+# drifted and CI green. That step needs a robotmoney-core checkout, so it is
+# guarded on a token being configured and FAILS LOUDLY when it runs, never
+# silently skipping into a green.
+#
+# CI taxonomy class: feature-correctness — cheap (seconds, no Docker, no
+# network beyond two checkouts), so it gates every PR, draft included.
+name: fusion-cross-repo-drift
+env:
+  CI_CLASS: feature-correctness
+on:
+  push:
+    branches: [main, "releases-*"]
+    tags: ["v*"]
+  # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
+  # runs on `push: branches: [main]` also runs on a nightly schedule, and
+  # nothing else does. Enforced by scripts/tests/unit/nightly-mirrors-merge-set.test.ts.
+  # Minute staggered against the other ten mirrors.
+  schedule:
+    - cron: "57 3 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    # The `secrets` context is NOT available in a step-level `if` (only `env`,
+    # `steps`, `github`, … are), so the token's presence is lifted into an env
+    # var here and the guarded steps branch on that.
+    env:
+      RM_CORE_RO_TOKEN: ${{ secrets.RM_CORE_RO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      # No `bun install`: the check imports only node:crypto/fs/path, exactly
+      # like the contract package it guards, so it must run on a bare checkout.
+      - name: Shared fixtures are byte-identical to robotmoney-core
+        run: bun scripts/fusion/check-cross-repo-fixture-drift.ts
+
+      # ── the guard's own negative evidence (C-21) ───────────────────────────
+      - name: Check out robotmoney-core (for the negative self-test)
+        id: core
+        if: ${{ env.RM_CORE_RO_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: robotmoney/robotmoney-core
+          token: ${{ env.RM_CORE_RO_TOKEN }}
+          path: .rm-core
+          fetch-depth: 0
+      - name: Negative self-test (the guard must go RED on the rc.3-era drift)
+        if: ${{ steps.core.outcome == 'success' }}
+        run: bash scripts/fusion/test-cross-repo-fixture-drift.sh "$GITHUB_WORKSPACE/.rm-core"
+      # A skipped self-test is reported, not hidden. It is not fatal: the drift
+      # check above is the gate, and a fork PR legitimately has no token.
+      - name: Report a skipped self-test
+        if: ${{ steps.core.outcome != 'success' }}
+        run: |
+          echo "::warning title=cross-repo self-test skipped::RM_CORE_RO_TOKEN is not available to this run, so the drift guard was not exercised against the rc.3-era drifted tree. The byte comparison above still ran."
