@@ -97,8 +97,11 @@ describe("resolveStackRmEnv — the boot decides, and a contradiction is refused
     const main = readFileSync(join(REPO_ROOT, "scripts", "lib", "smoke-main.ts"), "utf8");
     expect(main).toContain("resolveStackRmEnvOrExit(staticPortMode)");
     expect(main).toContain("rmEnv: stackRmEnv");
-    // The passthrough list is what made it an exported shell value.
-    const passthrough = readFileSync(join(REPO_ROOT, "scripts", "lib", "smoke-compose-env.ts"), "utf8");
+    // The passthrough list is what made it an exported shell value. It is
+    // declared one module further down since r2/judge-budget extracted it to
+    // its own leaf so the judge-transport entries could be tested; smoke-
+    // compose-env.ts re-exports it, so smoke-main.ts's import site is the same.
+    const passthrough = readFileSync(join(REPO_ROOT, "scripts", "lib", "smoke-compose-passthrough.ts"), "utf8");
     const list = /DEMO_COMPOSE_PASSTHROUGH = \[([\s\S]*?)\] as const;/.exec(passthrough);
     expect(list, "DEMO_COMPOSE_PASSTHROUGH is still declared").not.toBeNull();
     expect(list![1]).not.toMatch(/^\s*"RM_ENV",/m);
