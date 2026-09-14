@@ -24,6 +24,16 @@
 // row is the one move that defeats this check, so don't: the manifest carries
 // that instruction in its own $comment, and re-vendoring is one command.
 //
+// THE FOURTH ARM, AND WHY IT IS NOT OPTIONAL. MISSING/DRIFTED/EXTRA all start
+// from this repo's disk, so a fixture robotmoney-core ADDS to the shared set and
+// the frontend never copies is invisible to all three — the manifest simply has
+// no row for it, and the check stays green while the pin quietly covers less
+// than the shared set does. So --regenerate enumerates core's fixture dir at the
+// pinned commit (git ls-tree, not manifest.files) and records the result in
+// core_shared_inventory; any name there that is neither vendored nor explicitly
+// declared core-only is an OMITTED failure. Re-vendoring refuses to write a
+// manifest that would carry an unclaimed core fixture.
+//
 // EXTRA files are drift too, not a free-for-all. A `consensus-receipt.*` file
 // that appears here and was never promoted through the release process is the
 // same asymmetry in the other direction, so the manifest names the frontend-only
@@ -32,6 +42,9 @@
 // Usage:
 //   bun scripts/fusion/check-cross-repo-fixture-drift.ts [--fixtures-dir DIR] [--manifest FILE]
 //   bun scripts/fusion/check-cross-repo-fixture-drift.ts --regenerate --core PATH [--core-ref REF]
+//
+// --core-ref accepts any rev (tag, SHA, branch) but the manifest always records
+// the resolved COMMIT SHA, plus the tag when the commit carries one.
 //
 // The exit code IS the verdict: 0 clean, 1 drift. Wired into
 // .github/workflows/fusion-cross-repo-drift.yml, and executed against a planted
@@ -56,9 +69,12 @@ interface Manifest {
   core_repo: string;
   core_fixture_dir: string;
   core_ref: string;
+  core_tag?: string | null;
   core_commit: string;
   frontend_fixture_dir: string;
   frontend_only_not_shared: string[];
+  core_only_not_shared: string[];
+  core_shared_inventory: string[];
   files: Row[];
   [k: string]: unknown;
 }
@@ -73,7 +89,7 @@ function loadManifest(path: string): Manifest {
   return JSON.parse(readFileSync(path, "utf8")) as Manifest;
 }
 
-type Status = "ok" | "DRIFTED" | "MISSING" | "EXTRA" | "PENDING-CORE";
+type Status = "ok" | "DRIFTED" | "MISSING" | "EXTRA" | "PENDING-CORE" | "OMITTED";
 type Line = { file: string; status: Status; expected: string; actual: string };
 
 function compare(fixturesDir: string, manifest: Manifest): { errors: string[]; lines: Line[] } {
@@ -110,6 +126,22 @@ function compare(fixturesDir: string, manifest: Manifest): { errors: string[]; l
     lines.push({ file: row.file, status: pending ? "PENDING-CORE" : "ok", expected: row.sha256, actual });
   }
 
+  // "core has a shared fixture this manifest omits". The other three arms all
+  // look at THIS repo's disk, so a fixture that core grew and the frontend
+  // never copied is invisible to them: the manifest simply has no row for it.
+  // core_shared_inventory is the full consensus-receipt.* enumeration of core's
+  // fixture dir at the pinned commit, written by --regenerate, so a new core
+  // fixture that is neither vendored (files) nor explicitly declared core-only
+  // (core_only_not_shared) is a FAIL here without needing a core checkout.
+  const coreOnly = new Set(manifest.core_only_not_shared ?? []);
+  for (const name of manifest.core_shared_inventory ?? []) {
+    if (named.has(name) || coreOnly.has(name)) continue;
+    lines.push({ file: name, status: "OMITTED", expected: "-", actual: "-" });
+    errors.push(
+      `${name}: core has a shared fixture this manifest omits — robotmoney-core @ ${manifest.core_commit.slice(0, 12)} carries ${CORE_FIXTURE_DIR}/${name}, but it is named by neither files[] nor core_only_not_shared`,
+    );
+  }
+
   const frontendOnly = new Set(manifest.frontend_only_not_shared ?? []);
   for (const name of readdirSync(fixturesDir).sort()) {
     if (!name.startsWith("consensus-receipt.")) continue;
@@ -124,15 +156,33 @@ function compare(fixturesDir: string, manifest: Manifest): { errors: string[]; l
 
 function printTable(lines: Line[], manifest: Manifest): void {
   const width = Math.max(10, ...lines.map((l) => l.file.length));
-  console.log(`cross-repo shared fixtures vs robotmoney-core @ ${manifest.core_commit} (${manifest.core_ref})`);
+  console.log(`cross-repo shared fixtures vs robotmoney-core @ ${manifest.core_commit}${manifest.core_tag ? ` (tag ${manifest.core_tag})` : ""}`);
   console.log(`${"fixture".padEnd(width)}  ${"status".padEnd(12)}  expected sha256 / actual sha256`);
   console.log("-".repeat(width + 62));
   for (const l of lines) {
     console.log(`${l.file.padEnd(width)}  ${l.status.padEnd(12)}  ${l.expected}`);
-    if (l.status === "DRIFTED" || l.status === "MISSING" || l.status === "EXTRA") {
-      console.log(`${" ".padEnd(width)}  ${" ".padEnd(12)}  ${l.actual}   <-- on disk`);
+    if (l.status === "DRIFTED" || l.status === "MISSING" || l.status === "EXTRA" || l.status === "OMITTED") {
+      const note = l.status === "OMITTED" ? "<-- present in core, absent from this manifest" : `${l.actual}   <-- on disk`;
+      console.log(`${" ".padEnd(width)}  ${" ".padEnd(12)}  ${note}`);
     }
   }
+}
+
+function coreInventory(core: string, ref: string): string[] | null {
+  // The full consensus-receipt.* enumeration of core's fixture dir at `ref`.
+  // This is the ONLY place the shared set is discovered rather than assumed;
+  // iterating manifest.files alone can never learn about a fixture core added.
+  const ls = Bun.spawnSync(["git", "-C", core, "ls-tree", "--name-only", `${ref}:${CORE_FIXTURE_DIR}`]);
+  if (ls.exitCode !== 0) {
+    console.error(`git ls-tree ${ref}:${CORE_FIXTURE_DIR} failed in ${core}: ${ls.stderr.toString()}`);
+    return null;
+  }
+  return ls.stdout
+    .toString()
+    .split("\n")
+    .map((n) => n.trim())
+    .filter((n) => n.startsWith("consensus-receipt."))
+    .sort();
 }
 
 function regenerate(core: string, ref: string, manifestPath: string, fixturesDir: string): number {
@@ -142,9 +192,30 @@ function regenerate(core: string, ref: string, manifestPath: string, fixturesDir
     console.error(`git rev-parse ${ref} failed in ${core}: ${rev.stderr.toString()}`);
     return 1;
   }
+  const commit = rev.stdout.toString().trim();
+
+  const inventory = coreInventory(core, commit);
+  if (inventory === null) return 1;
+  if (inventory.length === 0) {
+    console.error(`no consensus-receipt.* fixtures found in ${core} @ ${ref}:${CORE_FIXTURE_DIR} — refusing to write a vacuous manifest`);
+    return 1;
+  }
+
+  const named = new Set(manifest.files.map((r) => r.file));
+  const coreOnly = new Set(manifest.core_only_not_shared ?? []);
+  const unclaimed = inventory.filter((n) => !named.has(n) && !coreOnly.has(n));
+  if (unclaimed.length) {
+    console.error(
+      `core has ${unclaimed.length} shared fixture(s) this manifest omits: ${unclaimed.join(", ")}\n` +
+        `Re-vendoring cannot decide this for you: copy each into ${manifest.frontend_fixture_dir} and add a\n` +
+        `files[] row for it, or declare it core-only by adding it to core_only_not_shared. Then re-run.`,
+    );
+    return 1;
+  }
+
   const files: Row[] = [];
   for (const row of manifest.files) {
-    const blob = Bun.spawnSync(["git", "-C", core, "show", `${ref}:${CORE_FIXTURE_DIR}/${row.file}`]);
+    const blob = Bun.spawnSync(["git", "-C", core, "show", `${commit}:${CORE_FIXTURE_DIR}/${row.file}`]);
     if (blob.exitCode !== 0) {
       // Not yet adopted in core: pin OUR bytes and say so on every run, rather
       // than claiming a cross-repo comparison that was never made.
@@ -155,11 +226,23 @@ function regenerate(core: string, ref: string, manifestPath: string, fixturesDir
     const payload = blob.stdout;
     files.push({ file: row.file, byte_length: payload.length, sha256: sha256(payload) });
   }
-  manifest.core_commit = rev.stdout.toString().trim();
-  manifest.core_ref = ref;
+
+  // core_ref is a COMMIT SHA, never a branch name: a branch moves or is deleted
+  // and the manifest's "pinned commit" prose stops being true. The tag, when the
+  // commit carries one, is recorded alongside it for human legibility only.
+  const tags = Bun.spawnSync(["git", "-C", core, "tag", "--points-at", commit]);
+  const tag = tags.exitCode === 0 ? tags.stdout.toString().split("\n").map((t) => t.trim()).filter(Boolean).sort()[0] ?? null : null;
+
+  manifest.core_commit = commit;
+  manifest.core_ref = commit;
+  manifest.core_tag = tag;
+  manifest.core_shared_inventory = inventory;
   manifest.files = files;
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-  console.log(`re-vendored ${files.length} rows from ${core} @ ${ref} (${manifest.core_commit})`);
+  console.log(
+    `re-vendored ${files.length} rows from ${core} @ ${commit}${tag ? ` (tag ${tag})` : " (no tag at this commit)"}; ` +
+      `core shared-fixture inventory: ${inventory.length} file(s)`,
+  );
   return 0;
 }
 
