@@ -6,7 +6,7 @@ import { runPreflightMain, type Db } from "../../lib/preflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
   DIGEST_SCHEME_COLUMN, JUDGE_MODEL_CONSTRAINT, MEMBER_RECEIVED_INDEX, OWNER_ROLE,
-  PRIOR_RELEASE_MIGRATIONS, SIGNING_KEY_COLUMN, TAG_GLOB, THIS_RELEASE_MIGRATIONS,
+  NEW_TABLE, PRIOR_RELEASE_MIGRATIONS, SIGNING_KEY_COLUMN, TAG_GLOB, THIS_RELEASE_MIGRATIONS,
 } from "./release.ts";
 import { COMMITTED_EVIDENCE_DIR } from "./steps.ts";
 
@@ -73,15 +73,13 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
         "re-enable after the upgrade by setting mode AND model in one request"
       : "no judge config row is enabled without a model — 0056 has nothing to repair");
 
-  // Every table these eight migrations touch already exists on a v0.4.0
-  // database — none of them creates a new TABLE (0049/0052 add columns, 0053/
-  // 0054 change ownership and grants, 0055 adds an index, 0056 adds a CHECK
-  // constraint) — so there is no "clean-target-tables" check to make here the
-  // way earlier releases' new tables needed one. Recorded explicitly so a
-  // future migration that DOES add a table has an obvious existing check to
-  // extend instead of a silent gap, rather than this being an assumption
-  // nothing states.
-  record("no-new-tables", "PASS", "this release adds columns, an index, a CHECK constraint, and role/grant changes only — no new table to pre-check");
+  // The note this replaces said the release created no new TABLE and recorded
+  // a standing PASS, "so a future migration that DOES add a table has an
+  // obvious existing check to extend instead of a silent gap". 0058 is that
+  // migration: it creates the fault-injection table. This is the extension.
+  const newTable = (await db`SELECT to_regclass(${`public.${NEW_TABLE}`}) IS NOT NULL AS present`)[0] as { present: boolean };
+  record("clean-target-tables", newTable.present ? "FAIL" : "PASS",
+    newTable.present ? `${NEW_TABLE} already exists` : `0058's new table ${NEW_TABLE} absent before migration`);
 }
 
 // Only when RUN as a script. `runChecks` is imported by restore-check.ts and by

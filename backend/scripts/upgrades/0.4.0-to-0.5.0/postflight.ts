@@ -43,12 +43,12 @@ export function resolveAcceptanceFlag(
 }
 
 export async function runChecks(db: Db, { record }: Checker): Promise<void> {
-  // 1. All eight migrations recorded.
+  // 1. All eleven migrations recorded.
   const migrations = (await db`SELECT name FROM schema_migrations WHERE name = ANY(${THIS_RELEASE_MIGRATIONS})`) as unknown as { name: string }[];
   const got = new Set(migrations.map((r) => r.name));
   const missingMigrations = THIS_RELEASE_MIGRATIONS.filter((name) => !got.has(name));
   record("migrations", missingMigrations.length ? "FAIL" : "PASS",
-    missingMigrations.length ? `missing: ${missingMigrations.join(", ")}` : "all eight v0.5.0 migrations recorded");
+    missingMigrations.length ? `missing: ${missingMigrations.join(", ")}` : `all ${THIS_RELEASE_MIGRATIONS.length} v0.5.0 migrations recorded`);
 
   // 2. 0049 — signing_key_id, nullable, FK to swarm_member_keys ON DELETE SET NULL.
   const fk = (await db`

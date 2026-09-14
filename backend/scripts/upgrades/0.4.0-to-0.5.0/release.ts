@@ -6,8 +6,15 @@
 // WHY THIS BOUNDARY, AND NOT ANOTHER ONE. Production, verified directly by a
 // fresh replica capture on 2026-09-11 (a `bun run smoke:twin` boot's own
 // `migrate()` step, which only ever applies what schema_migrations does not
-// already have), is at migration 0048. The eight files below are exactly what
+// already have), is at migration 0048. The ELEVEN files below are exactly what
 // that boot applied — nothing on disk past 0048 was already there.
+//
+// 0057-0059 joined the list during the rc.3 integration cycle: r2/receipt-gap
+// added the judge-policy stamp, r2/fault-lever the fault-injection table and
+// the judgement spend columns. Each branch added its migration and none
+// touched this list, so the release would otherwise have shipped three
+// migrations its own postflight could not see, reporting "all recorded" over
+// a set that excluded them.
 //
 // `backend/scripts/upgrades/0.3.0-to-0.4.0/release.ts` ALSO lists `0053` and
 // `0054` in its own THIS_RELEASE_MIGRATIONS, which looks like an overlap with
@@ -34,7 +41,17 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0054_rm_worker_allowlist.sql",
   "0055_swarm_recommendations_member_received_idx.sql",
   "0056_swarm_judge_requires_model.sql",
+  "0057_swarm_judge_policy_stamp.sql",
+  "0058_swarm_judge_fault_injection.sql",
+  "0059_swarm_judgement_completion_usage.sql",
 ] as const;
+
+/**
+ * The one TABLE this release creates (0058). Every other migration in the list
+ * adds columns, an index, a CHECK constraint, or role/grant changes to objects
+ * a v0.4.0 database already has.
+ */
+export const NEW_TABLE = "swarm_judge_fault_injection";
 
 /**
  * The migrations v0.4.0 actually shipped to production and that this upgrade

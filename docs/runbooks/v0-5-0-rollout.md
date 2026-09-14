@@ -194,11 +194,11 @@ bun backend/scripts/upgrades/0.4.0-to-0.5.0/stage-rehearsal.ts "$RM_BACKUP_DIR" 
 ```
 
 The restore check validates the v0.4.0 starting state. The rehearsal applies
-the eight migrations to the restored smoke-twin, boots real services, and
+the eleven migrations to the restored smoke-twin, boots real services, and
 executes the release postflight before teardown. It proves conformance to
 the release acceptance criteria — §4.4 gate:
 
-1. All eight full migration filenames appear once in `schema_migrations`.
+1. All eleven full migration filenames appear once in `schema_migrations`.
 2. `swarm_recommendations.signing_key_id` is nullable and its foreign key is
    `ON DELETE SET NULL`; `swarm_session_judgements.digest_scheme` is
    `NOT NULL DEFAULT 'derivation-v1'`.
@@ -317,7 +317,7 @@ bun scripts/stack/ship-images.ts --tag v0.5.0-rc.N --host <deploy host>
    with `RM_IMAGES_OVERRIDE=/home/stage-server/fusion-stage/images.override.yaml`,
    which appends that file to the compose model and passes `--no-build`: a
    missing image stops the boot by name rather than being compiled here.
-5. Confirm the migration log names all eight new files exactly once — per R1
+5. Confirm the migration log names all eleven new files exactly once — per R1
    (additive only).
 6. Immediately after the migration step (before the API is serving traffic),
    confirm the API's own runtime role can still connect and query:
