@@ -66,6 +66,7 @@
 // See canonicalizeDigestInputs() for the decision and its reasoning.
 import { createHash } from "node:crypto";
 import { buildDisagreements, buildRationale } from "./domain.ts";
+import { DEFAULT_JUDGE_TIMEOUT_MS } from "./judge-budget.ts";
 
 // ── The judged inputs ───────────────────────────────────────────────────────
 
@@ -741,7 +742,10 @@ export interface JudgeTransport {
 }
 
 export const DEFAULT_JUDGE_BASE_URL = "https://opencode.ai/zen/v1";
-export const DEFAULT_JUDGE_TIMEOUT_MS = 60_000;
+// Re-exported, not redefined: the constant lives in the leaf judge-budget.ts so
+// the smoke driver can derive its judge ceiling from it without importing this
+// module's database wiring. Every caller of this file keeps the same import.
+export { DEFAULT_JUDGE_TIMEOUT_MS } from "./judge-budget.ts";
 
 export function resolveJudgeTimeoutMs(env: Record<string, string | undefined> = process.env): number {
   const raw = env.SWARM_JUDGE_TIMEOUT_MS;

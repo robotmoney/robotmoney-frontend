@@ -46,7 +46,11 @@ describe("v0.4.0 -> v0.5.0 postflight, against a fully migrated database", () =>
     // subject-repair's own "absent is not a failure" note in postflight.ts.
     // judge-model-acceptance is the second: a freshly migrated database ships
     // the judge `off`, so there is no model in use to disqualify.
-    expect(warned.map((r) => r.name).sort()).toEqual(["judge-model-acceptance", "subject-repair"]);
+    // judge-source is the third, and for the same reason: with the judge off
+    // there are no judgement rows in the window, so there is no fallback share
+    // to assess. It WARNs rather than PASSes deliberately — "nothing was judged"
+    // must never read as "a model authored everything" (decision D15).
+    expect(warned.map((r) => r.name).sort()).toEqual(["judge-model-acceptance", "judge-source", "subject-repair"]);
   });
 
   // AC-MODEL-01, asked of the database rather than of the code that writes it.

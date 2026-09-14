@@ -13,6 +13,7 @@ import {
   detectMissingReceiptSessions,
   type MissingReceiptReport,
 } from "../swarm/receipt-gap.ts";
+import { JUDGE_FALLBACK_LOOKBACK_DAYS, summarizeJudgeSources } from "../swarm/judge-budget.ts";
 
 // Research signals are considered stale after this many UTC calendar days
 // without a new row — named per docs/architecture.md US-A2 ("Use a
@@ -386,6 +387,40 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
       level: "failed",
       source: "swarm.consensus_receipt",
       message: `missing-receipt detection failed: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+
+  // ── The judge's fallback SHARE (R17 / decision D15) ─────────────────────
+  // A misconfigured budget must not be able to masquerade as an upstream
+  // outage. Every OTHER signal on this page is green while the judge is in
+  // permanent fallback: the sessions publish, the receipts exist, nothing is
+  // missing, the lane's jobs succeed. The only thing that is wrong is that no
+  // model ever answered — and until this alert, the only place that fact
+  // existed was a column nobody selected.
+  //
+  // The thresholds are D15's, matching the postflight check exactly (both call
+  // summarizeJudgeSources): report always, and call it FAILED only at 100 %
+  // over the window, because AC-FE-05 makes a partial fallback a working
+  // feature rather than an incident.
+  try {
+    const judgeSources = await sql<{ source: string; fallback_reason: string | null; n: number }[]>`
+      SELECT source, coalesce(btrim(fallback_reason), '') AS fallback_reason, count(*)::int AS n
+        FROM swarm_session_judgements
+       WHERE created_at >= now() - (${JUDGE_FALLBACK_LOOKBACK_DAYS} || ' days')::interval
+       GROUP BY 1, 2`;
+    const summary = summarizeJudgeSources(
+      judgeSources.map((r) => ({ source: r.source, fallbackReason: r.fallback_reason || null, n: r.n })),
+    );
+    alerts.push({
+      level: summary.verdict === "FAIL" ? "failed" : summary.verdict === "WARN" && summary.fallback > 0 ? "degraded" : summary.verdict === "WARN" ? "stale" : "healthy",
+      source: "swarm.judge_fallback",
+      message: summary.detail,
+    });
+  } catch (e) {
+    alerts.push({
+      level: "failed",
+      source: "swarm.judge_fallback",
+      message: `judge fallback-share detection failed: ${e instanceof Error ? e.message : String(e)}`,
     });
   }
 

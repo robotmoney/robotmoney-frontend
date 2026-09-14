@@ -82,9 +82,16 @@ test("stage rehearsal refuses a receipt whose fallback is a CREDIT/CREDENTIAL re
 
   // THE CONTROL: a survivable runtime failure is still accepted, reason and all
   // — otherwise this refusal would have quietly repealed AC-FE-05.
+  //
+  // The control used to be `model_timeout`, which decision D15 moved onto the
+  // disqualifying list for this gate: a timeout is a BUDGET misconfiguration
+  // masquerading as an outage (the 60 s default against a model measured at
+  // 58-175 s), and a receipt no model contributed to cannot be the evidence the
+  // RC tag is cut on. `response_unparseable` is the genuine article — the model
+  // WAS reached, it answered, and its answer could not be trusted whole.
   const ok = await waitForVerifiedFusionReceipt({
     backendUrl: "http://stage.invalid",
-    latest: async () => ({ sessionId: "survivable", source: "fallback", mode: "enforce", fallbackReason: "model_timeout" }),
+    latest: async () => ({ sessionId: "survivable", source: "fallback", mode: "enforce", fallbackReason: "response_unparseable" }),
     fetcher: async () => Response.json({ verified: true, canonicalBytes: "bytes", signatures: [{ verified: true }] }),
   });
   expect(ok.sessionId).toBe("survivable");
