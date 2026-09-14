@@ -73,7 +73,16 @@ async function bucketWeightsSession(prefix: string, vectors: (number[] | null)[]
   const date = session.date instanceof Date
     ? session.date.toISOString().slice(0, 10)
     : String(session.date).slice(0, 10);
+  // T17: the submission gate now refuses a weightless or non-canonical-four
+  // take for a `bucket_weights` subject, which is the point — but the ASSEMBLY
+  // gates below are defence in depth over takes ALREADY ON FILE, and this is
+  // how such a take comes to exist: it was filed while the subject still asked
+  // for prose only, and the subject was retyped afterwards (migration 0051 did
+  // exactly that). The brief above was published under the real type, so the
+  // session's ASK is unchanged; only the moment the takes landed differs.
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${subjectId}`;
   for (const v of vectors) await submit(await member(), date, subjectId, v);
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
   const closed = await admin.closeSessionAdmin(session.id, undefined);
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
   const aggregated = await admin.aggregateSessionAdmin(session.id, undefined);
@@ -289,7 +298,16 @@ async function rawVectorSession(prefix: string, vectors: ({ bucket: string; weig
   const date = session.date instanceof Date
     ? session.date.toISOString().slice(0, 10)
     : String(session.date).slice(0, 10);
+  // T17: the submission gate now refuses a weightless or non-canonical-four
+  // take for a `bucket_weights` subject, which is the point — but the ASSEMBLY
+  // gates below are defence in depth over takes ALREADY ON FILE, and this is
+  // how such a take comes to exist: it was filed while the subject still asked
+  // for prose only, and the subject was retyped afterwards (migration 0051 did
+  // exactly that). The brief above was published under the real type, so the
+  // session's ASK is unchanged; only the moment the takes landed differs.
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${subjectId}`;
   for (const v of vectors) await submitRaw(await member(), date, subjectId, v);
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
   const closed = await admin.closeSessionAdmin(session.id, undefined);
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
   const aggregated = await admin.aggregateSessionAdmin(session.id, undefined);

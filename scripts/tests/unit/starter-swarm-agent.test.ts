@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import type { SwarmBrief } from "@robotmoney/contract";
 import {
+  briefRequiresWeights,
   canonicalizeDraftForTransport,
   deterministicAuthorTake,
+  evenCanonicalWeights,
   signDraft,
   type StarterSession,
   type SubmissionDraft,
@@ -67,5 +69,43 @@ describe("starter swarm agent canonical signing", () => {
     const second = await deterministicAuthorTake({ session, brief });
     expect(first).toEqual(second);
     expect(first.body).toContain("replace deterministicAuthorTake with your model callback");
+  });
+
+  // T17 / D4 — THE API CLIENT NOW CARRIES THE VECTOR. A weightless take on a
+  // `bucket_weights` session is a 400 (`weights_required_for_bucket_weights_subject`),
+  // and before that refusal existed it was a 201 that permanently blocked the
+  // session's consensus receipt. The starter is the reference member client, so
+  // it has to demonstrate the correct shape, not merely avoid the failure.
+  test("a bucket_weights brief makes the default callback author the canonical four", async () => {
+    const session = { id: "9", date: "2026-07-21", subjectId: "vault" } as StarterSession;
+    const allocationBrief = {
+      id: "12", date: session.date, subjectId: session.subjectId, sessionId: "9",
+      createdAt: "2026-07-21T00:00:00.000Z",
+      body: {
+        subject: { recommendationType: "bucket_weights" },
+        takeSchema: { weights: { optional: false, buckets: [...RECEIPT_CANONICAL_BUCKET_ORDER] } },
+      },
+    } as unknown as SwarmBrief;
+    const proseBrief = {
+      ...allocationBrief,
+      body: {
+        subject: { recommendationType: "position_actions" },
+        takeSchema: { weights: { optional: true, buckets: [...RECEIPT_CANONICAL_BUCKET_ORDER] } },
+      },
+    } as unknown as SwarmBrief;
+
+    expect(briefRequiresWeights(allocationBrief)).toBe(true);
+    expect(briefRequiresWeights(proseBrief)).toBe(false);
+
+    const authored = await deterministicAuthorTake({ session, brief: allocationBrief });
+    expect(authored.weights?.map((w) => w.bucket)).toEqual([...RECEIPT_CANONICAL_BUCKET_ORDER]);
+    expect(authored.weights!.reduce((sum, w) => sum + w.weight, 0)).toBeCloseTo(1, 12);
+    // …and a prose session is untouched: no vector is invented for it.
+    expect((await deterministicAuthorTake({ session, brief: proseBrief })).weights).toBeUndefined();
+
+    // The vector reaches the SIGNED BYTES, which is the half that matters: the
+    // server verifies the signature over a payload that includes `weights`.
+    const signed = canonicalizeSubmission({ ...draft, weights: evenCanonicalWeights() });
+    expect(signed).toContain("agent_tokens");
   });
 });

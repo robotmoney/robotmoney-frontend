@@ -1027,14 +1027,72 @@ export async function rosterAddAdmin(sessionId: string, memberId: string, actor:
   });
 }
 
-export async function rosterExcuseAdmin(sessionId: string, memberId: string, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
+// THE AUDITED OPERATOR LEVER (T17). `force` excuses a member from the FROZEN
+// roster AFTER collection has begun, which the plain path refuses. It exists
+// for one shape of stuck session and no other: a `bucket_weights` session whose
+// receipt is refused (`weights_absent_for_bucket_weights_subject`,
+// `weights_not_authored_by_every_take`) because a take on file carries no
+// canonical-four vector. Those takes cannot be repaired — `swarm_recommendations`
+// is append-only, and the amendment window is shut — so without this the session
+// never publishes a receipt at all.
+//
+// IT IS A BACKSTOP, NOT THE FIX. The fix is `submitRecommendation`'s 400 (see
+// swarm/domain.ts), which stops such a take existing; this clears the ones that
+// already do. So:
+//   * it is REFUSED on a terminal session (`published`/`cancelled`) — nothing
+//     re-writes a session that has already published, and
+//   * it writes a DISTINCT audit action (`roster_excuse_forced`) carrying the
+//     session's state and the operator's reason, so the exceptional path is
+//     never indistinguishable from the ordinary one in the log, and
+//   * it does not itself re-aggregate: the operator runs `aggregate` (and
+//     `judge`) explicitly afterwards, through the guarded transitions, so the
+//     rollup is recomputed by the same path that computes every other rollup.
+//     `loadFrozenTakeSet` filters on non-excused roster rows, which is what
+//     makes the excused member's take drop out of the rollup AND out of the
+//     receipt's frozen take set.
+const FORCE_EXCUSE_TERMINAL_STATES: ReadonlySet<string> = new Set(["published", "cancelled"]);
+
+export interface RosterExcuseOptions {
+  /** Excuse after collection has begun. Audited as `roster_excuse_forced`. */
+  force?: boolean;
+  /** Free-text operator justification, recorded on the audit row. */
+  reason?: string;
+}
+
+export async function rosterExcuseAdmin(
+  sessionId: string,
+  memberId: string,
+  actor: Actor = ADMIN_ACTOR,
+  options: RosterExcuseOptions = {},
+): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const gate = await requireRosterEditable(tx, sessionId);
-    if (!gate.ok) return err(gate.status, gate.error);
+    let state: string | undefined;
+    if (options.force) {
+      const s = (await tx`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
+        | { id: string; state: string }
+        | undefined;
+      if (!s) return err(404, "session not found");
+      if (FORCE_EXCUSE_TERMINAL_STATES.has(s.state)) {
+        return err(409, `session is ${s.state}; a terminal session is never re-rostered (forced excuse refused)`);
+      }
+      state = s.state;
+    } else {
+      const gate = await requireRosterEditable(tx, sessionId);
+      if (!gate.ok) return err(gate.status, gate.error);
+    }
     const upd = await tx`UPDATE swarm_session_members SET status = 'excused', excused_at = now() WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
     if (upd.length === 0) return err(404, "member is not on this session's roster");
-    await audit(actor, "roster_excuse", { sessionId, memberId }, tx);
-    return { ok: true, status: 200, sessionId, memberId };
+    if (options.force) {
+      await audit(actor, "roster_excuse_forced", {
+        sessionId,
+        memberId,
+        state,
+        reason: options.reason ?? null,
+      }, tx);
+    } else {
+      await audit(actor, "roster_excuse", { sessionId, memberId }, tx);
+    }
+    return { ok: true, status: 200, sessionId, memberId, forced: options.force === true };
   });
 }
 

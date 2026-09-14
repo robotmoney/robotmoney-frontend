@@ -30,6 +30,7 @@ import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 // A real judge endpoint, locally served (issue #969): this file drives the
 // judging through judgeSessionAdmin, which has no injectable transport, and the
@@ -113,7 +114,7 @@ async function submitWithBadSignature(
 
 async function openCollectingSession(prefix: string) {
   const subj = rid(prefix);
-  await ic.ensureSubject(subj, `${prefix} subject`);
+  await ensureProseSubject(subj, `${prefix} subject`);
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   return { subj, session: s, date: sessionDate(s) };

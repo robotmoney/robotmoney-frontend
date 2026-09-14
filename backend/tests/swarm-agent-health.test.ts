@@ -16,6 +16,7 @@ import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -50,7 +51,7 @@ async function getAgentHealth(query: string) {
 
 test("closeWindow records exactly one absent event per missing expected roster member; queryable by session/member and counted", async () => {
   const subj = rid("s");
-  await ic.ensureSubject(subj, "S");
+  await ensureProseSubject(subj, "S");
   const present = await activeMember();
   const absent = await activeMember();
   const session = await ic.openSession(subj);
@@ -110,7 +111,7 @@ test("closeWindow records exactly one absent event per missing expected roster m
 
 test("a wrong-key/tampered submission is rejected 400 and recorded to the durable rejected-signature surface", async () => {
   const subj = rid("s2");
-  await ic.ensureSubject(subj, "S2");
+  await ensureProseSubject(subj, "S2");
   const m = await activeMember();
   const session = await ic.openSession(subj);
   // The DATABASE dates the session (migration 0022) — read it back rather

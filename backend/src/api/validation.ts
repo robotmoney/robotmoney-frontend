@@ -2,7 +2,7 @@ import type { ApplyInput, MemberProfilePatch, SubmissionInput } from "../swarm/d
 // Type-only (erased at runtime, no cycle): the admin patch shape is owned by
 // the domain module that writes it, the same way MemberProfilePatch is.
 import type { MemberAdminPatch } from "../swarm/admin.ts";
-import { STANCES, type canonicalizeSubmission } from "@robotmoney/contract";
+import { RECEIPT_CANONICAL_BUCKET_ORDER, STANCES, type canonicalizeSubmission } from "@robotmoney/contract";
 // Runtime (not type-only) and safe: signing.ts imports nothing from this
 // module — its only import is @robotmoney/contract — so there is no cycle.
 import { isRegistrablePublicKey, PUBLIC_KEY_REFUSAL } from "../lib/signing.ts";
@@ -78,23 +78,61 @@ export function optionalString(
   return value ?? undefined;
 }
 
-function optionalWeights(body: JsonObject): { bucket: string; weight: number }[] | null | undefined {
-  if (body.weights == null) return undefined;
-  if (!Array.isArray(body.weights) || body.weights.length === 0) return null;
+// ── THE ALLOCATION VECTOR AS IT ENTERS THE SIGNED BYTES (T17 / D4) ─────────
+//
+// TWO RULES, AND BOTH ARE ABOUT WHAT `weights` CAN EVER BE, not about which
+// subject asked for it: the buckets are the receipt's canonical four
+// (`RECEIPT_CANONICAL_BUCKET_ORDER` — schema 1.0 can carry no others) and the
+// vector can carry no more entries than there are canonical buckets. Before
+// this, `optionalWeights()` accepted ANY bucket name of any length, so a
+// non-canonical vector entered `canonicalizeSubmission`, was SIGNED, and
+// became append-only history that no later gate could repair — the receipt
+// assembler could then only refuse the whole receipt, terminally.
+//
+// SUBJECT-AWARENESS LIVES ONE LAYER UP (swarm/domain.ts submitRecommendation):
+// this function does not know which session a body is aimed at, and a take
+// with NO vector at all stays valid here because a `position_actions` session
+// is entitled to one.
+const CANONICAL_BUCKETS: ReadonlySet<string> = new Set(RECEIPT_CANONICAL_BUCKET_ORDER);
+const MAX_WEIGHT_ENTRIES = RECEIPT_CANONICAL_BUCKET_ORDER.length;
+
+export type WeightsParse =
+  | { ok: true; weights: { bucket: string; weight: number }[] | undefined }
+  | { ok: false; error: string };
+
+export function parseOptionalWeights(body: JsonObject): WeightsParse {
+  if (body.weights == null) return { ok: true, weights: undefined };
+  if (!Array.isArray(body.weights) || body.weights.length === 0) return { ok: false, error: "invalid weights" };
+  // LENGTH CAP FIRST, so an oversized array is refused before it is walked.
+  if (body.weights.length > MAX_WEIGHT_ENTRIES) {
+    return {
+      ok: false,
+      error: `weights_not_canonical_four: ${body.weights.length} entries; a weight vector carries at most the ${MAX_WEIGHT_ENTRIES} canonical buckets (${RECEIPT_CANONICAL_BUCKET_ORDER.join(", ")})`,
+    };
+  }
 
   const seen = new Set<string>();
   const weights: { bucket: string; weight: number }[] = [];
   let total = 0;
   for (const entry of body.weights) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return null;
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return { ok: false, error: "invalid weights" };
     const bucket = requiredString(entry as JsonObject, "bucket", 100);
     const weight = (entry as JsonObject).weight;
-    if (!bucket || seen.has(bucket) || typeof weight !== "number" || !Number.isFinite(weight) || weight < 0) return null;
+    if (!bucket || seen.has(bucket) || typeof weight !== "number" || !Number.isFinite(weight) || weight < 0) {
+      return { ok: false, error: "invalid weights" };
+    }
+    if (!CANONICAL_BUCKETS.has(bucket)) {
+      return {
+        ok: false,
+        error: `weights_bucket_not_canonical: "${bucket}" is not one of ${RECEIPT_CANONICAL_BUCKET_ORDER.join(", ")}`,
+      };
+    }
     seen.add(bucket);
     weights.push({ bucket, weight });
     total += weight;
   }
-  return total > 0 && Number.isFinite(total) ? weights : null;
+  if (!(total > 0) || !Number.isFinite(total)) return { ok: false, error: "invalid weights" };
+  return { ok: true, weights };
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -144,7 +182,7 @@ export function validateSubmission(
   const stance = requiredString(body, "stance", 100);
   const signature = requiredString(body, "signature", 2000);
   const confidence = body.confidence;
-  const weights = optionalWeights(body);
+  const parsedWeights = parseOptionalWeights(body);
 
   if (typeof body.stance === "string") {
     const s = body.stance.trim();
@@ -167,9 +205,10 @@ export function validateSubmission(
     return { ok: false, error: "confidence must be a number between 0 and 1" };
   }
 
-  if (weights === null) {
-    return { ok: false, error: "invalid weights" };
+  if (!parsedWeights.ok) {
+    return { ok: false, error: parsedWeights.error };
   }
+  const weights = parsedWeights.weights;
 
   if (
     !memberId || !date || !subjectId || !nonce || !stance || !signature ||
@@ -216,7 +255,7 @@ export function validateSigningDraft(
   const nonce = requiredString(body, "nonce", 200);
   const stance = requiredString(body, "stance", 100);
   const confidence = body.confidence;
-  const weights = optionalWeights(body);
+  const parsedWeights = parseOptionalWeights(body);
 
   if (typeof body.stance === "string") {
     const s = body.stance.trim();
@@ -239,9 +278,10 @@ export function validateSigningDraft(
     return { ok: false, error: "confidence must be a number between 0 and 1" };
   }
 
-  if (weights === null) {
-    return { ok: false, error: "invalid weights" };
+  if (!parsedWeights.ok) {
+    return { ok: false, error: parsedWeights.error };
   }
+  const weights = parsedWeights.weights;
 
   if (
     !memberId || !date || !subjectId || !nonce || !stance ||
