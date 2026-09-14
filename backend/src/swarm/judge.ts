@@ -66,6 +66,7 @@
 // See canonicalizeDigestInputs() for the decision and its reasoning.
 import { createHash } from "node:crypto";
 import { buildDisagreements, buildRationale } from "./domain.ts";
+import { assertJudgeModelAllowed } from "./judge-model-policy.ts";
 
 // ── The judged inputs ───────────────────────────────────────────────────────
 
@@ -852,6 +853,21 @@ export function resolveJudgeTransport(
 ): JudgeTransport | null {
   const apiKey = (env.OPENCODE_API_KEY ?? "").trim();
   const selected = (model ?? "").trim();
+  // RE-ASSERTED AT USE, not merely at write (AC-MODEL-01). setJudgeConfig()
+  // refuses a disqualified model, but it is not the only writer the
+  // swarm_judge_config row has ever had — migrations, a psql session and a
+  // restored backup all bypass it, and the read path used to post whatever the
+  // column held straight to Zen. A model this environment may not use is a
+  // configuration fault, so it fails CLOSED with a named reason rather than
+  // returning null (which would be reported as "nothing was configured") or
+  // producing a judgement that disqualifies the whole run.
+  if (selected) {
+    try {
+      assertJudgeModelAllowed(selected, env);
+    } catch {
+      throw new JudgeUnavailableError("model_disallowed", selected);
+    }
+  }
   if (!apiKey || !selected) return null;
   const baseUrl = (env.SWARM_JUDGE_BASE_URL ?? "").trim() || DEFAULT_JUDGE_BASE_URL;
   return {

@@ -88,6 +88,7 @@
 // MODEL SELECTION STAYS HERE, AND ONLY HERE. resolveModelConfig() below is the
 // single place an AGENT_MODEL selector becomes a model id and a credential; the
 // primitive takes that record and invents nothing.
+import { isAcceptancePath, resolveInferencePath, type InferencePathOptions as ModelPathOptions } from "../../backend/src/acceptance-path.ts";
 import { buildOnboardingPrompt, path as routePath, ROUTES, SWARM_ONBOARDING_SKILL_URL } from "@robotmoney/contract";
 import { classifyOutcome, shouldRetry } from "../agent/classify-outcome.ts";
 import { ensureMemberVolume, runMemberAgent } from "../agent/member-agent.ts";
@@ -288,52 +289,19 @@ export interface ModelConfig {
 //
 // So the refusal is scoped to the paths where it is true, not applied globally
 // (which would break every keyless local eval and be reverted within a week).
-export type InferencePath = "development" | "staging" | "production";
-
-export interface ModelPathOptions {
-  /**
-   * Stated outright by a caller that knows which environment it is booting.
-   * Wins over every derived signal — nothing about this decision should have to
-   * be inferred when the caller already knows.
-   */
-  path?: InferencePath;
-  /**
-   * The STANDING stack: `bun run smoke:stage`, i.e. the `--static-port` boot a
-   * tunnel points at. That is the staging deployment, whatever `RM_ENV` it was
-   * handed, so it gets the acceptance rules even before RM_ENV is corrected.
-   */
-  standingStack?: boolean;
-}
-
-/**
- * Which environment is asking for a model.
- *
- * `RM_ENV` is the backend's own runtime mode (`ephemeral | smoke | prod`,
- * backend/src/config.ts) and is the ONE derived signal used here: staging runs
- * `RM_ENV=prod` semantics by rule (docs/technical/stack-orchestrator.md §16 —
- * there is deliberately no `staging` value), so `prod` covers both hosted
- * environments and nothing else. `smoke` is an operator's own boot and stays
- * `development` unless that boot is the standing stack.
- *
- * Note what this is NOT: it is not a model knob. It selects a POLICY over the
- * one selector, and D22 rule 1's single-signal property is untouched —
- * `AGENT_MODEL` still decides which model, and this decides only whether the
- * answer is allowed here.
- */
-export function resolveInferencePath(
-  env: Record<string, string | undefined> = process.env,
-  opts: ModelPathOptions = {},
-): InferencePath {
-  if (opts.path) return opts.path;
-  if ((env.RM_ENV ?? "").trim() === "prod") return "production";
-  if (opts.standingStack === true) return "staging";
-  return "development";
-}
-
-/** True where AC-MODEL-01's refusals apply: everything that is not a dev box. */
-export function isAcceptancePath(path: InferencePath): boolean {
-  return path !== "development";
-}
+// The predicate itself lives in backend/src/acceptance-path.ts and is shared
+// with the judge half verbatim (D13). It is re-exported here because this
+// module is where the scripts tree has always imported it from, and because a
+// second definition is exactly what produced the contradiction D13 settles: an
+// unset RM_ENV meant STRICT to the judge and PERMISSIVE here, and both halves
+// had a green test. `ModelPathOptions` keeps its local name — `standingStack`
+// is a smoke-boot concept — and is the shared options type.
+export {
+  isAcceptancePath,
+  resolveInferencePath,
+  type InferencePath,
+  type InferencePathOptions as ModelPathOptions,
+} from "../../backend/src/acceptance-path.ts";
 
 // Resolves the model + credential the member-agent container will run with.
 //

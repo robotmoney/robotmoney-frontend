@@ -123,3 +123,50 @@ test("a mode-only patch adopts a model written concurrently INSIDE its own write
   expect(await patch).toMatchObject({ mode: "enforce", model: OTHER });
   expect(await getJudgeConfig(), "and the stored row agrees").toMatchObject({ mode: "enforce", model: OTHER });
 });
+
+// ── T06 · THE RESULTING MODEL, NOT THE PATCHED ONE (AC-MODEL-01) ────────────
+//
+// The fix above — a plain UPDATE whose COALESCE preserves the stored model —
+// is exactly what opened this door. `assertJudgeModelAllowed()` had one call
+// site and it was guarded on the patch CARRYING a model, so a row already
+// holding `nemotron-3-ultra-free` could be switched to `enforce` by a patch
+// that never mentioned a model at all. The same id sent explicitly was
+// correctly refused. Reproduced empirically on the rc.2 database before this
+// test existed.
+//
+// The row is seeded by RAW SQL rather than through setJudgeConfig(), because
+// setJudgeConfig() refuses the id — which is the whole point: the databases
+// this has to hold for are the ones whose history nobody watched (a restored
+// backup, a psql session, a migration, or a release of this code older than
+// the policy).
+const FREE = "nemotron-3-ultra-free";
+
+async function seedRawJudgeRow(mode: string, model: string): Promise<void> {
+  await sql`
+    INSERT INTO swarm_judge_config (id, mode, min_takes, model, third_party_enabled, updated_at)
+    VALUES (1, ${mode}, 2, ${model}, false, now())
+    ON CONFLICT (id) DO UPDATE SET mode = EXCLUDED.mode, model = EXCLUDED.model`;
+}
+
+test("a mode-only patch cannot enable a pre-seeded free-family model", async () => {
+  await seedRawJudgeRow("off", FREE);
+  expect(await getJudgeConfig(), "the seed is genuinely there").toMatchObject({ mode: "off", model: FREE });
+
+  await expect(setJudgeConfig({ mode: "enforce" })).rejects.toThrow(/keyless free family/);
+  await expect(setJudgeConfig({ mode: "shadow" })).rejects.toThrow(/keyless free family/);
+
+  // A refusal changes nothing — the judge stays off rather than half-applied.
+  expect(await getJudgeConfig()).toMatchObject({ mode: "off", model: FREE });
+});
+
+test("the same patch is accepted once the model is corrected in the same call", async () => {
+  await seedRawJudgeRow("off", FREE);
+  expect(await setJudgeConfig({ mode: "enforce", model: MODEL })).toMatchObject({ mode: "enforce", model: MODEL });
+});
+
+test("mode:off is still reachable from a free-family row — the way OUT is never blocked", async () => {
+  // Turning a disqualified judge OFF must not be refused: that is the
+  // operator's remedy, and a policy that blocks it would strand the row.
+  await seedRawJudgeRow("enforce", FREE);
+  expect(await setJudgeConfig({ mode: "off" })).toMatchObject({ mode: "off", model: FREE });
+});

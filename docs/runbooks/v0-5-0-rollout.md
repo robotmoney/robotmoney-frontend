@@ -217,8 +217,19 @@ migration step ever runs, not after.
 
 ### 5.1 Cut the RC tag
 
-Only once every criterion above (1–7) passes — a rejected stage pass returns
-to §3/§5 on a fixed commit and consumes no rc number, per §1's revised order:
+Only once every criterion above (1–8) passes — a rejected stage pass returns
+to §3/§5 on a fixed commit and consumes no rc number, per §1's revised order.
+
+**Criterion 8 is proved by `stage-rehearsal.ts` EXITING 0, not by reading the
+postflight table.** It is the one criterion the runbook calls a behaviour change
+an operator can observe end to end, and it is also the only one whose failure
+mode is a fifteen-minute silent wait rather than a printed `FAIL` row: the
+auto-publish never happens, the rehearsal blocks on the worker cadence, and the
+postflight output that *did* complete still reads "criteria 1-7 passed". An
+operator who interrupts that hang and tags anyway consumes an rc number on an
+unrehearsed candidate. So: if the rehearsal did not run to completion and return
+0, criterion 8 has NOT passed, whatever the table printed before the hang, and
+no tag is cut.
 
 ```bash
 git tag -a v0.5.0-rc.0 "$RC_SHA" -m 'v0.5.0-rc.0'

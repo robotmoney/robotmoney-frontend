@@ -1461,8 +1461,17 @@ CREDENTIAL rather than the model is the problem: an unfunded workspace, i.e. a
 wrong key, i.e. a `401`/`403` that does not complain about the model
 (`credential_rejected`), and an id this endpoint does not serve, e.g. the
 `opencode/`-prefixed selector Zen answers with `401 ModelError`
-(`model_not_supported`). The first three are CONFIGURATION: no model was called
-at all. The last three DID reach Zen, but none of them is a model that was
+(`model_not_supported`), and a model id THIS ENVIRONMENT MAY NOT USE
+(`model_disallowed`) — the free family anywhere, or anything but the pinned
+acceptance model on an acceptance path (AC-MODEL-01,
+`backend/src/swarm/judge-model-policy.ts`). That last one is asserted at the
+point of USE, not only where the config row is written: `setJudgeConfig()` is
+not the only writer the row has ever had, and a restored backup or a psql
+session must not be able to point a production judge at a keyless model. It is
+a refusal rather than a fallback for the same reason `credential_unconfigured`
+is — the judgement would be worthless as evidence, and a deterministic fallback
+would hide that behind prose. The first three are CONFIGURATION: no model was
+called at all. The last three DID reach Zen, but none of them is a model that was
 reachable and misbehaved — they are an account or a deployment that cannot do
 the job it claims to do, and answering them with template prose is how an
 exhausted account manufactures a signed consensus receipt indistinguishable from

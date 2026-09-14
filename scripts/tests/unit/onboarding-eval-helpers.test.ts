@@ -176,7 +176,7 @@ describe("onboarding-eval pure helpers", () => {
 
   test("resolveModelConfig keeps a `free` selection genuinely keyless, even with a key present", () => {
     // A key set for an unrelated reason must never get pulled into a keyless run.
-    const cfg = resolveModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "sk-zen" });
+    const cfg = resolveModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "sk-zen", RM_ENV: "smoke" });
     expect(cfg).toEqual({ model: "opencode/nemotron-3-ultra-free", apiKeyEnv: null, apiKey: null, keyless: true });
   });
 
@@ -547,7 +547,10 @@ describe("member-agent container primitive", () => {
 // re-proving the eval.
 describe("runOnboardingEvalWithRetry", () => {
   const FUNDED_ENV = { OPENCODE_API_KEY: "sk-zen" };
-  const KEYLESS_ENV = { AGENT_MODEL: "free" };
+  // RM_ENV IS STATED. Under D13 an unset RM_ENV is the acceptance path, where a
+  // keyless model is refused outright; these cases are about the DEVELOPMENT
+  // retry rules, so the env says which environment it is.
+  const KEYLESS_ENV = { AGENT_MODEL: "free", RM_ENV: "smoke" };
 
   function fakeResult(overrides: Partial<OnboardingEvalResult> = {}): OnboardingEvalResult {
     return {

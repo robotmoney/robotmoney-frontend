@@ -117,7 +117,15 @@ x-worker-env: &worker-env
   # never mutate analytics data tables (issue #106). Falls back to DATABASE_URL
   # when unset.
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
-  RM_ENV: ${RM_ENV:-smoke}
+  # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
+  # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
+  # service, so the value is a property of the stack config rather than of
+  # whatever the operator's shell last exported. It used to default to `smoke`,
+  # which meant a bare `docker compose up` — or any bring-up path that forgot to
+  # emit it — silently disabled AC-MODEL-01's refusals in the api and worker.
+  # `prod` is the strict/acceptance path: if the default IS ever reached, the
+  # stack refuses a keyless or unpinned model instead of accepting one.
+  RM_ENV: ${RM_ENV:-prod}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   # Capability-specific cache controls. Blank/unset is intentionally passed
   # through: backend parsing treats it as absent, preserving the production
@@ -216,7 +224,15 @@ services:
     command: ["bun", "run", "src/api/index.ts"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      RM_ENV: ${RM_ENV:-smoke}
+      # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
+      # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
+      # service, so the value is a property of the stack config rather than of
+      # whatever the operator's shell last exported. It used to default to `smoke`,
+      # which meant a bare `docker compose up` — or any bring-up path that forgot to
+      # emit it — silently disabled AC-MODEL-01's refusals in the api and worker.
+      # `prod` is the strict/acceptance path: if the default IS ever reached, the
+      # stack refuses a keyless or unpinned model instead of accepting one.
+      RM_ENV: ${RM_ENV:-prod}
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS
       # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here,

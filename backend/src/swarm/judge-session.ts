@@ -159,6 +159,19 @@ export async function setJudgeConfig(
     const current = await getJudgeConfig();
     const resultingMode = patch.mode ?? current.mode;
     const resultingModel = patch.model === undefined ? current.model : (patch.model === null ? null : patch.model.trim());
+    // WHICH MODEL THE ROW WILL CARRY, not which one this patch mentioned
+    // (AC-MODEL-01). assertJudgeModelAllowed() above is guarded on the patch
+    // CARRYING a model, and the UPDATE below COALESCEs the stored value
+    // forward — so `{"mode":"enforce"}` against a row already holding
+    // `nemotron-3-ultra-free` enabled a keyless judge that every gate the
+    // 0.5.0 rollout adds then passed. Commit 14741336, the one that made a
+    // mode-only patch work at all, is what opened that door. The resulting
+    // model is what will be posted verbatim to Zen and written into signed,
+    // append-only judgement rows, so it is the value that must satisfy the
+    // policy.
+    if (resultingMode !== "off" && resultingModel) {
+      assertJudgeModelAllowed(resultingModel);
+    }
     if (resultingMode !== "off" && !resultingModel) {
       throw new Error(
         `judge mode "${resultingMode}" requires a model — set { mode, model } together, or leave the judge off. ` +

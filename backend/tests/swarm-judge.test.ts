@@ -1555,9 +1555,14 @@ test("the model is selected by the config row, and a missing credential fails cl
   expect((await getJudgeConfig()).minTakes).toBe(2);
 
   // resolveJudgeTransport needs BOTH a model and a credential; neither alone.
-  expect(resolveJudgeTransport(null, { OPENCODE_API_KEY: "k" })).toBeNull();
-  expect(resolveJudgeTransport("vendor/m", {})).toBeNull();
-  const transport = resolveJudgeTransport("vendor/m", { OPENCODE_API_KEY: "k" });
+  // RM_ENV IS STATED: the transport re-asserts the model policy at use now, and
+  // an unset RM_ENV is the acceptance path (D13), where a stub id like
+  // `vendor/m` is refused. This case is about the two configuration gaps, so it
+  // runs on the development path the rest of this suite runs on.
+  const DEV = { RM_ENV: "ephemeral" };
+  expect(resolveJudgeTransport(null, { ...DEV, OPENCODE_API_KEY: "k" })).toBeNull();
+  expect(resolveJudgeTransport("vendor/m", { ...DEV })).toBeNull();
+  const transport = resolveJudgeTransport("vendor/m", { ...DEV, OPENCODE_API_KEY: "k" });
   expect(transport?.model).toBe("vendor/m");
 });
 

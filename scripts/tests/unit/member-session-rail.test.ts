@@ -157,6 +157,10 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
       SMOKE_PROJECT: "rm_ci_stack_y",
       COMPOSE_FILE: "docker-compose.yml:docker-compose.smoke.yml",
       AGENT_MODEL: "free",
+      // The stack states its own RM_ENV now (D13) and this rail is built from a
+      // smoke stack's compose env, so it carries one. Unset would be the
+      // acceptance path, where `free` is refused — see the RM_ENV cases below.
+      RM_ENV: "smoke",
       AUTOMATION_TOKEN: "automation-token",
       UNDEF: undefined,
     });
