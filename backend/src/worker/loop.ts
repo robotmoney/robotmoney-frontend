@@ -32,6 +32,17 @@ function isDegradedResult(output: unknown): output is { ok: false; error?: unkno
   return output != null && typeof output === "object" && (output as { ok?: unknown }).ok === false;
 }
 
+// A degrade a RETRY CANNOT CHANGE THE ANSWER TO (T21). The seam is the same
+// question `worker/handlers/swarm.ts` already applies to benign skips, asked in
+// the other direction: a consensus receipt refused because a FROZEN take set
+// carries no weight vector will be refused identically on every attempt, so
+// five identical red rows are five copies of one fact and a wasted backoff
+// window. The handler says so explicitly with `terminal: true`; everything else
+// keeps the exponential-backoff retry, because most degrades ARE transient.
+function isTerminalDegrade(output: unknown): boolean {
+  return output != null && typeof output === "object" && (output as { terminal?: unknown }).terminal === true;
+}
+
 function degradedError(output: { error?: unknown }): string {
   const e = output.error;
   return e == null ? "degraded (kept last-persisted rows)" : e instanceof Error ? e.message : String(e);
@@ -143,12 +154,25 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
     // distinct durable job_runs.status ('degraded') and engage the same
     // exponential-backoff retry as a hard failure so a transient blip recovers
     // before the next (up to daily) cron tick. Never escalate to 'dead' —
-    // last-persisted data is already intact and the schedule must keep firing;
-    // once attempts are exhausted we settle the job 'succeeded' and let the next
-    // cron slot re-enqueue a fresh attempt.
+    // last-persisted data is already intact and the schedule must keep firing.
+    //
+    // AN EXHAUSTED DEGRADE SETTLES 'failed', NOT 'succeeded' (R16). It used to
+    // settle 'succeeded' on the reasoning that the next cron slot re-enqueues a
+    // fresh attempt — which is true, and is unaffected by the status, because
+    // the scheduler enqueues NEW rows. What the old status did do was make the
+    // row lie: staging job 83 read `succeeded, attempts 5, last_error
+    // judge_unavailable` for a judging that never happened, and the admin
+    // overview's kind health, the operator's queue counts and
+    // `swarm/receipt-gap.ts` all had to work around a green row for work that
+    // was never done. 'failed' is the honest terminal for "asked N times, never
+    // answered"; 'dead' is still never used here, so an operator requeue and
+    // the next cron slot both stay available.
+    //
+    // A TERMINAL degrade skips the retries entirely — see isTerminalDegrade.
     if (isDegradedResult(output)) {
       const errText = degradedError(output);
-      const canRetry = job.attempts < job.max_attempts;
+      const terminal = isTerminalDegrade(output);
+      const canRetry = !terminal && job.attempts < job.max_attempts;
       const backoff = Math.min(MAX_BACKOFF_SECONDS, Math.pow(2, job.attempts));
       const recorded = await sql.begin(async (tx) => {
         const upd = canRetry
@@ -159,16 +183,20 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
                             last_error = ${errText}, updated_at = now()
                       WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`
           : await tx`UPDATE jobs
-                        SET status = 'succeeded', locked_at = NULL, locked_by = NULL,
+                        SET status = 'failed', locked_at = NULL, locked_by = NULL,
                             last_error = ${errText}, updated_at = now()
                       WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
         if (upd.length === 0) return false;
+        // The RUN keeps the 'degraded' status that distinguishes "kept the
+        // last-persisted rows" from a thrown failure — except for a terminal
+        // refusal, which is not a degradation of anything and is recorded red.
         await tx`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
-                 VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), 'degraded', ${errText}, ${tx.json(jsonValue(output ?? null))})`;
+                 VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), ${terminal ? "failed" : "degraded"}, ${errText}, ${tx.json(jsonValue(output ?? null))})`;
         return true;
       });
       if (!recorded) console.warn(`job ${job.id} (${job.kind}) lost its lock before completion (reaped) — degraded result discarded`);
-      else console.warn(`job ${job.id} (${job.kind}) DEGRADED — kept last-persisted${canRetry ? `, retry in ${backoff}s` : " (attempts exhausted; next cron re-enqueues)"}: ${errText.split("\n")[0]}`);
+      else if (terminal) console.error(`job ${job.id} (${job.kind}) REFUSED TERMINALLY — no retry can change the answer, settled FAILED: ${errText.split("\n")[0]}`);
+      else console.warn(`job ${job.id} (${job.kind}) DEGRADED — kept last-persisted${canRetry ? `, retry in ${backoff}s` : " (attempts exhausted; settled FAILED, next cron re-enqueues)"}: ${errText.split("\n")[0]}`);
       return true;
     }
 

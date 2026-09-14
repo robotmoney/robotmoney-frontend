@@ -182,6 +182,11 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     else if (lastJob?.status === "dead") alert = "dead";
     else if (runningTooLong) alert = "running";
     else if (lastJob?.status === "running") alert = "running";
+    // A SETTLED-FAILED JOB IS THE HEADLINE, not the run under it (R16). A
+    // retry-exhausted degrade now settles `status='failed'` while its runs stay
+    // `degraded`; without this line the kind would report the softer of the two
+    // facts about the same job.
+    else if (lastJob?.status === "failed") alert = "failed";
     else if (lastRun?.status === "dead") alert = "dead";
     else if (lastRun?.status === "failed") alert = "failed";
     else if (lastRun?.status === "degraded") alert = "degraded";

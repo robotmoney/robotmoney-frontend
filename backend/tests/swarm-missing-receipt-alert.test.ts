@@ -27,8 +27,10 @@ import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { getOverviewProjection } from "../src/admin/overview.ts";
-import { detectMissingReceiptSessions } from "../src/swarm/receipt-gap.ts";
+import { describeMissingReceipt, detectMissingReceiptSessions } from "../src/swarm/receipt-gap.ts";
 import { publishSession as publishSessionJob } from "../src/worker/handlers/swarm.ts";
+import { handleSwarm } from "../src/api/routes/swarm.ts";
+import { config } from "../src/config.ts";
 import { installJudgeStub, removeJudgeStub, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
@@ -73,29 +75,70 @@ async function aggregatedSession(prefix: string, takes: number) {
 }
 
 /**
- * The state `worker/loop.ts` leaves after an exhausted degrade: the session's
- * own `swarm.judge` job SUCCEEDED, attempts spent, `last_error` recorded. Not a
- * fabrication — it is the row observed on staging for session 157777c9.
+ * The state `worker/loop.ts` leaves after an exhausted degrade — IN BOTH OF THE
+ * SHAPES A JUDGE JOB IS ACTUALLY WRITTEN IN (T04).
+ *
+ * `admin` is the historical row observed on staging for session 157777c9: the
+ * scope columns `createSessionAdmin` sets, and `status='succeeded'`, which is
+ * what an exhausted degrade settled as before R16.
+ *
+ * `driver` is the shape PRODUCTION WRITES, and the one every fixture in this
+ * file used to miss: `scripts/lib/swarm/session.ts` enqueues through
+ * `POST /api/swarm/admin/enqueue-job`, which carries the session only in
+ * `payload.sessionId`. The row is created by calling that endpoint rather than
+ * by hand-writing columns, so this fixture cannot drift from the writer; and it
+ * settles `failed`, which is what R16 now writes.
  */
-async function judgeLaneExhausted(sessionId: string, error = "judge_unavailable") {
-  await sql`
-    INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by,
-                      status, attempts, last_error)
-    VALUES ('swarm.judge', ${sql.json({ sessionId } as never)}, now(), ${`swarm:${sessionId}:judge`},
-            'swarm_session', ${sessionId}, 'test', 'succeeded', 5, ${error})
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL
-      DO UPDATE SET status = 'succeeded', attempts = 5, last_error = EXCLUDED.last_error`;
+type JudgeJobShape = "admin" | "driver";
+
+async function judgeLaneExhausted(sessionId: string, shape: JudgeJobShape, error = "judge_unavailable") {
+  if (shape === "admin") {
+    await sql`
+      INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by,
+                        status, attempts, last_error)
+      VALUES ('swarm.judge', ${sql.json({ sessionId } as never)}, now(), ${`swarm:${sessionId}:judge`},
+              'swarm_session', ${sessionId}, 'test', 'succeeded', 5, ${error})
+      ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL
+        DO UPDATE SET status = 'succeeded', attempts = 5, last_error = EXCLUDED.last_error`;
+    return;
+  }
+  const savedToken = config.adminToken;
+  const savedInsecure = config.allowInsecure;
+  config.adminToken = null;
+  config.allowInsecure = true;
+  try {
+    const res = await handleSwarm(
+      new Request("http://x/api/swarm/admin/enqueue-job", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "judge", sessionId }),
+      }),
+      new URL("http://x/api/swarm/admin/enqueue-job"),
+    ) as { status: number; body: { jobId: number } };
+    expect(res.status).toBe(200);
+    await sql`UPDATE jobs SET status = 'failed', attempts = 5, last_error = ${error} WHERE id = ${res.body.jobId}`;
+  } finally {
+    config.adminToken = savedToken;
+    config.allowInsecure = savedInsecure;
+  }
 }
+
+/** Both shapes, every time — the suite was green on one of them alone. */
+const JUDGE_JOB_SHAPES: JudgeJobShape[] = ["admin", "driver"];
+const settledStatus = (shape: JudgeJobShape) => (shape === "admin" ? "succeeded" : "failed");
+
+const alertTextFor = (s: Parameters<typeof describeMissingReceipt>[0]) => describeMissingReceipt(s);
 
 const alertsFor = async (sessionId: string) =>
   (await getOverviewProjection()).alerts.filter((a) => a.message.includes(sessionId));
 
-test("the N5 sequence: an eligible session loses its receipt, and is still named after the lane recovers", async () => {
+for (const shape of JUDGE_JOB_SHAPES) {
+test(`the N5 sequence (${shape}-shaped judge job): an eligible session loses its receipt, and is still named after the lane recovers`, async () => {
   await setJudgeConfig({ mode: "enforce", minTakes: 3, model: STUB_JUDGE_MODEL });
 
   // 1. THE VICTIM: eligible (3 verified takes), judged by nobody.
-  const lost = await aggregatedSession("n5-lost", 3);
-  await judgeLaneExhausted(lost);
+  const lost = await aggregatedSession(`n5-lost-${shape}`, 3);
+  await judgeLaneExhausted(lost, shape);
 
   // 2. PUBLISH. rc.1 returned a clean success here carrying a quiet
   //    `{published:false, reason:"not_judged"}`.
@@ -107,12 +150,15 @@ test("the N5 sequence: an eligible session loses its receipt, and is still named
   expect(result.consensusReceipt.published).toBe(false);
   expect(result.consensusReceipt.reason).toBe("not_judged");
   expect(result.consensusReceipt.judgeLastError).toBe("judge_unavailable");
+  // THE ASSERTION THE DRIVER SHAPE USED TO FAIL. `publishSession()` must return
+  // ok:false for a job enqueued the way production enqueues it; it returned a
+  // clean success, because `judgeLaneFailureFor` matched only the admin columns.
   expect(result.ok, "the judge WAS asked and never answered — this run degrades").toBe(false);
   expect(result.error).toContain("judge was asked and never answered");
 
   // 3. THE LANE RECOVERS: a later session judges and publishes normally. In the
   //    staging run this is the moment every trace of the loss disappeared.
-  const healthy = await aggregatedSession("n5-healthy", 3);
+  const healthy = await aggregatedSession(`n5-healthy-${shape}`, 3);
   const judged = await admin.judgeSessionAdmin(healthy, undefined);
   expect(judged.ok, JSON.stringify(judged)).toBe(true);
   const healthyPublish = (await publishSessionJob({ sessionId: healthy })) as {
@@ -126,9 +172,11 @@ test("the N5 sequence: an eligible session loses its receipt, and is still named
   expect(report.sessions.map((s) => s.sessionId)).toEqual([lost]);
   expect(report.sessions[0]).toMatchObject({
     takeCount: 3,
-    judgeJobStatus: "succeeded",
+    judgeJobStatus: settledStatus(shape),
+    judgeJobAttempts: 5,
     judgeLastError: "judge_unavailable",
   });
+  expect(alertTextFor(report.sessions[0])).not.toContain("no swarm.judge job");
 
   const alerts = await alertsFor(lost);
   expect(alerts.length, "the alert is SESSION-scoped, not kind-scoped").toBe(1);
@@ -138,6 +186,7 @@ test("the N5 sequence: an eligible session loses its receipt, and is still named
   // The healthy session is not named.
   expect(await alertsFor(healthy)).toEqual([]);
 });
+}
 
 test("a later successful publication RESOLVES it — the alert is derived, not a row to clear", async () => {
   // AC-FE-10's staging clause, in full: "a controlled missing-publication
@@ -247,10 +296,11 @@ test("judge mode `shadow` reports nothing: the receipt is unreachable by design"
 // runbook uses — silently retracted the alert for a session that is still
 // permanently receiptless. Nothing was left behind, because the signal is
 // derived. "Cannot disappear silently" has to mean cannot be made to.
-test("raising min_takes AFTER the loss does not retract the alert", async () => {
+for (const shape of JUDGE_JOB_SHAPES) {
+test(`raising min_takes AFTER the loss does not retract the alert (${shape}-shaped judge job)`, async () => {
   await setJudgeConfig({ mode: "enforce", minTakes: 3, model: STUB_JUDGE_MODEL });
-  const lost = await aggregatedSession("n5-retro-mintakes", 3);
-  await judgeLaneExhausted(lost);
+  const lost = await aggregatedSession(`n5-retro-mintakes-${shape}`, 3);
+  await judgeLaneExhausted(lost, shape);
   await publishSessionJob({ sessionId: lost });
 
   expect((await detectMissingReceiptSessions()).sessions.map((x) => x.sessionId)).toEqual([lost]);
@@ -272,14 +322,14 @@ test("raising min_takes AFTER the loss does not retract the alert", async () => 
   expect((await sql`SELECT 1 FROM swarm_consensus_receipts WHERE session_id = ${lost}`).length).toBe(0);
 });
 
-test("turning the judge OFF after the loss does not retract it either", async () => {
+test(`turning the judge OFF after the loss does not retract it either (${shape}-shaped judge job)`, async () => {
   // The same lever, pulled the other way. Today's config may only vouch for a
   // session it PREDATES: `swarm_judge_config.updated_at` moving past the
   // session's `published_at` is what tells the check that the mode on file is
   // not the mode that applied.
   await setJudgeConfig({ mode: "enforce", minTakes: 3, model: STUB_JUDGE_MODEL });
-  const lost = await aggregatedSession("n5-retro-mode-off", 3);
-  await judgeLaneExhausted(lost);
+  const lost = await aggregatedSession(`n5-retro-mode-off-${shape}`, 3);
+  await judgeLaneExhausted(lost, shape);
   await publishSessionJob({ sessionId: lost });
   expect((await detectMissingReceiptSessions()).sessions.map((x) => x.sessionId)).toEqual([lost]);
 
@@ -290,6 +340,7 @@ test("turning the judge OFF after the loss does not retract it either", async ()
   expect(after.sessions.map((x) => x.sessionId), "a permanent loss stays named").toEqual([lost]);
   expect((await alertsFor(lost)).length).toBe(1);
 });
+}
 
 test("turning the judge ON does not retro-flag every session published while it was off", async () => {
   // The other direction of the same rule, and the reason the lookback window

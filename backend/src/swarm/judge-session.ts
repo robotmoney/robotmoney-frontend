@@ -209,15 +209,29 @@ export async function setJudgeConfig(
       model = CASE WHEN ${clearModel} THEN NULL
                    ELSE COALESCE(${patch.model ? patch.model.trim() : null}, model) END,
       third_party_enabled = COALESCE(${patch.thirdPartyEnabled ?? null}, third_party_enabled),
-      updated_at = now()
+      updated_at = now(),
+      -- THE POLICY STAMP MOVES ONLY WHEN THE POLICY MOVES (T04, migration
+      -- 0057). updated_at is bumped by every patch; swarm/receipt-gap.ts
+      -- asks a narrower question — "is today's config entitled to speak for a
+      -- session that published before it?" — and that is decided by mode and
+      -- min_takes alone. Reading updated_at there made a model rotation
+      -- silently retract the missing-receipt alert for a session that is still
+      -- permanently receiptless. The comparison is IS DISTINCT FROM against
+      -- the row AS IT STANDS when this UPDATE runs (not a snapshot read
+      -- earlier), so a no-op patch — setting mode to the mode it already has
+      -- — does not move it either.
+      policy_updated_at = CASE
+        WHEN mode IS DISTINCT FROM COALESCE(${patch.mode ?? null}, mode)
+          OR min_takes IS DISTINCT FROM COALESCE(${patch.minTakes ?? null}::integer, min_takes)
+        THEN now() ELSE policy_updated_at END
     WHERE id = 1
     RETURNING id`.catch(rethrowAsNamedModelRefusal(patch));
   if ((updated as unknown[]).length === 0) {
     await sql`
-      INSERT INTO swarm_judge_config (id, mode, min_takes, model, third_party_enabled, updated_at)
+      INSERT INTO swarm_judge_config (id, mode, min_takes, model, third_party_enabled, updated_at, policy_updated_at)
       VALUES (1, ${patch.mode ?? DEFAULT_CONFIG.mode}, ${patch.minTakes ?? DEFAULT_CONFIG.minTakes},
               ${clearModel ? null : (patch.model ? patch.model.trim() : null)},
-              ${patch.thirdPartyEnabled ?? DEFAULT_CONFIG.thirdPartyEnabled}, now())
+              ${patch.thirdPartyEnabled ?? DEFAULT_CONFIG.thirdPartyEnabled}, now(), now())
       ON CONFLICT (id) DO NOTHING`.catch(rethrowAsNamedModelRefusal(patch));
   }
   return getJudgeConfig();
