@@ -25,6 +25,11 @@ import { generateKeyPair } from "./crypto.ts";
 // judge; the smoke closes that by seeding the row FROM the registry, so the
 // two selection paths cannot disagree on a booted stack (issue #969).
 import { resolveAgentModel } from "../model-registry.ts";
+// The judge's per-call budget, from the LEAF that owns it (backend/src/swarm/
+// judge-budget.ts) — a constants-and-pure-functions module with no imports, so
+// this CLI does not acquire the backend's config or database wiring by reading
+// one number. Derived, never re-stated: see JUDGE_WAIT_MS below.
+import { DEFAULT_JUDGE_TIMEOUT_MS } from "../../../backend/src/swarm/judge-budget.ts";
 
 export function backendUrl(): string {
   return process.env.BACKEND_URL ?? "http://localhost:8787";
@@ -733,11 +738,22 @@ export async function enqueueLifecycleJob(action: string, payload: Record<string
 }
 
 // How long runJudgeStep will wait for a judging to land before publishing
-// anyway. The model call itself is bounded at ~60s (SWARM_JUDGE_TIMEOUT_MS),
-// and the judge job still has to be claimed off the swarm lane first, so this
-// is deliberately generous. It is a CEILING, not a budget: with the mode `off`
-// — the shipped default — nothing waits at all.
-const JUDGE_WAIT_MS = 120_000;
+// anyway.
+//
+// DERIVED, not chosen. The old value was a bare 120_000 whose comment said the
+// model call was "bounded at ~60s" — true of the old DEFAULT_JUDGE_TIMEOUT_MS
+// and false the moment it moved. A ceiling at or below the budget it is waiting
+// on is worse than no ceiling: it guarantees the driver gives up and publishes
+// while the judging it asked for is still legitimately in flight, so the
+// session publishes unjudged and the receipt is lost for good (`published` is
+// terminal). So it is the model budget plus the slack the REST of the path
+// needs: the job has to be claimed off the swarm lane, the takes loaded, the
+// response parsed and the row written.
+//
+// It is a CEILING, not a budget: with the mode `off` — the shipped default —
+// nothing waits at all.
+export const JUDGE_LANE_CLAIM_SLACK_MS = 60_000;
+export const JUDGE_WAIT_MS = DEFAULT_JUDGE_TIMEOUT_MS + JUDGE_LANE_CLAIM_SLACK_MS;
 
 /**
  * The judge's runtime mode, read from the switch itself

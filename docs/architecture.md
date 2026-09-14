@@ -1504,6 +1504,26 @@ inside the error constructors and inside `fallbackOutcome()`, so the ones built
 out of the model's own text cannot escape it. No partially-trusted model
 response ever reaches a session.
 
+**THE BUDGET IS PART OF THE CONTRACT, AND THE SHARE IS THE ALARM.**
+`model_timeout` above is a runtime failure by classification and, far more
+often, a MISCONFIGURATION by cause: the per-call budget was 60 s against a
+pinned model measured at 58-175 s on a real three-take prompt, so every
+judgement timed out, fell back correctly, and published deterministic prose
+under the judge's name with every documented check green. Two things follow.
+`DEFAULT_JUDGE_TIMEOUT_MS` (`backend/src/swarm/judge-budget.ts`) is now sized
+against the WORST measured latency rather than a round number, and
+`SWARM_JUDGE_TIMEOUT_MS` reaches a compose stack through the documented boot
+(`scripts/lib/smoke-compose-passthrough.ts`) rather than being interpolated from
+a variable nothing forwarded. And the FALLBACK SHARE over a 7-day window is
+reported by `postflight.ts`'s `judge-source` check and by
+`admin/overview.ts`'s `swarm.judge_fallback` alert, both through the one rule in
+`summarizeJudgeSources()`: report always, fail only at 100 % (decision D15). A
+partial fallback is AC-FE-05 working; a stack that has never once reached the
+model is not producing acceptance evidence, whatever else is green. The stage
+rehearsal additionally refuses `model_timeout` as RC evidence and fails fast on
+the fail-closed classes by reading the judge lane's own `jobs.last_error`, which
+now carries the class (`judge_unavailable:<reason>`) instead of the bare word.
+
 **This NARROWED the original contract, which applied one rule to both classes.**
 Until #969 every one of those paths fell back to the same template producers the
 aggregator uses (`buildRationale`, `buildDisagreements`), recorded a

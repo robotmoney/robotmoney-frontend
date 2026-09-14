@@ -10,6 +10,7 @@ import {
 } from "./release.ts";
 import { COMMITTED_EVIDENCE_DIR } from "./steps.ts";
 import { isAcceptanceJudgeEnv, isKeylessJudgeModel, PINNED_JUDGE_MODEL } from "../../../src/swarm/judge-model-policy.ts";
+import { JUDGE_FALLBACK_LOOKBACK_DAYS, summarizeJudgeSources } from "../../../src/swarm/judge-budget.ts";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(dir, "..", "..", "..", "..");
@@ -273,6 +274,36 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
     disqualifying.length
       ? `judgement rows recorded on keyless free-family models: ${disqualifying.map((r) => `${r.model} x${r.n}`).join(", ")} — those sessions are not acceptance evidence (AC-MODEL-01)`
       : `no judgement row names a free-family model (${freeJudgements.length} distinct model id(s) on record)`);
+
+  // 13. DID A MODEL EVER ACTUALLY ANSWER? (decision D15, AC-MODEL-01, AC-FE-05)
+  //
+  // Checks 11 and 12 ask WHICH model is named. This asks whether one was ever
+  // reached. `grep fallback` over this file used to return nothing, and that is
+  // how a stack in PERMANENT fallback passed every gate the release adds: a
+  // fallback receipt is still a published receipt with four weights, so
+  // `/version`, the weights total and `missingReceipts.count == 0` are all
+  // green on a stack where the judge has never once been answered. That was not
+  // hypothetical — a 60 s budget against a model that answers in ~112 s put
+  // staging in exactly that state for a whole QA run.
+  //
+  // REPORTED ALWAYS, FAILING ONLY AT 100 %. The fallback prose is a deliberate
+  // AC-FE-05 feature and a real upstream outage must not block a rollout; a
+  // stack that has NEVER reached the model is not producing acceptance
+  // evidence, which is a different claim. summarizeJudgeSources() owns that
+  // rule so this check, the rehearsal and the admin alert cannot drift.
+  const judgeSources = (await db`
+    SELECT source, coalesce(btrim(fallback_reason), '') AS fallback_reason, count(*)::int AS n
+      FROM swarm_session_judgements
+     WHERE created_at >= now() - (${JUDGE_FALLBACK_LOOKBACK_DAYS} || ' days')::interval
+     GROUP BY 1, 2
+  `) as unknown as { source: string; fallback_reason: string; n: number }[];
+  const fallbackSummary = summarizeJudgeSources(
+    judgeSources.map((r) => ({ source: r.source, fallbackReason: r.fallback_reason || null, n: r.n })),
+  );
+  record("judge-source", fallbackSummary.verdict, fallbackSummary.detail,
+    "Read the reasons above. `model_timeout` is a BUDGET problem, not an outage: raise SWARM_JUDGE_TIMEOUT_MS " +
+    "(runbook §2/§4) above the pinned model's measured latency. A credit/credential/model-id reason is the D-A7 " +
+    "fail-closed path and publishes nothing — see runbook §8's judge triage table.");
 
 }
 

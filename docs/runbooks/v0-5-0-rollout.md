@@ -83,7 +83,7 @@ commit stage is currently validating whether or not a tag exists on it.
 | Vault/allocation subject repair | `swarm_subjects` (0051) self-heals `robotmoney-vault` and `robotmoney-allocation` back to `recommendation_type = 'bucket_weights'` if a prior `ensureSmokeSubjectFixtures` bug (issue #780, fixed in the same PR) had clobbered either to `position_actions`. | None. Idempotent; a no-op if neither subject exists yet or both already read the right value. |
 | Judge digest provenance | `swarm_session_judgements.digest_scheme` (0052) records which canonical form produced a row's `inputs_digest`, so `swarm-judge-replay` can distinguish "this row predates a canonicalization change" from "this row claims the current rule and no longer reproduces." | None for this release — the column exists for the *next* canonical-form change, not this one. |
 | **Database role taxonomy** | **0053** re-owns every table, view, sequence, and function in `public` from the migration/bootstrap login to a new **`rm_owner`** role (`NOLOGIN` — no process may ever authenticate as it), revokes `PUBLIC`'s schema privileges, and re-grants `rm_app`/`rm_readonly` explicitly. **0054** replaces `rm_worker`'s broad/default grant with an explicit table allow-list — `rm_worker` can `SELECT` everywhere but `INSERT`/`UPDATE`/`DELETE` only on the 17 tables it actually queues/samples through. | **Verify BEFORE cutover** that the migration-time connection's role can execute `CREATE ROLE` (DigitalOcean managed Postgres's default admin role has this by default; a scoped-down migration credential may not) — see §3's precondition check. This is the highest-risk step in the release: getting it wrong changes who can read or write every table at once. |
-| Judge model invariant | **0056** requires every `shadow`/`enforce` row to name a model and repairs an invalid enabled/null row to `off`. Model transport failures still produce explicitly-labelled deterministic fallback prose. | Re-enable with `mode` and `model` in one request; never expose an invalid intermediate pair. |
+| Judge model invariant | **0056** requires every `shadow`/`enforce` row to name a model and repairs an invalid enabled/null row to `off`. **The D-A7 split, which this row previously stated wrongly:** a RUNTIME failure (the model was reached and misbehaved — timeout, unparseable answer, a number where prose was required) falls back to explicitly-labelled deterministic prose and the session publishes. A CONFIGURATION, CREDENTIAL or CREDIT failure (`credential_unconfigured`, `credential_rejected`, `credit_exhausted`, `model_not_supported`, `model_unconfigured`) FAILS CLOSED: nothing is judged, nothing is published, and the session's `swarm.judge` job records the class in `last_error`. `docs/architecture.md` §9.7 is the authority. | Re-enable with `mode` and `model` in one request; never expose an invalid intermediate pair. A fail-closed class is an operator fix, not a transient — see §8's judge triage table. |
 | Consensus receipt auto-publish | `swarm.publish` (the worker cadence, not the HTTP publish route) now calls the receipt-publish path itself right after a session publishes — no separate admin call needed for an `enforce`-judged session. | None required. Structurally still a no-op for `off`/`shadow`-mode sessions (a `shadow` judgement is deliberately withheld from the session's own record, so there is no adopted opinion for a receipt to attest to) — this is not a bug the patch could or should remove. |
 | Analyst allocation vector | A `bucket_weights` subject's brief now DECLARES the vector required (`takeSchema.weights.optional = false`, `buckets` = the four canonical vaults), the in-container member client asks its model for a `WEIGHTS:` control line and signs the resulting vector inside its canonical submission bytes, and receipt assembly REFUSES a `bucket_weights` session that produced no vector (`weights_absent_for_bucket_weights_subject` — deliberately outside `EXPECTED_RECEIPT_REFUSALS`, so the cadence run degrades). Before this, such a session published a signed, verified receipt with no `weights` field at all. | None at deploy time. After cutover, a published `robotmoney-vault` / `robotmoney-allocation` receipt must carry four `weights` entries totalling exactly 10,000 bps; a degraded `swarm.publish` naming `weights_absent_for_bucket_weights_subject` means the analysts are not authoring vectors and is a release-blocking condition, not a transient. |
 | Allocation support | A `bucket_weights` receipt may not carry an allocation authored by only SOME of the takes it attests to. `meanTakeWeights()` averages over the VECTORS it finds, not over the takes, so a 1-of-3 allocation used to publish with `release_safety.take_count` reporting 3 and `thinly_supported` false — and a bucket a member never named was counted as that member's explicit 0.00 vote. Assembly now refuses with `weights_not_authored_by_every_take` (also outside `EXPECTED_RECEIPT_REFUSALS`). | None at deploy time. A degraded `swarm.publish` naming `weights_not_authored_by_every_take` means at least one member submitted a take with no four-bucket vector — check the member containers' `[inference] <member>: take attempt N/2` warnings, and any rmpc/MCP/API member submitting through the raw API. Treat it exactly like the row above: release-blocking, not a transient. |
@@ -91,11 +91,18 @@ commit stage is currently validating whether or not a tag exists on it.
 | Judge mode patch | `POST /api/swarm/admin/judge {"mode":"enforce"}` alone now works and preserves the stored model. It previously returned 400 with a raw Postgres constraint string: the upsert's model-preserving `COALESCE` sat in a `DO UPDATE` arm PostgreSQL never reached, because it evaluates 0056's CHECK against the proposed INSERT tuple first. Sending `{ mode, model }` together is unchanged and still correct. | None. 0056 is unchanged and still refuses an on-with-no-model row — now in the function's own words rather than the driver's. |
 | Runtime build identity | `GET /version` (and `build` on `GET /health`) report the full commit SHA and exact tag baked into the image at `docker build` time. `null` with a named reason when the image was built without them; a `+dirty` suffix when the tree was modified and a `+unknown` suffix when `git status` could not be run at all, so neither a modified nor an unchecked build can report the pinned SHA. | Check it after every deploy: `curl -s https://<host>/version` must equal the RC tag and SHA, with NO suffix. `+dirty` means the build tree was modified; `+unknown` means its `git status` failed (an unreadable index or permissions) and the tree was never checked — both fail AC-ID-03 and neither may be waved through. |
 | Append-only preflight accuracy | `db-preflight`'s guard check no longer reports a table as "disarmed" (implying tampering) merely because its *own* opt-in migration (e.g. `0050` for `swarm_member_keys`) has not reached this database yet — it now gates each table on its own migration, not just `0032`'s. | None. Purely removes a false positive that every `smoke:twin`/`smoke:capture` run against a pre-0.5.0 database was hitting. |
+| **Judge budget (`SWARM_JUDGE_TIMEOUT_MS`)** | **The one new environment variable in this release.** The judge's per-call budget default moves from 60 s to **300 s**, because the pinned model (`deepseek-v4-flash`) answers the real judge prompt in **58–175 s** measured against the funded key — so the old default aborted EVERY judging and published deterministic fallback prose under the judge's name, with every documented check green. The variable is now also carried from an operator's shell into the stack by `bun run smoke:stage` (`scripts/lib/smoke-compose-passthrough.ts`), which it was not: exporting it used to produce an empty value in the container and the default anyway. | **Optional.** The shipped default is workable on its own. Set it only to widen the budget further — in `./.env` beside `OPENCODE_API_KEY` (the channel that is actually working today), or exported before `smoke:stage`. A value that is not a positive number of milliseconds FAILS CLOSED at boot, by design: `60s`, `60_000` and `60000ms` are all refused rather than silently defaulted. |
+| **Judge credential (`OPENCODE_API_KEY`)** | Read by **api** and **worker-swarm** (both interpolate it in `docker-compose.yml`); the judge uses the SAME vendor and the SAME key the member agents already use, so it adds no second credential. An UNFUNDED key is not an absent one: it authenticates and then refuses with `402 insufficient_credit`, which is a fail-closed class — the judge publishes nothing rather than dressing the refusal as an outage fallback. | **Confirm it is present AND funded before cutover.** The only precondition guard checks that it is non-empty. The postflight `judge-source` check below is what tells you afterwards whether a model ever actually answered. |
+| **Fallback share is now a gate** | `postflight.ts` records a `judge-source` check and `GET /api/admin/overview` raises a `swarm.judge_fallback` alert: both report the SHARE of judgements authored by the deterministic fallback over the last 7 days, with their reasons. Per decision D15 they FAIL only at **100 %** — a stack that has never once reached the model is not producing acceptance evidence (`AC-MODEL-01`) — and report, without failing, anything less, because a partial fallback is `AC-FE-05` working as designed. The stage rehearsal additionally treats `model_timeout` as disqualifying for RC evidence. | None at deploy time. A `FAIL` here means no model has authored a judging in a week: read the reasons. `model_timeout` is a BUDGET problem (the row above), not an outage. |
 
-No new environment variable is required by this release (unlike v0.4.0's
-`SWARM_SCHEDULES_ENABLED`). §4 below is a placeholder for that reason — kept
-present so the section numbering matches every other rollout runbook and
-`release-runbooks.md`'s cross-references.
+This release DOES carry a new operator-settable variable —
+`SWARM_JUDGE_TIMEOUT_MS`, the judge's per-call budget (see the row above). It is
+optional, because the shipped default was raised to a value the pinned model
+meets; §4 below says where to put it if you set it. (An earlier draft of this
+runbook stated that no new environment variable was required by this release.
+That was wrong, and it was wrong in the most expensive direction: an operator
+following it deployed a judge that timed out on every session and published
+fallback prose with every documented check green.)
 
 ## 3. Database preflight and baseline
 
@@ -151,9 +158,27 @@ this privilege is not a state this release can run in.
 
 ## 4. Configuration and deployment preparation
 
-No new required environment variable ships with this release — see §2's
-table. Confirm the deployment does not carry a stale `MIGRATE_DATABASE_URL`
-scoped to a role narrower than the precondition in §3.
+Confirm the deployment does not carry a stale `MIGRATE_DATABASE_URL` scoped to
+a role narrower than the precondition in §3.
+
+**`SWARM_JUDGE_TIMEOUT_MS` — the judge's per-call budget (optional).**
+
+| Where | How it arrives | Notes |
+| --- | --- | --- |
+| `./.env` beside the compose files | `docker compose` reads `.env` and `docker-compose.yml` interpolates `${SWARM_JUDGE_TIMEOUT_MS:-}` into **api** and **worker-swarm** | The currently-working channel, and where `OPENCODE_API_KEY` already lives. |
+| exported before `bun run smoke:stage` | `DEMO_COMPOSE_PASSTHROUGH` (`scripts/lib/smoke-compose-passthrough.ts`) forwards it, alongside `SWARM_JUDGE_BASE_URL` | This is new. Before it, an exported value reached nothing and the container saw an empty variable. |
+| unset | `DEFAULT_JUDGE_TIMEOUT_MS` = **300 000 ms** (`backend/src/swarm/judge-budget.ts`) | The supported default. Sized at 1.7x the worst measured latency of the pinned model on a real judge prompt. |
+
+Confirm what the containers actually received — an empty value is NOT the
+default being "left alone", it is the symptom the old passthrough gap produced:
+
+```bash
+docker compose exec worker-swarm printenv SWARM_JUDGE_TIMEOUT_MS   # empty or a positive integer
+```
+
+A value that is not a positive number of milliseconds is refused at use rather
+than silently defaulted (`resolveJudgeTimeoutMs`), so a typo fails closed and
+publishes nothing — that is deliberate, and it is the loud failure you want.
 
 ## 5. Stage rehearsal
 
@@ -301,7 +326,7 @@ now carries a `swarm_consensus_receipts` row without an operator having
 requested one — that is the one behavior change in this release an operator
 can observe end to end.
 
-Then run the three checks this release adds:
+Then run the four checks this release adds:
 
 ```bash
 # 1. Identity. Must equal the RC tag and full SHA from §1 — no `+dirty` and
@@ -327,7 +352,24 @@ curl -s https://<host>/api/swarm/sessions/<sessionId>/consensus-receipt \
 #    `swarm.consensus_receipt:<sessionId>` alert may be present.
 curl -s -H "X-Admin-Token: $ADMIN_TOKEN" https://<host>/api/admin/overview \
   | jq '.missingReceipts, [.alerts[] | select(.source | startswith("swarm.consensus_receipt"))]'
+
+# 4. A MODEL ACTUALLY ANSWERED. The three checks above are ALL green on a stack
+#    whose judge has never once been reached: a deterministic fallback receipt
+#    is still a published receipt with four weights. This is the one that can
+#    tell the difference, and the postflight `judge-source` row above says the
+#    same thing from the database side.
+curl -s -H "X-Admin-Token: $ADMIN_TOKEN" https://<host>/api/admin/overview \
+  | jq '[.alerts[] | select(.source == "swarm.judge_fallback")]'
 ```
+
+`judge-source` / `swarm.judge_fallback` read as follows (decision D15):
+
+| Reported | Meaning | Action |
+| --- | --- | --- |
+| `PASS` / `healthy` | every judgement in the window was authored by the model | none |
+| `WARN` / `degraded` | some fell back; the reasons are named in the message | read the reasons. `model_timeout` means the budget is too small for the day the model is having — §4. Anything else, §8's triage table. |
+| `FAIL` / `failed` | **100 % fallback over the window** — no model has authored a judging at all | release-blocking. Do not tag, do not cut over: nothing produced in this state is acceptance evidence (`AC-MODEL-01`). |
+| `WARN` / `stale` | no judgements at all in the window | expected on a freshly migrated database; suspicious on a running one. |
 
 ## 8. Failure, rollback, and close
 
@@ -339,6 +381,21 @@ logs, receipts, and baseline. Default response is the rehearsed restore of
 the encrypted pre-upgrade dump. Do not delete history rows to "clean up" a
 failed attempt — `swarm_member_keys` joining the append-only set in this
 release means that specific table now refuses it outright.
+
+**Judge triage — the fail-closed classes (D-A7).** §7's check 3 is the alarm
+that fires for all of these: the session publishes with no consensus receipt,
+and `GET /api/admin/overview` names it. The class is in the session's own
+`swarm.judge` job `last_error` (`judge_unavailable:<reason>`), and the stage
+rehearsal now fails fast naming it instead of waiting out its deadline.
+
+| `last_error` names | What actually happened | Fix |
+| --- | --- | --- |
+| `credit_exhausted` | the key authenticated and the account has no balance — Zen answered `402`/`CreditsError`. NOT an outage, and deliberately never dressed as one | fund the workspace. Nothing published while it was exhausted is evidence; re-run the affected sessions' judging after funding. |
+| `credential_rejected` | `401`/`403` with no model complaint: wrong, revoked or truncated `OPENCODE_API_KEY` | re-issue the key into `./.env` for **api** and **worker-swarm**, recreate both, confirm with `printenv OPENCODE_API_KEY \| wc -c` (never print it). |
+| `credential_unconfigured` | no key reached the process at all | the variable is absent from the service — check the compose interpolation and `.env`, not the vendor. |
+| `model_not_supported` | the endpoint does not serve the configured model id | correct `swarm_judge_config.model` (a database row, set atomically with `mode`), not an environment variable. |
+| `model_unconfigured` | `mode` is `shadow`/`enforce` with no model — impossible after 0056, possible on a restored older dump | re-enable with `mode` and `model` in ONE request. |
+| `model_timeout` *(fallback, not fail-closed)* | the model was reached and did not answer inside the budget — the session publishes fallback prose | raise `SWARM_JUDGE_TIMEOUT_MS` (§4). Watch §7's check 4: at 100 % this is a release blocker even though every other check is green. |
 
 If `0053`/`0054` are the failure (the migration-time role could not create
 `rm_owner`, or a runtime role lost access it needs), this is the scenario §5

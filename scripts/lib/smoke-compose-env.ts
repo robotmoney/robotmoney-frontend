@@ -37,49 +37,8 @@ export function resolveStackRmEnvOrExit(standingStack: boolean, env: NodeJS.Proc
 }
 
 // ── What else the operator's shell may still contribute ─────────────────────
-// Compose interpolation values the DEMO honours from the operator's own
-// environment, passed to the shared stack explicitly via `extraComposeEnv`.
-//
-// Why an allowlist and not `...process.env`: scripts/stack deliberately does not
-// inherit the ambient environment (§11.3 E1 — that is what keeps a provider key
-// out of a container). But the DEMO is an operator tool, and these knobs are
-// documented and load-bearing for it: exporting SWARM_WINDOW_MINUTES=5 or a
-// custom BASE_RPC_URL before `bun run smoke` works today, and silently ignoring
-// it after the bring-up moved onto the shared module would be a behaviour
-// regression that is miserable to debug. Every name here is interpolated by
-// docker-compose.yml / docker-compose.smoke.yml and each already carries a
-// `:-default` there, so an unset value behaves exactly as before. Values
-// buildComposeEnv() owns (ports, credentials, DATABASE_URL, POSTGRES_*,
-// DEMO_PROJECT) are deliberately NOT listed: the stack config is their single
-// source and an exported value must never shadow it.
-export const DEMO_COMPOSE_PASSTHROUGH = [
-  "BASE_RPC_URL",
-  "SWARM_AGGREGATE_CRON",
-  "SWARM_CLOSE_WINDOW_CRON",
-  "SWARM_NOTIFICATION_EMAIL_FROM",
-  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN",
-  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL",
-  "SWARM_OPEN_SESSION_CRON",
-  "SWARM_PUBLISH_BRIEF_CRON",
-  "SWARM_PUBLISH_CRON",
-  "SWARM_SCHEDULES_ENABLED",
-  "SWARM_WINDOW_MINUTES",
-  "FETCH_CACHE_DIR",
-  "FLOOR_SEED_PATH",
-  "PROJECTS_SOURCE",
-  // NO "RM_ENV". It is a first-class StackConfig field now (`rmEnv`,
-  // scripts/stack/config.ts) resolved from the KIND of boot by
-  // resolveStackRmEnv(), and buildComposeEnv() refuses to see it in the extras
-  // map. Passing it through from the operator's shell is exactly what made the
-  // acceptance path a property of what somebody last typed (D13).
-  "WORKER_DATABASE_URL",
-] as const;
-
-export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const k of DEMO_COMPOSE_PASSTHROUGH) {
-    const v = env[k];
-    if (v !== undefined && v !== "") out[k] = v;
-  }
-  return out;
-}
+// The allowlist itself lives one module further down (smoke-compose-passthrough
+// .ts) so the judge-transport test can import it without importing this file's
+// RM_ENV resolver; it is re-exported here because smoke-main.ts wants both
+// halves of "what reaches compose" from one import.
+export { DEMO_COMPOSE_PASSTHROUGH, smokePassthroughEnv } from "./smoke-compose-passthrough.ts";

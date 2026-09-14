@@ -74,7 +74,30 @@ export async function judgeSession(payload: Record<string, unknown>): Promise<un
   // judgeSession(), so this cron path and the HTTP admin route share the one
   // resolution — nothing to add on this side.
   const result = await admin.judgeSessionAdmin(sessionId, undefined, "worker", { force });
-  return translateBenignSkip(result, judgeSkipReason, sessionId);
+  return translateBenignSkip(qualifyJudgeUnavailable(result), judgeSkipReason, sessionId);
+}
+
+/**
+ * CARRY THE REASON INTO `jobs.last_error`.
+ *
+ * `judgeSessionAdmin` reports a fail-closed judging as
+ * `{ error: "judge_unavailable", judgeUnavailableReason: "credit_exhausted" }`
+ * — two fields — but `worker/loop.ts` persists only `error`. So every
+ * fail-closed class in the D-A7 ruling landed in the durable record as the
+ * single word `judge_unavailable`, and the one column an operator (and the
+ * stage rehearsal's fail-fast poll) can read afterwards could not tell an
+ * exhausted account from an unparseable answer. The reason is already computed;
+ * this only stops it being dropped at the seam.
+ *
+ * The `judge_unavailable:` prefix is preserved so nothing that matches on the
+ * old word breaks, and `judgeSkipReason` is unaffected — it tests
+ * `judge_disabled` by equality and `terminal_state:` by prefix, neither of
+ * which this touches.
+ */
+export function qualifyJudgeUnavailable<T extends { ok?: unknown; error?: unknown; judgeUnavailableReason?: unknown }>(result: T): T {
+  if (result.ok !== false || result.error !== "judge_unavailable") return result;
+  const reason = typeof result.judgeUnavailableReason === "string" ? result.judgeUnavailableReason.trim() : "";
+  return reason === "" ? result : { ...result, error: `judge_unavailable:${reason}` };
 }
 
 // ── Benign terminals on the cadence (issues #767, #806) ─────────────────────
