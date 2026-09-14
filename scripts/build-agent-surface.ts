@@ -127,7 +127,7 @@ function buildLlmsBlock(): string {
   );
   lines.push("");
   for (const e of PUBLIC_ENDPOINTS) {
-    if (e.path === "/health") continue;
+    if (e.path === "/health" || e.path === "/version") continue;
     const url = ORIGIN + openApiPath(e.path);
     const size = e.sizeHint ? ` ${e.sizeHint[0].toUpperCase()}${e.sizeHint.slice(1)}.` : "";
     // A URL carrying a {placeholder} is not fetchable, so it is written as code

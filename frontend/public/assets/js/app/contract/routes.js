@@ -17,6 +17,17 @@ export function path(template, params = {}) {
 
 export const ROUTES = {
   health: "/health",
+  // GET — the build identity of the RUNNING PROCESS: the full commit SHA and
+  // the exact tag, baked into the image at `docker build` time
+  // (backend/Dockerfile's RM_BUILD_* args). AC-ID-03's "staging runs exactly
+  // the pinned candidates" is checked against THIS, never against a `git
+  // rev-parse` in a checkout beside the container — a checkout answers a
+  // question about itself and moves independently of the image. Unauthenticated
+  // and deliberately so: it carries no configuration, no secret and no state,
+  // and an identity endpoint an auditor cannot reach proves nothing. The same
+  // object also rides on /health as `build`, so an existing health check gains
+  // the identity without a second request.
+  version: "/version",
 
   comments: {
     list: "/api/comments", // GET ?page=

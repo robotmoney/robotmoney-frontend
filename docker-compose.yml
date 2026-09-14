@@ -97,6 +97,8 @@ x-worker-base: &worker-base
     dockerfile: backend/Dockerfile
     args:
       AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+      RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+      RM_BUILD_TAG: ${RM_BUILD_TAG:-}
   command: ["bun", "run", "src/worker/index.ts"]
   depends_on:
     postgres:
@@ -209,15 +211,23 @@ services:
       dockerfile: backend/Dockerfile
       args:
         AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+        RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+        RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/api/index.ts"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
       RM_ENV: ${RM_ENV:-smoke}
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS
-      # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here
-      # and backend/Dockerfile sets no ENV, so a variable that is not named here
-      # NEVER reaches the container. Without these two lines the runbook's
+      # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here,
+      # so a variable that is not named here NEVER reaches the container at RUN
+      # time. The one exception is deliberate and is the opposite of a leak:
+      # backend/Dockerfile bakes AUM_PRODUCER_REVISION and RM_BUILD_COMMIT /
+      # RM_BUILD_TAG as ENV from its build args, because those are properties of
+      # the IMAGE rather than of a deployment. They must NOT be repeated in this
+      # block — an `environment:` entry with a blank default would override the
+      # baked value with the empty string and erase the identity /version
+      # reports. Without the two lines below the runbook's
       # emergency override (§2.1) is a silent no-op: the operator sets it in the
       # droplet env, redeploys, and the api's refusal log still tells them to set
       # the variable they just set. Blank default = unset inside the container,
@@ -385,6 +395,8 @@ services:
       dockerfile: backend/Dockerfile
       args:
         AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+        RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+        RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/producer/index.ts", "serve"]
     environment:
       ANALYTICS_API_URL: http://api:8787

@@ -27,7 +27,7 @@ This site publishes **two different datasets** and they are easy to confuse:
 
 The endpoints under `/api/dashboards/entities`, `/overview`, `/agents`, `/coins`, `/vaults`, `/wallets`, `/leaderboard` and `/api/projects` are all dataset 2. In particular `overview.vaultTvlUsd` is the sum of the tracked third-party vaults and is not Robot Money's vault. For "how much is in the Robot Money vault" the answer is `tvlUsd` from `/api/dashboards/vault-economics`, and today the two numbers differ by more than four orders of magnitude.
 
-Sanity check before quoting anything: [https://robotmoney.network/health](https://robotmoney.network/health) returns `env`. If `env` is not `prod`, that deployment is serving demo or staging data.
+Sanity check before quoting anything: [https://robotmoney.network/health](https://robotmoney.network/health) returns `env`. If `env` is not `prod`, that deployment is serving demo or staging data. [https://robotmoney.network/version](https://robotmoney.network/version) says which source commit and tag that deployment was built from, so you can tell a release apart from a host that merely answers.
 
 Source code is public and clonable: [github.com/robotmoney/robotmoney-frontend](https://github.com/robotmoney/robotmoney-frontend). The shared HTTP contract (route paths and every response type) is [contract/src](https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).
 

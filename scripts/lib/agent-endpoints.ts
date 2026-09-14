@@ -85,6 +85,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 200 B",
   },
   {
+    id: "getVersion",
+    method: "GET",
+    path: ROUTES.version,
+    summary: "Which source commit and tag the running process was built from",
+    description:
+      "Returns the full git commit SHA and the exact tag baked into this deployment's image at build time. Use it to check that a host is running the release it is supposed to: compare `commit` against the tag's commit, not against a checkout on the host, which moves independently of the image. Either field is null with a named reason when the image was built without its identity, and a commit ending in `+dirty` was built from a modified tree and is not the tagged artifact. The same object is also on /health as `build`.",
+    backs: [],
+    contractType: "{ commit, tag, commit_unavailable?, tag_unavailable? }",
+    sizeHint: "under 200 B",
+  },
+  {
     id: "getVaultEconomics",
     method: "GET",
     path: ROUTES.dashboards.vaultEconomics,
@@ -571,7 +582,7 @@ export function assertCatalogCoversRoutes(): string[] {
   const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/");
 
   const missing = flattenRoutes(ROUTES)
-    .filter((p) => p.startsWith("/api/") || p === ROUTES.health)
+    .filter((p) => p.startsWith("/api/") || p === ROUTES.health || p === ROUTES.version)
     .filter((p) => !credentialed(p))
     .filter((p) => !catalogued.has(p) && !excluded.has(p));
 

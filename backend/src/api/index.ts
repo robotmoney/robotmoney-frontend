@@ -6,6 +6,7 @@ import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured
 import { sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
+import { buildIdentityJson } from "../ops/build-identity.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
@@ -143,7 +144,23 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
         // RM_ALLOW_UNARMED_APPEND_ONLY_GUARD=1. The status CODE stays 200 in
         // every case — the compose healthcheck keys on `.ok`.
         append_only_guard: appendOnlyGuardOutcome(),
+        // WHICH SOURCE THIS PROCESS WAS BUILT FROM (AC-ID-03). Carried here as
+        // well as at /version so an existing health check gains the identity
+        // without a second request; both read the one resolver, so they cannot
+        // disagree. `null` with a named reason when the image was built without
+        // its identity — never a package version or a timestamp standing in for
+        // one (backend/src/ops/build-identity.ts).
+        build: buildIdentityJson(),
       });
+    }
+
+    // AC-ID-03 — the build identity on its own, for the check that is a string
+    // comparison against the RC tag and SHA of AC-ID-01. Separate from /health
+    // because the two answer different questions and fail for different
+    // reasons: /health is a liveness probe whose body varies with database and
+    // guard state, while this is a constant for the life of the process.
+    if (pathname === ROUTES.version) {
+      return json(buildIdentityJson());
     }
 
     if (pathname === ROUTES.comments.list && req.method === "GET") {

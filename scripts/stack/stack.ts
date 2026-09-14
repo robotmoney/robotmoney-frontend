@@ -38,6 +38,11 @@ import {
   type StackConfig,
   type StackHostPorts,
 } from "./config.ts";
+import {
+  BUILD_COMMIT_COMPOSE_VAR,
+  BUILD_TAG_COMPOSE_VAR,
+  resolveBuildIdentityEnv,
+} from "./build-identity.ts";
 import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -181,7 +186,14 @@ export function createStack(
   const emit = (e: StackEvent) => opts.hooks?.onEvent?.(e);
 
   const composeEnv = buildComposeEnv(cfg);
-  const spawnEnv = buildSpawnEnv(cfg, hostEnv);
+  // MUTABLE FOR EXACTLY ONE REASON (AC-ID-03): `build()` resolves the tree's
+  // commit/tag through `runtime.runSync` and folds them in as compose build
+  // args, so the identity baked into an image is the identity of the source it
+  // was built from. Resolving it at createStack() time would spawn on
+  // construction, which this module's header forbids; leaving it out entirely
+  // is the state that let a staging host serve an untagged tip with no way to
+  // tell from the outside. Nothing else reassigns this.
+  let spawnEnv = buildSpawnEnv(cfg, hostEnv);
   const databaseUrl = internalDatabaseUrl(cfg.database);
   // Discovered by hostPorts() after the containers are running, then reused.
   // `undefined` is the honest state before that: this module has no other way
@@ -264,6 +276,19 @@ export function createStack(
 
   async function build(buildServices: string[] = defaultBuildServices): Promise<void> {
     emit({ phase: "build", status: "start", detail: buildServices.join(", ") });
+    // WHAT SOURCE THIS IMAGE IS (AC-ID-03). Resolved from cfg.repoRoot — the
+    // tree compose is about to build — and never inherited from the host
+    // environment: RM_BUILD_* are not in DOCKER_CLIENT_ENV_ALLOWLIST, so an
+    // operator cannot hand a stack an identity it does not have. Resolved on
+    // every build so a rebuild after a checkout reports the new commit.
+    const identity = resolveBuildIdentityEnv((argv) => runtime.runSync(argv, { stdout: "pipe", stderr: "pipe" }));
+    spawnEnv = { ...spawnEnv, ...identity };
+    emit({
+      phase: "build",
+      status: "start",
+      detail: `source ${identity[BUILD_COMMIT_COMPOSE_VAR] || "unavailable"}` +
+        `${identity[BUILD_TAG_COMPOSE_VAR] ? ` (${identity[BUILD_TAG_COMPOSE_VAR]})` : ""}`,
+    });
     await composeAsync(buildArgs(buildServices), `compose build ${buildServices.join(" ")}`.trim());
     emit({ phase: "build", status: "done", detail: buildServices.join(", ") });
   }

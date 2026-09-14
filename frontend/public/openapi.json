@@ -55,6 +55,30 @@
         }
       }
     },
+    "/version": {
+      "get": {
+        "operationId": "getVersion",
+        "summary": "Which source commit and tag the running process was built from",
+        "description": "Returns the full git commit SHA and the exact tag baked into this deployment's image at build time. Use it to check that a host is running the release it is supposed to: compare `commit` against the tag's commit, not against a checkout on the host, which moves independently of the image. Either field is null with a named reason when the image was built without its identity, and a commit ending in `+dirty` was built from a modified tree and is not the tagged artifact. The same object is also on /health as `build`.\n\nResponse size: under 200 B.\n\nResponse type: `{ commit, tag, commit_unavailable?, tag_unavailable? }` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "x-contract-type": "{ commit, tag, commit_unavailable?, tag_unavailable? }",
+        "responses": {
+          "200": {
+            "description": "Which source commit and tag the running process was built from",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "{ commit, tag, commit_unavailable?, tag_unavailable? }"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboards/vault-economics": {
       "get": {
         "operationId": "getVaultEconomics",
