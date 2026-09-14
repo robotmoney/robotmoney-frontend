@@ -85,6 +85,11 @@ commit stage is currently validating whether or not a tag exists on it.
 | **Database role taxonomy** | **0053** re-owns every table, view, sequence, and function in `public` from the migration/bootstrap login to a new **`rm_owner`** role (`NOLOGIN` — no process may ever authenticate as it), revokes `PUBLIC`'s schema privileges, and re-grants `rm_app`/`rm_readonly` explicitly. **0054** replaces `rm_worker`'s broad/default grant with an explicit table allow-list — `rm_worker` can `SELECT` everywhere but `INSERT`/`UPDATE`/`DELETE` only on the 17 tables it actually queues/samples through. | **Verify BEFORE cutover** that the migration-time connection's role can execute `CREATE ROLE` (DigitalOcean managed Postgres's default admin role has this by default; a scoped-down migration credential may not) — see §3's precondition check. This is the highest-risk step in the release: getting it wrong changes who can read or write every table at once. |
 | Judge model invariant | **0056** requires every `shadow`/`enforce` row to name a model and repairs an invalid enabled/null row to `off`. Model transport failures still produce explicitly-labelled deterministic fallback prose. | Re-enable with `mode` and `model` in one request; never expose an invalid intermediate pair. |
 | Consensus receipt auto-publish | `swarm.publish` (the worker cadence, not the HTTP publish route) now calls the receipt-publish path itself right after a session publishes — no separate admin call needed for an `enforce`-judged session. | None required. Structurally still a no-op for `off`/`shadow`-mode sessions (a `shadow` judgement is deliberately withheld from the session's own record, so there is no adopted opinion for a receipt to attest to) — this is not a bug the patch could or should remove. |
+| Analyst allocation vector | A `bucket_weights` subject's brief now DECLARES the vector required (`takeSchema.weights.optional = false`, `buckets` = the four canonical vaults), the in-container member client asks its model for a `WEIGHTS:` control line and signs the resulting vector inside its canonical submission bytes, and receipt assembly REFUSES a `bucket_weights` session that produced no vector (`weights_absent_for_bucket_weights_subject` — deliberately outside `EXPECTED_RECEIPT_REFUSALS`, so the cadence run degrades). Before this, such a session published a signed, verified receipt with no `weights` field at all. | None at deploy time. After cutover, a published `robotmoney-vault` / `robotmoney-allocation` receipt must carry four `weights` entries totalling exactly 10,000 bps; a degraded `swarm.publish` naming `weights_absent_for_bucket_weights_subject` means the analysts are not authoring vectors and is a release-blocking condition, not a transient. |
+| Allocation support | A `bucket_weights` receipt may not carry an allocation authored by only SOME of the takes it attests to. `meanTakeWeights()` averages over the VECTORS it finds, not over the takes, so a 1-of-3 allocation used to publish with `release_safety.take_count` reporting 3 and `thinly_supported` false — and a bucket a member never named was counted as that member's explicit 0.00 vote. Assembly now refuses with `weights_not_authored_by_every_take` (also outside `EXPECTED_RECEIPT_REFUSALS`). | None at deploy time. A degraded `swarm.publish` naming `weights_not_authored_by_every_take` means at least one member submitted a take with no four-bucket vector — check the member containers' `[inference] <member>: take attempt N/2` warnings, and any rmpc/MCP/API member submitting through the raw API. Treat it exactly like the row above: release-blocking, not a transient. |
+| Missing-receipt visibility | `GET /api/admin/overview` reports one alert PER SESSION for every published session that lost a consensus receipt it could have had (`missingReceipts` on the projection, `swarm.consensus_receipt:<sessionId>` in the alert feed), over a 7-day window. Eligibility is judged against the mode and `min_takes` **that applied to that session** — read off its own append-only `swarm_session_judgements` row, and off the live config only for a session that was never judged and that the live config PREDATES — plus, independently, its own `swarm.judge` job's `last_error`. So raising `min_takes` or setting `mode: off` afterwards cannot retract an alert about a permanent loss. `off` and `shadow` raise nothing for sessions they cover: in both, a receipt is unreachable by construction. It is derived from state, so a later successful publication clears it and nothing has to be acknowledged. `swarm.publish` also degrades — instead of reporting a clean skip — when it refuses with `not_judged` AND that session's own `swarm.judge` job recorded a `last_error`. | None. A session named here is one that lost its receipt. Note for operators: an alert does NOT go away when you raise `min_takes` or turn the judge off — that is deliberate, and the only thing that clears it is a receipt (or the session ageing out of the 7-day window; a session published without a judgement is unrepairable, because `published` is terminal). |
+| Judge mode patch | `POST /api/swarm/admin/judge {"mode":"enforce"}` alone now works and preserves the stored model. It previously returned 400 with a raw Postgres constraint string: the upsert's model-preserving `COALESCE` sat in a `DO UPDATE` arm PostgreSQL never reached, because it evaluates 0056's CHECK against the proposed INSERT tuple first. Sending `{ mode, model }` together is unchanged and still correct. | None. 0056 is unchanged and still refuses an on-with-no-model row — now in the function's own words rather than the driver's. |
+| Runtime build identity | `GET /version` (and `build` on `GET /health`) report the full commit SHA and exact tag baked into the image at `docker build` time. `null` with a named reason when the image was built without them; a `+dirty` suffix when the tree was modified and a `+unknown` suffix when `git status` could not be run at all, so neither a modified nor an unchecked build can report the pinned SHA. | Check it after every deploy: `curl -s https://<host>/version` must equal the RC tag and SHA, with NO suffix. `+dirty` means the build tree was modified; `+unknown` means its `git status` failed (an unreadable index or permissions) and the tree was never checked — both fail AC-ID-03 and neither may be waved through. |
 | Append-only preflight accuracy | `db-preflight`'s guard check no longer reports a table as "disarmed" (implying tampering) merely because its *own* opt-in migration (e.g. `0050` for `swarm_member_keys`) has not reached this database yet — it now gates each table on its own migration, not just `0032`'s. | None. Purely removes a false positive that every `smoke:twin`/`smoke:capture` run against a pre-0.5.0 database was hitting. |
 
 No new environment variable is required by this release (unlike v0.4.0's
@@ -284,6 +289,34 @@ confirm after this deploy that a newly published, `enforce`-judged session
 now carries a `swarm_consensus_receipts` row without an operator having
 requested one — that is the one behavior change in this release an operator
 can observe end to end.
+
+Then run the three checks this release adds:
+
+```bash
+# 1. Identity. Must equal the RC tag and full SHA from §1 — no `+dirty` and
+#    no `+unknown` suffix, and neither field null.
+curl -s https://<host>/version
+
+# 2. The allocation is actually present. A published bucket_weights session
+#    (robotmoney-vault / robotmoney-allocation) must carry four weights
+#    totalling exactly 10000.
+curl -s https://<host>/api/swarm/sessions/<sessionId>/consensus-receipt \
+  | jq '.receipt.weights, ([.receipt.weights[].weight_bps] | add)'
+
+# 2b. …and every analyst it attests to authored it. Both numbers must be equal
+#     — the count of embedded submissions carrying a four-bucket vector, and
+#     the count of embedded submissions. (Assembly refuses otherwise, so a
+#     published receipt cannot fail this; run it once to prove the gate is live
+#     rather than to look for a failure.)
+curl -s https://<host>/api/swarm/sessions/<sessionId>/consensus-receipt \
+  | jq '[.receipt.analyst_signatures[] | (.canonical_submission | fromjson)]
+        | [ (map(select(.weights != null and (.weights | length) == 4)) | length), length ]'
+
+# 3. Nothing lost a receipt. `missingReceipts.count` must be 0, and no
+#    `swarm.consensus_receipt:<sessionId>` alert may be present.
+curl -s -H "X-Admin-Token: $ADMIN_TOKEN" https://<host>/api/admin/overview \
+  | jq '.missingReceipts, [.alerts[] | select(.source | startswith("swarm.consensus_receipt"))]'
+```
 
 ## 8. Failure, rollback, and close
 
