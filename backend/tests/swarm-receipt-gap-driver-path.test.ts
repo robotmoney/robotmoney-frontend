@@ -282,11 +282,21 @@ test("a weights refusal over a frozen take set settles once, loudly, not five ti
   await setJudgeConfig({ mode: "enforce", minTakes: 1, model: STUB_JUDGE_MODEL });
   const subjectId = rid("wt");
   await ic.ensureSubject(subjectId, "weights subject");
-  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
+  // ensureSubject() types every subject it creates `bucket_weights`
+  // (src/swarm/domain.ts), so the weightless take has to be filed while the
+  // subject is prose-typed.
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${subjectId}`;
   const session = await ic.openSession(subjectId);
   await ic.publishBrief(session.id, 60);
   const date = session.date instanceof Date ? session.date.toISOString().slice(0, 10) : String(session.date).slice(0, 10);
   await submit(await member(), date, subjectId); // a take with NO weight vector
+  // The subject becomes `bucket_weights` only AFTER the weightless take is on
+  // file. Since T17/D14 submission itself refuses a weightless take for a
+  // `bucket_weights` subject (400), so this is now the ONLY way the state gate
+  // 5b exists for can arise: a row filed before the subject was retyped, or
+  // before D14 shipped. Gate 5b is deliberately kept as defence in depth, and
+  // this is the test that it still settles TERMINALLY rather than retrying.
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
   await admin.closeSessionAdmin(session.id, undefined);
   await admin.aggregateSessionAdmin(session.id, undefined);
   const judged = await admin.judgeSessionAdmin(session.id, undefined);

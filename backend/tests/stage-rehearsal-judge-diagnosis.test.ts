@@ -17,6 +17,7 @@
 // A re-judge or a shadow-then-enforce sequence makes that refuse a good receipt
 // or clear a bad one.
 import { expect, test, describe } from "bun:test";
+import { RECEIPT_DOMAIN_SEPARATOR } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 // A database of its own: these cases seed receipts and judge jobs and then ask
 // "what is the LATEST one", which is a question every other file's rows would
@@ -34,7 +35,15 @@ import {
 
 useCleanDatabase(import.meta.file);
 
-const ok = async () => Response.json({ verified: true, canonicalBytes: "bytes", signatures: [{ verified: true }] });
+// Since D10 the rehearsal polls BOTH receipt routes — the bare anchored bytes
+// at `/consensus-receipt` and the envelope at `/consensus-receipt/verified` —
+// so a healthy double has to answer both. A single-route stub leaves the poll
+// looping until its deadline, which is what this file is about NOT doing.
+const BARE = '{"schema_version":"1.0"}\n';
+const ok = async (url: string | URL) =>
+  String(url).endsWith("/verified")
+    ? Response.json({ verified: true, canonicalBytes: RECEIPT_DOMAIN_SEPARATOR + BARE, signatures: [{ verified: true }] })
+    : new Response(BARE);
 
 describe("T18/D15 — model_timeout disqualifies rehearsal evidence", () => {
   test("model_timeout is on the disqualifying list", () => {
