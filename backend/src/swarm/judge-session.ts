@@ -34,6 +34,16 @@ import {
   type JudgeTake,
 } from "./judge.ts";
 import { LIVE_ROSTER_HANDLES } from "./roster-seed.ts";
+// R13 — the TEST-ONLY judge fault-injection lever. Resolved HERE, not inside
+// judge(): this is the layer that has a database and a session id, and keeping
+// the three gates (audited row, process flag, acceptance opt-in) in one module
+// with one caller is what makes "a judging cannot be faulted by accident" a
+// property of the wiring rather than of a reviewer's attention.
+import {
+  consumeJudgeFaultInjection,
+  getJudgeFaultInjection,
+  selectFaultInjection,
+} from "./judge-fault-injection.ts";
 
 export type JudgeMode = "off" | "shadow" | "enforce";
 
@@ -444,9 +454,16 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
   // rehydrate it from a row on file, and a row written before this change may
   // legitimately still read `source: "fallback"` — that history is append-only
   // (migration 0040) and stays readable. Only the FRESH value is narrowed.
+  // An explicitly passed `faultInjection` (tests, and only tests) wins; every
+  // other call resolves the armed row through the gates. `undefined` means "ask
+  // the lever", `null` means "this caller has decided: no fault".
+  const faultInjection = judgeOpts.faultInjection !== undefined
+    ? judgeOpts.faultInjection
+    : selectFaultInjection(await getJudgeFaultInjection(), sessionId);
+
   let outcome: JudgeOutcome;
   try {
-    outcome = await judge(input, { model: config.model, ...judgeOpts });
+    outcome = await judge(input, { model: config.model, ...judgeOpts, faultInjection });
   } catch (err) {
     if (err instanceof JudgeNothingToJudgeError) {
       // Not a failure: the session holds no member-authored sentence, so there
@@ -612,6 +629,21 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
         ${sql.json(outcome.opinion as any)}
       ) RETURNING id`)[0] as { id: string | number };
 
+    // R19 — what this judging COST, written beside the opinion it bought. A
+    // separate UPDATE rather than four more VALUES placeholders keeps the
+    // insert above readable and, more to the point, keeps a spend figure from
+    // ever being able to fail the write that matters: the CHECKs are
+    // "NULL or >= 0" and the values are already normalised by parseJudgeUsage.
+    if (outcome.usage) {
+      await tx`
+        UPDATE swarm_session_judgements SET
+          usage_input_tokens = ${outcome.usage.inputTokens},
+          usage_output_tokens = ${outcome.usage.outputTokens},
+          usage_total_tokens = ${outcome.usage.totalTokens},
+          usage_cost_usd = ${outcome.usage.costUsd}
+        WHERE id = ${inserted.id}`;
+    }
+
     recorded = { id: inserted.id, applied, ...(appliedSkippedReason ? { skipped: appliedSkippedReason } : {}) };
   };
 
@@ -620,6 +652,21 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
   } catch (e) {
     if (!(e instanceof JudgeRollback)) throw e;
     recorded = undefined;
+  }
+
+  // R13 — the lever is SPENT ONLY BY A JUDGING THAT WAS RECORDED. Decrementing
+  // before the transaction would let a rolled-back judging (a refusal in
+  // `beforeRecord`, a terminal session) burn a call an operator counted on, and
+  // an armed-for-one lever would then be gone with nothing to show for it.
+  // Outside the transaction, and deliberately not fatal: a judging that
+  // happened must not be reported as failed because the counter could not be
+  // decremented — the row stays armed and the next call spends it instead.
+  if (recorded && faultInjection && judgeOpts.faultInjection === undefined) {
+    try {
+      await consumeJudgeFaultInjection();
+    } catch (e) {
+      console.warn(`[judge] fault-injection counter not decremented for ${sessionId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   if (!recorded) {

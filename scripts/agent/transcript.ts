@@ -249,3 +249,72 @@ export function describeTranscriptError(e: TranscriptError): string {
 export function finalAssistantText(transcript: string): string {
   return assistantTextParts(transcript).at(-1)?.trim() ?? "";
 }
+
+// ── What a member run COST (R19) ───────────────────────────────────────────
+// `opencode run --format json` reports each completed model step as a
+// `step_finish` event carrying the provider's own token counts and cost:
+//
+//   {"type":"step_finish","part":{"type":"step_finish",
+//     "tokens":{"input":1820,"output":611,"reasoning":0,
+//               "cache":{"read":0,"write":0}},"cost":0.00042}}
+//
+// Every consumer in this repo dropped those lines on the floor — the parsers
+// above keep `type:"text"` and `continue` past everything else — so "what did
+// this session spend on member inference" could only be answered from the
+// vendor's dashboard, out of band and unattributable to a session or a member.
+// The numbers are already in the transcript we keep; read them.
+//
+// SUMMED ACROSS STEPS, because one take is one `opencode run` and a run may
+// take several steps (tool calls, a re-read). Schema-light like the rest of
+// this file: an unreadable field contributes nothing and a transcript with no
+// `step_finish` event at all returns null — NOT a row of zeroes, which would
+// read as a free run and is exactly the lie a spend report must not tell.
+export interface TranscriptSpend {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  /** Provider-reported cost in USD, summed over steps. Never computed from a rate card. */
+  costUsd: number;
+  /** How many `step_finish` events contributed — 0 can never be returned (null is). */
+  steps: number;
+}
+
+function finite(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+export function transcriptSpend(transcript: string): TranscriptSpend | null {
+  const spend: TranscriptSpend = {
+    inputTokens: 0, outputTokens: 0, reasoningTokens: 0,
+    cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, steps: 0,
+  };
+  for (const line of transcript.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    if (ev?.type !== "step_finish") continue;
+    const part = ev.part ?? ev;
+    const tokens = part?.tokens ?? {};
+    spend.steps += 1;
+    spend.inputTokens += finite(tokens.input);
+    spend.outputTokens += finite(tokens.output);
+    spend.reasoningTokens += finite(tokens.reasoning);
+    spend.cacheReadTokens += finite(tokens.cache?.read);
+    spend.cacheWriteTokens += finite(tokens.cache?.write);
+    spend.costUsd += finite(part?.cost);
+  }
+  if (spend.steps === 0) return null;
+  spend.totalTokens = spend.inputTokens + spend.outputTokens + spend.reasoningTokens;
+  // Float addition over per-step costs; rounded to the sub-cent the provider
+  // itself reports rather than left as 0.0004200000000000001 in a manifest.
+  spend.costUsd = Number(spend.costUsd.toFixed(8));
+  return spend;
+}
