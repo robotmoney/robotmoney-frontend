@@ -46,6 +46,7 @@ export const ROUTES: {
     session: string;
     sessionById: string;
     sessionConsensusReceipt: string;
+    sessionConsensusReceiptVerified: string;
     take: string;
     takePermalink: string;
     openSession: string;

@@ -1,5 +1,22 @@
 import { expect, test } from "bun:test";
-import { waitForVerifiedFusionReceipt } from "../scripts/upgrades/0.4.0-to-0.5.0/stage-rehearsal.ts";
+import { RECEIPT_DOMAIN_SEPARATOR } from "@robotmoney/contract";
+import { waitForVerifiedFusionReceipt, type ReceiptFetcher } from "../scripts/upgrades/0.4.0-to-0.5.0/stage-rehearsal.ts";
+
+// THE REHEARSAL NOW POLLS TWO ROUTES (decision D10): the read-time envelope at
+// `/consensus-receipt/verified`, and the ANCHORED `/consensus-receipt`, which
+// serves the bare canonical JSON — the keccak256 preimage minus its pinned
+// domain prefix. The gate has to check both together, because an envelope that
+// says `verified: true` while the anchored URL serves something else is exactly
+// the state phase3/3.1-FINDING-… found a green rehearsal sitting on.
+const BARE = '{"schema_version":"1.0"}\n';
+const CANONICAL = RECEIPT_DOMAIN_SEPARATOR + BARE;
+
+/** A double for that pair. `anchored: null` makes the anchored route 404. */
+const routes = (envelope: Record<string, unknown>, anchored: string | null = BARE): ReceiptFetcher =>
+  async (url) => {
+    if (String(url).endsWith("/verified")) return Response.json(envelope);
+    return anchored === null ? Response.json({ error: "none" }, { status: 404 }) : new Response(anchored);
+  };
 
 test("stage rehearsal waits for and verifies an enforce-mode model receipt", async () => {
   let reads = 0;
@@ -10,7 +27,9 @@ test("stage rehearsal waits for and verifies an enforce-mode model receipt", asy
     latest: async () => ++reads < 2 ? null : { sessionId: "session-1", source: "model", mode: "enforce" },
     fetcher: async (url) => {
       expect(String(url)).toContain("/api/swarm/sessions/session-1/consensus-receipt");
-      return Response.json({ verified: true, canonicalBytes: "bytes", signatures: [{ verified: true }] });
+      return String(url).endsWith("/verified")
+        ? Response.json({ verified: true, canonicalBytes: CANONICAL, signatures: [{ verified: true }] })
+        : new Response(BARE);
     },
   });
   expect(result.source).toBe("model");
@@ -20,7 +39,7 @@ test("stage rehearsal accepts explicit deterministic fallback provenance", async
   const result = await waitForVerifiedFusionReceipt({
     backendUrl: "http://stage.invalid",
     latest: async () => ({ sessionId: "session-fallback", source: "fallback", mode: "enforce" }),
-    fetcher: async () => Response.json({ verified: true, canonicalBytes: "bytes", signatures: [{ verified: true }] }),
+    fetcher: routes({ verified: true, canonicalBytes: CANONICAL, signatures: [{ verified: true }] }),
   });
   expect(result.source).toBe("fallback");
 });
@@ -29,7 +48,7 @@ test("stage rehearsal refuses a shadow-mode receipt", async () => {
   await expect(waitForVerifiedFusionReceipt({
     backendUrl: "http://stage.invalid",
     latest: async () => ({ sessionId: "shadow", source: "model", mode: "shadow" }),
-    fetcher: async () => Response.json({ verified: true, canonicalBytes: "bytes", signatures: [{}] }),
+    fetcher: routes({ verified: true, canonicalBytes: CANONICAL, signatures: [{}] }),
   })).rejects.toThrow(/expected enforce/);
 });
 
@@ -39,12 +58,19 @@ test("stage rehearsal refuses a shadow-mode receipt", async () => {
 // have passed, and the timeout message could not say which fact was missing.
 // Now the poll reports them apart, and each is driven alone.
 test("stage rehearsal never returns a receipt that is not verified/complete, and says which", async () => {
-  const cases: [string, Record<string, unknown>][] = [
-    ["not verified", { verified: false, canonicalBytes: "bytes", signatures: [{ verified: true }] }],
-    ["no canonical bytes", { verified: true, canonicalBytes: "", signatures: [{ verified: true }] }],
-    ["no signatures", { verified: true, canonicalBytes: "bytes", signatures: [] }],
+  const verified = { verified: true, canonicalBytes: CANONICAL, signatures: [{ verified: true }] };
+  const cases: [string, Record<string, unknown>, string | null][] = [
+    ["not verified", { ...verified, verified: false }, BARE],
+    ["no canonical bytes", { ...verified, canonicalBytes: "" }, BARE],
+    ["no signatures", { ...verified, signatures: [] }, BARE],
+    // D10's own failure mode, which every other case above would miss: the
+    // envelope is perfect and the ANCHORED url serves other bytes, so the
+    // digest a release would anchor is not the digest of what that URL returns.
+    ["anchored URL does not serve the anchored bytes", verified, '{"schema_version":"1.0","drifted":true}\n'],
+    // And the anchored route simply missing — a 404 there is not a slow publish.
+    ["anchored URL returned 404", verified, null],
   ];
-  for (const [missing, body] of cases) {
+  for (const [missing, body, anchored] of cases) {
     let thrown: unknown;
     try {
       await waitForVerifiedFusionReceipt({
@@ -52,14 +78,14 @@ test("stage rehearsal never returns a receipt that is not verified/complete, and
         timeoutMs: 5,
         pollMs: 1,
         latest: async () => ({ sessionId: "bad", source: "fallback", mode: "enforce" }),
-        fetcher: async () => Response.json(body),
+        fetcher: routes(body, anchored),
       });
     } catch (err) { thrown = err; }
     const message = String((thrown as Error)?.message ?? "");
     // It never RETURNED — the receipt was refused, not accepted late.
     expect(message, missing).toContain("timed out");
     // …and the poll's own classification names the missing fact, so a bug that
-    // ignored one of the three is distinguishable from a slow publish.
+    // ignored one of the five is distinguishable from a slow publish.
     expect(message, missing).toContain("was not verified/complete");
     expect(message, missing).toContain(missing);
   }
@@ -76,7 +102,7 @@ test("stage rehearsal refuses a receipt whose fallback is a CREDIT/CREDENTIAL re
       timeoutMs: 50,
       pollMs: 1,
       latest: async () => ({ sessionId: "poisoned", source: "fallback", mode: "enforce", fallbackReason: reason }),
-      fetcher: async () => Response.json({ verified: true, canonicalBytes: "bytes", signatures: [{ verified: true }] }),
+      fetcher: routes({ verified: true, canonicalBytes: CANONICAL, signatures: [{ verified: true }] }),
     })).rejects.toThrow(/not a survivable model failure/);
   }
 
@@ -85,7 +111,7 @@ test("stage rehearsal refuses a receipt whose fallback is a CREDIT/CREDENTIAL re
   const ok = await waitForVerifiedFusionReceipt({
     backendUrl: "http://stage.invalid",
     latest: async () => ({ sessionId: "survivable", source: "fallback", mode: "enforce", fallbackReason: "model_timeout" }),
-    fetcher: async () => Response.json({ verified: true, canonicalBytes: "bytes", signatures: [{ verified: true }] }),
+    fetcher: routes({ verified: true, canonicalBytes: CANONICAL, signatures: [{ verified: true }] }),
   });
   expect(ok.sessionId).toBe("survivable");
 });

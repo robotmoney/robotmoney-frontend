@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runSmokeTwinRehearsal } from "../../../../scripts/lib/smoke-twin-rehearsal.ts";
 import postgres from "postgres";
+import { RECEIPT_DOMAIN_SEPARATOR, ROUTES, path } from "@robotmoney/contract";
 import { TAG_GLOB } from "./release.ts";
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -71,16 +72,37 @@ export async function waitForVerifiedFusionReceipt(opts: {
             "is acceptance evidence (checklist §4.1, AC-MODEL-01)",
         );
       }
-      const response = await fetcher(`${opts.backendUrl}/api/swarm/sessions/${encodeURIComponent(candidate.sessionId)}/consensus-receipt`);
+      // TWO ROUTES, CHECKED TOGETHER (decision D10). The envelope — verdict,
+      // per-signature results, the publisher's own canonical bytes — comes from
+      // the `/verified` sibling; the ANCHORED path serves the bare preimage,
+      // and the rehearsal's job is to prove that the URL a release would anchor
+      // actually returns the bytes that hash to the anchored digest. Checking
+      // only the envelope is precisely how the run that produced
+      // phase3/3.1-FINDING-… passed while the anchor was unresolvable.
+      const anchoredUrl = `${opts.backendUrl}${path(ROUTES.swarm.sessionConsensusReceipt, { id: candidate.sessionId })}`;
+      const response = await fetcher(
+        `${opts.backendUrl}${path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: candidate.sessionId })}`,
+      );
       if (response.ok) {
         const body = await response.json() as { verified?: boolean; canonicalBytes?: unknown; signatures?: unknown[] };
-        // Three independent facts, reported apart so the poll's own message says
+        // Four independent facts, reported apart so the poll's own message says
         // WHICH one is missing: a bug that ignored `verified` used to be
         // observable only as a timeout, indistinguishable from a slow publish.
+        const anchored = await fetcher(anchoredUrl);
+        const anchoredBody = anchored.ok ? await anchored.text() : null;
+        const anchorMatches =
+          anchoredBody !== null &&
+          typeof body.canonicalBytes === "string" &&
+          RECEIPT_DOMAIN_SEPARATOR + anchoredBody === body.canonicalBytes;
         const missing = [
           body.verified === true ? null : "not verified",
           typeof body.canonicalBytes === "string" && body.canonicalBytes.length > 0 ? null : "no canonical bytes",
           Array.isArray(body.signatures) && body.signatures.length > 0 ? null : "no signatures",
+          anchorMatches
+            ? null
+            : anchoredBody === null
+              ? `anchored URL returned ${anchored.status}`
+              : "anchored URL does not serve the anchored bytes",
         ].filter((m): m is string => m !== null);
         if (missing.length === 0) return candidate;
         last = `receipt ${candidate.sessionId} served but was not verified/complete (${missing.join(", ")})`;

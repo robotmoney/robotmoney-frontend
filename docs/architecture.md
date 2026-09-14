@@ -1901,7 +1901,8 @@ payload, stores it once, and re-verifies it on every read.
 | The bytes, the schema, the arithmetic | **Imported** from `@robotmoney/contract/consensus-receipt` — `canonicalizeReceipt`, `validateReceipt`, `receiptSemanticErrors`, `participationBps`, `compareCodePoints`. Nothing about the format is restated in the backend. |
 | The assembly | `assembleConsensusReceipt()` — pure: no database, no clock, no configuration |
 | The database seam | `publishConsensusReceipt()` — idempotent, immutable, writes `swarm_consensus_receipts` |
-| The read | `GET /api/swarm/sessions/:id/consensus-receipt` — public, re-verified per request |
+| The read | `GET /api/swarm/sessions/:id/consensus-receipt` — public, the **anchored** path: the bare canonical JSON, byte-stable, `keccak256(domain separator + body) == payloadDigest` (decision D10) |
+| The verified read | `GET /api/swarm/sessions/:id/consensus-receipt/verified` — public, the same receipt in a verification envelope re-verified per request; never anchored |
 | The trigger | `POST /api/swarm/admin/sessions/:id/consensus-receipt` — privileged, idempotent |
 | The store | `swarm_consensus_receipts` (migration 0042) — append-only **and** UPDATE-refusing |
 
