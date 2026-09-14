@@ -49,11 +49,33 @@ describe("resolveInferencePath — one derived signal, and an explicit override"
     expect(resolveInferencePath({}, { standingStack: true })).toBe("staging");
   });
 
-  test("an operator's own boot and the test harness are development", () => {
+  test("an operator's own boot and the test harness are development — and they SAY so", () => {
     expect(resolveInferencePath({ RM_ENV: "smoke" })).toBe("development");
     expect(resolveInferencePath({ RM_ENV: "ephemeral" })).toBe("development");
-    expect(resolveInferencePath({})).toBe("development");
     expect(isAcceptancePath("development")).toBe(false);
+  });
+
+  // D13, and the line this file used to get wrong. `resolveInferencePath({})`
+  // returned "development" here while the judge half's isAcceptanceJudgeEnv({})
+  // returned true — two green tests pinning a contradiction, and the permissive
+  // half was the one a staging stack booted without RM_ENV consulted for its
+  // analyst containers. There is ONE rule now and it is the strict one.
+  test("an unset, blank or unrecognised RM_ENV is the acceptance path", () => {
+    expect(resolveInferencePath({})).toBe("production");
+    expect(resolveInferencePath({ RM_ENV: "" })).toBe("production");
+    expect(resolveInferencePath({ RM_ENV: "   " })).toBe("production");
+    // Not one of ephemeral|smoke|prod: backend/src/config.ts refuses to start
+    // on it, but a host-side script has no such guard and a typo must not read
+    // as "development".
+    expect(resolveInferencePath({ RM_ENV: "staging" })).toBe("production");
+    expect(resolveInferencePath({ RM_ENV: "Smoke" })).toBe("production");
+    expect(isAcceptancePath(resolveInferencePath({}))).toBe(true);
+  });
+
+  test("a keyless model is refused on the unset-RM_ENV path — the default has teeth", () => {
+    // The observable consequence of the line above. Before D13 this resolved to
+    // development and returned a keyless config without complaint.
+    expect(() => resolveModelConfig({ AGENT_MODEL: "free" })).toThrow(/keyless free-tier model/);
   });
 
   test("an explicit path wins over every derived signal", () => {
@@ -64,9 +86,17 @@ describe("resolveInferencePath — one derived signal, and an explicit override"
 
 // ── The development path is unchanged ───────────────────────────────────────
 
+// A DEVELOPMENT ENVIRONMENT NOW SAYS SO. These three cases used to pass a bare
+// `{ AGENT_MODEL }` and get the permissive rules from an unset RM_ENV; under D13
+// that is the acceptance path, so the escape hatches are exercised on an env
+// that states `smoke` — which is what the smoke stack's own compose env carries
+// (scripts/stack/config.ts's rmEnv) and what a developer's shell says when they
+// mean it. The hatches themselves are untouched.
 describe("development keeps every escape hatch D22 deliberately left open", () => {
+  const DEV = { RM_ENV: "smoke" };
+
   test("a keyless free-family model still resolves with no credential at all", () => {
-    const cfg = resolveModelConfig({ AGENT_MODEL: "free" });
+    const cfg = resolveModelConfig({ ...DEV, AGENT_MODEL: "free" });
     expect(cfg.keyless).toBe(true);
     expect(cfg.apiKey).toBeNull();
     expect(cfg.apiKeyEnv).toBeNull();
@@ -74,11 +104,11 @@ describe("development keeps every escape hatch D22 deliberately left open", () =
 
   test("the raw-id escape hatch still goes straight through", () => {
     const raw = `${keylessModel()}`;
-    expect(resolveModelConfig({ AGENT_MODEL: raw }).model).toBe(raw);
+    expect(resolveModelConfig({ ...DEV, AGENT_MODEL: raw }).model).toBe(raw);
   });
 
   test("a paid model with no key still fails with the long-standing message", () => {
-    expect(() => resolveModelConfig({ AGENT_MODEL: "deepseek" })).toThrow(/paid OpenCode Zen model/);
+    expect(() => resolveModelConfig({ ...DEV, AGENT_MODEL: "deepseek" })).toThrow(/paid OpenCode Zen model/);
   });
 });
 

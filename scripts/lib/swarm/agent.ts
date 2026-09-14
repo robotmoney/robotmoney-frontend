@@ -158,6 +158,10 @@ export function railFromEnv(env: Record<string, string | undefined> = process.en
     // alone — staging runs `RM_ENV=prod` by rule (docs/technical/stack-orchestrator.md
     // §16), which is what makes resolveModelConfig() refuse a keyless model and
     // a raw-id override for the member containers it launches (AC-MODEL-01).
+    // That env now always CARRIES an RM_ENV — buildComposeEnv() emits it from
+    // the stack config (D13) — so this driver no longer depends on an operator
+    // having exported one, and an absent value would be the acceptance path
+    // rather than the permissive one.
     modelConfig: resolveModelConfig(env),
     // This is the ONE place agent.ts reads AUTOMATION_TOKEN from
     // an environment object rather than taking it as an explicit argument —

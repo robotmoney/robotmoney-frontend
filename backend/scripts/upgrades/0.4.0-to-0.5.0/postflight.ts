@@ -15,6 +15,32 @@ const dir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(dir, "..", "..", "..", "..");
 const receiptStep = process.argv.find((a) => a.startsWith("--emit-receipt="))?.split("=", 2)[1] ?? (process.argv.includes("--emit-receipt") ? "P8.postflight-prod" : undefined);
 
+/**
+ * IS THIS DATABASE ON THE ACCEPTANCE PATH — ASKED, NOT SNIFFED.
+ *
+ * Check 11 used to read the ambient `RM_ENV` of whatever shell the operator
+ * happened to run this command in, which is not the environment the stack runs
+ * in and was, on 2026-09-13, not even the same value: a postflight run from a
+ * plain login shell downgraded the pinned-model requirement from FAIL to WARN
+ * for a stage database. `--acceptance` (or `--no-acceptance`) states it.
+ *
+ * The FALLBACK when neither flag is given is the shared fail-closed predicate
+ * (backend/src/acceptance-path.ts, D13): an unset or absent RM_ENV is the
+ * acceptance path, so forgetting the flag tightens the check rather than
+ * loosening it.
+ */
+export function resolveAcceptanceFlag(
+  argv: readonly string[],
+  env: Record<string, string | undefined>,
+): boolean {
+  if (argv.includes("--acceptance") && argv.includes("--no-acceptance")) {
+    throw new Error("--acceptance and --no-acceptance are mutually exclusive");
+  }
+  if (argv.includes("--acceptance")) return true;
+  if (argv.includes("--no-acceptance")) return false;
+  return isAcceptanceJudgeEnv(env);
+}
+
 export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   // 1. All eight migrations recorded.
   const migrations = (await db`SELECT name FROM schema_migrations WHERE name = ANY(${THIS_RELEASE_MIGRATIONS})`) as unknown as { name: string }[];
@@ -217,7 +243,7 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
     SELECT mode, coalesce(btrim(model), '') AS model FROM swarm_judge_config WHERE id = 1
   `)[0] as { mode: string; model: string } | undefined;
   const configuredModel = judgeModelRow?.model ?? "";
-  const acceptancePath = isAcceptanceJudgeEnv(process.env);
+  const acceptancePath = resolveAcceptanceFlag(process.argv, process.env);
   if (!judgeModelRow || judgeModelRow.mode === "off") {
     record("judge-model-acceptance", "WARN",
       `judge mode=${judgeModelRow?.mode ?? "(no row)"} — no model is in use, so there is nothing to disqualify`);
@@ -229,7 +255,7 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   } else {
     record("judge-model-acceptance", acceptancePath ? "FAIL" : "WARN",
       `judge is ${judgeModelRow.mode} on "${configuredModel}", not the pinned "${PINNED_JUDGE_MODEL}"` +
-        (acceptancePath ? " — AC-MODEL-01 requires the pinned model on an acceptance path" : " (not an acceptance path: RM_ENV is not prod)"));
+        (acceptancePath ? " — AC-MODEL-01 requires the pinned model on an acceptance path" : " (not an acceptance path: --no-acceptance, or RM_ENV names a development environment)"));
   }
 
   // 12. And the same question asked of what was actually PRODUCED, not of what

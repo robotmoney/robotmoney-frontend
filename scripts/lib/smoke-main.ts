@@ -30,6 +30,8 @@ import {
   type OnboardingIdentity,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
+import type { RmEnv } from "../../backend/src/acceptance-path.ts";
+import { resolveStackRmEnvOrExit, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
 import { startProspectTranscript } from "./smoke-prospect-transcript.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./smoke-newcomers.ts";
@@ -181,6 +183,9 @@ if (staticPortMode) {
 // allocation — the port is 48787 either way (see assertStageWebPortFree's
 // comment on why this bind is not the TOCTOU pattern we just deleted).
 async function stagePreflight(): Promise<void> {
+  // FIRST, before the port: a stage boot on a development RM_ENV comes up green,
+  // serves the tunnel, and produces sessions that are not evidence (D13).
+  resolveStackRmEnvOrExit(true);
   try {
     await assertStageWebPortFree();
   } catch (err) {
@@ -200,6 +205,7 @@ async function stagePreflight(): Promise<void> {
   }
 }
 if (staticPortMode) await stagePreflight();
+const stackRmEnv: RmEnv = resolveStackRmEnvOrExit(staticPortMode);
 
 // --- Which database this boot runs against (--db) ----------------------------
 // Every decision the flag implies — the three modes, the refusals, the banner —
@@ -386,49 +392,6 @@ delete process.env.ANALYTICS_TOKEN;
 // Data-path resolution (issue #147: DEMO_HERMETIC and the stubbed/offline path
 // were removed entirely — every boot, local or CI, is production parity: live
 // Base mainnet RPC + live analytics + floor seed).
-// Compose interpolation values the DEMO honours from the operator's own
-// environment, passed to the shared stack explicitly via `extraComposeEnv`.
-//
-// Why an allowlist and not `...process.env`: scripts/stack deliberately does not
-// inherit the ambient environment (§11.3 E1 — that is what keeps a provider key
-// out of a container). But the DEMO is an operator tool, and these knobs are
-// documented and load-bearing for it: exporting SWARM_WINDOW_MINUTES=5 or a
-// custom BASE_RPC_URL before `bun run smoke` works today, and silently ignoring
-// it after the bring-up moved onto the shared module would be a behaviour
-// regression that is miserable to debug. Every name here is interpolated by
-// docker-compose.yml / docker-compose.smoke.yml and each already carries a
-// `:-default` there, so an unset value behaves exactly as before. Values
-// buildComposeEnv() owns (ports, credentials, DATABASE_URL, POSTGRES_*,
-// DEMO_PROJECT) are deliberately NOT listed: the stack config is their single
-// source and an exported value must never shadow it.
-const DEMO_COMPOSE_PASSTHROUGH = [
-  "BASE_RPC_URL",
-  "SWARM_AGGREGATE_CRON",
-  "SWARM_CLOSE_WINDOW_CRON",
-  "SWARM_NOTIFICATION_EMAIL_FROM",
-  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN",
-  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL",
-  "SWARM_OPEN_SESSION_CRON",
-  "SWARM_PUBLISH_BRIEF_CRON",
-  "SWARM_PUBLISH_CRON",
-  "SWARM_SCHEDULES_ENABLED",
-  "SWARM_WINDOW_MINUTES",
-  "FETCH_CACHE_DIR",
-  "FLOOR_SEED_PATH",
-  "PROJECTS_SOURCE",
-  "RM_ENV",
-  "WORKER_DATABASE_URL",
-] as const;
-
-function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const k of DEMO_COMPOSE_PASSTHROUGH) {
-    const v = env[k];
-    if (v !== undefined && v !== "") out[k] = v;
-  }
-  return out;
-}
-
 // Env shared by every `docker compose` call — pins the project, selects the
 // smoke override, resolves the data path, and sets credentials. NO host ports:
 // the compose files publish container ports only and Docker picks the host
@@ -449,6 +412,10 @@ const dockerEnv: Record<string, string> = {
   DATABASE_URL: databaseUrl,
   // Guards the human /admin task-queue dashboard. Random
   // per launch; the value is shown ONLY in the interactive TUI (render()).
+  // Here as well as in buildComposeEnv(), for the same reason as the labels
+  // above: this map drives the DIRECT `docker compose` calls, which would
+  // otherwise fall back to the compose interpolation default (D13).
+  RM_ENV: stackRmEnv,
   ADMIN_TOKEN: adminPassword,
   AUTOMATION_TOKEN: automationToken,
   // Only the path crosses the host/compose environment. Docker mounts the
@@ -472,6 +439,7 @@ const smokeStackConfig: StackConfig = {
   database,
   credentials,
   environment: stackEnvironment,
+  rmEnv: stackRmEnv,
   extraComposeEnv: { ...smokeEnv.composeEnv, ...smokePassthroughEnv(process.env), ...inferenceComposeEnv },
 };
 
