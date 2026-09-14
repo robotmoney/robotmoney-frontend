@@ -192,6 +192,18 @@ export interface StackConfig {
   // passes its resolved data-path env here). Merged LAST so a consumer can
   // extend, and deliberately never sourced from the ambient environment.
   extraComposeEnv?: Record<string, string>;
+  /**
+   * AC-ID-05. Path to a compose overlay pinning every built service to an image
+   * that was built on `pinza` and shipped here (scripts/stack/images.ts). When
+   * set, this stack BUILDS NOTHING: the file is appended last to the compose
+   * file list, `up` carries `--no-build`, and `build()` refuses outright.
+   *
+   * An absolute path outside the pinned checkout. It is a config field rather
+   * than an environment read for the reason at the top of this file — a stack
+   * that could acquire this from the ambient environment is a stack whose
+   * artifacts an exported variable can change.
+   */
+  imagesOverride?: string;
 }
 
 // ── Compose env (PURE) ──────────────────────────────────────────────────────
@@ -279,8 +291,24 @@ export function buildArgs(services: string[] = []): string[] {
   return ["build", ...services];
 }
 
-export function upArgs(services: string[]): string[] {
-  return ["up", "-d", ...services];
+// `--no-build` is the TEETH of the images-override path, not a hint: compose
+// exits with "service X needs to be built" rather than building it, so a stack
+// whose shipped image is missing STOPS on the staging host instead of quietly
+// compiling a replacement that no longer corresponds to anything pinza built.
+export function upArgs(services: string[], opts: { noBuild?: boolean } = {}): string[] {
+  return ["up", "-d", ...(opts.noBuild ? ["--no-build"] : []), ...services];
+}
+
+/**
+ * The compose file list with the images override APPENDED LAST (compose merges
+ * later files over earlier ones, so last is the only position that wins), and
+ * never twice — a caller that already spelled it into its own list, as
+ * scripts/lib/smoke-main.ts does so child processes inherit the same
+ * COMPOSE_FILE, still gets exactly one `-f`.
+ */
+export function composeFilesWithImagesOverride(files: string[], imagesOverride?: string): string[] {
+  if (!imagesOverride) return files;
+  return files.includes(imagesOverride) ? files : [...files, imagesOverride];
 }
 
 // `--no-deps` is safe (and correct) because up() waits for postgres to be ready

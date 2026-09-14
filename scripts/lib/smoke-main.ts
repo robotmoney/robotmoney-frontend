@@ -30,6 +30,7 @@ import {
   type OnboardingIdentity,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
+import { decideImagesOverride } from "./smoke-images-override.ts";
 import { preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
 import { startProspectTranscript } from "./smoke-prospect-transcript.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./smoke-newcomers.ts";
@@ -147,6 +148,10 @@ const STATIC_PORT_FLAG = "--static-port";
 const smokeMode = isSmokeMode(process.argv);
 const scenario = scenarioPlan(smokeMode);
 const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
+// AC-ID-05 — wiring only; the decision is scripts/lib/smoke-images-override.ts.
+const imagesOverrideDecision = decideImagesOverride(process.argv, process.env);
+for (const line of imagesOverrideDecision.banner) console.warn(`[smoke] ${line}`);
+const imagesOverride = imagesOverrideDecision.path;
 
 // …and the same argument selects the smoke's CADENCE PROFILE (issue #371) — the
 // swarm interval, the SUBMISSION WINDOW (#570), the subject phase offset and the
@@ -339,6 +344,12 @@ if (pgDataDir) {
   composeFilesRun = `${composeFilesRun}:${overrideFile}`;
 }
 
+// LAST, after every generated overlay — compose merges later files over earlier
+// ones and the images pin must win. Also handed to the stack as a config field:
+// children spawned here inherit COMPOSE_FILE and must resolve the same
+// topology; createStack() dedupes, so both spellings make one `-f`.
+if (imagesOverride) composeFilesRun = `${composeFilesRun}:${imagesOverride}`;
+
 // Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
 // ADMIN_TOKEN). A FRESH random secret every launch. Issue #456: this used to
 // be published by mutating process.env.ADMIN_TOKEN on THIS process, so every
@@ -472,6 +483,7 @@ const smokeStackConfig: StackConfig = {
   database,
   credentials,
   environment: stackEnvironment,
+  imagesOverride,
   extraComposeEnv: { ...smokeEnv.composeEnv, ...smokePassthroughEnv(process.env), ...inferenceComposeEnv },
 };
 

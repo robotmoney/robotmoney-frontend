@@ -188,6 +188,9 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   Object.freeze({ flag: SMOKE_FLAG, arity: 0 as const }),
   Object.freeze({ flag: "--static-port", arity: 0 as const }),
   Object.freeze({ flag: "--stage", arity: 0 as const }),
+  // AC-ID-05: a path to a compose overlay pinning every image to an artifact
+  // built on pinza and shipped here. Its value is a path, so arity 1.
+  Object.freeze({ flag: "--images-override", arity: 1 as const }),
   Object.freeze({ flag: "--no-tui", arity: 0 as const }),
 ]);
 

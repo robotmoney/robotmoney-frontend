@@ -22,6 +22,8 @@
 // scripts/tests/integration/smoke-compose-config.test.ts.
 import { afterAll, expect, test } from "bun:test";
 import net from "node:net";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -107,7 +109,13 @@ test("GET /version reports the identity baked into the running process", async (
   // FLAT AND EXACT: the acceptance check is a string comparison against the RC
   // tag and SHA of AC-ID-01, run with curl, so the body must not require
   // parsing to reach either value.
-  expect(await version.json()).toEqual({ commit: COMMIT, tag: TAG });
+  const versionBody = await version.json();
+  // `commit` and `tag` stay TOP-LEVEL and exact — the acceptance check greps
+  // them. `static` is the SPA half (T26) and is asserted on its own below; a
+  // toEqual over the whole body would make every future identity field a test
+  // change rather than an addition.
+  expect(versionBody.commit).toBe(COMMIT);
+  expect(versionBody.tag).toBe(TAG);
 
   // Unauthenticated, deliberately: an identity endpoint an auditor cannot reach
   // proves nothing, and this body carries no configuration, secret or state.
@@ -128,12 +136,46 @@ test("an image built without its identity says so at /version rather than guessi
   // a tag can mistake for a match.
   const port = await bootApi({ [BUILD_COMMIT_ENV]: "", [BUILD_TAG_ENV]: "" });
   const body = await (await fetch(`http://127.0.0.1:${port}/version`)).json();
-  expect(body).toEqual({
+  const { static: staticIdentity, ...image } = body;
+  expect(image).toEqual({
     commit: null,
     tag: null,
     commit_unavailable: `${BUILD_COMMIT_ENV} is unset or blank`,
     tag_unavailable: `${BUILD_TAG_ENV} is unset or blank`,
   });
   // No package version, no timestamp, no branch name, no "unknown".
-  expect(JSON.stringify(body)).not.toMatch(/unknown|\d{4}-\d{2}-\d{2}/);
+  expect(JSON.stringify(image)).not.toMatch(/unknown|\d{4}-\d{2}-\d{2}/);
+  // An image with no identity cannot be "matched" by a frontend either.
+  expect(staticIdentity.matches_image).toBe(false);
+});
+
+
+// ── T26: the SPA the api is SERVING, not only the image it IS ───────────────
+test("GET /version reports the served frontend's digest, and whether it agrees with the image", async () => {
+  // The gap this closes: `_static` is a read-only bind of a directory assembled
+  // on the deploy host AFTER the image exists, so nothing baked in can describe
+  // it. A redeploy that rebuilt the image and skipped `bun run static:assemble`
+  // left the right api serving the previous release's HTML with every AC-ID-03
+  // check still green. Three cases, all against the real process over HTTP.
+  const dir = mkdtempSync(join(tmpdir(), "rm-static-identity-"));
+  const digest = `sha256:${"a".repeat(64)}`;
+  writeFileSync(
+    join(dir, ".rm-static-manifest.json"),
+    JSON.stringify({ schema: 1, commit: COMMIT, tag: TAG, digest, files: 393, generated_at: "2026-09-14T00:00:00.000Z" }),
+  );
+
+  const agreed = await (await fetch(`http://127.0.0.1:${await bootApi({ [BUILD_COMMIT_ENV]: COMMIT, [BUILD_TAG_ENV]: TAG, STATIC_DIR: dir })}/version`)).json();
+  expect(agreed.static).toEqual({ digest, commit: COMMIT, tag: TAG, files: 393, generated_at: "2026-09-14T00:00:00.000Z", matches_image: true });
+
+  // The drift itself: same directory, an image built from another commit.
+  const drifted = await (await fetch(`http://127.0.0.1:${await bootApi({ [BUILD_COMMIT_ENV]: "0".repeat(40), [BUILD_TAG_ENV]: "v0.4.0", STATIC_DIR: dir })}/version`)).json();
+  expect(drifted.static.matches_image).toBe(false);
+  expect(drifted.static.digest).toBe(digest);
+
+  // An UNASSEMBLED directory — the shape Docker leaves behind when the bind
+  // path did not exist — is `unavailable` with the reason named, never absent.
+  const bare = await (await fetch(`http://127.0.0.1:${await bootApi({ [BUILD_COMMIT_ENV]: COMMIT, [BUILD_TAG_ENV]: TAG, STATIC_DIR: mkdtempSync(join(tmpdir(), "rm-static-bare-")) })}/version`)).json();
+  expect(bare.static.digest).toBeNull();
+  expect(bare.static.matches_image).toBe(false);
+  expect(String(bare.static.unavailable)).toMatch(/static-assembly|manifest/);
 });
