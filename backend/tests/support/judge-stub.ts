@@ -24,6 +24,17 @@ export const STUB_JUDGE_ANSWER = JSON.stringify({
 
 let server: ReturnType<typeof Bun.serve> | null = null;
 let saved: { baseUrl?: string; apiKey?: string } = {};
+let answer = STUB_JUDGE_ANSWER;
+
+/**
+ * Serve a DIFFERENT answer until `resetJudgeStubAnswer()`. The one caller that
+ * needs this is the weight-smuggling boundary (judge.ts's WEIGHT_LIKE_KEYS):
+ * proving that a model which TRIES to author an allocation cannot move the
+ * receipt's vector needs a model that actually tries. Pass the raw assistant
+ * content, exactly as the transport would receive it.
+ */
+export function setJudgeStubAnswer(content: string): void { answer = content; }
+export function resetJudgeStubAnswer(): void { answer = STUB_JUDGE_ANSWER; }
 
 /** Start the stub and point the judge transport at it. Call from `beforeAll`. */
 export function installJudgeStub(): void {
@@ -34,7 +45,7 @@ export function installJudgeStub(): void {
       if (!new URL(req.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
-      return Response.json({ choices: [{ message: { content: STUB_JUDGE_ANSWER } }] });
+      return Response.json({ choices: [{ message: { content: answer } }] });
     },
   });
   saved = { baseUrl: process.env.SWARM_JUDGE_BASE_URL, apiKey: process.env.OPENCODE_API_KEY };
@@ -46,6 +57,7 @@ export function installJudgeStub(): void {
 
 /** Stop the stub and restore the environment. Call from `afterAll`. */
 export function removeJudgeStub(): void {
+  answer = STUB_JUDGE_ANSWER;
   server?.stop(true);
   server = null;
   if (saved.baseUrl === undefined) delete process.env.SWARM_JUDGE_BASE_URL;

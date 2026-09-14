@@ -28,7 +28,7 @@
 // LOUD-SKIP CONTRACT: swarm authorship depends on the opencode CLI + a
 // reachable model (external resources). When either is unavailable, this module
 // THROWS — it NEVER falls back to a templated body.
-import { STANCES } from "@robotmoney/contract";
+import { RECEIPT_CANONICAL_BUCKET_ORDER, STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
 import {
   assistantTextParts, cliStreamErrorFromStderr, describeTranscriptError, extractAssistantText, transcriptErrors,
@@ -109,6 +109,12 @@ export interface AuthorTakeOptions {
   // How many times to sample the model for a take that satisfies the section
   // contract below. See authorTake().
   structureAttempts?: number;
+  // TRUE for a `bucket_weights` subject: the prompt then demands a four-bucket
+  // WEIGHTS control line and `authorTake` refuses a take without one. The
+  // caller reads this off the session's own brief (`body.subject
+  // .recommendationType`) — never off an environment variable the harness
+  // supplies, which would let the harness decide what a member was asked.
+  requireWeights?: boolean;
 }
 
 // The three bold section headers `promptFor` demands, and the ONLY definition
@@ -125,6 +131,149 @@ export const TAKE_SECTION_LEAD_INS: readonly string[] = Object.freeze([
 // Pure and exported so the unit suite can pin it without a spawn.
 export function missingSectionLeadIns(body: string): readonly string[] {
   return TAKE_SECTION_LEAD_INS.filter((lead) => !body.includes(lead));
+}
+
+// ── THE ALLOCATION VECTOR (Project Fusion, AC-FMT-03/04) ────────────────────
+//
+// A `bucket_weights` subject asks the swarm for a NUMBER, not only prose, and
+// until this existed no analyst code path could state one: `AuthoredTake` was
+// {body, stance, confidence} and the prompt asked for three PROSE sections, so
+// `meanTakeWeights()` had nothing to average and every published receipt
+// omitted `weights` — legally, silently, and with every layer below behaving
+// correctly.
+//
+// THE CARRIER IS A CONTROL LINE, NOT AN EMBEDDED JSON BLOCK, and that was
+// decided by test rather than taste (see the RC2 evidence bundle's
+// D1-two-designs-weights-carrier). A fenced JSON block leaves the numbers in
+// `body`, and `body` travels inside the signed canonical bytes AND is copied
+// VERBATIM into the receipt's `judge.disagreements[].positions[].view`. The
+// receipt verifier can recompute `weights` from the embedded submissions; it
+// cannot recompute prose. So that design publishes the allocation twice in one
+// signed artifact with only one half checkable. A control line is STRIPPED from
+// the stored body exactly as `STANCE:` already is, so the vector exists exactly
+// once in the payload — in the field a stranger can reproduce.
+export const TAKE_WEIGHTS_LEAD_IN = "WEIGHTS:";
+
+// The four buckets, in the receipt's canonical order — DERIVED from the
+// contract constant, never re-declared, so the prompt, this parser and
+// `RECEIPT_CANONICAL_BUCKET_ORDER` can never drift into disagreeing about which
+// four vaults exist.
+export const TAKE_WEIGHT_BUCKETS: readonly string[] = Object.freeze([...RECEIPT_CANONICAL_BUCKET_ORDER]);
+
+/**
+ * Parse a trailing `WEIGHTS: <bucket>=<n> | …` line into the canonical
+ * four-bucket vector and return the body with that line stripped.
+ *
+ * Call it on the body `parseStanceFromBody()` already returned: the two control
+ * lines are the last two lines of the take, STANCE last, so each parser reads
+ * the line the previous one uncovered.
+ *
+ * THROWS on anything short of the exact four buckets — a missing line, a
+ * partial vector, an unknown bucket, a duplicate, a negative or non-finite
+ * share, or an all-zero vector. It NEVER fills a bucket in, defaults one to
+ * zero, or renormalizes: a fabricated allocation is a fabricated signed vote,
+ * which is the same rule `parseStanceFromBody` already applies to a fabricated
+ * stance. `authorTake()` turns the throw into a RE-SAMPLE, exactly as it does
+ * for a missing section, and an exhausted retry renders the member ABSENT.
+ *
+ * The values are carried RAW. Percentages (60/15/15/10) and fractions
+ * (0.6/0.15/0.15/0.1) are the same vector: the server's
+ * `normalizedTakeWeights()` divides by the total before averaging, so this
+ * function's only arithmetic obligation is to refuse a vector that cannot be
+ * normalized at all.
+ *
+ * THE UNIT IS A PROPERTY OF THE LINE, NOT OF EACH ENTRY. That is the one shape
+ * where "carried raw" stops being harmless: `agent_tokens=10% |
+ * conservative_defi_yield=0.85 | protocol_tokens=0.04 | real_world_assets=0.01`
+ * used to parse, because `%` was stripped and the value kept, and then
+ * normalized to 91.74 / 7.80 / 0.37 / 0.09 — an allocation nobody wrote,
+ * signed by the analyst and verifiable by the receipt, because the verifier
+ * recomputes the same mean from the same signed bytes. A line that mixes the
+ * two notations is REFUSED and re-sampled, which is this module's existing rule
+ * for anything it cannot read.
+ *
+ * AND IT TOLERATES THE DECORATION `STANCE:` ALREADY TOLERATES. `parseStanceFromBody`
+ * matches its control line anywhere in the last line; anchoring this one at the
+ * start of the line made markdown the stance parser shrugs off — `**WEIGHTS:**
+ * …`, a leading `- `, comma separators, a trailing period — fatal, and the cost
+ * of that asymmetry is a re-sample and then an ABSENT member, i.e. a session
+ * dropping below quorum over a formatting quirk. The COLON is still required,
+ * so a sentence merely containing the word stays a missing line rather than an
+ * unparseable one.
+ */
+export function parseWeightsFromBody(body: string): { weights: TakeWeight[]; body: string } {
+  const lines = body.trim().split("\n");
+  const last = lines[lines.length - 1] ?? "";
+  // Anywhere in the line, through optional `**` bold and after any bullet, but
+  // the colon is mandatory — see the header. The payload is everything after it.
+  const m = last.match(/WEIGHTS\s*\**\s*:\s*\**\s*(.+?)\s*$/i);
+  if (!m) {
+    throw new Error(
+      `model take is missing its trailing "${TAKE_WEIGHTS_LEAD_IN} ` +
+        `${TAKE_WEIGHT_BUCKETS.map((b) => `${b}=<0-1>`).join(" | ")}" line, which a bucket_weights subject requires — ` +
+        `the take is re-sampled and, failing that, the member is rendered ABSENT; no allocation is ever synthesized. ` +
+        `Last line of the take was: ${JSON.stringify(last.slice(0, 200))}`,
+    );
+  }
+  const byBucket = new Map<string, number>();
+  // `|`, `,` and `;` all separate entries. A comma cannot be ambiguous here:
+  // every value is a bare decimal with a `.` radix point, so nothing an entry
+  // can legally contain is a comma.
+  const percentOf: boolean[] = [];
+  for (const part of m[1].split(/[|,;]/)) {
+    const kv = part.trim().match(/^\**\s*([A-Za-z_]+)\s*\**\s*[=:]\s*\**\s*([0-9]*\.?[0-9]+)\s*(%?)\s*\**\s*\.?$/);
+    if (!kv) {
+      throw new Error(
+        `model take's ${TAKE_WEIGHTS_LEAD_IN} line carries the unparseable entry ${JSON.stringify(part.trim().slice(0, 80))} — ` +
+          `each entry must read <bucket>=<number>. The take is re-sampled, never patched.`,
+      );
+    }
+    const bucket = kv[1].toLowerCase();
+    if (byBucket.has(bucket)) {
+      throw new Error(`model take's ${TAKE_WEIGHTS_LEAD_IN} line names bucket '${bucket}' twice — the take is re-sampled, never de-duplicated.`);
+    }
+    const weight = Number(kv[2]);
+    if (!Number.isFinite(weight) || weight < 0) {
+      throw new Error(`model take's ${TAKE_WEIGHTS_LEAD_IN} line gives bucket '${bucket}' the share ${JSON.stringify(kv[2])}, which is not a finite non-negative number.`);
+    }
+    byBucket.set(bucket, weight);
+    percentOf.push(kv[3] === "%");
+  }
+  // ONE NOTATION PER LINE. A mixture means the line does not state a single
+  // vector at all, and stripping the `%` would silently turn it into a
+  // different, plausible-looking one (see the header).
+  if (percentOf.some(Boolean) && percentOf.some((p) => !p)) {
+    throw new Error(
+      `model take's ${TAKE_WEIGHTS_LEAD_IN} line MIXES percentages and fractions — ` +
+        `${percentOf.filter(Boolean).length} of ${percentOf.length} entries carry '%'. ` +
+        `The two notations mean different things for the same digits, so the line is re-sampled rather than read as one or the other; ` +
+        `write all four entries in the same notation.`,
+    );
+  }
+  const missing = TAKE_WEIGHT_BUCKETS.filter((bucket) => !byBucket.has(bucket));
+  const extra = [...byBucket.keys()].filter((bucket) => !TAKE_WEIGHT_BUCKETS.includes(bucket));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      `model take's ${TAKE_WEIGHTS_LEAD_IN} line is not the four canonical buckets ` +
+        `{${TAKE_WEIGHT_BUCKETS.join(", ")}}` +
+        `${missing.length ? ` — missing ${missing.join(", ")}` : ""}` +
+        `${extra.length ? ` — unsupported ${extra.join(", ")}` : ""}. ` +
+        `Schema 1.0's receipt can carry only those four, so a partial vector is re-sampled rather than padded with zeros.`,
+    );
+  }
+  const total = TAKE_WEIGHT_BUCKETS.reduce((sum, bucket) => sum + byBucket.get(bucket)!, 0);
+  if (!(total > 0) || !Number.isFinite(total)) {
+    throw new Error(
+      `model take's ${TAKE_WEIGHTS_LEAD_IN} line allocates nothing (the four shares total ${total}) — ` +
+        `a vector that cannot be normalized is not an allocation, and the take is re-sampled.`,
+    );
+  }
+  return {
+    // EMITTED IN CANONICAL ORDER whatever order the model wrote them in, so two
+    // members who agree on the allocation sign byte-identical vectors.
+    weights: TAKE_WEIGHT_BUCKETS.map((bucket) => ({ bucket, weight: byBucket.get(bucket)! })),
+    body: lines.slice(0, -1).join("\n").trim(),
+  };
 }
 
 // A model that drops a section is not a broken model, it is an unlucky sample:
@@ -154,6 +303,17 @@ export interface ParsedTake {
   confidence: number;
   // Body with the trailing STANCE/CONFIDENCE control line removed.
   body: string;
+  // The analyst's own four-bucket allocation, present only for a
+  // `bucket_weights` subject (see TAKE_WEIGHTS_LEAD_IN). Raw as the model
+  // stated it — the SERVER normalizes and averages; nothing here authors,
+  // rescales or settles a weight.
+  weights?: TakeWeight[];
+}
+
+/** One bucket's share as an analyst stated it. */
+export interface TakeWeight {
+  bucket: string;
+  weight: number;
 }
 
 // Parse a trailing "STANCE: <...> | CONFIDENCE: <0-1>" line from a model take
@@ -231,8 +391,30 @@ function pct(fraction: number | null | undefined, fallback: number): string {
 // Build the full single-message prompt for opencode `run`. opencode `run` takes
 // one positional prompt (no separate system message), so the persona framing,
 // session brief, and formatting task are woven into one string.
-export function promptFor(p: Persona, regime: RegimeContext, subjectId: string): string {
+export function promptFor(
+  p: Persona,
+  regime: RegimeContext,
+  subjectId: string,
+  options: { requireWeights?: boolean } = {},
+): string {
   const comp = regime.composite;
+  // The allocation ask, and the ONLY place the WEIGHTS line's shape is written
+  // for the model. A `position_actions` subject is asked for nothing numeric —
+  // it was never asked for a bucket vector, and inventing one would put an
+  // unrequested allocation inside that session's signed bytes.
+  const weightLines = options.requireWeights
+    ? [
+        `${TAKE_WEIGHTS_LEAD_IN} ${TAKE_WEIGHT_BUCKETS.map((b) => `${b}=<0-1>`).join(" | ")}`,
+        `STANCE: <${STANCE_VALUES.join("|")}> | CONFIDENCE: <0-1>`,
+      ]
+    : [`STANCE: <${STANCE_VALUES.join("|")}> | CONFIDENCE: <0-1>`];
+  const weightsBrief = options.requireWeights
+    ? [
+        ``,
+        `# Your allocation`,
+        `This session asks for a NUMBER as well as a view. State your own target split across ALL FOUR Robot Money vault buckets — ${TAKE_WEIGHT_BUCKETS.join(", ")} — as your ${TAKE_WEIGHTS_LEAD_IN} line below. Every bucket must appear exactly once, shares are non-negative, and they must not all be zero; write the split you would actually run, not the 95/5/0/0 target restated. Do not put these numbers anywhere else in the take.`,
+      ]
+    : [];
   return [
     `You are ${p.name}, an autonomous voice on the Robot Money Investment Swarm.`,
     `You read every session through a ${p.lens} lens — that lens, not the headline composite, sets your conviction.`,
@@ -265,8 +447,10 @@ export function promptFor(p: Persona, regime: RegimeContext, subjectId: string):
     `- The specific concentration or mechanism risk you underwrite`,
     `- The first move you would make, with a trigger`,
     ``,
-    `Stay in your voice. Conclude with one line exactly, and nothing after it:`,
-    `STANCE: <${STANCE_VALUES.join("|")}> | CONFIDENCE: <0-1>`,
+    ...weightsBrief,
+    ``,
+    `Stay in your voice. Conclude with ${weightLines.length === 1 ? "one line" : `these ${weightLines.length} lines, in this order`} exactly, and nothing after ${weightLines.length === 1 ? "it" : "them"}:`,
+    ...weightLines,
   ].join("\n");
 }
 
@@ -652,22 +836,48 @@ export async function authorTake(
   options: AuthorTakeOptions = {},
 ): Promise<AuthoredTake> {
   const attempts = Math.max(1, options.structureAttempts ?? DEFAULT_STRUCTURE_ATTEMPTS);
-  const prompt = promptFor(p, regime, subjectId);
-  let missing: readonly string[] = [];
+  const prompt = promptFor(p, regime, subjectId, { requireWeights: options.requireWeights });
+  let shortfall = "";
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const authored = await runOpencode(prompt, options);
     const parsed = parseStanceFromBody(authored.text);
-    missing = missingSectionLeadIns(parsed.body);
-    if (missing.length === 0) return { ...parsed, model: authored.model };
+    // THE ALLOCATION IS PART OF THE STRUCTURE CONTRACT, and is read FIRST —
+    // `parseStanceFromBody` uncovered the WEIGHTS line by stripping the STANCE
+    // line, and `missingSectionLeadIns` must run against the body the member
+    // will actually STORE, i.e. with the WEIGHTS line already removed.
+    //
+    // A malformed vector RE-SAMPLES rather than throwing on the first attempt,
+    // which is the `missingSectionLeadIns` rule and deliberately not the
+    // `parseStanceFromBody` one: a dropped section and a dropped control line
+    // are both unlucky samples, while a stance OUTSIDE the vocabulary is a model
+    // saying something else entirely. Nothing is ever patched into compliance.
+    let body = parsed.body;
+    let weights: TakeWeight[] | undefined;
+    if (options.requireWeights) {
+      try {
+        const withWeights = parseWeightsFromBody(parsed.body);
+        weights = withWeights.weights;
+        body = withWeights.body;
+      } catch (err) {
+        shortfall = err instanceof Error ? err.message : String(err);
+        console.warn(`[inference] ${p.memberId}: take attempt ${attempt}/${attempts} — ${shortfall} — re-sampling`);
+        continue;
+      }
+    }
+    const missing = missingSectionLeadIns(body);
+    if (missing.length === 0) {
+      return { ...parsed, body, ...(weights ? { weights } : {}), model: authored.model };
+    }
+    shortfall = `omitted the ${missing.join(", ")} section${missing.length === 1 ? "" : "s"}`;
     console.warn(
       `[inference] ${p.memberId}: take attempt ${attempt}/${attempts} omitted ${missing.join(", ")} — re-sampling`,
     );
   }
 
   throw new Error(
-    `model take for ${p.memberId} omitted the ${missing.join(", ")} section${missing.length === 1 ? "" : "s"} ` +
-      `on all ${attempts} attempt${attempts === 1 ? "" : "s"} — the member is rendered ABSENT, never patched ` +
-      `into compliance with a synthesized section.`,
+    `model take for ${p.memberId} failed the structure contract on all ${attempts} attempt${attempts === 1 ? "" : "s"} ` +
+      `(${shortfall}) — the member is rendered ABSENT, never patched into compliance with a synthesized section ` +
+      `or a synthesized allocation.`,
   );
 }

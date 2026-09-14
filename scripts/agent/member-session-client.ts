@@ -280,12 +280,26 @@ async function participate(): Promise<void> {
 
   // Read context over REST — this member's OWN fetch, not the harness's.
   const regime = (await restJson<{ latest?: any }>(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).body?.latest ?? {};
-  // Result unused (this member reasons from the regime read above); this is a
-  // liveness check. No brief yet is a legitimate 404 (issue #868), not a
-  // reason to abort the session.
-  await restJson(`${ROUTES.swarm.brief}?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subjectId)}`, undefined, {
-    allowStatuses: [404],
-  });
+  // THE BRIEF IS READ, NOT MERELY PINGED. It used to be a bare liveness check
+  // with its result discarded — and that is how a `bucket_weights` session
+  // could ask every analyst for an allocation and have none of them notice:
+  // WHICH KIND of recommendation this session wants is stated on the brief
+  // (`body.subject.recommendationType`, and `body.takeSchema.weights`), and
+  // nothing in this client ever looked.
+  //
+  // BY SESSION, not by date+subject. `?session=` is the unambiguous handle
+  // (migration 0028: a brief is keyed on its session), so a subject that
+  // convened twice today cannot hand this member the other session's ask.
+  // No brief yet is still a legitimate 404 (issue #868) and not a reason to
+  // abort — the member then authors prose only, and the SERVER refuses to
+  // publish a weightless receipt for a bucket_weights session rather than
+  // letting this client guess.
+  const brief = await restJson<{ body?: { subject?: { recommendationType?: string | null } | null } | null }>(
+    `${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`,
+    undefined,
+    { allowStatuses: [404] },
+  );
+  const requireWeights = brief.body?.body?.subject?.recommendationType === "bucket_weights";
   const composite = Number(regime?.composite ?? 0.5);
   const regimeCtx: RegimeContext = {
     composite,
@@ -319,6 +333,7 @@ async function participate(): Promise<void> {
     {
       telemetry: (event) => out("RM_TELEMETRY", event),
       diagnosticArtifactPath: process.env.RM_DIAGNOSTIC_ARTIFACT,
+      requireWeights,
     },
   );
   const provenanceText = provenance.length ? `\n\n_Provenance: ${provenance.join("; ")}_` : "";
@@ -343,6 +358,13 @@ async function participate(): Promise<void> {
     confidence: authored.confidence,
     body,
     memoUrl,
+    // INSIDE THE SIGNED BYTES, and only when the session asked. The draft goes
+    // to POST /api/swarm/signing-payload, whose canonicalizer
+    // (`canonicalizeSubmission`) already places `weights` after `memoUrl`, so
+    // the vector this member states is covered by this member's own signature
+    // and is reproducible by anyone holding the receipt. The client still never
+    // builds canonical bytes locally — the server response is the authority.
+    ...(authored.weights ? { weights: authored.weights } : {}),
   };
   const canonical = await fetchSigningPayload(draft);
   let signature: string;

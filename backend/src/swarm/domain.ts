@@ -1,7 +1,7 @@
 // Swarm domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { canonicalizeApplication, classifyRegime, SWARM_ROSTER_CAP, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import { canonicalizeApplication, classifyRegime, RECEIPT_CANONICAL_BUCKET_ORDER, SWARM_ROSTER_CAP, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { config, resolveSwarmNotificationEmailFrom } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -1629,6 +1629,10 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
   const subject = await getSubject(s.subject_id);
+  // The ONE read of the subject's recommendation type on this path — the same
+  // value `aggregateSession()` normalizes, so the ask published to the swarm and
+  // the derivation applied to its answers come from one column.
+  const recommendationType = subject?.recommendationType === "bucket_weights" ? "bucket_weights" : "position_actions";
   const closes = new Date(Date.now() + windowMinutes * 60_000);
   const windowClosesAt = closes.toISOString();
   const body = {
@@ -1645,11 +1649,21 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
       stance: { type: "string", enum: [...STANCES] },
       confidence: { type: "number", minimum: 0, maximum: 1 },
       body: { type: "string" },
+      // WHAT THIS SESSION ACTUALLY ASKS FOR. `optional` used to be an
+      // unconditional `true`, which said — truthfully, and uselessly — that the
+      // API accepts a take with no vector. It never said that a
+      // `bucket_weights` subject NEEDS one, so the brief an analyst reasons
+      // from could not distinguish "an allocation is wanted" from "prose is
+      // wanted", and v0.5.0-rc.1 published `bucket_weights` receipts carrying
+      // no allocation at all. `buckets` is the canonical four, from the
+      // contract, so the brief and the receipt schema can never disagree about
+      // which vaults exist.
       weights: {
         type: "array",
-        optional: true,
+        optional: recommendationType !== "bucket_weights",
+        buckets: [...RECEIPT_CANONICAL_BUCKET_ORDER],
         items: {
-          bucket: { type: "string" },
+          bucket: { type: "string", enum: [...RECEIPT_CANONICAL_BUCKET_ORDER] },
           weight: { type: "number", minimum: 0 },
         },
       },
