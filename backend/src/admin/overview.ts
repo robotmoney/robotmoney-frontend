@@ -8,6 +8,11 @@
 import { sql } from "../db/client.ts";
 import { computeRegimeSnapshotStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
 import { loadRosterSeedManifest } from "../projects/seed/roster-seed.ts";
+import {
+  describeMissingReceipt,
+  detectMissingReceiptSessions,
+  type MissingReceiptReport,
+} from "../swarm/receipt-gap.ts";
 
 // Research signals are considered stale after this many UTC calendar days
 // without a new row — named per docs/architecture.md US-A2 ("Use a
@@ -112,6 +117,17 @@ export interface AdminOverview {
   enabledAnalyticsSchedules: Array<{ id: number; kind: string; cron: string; nextRunAt: string | null }>;
   nextSwarmEvent: { jobId: number; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
   rosterSeed: RosterSeedHealth;
+  /**
+   * AC-FE-10. Published sessions that lost a consensus receipt they could have
+   * had — the one question `JUDGE_KIND` above cannot answer, because it is a
+   * question about SESSIONS and that alert is about the LANE. Eligibility is
+   * judged against the mode and threshold that applied to each session rather
+   * than against today's config, so an unrelated config change cannot retract
+   * it. See swarm/receipt-gap.ts for the staging episode that made the
+   * difference concrete, and for what `off`/`shadow` deliberately do not
+   * report.
+   */
+  missingReceipts: MissingReceiptReport;
   alerts: Alert[];
 }
 
@@ -322,6 +338,57 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     });
   }
 
+  // ── Missing consensus receipts (AC-FE-10) ──────────────────────────────
+  // ONE ALERT PER SESSION, not one per kind. The lane alert above clears the
+  // moment the next session judges successfully; this one persists for as long
+  // as the artifact is actually missing, because it is derived from the missing
+  // artifact rather than from the last run's status. That is the whole
+  // difference between "the judge was unwell for a while" and "this session
+  // lost its receipt".
+  //
+  // NEVER FATAL TO THE PROJECTION. The overview is the page an operator opens
+  // when something is already wrong; a failure in this one query must not take
+  // the other nine panels with it, so it is reported as its own alert.
+  let missingReceipts: MissingReceiptReport = {
+    judgeMode: "unknown", minTakes: 0, lookbackDays: 0, sessions: [], count: 0,
+  };
+  try {
+    missingReceipts = await detectMissingReceiptSessions();
+    for (const session of missingReceipts.sessions) {
+      alerts.push({
+        level: "failed",
+        source: `swarm.consensus_receipt:${session.sessionId}`,
+        message: describeMissingReceipt(session),
+      });
+    }
+    // The individually-named list is capped; say so rather than under-reporting.
+    if (missingReceipts.count > missingReceipts.sessions.length) {
+      alerts.push({
+        level: "failed",
+        source: "swarm.consensus_receipt",
+        message:
+          `${missingReceipts.count} published session(s) in the last ${missingReceipts.lookbackDays} day(s) were eligible ` +
+          `for a consensus receipt and have none; the ${missingReceipts.sessions.length} most recent are listed individually`,
+      });
+    } else if (missingReceipts.judgeMode === "enforce" && missingReceipts.count === 0) {
+      // ONLY IN `enforce`. In `off` and in `shadow` a receipt is unreachable by
+      // construction (`shadow` withholds the judgement from the session), so
+      // "every eligible session has a consensus receipt" would be a healthy
+      // line about a thing that cannot happen.
+      alerts.push({
+        level: "healthy",
+        source: "swarm.consensus_receipt",
+        message: `every eligible session published in the last ${missingReceipts.lookbackDays} day(s) has a consensus receipt`,
+      });
+    }
+  } catch (e) {
+    alerts.push({
+      level: "failed",
+      source: "swarm.consensus_receipt",
+      message: `missing-receipt detection failed: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+
   return {
     serverDate,
     queueCounts,
@@ -331,6 +398,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     enabledAnalyticsSchedules,
     nextSwarmEvent,
     rosterSeed,
+    missingReceipts,
     alerts,
   };
 }

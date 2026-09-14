@@ -1,6 +1,7 @@
 import * as ic from "../../swarm/domain.ts";
 import * as admin from "../../swarm/admin.ts";
 import { deliverSwarmNotification } from "../../swarm/notifications.ts";
+import { judgeLaneFailureFor } from "../../swarm/receipt-gap.ts";
 
 export async function openSession(payload: Record<string, unknown>): Promise<unknown> {
   // `payload.date` is deliberately IGNORED (and no longer defaulted from this
@@ -197,10 +198,15 @@ function translateBenignSkip(
  * - `judgement_stale`      an amendment landed between judging and publishing
  *
  * EVERY OTHER reason is an assembly failure — `no_takes`, `schema_invalid`,
- * `semantics_invalid`, `canonicalization_failed`, the `weights_*` family,
+ * `semantics_invalid`, `canonicalization_failed`, the `weights_*` family
+ * (including `weights_absent_for_bucket_weights_subject`, the refusal that
+ * makes an allocation session publishing no allocation a LOUD failure rather
+ * than a clean, silent, verifiable nothing, and
+ * `weights_not_authored_by_every_take`, which does the same for a receipt that
+ * would claim more analyst support for its allocation than it has),
  * `signing_key_unresolved`, `nonce_replayed` — and must degrade the run. An
- * ALLOWLIST rather than a failure list on purpose: a reason added later degrades
- * loudly instead of being silently absorbed into a successful publish.
+ * ALLOWLIST rather than a failure list on purpose: a reason added later
+ * degrades loudly instead of being silently absorbed into a successful publish.
  */
 const EXPECTED_RECEIPT_REFUSALS = new Set([
   "not_judged", "judgement_not_adopted", "session_not_reaggregated", "judgement_stale",
@@ -213,7 +219,30 @@ export async function publishSession(payload: Record<string, unknown>): Promise<
   if (receipt.ok) return { ...published, consensusReceipt: { published: true } };
   // admin.publishConsensusReceiptAdmin puts the refusal's REASON CODE in `error`.
   const consensusReceipt = { published: false, reason: receipt.error };
-  if (EXPECTED_RECEIPT_REFUSALS.has(receipt.error)) return { ...published, consensusReceipt };
+  if (EXPECTED_RECEIPT_REFUSALS.has(receipt.error)) {
+    // `not_judged` IS TWO CONDITIONS WEARING ONE REASON CODE, and the allowlist
+    // above can only be right about one of them (AC-FE-10, 1.13 N5).
+    //
+    //   * "the judge is off, which is the production default" — benign, the
+    //     reason this entry exists, and it must leave the run successful.
+    //   * "the judge was ON, was asked, exhausted its retries on THIS session,
+    //     and never answered" — an eligible session losing its receipt, which
+    //     is precisely what the criterion forbids passing in silence.
+    //
+    // The second one is already recorded, in this session's own `swarm.judge`
+    // job: `worker/loop.ts` settles an exhausted degrade `succeeded`, so the
+    // status says nothing, but `last_error` survives. No new state is needed to
+    // tell them apart — only the question.
+    const judgeFailure = receipt.error === "not_judged" ? await judgeLaneFailureFor(sessionId) : null;
+    if (!judgeFailure) return { ...published, consensusReceipt };
+    return {
+      ...published,
+      consensusReceipt: { ...consensusReceipt, judgeLastError: judgeFailure },
+      ok: false,
+      error: `consensus receipt refused: not_judged, and this session's own swarm.judge job recorded ${JSON.stringify(judgeFailure)} — ` +
+        "the judge was asked and never answered, so this is an eligible session losing its receipt, not the shipped `off` default",
+    };
+  }
   // The `{ok:false}` shape loop.ts's isDegradedResult() looks for. Without it a
   // broken receipt path reported a SUCCEEDED run carrying a quiet `published:
   // false`, so the release's headline feature could stop producing receipts in
