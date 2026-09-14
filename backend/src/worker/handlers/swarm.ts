@@ -212,6 +212,35 @@ const EXPECTED_RECEIPT_REFUSALS = new Set([
   "not_judged", "judgement_not_adopted", "session_not_reaggregated", "judgement_stale",
 ]);
 
+/**
+ * LOUD, AND ONCE (T21). Two of the `weights_*` refusals are facts about a take
+ * set that is already FROZEN by assembly time, so no backoff can change the
+ * answer:
+ *
+ * - `weights_absent_for_bucket_weights_subject` — no contributing take carried
+ *   a weight vector, so the rollup has none;
+ * - `weights_not_authored_by_every_take` — the allocation was written by fewer
+ *   analysts than the receipt attests to.
+ *
+ * Both are repaired by RE-RUNNING THE SESSION against analysts that author a
+ * WEIGHTS line, which is an operator action on new takes, never a retry of this
+ * job. Left as ordinary degrades they produced five identical red rows and
+ * ~30 s of pointless backoff for one permanent condition — precisely the
+ * "queue of red for a control working as designed" this file's benign-skip seam
+ * exists to prevent, and the same test it applies: CAN A RETRY CHANGE THE
+ * ANSWER. These stay `{ok:false}` — they are loud failures, not skips — and add
+ * `terminal:true`, which `worker/loop.ts` settles as FAILED on the first
+ * attempt.
+ *
+ * Every OTHER assembly refusal keeps its retries: `signing_key_unresolved` and
+ * `nonce_replayed` are about the environment, not the takes, and a retry really
+ * can change those answers.
+ */
+const TERMINAL_RECEIPT_REFUSALS = new Set([
+  "weights_absent_for_bucket_weights_subject",
+  "weights_not_authored_by_every_take",
+]);
+
 export async function publishSession(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
   const published = await ic.publishSession(sessionId);
@@ -246,9 +275,25 @@ export async function publishSession(payload: Record<string, unknown>): Promise<
   // The `{ok:false}` shape loop.ts's isDegradedResult() looks for. Without it a
   // broken receipt path reported a SUCCEEDED run carrying a quiet `published:
   // false`, so the release's headline feature could stop producing receipts in
-  // production with no degraded run and nothing to alert on. Retrying is safe:
-  // ic.publishSession is an idempotent UPDATE.
-  return { ...published, consensusReceipt, ok: false, error: `consensus receipt refused: ${receipt.error}` };
+  // production with no degraded run and nothing to alert on.
+  //
+  // RETRYING IS SAFE, AND FOR TWO REFUSALS IT IS ALSO POINTLESS.
+  // `ic.publishSession` is state-guarded and stamps `published_at` once (T21),
+  // so a redelivery of this job neither re-publishes nor moves the recorded
+  // publication instant. What a retry cannot do is change a refusal that is a
+  // fact about a frozen take set — see TERMINAL_RECEIPT_REFUSALS, which settles
+  // those on the first attempt instead of five times.
+  const terminal = TERMINAL_RECEIPT_REFUSALS.has(receipt.error);
+  return {
+    ...published,
+    consensusReceipt,
+    ok: false,
+    ...(terminal ? { terminal: true } : {}),
+    error: `consensus receipt refused: ${receipt.error}` +
+      (terminal
+        ? " — the session's takes are frozen, so no retry can change this; re-run the session against analysts that author a WEIGHTS control line"
+        : ""),
+  };
 }
 
 export async function sendApplicationReceivedNotification(payload: Record<string, unknown>): Promise<unknown> {

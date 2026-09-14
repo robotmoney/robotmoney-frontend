@@ -12,9 +12,12 @@
 //     lane alert fired;
 //   * session 157777c9 (3 verified takes, eligible) reached `aggregated` with
 //     no judgement;
-//   * `worker/loop.ts` settles a job `succeeded` once its retries are
+//   * `worker/loop.ts` settled a job `succeeded` once its retries were
 //     exhausted, so the session's judge job ended SUCCEEDED carrying
-//     last_error `judge_unavailable`;
+//     last_error `judge_unavailable` (R16 has since made an exhausted degrade
+//     settle `failed`; `last_error` is still the fact this module reads,
+//     because it is the one that is true on BOTH sides of that change and on
+//     every database written before it);
 //   * `publishConsensusReceiptAdmin` then refused with `not_judged`, which is
 //     the FIRST entry in EXPECTED_RECEIPT_REFUSALS (because the shipped `off`
 //     default must not paint every publish red), so the publish job also ended
@@ -37,6 +40,42 @@
 // refusal site, and its own resolution path — three more places to be wrong
 // about the same fact.
 import { sql as defaultSql, type DbHandle } from "../db/client.ts";
+
+/**
+ * THIS SESSION'S `swarm.judge` JOB — one definition, three consumers.
+ *
+ * A judge job reaches the queue by two paths that write DIFFERENT COLUMNS:
+ *
+ *   * `createSessionAdmin` (swarm/admin.ts) INSERTs with
+ *     `scope_type='swarm_session'` + `scope_id`;
+ *   * the DRIVER — `scripts/lib/swarm/session.ts` → `POST
+ *     /api/swarm/admin/enqueue-job` — INSERTs `(kind, payload, dedupe_key)`
+ *     and nothing else, so the only link to the session is
+ *     `payload->>'sessionId'`.
+ *
+ * Matching on the admin columns alone therefore matched ZERO rows on the shape
+ * production writes, and it did so in three places at once: this module's
+ * report, `judgeLaneFailureFor()`, and — through it —
+ * `worker/handlers/swarm.ts`'s publish degrade, which has no second clause at
+ * all and so recorded a session that lost its receipt to a judge outage as a
+ * clean SUCCESS. The writer has since been closed too (`enqueue-job` now sets
+ * the scope columns from `payload.sessionId`), but the predicate stays
+ * two-clause on purpose: every job row enqueued before that fix is still on
+ * file, and an alert about a permanent loss may not depend on when the row was
+ * written.
+ *
+ * `sessionId` is a fragment rather than a value so the same definition serves
+ * both a parameterised lookup (`${id}`) and a correlated lateral join
+ * (`s.id::text`). One function, one rule, no second copy to drift.
+ */
+export function judgeJobFor(db: DbHandle, sessionId: unknown) {
+  return db`
+    SELECT status, attempts, last_error FROM jobs
+     WHERE kind = 'swarm.judge'
+       AND ((scope_type = 'swarm_session' AND scope_id = ${sessionId as never})
+            OR (payload->>'sessionId') = ${sessionId as never})
+     ORDER BY id DESC LIMIT 1`;
+}
 
 /**
  * How far back to look. A published session that has been receiptless for a
@@ -73,8 +112,9 @@ export interface MissingReceiptSession {
   /**
    * The session's OWN `swarm.judge` job outcome, which is how "the judge is
    * off, as configured" is told apart from "the judge was on, was asked N
-   * times, and never answered". `worker/loop.ts` settles an exhausted degrade
-   * `succeeded`, so the status alone cannot say it — `last_error` can.
+   * times, and never answered". A retry-exhausted degrade settles `failed`
+   * since R16 and settled `succeeded` before it, so the status alone cannot say
+   * it on every database — `last_error` can.
    */
   judgeJobStatus: string | null;
   judgeJobAttempts: number | null;
@@ -126,8 +166,9 @@ export interface MissingReceiptReport {
  *      answered — that is the 1.13 N5 loss exactly, and it has no judgement
  *      row to carry a threshold. It is named whatever the take count is
  *      against today's `min_takes`, so raising the threshold cannot retract
- *      it. `worker/loop.ts` settles an exhausted degrade `succeeded`, so the
- *      job STATUS says nothing and `last_error` is the fact that survives.
+ *      it. A retry-exhausted degrade settles `failed` since R16 and settled
+ *      `succeeded` before it, so the job STATUS is not a fact that holds across
+ *      databases and `last_error` is the one that does.
  *   3. TODAY'S CONFIG MAY ONLY VOUCH FOR A SESSION IT PREDATES. When
  *      `swarm_judge_config.updated_at` is LATER than the session's
  *      `published_at`, the mode on file is not the mode that applied, and it
@@ -171,7 +212,7 @@ export async function detectMissingReceiptSessions(
 
   const since = new Date(now.getTime() - lookbackDays * 86_400_000);
   const rows = (await db`
-    WITH cfg AS (SELECT mode, min_takes, updated_at FROM swarm_judge_config WHERE id = 1),
+    WITH cfg AS (SELECT mode, min_takes, policy_updated_at FROM swarm_judge_config WHERE id = 1),
     candidate AS (
       SELECT s.id, s.subject_id, s.published_at, t.take_count,
              j.status AS judge_status, j.attempts AS judge_attempts, j.last_error AS judge_last_error,
@@ -180,11 +221,17 @@ export async function detectMissingReceiptSessions(
              -- The session carries its OWN record of what applied to it.
              (g.mode IS NOT NULL) AS was_judged,
              -- Durable, per-session evidence that the judge was asked and never
-             -- answered. worker/loop.ts settles an exhausted degrade succeeded,
-             -- so the STATUS says nothing and last_error is what survives.
+             -- answered. An exhausted degrade settles failed since R16 and
+             -- settled succeeded before it, so the STATUS is not a fact this
+             -- alert can rest on across databases — last_error is.
              (j.last_error IS NOT NULL AND btrim(j.last_error) <> '') AS judge_failed,
-             -- Today's config may only speak for a session it predates.
-             (COALESCE(c.updated_at, to_timestamp(0)) <= s.published_at) AS config_predates
+             -- Today's config may only speak for a session it predates, and
+             -- "today's config" means the POLICY — mode and min_takes.
+             -- updated_at moves on every patch, so reading it here let a
+             -- model rotation retract an alert about a permanent loss;
+             -- policy_updated_at (migration 0057) moves only when one of the
+             -- two columns this predicate is about actually changed value.
+             (COALESCE(c.policy_updated_at, to_timestamp(0)) <= s.published_at) AS config_predates
         FROM swarm_sessions s
         CROSS JOIN cfg c
         JOIN LATERAL (
@@ -192,11 +239,7 @@ export async function detectMissingReceiptSessions(
             FROM swarm_recommendations r
            WHERE r.session_id = s.id AND r.verified
         ) t ON true
-        LEFT JOIN LATERAL (
-          SELECT status, attempts, last_error FROM jobs
-           WHERE kind = 'swarm.judge' AND scope_type = 'swarm_session' AND scope_id = s.id::text
-           ORDER BY id DESC LIMIT 1
-        ) j ON true
+        LEFT JOIN LATERAL (${judgeJobFor(db, db`s.id::text`)}) j ON true
         -- THE SESSION'S OWN RECORD OF WHAT APPLIED TO IT. An enforce row is
         -- preferred over a later shadow one: enforce is the mode under which a
         -- receipt was reachable, and a session judged both ways (shadow soak,
@@ -213,18 +256,24 @@ export async function detectMissingReceiptSessions(
          -- control and is never reported.
          AND t.take_count >= 1
          AND NOT EXISTS (SELECT 1 FROM swarm_consensus_receipts rc WHERE rc.session_id = s.id)
+    ),
+    -- (1) THE MODE AND THRESHOLD THAT APPLIED made a receipt reachable and this
+    --     session met it. Off a judgement row those are the session's own
+    --     recorded values and no later patch can move them; without one the
+    --     live config decides, and only for a session it predates.
+    --
+    -- COMPUTED ONCE. This predicate is both a filter and the reported
+    -- trigger, and it used to be written out twice in one statement — two
+    -- copies that had to stay identical for the alert to say which clause was
+    -- speaking. One CTE column, read by both.
+    scored AS (
+      SELECT *,
+             (mode_applied = 'enforce' AND take_count >= min_takes_applied
+              AND (was_judged OR config_predates)) AS elig_takes
+        FROM candidate
     )
-    SELECT *,
-           (mode_applied = 'enforce' AND take_count >= min_takes_applied
-            AND (was_judged OR config_predates)) AS elig_takes
-      FROM candidate
-     WHERE
-       -- (1) THE MODE AND THRESHOLD THAT APPLIED made a receipt reachable and
-       --     this session met it. Off a judgement row those are the session's
-       --     own recorded values and no later patch can move them; without one
-       --     the live config decides, and only for a session it predates.
-       (mode_applied = 'enforce' AND take_count >= min_takes_applied
-        AND (was_judged OR config_predates))
+    SELECT * FROM scored
+     WHERE elig_takes
        -- (2) OR its own judge job recorded a failure — evidence in its own
        --     right, independent of any threshold. Silenced only by a mode
        --     entitled to speak for this session, i.e. one already in force when
@@ -270,11 +319,16 @@ export async function detectMissingReceiptSessions(
  * from "the judge was never asked".
  */
 export function describeMissingReceipt(s: MissingReceiptSession): string {
+  // THE THIRD BRANCH IS A CLAIM ABOUT THE QUEUE, and for the whole of rc.2 it
+  // was false: the lookup matched only the admin-shaped job columns, so every
+  // DRIVER-enqueued job — the shape production writes — read as "no job on
+  // file" while the row sat in `jobs` with its `last_error` recorded. It now
+  // says only what this report can actually see.
   const judged = s.judgeLastError
     ? `its swarm.judge job ended ${s.judgeJobStatus ?? "?"} after ${s.judgeJobAttempts ?? "?"} attempt(s) with last_error ${JSON.stringify(s.judgeLastError)}`
     : s.judgeJobStatus
       ? `its swarm.judge job ended ${s.judgeJobStatus} with no recorded error`
-      : "it has no swarm.judge job on file";
+      : "no swarm.judge job for this session was found in the queue";
   return `session ${s.sessionId} (${s.subjectId}) published ${s.publishedAt} with ${s.takeCount} verified take(s) ` +
     `(judge ${s.judgeModeApplied}, min_takes ${s.minTakesApplied} as applied to this session) and NO consensus receipt — ${judged}`;
 }
@@ -285,19 +339,18 @@ export function describeMissingReceipt(s: MissingReceiptSession): string {
  * judge lane exhausted its retries on this session`.
  *
  * Returns the recorded `last_error`, or null when the judge was never asked (no
- * job), was asked and succeeded, or is still to run. `worker/loop.ts` settles a
- * job `succeeded` once `max_attempts` is spent, so the STATUS cannot carry this
- * and the error column has to: in the 1.13 N5 run the session's judge job read
- * `SUCCEEDED, attempts 5, last_error judge_unavailable`, and every surface
- * downstream read the word "succeeded".
+ * job), was asked and succeeded, or is still to run. `worker/loop.ts` settled a
+ * job `succeeded` once `max_attempts` was spent, so the STATUS could not carry
+ * this and the error column had to: in the 1.13 N5 run the session's judge job
+ * read `SUCCEEDED, attempts 5, last_error judge_unavailable`, and every surface
+ * downstream read the word "succeeded". R16 settles that case `failed` now, and
+ * `last_error` is still what this reads — the fact that is true on both sides of
+ * the change, and on every row written before it.
  *
  * No new state: this is the row `worker/loop.ts` already writes.
  */
 export async function judgeLaneFailureFor(sessionId: string, db: DbHandle = defaultSql): Promise<string | null> {
-  const row = (await db`
-    SELECT last_error FROM jobs
-     WHERE kind = 'swarm.judge' AND scope_type = 'swarm_session' AND scope_id = ${sessionId}
-     ORDER BY id DESC LIMIT 1`)[0] as { last_error: string | null } | undefined;
+  const row = (await judgeJobFor(db, sessionId))[0] as { last_error: string | null } | undefined;
   const lastError = row?.last_error == null ? "" : String(row.last_error).trim();
   return lastError === "" ? null : lastError;
 }

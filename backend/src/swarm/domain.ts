@@ -2225,9 +2225,50 @@ export async function aggregateSession(sessionId: string) {
   };
 }
 
+/**
+ * Publish a session — GUARDED (T21), like the admin path it sits beside.
+ *
+ * WHAT IT WAS. A bare `UPDATE … SET state='published', published_at=now()
+ * WHERE id=$1`, with no state guard and no `published_at IS NULL` guard, while
+ * `publishSessionAdmin` has both plus a `guardedTransition` that refuses
+ * terminal states and writes session-event and audit rows. Two consequences,
+ * both reachable from the `swarm.publish` job's ordinary retries:
+ *
+ *   * every retry RE-STAMPED `published_at`, so the recorded publication
+ *     instant drifted and `swarm/receipt-gap.ts`'s alert named a time the
+ *     session did not publish at;
+ *   * an operator who CANCELLED a session inside the retry window had it
+ *     silently flipped back to `published` — no transition, no event row, no
+ *     audit row, from a state the lifecycle calls terminal.
+ *
+ * WHAT IT IS NOW. The same single statement, with the admin path's two guards:
+ * it fires only from a publishable state and stamps `published_at` once. It
+ * stays a single statement rather than becoming `guardedTransition` because the
+ * cadence deliberately keeps the two surfaces separate (see
+ * `worker/handlers/swarm.ts`), and it reports whether it actually transitioned
+ * so a caller can tell an effective publish from a no-op instead of reading
+ * "published" either way.
+ */
+const PUBLISHABLE_STATES = ["aggregated", "judged"] as const;
+
 export async function publishSession(sessionId: string) {
-  await sql`UPDATE swarm_sessions SET state = 'published', published_at = now() WHERE id = ${sessionId}`;
-  return { sessionId, state: "published" };
+  const rows = await sql`
+    UPDATE swarm_sessions
+       SET state = 'published',
+           published_at = COALESCE(published_at, now()),
+           version = version + 1
+     WHERE id = ${sessionId}
+       AND state = ANY(${[...PUBLISHABLE_STATES]})
+    RETURNING id, state`;
+  if (rows.length > 0) return { sessionId, state: "published", transitioned: true };
+  // Nothing transitioned: either the session is ALREADY published (an ordinary
+  // job redelivery — idempotent success, and `published_at` is untouched) or it
+  // is somewhere this call may not publish from, which is reported as the
+  // state it is actually in rather than as a publication that did not happen.
+  const current = (await sql`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+    | { state: string }
+    | undefined;
+  return { sessionId, state: current?.state ?? "unknown", transitioned: false };
 }
 
 // ── Memos ───────────────────────────────────────────────────────────────────
