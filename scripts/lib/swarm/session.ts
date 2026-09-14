@@ -877,9 +877,12 @@ export interface JudgeStepDeps {
  *
  * WHY IT WAITS, WHEN IT WAITS. The other steps are enqueued and then awaited by
  * state, and the judge has to be too — but for a stronger reason than symmetry.
- * `swarm.publish` is an unconditional `UPDATE ... SET state='published'`, while
- * `judgeSessionAdmin` needs the `aggregated -> judged` transition to still be
- * legal when its model call returns up to a minute later. Enqueue both back to
+ * `swarm.publish` publishes from `aggregated` as readily as from `judged` (T21
+ * gave it a state guard and a once-only `published_at`, but `aggregated` is
+ * still publishable — the guard refuses a CANCELLED or unaggregated session,
+ * not an unjudged one), while `judgeSessionAdmin` needs the
+ * `aggregated -> judged` transition to still be legal when its model call
+ * returns up to a minute later. Enqueue both back to
  * back and the publish very often wins: the transition is refused, the whole
  * judging transaction rolls back, and the soak records NOTHING while the job
  * queue fills with `degraded` rows. Waiting for `judged` removes the race.
