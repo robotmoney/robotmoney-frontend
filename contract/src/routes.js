@@ -143,7 +143,22 @@ export const ROUTES = {
     // session id must be able to reach the receipt without first knowing its
     // digest. The path is derived from the session id alone, so it survives
     // every redeploy and every rebuild of the frontend.
-    sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, read-time-verified
+    //
+    // THIS IS THE ANCHORED URL, AND IT SERVES THE ANCHORED BYTES (decision
+    // D10). `robotmoney-core` writes this path on chain as `payloadUri` beside
+    // `payloadDigest`, so a GET here returns the BARE canonical receipt — the
+    // exact keccak256 preimage, `application/json`, byte-stable — and nothing
+    // wrapped around it. It used to answer the read-time verification envelope,
+    // whose keccak256 is not the anchored digest; a third party reading only
+    // the chain then had to know, from nowhere on chain, to unwrap `.receipt`
+    // and re-canonicalize. The envelope moved to `sessionConsensusReceiptVerified`.
+    sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, BARE canonical bytes (anchored as payloadUri)
+    // The read-time VERIFICATION envelope for the same receipt: the receipt
+    // plus `verified`, the per-signature verdicts and `unverifiedReasons`, all
+    // recomputed on the request. A sibling of the anchored path rather than a
+    // query parameter on it, so that "the anchored URL" stays a whole URL a
+    // verifier can compare for equality. Nothing anchors this path.
+    sessionConsensusReceiptVerified: "/api/swarm/sessions/:id/consensus-receipt/verified", // GET — public, read-time-verified envelope
     take: "/api/swarm/takes/:id", // GET — public read-time-verified receipt
     takePermalink: "/swarm/takes/:id", // rendered public verification receipt
     openSession: "/api/swarm/open-session", // GET → session currently collecting, if any

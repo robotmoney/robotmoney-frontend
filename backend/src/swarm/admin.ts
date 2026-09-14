@@ -1673,7 +1673,16 @@ export async function publishConsensusReceiptAdmin(sessionId: string, actor: Act
       publishedAt: stored.publishedAt,
       // From the contract, never a literal — routes.js is the single source of
       // truth for URLs (finding 019).
+      //
+      // `url` is the ANCHORED one (decision D10): it serves the bare canonical
+      // bytes, so `keccak256(domain separator + body)` is the `payloadDigest`
+      // robotmoney-core writes beside it, and "the URL drafted from IS the
+      // anchored payloadUri" stays a string equality. `verifiedUrl` is the
+      // read-time verification envelope — the human/verifier surface — and is
+      // never anchored. Both are returned so a caller never has to build either
+      // by hand.
       url: path(ROUTES.swarm.sessionConsensusReceipt, { id: stored.sessionId }),
+      verifiedUrl: path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: stored.sessionId }),
       canonicalBytes: stored.canonicalBytes,
       receipt: stored.receipt,
     },

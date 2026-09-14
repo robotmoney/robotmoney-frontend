@@ -1,7 +1,11 @@
 // THE READ-TIME ENVELOPE IS A PINNED SHAPE, NOT A ROUTE-LOCAL CONVENTION (T24).
 //
-// GET /api/swarm/sessions/:id/consensus-receipt does not serve the receipt
-// bare: it serves a read-time verification envelope around it. Every consumer
+// GET /api/swarm/sessions/:id/consensus-receipt/verified serves a read-time
+// verification envelope around the receipt. (Its sibling — the ANCHORED path
+// without /verified — serves the bare canonical bytes since decision D10;
+// consensus-receipt-bare-bytes.test.ts owns that one, and the two files
+// together are what stops the envelope and the anchor being confused again.)
+// Every consumer
 // downstream — rmpc, the devnet acceptance gate, robotmoney-core's shell
 // helpers, the dapp — has to parse that shape, and before
 // contract/src/__fixtures__/consensus-receipt.envelope.json existed they each
@@ -61,7 +65,7 @@ async function seedStoredReceipt(): Promise<void> {
 
 test("the served envelope IS consensus-receipt.envelope.json, key for key and value for value", async () => {
   await seedStoredReceipt();
-  const res = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: ENVELOPE.sessionId }))) as {
+  const res = (await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: ENVELOPE.sessionId }))) as {
     status: number;
     body: Record<string, unknown>;
   };
@@ -88,7 +92,7 @@ test("the RECEIPT's key order is NOT preserved through storage — and that is w
   // a `text` column, and re-canonicalizing the served receipt reproduces it —
   // asserted below, so the claim is checked rather than argued.
   await seedStoredReceipt();
-  const res = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: ENVELOPE.sessionId }))) as {
+  const res = (await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: ENVELOPE.sessionId }))) as {
     status: number;
     body: any;
   };
@@ -140,7 +144,7 @@ test("`verified` is RECOMPUTED on the read, not echoed from storage", async () =
     VALUES (${sessionId}, ${ENVELOPE.subjectId}, ${ENVELOPE.schemaVersion}, ${judgement!.id}, 1,
             ${sql.json(tampered)}, ${canonicalBytes}, ${ENVELOPE.publishedAt})`;
 
-  const res = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: sessionId }))) as { status: number; body: any };
+  const res = (await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: sessionId }))) as { status: number; body: any };
   // SERVED, NOT WITHHELD, and not passed off as valid: the envelope shape is
   // unchanged, `verified` is false, and the reason names the member.
   expect(res.status).toBe(200);
