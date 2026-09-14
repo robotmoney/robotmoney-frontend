@@ -44,7 +44,16 @@ async function activeMember() {
   return { id, token: r.token, privateKey };
 }
 
-const W = [{ bucket: "agent_tokens", weight: 2 }, { bucket: "protocol", weight: 1 }];
+// The CANONICAL FOUR, one entry each. Since T17/D14 a take filed against a
+// `bucket_weights` subject that names anything else is refused at submission
+// with a 400 `weights_not_canonical_four`, so the two-bucket fixture this test
+// was written against can no longer reach a session at all.
+const W = [
+  { bucket: "agent_tokens", weight: 2 },
+  { bucket: "conservative_defi_yield", weight: 1 },
+  { bucket: "protocol_tokens", weight: 1 },
+  { bucket: "real_world_assets", weight: 0 },
+];
 
 async function aggregatedSession(prefix: string, count = 3) {
   const subj = rid(prefix);
