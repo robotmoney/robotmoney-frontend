@@ -419,6 +419,12 @@ test("refusals reach the operator with a reason: an unjudged session, and a non-
   const s3 = await ic.openSession(threeSubject);
   await ic.publishBrief(s3.id, 60);
   const date3 = s3.date instanceof Date ? s3.date.toISOString().slice(0, 10) : String(s3.date).slice(0, 10);
+  // T17 refuses a three-bucket take at SUBMISSION now, so this is how such a
+  // take comes to exist at all: filed while the subject still asked for prose,
+  // and retyped afterwards (what migration 0051 did in production). The receipt
+  // refusal below is defence in depth over takes ALREADY ON FILE, and it is
+  // exactly the case this test is about.
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${threeSubject}`;
   for (let i = 0; i < 2; i++) {
     const mi = await member();
     const sub = {
@@ -433,6 +439,7 @@ test("refusals reach the operator with a reason: an unjudged session, and a non-
     const res = await ic.submitRecommendation(mi.token, { ...sub, signature: await signMessage(canonicalizeSubmission(sub), mi.privateKey) });
     expect(res.status).toBe(201);
   }
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${threeSubject}`;
   await advanceToPublished(s3.id);
 
   // The public API really does serve an allocation for this session — which is

@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 import * as ic from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { config } from "../src/config.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
@@ -182,7 +182,13 @@ afterAll(() => {
   else process.env.OPENCODE_API_KEY = savedJudgeEnv.apiKey;
 });
 
-const W = [{ bucket: "agent_tokens", weight: 2 }, { bucket: "protocol", weight: 1 }];
+// THE CANONICAL FOUR (T17). These sessions are `bucket_weights`, and a take
+// aimed at such a subject is refused at submission unless it names exactly the
+// four receipt buckets — the two-bucket vector this used to carry would now be
+// a 400. Every assertion below compares the rollup's weights BEFORE and AFTER a
+// judge run, so the values themselves are arbitrary; only their canonicity is
+// load-bearing.
+const W = [...RECEIPT_CANONICAL_BUCKET_ORDER].map((bucket, i) => ({ bucket, weight: 4 - i }));
 
 /** Open, submit `bodies.length` takes, close, aggregate. Returns the session. */
 async function aggregatedSession(prefix: string, count = 3) {

@@ -59,7 +59,7 @@
 // LOUD-FAILURE CONTRACT: any failure exits non-zero with the reason on
 // stderr; the harness renders that member ABSENT (#122 semantics) and the
 // session proceeds without it. There is no fallback of any kind in here.
-import { classifyRegime, ROUTES } from "@robotmoney/contract";
+import { classifyRegime, path as routePath, ROUTES } from "@robotmoney/contract";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -113,6 +113,48 @@ export async function restJson<T = any>(
     throw new Error(`${route} failed with HTTP ${res.status}${error ? `: ${error}` : ""}`);
   }
   return { status: res.status, body };
+}
+
+/**
+ * Does this session ask for an allocation vector as well as prose?
+ *
+ * Exported so the HTTP-boundary suite can pin both witnesses without
+ * running a session.
+ */
+export async function resolveRequireWeights(sessionId: string, subjectId: string): Promise<boolean> {
+  // THE BRIEF IS READ, NOT MERELY PINGED. It used to be a bare liveness check
+  // with its result discarded — and that is how a `bucket_weights` session
+  // could ask every analyst for an allocation and have none of them notice:
+  // WHICH KIND of recommendation this session wants is stated on the brief
+  // (`body.subject.recommendationType`, and `body.takeSchema.weights`), and
+  // nothing in this client ever looked.
+  //
+  // BY SESSION, not by date+subject. `?session=` is the unambiguous handle
+  // (migration 0028: a brief is keyed on its session), so a subject that
+  // convened twice today cannot hand this member the other session's ask.
+  // No brief yet is still a legitimate 404 (issue #868) and not a reason to
+  // abort — but it is no longer a reason to author prose only either. T17 made
+  // a weightless take a 400 for a `bucket_weights` subject, so a member that
+  // guessed "no brief, therefore no allocation asked for" would simply be
+  // refused. THE SUBJECT IS THE FALLBACK AUTHORITY: `GET /api/swarm/subjects/:id`
+  // serves `recommendationType`, is public, and exists long before any brief
+  // does. The brief stays the primary source (it is the session's own ask); the
+  // subject read only answers the case where the brief is not there yet.
+  const brief = await restJson<{ body?: { subject?: { recommendationType?: string | null } | null } | null }>(
+    `${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`,
+    undefined,
+    { allowStatuses: [404] },
+  );
+  let recommendationType = brief.body?.body?.subject?.recommendationType ?? null;
+  if (recommendationType == null) {
+    const subject = await restJson<{ recommendationType?: string | null } | null>(
+      routePath(ROUTES.swarm.subject, { id: subjectId }),
+      undefined,
+      { allowStatuses: [404] },
+    );
+    recommendationType = subject.body?.recommendationType ?? null;
+  }
+  return recommendationType === "bucket_weights";
 }
 
 /** Fetch the exact canonical byte string RM validated for this draft. */
@@ -280,26 +322,7 @@ async function participate(): Promise<void> {
 
   // Read context over REST — this member's OWN fetch, not the harness's.
   const regime = (await restJson<{ latest?: any }>(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).body?.latest ?? {};
-  // THE BRIEF IS READ, NOT MERELY PINGED. It used to be a bare liveness check
-  // with its result discarded — and that is how a `bucket_weights` session
-  // could ask every analyst for an allocation and have none of them notice:
-  // WHICH KIND of recommendation this session wants is stated on the brief
-  // (`body.subject.recommendationType`, and `body.takeSchema.weights`), and
-  // nothing in this client ever looked.
-  //
-  // BY SESSION, not by date+subject. `?session=` is the unambiguous handle
-  // (migration 0028: a brief is keyed on its session), so a subject that
-  // convened twice today cannot hand this member the other session's ask.
-  // No brief yet is still a legitimate 404 (issue #868) and not a reason to
-  // abort — the member then authors prose only, and the SERVER refuses to
-  // publish a weightless receipt for a bucket_weights session rather than
-  // letting this client guess.
-  const brief = await restJson<{ body?: { subject?: { recommendationType?: string | null } | null } | null }>(
-    `${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`,
-    undefined,
-    { allowStatuses: [404] },
-  );
-  const requireWeights = brief.body?.body?.subject?.recommendationType === "bucket_weights";
+  const requireWeights = await resolveRequireWeights(sessionId, subjectId);
   const composite = Number(regime?.composite ?? 0.5);
   const regimeCtx: RegimeContext = {
     composite,

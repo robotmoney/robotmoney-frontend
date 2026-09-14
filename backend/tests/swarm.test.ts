@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeApplication, canonicalizeSubmission, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -9,6 +9,7 @@ import {
   FORGED_SIGNATURE_B64,
   LOW_ORDER_ED25519_PUBLIC_KEYS_B64,
 } from "./support/low-order-ed25519.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 // A session's date is whatever the DATABASE derived from convened_at
 // (migration 0022). postgres returns it as a Date; normalise to the YYYY-MM-DD
@@ -258,7 +259,7 @@ test("apply → activate approves without minting; re-activate finds no pending 
 
 test("submit: signature verify/reject, window, duplicate", async () => {
   const subj = rid("s");
-  await ic.ensureSubject(subj, "S");
+  await ensureProseSubject(subj, "S");
   const session = await ic.openSession(subj);
   // The DATABASE dates the session (migration 0022) — read it back rather
   // than asserting a date this test chose.
@@ -405,7 +406,11 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
       stance,
       confidence,
       body: memoBody(subj),
-      weights: [{ bucket: "must_not_aggregate_for_position_actions", weight: 1 }],
+      // A CANONICAL bucket: since T17 the validator refuses any other name
+      // outright. The assertion this feeds is unchanged — a position_actions
+      // session must not aggregate a vector into its recommendation, whatever
+      // buckets the take named.
+      weights: [{ bucket: "agent_tokens", weight: 1 }],
     };
     const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
     const res = await ic.submitRecommendation(m.token, { ...sub, signature });
@@ -476,6 +481,16 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(body).toContain("**SUBJECT**");
 });
 
+// EVERY TAKE CARRIES THE CANONICAL FOUR (T17). The vectors used to be
+// heterogeneous partial ones (alpha/beta/gamma), which a `bucket_weights`
+// subject now refuses at submission — and `meanTakeWeights()`'s behaviour over
+// ragged input is unit-tested directly in swarm-consensus-weights.test.ts. What
+// this test is for survives intact: three takes whose vectors have DIFFERENT
+// totals (6, 5, 2), so the published mean is right only if each take was
+// normalized before averaging.
+const canonical = (shares: number[]) =>
+  [...RECEIPT_CANONICAL_BUCKET_ORDER].map((bucket, i) => ({ bucket, weight: shares[i]! }));
+
 test("bucket aggregation computes the normalized unweighted mean and attributes only stored non-empty bodies", async () => {
   const subjectId = rid("weighted");
   await ic.ensureSubject(subjectId, "Weighted Subject");
@@ -495,19 +510,19 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
       stance: "bullish",
       confidence: 0.9,
       body: "Member one supports the submitted allocation because liquidity is observable.",
-      weights: [{ bucket: "alpha", weight: 2 }, { bucket: "beta", weight: 1 }],
+      weights: canonical([2, 1, 0, 0]),
     },
     {
       stance: "cautious",
       confidence: 0.6,
       body: "Member two prefers a larger beta sleeve until volatility settles.",
-      weights: [{ bucket: "alpha", weight: 1 }, { bucket: "beta", weight: 3 }, { bucket: "gamma", weight: 1 }],
+      weights: canonical([1, 3, 1, 0]),
     },
     {
       stance: "neutral",
       confidence: 0.3,
       body: "",
-      weights: [{ bucket: "beta", weight: 1 }, { bucket: "gamma", weight: 1 }],
+      weights: canonical([0, 1, 1, 0]),
     },
   ];
   for (let index = 0; index < fixtures.length; index++) {
@@ -569,7 +584,7 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
 
 test("aggregation omits invented prose and weights when no eligible body or valid weighted take exists", async () => {
   const subjectId = rid("empty");
-  await ic.ensureSubject(subjectId, "Empty Body Subject");
+  await ensureProseSubject(subjectId, "Empty Body Subject");
   const member = await activeMember();
   const session = await ic.openSession(subjectId);
   // The DATABASE dates the session (migration 0022) — read it back rather
@@ -595,7 +610,7 @@ test("aggregation omits invented prose and weights when no eligible body or vali
 
 test("restart-safety (issue #208): re-opening the same session is idempotent (one row); a REPLAYED member take is 409 with exactly one recommendation row", async () => {
   const subj = rid("restart");
-  await ic.ensureSubject(subj, "Restart Subject");
+  await ensureProseSubject(subj, "Restart Subject");
 
   // A worker restart (or an at-most-once cron retry) may call openSession twice
   // for the same (date, subject_id) — this must never create a second session row.
@@ -672,7 +687,7 @@ test("GET /api/swarm/sessions default: light-projected + cursor-paginated (no bi
   const created: { id: string; date: string; subjectId: string }[] = [];
   for (let i = 0; i < n; i++) {
     const subj = rid(`pagsubj${i}`);
-    await ic.ensureSubject(subj, `Pagination Subject ${i}`);
+    await ensureProseSubject(subj, `Pagination Subject ${i}`);
     // Distinct SUBJECTS, one session each, all dated by the database — the old
     // spread of invented 2031 dates is no longer expressible (and never needed
     // to be: the cursor invariant under test is about rows, not calendars).
@@ -729,7 +744,7 @@ test("GET /api/swarm/sessions default: light-projected + cursor-paginated (no bi
 
 test("GET /api/swarm/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default carries both regimeSummary (issue #357) and synthesis (issue #358)", async () => {
   const subj = rid("fullproj");
-  await ic.ensureSubject(subj, "Full Projection Subject");
+  await ensureProseSubject(subj, "Full Projection Subject");
   const session = await ic.openSession(subj);
   // The DATABASE dates the session (migration 0022) — read it back rather
   // than asserting a date this test chose.
@@ -858,8 +873,8 @@ test("GET /api/swarm/sessions: nextSessionAt is null when the schedule is enable
 test("GET /api/swarm/members/:id/takes (#243B): collapses list+N-detail into one call — newest first, in-progress states included, doesn't collide with the plain member-detail route", async () => {
   const subjOlder = rid("takesA");
   const subjNewer = rid("takesB");
-  await ic.ensureSubject(subjOlder, "Takes Subject A");
-  await ic.ensureSubject(subjNewer, "Takes Subject B");
+  await ensureProseSubject(subjOlder, "Takes Subject A");
+  await ensureProseSubject(subjNewer, "Takes Subject B");
   const m = await activeMember();
 
   // No date parameter: the caller cannot choose one any more. The two sessions
@@ -970,7 +985,7 @@ test("GET /api/swarm/members exposes lastTakeAt (#782): null until a member's fi
   };
 
   const subj = rid("lastTake");
-  await ic.ensureSubject(subj, "Last Take Subject");
+  await ensureProseSubject(subj, "Last Take Subject");
   const m = await activeMember();
 
   // A live seat with zero takes must not be confused with a participating one.
@@ -1015,7 +1030,7 @@ test("GET /api/swarm/members exposes lastTakeAt (#782): null until a member's fi
 // above exercises that one.
 test("GET /api/swarm/members/:id and the profile-update RETURNING path also expose a real lastTakeAt (#782 follow-up), not just getMembers()", async () => {
   const subj = rid("lastTakeSingle");
-  await ic.ensureSubject(subj, "Last Take Single Subject");
+  await ensureProseSubject(subj, "Last Take Single Subject");
   const m = await activeMember();
 
   // Before any take, both single-member paths agree with getMembers(): null.
@@ -1127,7 +1142,7 @@ test("POST /api/swarm/signing-payload and submit reject unknown stances and unkn
 // it. The id route is the unambiguous handle the session lists link by.
 test("two sessions for one subject on one day: the dated route returns the LATEST, the id route returns each", async () => {
   const subj = rid("twice");
-  await ic.ensureSubject(subj, "Twice In A Day");
+  await ensureProseSubject(subj, "Twice In A Day");
 
   const first = await ic.openSession(subj);
   // Publishing is what frees the subject to convene again — openSession is
@@ -1179,7 +1194,7 @@ test("two sessions for one subject on one day: the dated route returns the LATES
 // session's windowClosesAt (the second session's value, not its own).
 test("two sessions for one subject on one day: BOTH briefs survive, each keeping its own windowClosesAt", async () => {
   const subj = rid("twobriefs");
-  await ic.ensureSubject(subj, "Twice-Briefed Subject");
+  await ensureProseSubject(subj, "Twice-Briefed Subject");
 
   // Session 1: a 30-minute window. Publishing is what frees the subject to
   // convene again — openSession is idempotent while a session is still
@@ -1324,7 +1339,7 @@ test("re-registering an active member does not consume roster capacity", async (
 // ── researchSignals projected to references on the public route (issue #869) ─
 test("GET brief projects researchSignals to references by default, and ?include=researchSignals restores the embed", async () => {
   const subj = rid("briefref");
-  await ic.ensureSubject(subj, "Brief Ref Subject");
+  await ensureProseSubject(subj, "Brief Ref Subject");
   const session = await ic.openSession(subj);
   const date = sessionDate(session);
 
@@ -1362,7 +1377,7 @@ test("GET brief projects researchSignals to references by default, and ?include=
 // ── subjects/:id/snapshots — limit/before are opt-in (issue #869c) ──────────
 test("GET subject snapshots: omitting limit/before returns everything; both are opt-in pagination", async () => {
   const subj = rid("snaps");
-  await ic.ensureSubject(subj, "Snapshot Paging Subject");
+  await ensureProseSubject(subj, "Snapshot Paging Subject");
   const dates = ["2026-08-01", "2026-08-02", "2026-08-03"];
   for (const d of dates) {
     await sql`INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)

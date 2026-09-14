@@ -222,7 +222,11 @@ export const ROUTES = {
       // the session, and what the parser dropped out of the model's response.
       sessionJudgements: "/api/swarm/admin/sessions/:id/judgements",
       rosterAdd: "/api/swarm/admin/sessions/:id/roster/add", // POST { memberId } — before collecting only
-      rosterExcuse: "/api/swarm/admin/sessions/:id/roster/excuse", // POST { memberId } — before collecting only
+      // POST { memberId, force?, reason? } — before collecting only, UNLESS
+      // `force` is set: the audited T17 lever that clears a session already
+      // stranded by a weightless take on file (refused on a terminal session,
+      // logged as `roster_excuse_forced` with the operator's reason).
+      rosterExcuse: "/api/swarm/admin/sessions/:id/roster/excuse",
       rosterRestore: "/api/swarm/admin/sessions/:id/roster/restore", // POST { memberId } — before collecting only
       sessionCancel: "/api/swarm/admin/sessions/:id/cancel", // POST — versioned guarded transition
       sessionClose: "/api/swarm/admin/sessions/:id/close", // POST — versioned guarded transition

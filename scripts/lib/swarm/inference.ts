@@ -867,6 +867,19 @@ export async function authorTake(
     }
     const missing = missingSectionLeadIns(body);
     if (missing.length === 0) {
+      // A `requireWeights` take NEVER leaves here without its vector. The
+      // branch above already re-samples a malformed WEIGHTS line, so this is
+      // unreachable by construction — and it is written down anyway because the
+      // cost of being wrong changed with T17: an analyst container that returns
+      // a weightless take for a `bucket_weights` session is now refused at
+      // submission (400 weights_required_for_bucket_weights_subject) and the
+      // member renders ABSENT, where before it filed a take that quietly
+      // destroyed the session's receipt.
+      if (options.requireWeights && !weights) {
+        throw new Error(
+          `internal: take for ${p.memberId} passed the structure contract for a bucket_weights session without a weight vector`,
+        );
+      }
       return { ...parsed, body, ...(weights ? { weights } : {}), model: authored.model };
     }
     shortfall = `omitted the ${missing.join(", ")} section${missing.length === 1 ? "" : "s"}`;

@@ -28,6 +28,7 @@ import { getJudgeConfig, judgeSession, latestJudgement, setJudgeConfig } from ".
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -43,7 +44,7 @@ async function member(prefix: string) {
 
 async function session(prefix: string) {
   const subjectId = rid(prefix);
-  await swarm.ensureSubject(subjectId, subjectId);
+  await ensureProseSubject(subjectId, subjectId);
   const opened = await swarm.openSession(subjectId);
   await swarm.publishBrief(opened.id, 60);
   return { subjectId, session: opened, date: opened.date instanceof Date ? opened.date.toISOString().slice(0, 10) : String(opened.date).slice(0, 10) };

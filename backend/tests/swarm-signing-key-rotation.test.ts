@@ -24,6 +24,7 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -64,7 +65,7 @@ async function submitSignedTake(opts: {
 test("a historical take still verifies after its author RE-REGISTERS (registerMember)", async () => {
   const memberId = rid("m");
   const subj = rid("s");
-  await ic.ensureSubject(subj, "Re-register Rotation Subject");
+  await ensureProseSubject(subj, "Re-register Rotation Subject");
   const session = await ic.openSession(subj);
   const date = sessionDate(session);
 
@@ -108,7 +109,7 @@ test("a historical take still verifies after its author RE-REGISTERS (registerMe
 test("a historical take still verifies after an ADMIN key rotation (rotateMemberKeyAdmin)", async () => {
   const memberId = rid("m");
   const subj = rid("s");
-  await ic.ensureSubject(subj, "Admin Rotation Subject");
+  await ensureProseSubject(subj, "Admin Rotation Subject");
   const session = await ic.openSession(subj);
   const date = sessionDate(session);
 
@@ -148,7 +149,7 @@ test("a historical take still verifies after an ADMIN key rotation (rotateMember
 test("submitRecommendation records the exact key row that verified it (signing_key_id)", async () => {
   const memberId = rid("m");
   const subj = rid("s");
-  await ic.ensureSubject(subj, "Signing Key Id Subject");
+  await ensureProseSubject(subj, "Signing Key Id Subject");
   const session = await ic.openSession(subj);
   const date = sessionDate(session);
 
@@ -175,7 +176,7 @@ test("a pre-#697 row (signing_key_id NULL) falls back to the currently-active-ke
   // (still-active, unrotated) key and verify.
   const memberId = rid("m");
   const subj = rid("s");
-  await ic.ensureSubject(subj, "Cutover Fallback Subject");
+  await ensureProseSubject(subj, "Cutover Fallback Subject");
   const session = await ic.openSession(subj);
   const date = sessionDate(session);
 

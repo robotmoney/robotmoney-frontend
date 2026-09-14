@@ -24,6 +24,7 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -80,7 +81,7 @@ async function runLifecycle(sessionId: string) {
 
 test("a take submitted BETWEEN sessions is accepted and routed to the session it belongs to", async () => {
   const subj = rid("gap");
-  await ic.ensureSubject(subj, "Gap Subject");
+  await ensureProseSubject(subj, "Gap Subject");
 
   // Session A: convened, brief published, closed, aggregated, published.
   const a = await ic.openSession(subj);
@@ -116,7 +117,7 @@ test("a take submitted BETWEEN sessions is accepted and routed to the session it
 
 test("the same take is still accepted once the brief IS published — the deadline never regressed", async () => {
   const subj = rid("open");
-  await ic.ensureSubject(subj, "Open Subject");
+  await ensureProseSubject(subj, "Open Subject");
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   const m = await activeMember();
@@ -125,7 +126,7 @@ test("the same take is still accepted once the brief IS published — the deadli
 
 test("an ELAPSED window still refuses, and that is now the only timing refusal", async () => {
   const subj = rid("late");
-  await ic.ensureSubject(subj, "Late Subject");
+  await ensureProseSubject(subj, "Late Subject");
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   // Elapse the advertised deadline while the session is still `collecting` —
@@ -147,7 +148,7 @@ test("closing the window EARLY no longer rejects takes — the advertised deadli
   // session whose deadline has not passed. The member was promised that
   // deadline, so the take is accepted.
   const subj = rid("early");
-  await ic.ensureSubject(subj, "Early Subject");
+  await ensureProseSubject(subj, "Early Subject");
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   await ic.closeWindow(s.id);
@@ -168,7 +169,7 @@ test("a fresh nonce from the same member is an AMENDMENT, not a duplicate — an
   // an amendment is expressed. Keeping the old assertion would pin the feature
   // shut, so it is rewritten to assert the replacement rather than deleted.
   const subj = rid("dup");
-  await ic.ensureSubject(subj, "Dup Subject");
+  await ensureProseSubject(subj, "Dup Subject");
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   const m = await activeMember();
@@ -204,7 +205,7 @@ test("published_at >= window_closes_at — the invariant that was false by -59.9
   // coarse shape but never a RELATION between two fields — so the evidence sat
   // committed in the tree for a month with nothing pointed at it.
   const subj = rid("inv");
-  await ic.ensureSubject(subj, "Invariant Subject");
+  await ensureProseSubject(subj, "Invariant Subject");
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   const m = await activeMember();
@@ -231,7 +232,7 @@ test("RED CONTROL: the invariant assertion catches a session published before it
   // is what the driver produced on every session before it waited out the
   // window. Nothing in the driver can reach this any more; a direct caller can.
   const subj = rid("red");
-  await ic.ensureSubject(subj, "Red Control Subject");
+  await ensureProseSubject(subj, "Red Control Subject");
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   await ic.closeWindow(s.id);

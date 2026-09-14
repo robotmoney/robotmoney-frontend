@@ -11,6 +11,7 @@ import { config as globalConfig } from "../../config.ts";
 import { isPrivileged, hasAutomationRole } from "../auth.ts";
 import { isRegistrablePublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import {
+  optionalString,
   parseExpectedVersion,
   parseManualMember,
   parseSessionCreate,
@@ -212,7 +213,20 @@ export async function handleSwarmAdmin(
       const b = (await readJsonObject(req)) ?? {};
       const memberId = requiredString(b, "memberId", 100);
       if (!memberId) return { status: 400, body: { error: "memberId required" } };
-      const fn = { add: admin.rosterAddAdmin, excuse: admin.rosterExcuseAdmin, restore: admin.rosterRestoreAdmin }[segs[3] as "add" | "excuse" | "restore"];
+      // THE AUDITED FORCED EXCUSE (T17), excuse-only. `force` is what lets an
+      // operator clear a session already stranded by a weightless take on file;
+      // it is refused on a terminal session and audited under its own action
+      // (`roster_excuse_forced`) with the operator's `reason`. Every other
+      // roster operation keeps exactly the pre-T17 contract.
+      if (segs[3] === "excuse") {
+        const force = b.force === true;
+        const reason = optionalString(b, "reason", 500);
+        if (!force && reason !== undefined) {
+          return { status: 400, body: { error: "reason is only recorded for a forced excuse (send force: true)" } };
+        }
+        return fromResult(await admin.rosterExcuseAdmin(sessionId, memberId, admin.ADMIN_ACTOR, { force, reason }));
+      }
+      const fn = { add: admin.rosterAddAdmin, restore: admin.rosterRestoreAdmin }[segs[3] as "add" | "restore"];
       return fromResult(await fn(sessionId, memberId));
     }
     // Issue #754. Not a state transition and therefore not versioned: it
