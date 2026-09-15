@@ -168,6 +168,39 @@ describe("waitUntilWindowCloses — the loop, on a fake clock and injected reads
       .rejects.toThrow(/publish_brief did not land/);
   });
 
+  test("a transient session read failure retries without inventing a missing deadline", async () => {
+    const closes = iso(T0 + 2_000);
+    let now = T0;
+    let reads = 0;
+    const logs: string[] = [];
+    const out = await waitUntilWindowCloses("2026-08-07", "woon", LIMITS, {
+      read: async () => {
+        reads++;
+        if (reads === 1) throw new Error("GET /api/swarm/sessions/2026-08-07/woon -> HTTP 502");
+        return { windowClosesAt: closes, serverNowMs: now };
+      },
+      wait: async (ms: number) => { now += ms; },
+      now: () => now,
+      log: (line: string) => { logs.push(line); },
+    });
+    expect(reads).toBe(2);
+    expect(out.windowClosesAt).toBe(closes);
+    expect(logs.join(" ")).toContain("HTTP 502; retrying");
+  });
+
+  test("a persistently unreadable session endpoint still stops at the wait ceiling", async () => {
+    let now = T0;
+    const logs: string[] = [];
+    await expect(waitUntilWindowCloses("2026-08-07", "woon", { maxWaitMs: 12_000, pollMs: 5_000 }, {
+      read: async () => { throw new Error("HTTP 502"); },
+      wait: async (ms: number) => { now += ms; },
+      now: () => now,
+      log: (line: string) => { logs.push(line); },
+    })).rejects.toThrow(/exceeded its 12s ceiling.*last error: HTTP 502/);
+    expect(logs).toHaveLength(3);
+    expect(now - T0).toBe(12_000);
+  });
+
   test("a window that keeps being pushed out hits the ELAPSED ceiling and throws", async () => {
     // Total elapsed is bounded independently of the per-read remaining check, so
     // a pathological server cannot keep this loop alive forever.
