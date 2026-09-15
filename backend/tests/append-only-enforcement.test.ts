@@ -468,3 +468,46 @@ describe("append-only: the limits the migration header claims, held to the same 
     expectGuardRefused(raised, "schema_migrations", "DELETE", "the rollback lever");
   });
 });
+
+describe("source acquisition ledger: complete immutability and runtime-role boundary", () => {
+  const tables = ["source_acquisitions", "source_acquisition_events", "source_payloads", "source_fetches", "source_value_versions"] as const;
+
+  test("valid inserts succeed, every table has ENABLE ALWAYS row/statement guards, and UPDATE/DELETE/TRUNCATE are refused", async () => {
+    const acquisition = crypto.randomUUID();
+    const fetchId = crypto.randomUUID();
+    const bytes = new TextEncoder().encode("append-only-source-payload");
+    const checksum = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+    await sql`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisition}, 'fixture', '1', 'append-only')`;
+    await sql`INSERT INTO source_acquisition_events (acquisition_id, sequence, event_type) VALUES (${acquisition}, 1, 'started')`;
+    await sql`INSERT INTO source_payloads (checksum, payload_bytes) VALUES (${checksum}, ${bytes})`;
+    await sql`INSERT INTO source_fetches (id, acquisition_id, sequence, request_identity, cache_status, response_status, response_checksum)
+              VALUES (${fetchId}, ${acquisition}, 1, '{"method":"GET","url":"https://example.invalid","headers":{}}', 'disabled', 200, ${checksum})`;
+    await sql`INSERT INTO source_value_versions (acquisition_id, source_key, market_date, value, revision_kind)
+              VALUES (${acquisition}, 'append-only:probe', '2024-01-01', 1, 'initial')`;
+
+    const triggers = await sql`
+      SELECT c.relname AS table_name, t.tgname, t.tgenabled, (t.tgtype & 1) = 1 AS is_row
+      FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+      WHERE NOT t.tgisinternal AND c.relname = ANY(${[...tables]}::text[])`;
+    for (const table of tables) {
+      const own = triggers.filter((r) => r.table_name === table);
+      expect(own).toHaveLength(2);
+      expect(new Set(own.map((r) => r.is_row))).toEqual(new Set([false, true]));
+      expect(own.every((r) => r.tgenabled === "A")).toBe(true);
+      for (const statement of [`UPDATE ${table} SET knowledge_time = knowledge_time`, `DELETE FROM ${table}`, `TRUNCATE ${table} CASCADE`]) {
+        const raised = await attempt(statement);
+        expect(raised?.code).toBe("0A000");
+        expect(raised?.message).toMatch(new RegExp(`^source ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`));
+      }
+    }
+  });
+
+  test("rm_worker cannot fabricate evidence and rm_readonly can inspect it", async () => {
+    const privileges = await sql`
+      SELECT table_name,
+             has_table_privilege('rm_worker', 'public.' || table_name, 'INSERT') AS worker_insert,
+             has_table_privilege('rm_readonly', 'public.' || table_name, 'SELECT') AS readonly_select
+      FROM unnest(${[...tables]}::text[]) AS table_name`;
+    expect(privileges.every((r) => r.worker_insert === false && r.readonly_select === true)).toBe(true);
+  });
+});

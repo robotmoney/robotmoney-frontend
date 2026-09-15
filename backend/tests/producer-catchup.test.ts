@@ -9,8 +9,10 @@ import { RESEARCH_SIGNAL_TELEMETRY_KEYS } from "../src/analytics/index.ts";
 import {
   computeMissingResearchDays,
   catchUpMissedResearchDays,
+  catchUpMissedIndicatorDays,
   startProducerSchedules,
 } from "../src/producer/index.ts";
+import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
 
 const DAY_MS = 86_400_000;
 const NOW = new Date("2026-08-10T12:00:00Z");
@@ -163,7 +165,63 @@ test("startProducerSchedules: runs catch-up before arming the daily crons", asyn
     env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN: "t" },
     waitUntilReady: async () => { order.push("ready"); },
     catchUp: async () => { order.push("catchup"); },
+    catchUpIndicators: async () => { order.push("catchupIndicators"); },
     scheduleKind: (kind) => { order.push(`armed:${kind}`); },
   });
-  expect(order).toEqual(["ready", "catchup", "armed:regime", "armed:research"]);
+  expect(order).toEqual(["ready", "catchup", "catchupIndicators", "armed:regime", "armed:research"]);
+});
+
+test("missing-day indicator repair persists an acquisition independent of an analytics run", async () => {
+  const acquisitions: any[] = [];
+  let seeded: Record<string, { date: string; value: number }[]> | null = null;
+  const persistence: AnalyticsPersistence = {
+    saveSourceAcquisition: async (e) => { acquisitions.push(e); return { acquisitionId: e.id, replayed: false }; },
+    loadRawHistory: async () => ({}), saveRawHistory: async () => {},
+    seedRawHistory: async (history) => { seeded = history; return { seededPoints: 1, existingPoints: 0, indicators: 1 }; },
+    saveRegimeSnapshots: async () => {}, saveResearchSignal: async () => {},
+    loadResearchSignalDates: async () => [], loadRawHistoryGapDates: async () => [iso(1)],
+  };
+  const source: AnalyticsDataSource = {
+    async fetchIndicators(indicators, _logger, acquisitionSink, requestedByRunId) {
+      expect(requestedByRunId).toBeNull();
+      expect(acquisitionSink).toBeDefined();
+      const evidence = {
+        id: crypto.randomUUID(), provider: "fixture", parserVersion: "1", cacheIdentity: "catch-up",
+        requestedByRunId: requestedByRunId ?? null, events: [{ type: "started" as const, detail: null }, { type: "succeeded" as const, detail: null }],
+        fetches: [], values: [{ sourceKey: `raw_indicator_history:${indicators[0]!.id}`, marketDate: iso(1), marketInstant: null, value: 5 }],
+      };
+      await acquisitionSink!.saveSourceAcquisition(evidence);
+      return { [indicators[0]!.id]: [{ date: iso(1), value: 5 }] };
+    },
+    async fetchResearchInputs() { throw new Error("not used"); },
+    async fetchBacktestExtras() { throw new Error("not used"); },
+  };
+  expect(await catchUpMissedIndicatorDays({ persistence, source, now: () => NOW })).toEqual([iso(1)]);
+  expect(acquisitions).toHaveLength(1);
+  expect(acquisitions[0].requestedByRunId).toBeNull();
+  expect(seeded).not.toBeNull();
+});
+
+test("missing-day repair never persists fetched values when acquisition evidence persistence fails", async () => {
+  let currentViewWrites = 0;
+  const persistence: AnalyticsPersistence = {
+    saveSourceAcquisition: async () => { throw new Error("evidence store unavailable"); },
+    loadRawHistory: async () => ({}), saveRawHistory: async () => { currentViewWrites++; },
+    seedRawHistory: async () => { currentViewWrites++; return { seededPoints: 1, existingPoints: 0, indicators: 1 }; },
+    saveRegimeSnapshots: async () => {}, saveResearchSignal: async () => {},
+    loadResearchSignalDates: async () => [], loadRawHistoryGapDates: async () => [iso(1)],
+  };
+  const source: AnalyticsDataSource = {
+    async fetchIndicators(indicators, _logger, acquisitionSink) {
+      await acquisitionSink!.saveSourceAcquisition({
+        id: crypto.randomUUID(), provider: "fixture", parserVersion: "1", cacheIdentity: "refused", requestedByRunId: null,
+        events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }], fetches: [],
+        values: [{ sourceKey: `raw_indicator_history:${indicators[0]!.id}`, marketDate: iso(1), marketInstant: null, value: 99 }],
+      });
+      return { [indicators[0]!.id]: [{ date: iso(1), value: 99 }] };
+    },
+    async fetchResearchInputs() { throw new Error("not used"); }, async fetchBacktestExtras() { throw new Error("not used"); },
+  };
+  expect(await catchUpMissedIndicatorDays({ persistence, source, now: () => NOW })).toEqual([iso(1)]);
+  expect(currentViewWrites).toBe(0);
 });

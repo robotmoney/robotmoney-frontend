@@ -20,13 +20,11 @@ import { mergeSeries } from "../src/analytics/transform/math.ts";
 const NOW = Date.parse("2026-07-15T12:00:00Z");
 
 function throttled(retryAfter?: string) {
-  return {
-    ok: false,
+  return new Response(null, {
     status: 429,
     statusText: "Too Many Requests",
-    headers: new Headers(retryAfter !== undefined ? { "retry-after": retryAfter } : {}),
-    json: async () => ({}),
-  } as unknown as Response;
+    headers: retryAfter !== undefined ? { "retry-after": retryAfter } : {},
+  });
 }
 
 // One in-window entry + one stale entry → countNewPools24h stops after page 1
@@ -36,13 +34,7 @@ function okLastPage() {
     { attributes: { pool_created_at: new Date(NOW - 3600_000).toISOString() } },
     { attributes: { pool_created_at: new Date(NOW - 30 * 3600_000).toISOString() } },
   ];
-  return {
-    ok: true,
-    status: 200,
-    statusText: "OK",
-    headers: new Headers(),
-    json: async () => ({ data: entries }),
-  } as unknown as Response;
+  return Response.json({ data: entries });
 }
 
 const silent = { warn: () => {} };
@@ -170,13 +162,7 @@ test("non-transient status: throws immediately with no retries (no backoff time 
   let calls = 0;
   globalThis.fetch = (async () => {
     calls++;
-    return {
-      ok: false,
-      status: 404,
-      statusText: "Not Found",
-      headers: new Headers(),
-      json: async () => ({}),
-    } as unknown as Response;
+    return new Response(null, { status: 404, statusText: "Not Found" });
   }) as any;
   const sleeps: number[] = [];
   try {

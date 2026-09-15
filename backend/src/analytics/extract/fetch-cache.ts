@@ -19,6 +19,7 @@ export interface FetchCacheOptions {
   ttlMs?: number; // <=0 disables caching (default: off)
   dir?: string; // cache directory (default from FETCH_CACHE_DIR, else <tmp>/robotmoney-fetch-cache)
   now?: () => number; // injectable clock for tests
+  onStatus?: (status: "disabled" | "hit" | "miss") => void;
 }
 
 interface CacheEnvelope<T> {
@@ -66,7 +67,10 @@ export async function withFetchCache<T>(
   opts: FetchCacheOptions = {},
 ): Promise<T> {
   const ttl = cacheTtlMs(opts);
-  if (ttl <= 0) return fetcher();
+  if (ttl <= 0) {
+    opts.onStatus?.("disabled");
+    return fetcher();
+  }
 
   const now = opts.now ?? Date.now;
   const dir = cacheDir(opts);
@@ -76,12 +80,14 @@ export async function withFetchCache<T>(
     const raw = await readFile(path, "utf8");
     const env = JSON.parse(raw) as CacheEnvelope<T>;
     if (typeof env.ts === "number" && now() - env.ts < ttl) {
+      opts.onStatus?.("hit");
       return env.body;
     }
   } catch {
     // miss / expired / unreadable → fall through to a live fetch
   }
 
+  opts.onStatus?.("miss");
   const body = await fetcher();
   try {
     mkdirSync(dir, { recursive: true });

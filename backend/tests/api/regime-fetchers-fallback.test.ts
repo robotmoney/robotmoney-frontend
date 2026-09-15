@@ -26,21 +26,11 @@ function mockFetchReject(message: string) {
 }
 
 function mockFetchHttpError(status: number, statusText: string) {
-  return (async () => ({
-    ok: false,
-    status,
-    statusText,
-    text: async () => "",
-  })) as unknown as typeof fetch;
+  return (async () => new Response("", { status, statusText })) as unknown as typeof fetch;
 }
 
 function mockFetchEmptyCsv() {
-  return (async () => ({
-    ok: true,
-    status: 200,
-    statusText: "OK",
-    text: async () => "DATE,BAMLH0A0HYM2\n", // header only — 0 usable rows
-  })) as unknown as typeof fetch;
+  return (async () => new Response("DATE,BAMLH0A0HYM2\n", { status: 200 })) as unknown as typeof fetch;
 }
 
 test("fetchOne(HY_OAS) throws on a network failure — the caller decides the fallback, per its documented contract", async () => {
@@ -100,12 +90,8 @@ test("gracefully falls back: a hard fetch failure merged against the persisted f
 // seed rather than relying on a fresh purge-mode fetch to reproduce them.
 test("without a persisted floor, a truncated live fetch alone cannot recover pre-window history (motivates the preserve-list floor seed)", async () => {
   const orig = globalThis.fetch;
-  globalThis.fetch = (async () => ({
-    ok: true,
-    status: 200,
-    statusText: "OK",
-    text: async () => "DATE,BAMLH0A0HYM2\n2023-08-15,3.85\n2023-08-16,3.84\n",
-  })) as unknown as typeof fetch;
+  globalThis.fetch = (async () =>
+    new Response("DATE,BAMLH0A0HYM2\n2023-08-15,3.85\n2023-08-16,3.84\n", { status: 200 })) as unknown as typeof fetch;
   try {
     const live = await fetchOne(HY_OAS);
     const merged = mergeSeries([], live);

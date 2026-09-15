@@ -162,6 +162,9 @@ export async function runAnalytics(
   const want = (id: string) => (wanted ? wanted.has(id) : !toolId || toolId === id);
   const results: Record<string, unknown> = {};
   const sourceLabel = source === hermeticDataSource ? "hermetic" : source === liveDataSource ? "live" : "fixture";
+  const acquisitionSink = persistence.saveSourceAcquisition
+    ? { saveSourceAcquisition: persistence.saveSourceAcquisition.bind(persistence) }
+    : undefined;
   const collector = new TelemetryCollector();
   let runFailed: unknown = null;
 
@@ -188,7 +191,7 @@ export async function runAnalytics(
     }
     let t0 = new Date();
     const floor = await getPersisted();
-    const fetched = await source.fetchIndicators(INDICATORS, logger);
+    const fetched = await source.fetchIndicators(INDICATORS, logger, acquisitionSink, jobId ?? null);
     collector.stage("access", "ok", `fetched ${INDICATORS.length} registry indicator(s) from the ${sourceLabel} source`, t0);
 
     t0 = new Date();
@@ -256,7 +259,7 @@ export async function runAnalytics(
     // (SPX/ETH price levels + DTB3 yield; NOT registry indicators). A failed
     // extras fetch degrades to []: correlations/backtest simply carry fewer/no
     // pairs rather than throwing. Baked onto the latest snapshot row (asof view).
-    const extras = await source.fetchBacktestExtras(logger);
+    const extras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
     let backtest: BacktestPayload | null = null;
     let correlations: CorrelationsPayload | null = null;
     let analyzeStatus: "ok" | "warn" = "ok";
@@ -315,7 +318,7 @@ export async function runAnalytics(
     const inputs = await source.fetchResearchInputs(asof, logger, {
       persistedMna: floor.MNA ?? [],
       deadlineAt: Date.now() + defaultEdgarRefreshDeadlineMs(edgarTier),
-    });
+    }, acquisitionSink, jobId ?? null);
     collector.stage("access", "ok", `fetched research inputs from the ${sourceLabel} source`, t0);
 
     if (want("channel-divergence")) {

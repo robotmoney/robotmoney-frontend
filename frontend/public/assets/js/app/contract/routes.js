@@ -247,6 +247,7 @@ export const ROUTES = {
   analytics: {
     readiness: "/api/analytics/readiness", // GET — authenticate producer credential; no data read or mutation
     rawHistory: "/api/analytics/raw-history", // GET → persisted floor; POST — batch upsert on (date, indicator)
+    sourceAcquisitions: "/api/analytics/source-acquisitions", // POST — immutable provider fetch/value evidence
     rawHistorySeed: "/api/analytics/raw-history/seed", // POST — cold-DB gap-fill (existing rows win; EDGAR seed ingestion)
     regimeSnapshots: "/api/analytics/regime-snapshots", // POST — snapshot batch upsert on (date)
     researchSignals: "/api/analytics/research-signals", // POST — signal batch upsert on (signal_key, date)
