@@ -7,6 +7,7 @@
 import { sql } from "../../db/client.ts";
 import type { AnalyticsPersistence } from "../persistence.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "./raw-history-store.ts";
+import { saveSourceAcquisition } from "./source-ledger-store.ts";
 import { applyRawFloorSeed } from "./floor-seed.ts";
 import { saveRegimeSnapshots } from "./regime-store.ts";
 import { persistResearchSignal, loadRecentResearchSignalDates } from "./research-store.ts";
@@ -14,6 +15,7 @@ import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
+  saveSourceAcquisition,
   loadRawHistory: () => loadRawIndicatorHistory(),
   saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),
   // Gap-fill inside one transaction so a mid-seed failure never leaves a

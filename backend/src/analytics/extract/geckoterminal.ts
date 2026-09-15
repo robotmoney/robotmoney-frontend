@@ -27,6 +27,7 @@ import type { Point } from "../types.ts";
 import { isoDay } from "../transform/math.ts";
 import { UA } from "./http.ts";
 import { withFetchCache } from "./fetch-cache.ts";
+import { recordSourceFetch, type CacheStatus } from "../source-ledger.ts";
 
 const ENDPOINT = "https://api.geckoterminal.com/api/v2/networks/new_pools";
 const MAX_PAGES = 10;
@@ -95,7 +96,9 @@ async function fetchNewPoolsPage(
   sleep: Sleep,
 ): Promise<unknown> {
   const url = geckoTerminalUrl(page);
-  return withFetchCache("json", url, async () => {
+  const headers = { "user-agent": UA, accept: "application/json" };
+  let cacheStatus: CacheStatus = "disabled";
+  const result = await withFetchCache<{ payloadBase64: string }>("json", url, async () => {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_PAGE; attempt++) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
@@ -109,12 +112,19 @@ async function fetchNewPoolsPage(
       try {
         res = await fetch(url, {
           signal: ac.signal,
-          headers: { "user-agent": UA, accept: "application/json" },
+          headers,
         });
+      } catch (error) {
+        recordSourceFetch({ url, headers, cacheStatus, error });
+        throw error;
       } finally {
         clearTimeout(timer);
       }
-      if (res.ok) return await res.json();
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      recordSourceFetch({ url, headers, cacheStatus, responseStatus: res.status, payload: bytes,
+        providerReleaseId: res.headers.get("etag") ?? res.headers.get("last-modified"),
+        error: res.ok ? undefined : `${res.status} ${res.statusText}` });
+      if (res.ok) return { payloadBase64: Buffer.from(bytes).toString("base64") };
       if (!TRANSIENT_STATUSES.has(res.status)) throw new Error(`${res.status} ${res.statusText} for ${url}`);
       const wait =
         attempt < MAX_ATTEMPTS_PER_PAGE
@@ -132,7 +142,10 @@ async function fetchNewPoolsPage(
       await sleep(wait);
     }
     throw new Error(`geckoterminal: page ${page} unrecovered after ${MAX_ATTEMPTS_PER_PAGE} attempts`);
-  });
+  }, { onStatus: (status) => { cacheStatus = status; } });
+  const bytes = new Uint8Array(Buffer.from(result.payloadBase64, "base64"));
+  if ((cacheStatus as CacheStatus) === "hit") recordSourceFetch({ url, headers, cacheStatus, responseStatus: 200, payload: bytes });
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 // Pure: count firehose entries whose pool_created_at falls within [now-window, now].
