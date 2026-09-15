@@ -29,6 +29,7 @@ import {
   isAppendOnlyRefusal,
   triggerNames,
 } from "../src/db/append-only-guard.ts";
+import { LEDGER_FAMILIES, checkAnalyticsLedgerGuard, ledgerTriggerNames } from "../src/db/analytics-ledger-guard.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -211,5 +212,102 @@ describe("the append-only guard's runtime check", () => {
     expect(err?.code, "the fixture must really be a 0A000 from Postgres itself").toBe("0A000");
     expect(err?.message).toMatch(/cannot truncate a table referenced in a foreign key constraint/);
     expect(isAppendOnlyRefusal(raised, "swarm_members"), "0A000 is not evidence; the message is").toBe(false);
+  });
+});
+
+// Issue #979 AC6: the production startup guard for the Phase A LEDGER's own
+// immutability triggers — a DIFFERENT trigger family from rm_append_only_guard
+// above (source/run/output/cutover ledgers, migrations 0057-0060), each of
+// which blocks UPDATE too. Same "probe, don't just inventory" discipline: a
+// neutered trigger FUNCTION disarms every table in its family while the
+// catalog still reports every trigger present, ENABLE ALWAYS, and correctly
+// named — so this suite removes/disables real guards and requires the
+// checker's own probe to catch it, never merely a trigger count.
+describe("the analytics ledger immutability guard's runtime check (issue #979)", () => {
+  afterEach(async () => {
+    // Restore every family's function to its shipped, migration-defined body.
+    for (const family of LEDGER_FAMILIES) {
+      await sql.unsafe(`
+        CREATE OR REPLACE FUNCTION public.${family.functionName}() RETURNS trigger
+        LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+        BEGIN
+          RAISE EXCEPTION '${family.label} is immutable: % is not permitted on %', TG_OP, TG_TABLE_NAME
+            USING ERRCODE = 'feature_not_supported';
+        END;
+        $fn$;`);
+      for (const table of family.tables) {
+        const names = ledgerTriggerNames(table);
+        await sql.unsafe(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER ${names.statement}`).catch(() => {});
+        await sql.unsafe(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER ${names.row}`).catch(() => {});
+      }
+    }
+  });
+
+  test("reports 'armed' on a freshly migrated database", async () => {
+    const result = await checkAnalyticsLedgerGuard(sql);
+    expect(result.problems).toEqual([]);
+    expect(result.status).toBe("armed");
+  });
+
+  test("a neutered function disarms an ENTIRE family (UPDATE, DELETE, AND TRUNCATE) while the catalog still looks perfect", async () => {
+    const family = LEDGER_FAMILIES.find((f) => f.functionName === "rm_source_ledger_immutable")!;
+    await sql.unsafe(`
+      CREATE OR REPLACE FUNCTION public.${family.functionName}() RETURNS trigger
+      LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN COALESCE(NEW, OLD); END IF; RETURN NULL; END $$;`);
+
+    // The catalog is untouched: every trigger still exists, still names the
+    // right function, still reports ENABLE ALWAYS.
+    const rows = (await sql`
+      SELECT c.relname::text AS table_name, t.tgenabled::text AS enabled, p.proname::text AS function_name
+      FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_proc p ON p.oid = t.tgfoid
+      WHERE NOT t.tgisinternal AND c.relname = ANY(${[...family.tables]}::text[])`) as unknown as
+      { table_name: string; enabled: string; function_name: string }[];
+    expect(rows.length).toBe(family.tables.length * 2);
+    expect(rows.every((r) => r.enabled === "A" && r.function_name === family.functionName)).toBe(true);
+
+    // And a real row in a real table of this family can now be rewritten AND
+    // removed — proved by doing it.
+    const acquisition = crypto.randomUUID();
+    await sql`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisition}, 'fixture', '1', 'guard-check')`;
+    await sql.unsafe(`UPDATE source_acquisitions SET cache_identity = 'rewritten' WHERE id = '${acquisition}'`);
+    await sql.unsafe(`DELETE FROM source_acquisitions WHERE id = '${acquisition}'`);
+    const left = await sql`SELECT 1 FROM source_acquisitions WHERE id = ${acquisition}`;
+    expect(left.length, "a disarmed guard let the row be rewritten AND removed").toBe(0);
+
+    // The real check catches it on every table in the family, for every
+    // operation the family is supposed to block.
+    const result = await checkAnalyticsLedgerGuard(sql);
+    expect(result.status).toBe("disarmed");
+    for (const table of family.tables) {
+      expect(result.problems.some((p) => p.startsWith(`${table}: a UPDATE was ACCEPTED`))).toBe(true);
+      expect(result.problems.some((p) => p.startsWith(`${table}: a DELETE was ACCEPTED`))).toBe(true);
+    }
+  });
+
+  test("catches a single DROPPED trigger on one table of one family, in a database that is otherwise armed", async () => {
+    await sql.unsafe(`DROP TRIGGER analytics_ledger_runs_immutable_row ON analytics_ledger_runs`);
+    try {
+      const result = await checkAnalyticsLedgerGuard(sql);
+      expect(result.status).toBe("disarmed");
+      expect(result.problems.some((p) => p.includes("analytics_ledger_runs: the row-level analytics run ledger trigger 'analytics_ledger_runs_immutable_row' is MISSING"))).toBe(true);
+    } finally {
+      await sql.unsafe(
+        `CREATE TRIGGER analytics_ledger_runs_immutable_row BEFORE UPDATE OR DELETE ON analytics_ledger_runs
+         FOR EACH ROW EXECUTE FUNCTION rm_analytics_run_ledger_immutable()`,
+      );
+      await sql.unsafe(`ALTER TABLE analytics_ledger_runs ENABLE ALWAYS TRIGGER analytics_ledger_runs_immutable_row`);
+    }
+  });
+
+  test("catches ENABLE REPLICA TRIGGER on the output ledger family, which a 'try one delete' hand-check would NOT catch", async () => {
+    await sql.unsafe(`ALTER TABLE analytics_report_snapshots ENABLE REPLICA TRIGGER analytics_report_snapshots_immutable`);
+    try {
+      const result = await checkAnalyticsLedgerGuard(sql);
+      expect(result.status).toBe("disarmed");
+      const joined = result.problems.join("\n");
+      expect(joined).toContain("tgenabled='R'");
+    } finally {
+      await sql.unsafe(`ALTER TABLE analytics_report_snapshots ENABLE ALWAYS TRIGGER analytics_report_snapshots_immutable`);
+    }
   });
 });
