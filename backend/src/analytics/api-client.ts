@@ -11,8 +11,15 @@ import { ROUTES } from "@robotmoney/contract";
 import type { RawIndicatorHistory } from "./types.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
-import type { AnalyticsPersistence, FloorSeedResult, BeginRunResult, FreezeVintageResult } from "./persistence.ts";
+import type {
+  AnalyticsPersistence,
+  FloorSeedResult,
+  BeginRunResult,
+  FreezeVintageResult,
+  TerminalRunPackageResult,
+} from "./persistence.ts";
 import type { RunLifecycleEvent } from "./run-ledger.ts";
+import type { TerminalRunPackageInput } from "./output-snapshots.ts";
 import { envSecret } from "../lib/env-secret.ts";
 
 export interface AnalyticsApiConfig {
@@ -77,6 +84,27 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
     },
     async freezeVintage(input) {
       return await call<FreezeVintageResult>("POST", ROUTES.analytics.vintages, { vintage: input });
+    },
+    async submitTerminalRunPackage(input: TerminalRunPackageInput) {
+      const wire =
+        input.status === "succeeded"
+          ? {
+              runId: input.runId,
+              asof: input.asof,
+              status: input.status,
+              regimeSnapshots: input.regimeSnapshots ?? [],
+              researchSignals: input.researchSignals ?? [],
+              reportBase64: Buffer.from(input.reportBytes ?? new Uint8Array()).toString("base64"),
+            }
+          : {
+              runId: input.runId,
+              asof: input.asof,
+              status: input.status,
+              warnings: input.warnings ?? [],
+              logs: input.logs ?? [],
+              exceptions: input.exceptions ?? [],
+            };
+      return await call<TerminalRunPackageResult>("POST", ROUTES.analytics.runPackage, { package: wire });
     },
     async saveSourceAcquisition(acquisition) {
       return await call<{ acquisitionId: string; replayed: boolean }>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });

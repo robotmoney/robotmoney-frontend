@@ -14,11 +14,13 @@ import { persistResearchSignal, loadRecentResearchSignalDates } from "./research
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
 import { beginRun, appendRunEvent, freezeVintage } from "./run-ledger-store.ts";
+import { submitTerminalRunPackage } from "./output-snapshot-store.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
   beginRun,
   appendRunEvent,
   freezeVintage,
+  submitTerminalRunPackage,
   saveSourceAcquisition,
   loadRawHistory: () => loadRawIndicatorHistory(),
   saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),

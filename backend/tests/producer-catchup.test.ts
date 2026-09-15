@@ -21,7 +21,7 @@ const iso = (offsetDays: number) => new Date(NOW.getTime() - offsetDays * DAY_MS
 // These fixtures test the PRODUCER's catch-up scheduling, never runAnalytics
 // itself — none of them are ever wired through the issue #977 run ledger, so
 // this stub only needs to satisfy AnalyticsPersistence's shape.
-const NOOP_RUN_LEDGER: Pick<AnalyticsPersistence, "beginRun" | "appendRunEvent" | "freezeVintage"> = {
+const NOOP_RUN_LEDGER: Pick<AnalyticsPersistence, "beginRun" | "appendRunEvent" | "freezeVintage" | "submitTerminalRunPackage"> = {
   beginRun: async () => ({ runId: "0", methodologyVersionId: "0", replayed: false }),
   appendRunEvent: async () => {},
   freezeVintage: async () => ({
@@ -33,6 +33,7 @@ const NOOP_RUN_LEDGER: Pick<AnalyticsPersistence, "beginRun" | "appendRunEvent" 
     memberCount: 0,
     replayed: false,
   }),
+  submitTerminalRunPackage: async () => ({ outputSnapshots: [], reportSnapshotId: null, replayed: false }),
 };
 
 test("computeMissingResearchDays: a fully-populated window reports nothing missing", () => {

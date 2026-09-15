@@ -20,6 +20,7 @@ import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/acces
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { loadRawIndicatorHistory, loadRegimeHistory, loadJsonGz } from "./fixtures/regime/load.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import * as swarmDomain from "../src/swarm/domain.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
@@ -198,6 +199,51 @@ test(
       SELECT composite, regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
     expect(Math.abs(Number(latestAfterLedger.composite) - gt.composite)).toBeLessThan(TOL);
     expect(latestAfterLedger.regime).toBe(gt.regime);
+
+    // ── (6) issue #978 wiring: runAnalytics itself — not a test calling
+    // submitTerminalRunPackage by hand — is what freezes the terminal
+    // output/report snapshot for every real run. This is the production
+    // wiring gap the independent review found: without it,
+    // analytics_output_snapshots/analytics_report_snapshots stay empty for
+    // every real run and swarm_briefs.report_snapshot_id can never resolve
+    // to a real row. ──
+    for (const ledger of [firstLedger, secondLedger]) {
+      const [{ n: outputRows }] = await sql`
+        SELECT COUNT(*)::int AS n FROM analytics_output_snapshots WHERE run_id = ${ledger.runId}::bigint`;
+      expect(outputRows).toBeGreaterThan(0);
+      const kinds = (
+        await sql`SELECT artifact_kind FROM analytics_output_snapshots WHERE run_id = ${ledger.runId}::bigint ORDER BY artifact_kind`
+      ).map((r) => r.artifact_kind);
+      expect(kinds).toEqual(["regime_snapshots", "research_signals"]);
+    }
+    // Both the first (whole-suite) run and the second (regime-only re-run)
+    // ran for the SAME market date, so each froze its own independently
+    // addressable report snapshot for ASOF (issue #978: never per-date,
+    // always per-run).
+    for (const ledger of [firstLedger, secondLedger]) {
+      const [{ n: reportRowsForRun }] = await sql`
+        SELECT COUNT(*)::int AS n FROM analytics_report_snapshots WHERE run_id = ${ledger.runId}::bigint`;
+      expect(reportRowsForRun).toBe(1);
+    }
+    // publishBrief resolves to the NEWEST report snapshot for the session's
+    // date — the second run's, per its own `ORDER BY id DESC LIMIT 1`.
+    const [newestReportForAsof] = await sql`
+      SELECT id::text AS id FROM analytics_report_snapshots WHERE asof = ${ASOF}::date ORDER BY id DESC LIMIT 1`;
+
+    // publishBrief for a session dated ASOF resolves swarm_briefs.report_snapshot_id
+    // to that REAL, non-null row — not NULL, which is what the review found in
+    // production before runAnalytics called submitTerminalRunPackage at all.
+    const subjectId = `analytics-suite-wiring-${crypto.randomUUID().slice(0, 8)}`;
+    await swarmDomain.ensureSubject(subjectId, "Analytics Suite Wiring Subject");
+    const session = await swarmDomain.openSession(subjectId);
+    // `date` is a STORED generated column derived from `convened_at` (issue
+    // #150/committee_session_convened_at) — bind this session to ASOF by
+    // setting the column it is actually generated from.
+    await sql`UPDATE swarm_sessions SET convened_at = ${ASOF}::date WHERE id = ${session.id}`;
+    await swarmDomain.publishBrief(session.id, 60);
+    const [brief] = await sql`SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`;
+    expect(brief.report_snapshot_id).not.toBeNull();
+    expect(String(brief.report_snapshot_id)).toBe(newestReportForAsof!.id);
   },
   { timeout: 180_000 },
 );

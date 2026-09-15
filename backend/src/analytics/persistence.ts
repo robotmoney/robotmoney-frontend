@@ -16,6 +16,7 @@ import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
 import type { SourceAcquisitionEvidence } from "./source-ledger.ts";
 import type { MethodologyIdentity, RunLifecycleEvent, VintageManifest } from "./run-ledger.ts";
+import type { OutputArtifactKind, TerminalRunPackageInput } from "./output-snapshots.ts";
 
 export interface FloorSeedResult {
   seededPoints: number; // rows actually written this run (gap-fill only)
@@ -33,6 +34,24 @@ export interface FreezeVintageResult {
   vintageId: string;
   manifest: VintageManifest;
   memberCount: number;
+  replayed: boolean;
+}
+
+// Issue #978: the frozen output/report snapshot layer's own result shape —
+// structurally identical to store/output-snapshot-store.ts's own
+// OutputSnapshotRecord/TerminalRunPackageResult (same split as
+// BeginRunResult/FreezeVintageResult above: this file stays pure/I/O-free so
+// the producer's api-client.ts can import it without ever importing SQL).
+export interface OutputSnapshotRecord {
+  id: string;
+  artifactKind: OutputArtifactKind;
+  checksum: string;
+  byteLength: number;
+}
+
+export interface TerminalRunPackageResult {
+  outputSnapshots: OutputSnapshotRecord[];
+  reportSnapshotId: string | null;
   replayed: boolean;
 }
 
@@ -60,6 +79,13 @@ export interface AnalyticsPersistence {
     methodologyVersionId: string;
     buildIdentity: string;
   }): Promise<FreezeVintageResult>;
+  // Issue #978: submit one terminal run package (see output-snapshots.ts's
+  // header) bound to this run's id — the complete, immutable output/report
+  // evidence for a run that reached a terminal outcome. Mandatory, like
+  // freezeVintage above, NOT best-effort like telemetry: a run whose
+  // outputs/report (or warning/log/exception artifacts) could not be
+  // durably frozen must not read as quiet success.
+  submitTerminalRunPackage(input: TerminalRunPackageInput): Promise<TerminalRunPackageResult>;
   // Append one complete provider acquisition atomically. The producer-generated
   // UUID is the replay key; prior evidence is never mutated on replay.
   saveSourceAcquisition?(evidence: SourceAcquisitionEvidence): Promise<{ acquisitionId: string; replayed: boolean }>;

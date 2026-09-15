@@ -53,6 +53,14 @@ import { telemetryHttpSink } from "./telemetry-client.ts";
 import { randomUUID } from "node:crypto";
 import { resolveBuildIdentity } from "./build-identity.ts";
 import type { MethodologyIdentity } from "./run-ledger.ts";
+import { canonicalStringify } from "./output-snapshots.ts";
+import type {
+  TerminalRunPackageInput,
+  ResearchSignalArtifact,
+  WarningArtifact,
+  LogArtifact,
+  ExceptionArtifact,
+} from "./output-snapshots.ts";
 
 const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
 // R6 follow-up (two-tier EDGAR refresh, see edgar-incremental-refresh.ts):
@@ -199,6 +207,13 @@ export async function runAnalytics(
   const getPersisted = async () => (persisted ??= await persistence.loadRawHistory());
   let mergedRaw: Record<string, { date: string; value: number }[]> | null = null;
   let vintage: Awaited<ReturnType<AnalyticsPersistence["freezeVintage"]>> | null = null;
+  // Issue #978: the complete regime-snapshot rows and research-signal
+  // payloads THIS run actually computed and persisted — captured here (not
+  // recomputed) so the terminal run package submitted at the end below is
+  // exactly what saveRegimeSnapshots/saveResearchSignal above already wrote,
+  // never a second, possibly-divergent serialization.
+  let regimeSnapshotRows: RegimeSnapshotRow[] | null = null;
+  const researchSignalArtifacts: ResearchSignalArtifact[] = [];
 
   try {
   // ── REGIME ────────────────────────────────────────────────────────────────
@@ -319,6 +334,7 @@ export async function runAnalytics(
     t0 = new Date();
     await persistence.saveRegimeSnapshots(rows);
     collector.stage("store", "ok", `persisted ${rows.length} regime snapshot row(s)`, t0);
+    regimeSnapshotRows = rows;
 
     results.regime = {
       asof,
@@ -371,6 +387,7 @@ export async function runAnalytics(
       await persistence.saveResearchSignal("channel-divergence", asof, payload);
       collector.stage("store", "ok", "persisted channel-divergence research signal", t0);
 
+      researchSignalArtifacts.push({ key: "channel-divergence", date: asof, payload });
       results["channel-divergence"] = payload;
     }
 
@@ -443,6 +460,7 @@ export async function runAnalytics(
         t0 = new Date();
         await persistence.saveResearchSignal("late-cycle-signals", asof, payload);
         collector.stage("store", "ok", "persisted late-cycle-signals research signal", t0);
+        researchSignalArtifacts.push({ key: "late-cycle-signals", date: asof, payload });
         results["late-cycle-signals"] = payload;
       }
     }
@@ -499,6 +517,59 @@ export async function runAnalytics(
   } catch (ledgerEventError) {
     if (!runFailed) runFailed = ledgerEventError;
   }
+
+  // ── ISSUE #978: freeze the terminal output/report snapshot ──────────────
+  // Mandatory, NOT best-effort like telemetry above — mirrors freezeVintage:
+  // every run that reaches a terminal outcome (succeeded, degraded, or
+  // failed) submits ONE complete package bound to this run's id, so
+  // analytics_output_snapshots/analytics_report_snapshots are never empty
+  // for a real run and swarm_briefs.report_snapshot_id can resolve to a real
+  // row. `overallStatus` (computed above, before the mandatory ledger event
+  // that may have since escalated `runFailed`) decides the shape: a
+  // "degraded" run still produced real regime/research outputs, so it
+  // freezes exactly like a "succeeded" one — only a run whose OWN stages
+  // never reached a usable output freezes its warnings/logs/exceptions
+  // instead.
+  const terminalPackage: TerminalRunPackageInput =
+    overallStatus === "failed"
+      ? {
+          runId,
+          asof,
+          status: "failed",
+          warnings: collector.warnings as WarningArtifact[],
+          logs: collector.stages.map(
+            (s): LogArtifact => ({
+              level: s.status === "error" ? "error" : s.status === "warn" ? "warn" : "info",
+              message: `[${s.stage}] ${s.summary}`,
+              at: s.finishedAt,
+            }),
+          ),
+          exceptions: [
+            {
+              message: String((runFailed as any)?.message ?? runFailed),
+              stack: (runFailed as any)?.stack ?? null,
+            } satisfies ExceptionArtifact,
+          ],
+        }
+      : {
+          runId,
+          asof,
+          status: "succeeded",
+          regimeSnapshots: regimeSnapshotRows ?? [],
+          researchSignals: researchSignalArtifacts,
+          // The report IS this run's own complete structured output — not a
+          // second, independently-generated document — so a byte-exact
+          // retrieval of it is exactly what runAnalytics computed and
+          // returned, canonicalized the same way the run/vintage ledger
+          // above canonicalizes its own evidence.
+          reportBytes: new TextEncoder().encode(canonicalStringify({ asof, toolId: runToolId, results })),
+        };
+  try {
+    await persistence.submitTerminalRunPackage(terminalPackage);
+  } catch (packageError) {
+    if (!runFailed) runFailed = packageError;
+  }
+
   Object.defineProperty(results, "__runLedger", {
     value: { runId, methodologyVersionId, buildIdentity, vintage },
     enumerable: false,

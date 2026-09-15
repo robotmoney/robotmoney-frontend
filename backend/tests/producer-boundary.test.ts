@@ -25,6 +25,7 @@ function recordingPersistence(): AnalyticsPersistence {
         replayed: false,
       };
     },
+    async submitTerminalRunPackage() { return { outputSnapshots: [], reportSnapshotId: null, replayed: false }; },
     async loadRawHistory() { return {}; },
     async saveRawHistory() {},
     async seedRawHistory() { return { seededPoints: 0, existingPoints: 0, indicators: 0 }; },

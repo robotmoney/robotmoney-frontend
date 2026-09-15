@@ -30,6 +30,7 @@ function fakePersistence(overrides: Partial<AnalyticsPersistence> = {}): Analyti
       memberCount: 0,
       replayed: false,
     }),
+    submitTerminalRunPackage: async () => ({ outputSnapshots: [], reportSnapshotId: null, replayed: false }),
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
