@@ -20,6 +20,7 @@ const SIGNING_KEYS = new Set([
   "confidence",
   "body",
   "memoUrl",
+  "reportSnapshotId",
   "weights",
 ]);
 
@@ -32,6 +33,7 @@ const SUBMISSION_KEYS = new Set([
   "confidence",
   "body",
   "memoUrl",
+  "reportSnapshotId",
   "weights",
   "signature",
 ]);
@@ -76,6 +78,16 @@ export function optionalString(
   if (body[key] == null || body[key] === "") return undefined;
   const value = requiredString(body, key, max);
   return value ?? undefined;
+}
+
+// Issue #978 AC6: a positive-integer id (analytics_report_snapshots.id, a
+// Postgres bigint) as a string, or omitted. `null` signals "present but
+// malformed" the same way optionalWeights does, so callers can distinguish
+// it from "the field was never sent".
+function optionalReportSnapshotId(body: JsonObject): string | null | undefined {
+  if (body.reportSnapshotId == null) return undefined;
+  const v = body.reportSnapshotId;
+  return typeof v === "string" && /^[1-9][0-9]{0,30}$/.test(v) ? v : null;
 }
 
 function optionalWeights(body: JsonObject): { bucket: string; weight: number }[] | null | undefined {
@@ -145,6 +157,7 @@ export function validateSubmission(
   const signature = requiredString(body, "signature", 2000);
   const confidence = body.confidence;
   const weights = optionalWeights(body);
+  const reportSnapshotId = optionalReportSnapshotId(body);
 
   if (typeof body.stance === "string") {
     const s = body.stance.trim();
@@ -171,6 +184,10 @@ export function validateSubmission(
     return { ok: false, error: "invalid weights" };
   }
 
+  if (reportSnapshotId === null) {
+    return { ok: false, error: "reportSnapshotId must be a positive integer id (string), or omitted" };
+  }
+
   if (
     !memberId || !date || !subjectId || !nonce || !stance || !signature ||
     typeof confidence !== "number"
@@ -190,6 +207,7 @@ export function validateSubmission(
       signature,
       body: optionalString(body, "body", 10_000),
       memoUrl: optionalString(body, "memoUrl", 2000),
+      reportSnapshotId,
       weights,
     },
   };
@@ -217,6 +235,7 @@ export function validateSigningDraft(
   const stance = requiredString(body, "stance", 100);
   const confidence = body.confidence;
   const weights = optionalWeights(body);
+  const reportSnapshotId = optionalReportSnapshotId(body);
 
   if (typeof body.stance === "string") {
     const s = body.stance.trim();
@@ -243,6 +262,10 @@ export function validateSigningDraft(
     return { ok: false, error: "invalid weights" };
   }
 
+  if (reportSnapshotId === null) {
+    return { ok: false, error: "reportSnapshotId must be a positive integer id (string), or omitted" };
+  }
+
   if (
     !memberId || !date || !subjectId || !nonce || !stance ||
     typeof confidence !== "number"
@@ -261,6 +284,7 @@ export function validateSigningDraft(
       confidence,
       body: optionalString(body, "body", 10_000),
       memoUrl: optionalString(body, "memoUrl", 2000),
+      reportSnapshotId,
       weights,
     },
   };

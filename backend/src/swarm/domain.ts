@@ -687,6 +687,12 @@ export async function getBrief(date: string, subjectId: string) {
 export interface SubmissionInput {
   memberId: string; date: string; subjectId: string; nonce: string;
   stance: string; confidence: number; body?: string; memoUrl?: string;
+  // Issue #978 AC6: naming a reportSnapshotId signs schema 2.0
+  // (canonicalizeSubmission) and binds the take to the exact analytics
+  // report snapshot its author saw. Optional so a schema-1.0 (legacy)
+  // submission still verifies unchanged; submitRecommendation below rejects
+  // one that does not match the session's OWN brief.
+  reportSnapshotId?: string;
   weights?: { bucket: string; weight: number }[]; signature: string;
 }
 
@@ -739,6 +745,27 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   }
   if (session.window_closes_at && new Date(session.window_closes_at).getTime() < Date.now())
     return { ok: false, status: 409, error: "submission window closed" };
+
+  // Report-snapshot binding (issue #978 AC6). Once this session's brief is
+  // bound to an analytics report snapshot, every take must name the SAME
+  // one — a stale or mismatched reportSnapshotId is refused here, BEFORE the
+  // Ed25519 verify (same "cheap refusals first" discipline as the checks
+  // below): a genuinely tampered id is instead caught by the signature
+  // itself failing to verify (schema 2.0's canonical bytes include it), so
+  // this check exists for the HONEST-but-wrong case, not the forged one.
+  // A brief with no bound report snapshot (report_snapshot_id NULL — no
+  // analytics run has submitted a report for this session's date) imposes
+  // no requirement, so a schema-1.0 (legacy) submission keeps working.
+  const brief = (await sql<{ report_snapshot_id: string | null }[]>`
+    SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`)[0];
+  const boundReportSnapshotId = brief?.report_snapshot_id != null ? String(brief.report_snapshot_id) : null;
+  if (boundReportSnapshotId !== null && sub.reportSnapshotId !== boundReportSnapshotId) {
+    return {
+      ok: false,
+      status: 409,
+      error: `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`,
+    };
+  }
 
   // Roster gate (issue #152, AC6): sessions created through the admin surface
   // (swarm/admin.ts createSessionAdmin) carry a FROZEN expected roster in
@@ -874,12 +901,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // the two-statement path explainable in the audit row.
     const rows = await sql`
       INSERT INTO swarm_recommendations
-        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision, signing_key_id)
+        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision, signing_key_id, report_snapshot_id)
       SELECT s.id, ${memberId}, ${sub.subjectId}, ${sub.date}, ${sub.nonce}, ${sub.stance},
              ${sub.confidence}, ${sub.body ?? null}, ${sub.memoUrl ?? null}, ${sql.json(sub as any)}, ${sub.signature}, true,
              (SELECT coalesce(max(r.revision), 0) + 1 FROM swarm_recommendations r
               WHERE r.session_id = s.id AND r.member_id = ${memberId}),
-             ${key.id}
+             ${key.id}, ${sub.reportSnapshotId ?? null}::bigint
       FROM swarm_sessions s
       WHERE s.id = ${session.id}
         AND (s.window_closes_at IS NULL OR s.window_closes_at > now())

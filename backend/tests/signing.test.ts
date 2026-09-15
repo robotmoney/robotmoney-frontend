@@ -73,6 +73,49 @@ test("weights-less canonical bytes and pre-recorded signatures remain backward c
   expect(await verifySubmissionSignature(legacySubmission, legacySignatureB64, legacyPublicKeyB64)).toBe(true);
 });
 
+// ---------------------------------------------------------------------------
+// Issue #978 AC6 — schema 2.0 (reportSnapshotId-bound submissions).
+//
+// A submission that names a reportSnapshotId signs schema 2.0: an explicit
+// `schemaVersion` marker plus the field itself, appended in a FIXED position
+// (after memoUrl, before weights) so both fixtures below are pinned exactly,
+// not merely "parses back to the same object" — a byte-for-byte pin is what
+// would catch a future refactor that reorders or retypes a field silently.
+// ---------------------------------------------------------------------------
+
+const v1Fixture = { memberId: "m1", date: "2026-08-01", subjectId: "subj", nonce: "n-v1", stance: "neutral", confidence: 0.5, body: "v1 body", memoUrl: "" };
+const v2Fixture = { ...v1Fixture, nonce: "n-v2", reportSnapshotId: "42" };
+
+test("schema 1.0 (legacy, unversioned) canonical bytes carry no schemaVersion and no reportSnapshotId — a fixed fixture, pinned exactly", () => {
+  expect(canonicalizeSubmission(v1Fixture)).toBe(
+    '{"memberId":"m1","date":"2026-08-01","subjectId":"subj","nonce":"n-v1","stance":"neutral","confidence":0.5,"body":"v1 body","memoUrl":""}',
+  );
+});
+
+test("schema 2.0 canonical bytes include an explicit schemaVersion marker AND reportSnapshotId — a fixed fixture, pinned exactly", () => {
+  expect(canonicalizeSubmission(v2Fixture)).toBe(
+    '{"schemaVersion":"2.0","memberId":"m1","date":"2026-08-01","subjectId":"subj","nonce":"n-v2","stance":"neutral","confidence":0.5,"body":"v1 body","memoUrl":"","reportSnapshotId":"42"}',
+  );
+});
+
+test("schema 2.0: a valid v2 submission verifies, and CHANGING the reportSnapshotId (without re-signing) invalidates the signature", async () => {
+  const identity = await generateKeyPair();
+  const signature = await signMessage(canonicalizeSubmission(v2Fixture), identity.privateKey);
+  expect(await verifySubmissionSignature(v2Fixture, signature, identity.publicKeyB64)).toBe(true);
+  expect(await verifySubmissionSignature({ ...v2Fixture, reportSnapshotId: "43" }, signature, identity.publicKeyB64)).toBe(false);
+  // Dropping it entirely (falling back to schema 1.0 bytes) is a DIFFERENT
+  // message too, so it must not verify against the v2 signature either.
+  expect(await verifySubmissionSignature(v1Fixture, signature, identity.publicKeyB64)).toBe(false);
+});
+
+test("historical schema-1.0 (unversioned) fixtures still verify under this SAME (legacy) canonicalizer — no separate code path", async () => {
+  // legacySubmission/legacySignatureB64/legacyPublicKeyB64 above are exactly
+  // this case: a real fixture recorded before reportSnapshotId existed at
+  // all, still verifying through the one canonicalizeSubmission function.
+  expect(await verifySubmissionSignature(legacySubmission, legacySignatureB64, legacyPublicKeyB64)).toBe(true);
+  expect("reportSnapshotId" in legacySubmission).toBe(false);
+});
+
 test("weighted submissions sign the appended weights and reject tampering", async () => {
   const identity = await generateKeyPair();
   const weighted = {
