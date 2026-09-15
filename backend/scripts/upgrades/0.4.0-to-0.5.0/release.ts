@@ -44,7 +44,6 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0057_swarm_judge_policy_stamp.sql",
   "0058_swarm_judge_fault_injection.sql",
   "0059_swarm_judgement_completion_usage.sql",
-  "0060_set_worker_password.sql",
 ] as const;
 
 /**
