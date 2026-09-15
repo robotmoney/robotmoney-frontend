@@ -616,11 +616,16 @@ export interface SessionWindowReading {
 
 /** Read the advertised deadline AND the server clock in one round trip. */
 export async function readSessionWindow(date: string, subject: string): Promise<SessionWindowReading> {
-  const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.session, { date, subject })}`);
+  const path = routePath(ROUTES.swarm.session, { date, subject });
+  const r = await fetch(`${backendUrl()}${path}`);
   const header = r.headers.get("date");
   const headerMs = header ? Date.parse(header) : NaN;
   const serverNowMs = Number.isFinite(headerMs) ? headerMs : null;
-  if (!r.ok) return { windowClosesAt: null, serverNowMs };
+  // A failed read says nothing about the session's stored deadline. Returning
+  // null here used to conflate a transient proxy/API failure with a successful
+  // response for an unbriefed session, so one 502 made the driver claim that
+  // publish_brief never landed and abort an otherwise healthy smoke run.
+  if (!r.ok) throw new Error(`GET ${path} -> HTTP ${r.status}`);
   const data = await responseJson<{ session?: { windowClosesAt?: string | null } }>(r);
   return { windowClosesAt: data.session?.windowClosesAt ?? null, serverNowMs };
 }
@@ -658,8 +663,26 @@ export async function waitUntilWindowCloses(
   const startedAt = now();
   let clockFallbacks = 0;
   let skewWarned = false;
+  let readFailures = 0;
   for (;;) {
-    const reading = await read(date, subject);
+    let reading: SessionWindowReading;
+    try {
+      reading = await read(date, subject);
+    } catch (error) {
+      readFailures++;
+      const elapsed = now() - startedAt;
+      const detail = error instanceof Error ? error.message : String(error);
+      if (elapsed >= limits.maxWaitMs) {
+        throw new Error(
+          `window wait for ${date}/${subject} exceeded its ${Math.round(limits.maxWaitMs / 1000)}s ceiling ` +
+            `while the session endpoint was unreadable (last error: ${detail})`,
+        );
+      }
+      log(`  [window] session read failed (attempt ${readFailures}): ${detail}; retrying`);
+      const poll = limits.pollMs ?? WINDOW_WAIT_POLL_MS;
+      await wait(Math.min(poll, limits.maxWaitMs - elapsed));
+      continue;
+    }
     const hostNow = now();
     let serverNow = reading.serverNowMs;
     if (serverNow === null) {
