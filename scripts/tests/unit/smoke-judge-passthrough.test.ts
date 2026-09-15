@@ -29,6 +29,37 @@ describe("judge transport settings reach the stack through the documented boot",
   });
 });
 
+// C-27 — THE FAULT-INJECTION LEVER MUST BE REACHABLE THROUGH THE DOCUMENTED
+// BOOT, same gap as SWARM_JUDGE_TIMEOUT_MS above and the same fix shape.
+// `docker-compose.yml` interpolates `SWARM_JUDGE_FAULT_INJECTION` and
+// `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` into api and worker-swarm,
+// but until DEMO_COMPOSE_PASSTHROUGH named them an operator exporting either
+// got an EMPTY variable in the container and every judging (and every arm
+// attempt) silently refused with `flag_absent`.
+describe("judge fault-injection flags reach the stack through the documented boot", () => {
+  test.each(["SWARM_JUDGE_FAULT_INJECTION", "SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN"])(
+    "%s is on DEMO_COMPOSE_PASSTHROUGH",
+    (key) => {
+      expect(DEMO_COMPOSE_PASSTHROUGH as readonly string[]).toContain(key);
+    },
+  );
+
+  test("exported fault-injection flags survive into the compose environment", () => {
+    const out = smokePassthroughEnv({
+      SWARM_JUDGE_FAULT_INJECTION: "1",
+      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: "1",
+    });
+    expect(out.SWARM_JUDGE_FAULT_INJECTION).toBe("1");
+    expect(out.SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN).toBe("1");
+  });
+
+  test("unset fault-injection flags still pass nothing, so the lever stays inert by default", () => {
+    const out = smokePassthroughEnv({});
+    expect(out).not.toHaveProperty("SWARM_JUDGE_FAULT_INJECTION");
+    expect(out).not.toHaveProperty("SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN");
+  });
+});
+
 // The driver's ceiling is DERIVED, not a coincidence: it used to be a bare
 // 120_000 whose comment claimed the model call was "bounded at ~60s" — true of
 // the old default and false of this one. A ceiling below the budget it is

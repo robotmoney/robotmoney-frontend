@@ -45,6 +45,15 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   // reach the container through the boot the runbook documents.
   "SWARM_JUDGE_BASE_URL",
   "SWARM_JUDGE_TIMEOUT_MS",
+  // THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (backend/src/swarm/
+  // judge-fault-injection.ts, R13). `docker-compose.yml` interpolates both
+  // into api and worker-swarm, but the same gap as SWARM_JUDGE_TIMEOUT_MS
+  // above meant exporting either produced an EMPTY variable in the
+  // container: an operator staging AC-E2E-06 through the documented
+  // `bun run smoke:stage` boot got a silent "flag_absent" refusal instead of
+  // the lever they set. Blank by default (never enabled unless set).
+  "SWARM_JUDGE_FAULT_INJECTION",
+  "SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN",
   "FETCH_CACHE_DIR",
   "FLOOR_SEED_PATH",
   "PROJECTS_SOURCE",

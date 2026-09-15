@@ -311,6 +311,15 @@ services:
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
+      # judge-fault-injection.ts). This service arms/disarms the row over
+      # POST /api/swarm/admin/judge/fault-injection (swarm/admin.ts), and
+      # `assertFaultInjectionAllowed()` runs on THIS process's env before that
+      # write — a row armed without the flag present here is refused at arm
+      # time, not merely inert. Blank by default so no deployment honours a
+      # fault-injected judge unless an operator explicitly sets these.
+      SWARM_JUDGE_FAULT_INJECTION: ${SWARM_JUDGE_FAULT_INJECTION:-}
+      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: ${SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN:-}
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:
@@ -389,6 +398,15 @@ services:
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
+      # judge-fault-injection.ts) — THIS LANE ONLY, same reasoning as the three
+      # knobs above: `selectFaultInjection()` runs inside `swarm.judge`, which
+      # only this worker lane executes. Without the flag present here the
+      # lever stays inert even once armed through the api. Blank by default so
+      # no deployment honours a fault-injected judge unless an operator
+      # explicitly sets these.
+      SWARM_JUDGE_FAULT_INJECTION: ${SWARM_JUDGE_FAULT_INJECTION:-}
+      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: ${SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN:-}
 
   worker-analytics:
     <<: *worker-base
