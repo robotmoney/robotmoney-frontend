@@ -6,6 +6,7 @@
 // other admin action is; see setAnalyticsReadMode's caller in
 // scripts/analytics-ledger-cutover-gate.ts).
 import { sql, type DbHandle } from "../../db/client.ts";
+import { evaluateCutoverGate, defaultCutoverGateConfig } from "./gate.ts";
 
 export type AnalyticsReadMode = "compatibility" | "ledger";
 
@@ -37,6 +38,15 @@ export async function setAnalyticsReadMode(
   updatedBy: string,
   db: DbHandle = sql,
 ): Promise<void> {
+  // The gate is enforced HERE, not only in the CLI (defense in depth): every
+  // caller of this function — script, admin action, or a future direct call —
+  // is refused the same way. Switching to 'compatibility' is never gated: a
+  // rollback must always be available, including to recover from a bad
+  // cutover.
+  if (mode === "ledger") {
+    const result = await evaluateCutoverGate(db, defaultCutoverGateConfig());
+    if (!result.ok) throw new CutoverGateNotPassedError(result.reasons);
+  }
   await db`
     UPDATE analytics_read_mode SET mode = ${mode}, updated_at = clock_timestamp(), updated_by = ${updatedBy}
     WHERE id = true`;
