@@ -106,6 +106,7 @@ export const ROUTES: {
   analytics: {
     readiness: string;
     rawHistory: string;
+    sourceAcquisitions: string;
     rawHistorySeed: string;
     regimeSnapshots: string;
     researchSignals: string;

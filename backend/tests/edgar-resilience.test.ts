@@ -9,21 +9,13 @@ import { test, expect } from "bun:test";
 import { fetchEdgarS4Monthly, fetchEdgarMonthCount } from "../src/analytics/extract/edgar.ts";
 
 function okResponse(count: number) {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({ hits: { total: { value: count } } }),
-  } as Response;
+  return Response.json({ hits: { total: { value: count } } }) as Response;
 }
 
 // Non-retryable 4xx (not 429): fetchEdgarMonthCount's own retry loop `break`s
 // immediately on this, so no backoff sleeps are incurred.
 function badResponse() {
-  return {
-    ok: false,
-    status: 400,
-    json: async () => ({}),
-  } as Response;
+  return new Response(JSON.stringify({}), { status: 400 }) as Response;
 }
 
 function startdtOf(url: string): string {
@@ -102,7 +94,7 @@ test("fetchEdgarMonthCount: an absolute deadlineAt cuts a sustained-429 retry lo
   let calls = 0;
   globalThis.fetch = (async () => {
     calls++;
-    return { ok: false, status: 429, json: async () => ({}) } as Response;
+    return new Response(JSON.stringify({}), { status: 429 }) as Response;
   }) as any;
   let clock = 0;
   const fakeClock = {
@@ -127,11 +119,7 @@ test("fetchEdgarMonthCount: an absolute deadlineAt cuts a sustained-429 retry lo
 
 test("fetchEdgarMonthCount: no deadlineAt behaves exactly as before (unbounded by any outer deadline)", async () => {
   const orig = globalThis.fetch;
-  globalThis.fetch = (async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ hits: { total: { value: 11 } } }),
-  })) as any;
+  globalThis.fetch = (async () => Response.json({ hits: { total: { value: 11 } } })) as any;
   try {
     const result = await fetchEdgarMonthCount("2020-01-01", "2020-01-31", 15000, { warn: () => {} });
     expect(result).toBe(11);

@@ -26,12 +26,7 @@ const HY_OAS = INDICATORS.find((i) => i.id === "HY_OAS")!;
 const TRUNCATED_CSV = ["DATE,BAMLH0A0HYM2", "2023-08-15,3.85", "2023-08-16,3.84", "2026-08-13,2.80"].join("\n");
 
 function mockFetchText(csv: string) {
-  return (async (url: string) => ({
-    ok: true,
-    status: 200,
-    statusText: "OK",
-    text: async () => csv,
-  })) as unknown as typeof fetch;
+  return (async (url: string) => new Response(csv, { status: 200 })) as unknown as typeof fetch;
 }
 
 test("fetchFred requests the cosd=2010-01-01 override (the fix that works for every OTHER FRED series)", () => {

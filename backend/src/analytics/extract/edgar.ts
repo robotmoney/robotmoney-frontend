@@ -11,6 +11,7 @@
 // without intra-month lookahead.
 import type { Point } from "../types.ts";
 import { fetchJson } from "./http.ts";
+import { recordSourceFetch } from "../source-ledger.ts";
 
 const UA = "robotmoney-research/1.0 (research@robotmoney.net)";
 
@@ -114,17 +115,25 @@ export async function fetchEdgarMonthCount(
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), attemptTimeoutMs);
       let res: Response;
+      const headers = { "user-agent": UA, accept: "application/json" };
       try {
-        res = await fetch(url, { signal: ac.signal, headers: { "user-agent": UA, accept: "application/json" } });
+        res = await fetch(url, { signal: ac.signal, headers });
+      } catch (error) {
+        recordSourceFetch({ url, headers, cacheStatus: "disabled", error });
+        throw error;
       } finally {
         clearTimeout(timer);
       }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      recordSourceFetch({ url, headers, cacheStatus: "disabled", responseStatus: res.status, payload: bytes,
+        providerReleaseId: res.headers.get("etag") ?? res.headers.get("last-modified"),
+        error: res.ok ? undefined : `HTTP ${res.status}` });
       if (!res.ok) {
         lastErr = `HTTP ${res.status}`;
         if (res.status >= 400 && res.status < 500 && res.status !== 429) break; // non-retryable
         continue;
       }
-      const count = parseEdgarCount(await res.json());
+      const count = parseEdgarCount(JSON.parse(new TextDecoder().decode(bytes)));
       if (count != null) return count;
       lastErr = "no count in response";
     } catch (e: any) {

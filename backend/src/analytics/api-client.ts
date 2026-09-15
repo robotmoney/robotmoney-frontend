@@ -68,6 +68,9 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
   }
 
   return {
+    async saveSourceAcquisition(acquisition) {
+      return await call<{ acquisitionId: string; replayed: boolean }>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
+    },
     async loadRawHistory() {
       const { history } = await call<{ history: RawIndicatorHistory }>("GET", ROUTES.analytics.rawHistory);
       return history;

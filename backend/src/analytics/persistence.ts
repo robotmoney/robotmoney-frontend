@@ -14,6 +14,7 @@
 import type { RawIndicatorHistory } from "./types.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
+import type { SourceAcquisitionEvidence } from "./source-ledger.ts";
 
 export interface FloorSeedResult {
   seededPoints: number; // rows actually written this run (gap-fill only)
@@ -22,6 +23,9 @@ export interface FloorSeedResult {
 }
 
 export interface AnalyticsPersistence {
+  // Append one complete provider acquisition atomically. The producer-generated
+  // UUID is the replay key; prior evidence is never mutated on replay.
+  saveSourceAcquisition?(evidence: SourceAcquisitionEvidence): Promise<{ acquisitionId: string; replayed: boolean }>;
   // Read the whole persisted raw floor, grouped by indicator, sorted by date.
   loadRawHistory(): Promise<RawIndicatorHistory>;
   // Upsert merged raw history on (date, indicator); fetched wins on overlap.

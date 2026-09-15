@@ -190,7 +190,10 @@ export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}
   const missingSet = new Set(missing);
   let fetched: Record<string, { date: string; value: number }[]>;
   try {
-    fetched = await source.fetchIndicators(INDICATORS, console);
+    const acquisitionSink = persistence.saveSourceAcquisition
+      ? { saveSourceAcquisition: persistence.saveSourceAcquisition.bind(persistence) }
+      : undefined;
+    fetched = await source.fetchIndicators(INDICATORS, console, acquisitionSink, null);
   } catch (err) {
     console.error(`[analytics-producer] indicator catch-up: registry fetch failed (will retry next pass): ${err instanceof Error ? err.message : err}`);
     return missing;

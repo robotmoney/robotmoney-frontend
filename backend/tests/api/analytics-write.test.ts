@@ -21,6 +21,7 @@ import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import { assertAnalyticsUpdaterCredentials } from "../../src/analytics/api-client.ts";
 import { hashKey } from "../../src/lib/keys.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
+import { payloadChecksum } from "../../src/analytics/source-ledger.ts";
 
 // Own database per file, cloned from the migrated template (support/clean-db.ts).
 useCleanDatabase(import.meta.file);
@@ -69,6 +70,46 @@ const validBodies: [string, string, unknown][] = [
   ["POST", A.regimeSnapshots, { snapshots: [{ date: "1999-01-01", composite: 0.5, compositePercentile: 0.5, regime: "neutral", macroRegime: null, onchainRegime: null, factorRegime: null, percentiles: {}, indicators: [] }] }],
   ["POST", A.researchSignals, { signals: [{ key: `sig-${rid()}`, date: "1999-01-01", payload: { title: "t" } }] }],
 ];
+
+function sourceAcquisitionBody(id = crypto.randomUUID()) {
+  const bytes = new TextEncoder().encode('{"value":1}');
+  return { acquisition: {
+    id, provider: "fixture", parserVersion: "fixture:1", cacheIdentity: "api-test", requestedByRunId: null,
+    events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }],
+    fetches: [{ id: crypto.randomUUID(), sequence: 1,
+      requestIdentity: { method: "GET", url: "https://example.invalid/data?api_key=%5BREDACTED%5D", headers: { authorization: "[REDACTED]" } },
+      cacheStatus: "disabled", responseStatus: 200, responseChecksum: payloadChecksum(bytes),
+      payloadBase64: Buffer.from(bytes).toString("base64"), providerReleaseId: null, errorDetail: null }],
+    values: [{ sourceKey: "api:test", marketDate: "2024-01-01", marketInstant: null, value: 1 }],
+  } };
+}
+
+test("source acquisition ingestion is provider-only, validates before mutation, rolls back atomically, and replays idempotently", async () => {
+  prodAuth();
+  const body = sourceAcquisitionBody();
+  expect((await call(req("POST", A.sourceAcquisitions, body)))?.status).toBe(401);
+  expect((await call(req("POST", A.sourceAcquisitions, body, ADMIN)))?.status).toBe(403);
+  expect((await call(req("POST", A.sourceAcquisitions, body, "member-token")))?.status).toBe(403);
+  expect((await call(req("POST", A.sourceAcquisitions, body, TOKEN)))?.body).toEqual({ acquisitionId: body.acquisition.id, replayed: false });
+  expect((await call(req("POST", A.sourceAcquisitions, body, TOKEN)))?.body).toEqual({ acquisitionId: body.acquisition.id, replayed: true });
+  const [{ acquisitions, fetches, values }] = await sql`
+    SELECT (SELECT count(*) FROM source_acquisitions)::int AS acquisitions,
+           (SELECT count(*) FROM source_fetches)::int AS fetches,
+           (SELECT count(*) FROM source_value_versions WHERE acquisition_id IS NOT NULL)::int AS values`;
+  expect({ acquisitions, fetches, values }).toEqual({ acquisitions: 1, fetches: 1, values: 1 });
+
+  const invalidBody = sourceAcquisitionBody();
+  invalidBody.acquisition.fetches[0]!.responseChecksum = "0".repeat(64);
+  expect((await call(req("POST", A.sourceAcquisitions, invalidBody, TOKEN)))?.status).toBe(400);
+  const [{ bad }] = await sql`SELECT count(*)::int AS bad FROM source_acquisitions WHERE id=${invalidBody.acquisition.id}`;
+  expect(bad).toBe(0);
+
+  const rollbackBody = sourceAcquisitionBody();
+  rollbackBody.acquisition.values.push({ sourceKey: "api:test", marketDate: "2024-01-01", marketInstant: null, value: 2 });
+  await expect(call(req("POST", A.sourceAcquisitions, rollbackBody, TOKEN))).rejects.toThrow();
+  const [{ rolledBack }] = await sql`SELECT count(*)::int AS "rolledBack" FROM source_acquisitions WHERE id=${rollbackBody.acquisition.id}`;
+  expect(rolledBack).toBe(0);
+});
 
 test("readiness authenticates the producer credential without reading or mutating analytics data", async () => {
   prodAuth();
