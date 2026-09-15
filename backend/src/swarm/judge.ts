@@ -791,6 +791,24 @@ function usageNumber(value: unknown): number | null {
 }
 
 /**
+ * Like usageNumber, but also accepts a numeric STRING — captured live against
+ * `https://opencode.ai/zen/v1/chat/completions` (deepseek-v4-flash) on
+ * 2026-09-15: `{"usage":{...no cost...},"cost":"0.00001694"}`. The top-level
+ * `cost` field is a JSON string, not a number, on this endpoint — the reason
+ * `usage_cost_usd` recorded NULL on every real judgement despite the token
+ * counts in the SAME response parsing correctly (they arrive as numbers).
+ * Token counts are deliberately left on the strict usageNumber() above: this
+ * is a targeted widening for the one field observed to need it, not a general
+ * loosening of provider-response parsing.
+ */
+function usageCost(value: unknown): number | null {
+  if (typeof value === "number") return usageNumber(value);
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
  * The provider's own cost/token report, lifted out of a `/chat/completions`
  * body — or null when it carried none.
  *
@@ -804,7 +822,8 @@ function usageNumber(value: unknown): number | null {
  * (`usage.cost` on the chat endpoint, `usage.total_cost` in its usage export);
  * a rate-card multiplication is deliberately NOT done here — a spend report
  * that quotes the provider is auditable and one that recomputes is a second
- * source of truth.
+ * source of truth. The top-level `cost` fallback may arrive as a numeric
+ * STRING (see usageCost()) — every spelling still goes through it.
  */
 export function parseJudgeUsage(body: unknown): JudgeUsage | null {
   const usage = (body as { usage?: unknown } | null)?.usage;
@@ -814,7 +833,7 @@ export function parseJudgeUsage(body: unknown): JudgeUsage | null {
   const outputTokens = usageNumber(u.completion_tokens) ?? usageNumber(u.output_tokens);
   const totalTokens = usageNumber(u.total_tokens) ??
     (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null);
-  const costUsd = usageNumber(u.cost) ?? usageNumber(u.total_cost) ?? usageNumber((body as any)?.cost);
+  const costUsd = usageCost(u.cost) ?? usageCost(u.total_cost) ?? usageCost((body as { cost?: unknown } | null)?.cost);
   if (inputTokens === null && outputTokens === null && totalTokens === null && costUsd === null) return null;
   return { inputTokens, outputTokens, totalTokens, costUsd };
 }

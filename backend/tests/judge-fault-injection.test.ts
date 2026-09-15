@@ -257,6 +257,32 @@ test("parseJudgeUsage reads Zen's usage object, and null when there is none", ()
   expect(parseJudgeUsage(null)).toBeNull();
 });
 
+// R19/C-11: live capture against https://opencode.ai/zen/v1/chat/completions
+// (deepseek-v4-flash, 2026-09-15) showed `usage` with NO cost field at all and
+// a top-level `cost` that is a JSON STRING, not a number — exactly why every
+// real staging judgement recorded usage_cost_usd = NULL despite its token
+// counts (which arrive as real numbers) parsing correctly.
+test("parseJudgeUsage reads a numeric-STRING top-level cost (the real Zen chat-completions shape)", () => {
+  const zenChatCompletionBody = {
+    id: "router-b49588245a3f327b37de6e6d2ed493f4",
+    object: "chat.completion",
+    model: "deepseek-v4-flash",
+    choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "OK" } }],
+    usage: { prompt_tokens: 89, completion_tokens: 16, total_tokens: 105, prompt_tokens_details: {} },
+    cost: "0.00001694",
+  };
+  expect(parseJudgeUsage(zenChatCompletionBody)).toEqual({
+    inputTokens: 89, outputTokens: 16, totalTokens: 105, costUsd: 0.00001694,
+  });
+  // A non-numeric or blank string must still degrade to null, not NaN or 0.
+  expect(parseJudgeUsage({ usage: { prompt_tokens: 1 }, cost: "not-a-number" }))
+    .toEqual({ inputTokens: 1, outputTokens: null, totalTokens: null, costUsd: null });
+  expect(parseJudgeUsage({ usage: { prompt_tokens: 1 }, cost: "" }))
+    .toEqual({ inputTokens: 1, outputTokens: null, totalTokens: null, costUsd: null });
+  expect(parseJudgeUsage({ usage: { prompt_tokens: 1 }, cost: "-1" }))
+    .toEqual({ inputTokens: 1, outputTokens: null, totalTokens: null, costUsd: null });
+});
+
 test("a model judgement carries the spend the provider reported", async () => {
   const answer = JSON.stringify({
     rationale: "The takes agree the treasury is intact.",
