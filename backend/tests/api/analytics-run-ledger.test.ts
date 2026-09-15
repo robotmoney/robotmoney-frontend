@@ -106,6 +106,24 @@ test("POST runs: idempotent retry on the SAME runKey replays the existing header
   expect(n).toBe(1);
 });
 
+test("POST runs: a genuinely CONCURRENT duplicate submission (not just a sequential retry) is still idempotent, not an unhandled 23505", async () => {
+  prodAuth();
+  const body = runBody();
+  // Fire both requests together so they race on the same run_key uniqueness
+  // check, rather than one completing before the other starts.
+  const [a, b] = await Promise.all([
+    call(req("POST", A.runs, body, TOKEN)),
+    call(req("POST", A.runs, body, TOKEN)),
+  ]);
+  expect(a!.status).toBe(200);
+  expect(b!.status).toBe(200);
+  const replayedFlags = [(a!.body as any).replayed, (b!.body as any).replayed].sort();
+  expect(replayedFlags).toEqual([false, true]); // exactly one winner, one idempotent replay
+  expect((a!.body as any).runId).toBe((b!.body as any).runId);
+  const [{ n }] = await sql`SELECT count(*)::int AS n FROM analytics_ledger_runs WHERE run_key = ${body.run.runKey}`;
+  expect(n).toBe(1);
+});
+
 test("POST runs/events (append event): auth required, whole-body validated, and events land in order", async () => {
   prodAuth();
   const { runId } = await beginRunViaApi();
