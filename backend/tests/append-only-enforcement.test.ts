@@ -494,11 +494,36 @@ describe("source acquisition ledger: complete immutability and runtime-role boun
       expect(own).toHaveLength(2);
       expect(new Set(own.map((r) => r.is_row))).toEqual(new Set([false, true]));
       expect(own.every((r) => r.tgenabled === "A")).toBe(true);
-      for (const statement of [`UPDATE ${table} SET knowledge_time = knowledge_time`, `DELETE FROM ${table}`, `TRUNCATE ${table} CASCADE`]) {
+      // Issue #979 AC5: the COMPLETE operation matrix — UPDATE, DELETE,
+      // DELETE WHERE false (the operation is refused regardless of whether it
+      // matches a row), and TRUNCATE CASCADE — plus row survival, asserted
+      // per table rather than trusted from the earlier assertions alone.
+      const before = (await sql.unsafe(`SELECT count(*)::int AS n FROM ${table}`) as unknown as { n: number }[])[0]!.n;
+      expect(before, `${table} must hold at least one row before any refusal is attempted`).toBeGreaterThan(0);
+      for (const statement of [
+        `UPDATE ${table} SET knowledge_time = knowledge_time`,
+        `DELETE FROM ${table}`,
+        `DELETE FROM ${table} WHERE false`,
+        `TRUNCATE ${table} CASCADE`,
+      ]) {
         const raised = await attempt(statement);
-        expect(raised?.code).toBe("0A000");
-        expect(raised?.message).toMatch(new RegExp(`^source ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`));
+        expect(raised?.code, statement).toBe("0A000");
+        expect(raised?.message, statement).toMatch(new RegExp(`^source ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`));
       }
+      // Bare TRUNCATE (no CASCADE): on a table with an inbound foreign key,
+      // Postgres's own RESTRICT check refuses it before the trigger stage —
+      // same caveat the original APPEND_ONLY_TABLES loop above documents at
+      // length — so that is the one case asserted as the OTHER message
+      // rather than the guard's.
+      const truncateRaised = await attempt(`TRUNCATE ${table}`);
+      if (fkParents.has(table)) {
+        expect(truncateRaised!.message).toMatch(/cannot truncate a table referenced in a foreign key constraint/);
+      } else {
+        expect(truncateRaised?.code).toBe("0A000");
+        expect(truncateRaised?.message).toMatch(new RegExp(`^source ledger is immutable: TRUNCATE is not permitted on ${table}`));
+      }
+      const after = (await sql.unsafe(`SELECT count(*)::int AS n FROM ${table}`) as unknown as { n: number }[])[0]!.n;
+      expect(after, `${table}: every refused/restricted operation above must not have removed anything`).toBe(before);
     }
   });
 
@@ -594,9 +619,12 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
       analytics_vintage_members: "source_key",
     };
     for (const table of tables) {
+      // Issue #979 AC5: the complete matrix, including DELETE WHERE false
+      // (refused on the OPERATION, not on whether it matches a row).
       for (const statement of [
         `UPDATE ${table} SET ${noopColumn[table]} = ${noopColumn[table]}`,
         `DELETE FROM ${table}`,
+        `DELETE FROM ${table} WHERE false`,
         `TRUNCATE ${table} CASCADE`,
       ]) {
         const raised = await attempt(statement);
@@ -606,12 +634,22 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
           new RegExp(`^analytics run ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`),
         );
       }
+      // Bare TRUNCATE: refused by the guard on a table with no inbound FK,
+      // by Postgres's own RESTRICT check otherwise (same fkParents caveat
+      // documented at length earlier in this file).
+      const truncateRaised = await attempt(`TRUNCATE ${table}`);
+      if (fkParents.has(table)) {
+        expect(truncateRaised!.message).toMatch(/cannot truncate a table referenced in a foreign key constraint/);
+      } else {
+        expect(truncateRaised?.code).toBe("0A000");
+        expect(truncateRaised?.message).toMatch(new RegExp(`^analytics run ledger is immutable: TRUNCATE is not permitted on ${table}`));
+      }
     }
 
     const after = (await sql.unsafe(
       tables.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(" UNION ALL "),
     )) as unknown as { t: string; n: number }[];
-    expect(after).toEqual(before); // every refused operation left the data exactly as it was
+    expect(after).toEqual(before); // every refused/restricted operation left the data exactly as it was
 
     // Content-preservation, not merely row-count preservation: the run
     // header's own build_identity survives a rejected UPDATE attempt intact.
@@ -751,9 +789,11 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
       swarm_brief_revisions: "revision",
     };
     for (const table of tables) {
+      // Issue #979 AC5: the complete matrix, including DELETE WHERE false.
       for (const statement of [
         `UPDATE ${table} SET ${noopColumn[table]} = ${noopColumn[table]}`,
         `DELETE FROM ${table}`,
+        `DELETE FROM ${table} WHERE false`,
         `TRUNCATE ${table} CASCADE`,
       ]) {
         const raised = await attempt(statement);
@@ -762,6 +802,13 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
         expect(raised!.message).toMatch(
           new RegExp(`^analytics output ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`),
         );
+      }
+      const truncateRaised = await attempt(`TRUNCATE ${table}`);
+      if (fkParents.has(table)) {
+        expect(truncateRaised!.message).toMatch(/cannot truncate a table referenced in a foreign key constraint/);
+      } else {
+        expect(truncateRaised?.code).toBe("0A000");
+        expect(truncateRaised?.message).toMatch(new RegExp(`^analytics output ledger is immutable: TRUNCATE is not permitted on ${table}`));
       }
     }
 
@@ -849,5 +896,84 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
              has_table_privilege('rm_readonly', 'public.' || table_name, 'SELECT') AS readonly_select
       FROM unnest(${[...tables]}::text[]) AS table_name`;
     expect(privileges.every((r) => r.worker_insert === false && r.readonly_select === true)).toBe(true);
+  });
+});
+
+describe("analytics cutover ledger (issue #979): complete immutability, content preservation, and runtime-role boundary", () => {
+  const table = "analytics_parity_observations";
+  let observationId = "";
+
+  beforeAll(async () => {
+    const [row] = (await sql`
+      INSERT INTO analytics_parity_observations
+        (domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail)
+      VALUES ('raw_indicator_history', 1, 1, ${"6".repeat(64)}, ${"6".repeat(64)}, true, '{}'::jsonb)
+      RETURNING id
+    `) as unknown as { id: string }[];
+    observationId = String(row!.id);
+  });
+
+  test("the seeded observation really exists (a fixture that failed to insert would pass every refusal test for free)", async () => {
+    const [{ n }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
+    expect(n).toBeGreaterThan(0);
+  });
+
+  test("UPDATE, DELETE, DELETE WHERE false, TRUNCATE, and TRUNCATE CASCADE are all refused, with the cutover ledger's own stable message, and content survives", async () => {
+    const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
+    for (const statement of [
+      `UPDATE ${table} SET domain = domain`,
+      `DELETE FROM ${table}`,
+      `DELETE FROM ${table} WHERE false`,
+      `TRUNCATE ${table} CASCADE`,
+      `TRUNCATE ${table}`,
+    ]) {
+      const raised = await attempt(statement);
+      expect(raised, `${statement} must raise`).not.toBeNull();
+      expect(raised!.code).toBe("0A000");
+      expect(raised!.message).toMatch(
+        new RegExp(`^analytics cutover ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`),
+      );
+    }
+    const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
+    expect(after).toBe(before);
+    const [row] = await sql`SELECT matched FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
+    expect(row.matched).toBe(true);
+  });
+
+  test("BOTH guards are installed, at the right level, as ENABLE ALWAYS", async () => {
+    const rows = (await sql`
+      SELECT t.tgname::text AS trigger_name, t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row, p.proname::text AS function_name
+      FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_proc p ON p.oid = t.tgfoid
+      WHERE NOT t.tgisinternal AND c.relname = ${table}
+    `) as unknown as { trigger_name: string; enabled: string; is_row: boolean; function_name: string }[];
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.is_row))).toEqual(new Set([false, true]));
+    expect(rows.every((r) => r.enabled === "A" && r.function_name === "rm_analytics_cutover_immutable")).toBe(true);
+  });
+
+  test("a replica-role session cannot delete from it", async () => {
+    const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
+    let raised: Raised = null;
+    try {
+      await sql.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL session_replication_role = 'replica'");
+        await tx.unsafe(`DELETE FROM ${table}`);
+      });
+    } catch (e) {
+      const err = e as { message?: string; code?: string };
+      raised = { message: err?.message ?? String(e), code: err?.code ?? null };
+    }
+    expect(raised?.code).toBe("0A000");
+    expect(raised?.message).toMatch(new RegExp(`^analytics cutover ledger is immutable: DELETE is not permitted on ${table}`));
+    const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
+    expect(after).toBe(before);
+  });
+
+  test("rm_worker cannot fabricate an observation and rm_readonly can inspect it", async () => {
+    const [priv] = await sql`
+      SELECT has_table_privilege('rm_worker', 'public.analytics_parity_observations', 'INSERT') AS worker_insert,
+             has_table_privilege('rm_readonly', 'public.analytics_parity_observations', 'SELECT') AS readonly_select`;
+    expect(priv.worker_insert).toBe(false);
+    expect(priv.readonly_select).toBe(true);
   });
 });
