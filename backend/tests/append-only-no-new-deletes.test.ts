@@ -54,6 +54,10 @@ const ALLOWED: Record<string, string> = {
   "backend/tests/analytics-worker-role.test.ts": "asserts the restricted role is denied 42501",
   "backend/tests/api-boot-handle-namespace-guard.test.ts": "rolls schema_migrations back to build a pre-0032 database",
   "backend/tests/consensus-receipt-publish.test.ts": "asserts DELETE and TRUNCATE of a published receipt are refused",
+  "backend/tests/analytics-overwrite-events.test.ts":
+    "asserts regime deletion is refused while allowed current-view deletes are captured",
+  "backend/tests/database-role-taxonomy.test.ts":
+    "asserts rm_app direct evidence DELETE and TRUNCATE are denied 42501",
   // The statements here are DATA, not code: fixture migration bodies handed to
   // preflight's scanner as strings so it can be proved to turn red on them. The
   // file opens no writeable connection to a protected table at all — its only

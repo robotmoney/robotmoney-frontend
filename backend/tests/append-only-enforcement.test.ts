@@ -154,6 +154,15 @@ beforeAll(async () => {
   await sql`INSERT INTO audit_log (actor, action) VALUES ('append-only-test', 'probe')`;
   await sql`INSERT INTO agent_activity_log (action_type, status) VALUES ('probe', 'success')`;
   await sql`INSERT INTO regime_snapshots (date) VALUES ('2031-01-02')`;
+  // 0056's evidence ledger is populated only by a material current-view
+  // mutation. Seed it through that production mechanism, not with a fabricated
+  // direct event, so every table in APPEND_ONLY_TABLES contains a real row.
+  await sql`
+    INSERT INTO raw_indicator_history (date, indicator, value, source)
+    VALUES ('2031-01-02', 'APPEND_ONLY_EVIDENCE_PROBE', 1, 'seed')`;
+  await sql`
+    UPDATE raw_indicator_history SET value = 2, source = 'live'
+    WHERE date = '2031-01-02' AND indicator = 'APPEND_ONLY_EVIDENCE_PROBE'`;
 
   const parents = (await sql`
     SELECT DISTINCT confrelid::regclass::text AS parent FROM pg_constraint WHERE contype = 'f'
@@ -273,6 +282,14 @@ describe("append-only: every protected table holds data that cannot be removed",
       detail = (e as { detail?: string }).detail ?? null;
     }
     expect(detail).toMatch(/refused by trigger audit_log_append_only, STATEMENT level/);
+  });
+
+  test("analytics overwrite evidence also refuses UPDATE with its own stable guard error", async () => {
+    const raised = await attempt(`UPDATE analytics_overwrite_events SET natural_key = natural_key`);
+    expect(raised).toEqual({
+      code: "0A000",
+      message: "analytics_overwrite_events is immutable: UPDATE is not permitted",
+    });
   });
 
   for (const table of APPEND_ONLY_TABLES as readonly Table[]) {

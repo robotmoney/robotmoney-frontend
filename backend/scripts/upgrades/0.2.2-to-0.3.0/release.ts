@@ -349,6 +349,10 @@ export const APPEND_ONLY_TABLES = [
   "agent_activity_log",
   "regime_snapshots",
   "schema_migrations",
+  // Opted in by migration 0056 (issue #974). The migration is outside this
+  // historical release's delta, but postflight's live-schema roster is kept
+  // byte-identical to the runtime guard as the drift test requires.
+  "analytics_overwrite_events",
 ] as const;
 
 /** Exact custom guards added by the AUM P0/P1 migrations. Unlike the shared
