@@ -66,10 +66,19 @@ const IMPORT_POSTGRES = { re: /from\s+["']postgres["']/, why: "imports postgres 
 const SQL_TAG = { re: /\b(sql|tx|db)`/, why: "uses a SQL tag" };
 const IMPORT_STORE = { re: /from\s+["'][^"']*analytics\/store\/[^"']*["']|from\s+["']\.\.?\/store\/[^"']*["']|from\s+["']\.\.?\/\.\.\/store\/[^"']*["']/, why: "imports an analytics store writer" };
 
-test("updater/orchestrator modules (analytics/** minus store,report) carry zero database access", () => {
+test("updater/orchestrator modules (analytics/** minus store,report,cutover) carry zero database access", () => {
   const files = tsFiles(join(SRC, "analytics")).filter((f) => {
     const rel = relative(join(SRC, "analytics"), f);
-    return !rel.startsWith("store/") && !rel.startsWith("report/");
+    // Issue #979: analytics/cutover/** is a THIRD trusted, DB-touching
+    // category, the same shape as store/report — it reads the Phase A ledger
+    // (via the store layer's own public readers, same as report/ already
+    // does) to reconstruct current-view content and records/evaluates parity
+    // observations. It is deliberately reachable from outside api/ (the
+    // dashboard/admin/swarm-brief read paths it is wired into are NOT all
+    // under api/), which is exactly what makes it its own category rather
+    // than simply living under store/ or report/ (see the companion
+    // allowedPrefixes list below).
+    return !rel.startsWith("store/") && !rel.startsWith("report/") && !rel.startsWith("cutover/");
   });
   expect(files.length).toBeGreaterThan(15); // canary: the updater surface is known-large
   const violations = scan(files, [IMPORT_DB_CLIENT, IMPORT_WORKER_CLIENT, IMPORT_POSTGRES, SQL_TAG, IMPORT_STORE]);
@@ -84,7 +93,11 @@ test("worker modules never import db/client or analytics store writers (queue ac
 });
 
 test("only API persistence + migration/smoke tooling import the analytics store writers", () => {
-  const allowedPrefixes = ["api/", "analytics/store/", "db/", "smoke/"];
+  // analytics/cutover/ (issue #979) is allowlisted for the same reason it is
+  // excluded from the zero-db-access sweep above: it legitimately reads
+  // through the store layer's own public functions (loadRawIndicatorHistory
+  // et al.), the same way analytics/report/ already does.
+  const allowedPrefixes = ["api/", "analytics/store/", "analytics/cutover/", "db/", "smoke/"];
   const files = tsFiles(SRC);
   const violations: Violation[] = [];
   for (const file of files) {

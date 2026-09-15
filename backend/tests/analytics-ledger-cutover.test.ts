@@ -14,7 +14,7 @@ import { payloadChecksum } from "../src/analytics/source-ledger.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { evaluateCutoverGate, type CutoverGateConfig } from "../src/analytics/cutover/gate.ts";
 import { getAnalyticsReadMode, setAnalyticsReadMode, CutoverGateNotPassedError } from "../src/analytics/cutover/read-mode.ts";
-import { recordParityObservation, type ParityDomain, type ParityResult } from "../src/analytics/cutover/parity.ts";
+import type { ParityDomain } from "../src/analytics/cutover/parity.ts";
 import { canonicalStringify, sha256Hex } from "../src/analytics/run-ledger.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
