@@ -57,7 +57,7 @@ export interface ScenarioMember {
 export type ScenarioInitializer = "simulation" | "archive";
 export type ScenarioAssertion = "smoke" | "archive-continuity";
 export interface ScenarioPlan {
-  kind: "smoke" | "smoke";
+  kind: "simulation" | "archive-restore";
   initializer: ScenarioInitializer;
   migrateEnv: Readonly<Record<string, string>>;
   migrateScriptArgs: readonly string[];
@@ -134,7 +134,7 @@ export const SMOKE_MEMBERS: readonly { handle: string; name: string }[] = Object
 export function scenarioPlan(smoke: boolean): ScenarioPlan {
   return smoke
     ? {
-        kind: "smoke",
+        kind: "archive-restore",
         initializer: "archive",
         migrateEnv: SMOKE_MIGRATE_ENV,
         migrateScriptArgs: SMOKE_MIGRATE_SCRIPT_ARGS,
@@ -144,7 +144,7 @@ export function scenarioPlan(smoke: boolean): ScenarioPlan {
         runsNewcomerOnboarding: false,
       }
     : {
-        kind: "smoke",
+        kind: "simulation",
         initializer: "simulation",
         migrateEnv: DEMO_MIGRATE_ENV,
         migrateScriptArgs: DEMO_MIGRATE_SCRIPT_ARGS,
@@ -237,7 +237,7 @@ export function adoptRestoredRoster(
   const result = planAdoptions(
     [...roster],
     new Set(seated.map((m) => m.memberId)),
-    adoptionFilter(plan.kind === "smoke", { seatAllActive: seatAll }),
+    adoptionFilter(plan.kind === "archive-restore", { seatAllActive: seatAll }),
   );
   const adopted = result.adopt.map((m) => ({
     memberId: m.id,
@@ -246,7 +246,7 @@ export function adoptRestoredRoster(
     bias: 0,
     present: true,
   }));
-  if (plan.kind === "smoke") {
+  if (plan.kind === "archive-restore") {
     // Compared by HANDLE (issue #685). The adopted rows carry whatever id this
     // deployment generated, so an id comparison could only ever be satisfied by
     // a seed that hardcoded slug ids — the thing this issue removes. The handle

@@ -388,3 +388,27 @@ describe("resolveSeatAllRestored — which boots may re-key the committee", () =
     expect(resolveSeatAllRestored({ smoke: true, stage: false, dataPath: { kind: "ephemeral" } })).toBe(false);
   });
 });
+
+// ── C-26: scenarioPlan's `kind` must distinguish restore from seed ──────────
+// The bug: an earlier demo→smoke rename blindly replaced the literal "demo"
+// with "smoke", collapsing `kind: "demo" | "smoke"` into `kind: "smoke" |
+// "smoke"`. adoptRestoredRoster() branches on `plan.kind === "smoke"` to run
+// the archive-continuity check ("we restored an archive, so the three
+// committed personas MUST be present"). With the union collapsed, that check
+// ran even for a plain simulation boot (no `--smoke`, nothing restored), so
+// `bun run smoke:stage` against a fresh database failed at startup with
+// "smoke initializer expected restored IC handles [...], got [none]" although
+// nothing was ever supposed to be restored.
+describe("scenarioPlan — kind distinguishes archive-restore from a plain simulation boot", () => {
+  test("the two boot plans carry genuinely distinct kinds", () => {
+    expect(scenarioPlan(false).kind).not.toBe(scenarioPlan(true).kind);
+  });
+
+  test("a plain simulation boot with nothing restored does not run the archive-continuity check", () => {
+    expect(() => adoptRestoredRoster(scenarioPlan(false), [])).not.toThrow();
+  });
+
+  test("a real --smoke archive-restore boot still requires the three committed personas", () => {
+    expect(() => adoptRestoredRoster(scenarioPlan(true), [])).toThrow(/expected restored IC handles/);
+  });
+});
