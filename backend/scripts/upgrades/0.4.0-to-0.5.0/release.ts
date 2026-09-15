@@ -100,6 +100,11 @@ export const WORKER_WRITABLE_TABLES = [
   "projects", "openclaw_agents", "lobster_coins", "tracked_wallets", "agent_vaults",
   "agent_revenue_daily", "daily_coin_snapshots", "daily_agent_snapshots",
   "daily_wallet_snapshots", "daily_tvl_snapshots",
+  // 0061: the wallet-backfill repair driver (worker/handlers/repair.ts) writes
+  // these three through the same restricted WORKER_DATABASE_URL connection —
+  // 0054's allow-list dropped them by omission, which read as PASS here while
+  // the live worker got "permission denied" (checklist B05).
+  "chain_day_blocks", "wallet_backfill_state", "chain_address_floors",
 ] as const;
 
 /** 0055's new index — makes getMembers()'s per-member `max(received_at)`
