@@ -270,6 +270,34 @@ export const ROUTES = {
     // outcome; issue #151). Non-fatal to callers: a failed submission never
     // blocks the canonical analytics writes above.
     telemetry: "/api/analytics/telemetry",
+    // Issue #977: the immutable analytics run/vintage ledger — the next
+    // layer above sourceAcquisitions above. Distinct from the mutable
+    // diagnostics-only `admin.runs` GET below (a different, pre-existing
+    // table). MANDATORY to the caller, never best-effort like telemetry.
+    //
+    //   POST runs            — begin one immutable run header (idempotent on
+    //                           body.run.runKey)
+    //   POST runEvents        — append one ordered lifecycle event
+    //   POST vintages         — freeze one data vintage for (runId, toolId)
+    //                           (idempotent; a differing resubmission for the
+    //                           same pair is rejected, 409)
+    //   GET  vintage?runId=&toolId=   — read back the exact frozen manifest
+    runs: "/api/analytics/runs",
+    runEvents: "/api/analytics/runs/events",
+    vintages: "/api/analytics/vintages",
+    vintage: "/api/analytics/vintages/lookup",
+    // Issue #978: freeze analytics outputs and report snapshots — the next
+    // layer above the run header. One terminal package per runId (idempotent,
+    // same shape as beginRun): a SUCCEEDED package's complete regime-snapshot
+    // and research-signal outputs plus its exact report bytes are frozen and,
+    // in the SAME transaction, dual-written into the existing current-view
+    // tables; a FAILED package freezes its complete warning/log/exception
+    // artifacts and touches no current-view row.
+    //
+    //   POST runPackage         — submit one terminal run package
+    //   GET  reportSnapshot?id= — byte-exact report retrieval by immutable id
+    runPackage: "/api/analytics/run-packages",
+    reportSnapshot: "/api/analytics/reports",
   },
 
   admin: {

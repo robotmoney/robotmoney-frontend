@@ -286,6 +286,18 @@ export const ROUTES = {
     runEvents: "/api/analytics/runs/events",
     vintages: "/api/analytics/vintages",
     vintage: "/api/analytics/vintages/lookup",
+    // Issue #978: freeze analytics outputs and report snapshots — the next
+    // layer above the run header. One terminal package per runId (idempotent,
+    // same shape as beginRun): a SUCCEEDED package's complete regime-snapshot
+    // and research-signal outputs plus its exact report bytes are frozen and,
+    // in the SAME transaction, dual-written into the existing current-view
+    // tables; a FAILED package freezes its complete warning/log/exception
+    // artifacts and touches no current-view row.
+    //
+    //   POST runPackage         — submit one terminal run package
+    //   GET  reportSnapshot?id= — byte-exact report retrieval by immutable id
+    runPackage: "/api/analytics/run-packages",
+    reportSnapshot: "/api/analytics/reports",
   },
 
   admin: {

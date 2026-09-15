@@ -118,6 +118,8 @@ export const ROUTES: {
     runEvents: string;
     vintages: string;
     vintage: string;
+    runPackage: string;
+    reportSnapshot: string;
   };
   admin: {
     auth: string;
