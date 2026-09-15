@@ -165,9 +165,10 @@ test("startProducerSchedules: runs catch-up before arming the daily crons", asyn
     env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN: "t" },
     waitUntilReady: async () => { order.push("ready"); },
     catchUp: async () => { order.push("catchup"); },
+    catchUpIndicators: async () => { order.push("catchupIndicators"); },
     scheduleKind: (kind) => { order.push(`armed:${kind}`); },
   });
-  expect(order).toEqual(["ready", "catchup", "armed:regime", "armed:research"]);
+  expect(order).toEqual(["ready", "catchup", "catchupIndicators", "armed:regime", "armed:research"]);
 });
 
 test("missing-day indicator repair persists an acquisition independent of an analytics run", async () => {
