@@ -350,3 +350,67 @@ test("existing dashboard regime and research-signal response fields retain their
   expect(signal?.date).toBe(asof);
   expect((signal?.payload as any)?.title).toBe("output-snapshot-signal signal");
 });
+
+// ── FIX2 (replay-integrity gap) ──────────────────────────────────────────────
+test("an IDENTICAL resubmission for the same run_id still replays with 200, byte-for-byte", async () => {
+  prodAuth();
+  const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-08", toolId: "fix2-identical" });
+  const asof = "2026-06-08";
+  const body = succeededPackage(runId, asof);
+
+  const first = await call(req("POST", A.runPackage, body, TOKEN));
+  expect(first!.status).toBe(200);
+  const second = await call(req("POST", A.runPackage, body, TOKEN));
+  expect(second!.status).toBe(200);
+  expect((second!.body as any).reportSnapshotId).toBe((first!.body as any).reportSnapshotId);
+  expect((second!.body as any).replayed).toBe(true);
+
+  const [{ n }] = await sql`SELECT count(*)::int AS n FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
+  expect(n).toBe(1);
+});
+
+test("a DIFFERENT-content resubmission for the same run_id is rejected with 409 and does not overwrite the original stored artifacts", async () => {
+  prodAuth();
+  const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-09", toolId: "fix2-conflict" });
+  const asof = "2026-06-09";
+  const originalBody = succeededPackage(runId, asof);
+  const first = await call(req("POST", A.runPackage, originalBody, TOKEN));
+  expect(first!.status).toBe(200);
+  const originalReportSnapshotId = (first!.body as any).reportSnapshotId as string;
+
+  // Same run_id, DIFFERENT report bytes AND different regime snapshot content.
+  const conflictingBody = succeededPackage(runId, asof, {
+    reportBase64: Buffer.from(`a DIFFERENT report for run ${runId}`, "utf8").toString("base64"),
+    regimeSnapshots: [{ ...regimeSnapshotFixture(asof), composite: 999 }],
+  });
+  const conflict = await call(req("POST", A.runPackage, conflictingBody, TOKEN));
+  expect(conflict!.status).toBe(409);
+  expect((conflict!.body as any).error).toMatch(/already frozen/);
+  expect((conflict!.body as any).existing.reportSnapshotId).toBe(originalReportSnapshotId);
+
+  // The original stored artifacts are untouched — same report id, same bytes.
+  const [{ n }] = await sql`SELECT count(*)::int AS n FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
+  expect(n).toBe(1);
+  const [reportRow] = await sql`SELECT report_bytes FROM analytics_report_snapshots WHERE id = ${originalReportSnapshotId}::bigint`;
+  const expectedOriginalBytes = new Uint8Array(Buffer.from(originalBody.package.reportBase64, "base64"));
+  expect(new Uint8Array(reportRow.report_bytes as Buffer)).toEqual(expectedOriginalBytes);
+  const [regimeRow] = await sql`SELECT composite FROM regime_snapshots WHERE date = ${asof}`;
+  expect(Number(regimeRow.composite)).toBe(42.5); // NOT 999 — the conflicting submission never applied
+});
+
+// A different-STATUS resubmission (succeeded vs. failed) for the same run_id
+// is also a content conflict, not a replay — proves the comparison checks
+// the kind SET, not merely per-kind checksums of whatever happens to overlap.
+test("resubmitting a DIFFERENT status (failed) for an already-succeeded run_id is rejected with 409", async () => {
+  prodAuth();
+  const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-10", toolId: "fix2-status-conflict" });
+  const asof = "2026-06-10";
+  const first = await call(req("POST", A.runPackage, succeededPackage(runId, asof), TOKEN));
+  expect(first!.status).toBe(200);
+
+  const conflict = await call(req("POST", A.runPackage, failedPackage(runId, asof), TOKEN));
+  expect(conflict!.status).toBe(409);
+
+  const [{ n: reportRows }] = await sql`SELECT count(*)::int AS n FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
+  expect(reportRows).toBe(1); // the original succeeded package's report is untouched
+});

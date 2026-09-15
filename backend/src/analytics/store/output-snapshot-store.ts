@@ -12,6 +12,17 @@ import {
 import { saveRegimeSnapshots } from "./regime-store.ts";
 import { persistResearchSignal } from "./research-store.ts";
 
+// Thrown by submitTerminalRunPackage when a run_id already has a DIFFERENT
+// terminal package frozen — the API route (issue #978 FIX2) turns this into
+// a 409, mirroring VintageConflictError/freezeVintage (run-ledger-store.ts):
+// a replay must never silently return stale data for content that changed.
+export class TerminalRunPackageConflictError extends Error {
+  constructor(public readonly existing: TerminalRunPackageResult) {
+    super(`a different terminal run package is already frozen for this run_id`);
+    this.name = "TerminalRunPackageConflictError";
+  }
+}
+
 export interface OutputSnapshotRecord {
   id: string;
   artifactKind: OutputArtifactKind;
@@ -104,6 +115,62 @@ export async function findPackageByRun(runId: string, db: DbHandle = sql): Promi
   };
 }
 
+// The checksums THIS input would produce if it were freshly inserted — used
+// only to compare against what a prior submission for the same run_id
+// already stored (assertReplayMatches below). Exactly the same
+// kind-selection `insertOutputSnapshots` uses, kept in sync by construction
+// (both read `input.status` the same way) rather than duplicated by hand.
+function expectedArtifactChecksums(input: TerminalRunPackageInput): Record<OutputArtifactKind, string> {
+  const kinds: [OutputArtifactKind, readonly unknown[]][] =
+    input.status === "succeeded"
+      ? [
+          ["regime_snapshots", input.regimeSnapshots ?? []],
+          ["research_signals", input.researchSignals ?? []],
+        ]
+      : [
+          ["warnings", input.warnings ?? []],
+          ["logs", input.logs ?? []],
+          ["exceptions", input.exceptions ?? []],
+        ];
+  const out = {} as Record<OutputArtifactKind, string>;
+  for (const [kind, rows] of kinds) out[kind] = buildOutputArtifact(kind, rows).checksum;
+  return out;
+}
+
+// Issue #978 FIX2: a replay (either the pre-check below or the 23505 retry
+// branch) must compare the NEW submission's content against what is already
+// stored, not merely return it. Identical content replays as before (200,
+// replayed: true); different content throws TerminalRunPackageConflictError
+// (mapped to HTTP 409) rather than silently handing back stale data —
+// mirroring freezeVintage's identical/differing split in run-ledger-store.ts.
+async function assertReplayMatches(
+  input: TerminalRunPackageInput,
+  stored: TerminalRunPackageResult,
+  db: DbHandle = sql,
+): Promise<TerminalRunPackageResult> {
+  const expected = expectedArtifactChecksums(input);
+  const expectedKinds = Object.keys(expected).sort();
+  const storedKinds = stored.outputSnapshots.map((o) => o.artifactKind).sort();
+  const kindsMatch = expectedKinds.length === storedKinds.length && expectedKinds.every((k, i) => k === storedKinds[i]);
+  const artifactsMatch = kindsMatch && stored.outputSnapshots.every((o) => expected[o.artifactKind] === o.checksum);
+
+  let reportMatches: boolean;
+  if (input.status === "succeeded") {
+    const expectedReportChecksum = buildReportArtifact(input.reportBytes ?? new Uint8Array()).checksum;
+    if (!stored.reportSnapshotId) {
+      reportMatches = false;
+    } else {
+      const [row] = await db`SELECT checksum FROM analytics_report_snapshots WHERE id = ${stored.reportSnapshotId}::bigint`;
+      reportMatches = row?.checksum === expectedReportChecksum;
+    }
+  } else {
+    reportMatches = stored.reportSnapshotId === null;
+  }
+
+  if (artifactsMatch && reportMatches) return stored;
+  throw new TerminalRunPackageConflictError({ ...stored, replayed: false });
+}
+
 // Submit one terminal run package atomically: the immutable output
 // artifact(s) and — for a SUCCEEDED run only — the immutable report snapshot
 // AND the compatibility current-view dual-write, all in ONE transaction
@@ -115,7 +182,7 @@ export async function findPackageByRun(runId: string, db: DbHandle = sql): Promi
 // sequential retry).
 export async function submitTerminalRunPackage(input: TerminalRunPackageInput): Promise<TerminalRunPackageResult> {
   const existing = await findPackageByRun(input.runId);
-  if (existing) return existing;
+  if (existing) return await assertReplayMatches(input, existing);
   try {
     return await sql.begin(async (tx) => {
       const outputSnapshots = await insertOutputSnapshots(input, tx);
@@ -132,7 +199,7 @@ export async function submitTerminalRunPackage(input: TerminalRunPackageInput): 
       const replay = await findPackageByRun(input.runId);
       /* istanbul ignore next -- a 23505 on this unique key means a row now exists; a miss here would be a bug, not a runtime case */
       if (!replay) throw err;
-      return replay;
+      return await assertReplayMatches(input, replay);
     }
     throw err;
   }
