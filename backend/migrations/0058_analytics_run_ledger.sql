@@ -47,14 +47,18 @@ CREATE TABLE analytics_ledger_runs (
   source_label text NOT NULL CHECK (source_label IN ('live', 'hermetic', 'fixture')),
   methodology_version_id bigint NOT NULL REFERENCES analytics_ledger_methodology_versions(id),
   build_identity text NOT NULL CHECK (build_identity <> '' AND length(build_identity) <= 256),
-  -- `jobs` churns and is deliberately unprotected (see append-only-guard.ts);
-  -- losing the job link on a job's own cleanup must never take the run header
-  -- down with it.
-  job_id bigint REFERENCES jobs(id) ON DELETE SET NULL,
+  -- Deliberately NO foreign key to jobs(id) (same choice as
+  -- research_pipeline_runs.job_id, migration 0018): `jobs` churns and this
+  -- table blocks UPDATE outright (see the immutability trigger below), so an
+  -- ON DELETE SET NULL action on a job's own cleanup would itself be an
+  -- UPDATE the trigger refuses, taking the unrelated job deletion down with
+  -- it. A plain, unenforced bigint is the correct correlation id here.
+  job_id bigint,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
 CREATE INDEX analytics_ledger_runs_asof_idx ON analytics_ledger_runs (asof DESC);
+CREATE INDEX analytics_ledger_runs_job_idx ON analytics_ledger_runs (job_id);
 
 CREATE TABLE analytics_ledger_run_events (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
