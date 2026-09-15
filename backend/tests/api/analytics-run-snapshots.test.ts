@@ -16,6 +16,7 @@ import {
   insertReportSnapshot,
   applyCurrentProjections,
 } from "../../src/analytics/store/output-snapshot-store.ts";
+import { getRegimeSnapshots, getResearchSignal } from "../../src/api/routes/dashboards.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -326,4 +327,26 @@ test("telemetry rejects an artifact larger than its preview cap, while the compl
   const [storedRow] = await sql`SELECT payload_bytes FROM analytics_output_snapshots WHERE run_id = ${runId}::bigint AND artifact_kind = 'research_signals'`;
   const stored = JSON.parse(Buffer.from(storedRow.payload_bytes as Buffer).toString("utf8"));
   expect(stored[0].payload.series.points).toHaveLength(5000); // the COMPLETE series, not a bounded preview
+});
+
+// ── AC7 ──────────────────────────────────────────────────────────────────────
+test("existing dashboard regime and research-signal response fields retain their established values once the immutable snapshot dual-write is enabled", async () => {
+  prodAuth();
+  const asof = "2026-06-07";
+  const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof, toolId: "ac7-regression" });
+  const res = await call(req("POST", A.runPackage, succeededPackage(runId, asof), TOKEN));
+  expect(res!.status).toBe(200);
+
+  // GET /api/dashboards/regime-snapshots — the SAME response shape and field
+  // names every existing caller already reads, not a new/renamed projection.
+  const dashboard = await getRegimeSnapshots(new URL("http://x/api/dashboards/regime-snapshots?range=30"));
+  expect(dashboard.latest?.date).toBe(asof);
+  expect(dashboard.latest?.composite).toBe(42.5);
+  expect(dashboard.latest?.regime).toBe("risk_on");
+  expect(Array.isArray(dashboard.history)).toBe(true);
+
+  // GET /api/dashboards/research-signals/:key
+  const signal = await getResearchSignal("output-snapshot-signal");
+  expect(signal?.date).toBe(asof);
+  expect((signal?.payload as any)?.title).toBe("output-snapshot-signal signal");
 });
