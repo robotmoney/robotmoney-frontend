@@ -73,6 +73,16 @@ export async function beginRun(input: BeginRunInput): Promise<BeginRunResult> {
   }
 }
 
+// The run header's own recorded `asof` (issue #978 FIX3): the cross-check a
+// terminal run package submission uses to catch a caller binding a report
+// snapshot to the wrong market date. Returns null only if runId names no
+// real run — submitTerminalRunPackage's own FK insert is what actually
+// refuses that case.
+export async function loadRunAsof(runId: string, db: DbHandle = sql): Promise<string | null> {
+  const [row] = await db`SELECT asof::text AS asof FROM analytics_ledger_runs WHERE id = ${runId}::bigint`;
+  return row ? (row.asof as string) : null;
+}
+
 // Append-only, ordered lifecycle events (issue #977 AC5). Never updates the
 // header — there is no status/finished_at/warning/error column on it to
 // update. Serialized per run_id via an advisory xact lock so two concurrent

@@ -11,6 +11,24 @@ import {
 } from "../output-snapshots.ts";
 import { saveRegimeSnapshots } from "./regime-store.ts";
 import { persistResearchSignal } from "./research-store.ts";
+import { loadRunAsof } from "./run-ledger-store.ts";
+
+// Thrown when a terminal run package's `asof` disagrees with the `asof`
+// already recorded on its run header (analytics_ledger_runs, issue #977) —
+// the API route (issue #978 FIX3) turns this into a 400: a caller bug must
+// never freeze a report snapshot under the wrong market date.
+export class RunAsofMismatchError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly submittedAsof: string,
+    public readonly recordedAsof: string,
+  ) {
+    super(
+      `package.asof (${submittedAsof}) does not match run ${runId}'s recorded asof (${recordedAsof})`,
+    );
+    this.name = "RunAsofMismatchError";
+  }
+}
 
 // Thrown by submitTerminalRunPackage when a run_id already has a DIFFERENT
 // terminal package frozen — the API route (issue #978 FIX2) turns this into
@@ -179,8 +197,16 @@ async function assertReplayMatches(
 // replays the existing result rather than raising a duplicate-key error, and
 // a genuinely CONCURRENT duplicate is resolved the same way via retry-on-23505
 // (mirroring run-ledger-store.ts's beginRun/freezeVintage, not merely a
-// sequential retry).
+// sequential retry). Every path — pre-check, 23505 retry, and the fresh
+// insert itself — first cross-checks `input.asof` against the run's own
+// recorded asof (issue #978 FIX3): a mismatch is a caller bug, refused with
+// RunAsofMismatchError (mapped to HTTP 400) before anything is compared or
+// written.
 export async function submitTerminalRunPackage(input: TerminalRunPackageInput): Promise<TerminalRunPackageResult> {
+  const recordedAsof = await loadRunAsof(input.runId);
+  if (recordedAsof !== null && recordedAsof !== input.asof) {
+    throw new RunAsofMismatchError(input.runId, input.asof, recordedAsof);
+  }
   const existing = await findPackageByRun(input.runId);
   if (existing) return await assertReplayMatches(input, existing);
   try {

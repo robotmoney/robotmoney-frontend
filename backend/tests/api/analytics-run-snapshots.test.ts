@@ -414,3 +414,31 @@ test("resubmitting a DIFFERENT status (failed) for an already-succeeded run_id i
   const [{ n: reportRows }] = await sql`SELECT count(*)::int AS n FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
   expect(reportRows).toBe(1); // the original succeeded package's report is untouched
 });
+
+// ── FIX3 (asof cross-check gap) ──────────────────────────────────────────────
+test("a package.asof that disagrees with the run's own recorded asof (analytics_ledger_runs) is rejected with 400 and writes nothing", async () => {
+  prodAuth();
+  const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-11", toolId: "fix3-asof-mismatch" });
+  // The run's ledger asof is 2026-06-11; submit a package claiming a DIFFERENT
+  // market date — a caller bug that must never freeze a report snapshot
+  // under the wrong date.
+  const wrongAsof = "2026-06-12";
+  const body = succeededPackage(runId, wrongAsof);
+
+  const res = await call(req("POST", A.runPackage, body, TOKEN));
+  expect(res!.status).toBe(400);
+  expect((res!.body as any).error).toMatch(/does not match run .* recorded asof/);
+
+  const [{ n }] = await sql`SELECT count(*)::int AS n FROM analytics_output_snapshots WHERE run_id = ${runId}::bigint`;
+  expect(n).toBe(0);
+  const [{ n: reportRows }] = await sql`SELECT count(*)::int AS n FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
+  expect(reportRows).toBe(0);
+});
+
+test("a package.asof that MATCHES the run's own recorded asof is accepted normally", async () => {
+  prodAuth();
+  const asof = "2026-06-13";
+  const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof, toolId: "fix3-asof-match" });
+  const res = await call(req("POST", A.runPackage, succeededPackage(runId, asof), TOKEN));
+  expect(res!.status).toBe(200);
+});
