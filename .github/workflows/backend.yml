@@ -123,4 +123,7 @@ jobs:
         # tests/geckoterminal-resilience.test.ts and
         # tests/token-prices-resilience.test.ts are excluded here — they are
         # research-pipeline.yml's exclusive responsibility (issue #275 addendum).
-        run: bun test --path-ignore-patterns='tests/geckoterminal-resilience.test.ts' --path-ignore-patterns='tests/token-prices-resilience.test.ts'
+        # The timeout is passed explicitly because bun 1.3.x ignores
+        # bunfig.toml's `[test] timeout = 30000` and defaults to 5000ms per
+        # test, which heavy DB suites exceed under parallel CI load.
+        run: bun test --timeout=30000 --path-ignore-patterns='tests/geckoterminal-resilience.test.ts' --path-ignore-patterns='tests/token-prices-resilience.test.ts'
