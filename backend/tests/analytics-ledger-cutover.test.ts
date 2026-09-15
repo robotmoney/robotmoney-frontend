@@ -369,12 +369,23 @@ describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and
 
 describe("issue #979 AC7: legacy-baseline source rows are never upgraded to historically reproducible", () => {
   test("every migration-time backfill row is legacy_baseline with no acquisition (not historically reproducible)", async () => {
+    // The template database this file clones from is migrated against an
+    // EMPTY raw_indicator_history, so migration 0057's own backfill produced
+    // zero rows here — re-running its exact backfill statement (copied
+    // verbatim from backend/migrations/0057_source_acquisition_ledger.sql)
+    // against a seeded row makes this a real, non-vacuous check of what that
+    // statement actually does, not merely an assertion over an empty set.
+    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-01', 'AC7_BACKFILL_PROBE', 1, 'seed')`;
+    await sql.unsafe(`
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
+      SELECT 'raw_indicator_history:' || indicator, date, value, 'legacy_baseline', statement_timestamp()
+      FROM raw_indicator_history
+      ON CONFLICT DO NOTHING`);
+
     const rows = (await sql`
       SELECT revision_kind, acquisition_id FROM source_value_versions WHERE revision_kind = 'legacy_baseline'
     `) as unknown as { revision_kind: string; acquisition_id: string | null }[];
-    // raw_indicator_history is empty in this fresh, cloned-template database
-    // (no smoke seed loaded it), so the backfill legitimately produced zero
-    // rows — the invariant under test is what's asserted below regardless.
+    expect(rows.length, "the backfill must have produced at least the seeded probe row").toBeGreaterThan(0);
     for (const row of rows) {
       expect(row.acquisition_id, "a legacy_baseline row must have NO acquisition — that is what 'not reproducible' means").toBeNull();
     }
