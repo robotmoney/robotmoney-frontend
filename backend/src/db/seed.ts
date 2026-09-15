@@ -95,6 +95,19 @@ export const SCHEDULES: SeedSchedule[] = [
   // the anti-join query is cheap to run against a caught-up deployment.
   // Handler: worker/handlers/index.ts → ops/asset-prices.ts::backfillAssetPricesForCleanDays.
   { kind: "ops.backfill_asset_prices", cron: "*/15 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Issue #979 AC2: dual-write parity sweep — the ONLY production caller of
+  // recordParityObservation()/runParitySweep() (analytics/cutover/parity.ts),
+  // which is what populates analytics_parity_observations. That table is the
+  // evidence backend/scripts/analytics-ledger-cutover-gate.ts reads before
+  // ledger-mode reads can ever be armed; the CLI itself only evaluates
+  // existing observations, it never records one. Hourly (staggered to minute
+  // 20 so it never fires in the same minute as vault.sample_share_price /
+  // vault.sample_adapters above): comfortably clears the gate's default
+  // 12-observation minimum inside its default 24h window, and each tick's
+  // cost is a handful of read queries plus one small insert per domain — not
+  // proportional to how often it runs. Handler: worker/handlers/index.ts →
+  // analytics/cutover/parity.ts::runParitySweep.
+  { kind: "analytics.parity_sweep", cron: "20 * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Swarm lifecycle rows are seeded SEPARATELY below (seedSwarmSchedules)
   // — issue #208 made their enabled/cron/window environment-configurable via
   // resolveSwarmSchedules(), and (unlike every other row here) their
