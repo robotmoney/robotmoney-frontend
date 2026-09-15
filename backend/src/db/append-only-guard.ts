@@ -176,6 +176,10 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *  - `schema_migrations` — the migration ledger. See the deliberate cost of
  *    this one in migration 0032's header: `DELETE FROM schema_migrations` is
  *    the usual lever for forcing a re-run, and it now raises.
+ *  - `analytics_overwrite_events` — issue #974's immutable evidence for every
+ *    future material replacement or allowed removal of an analytics
+ *    current-view row. An evidence ledger that can itself be edited or erased
+ *    cannot establish that an overwrite happened.
  *
  * NOT protected. Each is a decision, not an omission — a table missing from
  * BOTH lists is the defect this section exists to prevent:
@@ -189,11 +193,12 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *    0032's header: `jobs` has `ON DELETE SET NULL` edges into protected tables
  *    (`audit_log.job_id`, `swarm_session_events.job_id`), so removing a job
  *    blanks provenance on rows that themselves survive.
- *  - `raw_indicator_history` — re-derivable from its external sources, and it
+ *  - `raw_indicator_history` — a self-healing current view, and it
  *    has a live repair path that deletes calendar-invalid rows
  *    (`verifySeedProvenance(db, clean = true)`,
- *    analytics/store/seed-provenance.ts). Protecting it breaks a shipped tool
- *    to preserve data that can be re-fetched.
+ *    analytics/store/seed-provenance.ts). Protecting it breaks a shipped tool;
+ *    migration 0056 instead preserves its changed/deleted rows in
+ *    `analytics_overwrite_events`.
  *  - `swarm_agent_health_events` — liveness telemetry. High-volume, per-tick,
  *    and meaningful only while it is recent; it records that a process was up,
  *    not a fact anyone later relies on. It is the table most likely to need a
@@ -209,7 +214,9 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *    live paths (see backend/tests/analytics-worker-role.test.ts). Their
  *    integrity guarantee is the `rm_worker` role's lack of DELETE privilege,
  *    which is a stronger and separate mechanism — a privilege refusal (42501)
- *    beats a trigger the owner can drop.
+ *    beats a trigger the owner can drop. `research_signals` remains a current
+ *    view, but migration 0056 captures each changed/deleted row before it is
+ *    replaced or removed.
  *  - `swarm_judge_config` — a ONE-ROW operator switch (mode, min_takes, model).
  *    Mutable configuration, not history; the record of who changed it and when
  *    is `audit_log`, which IS protected.
@@ -235,6 +242,7 @@ export const APPEND_ONLY_TABLES = [
   "agent_activity_log",
   "regime_snapshots",
   "schema_migrations",
+  "analytics_overwrite_events",
 ] as const;
 
 export type AppendOnlyTable = (typeof APPEND_ONLY_TABLES)[number];
@@ -257,6 +265,7 @@ export const APPEND_ONLY_MIGRATIONS = [
   "0040_swarm_judgements_append_only.sql",
   "0042_swarm_consensus_receipts.sql",
   "0050_swarm_member_keys_append_only.sql",
+  "0056_analytics_overwrite_events.sql",
 ] as const;
 
 /** The two trigger names migration 0032 installs on each protected table. */
