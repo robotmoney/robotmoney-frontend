@@ -11,7 +11,8 @@ import { ROUTES } from "@robotmoney/contract";
 import type { RawIndicatorHistory } from "./types.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
-import type { AnalyticsPersistence, FloorSeedResult } from "./persistence.ts";
+import type { AnalyticsPersistence, FloorSeedResult, BeginRunResult, FreezeVintageResult } from "./persistence.ts";
+import type { RunLifecycleEvent } from "./run-ledger.ts";
 import { envSecret } from "../lib/env-secret.ts";
 
 export interface AnalyticsApiConfig {
@@ -68,6 +69,15 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
   }
 
   return {
+    async beginRun(input) {
+      return await call<BeginRunResult>("POST", ROUTES.analytics.runs, { run: input });
+    },
+    async appendRunEvent(runId: string, eventType: RunLifecycleEvent, detail: string | null) {
+      await call("POST", ROUTES.analytics.runEvents, { event: { runId, eventType, detail } });
+    },
+    async freezeVintage(input) {
+      return await call<FreezeVintageResult>("POST", ROUTES.analytics.vintages, { vintage: input });
+    },
     async saveSourceAcquisition(acquisition) {
       return await call<{ acquisitionId: string; replayed: boolean }>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
     },

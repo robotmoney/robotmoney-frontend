@@ -50,6 +50,9 @@ import {
   type TelemetryRunStatus,
 } from "./telemetry.ts";
 import { telemetryHttpSink } from "./telemetry-client.ts";
+import { randomUUID } from "node:crypto";
+import { resolveBuildIdentity } from "./build-identity.ts";
+import type { MethodologyIdentity } from "./run-ledger.ts";
 
 const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
 // R6 follow-up (two-tier EDGAR refresh, see edgar-incremental-refresh.ts):
@@ -168,9 +171,34 @@ export async function runAnalytics(
   const collector = new TelemetryCollector();
   let runFailed: unknown = null;
 
+  // ── ISSUE #977: the immutable run ledger ────────────────────────────────
+  // beginRun MUST succeed BEFORE `source` (the injected AnalyticsDataSource)
+  // is ever called — its failure is fatal and prevents both acquisition and
+  // every canonical output write below (AC1/AC10). Deliberately outside the
+  // try/catch: a begin-run failure is not "this run degraded", it is "this
+  // run never started", and it propagates to the caller unchanged.
+  const runToolId = toolId ?? "suite";
+  const buildIdentity = resolveBuildIdentity();
+  const methodology: MethodologyIdentity = {
+    toolId: runToolId,
+    versionLabel: CURRENT_REGIME_VERSION,
+    config: { toolId: runToolId, regimeVersion: CURRENT_REGIME_VERSION },
+  };
+  const { runId, methodologyVersionId } = await persistence.beginRun({
+    runKey: randomUUID(),
+    asof,
+    toolId: runToolId,
+    sourceLabel,
+    methodology,
+    buildIdentity,
+    jobId: jobId ?? null,
+  });
+  await persistence.appendRunEvent(runId, "started", null);
+
   let persisted: Awaited<ReturnType<AnalyticsPersistence["loadRawHistory"]>> | null = null;
   const getPersisted = async () => (persisted ??= await persistence.loadRawHistory());
   let mergedRaw: Record<string, { date: string; value: number }[]> | null = null;
+  let vintage: Awaited<ReturnType<AnalyticsPersistence["freezeVintage"]>> | null = null;
 
   try {
   // ── REGIME ────────────────────────────────────────────────────────────────
@@ -419,6 +447,21 @@ export async function runAnalytics(
       }
     }
   }
+
+  // ── ISSUE #977: freeze the data vintage ─────────────────────────────────
+  // Everything this run acquired (and everything already in the ledger) is
+  // frozen as of NOW (knowledge-time cutoff) and `asof` (market-time cutoff)
+  // — the complete, reproducible input universe this run's outputs above
+  // were computed against. A freeze failure fails the WHOLE run: it is part
+  // of the mandatory ledger, not best-effort telemetry.
+  vintage = await persistence.freezeVintage({
+    runId,
+    toolId: runToolId,
+    knowledgeTimeCutoff: new Date().toISOString(),
+    marketTimeCutoff: asof,
+    methodologyVersionId,
+    buildIdentity,
+  });
   } catch (e) {
     runFailed = e;
   }
@@ -441,6 +484,27 @@ export async function runAnalytics(
   // Non-enumerable so `Object.keys(results)`/JSON-shape assertions of the
   // canonical tool outputs are never affected by telemetry outcome exposure.
   Object.defineProperty(results, "__telemetry", { value: telemetryOutcome, enumerable: false, writable: true, configurable: true });
+
+  // Mandatory ledger event — NOT best-effort like telemetry above. Its own
+  // failure escalates the run to failed even when everything else succeeded:
+  // a run whose outcome the ledger could not record must not read as quiet
+  // success (issue #977 AC5/AC10).
+  // overallStatus is computed above as one of "failed" | "degraded" |
+  // "succeeded" only (never "running", the fourth TelemetryRunStatus value,
+  // which does not apply once this function is about to return) — narrow it
+  // to RunLifecycleEvent's smaller set for the ledger event below.
+  const eventStatus = overallStatus as "succeeded" | "degraded" | "failed";
+  try {
+    await persistence.appendRunEvent(runId, eventStatus, runFailed ? String((runFailed as any)?.message ?? runFailed) : null);
+  } catch (ledgerEventError) {
+    if (!runFailed) runFailed = ledgerEventError;
+  }
+  Object.defineProperty(results, "__runLedger", {
+    value: { runId, methodologyVersionId, buildIdentity, vintage },
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
 
   if (runFailed) throw runFailed;
   return results;
