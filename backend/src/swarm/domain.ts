@@ -17,6 +17,11 @@ import {
 // stored checksum recomputes clean from the retrieved bytes" is one proof
 // technique across both ledgers.
 import { canonicalStringify, sha256Hex } from "../analytics/run-ledger.ts";
+// Issue #979: once cutover is armed, a brief-by-session read resolves the
+// body from swarm_brief_revisions (never swarm_briefs) — see
+// analytics/cutover/ledger-current.ts's header.
+import { getAnalyticsReadMode } from "../analytics/cutover/read-mode.ts";
+import { ledgerCurrentBriefBySession } from "../analytics/cutover/ledger-current.ts";
 // Issue #562: a new member's public handle comes from its name, not from the
 // UUID applyMember minted for it. Leaf module — imports nothing from here, so
 // admin.ts can call it on the manual-add path too without a cycle.
@@ -646,6 +651,25 @@ export async function getBriefBySession(sessionId: string) {
   // `session_id` is a uuid column, so a non-uuid handle would make Postgres
   // throw rather than return no rows; screen it here (mirrors getSessionById).
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return null;
+  // Issue #979: in ledger mode, `body` is read from swarm_brief_revisions
+  // (the immutable ledger) instead of swarm_briefs.body directly — `id` still
+  // comes from swarm_briefs because it is an opaque handle with no ledger
+  // equivalent, not a fact the ledger vs. compatibility split is about (both
+  // modes keep dual-writing swarm_briefs; only which table SUPPLIES the body
+  // differs).
+  if ((await getAnalyticsReadMode()) === "ledger") {
+    const ledger = await ledgerCurrentBriefBySession(sessionId);
+    if (!ledger) return null;
+    const [row] = await sql`SELECT id, created_at FROM swarm_briefs WHERE session_id = ${sessionId} LIMIT 1`;
+    return toBrief({
+      id: row?.id ?? null,
+      date: ledger.date,
+      subject_id: ledger.subjectId,
+      session_id: ledger.sessionId,
+      body: ledger.body,
+      created_at: row?.created_at ?? ledger.createdAt,
+    });
+  }
   const r = await sql`SELECT id, date, subject_id, session_id, body, created_at FROM swarm_briefs
                       WHERE session_id = ${sessionId} LIMIT 1`;
   return r[0] ? toBrief(r[0]) : null;

@@ -7,6 +7,7 @@ import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured
 import { isDatabaseUnavailable, sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
+import { analyticsLedgerGuardOutcome, assertAnalyticsLedgerGuardArmed } from "../db/analytics-ledger-guard.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
@@ -89,6 +90,11 @@ await assertHandleNamespaceClean();
 // (`append_only_guard`), and RM_ALLOW_UNARMED_APPEND_ONLY_GUARD=1 turns the
 // refusal into a loud warning.
 await assertAppendOnlyGuardArmed();
+// Issue #979 AC6: the Phase A analytics ledger's own immutability guards
+// (source/run/output/cutover, migrations 0057-0060) are a DISTINCT trigger
+// family from migration 0032's rm_append_only_guard() above and must be
+// checked independently — see backend/src/db/analytics-ledger-guard.ts.
+await assertAnalyticsLedgerGuardArmed();
 
 const server = Bun.serve({
   port: config.apiPort,
@@ -151,6 +157,7 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
         // RM_ALLOW_UNARMED_APPEND_ONLY_GUARD=1. The status CODE stays 200 in
         // every case — the compose healthcheck keys on `.ok`.
         append_only_guard: appendOnlyGuardOutcome(),
+        analytics_ledger_guard: analyticsLedgerGuardOutcome(),
       });
     }
 

@@ -21,6 +21,8 @@ import { getOverviewProjection, PRODUCTION_KINDS } from "../../admin/overview.ts
 import { detectAllGaps } from "../../ops/gap-detector.ts";
 import { isPrivileged } from "../auth.ts";
 import { hashKey } from "../../lib/keys.ts";
+import { getAnalyticsReadMode } from "../../analytics/cutover/read-mode.ts";
+import { ledgerCurrentRawIndicatorSeries, ledgerCurrentResearchSignals } from "../../analytics/cutover/ledger-current.ts";
 
 // Auth surface for the admin dashboard. Injectable so tests can exercise a
 // prod-mode config (token required, insecure disallowed) against the ephemeral DB.
@@ -615,6 +617,19 @@ export async function handleAdmin(
     if (from !== null && !isIsoDate(from)) return { status: 400, body: { error: "from must be a valid YYYY-MM-DD date" } };
     if (to !== null && !isIsoDate(to)) return { status: 400, body: { error: "to must be a valid YYYY-MM-DD date" } };
     const limit = clampLimit(url.searchParams.get("limit"), 500, 5000);
+    // Issue #979: ledger mode derives these points PURELY from
+    // source_value_versions (never from raw_indicator_history) — see
+    // cutover/ledger-current.ts. `source` has no ledger equivalent (it is
+    // dual-write provenance metadata, not a frozen value) and is omitted
+    // rather than fabricated when this branch answers.
+    if ((await getAnalyticsReadMode()) === "ledger") {
+      const all = await ledgerCurrentRawIndicatorSeries(indicator);
+      const points = all
+        .filter((p) => (from ? p.date >= from : true) && (to ? p.date <= to : true))
+        .slice(0, limit)
+        .map((p) => ({ date: p.date, value: p.value, source: null as string | null }));
+      return { status: 200, body: { indicator, points } };
+    }
     const conds = [sql`indicator = ${indicator}`];
     if (from) conds.push(sql`date >= ${from}`);
     if (to) conds.push(sql`date <= ${to}`);
@@ -639,6 +654,18 @@ export async function handleAdmin(
     if (from !== null && !isIsoDate(from)) return { status: 400, body: { error: "from must be a valid YYYY-MM-DD date" } };
     if (to !== null && !isIsoDate(to)) return { status: 400, body: { error: "to must be a valid YYYY-MM-DD date" } };
     const limit = clampLimit(url.searchParams.get("limit"), 500, 5000);
+    // Issue #979: ledger mode derives these points PURELY from
+    // analytics_output_snapshots (never from research_signals) — see
+    // cutover/ledger-current.ts.
+    if ((await getAnalyticsReadMode()) === "ledger") {
+      const all = (await ledgerCurrentResearchSignals()).filter((r) => r.signalKey === key);
+      const points = all
+        .filter((r) => (from ? r.date >= from : true) && (to ? r.date <= to : true))
+        .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+        .slice(0, limit)
+        .map((r) => ({ date: r.date, payload: r.payload }));
+      return { status: 200, body: { key, points } };
+    }
     const conds = [sql`signal_key = ${key}`];
     if (from) conds.push(sql`date >= ${from}`);
     if (to) conds.push(sql`date <= ${to}`);
