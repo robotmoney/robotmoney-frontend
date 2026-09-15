@@ -42,11 +42,18 @@ export async function saveSourceAcquisition(
            ${fetch.providerReleaseId ?? null}, ${fetch.errorDetail ?? null})`;
     }
 
+    // One transaction-level advisory lock per source key serializes competing
+    // revisions of the same series without over-serializing unrelated series.
+    // Every value in an acquisition belongs to one sourceKey, so this bounds the
+    // lock count per transaction to the distinct keys present (never one lock per
+    // row — a full FRED/Yahoo daily series would otherwise exhaust Postgres's
+    // max_locks_per_transaction and fail with SQLSTATE 53200 "out of shared memory").
+    const sourceKeys = Array.from(new Set(evidence.values.map((v) => v.sourceKey)));
+    for (const sourceKey of sourceKeys) {
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${sourceKey}, 0))`;
+    }
+
     for (const value of evidence.values) {
-      // One transaction-level advisory lock per observation serializes competing
-      // revisions without locking unrelated series or dates.
-      const marketKey = value.marketDate ?? value.marketInstant!;
-      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`${value.sourceKey}\u001f${marketKey}`}, 0))`;
       const [prior] = await tx`
         SELECT id, value
         FROM source_value_versions
