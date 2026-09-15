@@ -11,6 +11,12 @@ import {
   verifyClaimChallengeSignature,
   verifySubmissionSignature,
 } from "../lib/signing.ts";
+// Pure canonicalization shared with the #977/#978 analytics ledgers — no DB
+// import, so pulling it in here carries no cycle risk. Every brief revision's
+// body is hashed the SAME way an analytics report/output snapshot is, so "the
+// stored checksum recomputes clean from the retrieved bytes" is one proof
+// technique across both ledgers.
+import { canonicalStringify, sha256Hex } from "../analytics/run-ledger.ts";
 // Issue #562: a new member's public handle comes from its name, not from the
 // UUID applyMember minted for it. Leaf module — imports nothing from here, so
 // admin.ts can call it on the manual-add path too without a cycle.
@@ -1620,6 +1626,29 @@ export async function openSession(subjectId: string) {
   return r;
 }
 
+// Append one immutable brief revision — never edits a prior one. Exported on
+// its own (issue #978), same reason output-snapshot-store.ts exports
+// insertOutputSnapshots/insertReportSnapshot/applyCurrentProjections
+// separately: a test can compose this with a deliberately injected failure
+// in its OWN sql.begin to prove the whole publish rolls back atomically,
+// using the exact production code path rather than a duplicated copy of it.
+export async function appendBriefRevision(
+  sessionId: string,
+  body: Record<string, unknown>,
+  reportSnapshotId: string | null,
+  tx: DbHandle,
+): Promise<{ revision: number; checksum: string }> {
+  const bodyBytes = Buffer.from(canonicalStringify(body), "utf8");
+  const checksum = sha256Hex(bodyBytes);
+  await tx`SELECT pg_advisory_xact_lock(hashtextextended('swarm_brief_revisions:' || ${sessionId}, 0))`;
+  const [{ next }] = await tx`
+    SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM swarm_brief_revisions WHERE session_id = ${sessionId}`;
+  await tx`
+    INSERT INTO swarm_brief_revisions (session_id, revision, body_bytes, checksum, report_snapshot_id)
+    VALUES (${sessionId}, ${next}, ${bodyBytes}, ${checksum}, ${reportSnapshotId}::bigint)`;
+  return { revision: Number(next), checksum };
+}
+
 export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   const regime = (await sql`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
@@ -1656,16 +1685,36 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     },
     windowClosesAt,
   };
+
+  // Issue #978 AC5/AC6: bind this brief to the exact, immutable analytics
+  // report snapshot for the session's market date — the newest one frozen,
+  // if any run has submitted a terminal package for this date at all. A
+  // session whose date has no analytics report yet (or ever, e.g. a
+  // smoke/legacy subject) gets `report_snapshot_id = NULL`, same cutover
+  // shape as migration 0049's signing_key_id.
+  const [report] = await sql`
+    SELECT id FROM analytics_report_snapshots WHERE asof = ${s.date}::date ORDER BY id DESC LIMIT 1`;
+  const reportSnapshotId: string | null = report ? String(report.id) : null;
+
   // Keyed on the SESSION (migration 0028), not the day. The old
   // `ON CONFLICT (date, subject_id)` made every session after the first of a
   // day overwrite its predecessor's brief — destroying the `windowClosesAt`
   // that session had already advertised to its members. Re-publishing the SAME
-  // session still updates in place (the brief driver may retry), but a second
-  // session on the same day now INSERTs its own row.
-  await sql`INSERT INTO swarm_briefs (session_id, date, subject_id, body)
-            VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${sql.json(jsonValue(body))})
-            ON CONFLICT (session_id) DO UPDATE SET body = EXCLUDED.body`;
-  await sql`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
+  // session still updates swarm_briefs (the current-view projection) in place
+  // (the brief driver may retry), but a second session on the same day now
+  // INSERTs its own row.
+  //
+  // ISSUE #978: every publish call also APPENDS a new, immutable
+  // swarm_brief_revisions row via appendBriefRevision — never edits a prior
+  // one — in the SAME transaction as the current-view update, so a failure
+  // partway (see appendBriefRevision's header) leaves neither side changed.
+  await sql.begin(async (tx) => {
+    await appendBriefRevision(sessionId, body, reportSnapshotId, tx);
+    await tx`INSERT INTO swarm_briefs (session_id, date, subject_id, body, report_snapshot_id)
+              VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${tx.json(jsonValue(body))}, ${reportSnapshotId}::bigint)
+              ON CONFLICT (session_id) DO UPDATE SET body = EXCLUDED.body, report_snapshot_id = EXCLUDED.report_snapshot_id`;
+    await tx`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
+  });
   return { sessionId, state: "collecting", windowClosesAt };
 }
 
