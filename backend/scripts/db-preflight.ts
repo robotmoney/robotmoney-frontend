@@ -81,6 +81,7 @@ import {
   type NamespaceDb,
 } from "../src/db/handle-namespace.ts";
 import { appendOnlyRefusalLines, checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
+import { analyticsLedgerGuardRefusalLines, checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 
 export { handleNamespaceConflicts };
 
@@ -131,6 +132,16 @@ export interface PreflightResult {
    *  leaving the catalog looking correct. Read-only in every outcome: the probe
    *  matches no rows whether or not it is refused. */
   appendOnlyProblems: string[];
+  /** Problems found by the Phase A analytics ledger's own immutability guard
+   *  (issue #979 AC6, migrations 0057-0060) — a distinct trigger family from
+   *  the append-only guard above, checked the same way: read-only in every
+   *  outcome, empty on an armed database and on one that predates the
+   *  ledger. This is the third of the three callers analytics-ledger-guard.ts
+   *  documents for assertAnalyticsLedgerGuardArmed (api/index.ts and
+   *  prod-bootstrap.ts are the other two) — an adopted archive that restores
+   *  the ledger tables without their triggers must be caught HERE, before
+   *  migrate + seed writes another row into them. */
+  analyticsLedgerGuardProblems: string[];
 }
 
 /** Parse --initializer=… out of argv. Missing or unrecognised ⇒ simulation —
@@ -164,7 +175,14 @@ export async function classifyDatabase(initializer: BootInitializer, db: Preflig
     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
   `) as unknown as { count: number }[];
   if (count === 0) {
-    return { mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [] };
+    return {
+      mode: "bootstrap",
+      tables: 0,
+      census: [],
+      handleNamespaceConflicts: [],
+      appendOnlyProblems: [],
+      analyticsLedgerGuardProblems: [],
+    };
   }
   return {
     mode: initializer === "archive" ? "adopt" : "refuse",
@@ -172,6 +190,7 @@ export async function classifyDatabase(initializer: BootInitializer, db: Preflig
     census: await censusSample(db),
     handleNamespaceConflicts: await handleNamespaceConflicts(db),
     appendOnlyProblems: (await checkAppendOnlyGuard(db)).problems,
+    analyticsLedgerGuardProblems: (await checkAnalyticsLedgerGuard(db)).problems,
   };
 }
 
@@ -218,6 +237,10 @@ export function reportLines(target: string, r: PreflightResult): string[] {
     lines.push(...appendOnlyRefusalLines(r.appendOnlyProblems, "[db-preflight]"));
     lines.push(`[db-preflight] Nothing has been written.`);
   }
+  if (r.analyticsLedgerGuardProblems.length > 0) {
+    lines.push(...analyticsLedgerGuardRefusalLines(r.analyticsLedgerGuardProblems, "[db-preflight]"));
+    lines.push(`[db-preflight] Nothing has been written.`);
+  }
   return lines;
 }
 
@@ -234,7 +257,12 @@ export async function main(): Promise<void> {
     // migrate + seed, and adopting a database whose history guard is recorded
     // as applied but no longer refuses deletion means every writer past this
     // point is writing into tables that can be silently emptied.
-    result.appendOnlyProblems.length > 0;
+    result.appendOnlyProblems.length > 0 ||
+    // Same reasoning again, for the Phase A analytics ledger's OWN immutability
+    // guard (issue #979 AC6) — a restored archive can carry the ledger tables
+    // without their triggers just as easily as it can carry swarm_members
+    // without its namespace trigger or the generic append-only guard disabled.
+    result.analyticsLedgerGuardProblems.length > 0;
   const emit = refused ? console.error : console.log;
   for (const line of reportLines(target, result)) emit(line);
   if (refused) process.exitCode = 1;
