@@ -9,7 +9,13 @@ import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "./wallet.ts";
 import { backfillAssetPricesForCleanDays } from "../../ops/asset-prices.ts";
-import { runParitySweep } from "../../analytics/cutover/parity.ts";
+// Issue #979 fix: NEVER import analytics/cutover/parity.ts here — it imports
+// db/client.ts (the rm_app-credentialed API pool), and worker/** must never
+// hold that pool, even transitively (see db migration 0060's REVOKE + the
+// analytics-api-boundary transitive-reachability test). triggerParitySweep()
+// is the authenticated-HTTP call to the API process instead, the same
+// worker→API pattern analyticsApiClient() already uses for #977/#978.
+import { triggerParitySweep } from "../../analytics/api-client.ts";
 
 // `jobId` is the claimed job's row id (loop.ts passes `job.id`). It is optional
 // and source-compatible: existing handlers that only take `payload` remain
@@ -75,12 +81,13 @@ export const handlers: Record<string, JobHandler> = {
   // and safe to run often — hourly is far more than the gate's default
   // 12-observation / 24h window needs, which lets the window close in about
   // half a day instead of waiting on a slower cadence.
-  "analytics.parity_sweep": () =>
-    runParitySweep().then((results) => ({
-      domains: results.length,
-      matched: results.filter((r) => r.matched).map((r) => r.domain),
-      mismatched: results.filter((r) => !r.matched).map((r) => r.domain),
-    })),
+  //
+  // WIRING (issue #979 fix): this handler never touches Postgres itself. It
+  // calls POST /api/analytics/parity-sweep (triggerParitySweep(),
+  // analytics/api-client.ts) over the SAME authenticated HTTP boundary the
+  // retained analytics handlers above already use — runParitySweep() runs
+  // INSIDE the API process, which legitimately holds the rm_app pool.
+  "analytics.parity_sweep": () => triggerParitySweep(),
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
   // swarm session lifecycle

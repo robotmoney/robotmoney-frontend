@@ -298,6 +298,18 @@ export const ROUTES = {
     //   GET  reportSnapshot?id= — byte-exact report retrieval by immutable id
     runPackage: "/api/analytics/run-packages",
     reportSnapshot: "/api/analytics/reports",
+    // Issue #979 fix: the API-owned trigger for the dual-write parity sweep.
+    // runParitySweep() (analytics/cutover/parity.ts) touches Postgres directly
+    // (the rm_app-credentialed pool, db/client.ts) and MUST only ever run
+    // inside the API process — worker/** must never import db/client.ts, even
+    // transitively. The worker's `analytics.parity_sweep` handler calls this
+    // route over authenticated HTTP (same analyticsApiClient()-shaped pattern
+    // as every other worker→API write) instead of importing the checker
+    // module directly.
+    //
+    //   POST paritySweep — run every parity domain's check once and record
+    //                      each as a fresh analytics_parity_observations row
+    paritySweep: "/api/analytics/parity-sweep",
   },
 
   admin: {
