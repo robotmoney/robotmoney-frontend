@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -129,6 +130,28 @@ test("concurrent revisions serialize into a single chain without a duplicate suc
   expect(new Set(rows.map((r) => Number(r.value)))).toEqual(new Set([1, 2, 3]));
   expect(rows.filter((r) => r.prior_version_id === null)).toHaveLength(1);
   expect(new Set(rows.filter((r) => r.prior_version_id !== null).map((r) => String(r.prior_version_id))).size).toBe(2);
+});
+
+test("large historical acquisitions split value inserts below PostgreSQL's parameter limit", async () => {
+  const values = Array.from({ length: 9_000 }, (_, i) => ({
+    sourceKey: "series:large",
+    marketDate: new Date(Date.UTC(2000, 0, i + 1)).toISOString().slice(0, 10),
+    marketInstant: null,
+    value: i,
+  }));
+  await saveSourceAcquisition({
+    id: randomUUID(),
+    provider: "fixture",
+    parserVersion: "fixture:1",
+    cacheIdentity: "large",
+    requestedByRunId: null,
+    events: [],
+    fetches: [],
+    values,
+  });
+  const [{ count }] = await sql`
+    SELECT count(*)::int AS count FROM source_value_versions WHERE source_key = 'series:large'`;
+  expect(count).toBe(9_000);
 });
 
 test("date and instant market time round-trip exactly, and redaction removes credentials from identities and failures", async () => {
