@@ -130,6 +130,13 @@ export async function fetchSigningPayload(draft: Record<string, unknown>): Promi
   return body.canonical;
 }
 
+/** Read the optional immutable report binding from a public brief response. */
+export function reportSnapshotIdFromBrief(brief: { reportSnapshotId?: unknown } | null | undefined): string | undefined {
+  return typeof brief?.reportSnapshotId === "string" && brief.reportSnapshotId.length > 0
+    ? brief.reportSnapshotId
+    : undefined;
+}
+
 const b64 = (b: ArrayBuffer | Uint8Array) =>
   Buffer.from(b instanceof Uint8Array ? b : new Uint8Array(b)).toString("base64");
 
@@ -280,12 +287,14 @@ async function participate(): Promise<void> {
 
   // Read context over REST — this member's OWN fetch, not the harness's.
   const regime = (await restJson<{ latest?: any }>(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).body?.latest ?? {};
-  // Result unused (this member reasons from the regime read above); this is a
-  // liveness check. No brief yet is a legitimate 404 (issue #868), not a
-  // reason to abort the session.
-  await restJson(`${ROUTES.swarm.brief}?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subjectId)}`, undefined, {
+  // Read the brief for THIS session (not merely the newest brief that happens
+  // to share its date and subject). Its immutable report binding is part of
+  // the schema-2 signing payload. No brief yet is a legitimate 404 (issue
+  // #868), not a reason to abort the session.
+  const brief = await restJson<{ reportSnapshotId?: unknown }>(`${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`, undefined, {
     allowStatuses: [404],
   });
+  const reportSnapshotId = brief.status === 200 ? reportSnapshotIdFromBrief(brief.body) : undefined;
   const composite = Number(regime?.composite ?? 0.5);
   const regimeCtx: RegimeContext = {
     composite,
@@ -343,6 +352,7 @@ async function participate(): Promise<void> {
     confidence: authored.confidence,
     body,
     memoUrl,
+    ...(reportSnapshotId === undefined ? {} : { reportSnapshotId }),
   };
   const canonical = await fetchSigningPayload(draft);
   let signature: string;

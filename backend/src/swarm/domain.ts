@@ -646,7 +646,7 @@ export async function getBriefBySession(sessionId: string) {
   // `session_id` is a uuid column, so a non-uuid handle would make Postgres
   // throw rather than return no rows; screen it here (mirrors getSessionById).
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return null;
-  const r = await sql`SELECT id, date, subject_id, session_id, body, created_at FROM swarm_briefs
+  const r = await sql`SELECT id, date, subject_id, session_id, report_snapshot_id, body, created_at FROM swarm_briefs
                       WHERE session_id = ${sessionId} LIMIT 1`;
   return r[0] ? toBrief(r[0]) : null;
 }
@@ -675,7 +675,7 @@ export async function getBrief(date: string, subjectId: string) {
   // 0028 deliberately preserved v0-archived briefs whose session was never
   // archived, and an inner join would silently hide them. `NULLS LAST` ranks a
   // real session's brief above such a row when both exist for a day.
-  const r = await sql`SELECT b.id, b.date, b.subject_id, b.session_id, b.body, b.created_at
+  const r = await sql`SELECT b.id, b.date, b.subject_id, b.session_id, b.report_snapshot_id, b.body, b.created_at
                       FROM swarm_briefs b
                       LEFT JOIN swarm_sessions s ON s.id = b.session_id
                       WHERE b.date = ${date} AND b.subject_id = ${subjectId}
