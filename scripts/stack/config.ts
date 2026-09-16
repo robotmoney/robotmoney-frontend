@@ -294,7 +294,12 @@ export function buildArgs(services: string[] = []): string[] {
 }
 
 export function upArgs(services: string[]): string[] {
-  return ["up", "-d", ...services];
+  // `up` returning only means containers were created. The full profile also
+  // starts analytics-producer, whose healthcheck stays `starting` while its
+  // boot-time repair is consuming the API. Consumers must not run sessions or
+  // browser checks in that interval: wait for Docker's service-health contract
+  // before exposing the stack as ready.
+  return ["up", "-d", "--wait", "--wait-timeout", "1800", ...services];
 }
 
 // `--no-deps` is safe (and correct) because up() waits for postgres to be ready
