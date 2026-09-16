@@ -184,9 +184,7 @@ describe("argv builders", () => {
   });
 
   test("upArgs names services explicitly — never a bare `up -d`", () => {
-    expect(upArgs(["postgres", "api"])).toEqual([
-      "up", "-d", "--wait", "--wait-timeout", "1800", "postgres", "api",
-    ]);
+    expect(upArgs(["postgres", "api"])).toEqual(["up", "-d", "postgres", "api"]);
   });
 
   test("downArgs is a plain `down` unless volumes/orphans are explicitly requested", () => {
