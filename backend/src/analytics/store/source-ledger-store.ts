@@ -53,26 +53,72 @@ export async function saveSourceAcquisition(
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${sourceKey}, 0))`;
     }
 
-    for (const value of evidence.values) {
-      const [prior] = await tx`
-        SELECT id, value
-        FROM source_value_versions
-        WHERE source_key = ${value.sourceKey}
-          AND market_date IS NOT DISTINCT FROM ${value.marketDate}::date
-          AND market_instant IS NOT DISTINCT FROM ${value.marketInstant}::timestamptz
-        ORDER BY knowledge_time DESC, id DESC
-        LIMIT 1`;
-      const revisionKind = prior === undefined
-        ? "initial"
-        : Number(prior.value) === value.value ? "unchanged" : "revision";
-      await tx`
-        INSERT INTO source_value_versions
-          (acquisition_id, source_key, market_date, market_instant, value,
-           prior_version_id, revision_kind)
-        VALUES
-          (${evidence.id}::uuid, ${value.sourceKey}, ${value.marketDate ?? null}::date,
-           ${value.marketInstant ?? null}::timestamptz, ${value.value}, ${prior?.id ?? null},
-           ${revisionKind})`;
+    // Coordinates duplicated in one acquisition need sequential handling so
+    // later values link to earlier values from that same transaction.
+    const coordKey = (v: { sourceKey: string; marketDate: string | null; marketInstant: string | null }) =>
+      `${v.sourceKey}\u0001${v.marketDate ?? ""}\u0001${v.marketInstant ?? ""}`;
+    const hasWithinBatchDuplicate = new Set(evidence.values.map(coordKey)).size !== evidence.values.length;
+
+    if (hasWithinBatchDuplicate) {
+      for (const value of evidence.values) {
+        const [prior] = await tx`
+          SELECT id, value
+          FROM source_value_versions
+          WHERE source_key = ${value.sourceKey}
+            AND market_date IS NOT DISTINCT FROM ${value.marketDate}::date
+            AND market_instant IS NOT DISTINCT FROM ${value.marketInstant}::timestamptz
+          ORDER BY knowledge_time DESC, id DESC
+          LIMIT 1`;
+        const revisionKind = prior === undefined
+          ? "initial"
+          : Number(prior.value) === value.value ? "unchanged" : "revision";
+        await tx`
+          INSERT INTO source_value_versions
+            (acquisition_id, source_key, market_date, market_instant, value,
+             prior_version_id, revision_kind)
+          VALUES
+            (${evidence.id}::uuid, ${value.sourceKey}, ${value.marketDate ?? null}::date,
+             ${value.marketInstant ?? null}::timestamptz, ${value.value}, ${prior?.id ?? null},
+             ${revisionKind})`;
+      }
+    } else if (evidence.values.length > 0) {
+      const sourceKeyArr = evidence.values.map((v) => v.sourceKey);
+      const marketDateArr = evidence.values.map((v) => v.marketDate ?? null);
+      const marketInstantArr = evidence.values.map((v) => v.marketInstant ?? null);
+      const priorRows = await tx`
+        SELECT k.idx, svv.id, svv.value
+        FROM unnest(${sourceKeyArr}::text[], ${marketDateArr}::date[], ${marketInstantArr}::timestamptz[])
+          WITH ORDINALITY AS k(source_key, market_date, market_instant, idx)
+        LEFT JOIN LATERAL (
+          SELECT id, value
+          FROM source_value_versions v
+          WHERE v.source_key = k.source_key
+            AND v.market_date IS NOT DISTINCT FROM k.market_date
+            AND v.market_instant IS NOT DISTINCT FROM k.market_instant
+          ORDER BY v.knowledge_time DESC, v.id DESC
+          LIMIT 1
+        ) svv ON true`;
+      const priorByIdx = new Map(priorRows.map((r) => [Number(r.idx), r.id === null ? undefined : { id: r.id, value: r.value }]));
+      const rows = evidence.values.map((value, i) => {
+        const prior = priorByIdx.get(i + 1);
+        const revisionKind = prior === undefined
+          ? "initial"
+          : Number(prior.value) === value.value ? "unchanged" : "revision";
+        return {
+          acquisition_id: evidence.id,
+          source_key: value.sourceKey,
+          market_date: value.marketDate ?? null,
+          market_instant: value.marketInstant ?? null,
+          value: value.value,
+          prior_version_id: prior?.id ?? null,
+          revision_kind: revisionKind,
+        };
+      });
+      const VALUE_INSERT_BATCH_SIZE = 5_000;
+      for (let start = 0; start < rows.length; start += VALUE_INSERT_BATCH_SIZE) {
+        await tx`
+          INSERT INTO source_value_versions ${tx(rows.slice(start, start + VALUE_INSERT_BATCH_SIZE), "acquisition_id", "source_key", "market_date", "market_instant", "value", "prior_version_id", "revision_kind")}`;
+      }
     }
 
     return { acquisitionId: evidence.id, replayed: false };
