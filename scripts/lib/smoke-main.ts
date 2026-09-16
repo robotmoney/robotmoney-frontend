@@ -1164,6 +1164,13 @@ async function main(): Promise<void> {
     migrateScriptArgs: [...scenario.migrateScriptArgs],
     preflight: composePostgres ? undefined : classifyDatabase,
     initialize: initializeScenario,
+    // The producer performs boot-time gap repair immediately. Starting it on
+    // an empty database made every missing day look like a full 201-month EDGAR
+    // crawl, multiplying provider requests and append-only evidence writes
+    // before initializeScenario could load the retained floor. The API and
+    // worker lanes do not depend on the producer, so seed first, then start it
+    // behind its real healthcheck.
+    deferredServices: ["analytics-producer"],
   }));
 
   if (process.env.CI && smokeMode) {

@@ -111,6 +111,38 @@ test("up() runs exactly one migration, and it precedes initialization", async ()
   expect(composeCalls.filter((a) => a.some((s) => s.includes("migrate")))).toHaveLength(1);
 });
 
+test("a deferred provider service starts after initialization and waits for health", async () => {
+  const rec: Recorded = { events: [], probes: 0 };
+  const composeCalls: string[][] = [];
+  const fullConfig: StackConfig = {
+    ...config,
+    profile: "full",
+    credentials: { ...config.credentials, analyticsTokenFile: "/etc/hosts" },
+  };
+  const stack = createStack(fullConfig, {
+    runtime: fakeRuntime(rec, {
+      async run(argv) {
+        composeCalls.push(argv);
+        return 0;
+      },
+    }),
+  });
+
+  await stack.up({
+    deferredServices: ["analytics-producer"],
+    initialize: async () => { composeCalls.push(["<initialize>"]); },
+  });
+
+  const init = composeCalls.findIndex((a) => a[0] === "<initialize>");
+  const producer = composeCalls.findIndex((a) =>
+    a.includes("analytics-producer") && a.includes("--wait") && a.includes("--wait-timeout")
+  );
+  expect(init).toBeGreaterThan(-1);
+  expect(producer).toBeGreaterThan(init);
+  const primaryStart = composeCalls.find((a) => a.includes("up") && a.includes("api"));
+  expect(primaryStart).not.toContain("analytics-producer");
+});
+
 test("a never-healthy API fails the boot and the initializer never runs", async () => {
   const rec: Recorded = { events: [], probes: 0 };
   let initialized = false;

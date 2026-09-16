@@ -85,6 +85,10 @@ export interface StackUpOptions {
   /** Scenario-specific initialization after services start but before the
    * stack is declared ready. Migration remains owned by this method exactly once. */
   initialize?: () => Promise<void>;
+  /** Services that must start only after initialization has populated their
+   * durable input. They are started with Compose's health barrier so a caller
+   * cannot consume a process still busy with boot-time catch-up. */
+  deferredServices?: string[];
   pgTimeoutMs?: number;
   healthTimeoutMs?: number;
 }
@@ -393,7 +397,12 @@ export function createStack(
 
     // Named explicitly from the profile — never a bare `docker compose up -d` —
     // so a compose service added later can never leak into `core`.
-    const rest = services.filter((s) => s !== "postgres");
+    const requestedDeferred = new Set(upOpts.deferredServices ?? []);
+    const unknownDeferred = [...requestedDeferred].filter((s) => !services.includes(s));
+    if (unknownDeferred.length > 0) {
+      throw new Error(`deferred services are not in the ${cfg.profile} profile: ${unknownDeferred.join(", ")}`);
+    }
+    const rest = services.filter((s) => s !== "postgres" && !requestedDeferred.has(s));
     emit({ phase: "services", status: "start", detail: rest.join(", ") });
     await composeAsync(upArgs(rest), "start services");
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
@@ -431,6 +440,16 @@ export function createStack(
       emit({ phase: "initialize", status: "start" });
       await upOpts.initialize();
       emit({ phase: "initialize", status: "done" });
+    }
+
+    if (requestedDeferred.size > 0) {
+      const deferred = [...requestedDeferred];
+      emit({ phase: "services", status: "start", detail: deferred.join(", ") });
+      await composeAsync(
+        upArgs(deferred, { wait: true, waitTimeoutSeconds: 600 }),
+        `start deferred services ${deferred.join(" ")}`,
+      );
+      emit({ phase: "services", status: "done", detail: deferred.join(", ") });
     }
 
     return ports;
