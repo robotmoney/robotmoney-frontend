@@ -241,3 +241,76 @@ describe("dual-write parity: raw-history, regime, and research through the authe
     expect((researchRows[0]!.payload as { title: string }).title).toBe("v2");
   });
 });
+
+// Issue #979 fix: the mid-run false-mismatch race. checkRegimeSnapshotsParity/
+// checkResearchSignalsParity's two reads are not one consistent snapshot — the
+// compatibility row (saveRegimeSnapshots/saveResearchSignal, A.regimeSnapshots/
+// A.researchSignals below) lands mid-run, while the ledger-derived
+// reconstruction only gains that date's content once submitTerminalRunPackage
+// freezes it, at the very end of the SAME run. These reproduce exactly that
+// window — a compat write with NO terminal package (A.runPackage) ever
+// submitted for that date — and prove the sweep does not record a false
+// matched:false for it, while a genuinely persistent divergence on an
+// ALREADY-settled date still correctly does.
+describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
+  test("RACE: a compat-only write with no terminal package yet is not compared, so it cannot false-mismatch", async () => {
+    prodAuth();
+    const date = "2024-04-01";
+
+    // Exactly the mid-run call shape (analytics/index.ts's
+    // persistence.saveRegimeSnapshots/saveResearchSignal): the compat row
+    // lands, but no A.runPackage submission has EVER frozen this asof, so
+    // analytics_report_snapshots has no row for it — the date is "in-flight".
+    const regimeRes = await call(req("POST", A.regimeSnapshots, { snapshots: [regimeFixture(date, 99)] }));
+    expect(regimeRes!.status, JSON.stringify(regimeRes)).toBe(200);
+    const researchRes = await call(
+      req("POST", A.researchSignals, { signals: [researchFixture("race-signal", date, "in-flight")] }),
+    );
+    expect(researchRes!.status, JSON.stringify(researchRes)).toBe(200);
+
+    // The compat write really landed — this is not a no-op test.
+    const compatRegime = await sql`SELECT composite FROM regime_snapshots WHERE date = ${date}`;
+    expect(compatRegime.length).toBe(1);
+    const compatResearch = await sql`SELECT payload FROM research_signals WHERE signal_key = 'race-signal' AND date = ${date}`;
+    expect(compatResearch.length).toBe(1);
+
+    // No analytics_report_snapshots row exists for this asof — genuinely unsettled.
+    const settled = await sql`SELECT 1 FROM analytics_report_snapshots WHERE asof = ${date}`;
+    expect(settled.length).toBe(0);
+
+    const regime = await checkRegimeSnapshotsParity();
+    expect(regime.matched, JSON.stringify(regime.mismatches)).toBe(true);
+    expect(regime.mismatches.some((m) => m.naturalKey === date)).toBe(false);
+
+    const research = await checkResearchSignalsParity();
+    expect(research.matched, JSON.stringify(research.mismatches)).toBe(true);
+    expect(research.mismatches.some((m) => m.naturalKey === `race-signal ${date}`)).toBe(false);
+  });
+
+  test("PERSISTENT MISMATCH: a genuine divergence on an already-SETTLED date still records matched:false", async () => {
+    prodAuth();
+    const date = "2024-04-02";
+    // Freeze this asof for real (A.runPackage) — analytics_report_snapshots
+    // now has a row for it, so it is settled and eligible for comparison.
+    await submitRegimeAndResearch(date, 10, "persistent-mismatch-signal", "v1");
+    expect((await checkRegimeSnapshotsParity()).matched).toBe(true);
+    expect((await checkResearchSignalsParity()).matched).toBe(true);
+
+    // Drift the COMPATIBILITY table only, out of band, after settlement — the
+    // ledger keeps the frozen value. This is a real, persistent divergence,
+    // not a timing artifact, and AC2 requires it to still block cutover.
+    await sql`UPDATE regime_snapshots SET composite = 424242 WHERE date = ${date}`;
+    await sql`
+      UPDATE research_signals SET payload = ${sql.json({ asof: date, title: "drifted-out-of-band", question: "q", spec: {}, gauges: [] })}
+      WHERE signal_key = 'persistent-mismatch-signal' AND date = ${date}
+    `;
+
+    const regime = await checkRegimeSnapshotsParity();
+    expect(regime.matched).toBe(false);
+    expect(regime.mismatches.some((m) => m.naturalKey === date)).toBe(true);
+
+    const research = await checkResearchSignalsParity();
+    expect(research.matched).toBe(false);
+    expect(research.mismatches.some((m) => m.naturalKey === `persistent-mismatch-signal ${date}`)).toBe(true);
+  });
+});
