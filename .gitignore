@@ -28,6 +28,10 @@ _static/
 # it into the job summary and uploads it.
 onboarding-admission-record.md
 
+# Agent handoff scratch: written for the next session, stale the moment it is
+# read. Tracked once by mistake (7d1cd13b), which is why it is named here.
+next_agent.md
+
 # Agent/loop runtime state only — demo state files, logs, caches, plan backups.
 # Never source, never committed, so the whole directory is ignored.
 .agents/
