@@ -92,6 +92,11 @@ await assertAppendOnlyGuardArmed();
 
 const server = Bun.serve({
   port: config.apiPort,
+  // The default is 10 seconds. During a production-parity cold start, an
+  // ordinary read can wait behind a bounded-but-large analytics acquisition;
+  // closing it at that boundary turns a transient delay into nginx's 502.
+  // Keep this finite so abandoned clients cannot hold a request forever.
+  idleTimeout: 60,
   async fetch(req, server) {
     const url = new URL(req.url);
     const { pathname } = url;
