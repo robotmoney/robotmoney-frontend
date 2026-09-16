@@ -60,6 +60,7 @@ describe("starter swarm agent canonical signing", () => {
       // (it tolerates a loose client's numeric id) while the brief's
       // `sessionId` is the contract's `string | null`.
       sessionId: String(session.id),
+      reportSnapshotId: null,
       body: null,
       createdAt: "2026-07-21T00:00:00.000Z",
     };
