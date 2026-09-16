@@ -43,3 +43,7 @@ export {
 if (import.meta.main) {
   await import("./lib/smoke-main.ts");
 }
+
+// CI baseline probe: no-op comment to trigger the e2e path filter (**.md/**.txt
+// are paths-ignored). This branch exists only to measure the e2e workflow
+// against unmodified main. Delete the branch and PR once the baseline is read.
