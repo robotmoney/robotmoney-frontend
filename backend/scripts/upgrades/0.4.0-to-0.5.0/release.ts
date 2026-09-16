@@ -44,6 +44,14 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0057_swarm_judge_policy_stamp.sql",
   "0058_swarm_judge_fault_injection.sql",
   "0059_swarm_judgement_completion_usage.sql",
+  // 0061 (checklist B05): granted after 0060 was removed (see the comment on
+  // WORKER_WRITABLE_TABLES below) — declared here for the same reason 0057-0059
+  // were, above: an undeclared migration is invisible to postflight AND, per
+  // preflight-0-3-0-append-only-safety.test.ts's baseline partition (backend
+  // migrations minus every release's OWN THIS_RELEASE_MIGRATIONS = "v0.2.2
+  // baseline"), gets bucketed as pre-v0.3.0 content and replayed before the
+  // v0.3.0-era migration that creates the table it grants on.
+  "0061_rm_worker_wallet_backfill_grant.sql",
 ] as const;
 
 /**
