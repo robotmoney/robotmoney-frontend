@@ -666,11 +666,12 @@ export async function getBriefBySession(sessionId: string) {
       date: ledger.date,
       subject_id: ledger.subjectId,
       session_id: ledger.sessionId,
+      report_snapshot_id: ledger.reportSnapshotId,
       body: ledger.body,
       created_at: row?.created_at ?? ledger.createdAt,
     });
   }
-  const r = await sql`SELECT id, date, subject_id, session_id, body, created_at FROM swarm_briefs
+  const r = await sql`SELECT id, date, subject_id, session_id, report_snapshot_id, body, created_at FROM swarm_briefs
                       WHERE session_id = ${sessionId} LIMIT 1`;
   return r[0] ? toBrief(r[0]) : null;
 }
@@ -699,7 +700,7 @@ export async function getBrief(date: string, subjectId: string) {
   // 0028 deliberately preserved v0-archived briefs whose session was never
   // archived, and an inner join would silently hide them. `NULLS LAST` ranks a
   // real session's brief above such a row when both exist for a day.
-  const r = await sql`SELECT b.id, b.date, b.subject_id, b.session_id, b.body, b.created_at
+  const r = await sql`SELECT b.id, b.date, b.subject_id, b.session_id, b.report_snapshot_id, b.body, b.created_at
                       FROM swarm_briefs b
                       LEFT JOIN swarm_sessions s ON s.id = b.session_id
                       WHERE b.date = ${date} AND b.subject_id = ${subjectId}

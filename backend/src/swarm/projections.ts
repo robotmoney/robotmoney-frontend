@@ -216,6 +216,7 @@ export function toBrief(row: Row): SwarmBrief {
     // backfill note. Exposing it is what lets a caller that read a day-scoped
     // brief tell WHICH of the day's sessions it actually got.
     sessionId: row.session_id ?? null,
+    reportSnapshotId: row.report_snapshot_id != null ? String(row.report_snapshot_id) : null,
     body: row.body ?? null,
     createdAt: instant(row.created_at) ?? "",
   };

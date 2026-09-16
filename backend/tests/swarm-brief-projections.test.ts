@@ -4,7 +4,7 @@
 // round-trip are covered separately in swarm.test.ts.
 import { expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
-import { projectBriefResearchSignals } from "../src/swarm/projections.ts";
+import { projectBriefResearchSignals, toBrief } from "../src/swarm/projections.ts";
 import type { SwarmBrief } from "@robotmoney/contract";
 
 function brief(researchSignals: unknown[]): SwarmBrief {
@@ -13,6 +13,7 @@ function brief(researchSignals: unknown[]): SwarmBrief {
     date: "2026-09-03",
     subjectId: "subj-1",
     sessionId: "sess-1",
+    reportSnapshotId: null,
     createdAt: "2026-09-03T00:00:00.000Z",
     body: {
       regime: null,
@@ -62,8 +63,15 @@ test("empty researchSignals array projects to an empty array either way", () => 
 });
 
 test("null body is passed through untouched (no brief for that day/session)", () => {
-  const b: SwarmBrief = { id: "b1", date: "2026-09-03", subjectId: "s", sessionId: null, createdAt: "", body: null };
+  const b: SwarmBrief = { id: "b1", date: "2026-09-03", subjectId: "s", sessionId: null, reportSnapshotId: null, createdAt: "", body: null };
   expect(projectBriefResearchSignals(b, false)).toBe(b);
+});
+
+test("brief projection exposes its immutable report snapshot binding", () => {
+  expect(toBrief({
+    id: "b1", date: "2026-09-03", subject_id: "s", session_id: "session-1",
+    report_snapshot_id: 42, body: null, created_at: "2026-09-03T00:00:00.000Z",
+  } as any).reportSnapshotId).toBe("42");
 });
 
 test("a malformed entry (missing signal_key) still projects without throwing", () => {
