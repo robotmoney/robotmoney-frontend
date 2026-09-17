@@ -1733,36 +1733,61 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
   };
 
   // Issue #978 AC5/AC6: bind this brief to the exact, immutable analytics
-  // report snapshot for the session's market date.
+  // report snapshot that produced the regime numbers this brief BODY shows —
+  // derived from the embedded `regime` row above, NOT from the session's own
+  // market date.
   //
-  // NOT simply the newest snapshot for the date. The producer arms TWO runs
-  // per `asof` — regime (22:30) and research (23:00, RESEARCH_TOOL_GROUP) —
-  // and each freezes its own report snapshot, so a plain `ORDER BY id DESC`
-  // always won the research run, whose report bytes contain no regime data
-  // at all. The brief's headline numbers come from `regime_snapshots`
-  // (above), so every take then signed a binding to a report containing none
-  // of the numbers the brief showed.
+  // NOT the newest snapshot for the date. The producer arms TWO runs per
+  // `asof` — regime (22:30) and research (23:00, RESEARCH_TOOL_GROUP) — and
+  // each freezes its own report snapshot, so a plain `ORDER BY id DESC`
+  // always won the research run, whose report bytes contain no regime data at
+  // all. Hence the join: only a run that froze a NON-EMPTY `regime_snapshots`
+  // output artifact is a candidate. Since issue #978 that artifact and the
+  // current-view projection are written by one transaction
+  // (applyCurrentProjections), so "froze regime rows" and "published the
+  // regime rows the brief reads" are the same run.
   //
-  // The binding therefore names the run that actually PUBLISHED the regime
-  // projection this brief reads: the newest report snapshot for the date
-  // whose run also froze a non-empty `regime_snapshots` output artifact.
-  // Since issue #978 that artifact and the current-view projection are
-  // written by one transaction (applyCurrentProjections), so "froze regime
-  // rows" and "published the regime rows the brief reads" are the same run.
-  // A whole-suite run satisfies this and covers the research signals too; a
-  // research-only run does not (its regime artifact is the empty array).
+  // NOT `rs.asof = s.date` either, which is what the committed schedules make
+  // permanently unsatisfiable: a session convenes 06:00 and publishes its
+  // brief 07:00 UTC on day D (SWARM_OPEN_SESSION_CRON / SWARM_PUBLISH_BRIEF_
+  // CRON, config.ts), but day D's regime run does not fire until 22:30 UTC
+  // (PRODUCER_REGIME_CRON) — 15.5 hours after the session is over. Keying on
+  // the session date bound every real brief to NULL, and NULL is
+  // indistinguishable from the legitimate "this subject has no analytics
+  // report" case, so nothing went red while every schema-2.0 take was 409'd.
   //
-  // A session whose date has no such report yet (or ever, e.g. a smoke/legacy
-  // subject) gets `report_snapshot_id = NULL`, same cutover shape as
-  // migration 0049's signing_key_id.
-  const [report] = await sql`
-    SELECT rs.id FROM analytics_report_snapshots rs
-    JOIN analytics_output_snapshots os
-      ON os.run_id = rs.run_id
-     AND os.artifact_kind = 'regime_snapshots'
-     AND os.payload_bytes <> convert_to('[]', 'UTF8')
-    WHERE rs.asof = ${s.date}::date
-    ORDER BY rs.id DESC LIMIT 1`;
+  // Keying on `regime.date` is correct under ANY schedule because it is a
+  // derivation rather than a guess: `buildDateAxis(BACKFILL_START, asof)`
+  // (analytics/index.ts) always ends the published row set exactly at the
+  // run's own `asof`, so the MAX-dated row in `regime_snapshots` — the one
+  // line 1700 reads into the body — is by construction the newest
+  // regime-bearing run's `asof`. Looking that date up in
+  // `analytics_report_snapshots.asof` therefore names that run's report, the
+  // one whose bytes contain the exact numbers displayed. `ORDER BY rs.id
+  // DESC` breaks a same-date re-run tie toward the last writer, which is the
+  // run whose rows actually won the upsert.
+  //
+  // A brief with no regime row at all to show (a fresh database, a
+  // smoke/legacy subject), or one whose newest regime row predates the
+  // snapshot layer / was seeded outside it (import-regime-eq.ts), gets
+  // `report_snapshot_id = NULL` — the same documented cutover shape as
+  // migration 0049's signing_key_id, and honest: there is no frozen report
+  // holding those numbers.
+  const regimeDate: string | null = regime
+    ? regime.date instanceof Date
+      ? regime.date.toISOString().slice(0, 10)
+      : String(regime.date).slice(0, 10)
+    : null;
+  const [report] = regimeDate === null
+    ? []
+    : await sql`
+        SELECT rs.id FROM analytics_report_snapshots rs
+        JOIN analytics_output_snapshots os
+          ON os.run_id = rs.run_id
+         AND os.artifact_kind = 'regime_snapshots'
+         AND os.payload_bytes <> convert_to('[]', 'UTF8')
+        WHERE rs.asof = ${regimeDate}::date
+        ORDER BY rs.id DESC LIMIT 1`;
   const reportSnapshotId: string | null = report ? String(report.id) : null;
 
   // Keyed on the SESSION (migration 0028), not the day. The old

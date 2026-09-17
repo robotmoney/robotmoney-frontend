@@ -119,12 +119,10 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
     async seedRawHistory(byIndicator) {
       return await call<FloorSeedResult>("POST", ROUTES.analytics.rawHistorySeed, { history: byIndicator });
     },
-    async saveRegimeSnapshots(rows: RegimeSnapshotRow[]) {
-      await call("POST", ROUTES.analytics.regimeSnapshots, { snapshots: rows });
-    },
-    async saveResearchSignal(key: string, asof: string, payload: ResearchPayload) {
-      await call("POST", ROUTES.analytics.researchSignals, { signals: [{ key, date: asof, payload }] });
-    },
+    // RETIRED (issue #978): saveRegimeSnapshots / saveResearchSignal. The
+    // routes they posted to are gone — submitTerminalRunPackage above is the
+    // only way the producer publishes either projection, and it carries the
+    // run, the immutable artifacts and the report snapshot with it.
     async loadResearchSignalDates(sinceDate: string) {
       const { dates } = await call<{ dates: { signalKey: string; date: string }[] }>(
         "GET",

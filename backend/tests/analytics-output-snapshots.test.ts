@@ -179,6 +179,70 @@ test("publishBrief binds to the REGIME run's report snapshot, not the later rese
   expect(Buffer.from(bound!.bytes).toString("utf8")).toBe("the regime report for 2026-07-04");
 });
 
+// ── the committed cron offset: the brief publishes BEFORE its own day's run ─
+//
+// This is the schedule the repository actually ships, not a contrived one:
+//
+//   22:30 UTC on day D-1  PRODUCER_REGIME_CRON `30 22 * * *`
+//                         (producer/index.ts:395, docker-compose.yml:423)
+//                         runs with asof = D-1 and freezes report R(D-1).
+//   06:00 UTC on day D    SWARM_OPEN_SESSION_CRON `0 6 * * *`
+//                         (config.ts:625, docker-compose.yml:288) convenes a
+//                         session, so swarm_sessions.date = D.
+//   07:00 UTC on day D    SWARM_PUBLISH_BRIEF_CRON `0 7 * * *`
+//                         (config.ts:626, docker-compose.yml:289) publishes
+//                         the brief. Day D's own regime run is still 15.5
+//                         hours away and the session closes at 08:00.
+//
+// The brief body therefore embeds the D-1 regime row, and the ONLY honest
+// binding is R(D-1). Keying the lookup on the session's date instead made
+// every brief in a default deployment bind to NULL — silently, since NULL is
+// also the legitimate "no report for this subject" value — which in turn 409'd
+// every schema-2.0 take. No date alignment is forced here: the session is
+// dated D and the report is dated D-1, exactly as the crons produce them.
+test("a brief published on day D at 07:00 binds to the previous night's regime report R(D-1), the run whose numbers its body shows", async () => {
+  const dMinus1 = "2026-07-10"; // the 22:30 regime run's asof
+  const d = "2026-07-11"; // the session's own date, one day later
+
+  const regimeRunId = await beginRun(crypto.randomUUID(), dMinus1, "regime");
+  const nightlyResult = await submitTerminalRunPackage(
+    packageFor(regimeRunId, dMinus1, `the regime report frozen at 22:30 on ${dMinus1}`),
+  );
+  expect(nightlyResult.reportSnapshotId).not.toBeNull();
+
+  // Day D's run has NOT happened yet — nothing exists for the session's date.
+  const [{ n: reportsForD }] = await sql`SELECT count(*)::int AS n FROM analytics_report_snapshots WHERE asof = ${d}::date`;
+  expect(reportsForD).toBe(0);
+
+  const subjectId = `cron-offset-${crypto.randomUUID().slice(0, 8)}`;
+  await swarmDomain.ensureSubject(subjectId, "Cron Offset Subject");
+  const session = await swarmDomain.openSession(subjectId);
+  // 06:00 UTC on day D. `date` is a STORED generated column over convened_at,
+  // so setting the timestamp is how the session is dated to that morning.
+  await sql`UPDATE swarm_sessions SET convened_at = ${`${d}T06:00:00Z`}::timestamptz WHERE id = ${session.id}`;
+  const [dated] = await sql`SELECT date::text AS date FROM swarm_sessions WHERE id = ${session.id}`;
+  expect(dated!.date).toBe(d); // the session really is dated D, not D-1
+
+  await swarmDomain.publishBrief(session.id, 60);
+
+  const [brief] = await sql`SELECT body, report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`;
+  // The binding exists at all — the whole defect was that it never did.
+  expect(brief!.report_snapshot_id).not.toBeNull();
+  expect(String(brief!.report_snapshot_id)).toBe(String(nightlyResult.reportSnapshotId));
+
+  // And it points at the report holding the numbers the body is showing.
+  const body = brief!.body as { regime: { date: string } | null };
+  expect(body.regime).not.toBeNull();
+  expect(String(body.regime!.date).slice(0, 10)).toBe(dMinus1);
+  const bound = await loadReportSnapshot(String(brief!.report_snapshot_id));
+  expect(Buffer.from(bound!.bytes).toString("utf8")).toBe(`the regime report frozen at 22:30 on ${dMinus1}`);
+
+  // The revision the takes sign against carries the same binding.
+  const [rev] = await sql`
+    SELECT report_snapshot_id FROM swarm_brief_revisions WHERE session_id = ${session.id} ORDER BY revision DESC LIMIT 1`;
+  expect(String(rev!.report_snapshot_id)).toBe(String(nightlyResult.reportSnapshotId));
+});
+
 // ── a run that fails AFTER computing its outputs publishes nothing ─────────
 //
 // runAnalytics used to write regime_snapshots/research_signals mid-run, long

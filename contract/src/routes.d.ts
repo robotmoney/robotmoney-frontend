@@ -108,8 +108,6 @@ export const ROUTES: {
     rawHistory: string;
     sourceAcquisitions: string;
     rawHistorySeed: string;
-    regimeSnapshots: string;
-    researchSignals: string;
     researchSignalDates: string;
     rawHistoryGaps: string;
     researchEligibility: string;

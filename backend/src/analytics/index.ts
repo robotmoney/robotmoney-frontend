@@ -530,10 +530,21 @@ export async function runAnalytics(
   // ── ISSUE #978: freeze the terminal output/report snapshot ──────────────
   // Mandatory, NOT best-effort like telemetry above — mirrors freezeVintage:
   // every run that reaches a terminal outcome (succeeded, degraded, or
-  // failed) submits ONE complete package bound to this run's id, so
-  // analytics_output_snapshots/analytics_report_snapshots are never empty
-  // for a real run and swarm_briefs.report_snapshot_id can resolve to a real
-  // row. `overallStatus` (computed above, before the mandatory ledger event
+  // failed) submits ONE complete package bound to this run's id, so a run that
+  // completes leaves a real artifact for swarm_briefs.report_snapshot_id to
+  // resolve to.
+  //
+  // NOT "never empty for a real run": this single submit is the run's only
+  // chance to record anything, and analyticsApiClient.call has no timeout and
+  // no retry, so a submit that fails (network, API down) leaves the run with
+  // no artifact at all — the succeeded-shape package failed and no
+  // failed-shape package is submitted in its place. That fails SAFE rather
+  // than silently: the error escalates into `runFailed` below, the run throws
+  // red, and the current-view projections keep their last good state because
+  // applyCurrentProjections rides inside the very transaction that did not
+  // commit. The gap is an absent record, never a wrong one.
+  //
+  // `overallStatus` (computed above, before the mandatory ledger event
   // that may have since escalated `runFailed`) decides the shape: a
   // "degraded" run still produced real regime/research outputs, so it
   // freezes exactly like a "succeeded" one — only a run whose OWN stages
