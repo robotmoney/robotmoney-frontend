@@ -187,6 +187,12 @@ describe("argv builders", () => {
     expect(upArgs(["postgres", "api"])).toEqual(["up", "-d", "postgres", "api"]);
   });
 
+  test("upArgs can wait for a deferred service's real healthcheck", () => {
+    expect(upArgs(["analytics-producer"], { wait: true, waitTimeoutSeconds: 600 })).toEqual([
+      "up", "-d", "--wait", "--wait-timeout", "600", "analytics-producer",
+    ]);
+  });
+
   test("downArgs is a plain `down` unless volumes/orphans are explicitly requested", () => {
     expect(downArgs()).toEqual(["down"]);
     expect(downArgs({ removeVolumes: true, removeOrphans: true })).toEqual(["down", "--volumes", "--remove-orphans"]);
