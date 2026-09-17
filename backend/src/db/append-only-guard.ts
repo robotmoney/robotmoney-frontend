@@ -761,8 +761,8 @@ function expireAfter(ms: number): { expiry: Promise<never>; cancel: () => void }
  */
 export function appendOnlyRefusalLines(problems: readonly string[], prefix: string): string[] {
   return [
-    `${prefix} REFUSING the boot: a history guard is NOT armed on this database — migration 0032's`,
-    `${prefix} append-only guard, one of the immutable-ledger guards (0057/0058/0059), or both.`,
+    `${prefix} REFUSING the boot: the append-only guard is NOT armed on this database — migration 0032's`,
+    `${prefix} guard, one of the immutable-ledger guards (0057/0058/0059), or both.`,
     `${prefix} The migration that installs it is recorded as applied, so something removed or disarmed`,
     `${prefix} it AFTER it was installed — a partial pg_restore, a DROP/DISABLE TRIGGER, or a replaced`,
     `${prefix} guard function body. Rows in these tables can be removed right now:`,
