@@ -3,7 +3,13 @@
 // migration/cutover/rollback stability of both the ledger and the
 // pre-existing legacy tables.
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { readdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import net from "node:net";
+import postgres from "postgres";
 import { ROUTES } from "@robotmoney/contract";
+import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
 import { sql } from "../src/db/client.ts";
 import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
@@ -13,6 +19,7 @@ import { ensureSubject, openSession, publishBrief, getBriefBySession } from "../
 import { payloadChecksum } from "../src/analytics/source-ledger.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { evaluateCutoverGate, type CutoverGateConfig } from "../src/analytics/cutover/gate.ts";
+import { runCutoverGateCli } from "../scripts/analytics-ledger-cutover-gate.ts";
 import { getAnalyticsReadMode, setAnalyticsReadMode, CutoverGateNotPassedError } from "../src/analytics/cutover/read-mode.ts";
 import type { ParityDomain } from "../src/analytics/cutover/parity.ts";
 import { canonicalStringify, sha256Hex } from "../src/analytics/run-ledger.ts";
@@ -161,6 +168,28 @@ async function insertObservation(domain: ParityDomain, observedAt: Date, matched
 const DOMAINS: ParityDomain[] = ["raw_indicator_history", "regime_snapshots", "research_signals", "swarm_briefs"];
 const TEST_GATE: CutoverGateConfig = { minWindowMs: 60_000, minObservations: 3, maxStalenessMs: 30_000 };
 
+/**
+ * AC2's "exits zero"/"nonzero exit" and "prevents ledger-mode startup", both
+ * asserted against the real things rather than restated from the in-process
+ * `{ok, reasons}` object:
+ *
+ *  - the GATE CLI's actual return code (backend/scripts/analytics-ledger-
+ *    cutover-gate.ts, the command an operator or a deploy step runs), including
+ *    `--switch ledger`, which is the one that would arm production; and
+ *  - setAnalyticsReadMode('ledger'), which is what ledger-mode reads are
+ *    gated on — it must REFUSE, and the stored mode must still be
+ *    'compatibility' afterwards.
+ *
+ * TEST_GATE_ENV (set at module load) is what defaultCutoverGateConfig() reads,
+ * so the CLI evaluates the same window these tests seed for.
+ */
+async function expectLedgerModeRefused(): Promise<void> {
+  expect(await runCutoverGateCli([]), "the gate CLI must exit NONZERO for a window that does not pass").toBe(1);
+  expect(await runCutoverGateCli(["--switch", "ledger"]), "`--switch ledger` must exit nonzero and arm nothing").toBe(1);
+  await expect(setAnalyticsReadMode("ledger", "test")).rejects.toBeInstanceOf(CutoverGateNotPassedError);
+  expect(await getAnalyticsReadMode(), "a refused cutover must leave the read model on compatibility").toBe("compatibility");
+}
+
 async function seedPassingWindow(now: Date): Promise<void> {
   for (const domain of DOMAINS) {
     await insertObservation(domain, new Date(now.getTime() - 60_000), true);
@@ -176,6 +205,13 @@ describe("issue #979 AC2: the cutover gate's observation window", () => {
     const result = await evaluateCutoverGate(sql, TEST_GATE, now);
     expect(result.reasons).toEqual([]);
     expect(result.ok).toBe(true);
+
+    // The "exits zero" half, against the real CLI's real return code — and
+    // ONLY here, because every other test in this describe asserts the
+    // nonzero counterpart for its own single defect.
+    expect(await runCutoverGateCli([]), "a fully matching window must exit ZERO").toBe(0);
+    await setAnalyticsReadMode("ledger", "test");
+    expect(await getAnalyticsReadMode()).toBe("ledger");
   });
 
   test("a single checksum mismatch produces a nonzero (failing) gate result and blocks ledger-mode startup", async () => {
@@ -185,12 +221,10 @@ describe("issue #979 AC2: the cutover gate's observation window", () => {
     const result = await evaluateCutoverGate(sql, TEST_GATE, now);
     expect(result.ok).toBe(false);
     expect(result.reasons.some((r) => r.startsWith('checksum mismatch: "regime_snapshots"'))).toBe(true);
-
-    await expect(setAnalyticsReadMode("ledger", "test")).rejects.toBeInstanceOf(CutoverGateNotPassedError);
-    expect(await getAnalyticsReadMode()).toBe("compatibility");
+    await expectLedgerModeRefused();
   });
 
-  test("a missing domain produces a nonzero gate result", async () => {
+  test("a missing domain produces a nonzero gate result and blocks ledger-mode startup", async () => {
     const now = new Date();
     for (const domain of DOMAINS) {
       if (domain === "research_signals") continue; // never observed
@@ -200,17 +234,19 @@ describe("issue #979 AC2: the cutover gate's observation window", () => {
     const result = await evaluateCutoverGate(sql, TEST_GATE, now);
     expect(result.ok).toBe(false);
     expect(result.reasons.some((r) => r.includes('missing domain: no parity observations recorded for "research_signals"'))).toBe(true);
+    await expectLedgerModeRefused();
   });
 
-  test("a stale result (no recent observation) produces a nonzero gate result", async () => {
+  test("a stale result (no recent observation) produces a nonzero gate result and blocks ledger-mode startup", async () => {
     const now = new Date();
     await seedPassingWindow(new Date(now.getTime() - 10 * 60_000)); // all far in the past
     const result = await evaluateCutoverGate(sql, TEST_GATE, now);
     expect(result.ok).toBe(false);
     expect(result.reasons.some((r) => r.startsWith("stale result:"))).toBe(true);
+    await expectLedgerModeRefused();
   });
 
-  test("insufficient duration produces a nonzero gate result", async () => {
+  test("insufficient duration produces a nonzero gate result and blocks ledger-mode startup", async () => {
     const now = new Date();
     for (const domain of DOMAINS) {
       // Three observations, but all within one second — well under the
@@ -222,9 +258,10 @@ describe("issue #979 AC2: the cutover gate's observation window", () => {
     const result = await evaluateCutoverGate(sql, TEST_GATE, now);
     expect(result.ok).toBe(false);
     expect(result.reasons.some((r) => r.startsWith("insufficient duration:"))).toBe(true);
+    await expectLedgerModeRefused();
   });
 
-  test("insufficient count produces a nonzero gate result", async () => {
+  test("insufficient count produces a nonzero gate result and blocks ledger-mode startup", async () => {
     const now = new Date();
     for (const domain of DOMAINS) {
       // Spans the window but only TWO observations, below the minimum of 3.
@@ -234,6 +271,7 @@ describe("issue #979 AC2: the cutover gate's observation window", () => {
     const result = await evaluateCutoverGate(sql, TEST_GATE, now);
     expect(result.ok).toBe(false);
     expect(result.reasons.some((r) => r.startsWith("insufficient count:"))).toBe(true);
+    await expectLedgerModeRefused();
   });
 });
 
@@ -264,6 +302,19 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
       points: { date: string; payload: unknown }[];
     };
     const compatBrief = await getBriefBySession(session.id);
+
+    // NON-VACUITY. Every assertion below is an equality between two reads, and
+    // `toEqual` is happiest of all when both sides are empty — an upstream
+    // write that silently persisted nothing would make this whole test pass
+    // while proving nothing at all. So require each fixture to be genuinely
+    // populated FIRST, before any comparison is trusted.
+    expect(compatRegime.latest, "the regime fixture must be non-empty").not.toBeNull();
+    expect(compatRegime.history.length, "the regime history fixture must be non-empty").toBeGreaterThan(0);
+    expect(compatSummary.summary, "the regime summary fixture must be non-empty").not.toBeNull();
+    expect(compatSignal, "the research signal fixture must be non-empty").not.toBeNull();
+    expect(compatRawSeries.points.length, "the admin raw-series fixture must be non-empty").toBeGreaterThan(0);
+    expect(compatSignalSeries.points.length, "the admin signal-series fixture must be non-empty").toBeGreaterThan(0);
+    expect(compatBrief, "the swarm brief fixture must be non-empty").not.toBeNull();
 
     // Ledger tables' own row counts + checksums, recorded before cutover so
     // AC4's "byte-for-byte unchanged by rollback" is checkable at the end.
@@ -299,13 +350,34 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     );
 
     // ── AC4: rollback to compatibility, non-destructively ────────────────────
+    //
+    // "reads use the legacy fixture again" needs the two models to be
+    // DISTINGUISHABLE first. Everything above just proved they agree, so a
+    // post-rollback `toEqual(compatRegime)` would pass whichever one answered
+    // and prove nothing. Drift the LEGACY table alone, out of band, to a
+    // sentinel the ledger cannot know about: ledger mode must keep returning
+    // the frozen value, and rollback must return the drifted one.
+    const DRIFT = 424243;
+    await sql`UPDATE regime_snapshots SET composite = ${DRIFT} WHERE date = ${date}`;
+    const stillLedger = await getRegimeSnapshots(new URL("http://x?range=10"));
+    expect(JSON.stringify(stillLedger), "ledger mode must ignore a legacy-table edit").not.toContain(String(DRIFT));
+    expect(stillLedger).toEqual(compatRegime);
+
     await setAnalyticsReadMode("compatibility", "test");
     expect(await getAnalyticsReadMode()).toBe("compatibility");
+    const driftedRegime = await getRegimeSnapshots(new URL("http://x?range=10"));
+    expect(JSON.stringify(driftedRegime), "after rollback the LEGACY table is what answers").toContain(String(DRIFT));
+
+    // Put the legacy fixture back and confirm the original DTO returns — the
+    // AC's literal "reads use the legacy fixture again".
+    await sql`UPDATE regime_snapshots SET composite = 55 WHERE date = ${date}`;
     const revertedRegime = await getRegimeSnapshots(new URL("http://x?range=10"));
     const revertedBrief = await getBriefBySession(session.id);
     expect(revertedRegime).toEqual(compatRegime);
     expect(revertedBrief).toEqual(compatBrief);
 
+    // And none of that — cutover, the out-of-band legacy edit, or the
+    // rollback — moved a single byte in any ledger table.
     const ledgerTablesAfter = await snapshotLedgerTables();
     expect(ledgerTablesAfter).toEqual(ledgerTablesBefore);
   });
@@ -329,6 +401,22 @@ async function snapshotLedgerTables(): Promise<Record<string, { count: number; c
     out[table] = { count: rows.length, checksum: sha256Hex(canonicalStringify(rows)) };
   }
   return out;
+}
+
+// The AC9 migration-boundary test below builds its own throwaway Postgres —
+// the only place a PRE-migration legacy snapshot can be taken (see its own
+// comment).
+const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.on("error", reject);
+    server.listen(0, () => {
+      const port = (server.address() as net.AddressInfo).port;
+      server.close(() => resolve(port));
+    });
+  });
 }
 
 // Legacy-table row counts + primary-key checksums — issue #979 AC9.
@@ -365,6 +453,86 @@ describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and
     expect(duringLedgerMode).toEqual(before);
     expect(after).toEqual(before);
   });
+
+  // The "before MIGRATION" half of AC9, which the cutover test above cannot
+  // reach: this file's databases are clones of an already-fully-migrated
+  // template (tests/preload.ts), so by the time any test in it runs, 0057-0060
+  // have long since been applied and there is no pre-migration state left to
+  // snapshot. The only honest way to record legacy state BEFORE the Phase A
+  // migrations is to stop short of them in a database of this test's own —
+  // same harness shape as tests/source-ledger-migration.test.ts, which proves
+  // 0057's backfill against a real, populated legacy table for the same reason.
+  test("legacy row counts and PK checksums are identical before and after migrations 0057-0060 are applied for real", async () => {
+    const port = await freePort();
+    const container = `rmtest_ac9_migration_${crypto.randomUUID().slice(0, 8)}`;
+    const up = Bun.spawnSync([
+      "docker", "run", "-d", "--rm", "--name", container,
+      "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
+      "-p", `${port}:5432`, POSTGRES_IMAGE,
+    ]);
+    // Loud, never a silent skip: without Docker there is no migration boundary
+    // to test, and that is a broken runner, not a passing test.
+    if (up.exitCode !== 0) throw new Error(`AC9 migration-boundary test requires Docker+Postgres:\n${up.stderr.toString()}`);
+    const db = postgres(`postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`, { max: 1, onnotice: () => {} });
+    try {
+      const started = Date.now();
+      for (;;) {
+        try { await db`SELECT 1`; break; }
+        catch (error) { if (Date.now() - started > 30_000) throw error; await Bun.sleep(200); }
+      }
+      await db`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
+      const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
+      const apply = async (file: string) => {
+        await db.begin(async (tx) => {
+          if (file >= "0054_rm_worker_allowlist.sql") await tx.unsafe("SET LOCAL ROLE rm_owner");
+          await tx.unsafe(await readFile(join(migrationsDir, file), "utf8"));
+          await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
+        });
+      };
+
+      const PHASE_A = ["0057_source_acquisition_ledger.sql", "0058_analytics_run_ledger.sql",
+        "0059_analytics_output_and_report_snapshots.sql", "0060_analytics_ledger_cutover.sql"];
+      for (const file of files.filter((f) => f < PHASE_A[0]!)) await apply(file);
+
+      // Real legacy content, so the snapshot below is of something.
+      await db`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES
+        ('2020-01-01', 'AC9_LEGACY_A', 1.5, 'legacy'), ('2020-01-02', 'AC9_LEGACY_B', 2.5, NULL)`;
+      await db`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2020-01-01', 11, 'risk_on'), ('2020-01-02', 12, 'risk_off')`;
+      await db`INSERT INTO research_signals (signal_key, date, payload) VALUES
+        ('ac9-legacy', '2020-01-01', '{"a":1}'::jsonb), ('ac9-legacy', '2020-01-02', '{"a":2}'::jsonb)`;
+
+      const snapshot = async () => {
+        const out: Record<string, { count: number; checksum: string }> = {};
+        for (const { table, pk } of LEGACY_TABLES) {
+          const rows = (await db.unsafe(`SELECT ${pk} FROM ${table} ORDER BY ${pk}`)) as unknown as Record<string, unknown>[];
+          out[table] = { count: rows.length, checksum: sha256Hex(canonicalStringify(rows)) };
+        }
+        return out;
+      };
+
+      const beforeMigration = await snapshot();
+      for (const { table } of LEGACY_TABLES) {
+        expect(beforeMigration[table]!.count, `${table} must be populated before the migration`).toBeGreaterThan(0);
+      }
+      // 0060 must not even exist yet — otherwise "before migration" is a lie.
+      const [pre] = await db`SELECT to_regclass('public.analytics_parity_observations') AS t`;
+      expect(pre!.t, "0060's table must not exist before 0060 runs").toBeNull();
+
+      for (const file of PHASE_A) await apply(file);
+
+      const [post] = await db`SELECT to_regclass('public.analytics_parity_observations') AS t`;
+      expect(post!.t, "0060 really ran").not.toBeNull();
+      // 0057's backfill really read the legacy rows — so this is a migration
+      // that TOUCHED that data, not one that ignored it.
+      const [{ n: baselines }] = (await db`SELECT count(*)::int AS n FROM source_value_versions WHERE revision_kind = 'legacy_baseline'`) as unknown as { n: number }[];
+      expect(baselines, "0057 backfilled a legacy baseline per legacy raw row").toBe(2);
+
+      expect(await snapshot(), "no Phase A migration may alter a legacy table").toEqual(beforeMigration);
+    } finally {
+      await db.end({ timeout: 5 }).catch(() => {});
+      Bun.spawnSync(["docker", "rm", "-f", container]);
+    }
+  }, 180_000);
 });
 
 describe("issue #979 AC7: legacy-baseline source rows are never upgraded to historically reproducible", () => {
@@ -406,14 +574,30 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
     expect(raised!.code).toBe("23514"); // check_violation
   });
 
-  test("a real revision for a key that has a legacy_baseline predecessor is recorded as 'initial', never as another legacy_baseline", async () => {
+  test("a real revision for a key that has a legacy_baseline predecessor is never recorded as another legacy_baseline, and the baseline is not rewritten", async () => {
     prodAuth();
+    // The predecessor has to actually EXIST, or the writer takes its
+    // `no prior version` branch and this proves nothing about the
+    // legacy-baseline path. Seed one exactly as migration 0057's backfill
+    // does: no acquisition, revision_kind 'legacy_baseline'.
+    await sql`
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
+      VALUES ('raw_indicator_history:AC7_REAL_IND', '2024-07-01', 10, 'legacy_baseline', now())`;
+
     await submitRawHistoryPoint("AC7_REAL_IND", "2024-07-01", 11);
+
     const rows = (await sql`
-      SELECT revision_kind FROM source_value_versions WHERE source_key = 'raw_indicator_history:AC7_REAL_IND'
-    `) as unknown as { revision_kind: string }[];
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((r) => r.revision_kind !== "legacy_baseline")).toBe(true);
+      SELECT revision_kind, value, acquisition_id FROM source_value_versions
+      WHERE source_key = 'raw_indicator_history:AC7_REAL_IND' ORDER BY id
+    `) as unknown as { revision_kind: string; value: string; acquisition_id: string | null }[];
+    // Append, never upgrade-in-place: the baseline row survives untouched and
+    // the real observation is a SECOND row with a real acquisition.
+    expect(rows.length, "the real write must APPEND beside the baseline, not replace it").toBe(2);
+    expect(rows[0]!.revision_kind).toBe("legacy_baseline");
+    expect(rows[0]!.acquisition_id, "the baseline must still be un-attributed after the real write").toBeNull();
+    expect(Number(rows[0]!.value), "the baseline's value must not have been rewritten").toBe(10);
+    expect(rows[1]!.revision_kind, "the real observation is never another legacy_baseline").not.toBe("legacy_baseline");
+    expect(rows[1]!.acquisition_id, "the real observation carries a real acquisition").not.toBeNull();
   });
 
   test("no projection or admin read exposes a legacy_baseline row as historically reproducible", async () => {

@@ -29,7 +29,12 @@ import {
   isAppendOnlyRefusal,
   triggerNames,
 } from "../src/db/append-only-guard.ts";
-import { LEDGER_FAMILIES, checkAnalyticsLedgerGuard, ledgerTriggerNames } from "../src/db/analytics-ledger-guard.ts";
+import {
+  LEDGER_FAMILIES,
+  analyticsLedgerGuardRefusalLines,
+  checkAnalyticsLedgerGuard,
+  ledgerTriggerNames,
+} from "../src/db/analytics-ledger-guard.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -310,4 +315,198 @@ describe("the analytics ledger immutability guard's runtime check (issue #979)",
       await sql.unsafe(`ALTER TABLE analytics_report_snapshots ENABLE ALWAYS TRIGGER analytics_report_snapshots_immutable`);
     }
   });
+
+  // Issue #979 AC6, literally: EACH required trigger, ONE AT A TIME. The three
+  // tests above are the interesting shapes (a neutered function, one drop, one
+  // ENABLE REPLICA); this one is the exhaustive sweep that keeps a later
+  // migration from adding a table to a family — or renaming one trigger —
+  // without the checker noticing.
+  //
+  // Note what a SINGLE drop does and does not remove. Migrations 0057-0060
+  // install two OVERLAPPING triggers per table: `<t>_immutable` is BEFORE
+  // UPDATE OR DELETE OR TRUNCATE FOR EACH STATEMENT, `<t>_immutable_row` is
+  // BEFORE UPDATE OR DELETE FOR EACH ROW. So dropping either one alone leaves
+  // UPDATE and DELETE still refused by the other — which is exactly why a
+  // "try an UPDATE and see it fail" hand-check is not a sufficient guard
+  // check, and why the inventory half has to exist. What a lone drop really
+  // costs is proved by the two tests after this one: the statement trigger is
+  // the TRUNCATE protection, and a neutered FUNCTION is what takes UPDATE and
+  // DELETE with it on every table of a family at once.
+  test("EVERY required ledger trigger, dropped ONE AT A TIME, is named by the checker with the protection it lost", async () => {
+    for (const family of LEDGER_FAMILIES) {
+      for (const table of family.tables) {
+        const names = ledgerTriggerNames(table);
+        for (const [level, name] of [["statement", names.statement], ["row", names.row]] as const) {
+          // Recreate it afterwards from Postgres's own definition rather than
+          // a hand-written CREATE TRIGGER, so this sweep cannot drift from
+          // whatever the migration actually installed.
+          const [defRow] = (await sql`
+            SELECT pg_get_triggerdef(t.oid)::text AS def
+            FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+            WHERE NOT t.tgisinternal AND c.relname = ${table} AND t.tgname = ${name}
+          `) as unknown as { def: string }[];
+          expect(defRow?.def, `${table}.${name} must exist before it can be dropped`).toBeTruthy();
+
+          await sql.unsafe(`DROP TRIGGER ${name} ON public.${table}`);
+          try {
+            const result = await checkAnalyticsLedgerGuard(sql);
+            expect(result.status, `${table}.${name} dropped`).toBe("disarmed");
+            expect(
+              result.problems.some((p) =>
+                p.startsWith(`${table}: the ${level}-level ${family.label} trigger '${name}' is MISSING`),
+              ),
+              `${table}.${name}: ${JSON.stringify(result.problems)}`,
+            ).toBe(true);
+
+            // The message names the migration that reinstalls it, so the
+            // refusal is actionable rather than merely true.
+            expect(result.problems.some((p) => p.includes(`re-apply backend/migrations/${family.migration}`)), table).toBe(true);
+
+            // A disarmed check is what the boot refuses on, and the refusal an
+            // operator reads names the missing trigger — not just "unarmed".
+            const refusal = analyticsLedgerGuardRefusalLines(result.problems, "[api]").join("\n");
+            expect(refusal).toContain("REFUSING the boot: the analytics ledger immutability guard");
+            expect(refusal).toContain(name);
+          } finally {
+            await sql.unsafe(defRow!.def);
+            await sql.unsafe(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER ${name}`);
+          }
+        }
+      }
+    }
+    // And the database is back to fully armed, so the sweep proved something
+    // about each drop rather than about a cumulatively broken database.
+    expect((await checkAnalyticsLedgerGuard(sql)).status).toBe("armed");
+  }, 120_000);
+
+  // Issue #979 AC6's UPDATE and DELETE half, for EVERY family — not just the
+  // source ledger the shaped test above uses. Each family's function is
+  // neutered in turn (one statement, catalog untouched), and the checker must
+  // report the accepted UPDATE and the accepted DELETE on every table of THAT
+  // family, and stay silent about the others.
+  test("EACH family's function neutered in turn: the checker names the lost UPDATE and DELETE protection, table by table", async () => {
+    for (const family of LEDGER_FAMILIES) {
+      await sql.unsafe(`
+        CREATE OR REPLACE FUNCTION public.${family.functionName}() RETURNS trigger
+        LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN COALESCE(NEW, OLD); END IF; RETURN NULL; END $$;`);
+      try {
+        const result = await checkAnalyticsLedgerGuard(sql);
+        expect(result.status, family.label).toBe("disarmed");
+        for (const table of family.tables) {
+          expect(result.problems.some((p) => p.startsWith(`${table}: a UPDATE was ACCEPTED`)), `${family.label}/${table}`).toBe(true);
+          expect(result.problems.some((p) => p.startsWith(`${table}: a DELETE was ACCEPTED`)), `${family.label}/${table}`).toBe(true);
+        }
+        // No other family is implicated — the report points at the one that broke.
+        const otherTables = LEDGER_FAMILIES.filter((f) => f !== family).flatMap((f) => f.tables);
+        for (const table of otherTables) {
+          expect(result.problems.some((p) => p.startsWith(`${table}:`)), `${table} must not be implicated`).toBe(false);
+        }
+      } finally {
+        // afterEach re-arms too, but a later family in this same loop must not
+        // run against a database the previous one left broken.
+        await sql.unsafe(`
+          CREATE OR REPLACE FUNCTION public.${family.functionName}() RETURNS trigger
+          LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+          BEGIN
+            RAISE EXCEPTION '${family.label} is immutable: % is not permitted on %', TG_OP, TG_TABLE_NAME
+              USING ERRCODE = 'feature_not_supported';
+          END;
+          $fn$;`);
+      }
+    }
+    expect((await checkAnalyticsLedgerGuard(sql)).status).toBe("armed");
+  }, 60_000);
+
+  test("the statement-level trigger really is the TRUNCATE protection — with it dropped, TRUNCATE goes through", async () => {
+    // The probe half of the checker only issues UPDATE/DELETE (a TRUNCATE
+    // probe cannot be made harmless with `WHERE false`), so the statement-level
+    // trigger's contribution is asserted here instead, by doing the TRUNCATE —
+    // inside a transaction that is rolled back, because TRUNCATE is
+    // transactional in PostgreSQL and this clone's rows are still needed.
+    const table = "analytics_parity_observations";
+    await sql`
+      INSERT INTO analytics_parity_observations
+        (domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail)
+      VALUES ('raw_indicator_history', 1, 1, ${"7".repeat(64)}, ${"7".repeat(64)}, true, '{}'::jsonb)`;
+    const [{ n: before }] = (await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`) as unknown as { n: number }[];
+    expect(before).toBeGreaterThan(0);
+
+    // Armed: TRUNCATE is refused by the cutover ledger's own guard.
+    let armedRefusal: { code?: string; message?: string } | null = null;
+    try {
+      await sql.unsafe(`TRUNCATE public.${table}`);
+    } catch (e) {
+      armedRefusal = e as { code?: string; message?: string };
+    }
+    expect(armedRefusal?.code).toBe("0A000");
+    expect(armedRefusal?.message).toMatch(/^analytics cutover ledger is immutable: TRUNCATE is not permitted on analytics_parity_observations/);
+
+    const [defRow] = (await sql`
+      SELECT pg_get_triggerdef(t.oid)::text AS def
+      FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+      WHERE NOT t.tgisinternal AND c.relname = ${table} AND t.tgname = ${ledgerTriggerNames(table).statement}
+    `) as unknown as { def: string }[];
+    await sql.unsafe(`DROP TRIGGER ${ledgerTriggerNames(table).statement} ON public.${table}`);
+    try {
+      let truncated = false;
+      await sql
+        .begin(async (tx) => {
+          await tx.unsafe(`TRUNCATE public.${table}`);
+          const [{ n }] = (await tx.unsafe(`SELECT count(*)::int AS n FROM ${table}`)) as unknown as { n: number }[];
+          truncated = n === 0;
+          throw new Error("rollback: the evidence must survive this test");
+        })
+        .catch(() => {});
+      expect(truncated, "with the statement-level trigger gone, TRUNCATE erased the ledger").toBe(true);
+
+      const result = await checkAnalyticsLedgerGuard(sql);
+      expect(result.status).toBe("disarmed");
+      expect(
+        result.problems.some((p) =>
+          p.startsWith(`${table}: the statement-level analytics cutover ledger trigger '${table}_immutable' is MISSING`),
+        ),
+        JSON.stringify(result.problems),
+      ).toBe(true);
+    } finally {
+      await sql.unsafe(defRow!.def);
+      await sql.unsafe(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER ${ledgerTriggerNames(table).statement}`);
+    }
+    const [{ n: after }] = (await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`) as unknown as { n: number }[];
+    expect(after, "the rolled-back TRUNCATE left the evidence intact").toBe(before);
+  });
+
+  test("the api process REFUSES to start against a disarmed ledger — a real boot, a real nonzero exit code", async () => {
+    // Everything above proves the CHECKER sees it. AC6 also asks that the
+    // production startup guard REFUSE, and `process.exit(1)` cannot be
+    // asserted in-process — so this boots a real Bun process on the real
+    // entrypoint function, pointed at this file's clone with one family
+    // neutered, and requires a nonzero exit with the operator-facing refusal
+    // on stderr. afterEach re-arms the function afterwards.
+    const family = LEDGER_FAMILIES.find((f) => f.functionName === "rm_analytics_cutover_immutable")!;
+    await sql.unsafe(`
+      CREATE OR REPLACE FUNCTION public.${family.functionName}() RETURNS trigger
+      LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN COALESCE(NEW, OLD); END IF; RETURN NULL; END $$;`);
+
+    const [{ current_database: dbName }] = (await sql`SELECT current_database()`) as unknown as { current_database: string }[];
+    const base = new URL(process.env.DATABASE_URL!);
+    const cloneUrl = `postgres://${base.username}:${base.password}@${base.host}/${dbName}`;
+    const guardModule = new URL("../src/db/analytics-ledger-guard.ts", import.meta.url).pathname;
+
+    const proc = Bun.spawnSync(
+      [
+        "bun",
+        "-e",
+        `const { assertAnalyticsLedgerGuardArmed } = await import(${JSON.stringify(guardModule)});
+         await assertAnalyticsLedgerGuardArmed();
+         console.log("BOOTED");`,
+      ],
+      { env: { ...process.env, DATABASE_URL: cloneUrl }, stdout: "pipe", stderr: "pipe" },
+    );
+    const stderr = proc.stderr.toString();
+    expect(proc.stdout.toString(), `the boot must not get past the guard.\nstderr:\n${stderr}`).not.toContain("BOOTED");
+    expect(proc.exitCode, `stderr:\n${stderr}`).toBe(1);
+    expect(stderr).toContain("REFUSING the boot: the analytics ledger immutability guard");
+    expect(stderr).toContain("The api will NOT start");
+    expect(stderr).toContain("analytics_parity_observations");
+  }, 60_000);
 });
