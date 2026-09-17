@@ -231,10 +231,22 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
                 ${tx.json(jsonValue(manifest))}, ${manifest.manifestDigest}, ${members.length})
         RETURNING id`;
       const vintageId = String(vintage!.id);
-      for (const member of members) {
+      // Batched, never one round trip per member (the same rule as
+      // source-ledger-store.ts's value insert): a vintage spans every series
+      // in the ledger, so this is thousands of rows, and `sql.begin` holds one
+      // of the api's 10 pooled connections for the whole transaction. A
+      // per-row loop here would hold it open for one round trip per member.
+      // postgres.js binds one parameter per cell, so keep each statement well
+      // below PostgreSQL's 65,535-parameter limit (3 columns per row).
+      const MEMBER_INSERT_BATCH_SIZE = 10_000;
+      const memberRows = members.map((member) => ({
+        vintage_id: vintageId,
+        source_value_version_id: member.versionId,
+        source_key: member.sourceKey,
+      }));
+      for (let start = 0; start < memberRows.length; start += MEMBER_INSERT_BATCH_SIZE) {
         await tx`
-          INSERT INTO analytics_vintage_members (vintage_id, source_value_version_id, source_key)
-          VALUES (${vintageId}::bigint, ${member.versionId}::bigint, ${member.sourceKey})`;
+          INSERT INTO analytics_vintage_members ${tx(memberRows.slice(start, start + MEMBER_INSERT_BATCH_SIZE), "vintage_id", "source_value_version_id", "source_key")}`;
       }
       return { vintageId, manifest, memberCount: members.length, replayed: false };
     });

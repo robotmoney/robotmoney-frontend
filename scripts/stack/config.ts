@@ -293,8 +293,14 @@ export function buildArgs(services: string[] = []): string[] {
   return ["build", ...services];
 }
 
-export function upArgs(services: string[]): string[] {
-  return ["up", "-d", ...services];
+export function upArgs(
+  services: string[],
+  opts: { wait?: boolean; waitTimeoutSeconds?: number } = {},
+): string[] {
+  const wait = opts.wait
+    ? ["--wait", "--wait-timeout", String(opts.waitTimeoutSeconds ?? 600)]
+    : [];
+  return ["up", "-d", ...wait, ...services];
 }
 
 // `--no-deps` is safe (and correct) because up() waits for postgres to be ready

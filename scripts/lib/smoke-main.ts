@@ -1163,7 +1163,7 @@ async function main(): Promise<void> {
     migrateEnv: scenario.migrateEnv,
     migrateScriptArgs: [...scenario.migrateScriptArgs],
     preflight: composePostgres ? undefined : classifyDatabase,
-    initialize: initializeScenario,
+    initialize: initializeScenario, deferredServices: ["analytics-producer"],
   }));
 
   if (process.env.CI && smokeMode) {

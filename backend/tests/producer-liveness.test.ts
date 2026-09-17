@@ -24,6 +24,54 @@ import {
   type ScheduleState,
 } from "../src/producer/index.ts";
 
+// BOOT COVER (see the boot-cover block in src/producer/index.ts)
+// Nothing wrote a heartbeat between container start and the liveness loop, so
+// a producer still legitimately working — waiting on the API, then repairing a
+// backlog of missed days — aged past its start_period and Docker called it
+// unhealthy. These two cases pin the records that close that window, and pin
+// that they are written from inside the work rather than by a detached ticker.
+test("the first record lands BEFORE the API wait, so a slow API cannot age the container out", async () => {
+  const order: string[] = [];
+  const beats: { phase: string; detail?: string; staleAfterMs: number }[] = [];
+  await startProducerSchedules({
+    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN: "t" },
+    beat: async (rec) => {
+      order.push(`beat:${rec.phase}`);
+      beats.push({ phase: rec.phase, detail: rec.detail, staleAfterMs: rec.staleAfterMs });
+    },
+    waitUntilReady: async () => { order.push("waitForApi"); },
+    catchUp: async () => { order.push("catchup"); },
+    catchUpIndicators: async () => { order.push("catchupIndicators"); },
+    scheduleKind: (kind) => { order.push(`armed:${kind}`); },
+  });
+  // The beat is first. If it came after waitForApi it would cover nothing —
+  // waitForApi is itself the 120s that was ageing the container out.
+  expect(order[0]).toBe("beat:boot");
+  expect(order.indexOf("beat:boot")).toBeLessThan(order.indexOf("waitForApi"));
+  // `boot`, never `armed`: no cron is armed yet, and a record claiming one
+  // would report a state this process has not reached.
+  expect(beats).toHaveLength(1);
+  expect(beats[0]!.phase).toBe("boot");
+  expect(beats[0]!.detail).toContain("analytics API");
+  // Must outlast waitForApi's own ceiling, or a healthy-but-slow boot goes red.
+  expect(beats[0]!.staleAfterMs).toBeGreaterThan(120_000);
+});
+
+test("boot liveness is progress-driven — no detached ticker keeps it green", async () => {
+  // The rule src/ops/heartbeat.ts states and this process must not break: a
+  // record is written from inside the work, never by a timer that would go on
+  // pulsing green over a boot that had deadlocked. A red control: if someone
+  // reintroduces a setInterval pulse, this fails.
+  const src = await Bun.file(new URL("../src/producer/index.ts", import.meta.url)).text();
+  // A CALL, not a mention: the prose above and in src/ops/heartbeat.ts names
+  // `setInterval` precisely to forbid it, and matching the bare word would go
+  // green the moment someone deleted the rule it is quoting.
+  expect(src).not.toContain("setInterval(");
+  // And the catch-up loops beat per day, which is what keeps the container
+  // green across a multi-day backlog once the boot record has expired.
+  expect(src).toContain("catch-up: repairing missed research day ${day}");
+});
+
 afterEach(() => { resetProducerSchedules(); });
 
 const NOW = 1_700_000_000_000;
