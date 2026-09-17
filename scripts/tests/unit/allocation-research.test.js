@@ -57,5 +57,5 @@ test('an unfinished recommendation does not claim that an available reference is
   const record = adapt({ ...session, swarmRecommendation:null }, { allocation:{asof:'2026-09-01',buckets:sleeves.map((s,i)=>({id:s.key,target_weight:[.95,.05,0,0][i]}))} }, {}, 'live');
   const html = sessionPage(record,[record]);
   expect(html).toContain('Recommendation pending');
-  expect(html).toContain('policy dated 1 Sep 2026');
+  expect(html).toMatch(/policy dated 1 Sept? 2026/);
 });

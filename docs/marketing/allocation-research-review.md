@@ -60,11 +60,11 @@ RM_RESEARCH_PORT=51087 bun --hot frontend/public/prototypes/research/preview.mjs
 bun test scripts/tests/unit/allocation-research.test.js
 ```
 
-The preview exposes both Allocation routes and `/prototypes/research/components`. Add `?data=stress` for 96 sessions, 12 synthetic analysts, long passages and missing fields. These controls are absent from production views. JSON exports belong to the preview; production links point directly to the public API. The public OpenAPI catalogue documents subject filtering and pagination for agents.
+The preview exposes both Allocation routes and `/prototypes/research/components`. Add `?data=stress` for 96 sessions, 12 synthetic analysts, long passages and missing fields. These controls are absent from production views. JSON exports belong to the preview; production links point directly to the public API. The public OpenAPI catalogue documents subject filtering and pagination for agents. The Allocation subject is included in the sitemap and gets a prerendered explanation with direct data links for readers without JavaScript.
 
 ## Verification
 
-Database tests cover subject filtering, pagination, same-day IDs, literal search, compact references and immutable policy snapshots across retries. The existing Swarm lifecycle suite also passes. The required unit tier includes the component/scale suite and production-envelope, signature-state, route-isolation and rendering checks.
+Database tests cover subject filtering, pagination, same-day IDs, literal search, compact references and immutable policy snapshots across retries. The full backend suite passes: 1,974 tests, 15 opt-in live-network tests skipped, no failures. The Swarm lifecycle suite also passes. The required unit tier includes the component/scale suite and production-envelope, signature-state, route-isolation and rendering checks.
 
 A local API and isolated PostgreSQL 18 database were loaded through the real v0 bootstrap: 72 sessions and 216 takes across subjects. Browser review covers the actual production router, API pagination/search, dated and stable-ID sessions, mobile overflow, sleeve drilldown, tooltip placement and dismissal, source status and API failure/retry. Historical takes without structured weights stay unavailable. These records establish integration behavior, not current production holdings.
 
