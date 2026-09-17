@@ -200,10 +200,10 @@ function parseSnapshotRow(v: unknown, i: number): RegimeSnapshotRow | Invalid {
   };
 }
 
-// Exported (issue #361 Phase 4): POST /api/swarm/regime is now a genuine
-// SUBMISSION gate that accepts the same { snapshots } payload this boundary's
-// own regime-snapshots route accepts — one parser, two role-gated doors, zero
-// server-side recomputation on either.
+// Exported (issue #361 Phase 4): POST /api/swarm/regime is a genuine
+// SUBMISSION gate that accepts the same { snapshots } payload this boundary
+// parses inside a terminal run package (parseTerminalRunPackage below) — one
+// parser, two role-gated doors, zero server-side recomputation on either.
 export function parseSnapshots(body: unknown): RegimeSnapshotRow[] | Invalid {
   if (!isPlainObject(body) || !Array.isArray(body.snapshots)) return invalid("body must be { snapshots: RegimeSnapshotRow[] }");
   if (body.snapshots.length > MAX_SNAPSHOT_ROWS) return invalid(`payload exceeds ${MAX_SNAPSHOT_ROWS} snapshot rows`);
