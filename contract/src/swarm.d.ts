@@ -402,6 +402,7 @@ export interface SwarmBriefResearchSignalRef {
 }
 
 export interface SwarmBriefBody {
+  allocation?: { asof: string; buckets: { id: string; target_weight: number; items?: unknown[] }[] };
   regime: unknown;
   subject: SwarmSubject | null;
   recentSessions: unknown[];

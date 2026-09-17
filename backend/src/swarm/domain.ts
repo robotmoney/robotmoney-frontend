@@ -1709,16 +1709,27 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   const regimeRow = (await sql<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }[]>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
   const regime = regimeRow ? { ...regimeRow, method: REGIME_METHOD.id } : null;
-  const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' ORDER BY date DESC LIMIT 5`;
+  const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' AND subject_id = ${s.subject_id} ORDER BY date DESC LIMIT 5`;
 
   const researchSignals = await sql`
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
   const subject = await getSubject(s.subject_id);
+  const framework =
+    (subject?.source as { type?: string } | null)?.type === "framework"
+      ? (await sql<{ asof: Date | string; buckets: unknown[] }[]>`SELECT asof, buckets FROM allocation_framework WHERE id = 1`)[0]
+      : null;
+  const existing = (await sql<{ body?: { allocation?: unknown } }[]>`SELECT body FROM swarm_briefs WHERE session_id = ${sessionId}`)[0];
+  const allocation = existing
+    ? existing.body?.allocation ?? null
+    : framework
+      ? { asof: day(framework.asof), buckets: framework.buckets }
+      : null;
   const closes = new Date(Date.now() + windowMinutes * 60_000);
   const windowClosesAt = closes.toISOString();
   const body = {
+    ...(allocation ? { allocation } : {}),
     regime,
     subject,
     recentSessions: recent,
@@ -1818,7 +1829,9 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     await appendBriefRevision(sessionId, body, reportSnapshotId, tx);
     await tx`INSERT INTO swarm_briefs (session_id, date, subject_id, body, report_snapshot_id)
               VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${tx.json(jsonValue(body))}, ${reportSnapshotId}::bigint)
-              ON CONFLICT (session_id) DO UPDATE SET body = EXCLUDED.body, report_snapshot_id = EXCLUDED.report_snapshot_id`;
+              ON CONFLICT (session_id) DO UPDATE SET
+                body = (EXCLUDED.body - 'allocation') || CASE WHEN swarm_briefs.body ? 'allocation' THEN jsonb_build_object('allocation', swarm_briefs.body->'allocation') ELSE '{}'::jsonb END,
+                report_snapshot_id = EXCLUDED.report_snapshot_id`;
     await tx`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
   });
   return { sessionId, state: "collecting", windowClosesAt };
