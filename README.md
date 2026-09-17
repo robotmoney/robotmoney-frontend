@@ -50,6 +50,27 @@ real backend behavior.
 BACKEND_URL=http://127.0.0.1:<smoke api port> bun run goldens:update
 ```
 
+Add `?api=prod` or `?api=stage` to the preview URL (or any `?api=<origin>`) to
+answer `/api/*` from a live api instead of goldens — reads only, never writes.
+See `frontend/preview/index.html`'s header comment.
+
+## Web client versioning and CI
+
+`frontend/package.json` (`@robotmoney/web-client`) versions the static client
+independently of `backend/package.json` and `contract/package.json` — see
+[decisions.md D45](./docs/decisions.md#d45--the-web-client-gets-its-own-manifest-version-and-merge-gate--narrow-and-fast-separate-from-apibackend-ci-lucas-2026-09-17).
+`.github/workflows/web-client.yml` is its own merge gate: client unit tests,
+static assembly, and a fixtures-mode Playwright sweep of every route block the
+merge; the same sweep against production/stage is advisory only.
+
+```bash
+bun run --cwd frontend test           # the client's own unit-test subset
+bun run --cwd frontend assemble       # static assembly + prerender
+bun run --cwd frontend check          # Playwright sweep, fixtures (blocking in CI)
+bun run --cwd frontend check:prod     # same sweep against production (advisory)
+bun run --cwd frontend check:stage    # same sweep against stage (advisory)
+```
+
 ## Develop
 
 ```bash

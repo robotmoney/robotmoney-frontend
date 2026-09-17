@@ -24,7 +24,7 @@ const read = (name: string) => readFileSync(join(wfDir, name), "utf8");
 // PATH_GATED_WORKFLOWS — duplicated rather than imported, per this repo's
 // convention that sibling unit files stay independent of each other's
 // internals (see that file's own header comment).
-const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "integration.yml", "frontend.yml", "research-pipeline.yml", "onboarding-eval-rails.yml"];
+const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "onboarding-eval-rails.yml"];
 
 interface FilterStep {
   uses?: string;
@@ -147,8 +147,9 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     ["tsconfig.json", ["integration.yml"]],
     ["package.json", ["integration.yml"]],
     ["bun.lock", ["integration.yml"]],
-    ["frontend/public/assets/js/app.js", ["frontend.yml"]],
-    ["playwright.config.ts", ["frontend.yml"]],
+    ["frontend/public/assets/js/app.js", ["web-client.yml"]],
+    ["playwright.config.ts", ["web-client.yml"]],
+    ["goldens/api-goldens.json", ["web-client.yml"]],
     ["docs/architecture.md", []],
     ["README.md", []],
   ];
