@@ -1,7 +1,18 @@
 // Swarm domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { canonicalizeApplication, classifyRegime, SWARM_ROSTER_CAP, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import {
+  canonicalizeApplication,
+  classifyRegime,
+  REGIME_METHOD,
+  type RegimeLabel,
+  type RegimeSummary,
+  SWARM_ROSTER_CAP,
+  SWARM_TAKE_REVISION_CAP,
+  path as routePath,
+  ROUTES,
+  STANCES,
+} from "@robotmoney/contract";
 import { config, resolveSwarmNotificationEmailFrom } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -1632,6 +1643,16 @@ function subjectBasket(subjectId: string): Basket {
 // smoke session opens. `date` defaults to today; the snapshot is dated on-or-before
 // the session date so the frontend snapshot picker selects it.
 export async function ensureSmokeSubjectFixtures(subjectId: string, name: string, date?: string) {
+  const existing = (await sql<{ id: string; source: any }[]>`
+    SELECT id, source FROM swarm_subjects WHERE id = ${subjectId}
+  `)[0];
+  const sourceType = typeof existing?.source === "string"
+    ? JSON.parse(existing.source)?.type
+    : existing?.source?.type;
+  if (sourceType === "framework") {
+    return { skipped: true, reason: "framework_subject", subjectId, name };
+  }
+
   const snapDate = date ?? new Date().toISOString().slice(0, 10);
   const recommendationType = "position_actions";
   const thesis = `${name}: treasury read through the 95/5/0/0 conservative allocation mandate — Conservative DeFi Yield anchors 95%, the Agent Tokens sleeve caps at 5%.`;
@@ -1721,16 +1742,29 @@ export async function appendBriefRevision(
 
 export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
-  const regime = (await sql`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
-  const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' ORDER BY date DESC LIMIT 5`;
+  const regimeRow = (await sql<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }[]>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
+  const regime = regimeRow ? { ...regimeRow, method: REGIME_METHOD.id } : null;
+  const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' AND subject_id = ${s.subject_id} ORDER BY date DESC LIMIT 5`;
+
   const researchSignals = await sql`
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
   const subject = await getSubject(s.subject_id);
+  const framework =
+    (subject?.source as { type?: string } | null)?.type === "framework"
+      ? (await sql<{ asof: Date | string; buckets: unknown[] }[]>`SELECT asof, buckets FROM allocation_framework WHERE id = 1`)[0]
+      : null;
+  const existing = (await sql<{ body?: { allocation?: unknown } }[]>`SELECT body FROM swarm_briefs WHERE session_id = ${sessionId}`)[0];
+  const allocation = existing
+    ? existing.body?.allocation ?? null
+    : framework
+      ? { asof: day(framework.asof), buckets: framework.buckets }
+      : null;
   const closes = new Date(Date.now() + windowMinutes * 60_000);
   const windowClosesAt = closes.toISOString();
   const body = {
+    ...(allocation ? { allocation } : {}),
     regime,
     subject,
     recentSessions: recent,
@@ -1828,7 +1862,9 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     await appendBriefRevision(sessionId, body, reportSnapshotId, tx);
     await tx`INSERT INTO swarm_briefs (session_id, date, subject_id, body, report_snapshot_id)
               VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${tx.json(jsonValue(body))}, ${reportSnapshotId}::bigint)
-              ON CONFLICT (session_id) DO UPDATE SET body = EXCLUDED.body, report_snapshot_id = EXCLUDED.report_snapshot_id`;
+              ON CONFLICT (session_id) DO UPDATE SET
+                body = (EXCLUDED.body - 'allocation') || CASE WHEN swarm_briefs.body ? 'allocation' THEN jsonb_build_object('allocation', swarm_briefs.body->'allocation') ELSE '{}'::jsonb END,
+                report_snapshot_id = EXCLUDED.report_snapshot_id`;
     await tx`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
   });
   return { sessionId, state: "collecting", windowClosesAt };
@@ -1921,75 +1957,58 @@ export async function closeWindow(sessionId: string) {
 }
 
 // Build the reference-shaped regime_summary object from the trailing regime
-// snapshots (with deterministic IN-MEMORY padding so history.length >= 8). Kept
-// separate so tests and aggregation share one code path.
+// snapshots. Kept separate so tests and aggregation share one code path.
 //
 // LIVE-PATH honesty (finding 009): this is the live aggregation path, so it
 // never writes to regime_snapshots — stored labels are READ as-is (the
 // classifier owns them) and classifyRegime is only a fallback for rows whose
-// label is null. Sparse histories are padded in memory, not persisted; smoke
-// deployments get their >= 8 persisted points from ensureSmokeSubjectFixtures.
-export async function buildRegimeSummary(endDate: string, minPoints = 8) {
+// label is null. History is unpadded and emits only real points.
+export async function buildRegimeSummary(endDate: string, minPoints = 8): Promise<RegimeSummary> {
   const rows = await sql`
     SELECT date, composite, composite_percentile, regime,
            macro_regime, onchain_regime, factor_regime,
            macro_index, onchain_index, factor_index,
            macro_percentile, onchain_percentile, factor_percentile
-    FROM regime_snapshots ORDER BY date DESC LIMIT 14`;
+    FROM regime_snapshots
+    WHERE date <= ${endDate}
+    ORDER BY date DESC
+    LIMIT 14`;
   const chrono = rows.slice().reverse(); // chronological
-  const numOr = (v: unknown, fallback: number) => (v == null ? fallback : Number(v));
-  // Percentile fallback: use stored percentile else the value itself clamped 0..1.
-  const pct = (v: unknown, base: unknown) => {
-    const p = v == null ? null : Number(v);
-    if (p != null && Number.isFinite(p)) return round(Math.max(0, Math.min(1, p)));
-    const b = base == null ? 0.5 : Number(base);
-    return round(Math.max(0, Math.min(1, b)));
+  const num = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = typeof v === "number" ? v : Number(v);
+    return typeof n === "number" && Number.isFinite(n) ? round(n) : null;
   };
-  let history = chrono.map((r: any) => ({
-    date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
-    composite: numOr(r.composite, 0.5),
-    regime: r.regime ?? classifyRegime(numOr(r.composite, 0.5)),
-    macro: numOr(r.macro_index ?? r.macro_percentile, 0.6),
-    onchain: numOr(r.onchain_index ?? r.onchain_percentile, 0.35),
-    factor: numOr(r.factor_index ?? r.factor_percentile, 0.75),
-  }));
-
-  // Guarantee >= minPoints even if real rows exist but are sparse: prepend
-  // deterministic synthetic leading points dated before the earliest real one.
-  if (history.length < minPoints) {
-    const need = minPoints - history.length;
-    const anchor = history[0]?.date ?? endDate;
-    const rng = seeded(`pad:${anchor}`);
-    const pad = [];
-    for (let i = need; i >= 1; i--) {
-      const t = (need - i) / Math.max(1, need + history.length - 1);
-      pad.push(syntheticRegimePoint(shiftDay(anchor, -i), t, rng));
-    }
-    history = [...pad, ...history];
-  }
+  const history: RegimeSummary["history"] = chrono.map((r: any) => {
+    const c = num(r.composite);
+    return {
+      date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
+      composite: c,
+      composite_percentile: num(r.composite_percentile),
+      regime: (r.regime ?? (c != null ? classifyRegime(c) : "neutral")) as RegimeLabel,
+      macro_percentile: num(r.macro_percentile),
+      onchain_percentile: num(r.onchain_percentile),
+      factor_percentile: num(r.factor_percentile),
+    };
+  });
 
   const latest = chrono[chrono.length - 1] as any;
-  const lc = latest ? numOr(latest.composite, 0.5) : history[history.length - 1].composite;
+  const lc = latest ? num(latest.composite) ?? 0.5 : 0.5;
   return {
     composite: round(lc),
-    composite_percentile: pct(latest?.composite_percentile, lc),
-    regime: latest?.regime ?? classifyRegime(lc),
-    macro_regime: latest?.macro_regime ?? classifyRegime(history[history.length - 1].macro),
-    onchain_regime: latest?.onchain_regime ?? classifyRegime(history[history.length - 1].onchain),
-    factor_regime: latest?.factor_regime ?? classifyRegime(history[history.length - 1].factor),
-    macro_percentile: pct(latest?.macro_percentile, latest?.macro_index ?? history[history.length - 1].macro),
-    onchain_percentile: pct(latest?.onchain_percentile, latest?.onchain_index ?? history[history.length - 1].onchain),
-    factor_percentile: pct(latest?.factor_percentile, latest?.factor_index ?? history[history.length - 1].factor),
-    history: history.map((h) => ({
-      date: h.date,
-      composite: round(h.composite),
-      regime: h.regime,
-      macro: round(h.macro),
-      onchain: round(h.onchain),
-      factor: round(h.factor),
-    })),
+    composite_percentile: num(latest?.composite_percentile),
+    regime: (latest?.regime ?? classifyRegime(lc)) as RegimeLabel,
+    macro_regime: (latest?.macro_regime ?? (num(latest?.macro_percentile ?? latest?.macro_index) != null ? classifyRegime(num(latest?.macro_percentile ?? latest?.macro_index)!) : "neutral")) as RegimeLabel,
+    onchain_regime: (latest?.onchain_regime ?? (num(latest?.onchain_percentile ?? latest?.onchain_index) != null ? classifyRegime(num(latest?.onchain_percentile ?? latest?.onchain_index)!) : "neutral")) as RegimeLabel,
+    factor_regime: (latest?.factor_regime ?? (num(latest?.factor_percentile ?? latest?.factor_index) != null ? classifyRegime(num(latest?.factor_percentile ?? latest?.factor_index)!) : "neutral")) as RegimeLabel,
+    macro_percentile: num(latest?.macro_percentile),
+    onchain_percentile: num(latest?.onchain_percentile),
+    factor_percentile: num(latest?.factor_percentile),
+    history,
+    method: REGIME_METHOD.id,
   };
 }
+
 
 // Deterministic rollup over the takes ACTUALLY posted, ENRICHED into the
 // reference session shape (regime_summary + rich swarm_recommendation +
@@ -2101,7 +2120,7 @@ export function majorityStance(byStance: Record<string, number>): { stance: stri
 export function buildConsensus(
   active: number, submitted: number, participation: number,
   byStance: Record<string, number>, meanConfidence: number | null,
-  regimeSummary: { composite_percentile?: number; regime?: string } | null,
+  regimeSummary: { composite_percentile?: number | null; regime?: string } | null,
 ): string[] {
   if (submitted === 0) return [];
   const points: string[] = [`${submitted} of ${active} members submitted (${Math.round(participation * 100)}% participation).`];
@@ -2119,7 +2138,7 @@ export function buildConsensus(
 // the two can never collide (cheap check: rationale !== synthesis).
 export function buildRationale(
   subjectLabel: string, byStance: Record<string, number>, submitted: number,
-  meanConfidence: number | null, regimeSummary: { composite_percentile?: number } | null,
+  meanConfidence: number | null, regimeSummary: { composite_percentile?: number | null } | null,
 ): string {
   const majority = majorityStance(byStance);
   const parts: string[] = [];

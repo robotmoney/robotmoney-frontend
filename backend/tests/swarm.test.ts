@@ -1,7 +1,8 @@
 import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeApplication, canonicalizeSubmission, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeSubmission, REGIME_METHOD, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
+
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -393,8 +394,10 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(brief?.body?.windowClosesAt).toBe(publishedBrief.windowClosesAt);
   expect(brief?.body?.windowClosesAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   expect(new Date(brief!.body!.windowClosesAt).toISOString()).toBe(brief!.body!.windowClosesAt);
+  expect((brief?.body?.regime as any)?.method).toBe(REGIME_METHOD.id);
 
   // Two members with DISTINCT stances so a disagreement is synthesized.
+
   const submit = async (stance: string, confidence: number) => {
     const m = await activeMember();
     const sub = {
@@ -431,6 +434,8 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(typeof rs.history[0].composite).toBe("number");
   expect(rs).toHaveProperty("macro_percentile");
   expect(rs).toHaveProperty("onchain_regime");
+  expect(rs.method).toBe(REGIME_METHOD.id);
+
 
   // subject snapshot total flowed onto the session.
   expect(s.subjectSnapshotTotalValueUsd).toBeGreaterThan(0);
@@ -729,10 +734,8 @@ test("GET /api/swarm/sessions default: light-projected + cursor-paginated (no bi
 
 test("GET /api/swarm/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default carries both regimeSummary (issue #357) and synthesis (issue #358)", async () => {
   const subj = rid("fullproj");
-  await ic.ensureSubject(subj, "Full Projection Subject");
+  await ic.ensureSmokeSubjectFixtures(subj, "Full Projection Subject", "2026-07-05");
   const session = await ic.openSession(subj);
-  // The DATABASE dates the session (migration 0022) — read it back rather
-  // than asserting a date this test chose.
   const date = sessionDate(session);
   await ic.publishBrief(session.id, 60);
   const m = await activeMember();
