@@ -82,7 +82,10 @@ function adminReq(path: string): Request {
 }
 const callAdmin = (r: Request) => handleAdmin(r, new URL(r.url), ADMIN_CFG);
 
-async function submitRawHistoryPoint(indicator: string, date: string, value: number): Promise<void> {
+// `provenance` is the acquisition-time data-source label (issue #979,
+// migration 0061). Omitted here means the submitter observed none, which is
+// the pre-0061 shape: the ledger row's provenance stays NULL.
+async function submitRawHistoryPoint(indicator: string, date: string, value: number, provenance?: string): Promise<void> {
   const bytes = new TextEncoder().encode(JSON.stringify({ indicator, date, value }));
   await call(
     req("POST", A.sourceAcquisitions, {
@@ -106,7 +109,10 @@ async function submitRawHistoryPoint(indicator: string, date: string, value: num
             errorDetail: null,
           },
         ],
-        values: [{ sourceKey: `raw_indicator_history:${indicator}`, marketDate: date, marketInstant: null, value }],
+        values: [{
+          sourceKey: `raw_indicator_history:${indicator}`, marketDate: date, marketInstant: null, value,
+          ...(provenance === undefined ? {} : { provenance }),
+        }],
       },
     }),
   );
@@ -283,10 +289,13 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     const signalKey = "channel-divergence";
     const date = "2024-05-01";
 
-    await submitRawHistoryPoint(indicator, date, 3.25);
+    // The SAME real, non-default provenance label on both writes: into the
+    // ledger at acquisition time (source_value_versions.provenance) and onto
+    // the legacy current row (raw_indicator_history.source). Both sides of the
+    // `source` comparison below are therefore genuinely populated, and with a
+    // value neither writer would produce by default.
+    await submitRawHistoryPoint(indicator, date, 3.25, RAW_SOURCE);
     await submitRegimeAndResearch(date, 55, signalKey, "cutover-dto-check");
-    // Real provenance on the legacy row, so the one documented DTO divergence
-    // below (`source`) is a genuine difference rather than null on both sides.
     await sql`UPDATE raw_indicator_history SET source = ${RAW_SOURCE} WHERE indicator = ${indicator}`;
 
     const subjectId = `cutover-subject-${crypto.randomUUID()}`;
@@ -346,21 +355,22 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     expect(ledgerSignal).toEqual(compatSignal);
     expect(ledgerSignalSeries).toEqual(compatSignalSeries);
     expect(ledgerBrief).toEqual(compatBrief);
-    // raw-history is the ONE consumer whose DTO is not identical field for
-    // field: `source` is dual-write provenance metadata with no ledger
-    // equivalent, and the ledger branch returns null rather than fabricating
-    // it (api/routes/admin.ts). Pin that down instead of merely excluding the
-    // field — the DTO SHAPE must match, the ledger-derived fields must match
-    // exactly, and `source` must be the only difference, with a real non-null
-    // legacy value on one side so the divergence is genuine and not an
-    // artifact of both being null.
-    expect(ledgerRawSeries.points.map((p) => Object.keys(p).sort()))
-      .toEqual(compatRawSeries.points.map((p) => Object.keys(p).sort()));
-    expect(ledgerRawSeries.points.map((p) => ({ date: p.date, value: p.value }))).toEqual(
-      compatRawSeries.points.map((p) => ({ date: p.date, value: p.value })),
-    );
+    // raw-history's `source` now has a real ledger equivalent:
+    // source_value_versions.provenance (migration 0061), written at
+    // acquisition time and read back by cutover/ledger-current.ts. For a row
+    // written from 0061 onward the two DTOs agree field for field — asserted
+    // here with a whole-object toEqual, not a field-excluded comparison.
+    //
+    // NON-VACUITY FOR THIS FIELD SPECIFICALLY. `toEqual` would be satisfied by
+    // null on both sides, which is exactly the bug this closes. So require the
+    // shared value to be the real, non-null, non-default label the fixture
+    // wrote, on BOTH sides, before trusting the equality above it.
+    expect(ledgerRawSeries).toEqual(compatRawSeries);
     expect(compatRawSeries.points.every((p) => p.source === RAW_SOURCE), "the legacy fixture must carry real provenance").toBe(true);
-    expect(ledgerRawSeries.points.every((p) => p.source === null), "ledger mode must return null, never a fabricated source").toBe(true);
+    expect(
+      ledgerRawSeries.points.every((p) => p.source === RAW_SOURCE),
+      "ledger mode must carry the SAME real provenance, not null and not a fabricated default",
+    ).toBe(true);
 
     // ── AC4: rollback to compatibility, non-destructively ────────────────────
     //
@@ -393,6 +403,50 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // rollback — moved a single byte in any ledger table.
     const ledgerTablesAfter = await snapshotLedgerTables();
     expect(ledgerTablesAfter).toEqual(ledgerTablesBefore);
+  });
+
+  // The documented LIMIT of the parity above, asserted rather than asserted
+  // away. AC3's `source` agreement holds for rows written from migration 0061
+  // onward. Rows written before it — migration 0057's legacy baselines, and
+  // any acquisition submitted without a provenance label — carry NULL, and
+  // they must stay NULL: the append-only trigger refuses the UPDATE that would
+  // backfill them, which is the correct outcome, not a defect to route around.
+  test("a row written without provenance stays NULL in both modes, and the append-only ledger refuses to backfill it", async () => {
+    prodAuth();
+    const indicator = "PROVENANCE_PRE_0061";
+    const date = "2024-08-01";
+    await submitRawHistoryPoint(indicator, date, 7.5); // no provenance: the pre-0061 shape
+
+    const [row] = (await sql`
+      SELECT id, provenance FROM source_value_versions
+      WHERE source_key = ${`raw_indicator_history:${indicator}`}`) as unknown as { id: string; provenance: string | null }[];
+    expect(row, "the unlabelled acquisition really reached the ledger").toBeDefined();
+    expect(row!.provenance, "no label observed means NULL, never a fabricated default").toBeNull();
+
+    // Migration 0057's own backfill is the other NULL population: it read
+    // raw_indicator_history but had no column to carry `source` into.
+    const [{ n: labelledBaselines }] = (await sql`
+      SELECT count(*)::int AS n FROM source_value_versions
+      WHERE revision_kind = 'legacy_baseline' AND provenance IS NOT NULL`) as unknown as { n: number }[];
+    expect(labelledBaselines, "0057's legacy baselines carry no provenance and cannot acquire one").toBe(0);
+
+    // The append-only guarantee is why the two populations above are permanent.
+    // Refused BY THE LEDGER TRIGGER, asserted on both the message and 0A000
+    // (feature_not_supported) — not merely "some error", which a typo in the
+    // statement would also satisfy.
+    let raised: { message: string; code: string | null } | null = null;
+    try {
+      await sql.unsafe(`UPDATE source_value_versions SET provenance = 'backfilled' WHERE id = ${Number(row!.id)}`);
+    } catch (e) {
+      const err = e as { message?: string; code?: string };
+      raised = { message: err?.message ?? String(e), code: err?.code ?? null };
+    }
+    expect(raised, "backfilling provenance must raise").not.toBeNull();
+    expect(raised!.message).toMatch(/^source ledger is immutable: UPDATE is not permitted on source_value_versions/);
+    expect(raised!.code).toBe("0A000");
+    const [after] = (await sql`
+      SELECT provenance FROM source_value_versions WHERE id = ${row!.id}`) as unknown as { provenance: string | null }[];
+    expect(after!.provenance, "the refused backfill changed nothing").toBeNull();
   });
 });
 
@@ -475,7 +529,7 @@ describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and
   // migrations is to stop short of them in a database of this test's own —
   // same harness shape as tests/source-ledger-migration.test.ts, which proves
   // 0057's backfill against a real, populated legacy table for the same reason.
-  test("legacy row counts and PK checksums are identical before and after migrations 0057-0060 are applied for real", async () => {
+  test("legacy row counts and PK checksums are identical before and after migrations 0057-0061 are applied for real", async () => {
     const port = await freePort();
     const container = `rmtest_ac9_migration_${crypto.randomUUID().slice(0, 8)}`;
     const up = Bun.spawnSync([
@@ -504,7 +558,8 @@ describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and
       };
 
       const PHASE_A = ["0057_source_acquisition_ledger.sql", "0058_analytics_run_ledger.sql",
-        "0059_analytics_output_and_report_snapshots.sql", "0060_analytics_ledger_cutover.sql"];
+        "0059_analytics_output_and_report_snapshots.sql", "0060_analytics_ledger_cutover.sql",
+        "0061_source_value_provenance.sql"];
       for (const file of files.filter((f) => f < PHASE_A[0]!)) await apply(file);
 
       // Real legacy content, so the snapshot below is of something.

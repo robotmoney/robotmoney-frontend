@@ -133,11 +133,11 @@ export async function saveSourceAcquisition(
         await tx`
           INSERT INTO source_value_versions
             (acquisition_id, source_key, market_date, market_instant, value,
-             prior_version_id, revision_kind)
+             prior_version_id, revision_kind, provenance)
           VALUES
             (${evidence.id}::uuid, ${value.sourceKey}, ${value.marketDate ?? null}::date,
              ${value.marketInstant ?? null}::timestamptz, ${value.value}, ${prior?.id ?? null},
-             ${revisionKind})`;
+             ${revisionKind}, ${value.provenance ?? null})`;
       }
     } else if (evidence.values.length > 0) {
       // Common case (a full historical fetch can carry thousands of distinct
@@ -211,6 +211,7 @@ export async function saveSourceAcquisition(
           value: value.value,
           prior_version_id: prior?.id ?? null,
           revision_kind: revisionKind,
+          provenance: value.provenance ?? null,
         };
       });
       // postgres.js binds one parameter per cell in the array insert. Keep
@@ -219,7 +220,7 @@ export async function saveSourceAcquisition(
       const VALUE_INSERT_BATCH_SIZE = 5_000;
       for (let start = 0; start < rows.length; start += VALUE_INSERT_BATCH_SIZE) {
         await tx`
-          INSERT INTO source_value_versions ${tx(rows.slice(start, start + VALUE_INSERT_BATCH_SIZE), "acquisition_id", "source_key", "market_date", "market_instant", "value", "prior_version_id", "revision_kind")}`;
+          INSERT INTO source_value_versions ${tx(rows.slice(start, start + VALUE_INSERT_BATCH_SIZE), "acquisition_id", "source_key", "market_date", "market_instant", "value", "prior_version_id", "revision_kind", "provenance")}`;
       }
     }
 

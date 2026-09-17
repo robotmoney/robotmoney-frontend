@@ -619,15 +619,18 @@ export async function handleAdmin(
     const limit = clampLimit(url.searchParams.get("limit"), 500, 5000);
     // Issue #979: ledger mode derives these points PURELY from
     // source_value_versions (never from raw_indicator_history) — see
-    // cutover/ledger-current.ts. `source` has no ledger equivalent (it is
-    // dual-write provenance metadata, not a frozen value) and is omitted
-    // rather than fabricated when this branch answers.
+    // cutover/ledger-current.ts. `source` comes from the ledger's own
+    // `provenance` column (migration 0061), so this DTO matches the
+    // compatibility one field for field for every row written from 0061
+    // onward. It is null — never fabricated — for rows the append-only ledger
+    // cannot label retroactively: 0057's legacy baselines and anything written
+    // before 0061.
     if ((await getAnalyticsReadMode()) === "ledger") {
       const all = await ledgerCurrentRawIndicatorSeries(indicator);
       const points = all
         .filter((p) => (from ? p.date >= from : true) && (to ? p.date <= to : true))
         .slice(0, limit)
-        .map((p) => ({ date: p.date, value: p.value, source: null as string | null }));
+        .map((p) => ({ date: p.date, value: p.value, source: p.source }));
       return { status: 200, body: { indicator, points } };
     }
     const conds = [sql`indicator = ${indicator}`];

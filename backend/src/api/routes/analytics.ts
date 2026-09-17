@@ -309,7 +309,15 @@ function parseSourceAcquisition(body: unknown): SourceAcquisitionEvidence | Inva
     const hasDate = isIsoDate(v.marketDate);
     const hasInstant = typeof v.marketInstant === "string" && !Number.isNaN(Date.parse(v.marketInstant));
     if (Number(hasDate) + Number(hasInstant) !== 1) return invalid(`values[${i}] must have exactly one market time`);
-    values.push(v as unknown as SourceAcquisitionEvidence["values"][number]);
+    // Issue #979: `provenance` mirrors raw_indicator_history.source into the
+    // ledger (migration 0061). Absent means "no label observed" -> null; it is
+    // never defaulted here, because inventing a label the submitter did not
+    // send is the fabrication the ledger exists to prevent.
+    const provenance = v.provenance ?? null;
+    if (provenance !== null && (typeof provenance !== "string" || !provenance || provenance.length > 64)) {
+      return invalid(`values[${i}].provenance is invalid`);
+    }
+    values.push({ ...(v as unknown as SourceAcquisitionEvidence["values"][number]), provenance });
   }
   return { id: a.id, provider: a.provider, parserVersion: a.parserVersion, cacheIdentity: a.cacheIdentity,
     requestedByRunId: a.requestedByRunId as number | null, events, fetches, values };

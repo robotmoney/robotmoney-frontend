@@ -22,6 +22,12 @@ export interface SourceValueEvidence {
   marketDate: string | null;
   marketInstant: string | null;
   value: number;
+  // Issue #979: the ledger's own copy of `raw_indicator_history.source` —
+  // the data-source label observed at acquisition time. Persisted to
+  // source_value_versions.provenance (migration 0061) so ledger-mode reads
+  // return the same `source` the compatibility read returns instead of null.
+  // Null only where no label was observed; never fabricated after the fact.
+  provenance: string | null;
 }
 
 export interface SourceAcquisitionEvidence {
@@ -105,6 +111,12 @@ export async function captureSourceAcquisition<T = Point[]>(
     requestedByRunId?: number | null;
     marketTime?: "date" | "instant";
     points?: (result: T) => Point[];
+    // Issue #979: the data-source label this acquisition's values carry into
+    // the ledger. Defaults to 'live' — the same default
+    // store/raw-history-store.ts writes into raw_indicator_history.source for
+    // every point the production fetch path persists — so the two stay in
+    // step without every call site restating it.
+    provenance?: string | null;
   },
   sink: AcquisitionSink,
   operation: () => Promise<T>,
@@ -128,11 +140,13 @@ export async function captureSourceAcquisition<T = Point[]>(
     throw error;
   }
   const points = input.points ? input.points(result) : result as Point[];
+  const provenance = input.provenance === undefined ? "live" : input.provenance;
   evidence.values = points.map((point) => ({
     sourceKey: input.sourceKey,
     marketDate: input.marketTime === "instant" ? null : point.date,
     marketInstant: input.marketTime === "instant" ? new Date(point.date).toISOString() : null,
     value: point.value,
+    provenance,
   }));
   evidence.events.push({ type: "succeeded", detail: null });
   await sink.saveSourceAcquisition(evidence);
