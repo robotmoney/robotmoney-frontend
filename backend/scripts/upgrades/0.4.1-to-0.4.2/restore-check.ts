@@ -21,6 +21,12 @@ async function run(): Promise<number> {
     const db = postgres({ host: restored.host, port: restored.port, username: restored.username, password: restored.password, database: restored.database, max: 1 });
     try {
       const checker = createChecker("[restore-check-0.4.2] ");
+      // Gate C grades the DUMP, not the live target's role cutover: the twin
+      // restores only rm_readonly/rm_worker from the globals dump
+      // (restore-container.ts RESTORE_ROLES) and would migrate as a container
+      // superuser anyway, so runChecks() deliberately runs WITHOUT the
+      // role-readiness record — that gate belongs to the live preflight
+      // (P4.preflight-live), see preflight.ts.
       await runChecks(db, checker);
       return printVerdict(checker.results, { logPrefix: "[restore-check-0.4.2] ", okAll: "DUMP SAFE FOR 0.4.2", okWithWarnings: "DUMP SAFE FOR 0.4.2", blocked: "DUMP BLOCKED" });
     } finally { await db.end({ timeout: 5 }); }

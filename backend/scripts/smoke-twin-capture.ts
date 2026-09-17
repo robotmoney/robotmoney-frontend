@@ -37,9 +37,17 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 // backend/scripts/ -> <repo root>
 const repoRoot = join(scriptDir, "..", "..");
 
-/** The default backup directory — the SAME default resolveBackupFiles() uses, so
- *  capture and restore agree by construction rather than by runbook prose. */
-const DEFAULT_OUT = join(process.env.HOME ?? "/root", "rm-backup-v022");
+/**
+ * The default output directory, in the same precedence as every other backup
+ * consumer: the release's `RM_BACKUP_DIR` when exported (restore-check.ts,
+ * stage-rehearsal.ts and restore-container.ts's resolveBackupFiles() all read
+ * it), else v0.2.2's literal directory. Before this, capture silently ignored
+ * RM_BACKUP_DIR and wrote to ~/rm-backup-v022 while restore-check read
+ * $RM_BACKUP_DIR — the runbook's documented sequence could not pass.
+ */
+export function defaultOutDir(): string {
+  return process.env.RM_BACKUP_DIR?.trim() || join(process.env.HOME ?? "/root", "rm-backup-v022");
+}
 
 interface Args {
   out: string;
@@ -62,7 +70,7 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     if (a.startsWith("--") && !known.has(a)) return { error: `unknown flag "${a}".` };
   }
   return {
-    out: resolve(val("--out") ?? DEFAULT_OUT),
+    out: resolve(val("--out") ?? defaultOutDir()),
     envFile: resolve(val("--env-file") ?? join(repoRoot, ".env.readonly")),
     allowPrimary: argv.includes("--allow-primary"),
   };
@@ -81,7 +89,7 @@ export function assertOutsideRepo(out: string, root: string): void {
     throw new Error(
       `--out ${out} is inside the checkout (${root}). This directory holds a complete copy of ` +
         `production AND the passphrase that decrypts it; it must live outside any git working tree. ` +
-        `Use ${DEFAULT_OUT} or another path outside the repo.`,
+        `Export RM_BACKUP_DIR or pass --out with a path outside the repo.`,
     );
   }
 }
@@ -317,7 +325,7 @@ async function main(argv: string[]): Promise<number> {
   writeFileSync(join(out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
 
   log(`captured ${stamp}: dump ${manifest.bytes.dump} bytes, globals ${manifest.bytes.globals} bytes`);
-  log(`restore it with:  bun smoke -- --db smoke-twin${out === DEFAULT_OUT ? "" : ` --backup-dir ${out}`}`);
+  log(`restore it with:  bun smoke -- --db smoke-twin${out === defaultOutDir() ? "" : ` --backup-dir ${out}`}`);
   return 0;
 }
 

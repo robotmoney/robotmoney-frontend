@@ -34,8 +34,14 @@ invariants:
 
 The release-specific tools are in `backend/scripts/upgrades/0.4.1-to-0.4.2/`.
 Migrations run the normal way: at backend boot, via
-`backend/src/db/migrate.ts`. There is no separate manual migration-runner
-invocation.
+`backend/src/db/migrate.ts`. The migration session's credential is
+`MIGRATE_DATABASE_URL` when that variable is set, and `DATABASE_URL`
+otherwise (`backend/src/db/migrate.ts:34`). Migrations `0054` and later run
+`SET LOCAL ROLE rm_owner` inside that session (`migrate.ts:58`), so whoever
+applies them must hold `rm_owner` membership — §4.1's credential cutover is
+what provisions that. There is no migration-runner invocation beyond running
+the migration command (or the boot) with `MIGRATE_DATABASE_URL` set for that
+run only.
 
 ## 2. Code delta: systems upgraded and risks
 
@@ -51,7 +57,7 @@ The release contains the following changes relative to `v0.4.1`:
 | `backend/migrations/0050_swarm_member_keys_append_only.sql` | Swarm key history | `swarm_member_keys` joins the append-only protected set (0032): DELETE and TRUNCATE are refused, while UPDATE stays legal — rotations keep retiring a key as `active = false` | A legitimate removal being refused would be a very narrow operational surprise, and the register-member hard-DELETE that previously destroyed key rows is removed in the same commit | Postflight confirms the migration is recorded |
 | `backend/migrations/0051_swarm_vault_recommendation_type_repair.sql` | Swarm subjects | One-time idempotent `UPDATE` restoring `recommendation_type = 'bucket_weights'` on `robotmoney-vault`/`robotmoney-allocation` after a smoke-fixture upsert clobbered it to `position_actions`; a subject legitimately running `position_actions` is left alone | None beyond the two named framework subjects; the WHERE clause targets exactly the clobbered value | Idempotent — reruns match zero rows once both subjects read `bucket_weights` |
 | `backend/migrations/0052_swarm_judgement_digest_scheme.sql`, `backend/src/swarm/judge.ts`, `backend/src/swarm/judge-replay.ts` | Swarm judging | Adds `swarm_session_judgements.digest_scheme text NOT NULL DEFAULT 'derivation-v1'`, recording which canonical form produced each stored `inputs_digest` so `swarm-judge-replay` can tell expected history from a real mismatch | Every existing row is re-stamped under the current scheme, so nothing needs a backfill | Postflight confirms the migration is recorded |
-| `backend/migrations/0053_database_role_taxonomy.sql` | Database roles | Creates `rm_owner` (NOLOGIN), `rm_app`, `rm_worker`, `rm_readonly` and re-owns every existing `public` relation/function under `rm_owner`; DDL now runs as `SET ROLE rm_owner` | The ownership sweep re-stamps every object in `public`; fully transactional and idempotent on rerun | Postflight confirms the migration is recorded; runtime roles authenticate unchanged |
+| `backend/migrations/0053_database_role_taxonomy.sql` | Database roles | Creates `rm_owner` (NOLOGIN), `rm_app`, `rm_worker`, `rm_readonly` and re-owns every existing `public` relation/function under `rm_owner`; DDL now runs as `SET ROLE rm_owner` | The ownership sweep re-stamps every object in `public`; fully transactional and idempotent on rerun | Postflight confirms the migration is recorded. Runtime roles do **not** authenticate unchanged: this release is the cutover that points `DATABASE_URL` at `rm_app`, `WORKER_DATABASE_URL` at `rm_worker`, and the migration run at a bootstrap login holding `rm_owner` membership (§4.1; `docs/runbooks/deployment.md` §4.3/§4.3.1; `scripts/ops/provision-db-role-taxonomy.sh`). `backend/src/config.ts:710` refuses a doadmin `DATABASE_URL` at production boot, and `backend/src/db/worker-client.ts:20` hard-requires `WORKER_DATABASE_URL` in production |
 | `backend/migrations/0054_rm_worker_allowlist.sql` | Worker permissions | Replaces 0016's broad default worker grant with an explicit allow-list: `rm_worker` keeps SELECT everywhere but INSERT/UPDATE/DELETE only on the tables queue/sampler handlers actually write | A worker lane touching a table missing from the allow-list fails its writes at boot instead of silently depending on a blanket grant | Postflight confirms the migration is recorded |
 | `backend/migrations/0055_swarm_recommendations_member_received_idx.sql` | Swarm takes | Adds `swarm_recommendations (member_id, received_at DESC)` so `getMembers()`'s per-member `max(received_at)` lateral is an index-only walk instead of a scan | A redundant index if the read path never runs; otherwise negligible | Postflight confirms the migration is recorded |
 | `backend/migrations/0056_analytics_overwrite_events.sql`, `backend/src/analytics/**` | Analytics research integrity | New `analytics_overwrite_events` table and `rm_capture_analytics_overwrite()` SECURITY DEFINER function; an owner-installed trigger records immutable evidence whenever a current-view analytics table is updated or deleted | An evidence-append failure surfacing on every current-view write would trip the analytics pipeline loudly | Postflight confirms the table exists |
@@ -102,8 +108,46 @@ route definitions without an import error.
 
 ## 4. Baseline, backup, and live preflight
 
-Export a unique backup directory and follow `rollout-procedure.md` for the
-replica identity assertion, encrypted capture, and restore proof:
+**4.1 — Role/credential cutover (run this FIRST; it gates everything below).**
+This release is the first one that cannot boot on the old credentials:
+
+- `backend/src/config.ts:710-712` **refuses** a `doadmin` `DATABASE_URL` in
+  production — the API process dies at boot if the host still uses one;
+- `backend/src/db/worker-client.ts:20-22` **hard-requires**
+  `WORKER_DATABASE_URL` in production — the worker process dies at boot
+  without it;
+- migrations `0054` and later run `SET LOCAL ROLE rm_owner`
+  (`backend/src/db/migrate.ts:58`), which only a session holding `rm_owner`
+  **membership** can execute — the runtime `rm_app` role empirically cannot
+  (permission denied).
+
+The taxonomy cutover is human-run by design
+(`docs/runbooks/deployment.md` §4.3/§4.3.1): it writes to the **primary**, so
+it is an operator action, never an agent's. Provision the four roles and
+their passwords against the primary with the password-free bootstrap URL
+(`rm_owner` is NOLOGIN and gets none; the script prompts for the other
+three):
+
+```bash
+scripts/ops/provision-db-role-taxonomy.sh 'postgres://<bootstrap-login>@<primary-host>:25060/defaultdb?sslmode=require'
+```
+
+Then, on the cutover host:
+
+- `DATABASE_URL` → the **`rm_app`** login (deployment.md §4.3);
+- `WORKER_DATABASE_URL` → the **`rm_worker`** login (deployment.md §4.3);
+- the migration run gets **`MIGRATE_DATABASE_URL`** → a bootstrap login that
+  is a **member of `rm_owner`** (`backend/src/db/migrate.ts:34` reads it for
+  the migration run; `0053` grants `rm_owner` to the role that applies it).
+  Set it for the migration command only — never on the long-lived processes.
+
+Run this pre-step **before** `smoke:capture` in §4.2: the globals dump then
+carries the taxonomy, and the `role-readiness` preflight record (§4.4)
+against the live target can pass.
+
+**4.2 — Backup, restore proof, and baseline.** Export a unique backup
+directory and follow `rollout-procedure.md` for the replica identity
+assertion, encrypted capture, and restore proof:
 
 ```bash
 export RM_BACKUP_DIR=/path/outside/checkout/rm-backup-v042-$(date -u +%Y%m%dT%H%M%SZ)
@@ -111,7 +155,16 @@ bun run smoke:capture
 bun backend/scripts/upgrades/0.4.1-to-0.4.2/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt
 ```
 
-Before deployment, record a read-only baseline beside the dump. At minimum,
+`smoke:capture` writes into `$RM_BACKUP_DIR` (the same variable restore-check
+and the rehearsal read). Gate C restores the dump into a container-superuser
+database and grades the schema; it cannot grade roles or credentials — the
+smoke-twin carries only `rm_readonly`/`rm_worker` out of the globals dump
+(`scripts/lib/restore-container.ts`'s `RESTORE_ROLES`), and the twin would
+migrate as superuser regardless. Role/credential readiness is gated by the
+`role-readiness` preflight record against the **live** target (§4.4), never
+by the twin.
+
+**4.3 — Baseline.** Before deployment, record a read-only baseline beside the dump. At minimum,
 capture the full `schema_migrations` set, counts for `swarm_sessions`,
 `swarm_session_judgements`, `swarm_consensus_receipts`, and (pre-migration)
 `wallet_balance_samples`/`wallet_sleeve_samples` `live`/`seed` rows, the
@@ -120,12 +173,22 @@ totals from `/allocation`. The baseline is what the D41 read-path switch and
 the `asset_prices` seed get compared against after cutover; it is not
 reconstructed after the fact.
 
-Run the live check against `.env.readonly` and confirm its redacted target is
+**4.4 — Live preflight (role/credential gate).** Run the live check against `.env.readonly` and confirm its redacted target is
 the production replica:
 
 ```bash
 bun backend/scripts/upgrades/0.4.1-to-0.4.2/preflight.ts --emit-receipt
 ```
+
+The `role-readiness` record is this release's credential gate. With read-only
+catalog queries only — `pg_roles`, `pg_auth_members`,
+`has_table_privilege`; no `SET ROLE`, no writes — it verifies that the §4.1
+cutover has landed on the live target: the four taxonomy roles exist with
+0053's attributes, a LOGIN role holds `rm_owner` membership (so
+`migrate.ts`'s `SET LOCAL ROLE rm_owner` can run for `0054`+), neither
+runtime role holds it, and `rm_worker` carries the grants 0054 expects.
+Where a fact cannot be verified read-only the record FAILs with the exact
+manual confirmation — it never passes silently.
 
 The preflight is blocking if any of these occur:
 
@@ -137,7 +200,21 @@ The preflight is blocking if any of these occur:
 - one of the tables v0.4.2 creates already exists;
 - the database contains a migration absent from the checkout;
 - a required v0.4.0 judge/receipt table is absent;
-- the target is not proven read-only.
+- the target is not proven read-only;
+- the `role-readiness` record fails: a taxonomy role is absent or
+  mis-attributed (e.g. `rm_owner` LOGIN, a runtime role NOLOGIN or
+  SUPERUSER), no LOGIN role holds `rm_owner` membership, `rm_app` or
+  `rm_worker` holds it, or `rm_worker` lacks an allow-list grant — complete
+  §4.1 (`scripts/ops/provision-db-role-taxonomy.sh`; `deployment.md`
+  §4.3/§4.3.1) and re-run;
+- the deployed credential arrangement cannot be confirmed: on the cutover
+  host, `DATABASE_URL` must name `rm_app` (never `doadmin` — `config.ts`
+  refuses it at boot), `WORKER_DATABASE_URL` must name `rm_worker`
+  (`worker-client.ts` hard-requires it in prod), and the migration run must
+  set `MIGRATE_DATABASE_URL` to a login holding `rm_owner` membership
+  (`migrate.ts:34`). The preflight cannot read the deployed env; the
+  operator confirms these before §6 and records the confirmation in the
+  stage report.
 
 `0045`-`0059` pending is the expected, safe state to deploy from. Any other
 migration drift has no safe interpretation here: stop and resolve the target
@@ -150,13 +227,23 @@ Use the same RC, forced installs, backup, and deployment environment intended
 for production. The release-specific rehearsal restores the backup into a
 local smoke-twin, boots the real stack (which applies `0045`-`0059` via
 `migrate.ts` on the way up), runs the frontend checks, and runs the
-0.4.2 postflight before teardown:
+0.4.2 postflight — and the §5 criterion 9 allocation comparison — before
+teardown:
 
 ```bash
 bun install --force
 bun install --force --cwd backend
 bun backend/scripts/upgrades/0.4.1-to-0.4.2/stage-rehearsal.ts "$RM_BACKUP_DIR" --emit-receipt
 ```
+
+The smoke-twin is a container-superuser database (`rollout-procedure.md`
+G7/T1): its restore carries only `rm_readonly` and `rm_worker` out of the
+globals dump, and its boot applies the migrations with privileges no
+production runtime role has. The rehearsal therefore validates the migration
+SQL and the application's behavior — **not** the role/credential cutover.
+Role and credential readiness is gated by the `role-readiness` preflight
+record against the **live** target (§4.4); a green rehearsal is never
+evidence for it.
 
 The rehearsal is a pass only when all of the following are true:
 
@@ -176,10 +263,16 @@ The rehearsal is a pass only when all of the following are true:
 7. Zero `swarm_sessions` rows still show a `subject_name` that disagrees with
    their subject's current name.
 8. `swarm_judge_config.third_party_enabled` is `false`.
-9. A closed-day allocation total pulled from the rehearsed stack matches the
-   pre-migration baseline value for the same day within rounding — this is
-   the one check that catches a bad `asset_prices` seed or a broken join,
-   neither of which any FAIL/PASS check above can see on its own.
+9. The closed-day allocation total computed from the rehearsed stack's new
+   `asset_prices` join matches, within rounding, the same day computed from
+   the pre-migration fused read. `stage-rehearsal.ts` now computes BOTH
+   sides inside the migrated twin (0046 leaves the fused `price_usd` /
+   `value_usd` columns in place) for the most recent closed day
+   `asset_prices` covers, allowing one cent per symbol, and fails the
+   rehearsal on any divergence — this is the one check that catches a bad
+   `asset_prices` seed or a broken join, which no structural FAIL/PASS
+   check can see. The §4.3 baseline totals remain a separate operator
+   cross-check against the live cutover (§7).
 
 Rehearse rollback by checking out `v0.4.1`, running both forced installs, and
 booting it against a **fresh** restored copy (the pre-migration dump, not the
@@ -200,8 +293,11 @@ authority. Do not manually edit `schema_migrations` at any point.
    backup.
 2. Reconfirm the live preflight receipt is current and passed.
 3. Deploy in provider order: the v0.4.2 backend/API first (its boot applies
-   `0045`-`0059` via `migrate.ts` before it starts serving), then every worker
-   lane, then static frontend last. Do not publish the new SPA before its API.
+   `0045`-`0059` via `migrate.ts` before it starts serving — run it with
+   `MIGRATE_DATABASE_URL` set to the §4.1 bootstrap login for that run
+   only), then every worker lane (with `WORKER_DATABASE_URL` = `rm_worker`
+   set, per §4.1), then static frontend last. Do not publish the new SPA
+   before its API.
 4. Run `bun install --force` at the repository root and
    `bun install --force --cwd backend` in the deployment checkout.
 5. Start the backend and workers; wait for `/health` and the normal readiness
@@ -247,7 +343,13 @@ Any failure is a stop condition. Preserve logs, receipts, and the baseline.
 For a contract-freshness or static-assembly failure caught before the API
 started serving migrated data, stop publishing and roll back the application
 checkout to `v0.4.1`, then run both forced installs before restarting — the
-migration already applied is additive and does not block a v0.4.1 boot. For
+migration already applied is additive and does not block a v0.4.1 boot.
+Restart with the SAME v0.4.2 credentials (`DATABASE_URL` = `rm_app`,
+`WORKER_DATABASE_URL` = `rm_worker`): 0053 moved `public` objects under
+`rm_owner` but left both runtime roles their full data-plane grants (0053
+grants `rm_app` SELECT/INSERT/UPDATE/DELETE everywhere; 0054's allow-list
+covers the v0.4.1 worker's writes), so a v0.4.1 process boots against the
+migrated schema. Do not fall back to pre-cutover credentials. For
 an unexpected database or runtime invariant failure (a wrong `asset_prices`
 seed, a bad join, a drifted `subject_name`, or anything else postflight
 catches), the default remediation is the rehearsed encrypted backup restore,
