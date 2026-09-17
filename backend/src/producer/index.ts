@@ -165,6 +165,14 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
 // GET /api/admin/gaps for an operator to close deliberately.
 const INDICATOR_CATCHUP_WINDOW_DAYS = 14;
 
+/** Issue #979: the one data-source label this catch-up stamps on BOTH models —
+ *  source_value_versions.provenance at acquisition time and
+ *  raw_indicator_history.source at write time. It is 'seed' because the write
+ *  side is the gap-fill floor writer (store/floor-seed.ts), which tags every
+ *  row it writes 'seed'. Exported so a test can pin the two to each other
+ *  rather than restating the literal. */
+export const CATCH_UP_PROVENANCE = "seed";
+
 export interface IndicatorCatchUpDeps {
   persistence?: AnalyticsPersistence;
   source?: AnalyticsDataSource;
@@ -206,7 +214,15 @@ export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}
     const acquisitionSink = persistence.saveSourceAcquisition
       ? { saveSourceAcquisition: persistence.saveSourceAcquisition.bind(persistence) }
       : undefined;
-    fetched = await source.fetchIndicators(INDICATORS, console, acquisitionSink, null);
+    // Issue #979: the points this fetch returns are written back below through
+    // seedRawHistory → applyRawFloorSeed → saveRawIndicatorHistory(..., "seed"),
+    // so the ledger must record the SAME label. Without it the capture path
+    // defaults to 'live' and one gap-filled row answers 'live' in ledger mode
+    // and 'seed' in compatibility mode — the silent field change cutover is
+    // supposed to be impossible. The literal mirrors store/floor-seed.ts's tag;
+    // producer code may not import that API-owned module
+    // (tests/analytics-api-boundary.test.ts).
+    fetched = await source.fetchIndicators(INDICATORS, console, acquisitionSink, null, { provenance: CATCH_UP_PROVENANCE });
   } catch (err) {
     console.error(`[analytics-producer] indicator catch-up: registry fetch failed (will retry next pass): ${err instanceof Error ? err.message : err}`);
     return missing;

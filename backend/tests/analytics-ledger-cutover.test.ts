@@ -16,8 +16,12 @@ import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { handleAdmin, type AdminAuthConfig } from "../src/api/routes/admin.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal } from "../src/api/routes/dashboards.ts";
 import { ensureSubject, openSession, publishBrief, getBriefBySession } from "../src/swarm/domain.ts";
-import { payloadChecksum } from "../src/analytics/source-ledger.ts";
+import { captureSourceAcquisition, payloadChecksum } from "../src/analytics/source-ledger.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
+import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
+import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
+import { catchUpMissedIndicatorDays, CATCH_UP_PROVENANCE } from "../src/producer/index.ts";
+import { checkRawIndicatorHistoryParity } from "../src/analytics/cutover/parity.ts";
 import { evaluateCutoverGate, type CutoverGateConfig } from "../src/analytics/cutover/gate.ts";
 import { runCutoverGateCli } from "../scripts/analytics-ledger-cutover-gate.ts";
 import { getAnalyticsReadMode, setAnalyticsReadMode, CutoverGateNotPassedError } from "../src/analytics/cutover/read-mode.ts";
@@ -405,15 +409,23 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     expect(ledgerTablesAfter).toEqual(ledgerTablesBefore);
   });
 
-  // The documented LIMIT of the parity above, asserted rather than asserted
-  // away. AC3's `source` agreement holds for rows written from migration 0061
-  // onward. Rows written before it — migration 0057's legacy baselines, and
-  // any acquisition submitted without a provenance label — carry NULL, and
-  // they must stay NULL: the append-only trigger refuses the UPDATE that would
-  // backfill them, which is the correct outcome, not a defect to route around.
-  test("a row written without provenance stays NULL in both modes, and the append-only ledger refuses to backfill it", async () => {
+  // The documented LIMIT of the parity above, asserted rather than described.
+  // AC3's `source` agreement holds for rows written from migration 0061
+  // onward. For rows written before it — migration 0057's legacy baselines,
+  // and any acquisition submitted without a provenance label — the ledger
+  // carries NULL while the COMPATIBILITY table still carries the real
+  // 'live'/'seed' label raw_indicator_history.source has held since migration
+  // 0024. So those rows genuinely READ DIFFERENTLY in the two modes, and they
+  // always will: the append-only trigger refuses the UPDATE that would
+  // backfill them. That is the accepted cost of arming the cutover (product
+  // owner, 2026-09-17), not a defect to route around, and this test pins the
+  // divergence itself rather than a comfortable claim that there is none.
+  test("a row written without provenance reads NULL in ledger mode and its real legacy label in compatibility mode, and the append-only ledger refuses to backfill it", async () => {
     prodAuth();
-    const indicator = "PROVENANCE_PRE_0061";
+    // A real registry id: the admin raw-series route only serves allowlisted
+    // indicators, and this test has to read the DTO through that route in both
+    // modes rather than assert on the tables behind it.
+    const indicator = INDICATORS[0]!.id;
     const date = "2024-08-01";
     await submitRawHistoryPoint(indicator, date, 7.5); // no provenance: the pre-0061 shape
 
@@ -423,8 +435,47 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     expect(row, "the unlabelled acquisition really reached the ledger").toBeDefined();
     expect(row!.provenance, "no label observed means NULL, never a fabricated default").toBeNull();
 
+    // ── the divergence, through the SAME admin route in both modes ──────────
+    expect(await getAnalyticsReadMode()).toBe("compatibility");
+    const compatSeries = (await callAdmin(adminReq(`/api/admin/research/raw-series/${indicator}`)))!.body as {
+      points: { date: string; value: number; source: string | null }[];
+    };
+    expect(compatSeries.points.length, "the compatibility fixture must be non-empty").toBeGreaterThan(0);
+    expect(
+      compatSeries.points.every((p) => p.source === "live"),
+      "compatibility mode returns the legacy column's real default label, NOT null",
+    ).toBe(true);
+
+    await seedPassingWindow(new Date());
+    await setAnalyticsReadMode("ledger", "test");
+    const ledgerSeries = (await callAdmin(adminReq(`/api/admin/research/raw-series/${indicator}`)))!.body as {
+      points: { date: string; value: number; source: string | null }[];
+    };
+    expect(ledgerSeries.points.length, "ledger mode must return the same points").toBe(compatSeries.points.length);
+    expect(ledgerSeries.points.every((p) => p.source === null), "ledger mode has no label to return").toBe(true);
+    // Stated as the inequality it is: everything but `source` agrees, and
+    // `source` does not. An equality here would be the false claim the
+    // amendment used to make.
+    expect(ledgerSeries).not.toEqual(compatSeries);
+    expect(ledgerSeries.points.map((p) => ({ date: p.date, value: p.value })))
+      .toEqual(compatSeries.points.map((p) => ({ date: p.date, value: p.value })));
+    await setAnalyticsReadMode("compatibility", "test");
+
     // Migration 0057's own backfill is the other NULL population: it read
-    // raw_indicator_history but had no column to carry `source` into.
+    // raw_indicator_history but had no column to carry `source` into. The
+    // template database is migrated against an EMPTY raw_indicator_history
+    // (see the AC7 test below), so counting over it as-is would be 0 out of 0
+    // — vacuous. Seed a probe the way that AC7 test does, re-running 0057's
+    // backfill statement verbatim, so this counts a real population.
+    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-02', 'PROVENANCE_BASELINE_PROBE', 2, 'seed')`;
+    await sql.unsafe(`
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
+      SELECT 'raw_indicator_history:' || indicator, date, value, 'legacy_baseline', statement_timestamp()
+      FROM raw_indicator_history WHERE indicator = 'PROVENANCE_BASELINE_PROBE'
+      ON CONFLICT DO NOTHING`);
+    const [{ n: baselines }] = (await sql`
+      SELECT count(*)::int AS n FROM source_value_versions WHERE revision_kind = 'legacy_baseline'`) as unknown as { n: number }[];
+    expect(baselines, "the count below must run over a real population, not an empty one").toBeGreaterThan(0);
     const [{ n: labelledBaselines }] = (await sql`
       SELECT count(*)::int AS n FROM source_value_versions
       WHERE revision_kind = 'legacy_baseline' AND provenance IS NOT NULL`) as unknown as { n: number }[];
@@ -447,6 +498,89 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     const [after] = (await sql`
       SELECT provenance FROM source_value_versions WHERE id = ${row!.id}`) as unknown as { provenance: string | null }[];
     expect(after!.provenance, "the refused backfill changed nothing").toBeNull();
+  });
+
+  // Issue #979 AC3: the producer's gap catch-up writes the SAME points into
+  // both models in one pass — the ledger through captureSourceAcquisition, the
+  // compatibility table through seedRawHistory → applyRawFloorSeed →
+  // saveRawIndicatorHistory(..., "seed"). Before this fix the capture side
+  // took its 'live' default while the floor writer tagged the very same row
+  // 'seed', so ledger mode and compatibility mode answered DIFFERENTLY for a
+  // row written after 0061 — new data, not accepted history.
+  test("a producer catch-up row carries ONE label into both models, so both modes return the same `source` for it", async () => {
+    prodAuth();
+    const indicator = INDICATORS[0]!.id;
+    const date = "2024-09-01";
+
+    // The catch-up's real collaborators: the real persistence (so seedRawHistory
+    // really runs applyRawFloorSeed and the acquisition really reaches the
+    // ledger) and a source that captures through the real
+    // captureSourceAcquisition, forwarding `opts.provenance` exactly as
+    // extract/sources.ts's fetchAll does. What is under test is the LABEL the
+    // producer chooses and carries, not the registry fetch itself.
+    const source: AnalyticsDataSource = {
+      fetchIndicators: (_indicators, _logger, acquisitionSink, requestedByRunId, opts) =>
+        captureSourceAcquisition<Record<string, { date: string; value: number }[]>>(
+          {
+            provider: "fixture",
+            sourceKey: `raw_indicator_history:${indicator}`,
+            parserVersion: "fixture:1",
+            cacheIdentity: "catchup",
+            requestedByRunId: requestedByRunId ?? null,
+            provenance: opts?.provenance,
+            points: (r) => r[indicator]!,
+          },
+          acquisitionSink!,
+          async () => ({ [indicator]: [{ date, value: 6.5 }] }),
+        ),
+      fetchResearchInputs: () => { throw new Error("catch-up must never fetch research inputs"); },
+      fetchBacktestExtras: () => { throw new Error("catch-up must never fetch backtest extras"); },
+    };
+
+    const filled = await catchUpMissedIndicatorDays({
+      // Only the gap LIST is stubbed — it is this catch-up's input, not its
+      // behaviour. Every write below goes through the real store path.
+      persistence: { ...directAnalyticsPersistence, loadRawHistoryGapDates: async () => [date] },
+      source,
+      now: () => new Date("2024-09-05T00:00:00Z"),
+      beat: async () => {},
+    });
+    expect(filled, "the catch-up must have run for the missing day").toEqual([date]);
+
+    // Both sides really wrote, and they wrote the SAME label — the producer's
+    // one constant, not two literals that happen to match today.
+    const [legacyRow] = (await sql`
+      SELECT source FROM raw_indicator_history WHERE indicator = ${indicator} AND date = ${date}`) as unknown as { source: string | null }[];
+    expect(legacyRow, "the catch-up must have filled the compatibility table").toBeDefined();
+    expect(legacyRow!.source).toBe(CATCH_UP_PROVENANCE);
+    const [ledgerRow] = (await sql`
+      SELECT provenance FROM source_value_versions WHERE source_key = ${`raw_indicator_history:${indicator}`}`) as unknown as { provenance: string | null }[];
+    expect(ledgerRow, "the catch-up must have reached the ledger").toBeDefined();
+    expect(ledgerRow!.provenance, "the ledger must record the catch-up's label, not the 'live' capture default").toBe(CATCH_UP_PROVENANCE);
+
+    // And the consumer-visible proof: the same admin DTO in both modes.
+    expect(await getAnalyticsReadMode()).toBe("compatibility");
+    const compatSeries = (await callAdmin(adminReq(`/api/admin/research/raw-series/${indicator}`)))!.body as {
+      points: { date: string; value: number; source: string | null }[];
+    };
+    expect(compatSeries.points.length, "the compatibility fixture must be non-empty").toBeGreaterThan(0);
+    await seedPassingWindow(new Date());
+    await setAnalyticsReadMode("ledger", "test");
+    const ledgerSeries = (await callAdmin(adminReq(`/api/admin/research/raw-series/${indicator}`)))!.body as {
+      points: { date: string; value: number; source: string | null }[];
+    };
+    expect(ledgerSeries).toEqual(compatSeries);
+    // Non-vacuity for this field: null on both sides would satisfy the
+    // equality above and is exactly the bug it is meant to exclude.
+    expect(compatSeries.points.every((p) => p.source === CATCH_UP_PROVENANCE)).toBe(true);
+    expect(ledgerSeries.points.every((p) => p.source === CATCH_UP_PROVENANCE)).toBe(true);
+    await setAnalyticsReadMode("compatibility", "test");
+
+    // The cutover gate agrees: `source` is compared for this post-0061 row and
+    // matches. Before the fix this same sweep reported matched:false.
+    const parity = await checkRawIndicatorHistoryParity();
+    expect(parity.mismatches, JSON.stringify(parity.mismatches)).toEqual([]);
+    expect(parity.matched).toBe(true);
   });
 });
 

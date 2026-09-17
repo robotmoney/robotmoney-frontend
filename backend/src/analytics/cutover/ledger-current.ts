@@ -21,6 +21,17 @@ export interface LedgerRawIndicatorPoint {
   indicator: string;
   date: string;
   value: number;
+  // The ledger's own copy of raw_indicator_history.source — migration 0061's
+  // `provenance` column, written at acquisition time. NULL is the honest "no
+  // label was observed", which is permanent for 0057's legacy baselines and
+  // for every version recorded before 0061 existed (append-only).
+  source: string | null;
+  // When THIS version was physically recorded. source_value_versions never
+  // accepts a client-supplied knowledge_time — 0057 declares it
+  // `NOT NULL DEFAULT clock_timestamp()` and no writer names the column — so
+  // it cannot be backdated. cutover/parity.ts uses it to tell a version that
+  // could never have carried a label from one that could and did not.
+  knowledgeTimeEpochMs: number;
 }
 
 // source_value_versions is ITSELF the append-only chain each revision points
@@ -39,18 +50,30 @@ export async function ledgerCurrentRawIndicatorHistory(
   db: DbHandle = sql,
 ): Promise<LedgerRawIndicatorPoint[]> {
   const rows = (await db`
-    SELECT svv.source_key, svv.market_date::text AS market_date, svv.value
+    SELECT svv.source_key, svv.market_date::text AS market_date, svv.value, svv.provenance,
+           EXTRACT(EPOCH FROM svv.knowledge_time) AS knowledge_epoch
     FROM source_value_versions svv
     WHERE svv.source_key LIKE ${RAW_HISTORY_PREFIX + "%"}
       AND svv.market_date IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM source_value_versions nxt WHERE nxt.prior_version_id = svv.id
       )
-  `) as unknown as { source_key: string; market_date: string; value: number }[];
+  `) as unknown as {
+    source_key: string;
+    market_date: string;
+    value: number;
+    provenance: string | null;
+    knowledge_epoch: string | number;
+  }[];
   return rows.map((r) => ({
     indicator: r.source_key.slice(RAW_HISTORY_PREFIX.length),
     date: r.market_date,
     value: Number(r.value),
+    source: r.provenance ?? null,
+    // Seconds (postgres returns numeric, i.e. a string through postgres.js)
+    // to integer milliseconds — a plain number comparison, never a timestamp
+    // string whose rendering depends on the session TimeZone.
+    knowledgeTimeEpochMs: Math.round(Number(r.knowledge_epoch) * 1000),
   }));
 }
 

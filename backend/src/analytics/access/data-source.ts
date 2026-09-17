@@ -75,9 +75,28 @@ export interface BacktestExtras {
   tbill3m: Point[];
 }
 
+// Issue #979: the acquisition-time data-source label the fetched values carry
+// into source_value_versions.provenance (migration 0061). It MUST be the same
+// label the caller then writes into raw_indicator_history.source for the same
+// points, or ledger mode and compatibility mode answer differently for one
+// row and cutover silently changes that field. Omitted means 'live' — the
+// default both captureSourceAcquisition() and saveRawIndicatorHistory()
+// already apply, i.e. the orchestrator's ordinary merge path
+// (analytics/index.ts). producer/index.ts's gap catch-up writes its points
+// back through the 'seed'-tagged floor writer and so passes 'seed' here.
+export interface FetchIndicatorsOptions {
+  provenance?: string;
+}
+
 export interface AnalyticsDataSource {
   // Registry indicator raw series (id → pre-transform {date,value}[]).
-  fetchIndicators(indicators: Indicator[], logger?: Logger, acquisitionSink?: AcquisitionSink, requestedByRunId?: number | null): Promise<Record<string, Point[]>>;
+  fetchIndicators(
+    indicators: Indicator[],
+    logger?: Logger,
+    acquisitionSink?: AcquisitionSink,
+    requestedByRunId?: number | null,
+    opts?: FetchIndicatorsOptions,
+  ): Promise<Record<string, Point[]>>;
   // Research-only inputs (BTC/QQQ/SPY/RSP/top-7/MNA/MARGIN/CONF). `edgarCtx`
   // (issue #109) carries the persisted MNA floor + hard deadline for the
   // live source's incremental EDGAR sweep; hermetic/fixture sources never
@@ -107,9 +126,9 @@ async function safe(label: string, fn: () => Promise<Point[]>, logger: Logger): 
 }
 
 export const liveDataSource: AnalyticsDataSource = {
-  fetchIndicators(indicators, logger = console, acquisitionSink, requestedByRunId) {
+  fetchIndicators(indicators, logger = console, acquisitionSink, requestedByRunId, opts) {
     if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
-    return fetchAll({ logger, indicators, acquisitionSink, requestedByRunId });
+    return fetchAll({ logger, indicators, acquisitionSink, requestedByRunId, provenance: opts?.provenance });
   },
 
   async fetchResearchInputs(asof, logger = console, edgarCtx, acquisitionSink, requestedByRunId): Promise<ResearchInputs> {
