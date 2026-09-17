@@ -949,14 +949,12 @@ footer {
         <td>Cold-DB gap fill (existing rows win) — EDGAR seed ingestion</td>
       </tr>
       <tr>
-        <td><span class="endpoint">/api/analytics/regime-snapshots</span></td>
+        <td><span class="endpoint">/api/analytics/run-packages</span></td>
         <td><span class="method post">POST</span></td>
-        <td>Snapshot batch upsert on (date). <strong>GET returns 405.</strong></td>
-      </tr>
-      <tr>
-        <td><span class="endpoint">/api/analytics/research-signals</span></td>
-        <td><span class="method post">POST</span></td>
-        <td>Signal batch upsert on (signal_key, date). <strong>GET returns 405.</strong></td>
+        <td>One terminal run's complete package: the immutable output artifacts, the byte-exact report snapshot, and
+          the current-view <code>regime_snapshots</code>/<code>research_signals</code> upserts, all in one transaction.
+          Sole publisher of both projections since issue #978, which retired the standalone
+          <code>/api/analytics/regime-snapshots</code> and <code>/api/analytics/research-signals</code> upserts.</td>
       </tr>
       <tr>
         <td><span class="endpoint">/api/analytics/telemetry</span></td>

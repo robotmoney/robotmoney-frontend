@@ -67,9 +67,45 @@ async function tableCounts(): Promise<{ raw: number; snaps: number; signals: num
 const validBodies: [string, string, unknown][] = [
   ["POST", A.rawHistory, { history: { [rid()]: [{ date: "2020-01-01", value: 1 }] } }],
   ["POST", A.rawHistorySeed, { history: { [rid()]: [{ date: "2020-01-01", value: 1 }] } }],
-  ["POST", A.regimeSnapshots, { snapshots: [{ date: "1999-01-01", composite: 0.5, compositePercentile: 0.5, regime: "neutral", macroRegime: null, onchainRegime: null, factorRegime: null, percentiles: {}, indicators: [] }] }],
-  ["POST", A.researchSignals, { signals: [{ key: `sig-${rid()}`, date: "1999-01-01", payload: { title: "t" } }] }],
 ];
+
+// ISSUE #978: `POST /api/analytics/regime-snapshots` and
+// `POST /api/analytics/research-signals` are RETIRED. They upserted the
+// current views with no run, no immutable artifact and no report snapshot, so
+// an ANALYTICS_TOKEN holder could publish regime rows no frozen report ever
+// contained — and publishBrief, which derives its binding from those rows,
+// would bind a signed brief to some other run's report. Both DTOs now reach
+// the API only inside a terminal run package, which is what the validation
+// loops below exercise.
+//
+// One ledger run per package, inserted directly: this file is about the HTTP
+// ingestion boundary, not about beginRun (tests/api/analytics-run-snapshots.ts
+// covers that), and analytics_output_snapshots.run_id is a real foreign key.
+async function beginLedgerRun(asof: string, toolId: string): Promise<string> {
+  const [methodology] = (await sql`
+    INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
+    VALUES (${toolId}, 'v-test', '{"k":"v"}'::jsonb, ${crypto.randomUUID().replace(/-/g, "").padEnd(64, "a").slice(0, 64)})
+    RETURNING id`) as unknown as { id: string }[];
+  const [run] = (await sql`
+    INSERT INTO analytics_ledger_runs (run_key, asof, tool_id, source_label, methodology_version_id, build_identity)
+    VALUES (${crypto.randomUUID()}, ${asof}::date, ${toolId}, 'fixture', ${methodology!.id}::bigint, 'analytics-write-test')
+    RETURNING id`) as unknown as { id: string }[];
+  return String(run!.id);
+}
+
+function packageBody(over: Record<string, unknown> = {}) {
+  return {
+    package: {
+      runId: "1",
+      asof: "1999-01-02",
+      status: "succeeded",
+      regimeSnapshots: [],
+      researchSignals: [],
+      reportBase64: Buffer.from("a report").toString("base64"),
+      ...over,
+    },
+  };
+}
 
 function sourceAcquisitionBody(id = crypto.randomUUID()) {
   const bytes = new TextEncoder().encode('{"value":1}');
@@ -187,35 +223,53 @@ test("DTO validation rejects malformed/oversized/duplicate-conflicting/non-finit
   const inf = await call(req("POST", A.rawHistory, undefined, TOKEN, `{"history":{"${ind}":[{"date":"2020-01-01","value":1e999}]}}`));
   expect(inf?.status).toBe(400);
 
+  // Regime-snapshot DTOs, inside the terminal run package that is now their
+  // only way in. Every case is refused before submitTerminalRunPackage opens a
+  // transaction, so the nonexistent runId is never reached.
   const badSnaps: unknown[] = [
-    {}, // missing snapshots
-    { snapshots: [{}] }, // missing date
-    { snapshots: [{ date: "2024-02-30", percentiles: {}, indicators: [] }] }, // bad date
-    { snapshots: [{ date: "1999-01-02", composite: "x", percentiles: {}, indicators: [] }] }, // non-numeric
-    { snapshots: [{ date: "1999-01-02", percentiles: { a: "x" }, indicators: [] }] }, // bad percentile map
-    { snapshots: [{ date: "1999-01-02", percentiles: {}, indicators: {} }] }, // indicators not array
-    { snapshots: [ // duplicate natural key
+    "not-an-array", // regimeSnapshots missing/not an array
+    [{}], // missing date
+    [{ date: "2024-02-30", percentiles: {}, indicators: [] }], // bad date
+    [{ date: "1999-01-02", composite: "x", percentiles: {}, indicators: [] }], // non-numeric
+    [{ date: "1999-01-02", percentiles: { a: "x" }, indicators: [] }], // bad percentile map
+    [{ date: "1999-01-02", percentiles: {}, indicators: {} }], // indicators not array
+    [ // duplicate natural key
       { date: "1999-01-02", percentiles: {}, indicators: [] },
       { date: "1999-01-02", percentiles: {}, indicators: [] },
-    ] },
+    ],
   ];
-  for (const body of badSnaps) {
-    expect((await call(req("POST", A.regimeSnapshots, body, TOKEN)))?.status).toBe(400);
+  for (const regimeSnapshots of badSnaps) {
+    expect((await call(req("POST", A.runPackage, packageBody({ regimeSnapshots }), TOKEN)))?.status).toBe(400);
   }
 
   const badSignals: unknown[] = [
-    {}, // missing signals
-    { signals: [{ key: "", date: "1999-01-02", payload: {} }] }, // empty key
-    { signals: [{ key: "k", date: "not-a-date", payload: {} }] },
-    { signals: [{ key: "k", date: "1999-01-02", payload: "not-an-object" }] },
-    { signals: [{ key: "k", date: "1999-01-02", payload: {} }, { key: "k", date: "1999-01-02", payload: {} }] }, // duplicate
-    { signals: Array.from({ length: 51 }, (_, i) => ({ key: `k${i}`, date: "1999-01-02", payload: {} })) }, // oversized
+    "not-an-array", // researchSignals missing/not an array
+    [{ key: "", date: "1999-01-02", payload: {} }], // empty key
+    [{ key: "k", date: "not-a-date", payload: {} }],
+    [{ key: "k", date: "1999-01-02", payload: "not-an-object" }],
+    [{ key: "k", date: "1999-01-02", payload: {} }, { key: "k", date: "1999-01-02", payload: {} }], // duplicate
+    Array.from({ length: 51 }, (_, i) => ({ key: `k${i}`, date: "1999-01-02", payload: {} })), // oversized
   ];
-  for (const body of badSignals) {
-    expect((await call(req("POST", A.researchSignals, body, TOKEN)))?.status).toBe(400);
+  for (const researchSignals of badSignals) {
+    expect((await call(req("POST", A.runPackage, packageBody({ researchSignals }), TOKEN)))?.status).toBe(400);
   }
 
   expect(await tableCounts()).toEqual(before); // every rejection left zero row changes
+});
+
+// The retired routes stay retired: `handleAnalytics` no longer claims either
+// path, so an ANALYTICS_TOKEN holder cannot reach a regime/research current-view
+// write that carries no run, no artifact and no report snapshot.
+test("the retired standalone regime-snapshot and research-signal upsert routes are not handled at all (issue #978)", async () => {
+  prodAuth();
+  const before = await tableCounts();
+  for (const path of ["/api/analytics/regime-snapshots", "/api/analytics/research-signals"]) {
+    // `null` means "not an analytics route" — the caller falls through to the
+    // 404 at the router, with no authentication branch of its own to reach.
+    expect(await call(req("POST", path, { snapshots: [] }, TOKEN))).toBeNull();
+    expect(await call(req("POST", path, { signals: [] }, TOKEN))).toBeNull();
+  }
+  expect(await tableCounts()).toEqual(before);
 });
 
 test("raw-history + regime-snapshots: accept an optional provenance `source`, reject a garbage value (issue #397)", async () => {
@@ -240,12 +294,14 @@ test("raw-history + regime-snapshots: accept an optional provenance `source`, re
   const [defaulted] = await sql`SELECT source FROM raw_indicator_history WHERE indicator = ${ind2}`;
   expect(defaulted.source).toBe("live");
 
-  // Same validation on the regime-snapshots batch: garbage rejected, valid value persisted.
+  // Same validation on the regime snapshots carried by a terminal run package
+  // — the only route that still publishes them (issue #978).
   const date = "1997-03-04";
-  const badSnap = { snapshots: [{ date, percentiles: {}, indicators: [], source: "not-a-real-source" }] };
-  expect((await call(req("POST", A.regimeSnapshots, badSnap, TOKEN)))?.status).toBe(400);
-  const goodSnap = { snapshots: [{ date, percentiles: {}, indicators: [], source: "seed" }] };
-  expect((await call(req("POST", A.regimeSnapshots, goodSnap, TOKEN)))?.status).toBe(200);
+  const badSnap = packageBody({ asof: date, regimeSnapshots: [{ date, percentiles: {}, indicators: [], source: "not-a-real-source" }] });
+  expect((await call(req("POST", A.runPackage, badSnap, TOKEN)))?.status).toBe(400);
+  const runId = await beginLedgerRun(date, "provenance-source");
+  const goodSnap = packageBody({ runId, asof: date, regimeSnapshots: [{ date, percentiles: {}, indicators: [], source: "seed" }] });
+  expect((await call(req("POST", A.runPackage, goodSnap, TOKEN)))?.status).toBe(200);
   const [snapRow] = await sql`SELECT source FROM regime_snapshots WHERE date = ${date}`;
   expect(snapRow.source).toBe("seed");
 });
@@ -282,30 +338,44 @@ test("seed ingestion: gap-fill only (existing rows win), idempotent no-op when w
   expect(second?.body).toMatchObject({ seededPoints: 0, existingPoints: 3 }); // warm → no-op
 });
 
-test("regime snapshots + research signals: idempotent on (date) / (signal_key, date)", async () => {
+test("current-view projections stay idempotent on (date) / (signal_key, date) across two run packages for the same date", async () => {
   prodAuth();
   const date = "1998-06-15";
+  const key = `sig-${rid()}`;
   const snap = { date, composite: 0.4, compositePercentile: 0.6, regime: "neutral", macroRegime: "neutral", onchainRegime: "neutral", factorRegime: null, percentiles: { VIX: 0.5 }, indicators: [{ id: "VIX" }] };
-  expect((await call(req("POST", A.regimeSnapshots, { snapshots: [snap] }, TOKEN)))?.status).toBe(200);
-  expect((await call(req("POST", A.regimeSnapshots, { snapshots: [{ ...snap, composite: 0.9 }] }, TOKEN)))?.status).toBe(200);
+  const signal = { key, date, payload: { v: 1 } };
+
+  const runA = await beginLedgerRun(date, "idempotency-a");
+  expect((await call(req("POST", A.runPackage, packageBody({ runId: runA, asof: date, regimeSnapshots: [snap], researchSignals: [signal] }), TOKEN)))?.status).toBe(200);
+
+  // A SECOND run correcting the same market date — a new immutable package,
+  // the same current-view natural keys.
+  const runB = await beginLedgerRun(date, "idempotency-b");
+  expect((await call(req("POST", A.runPackage, packageBody({
+    runId: runB, asof: date,
+    regimeSnapshots: [{ ...snap, composite: 0.9 }],
+    researchSignals: [{ key, date, payload: { v: 2 } }],
+  }), TOKEN)))?.status).toBe(200);
+
   const rows = await sql`SELECT composite FROM regime_snapshots WHERE date = ${date}`;
   expect(rows.length).toBe(1); // upserted, not duplicated
   expect(Number(rows[0].composite)).toBe(0.9);
-
-  const key = `sig-${rid()}`;
-  await call(req("POST", A.researchSignals, { signals: [{ key, date, payload: { v: 1 } }] }, TOKEN));
-  await call(req("POST", A.researchSignals, { signals: [{ key, date, payload: { v: 2 } }] }, TOKEN));
   const sigs = await sql`SELECT payload FROM research_signals WHERE signal_key = ${key} AND date = ${date}`;
   expect(sigs.length).toBe(1);
   expect(sigs[0].payload).toEqual({ v: 2 });
+  // Both runs' evidence survives the current view converging.
+  const [{ n }] = await sql`SELECT count(*)::int AS n FROM analytics_report_snapshots WHERE asof = ${date}::date`;
+  expect(n).toBe(2);
 });
 
 test("forced mid-operation error rolls back the WHOLE mutation (nothing persists)", async () => {
   prodAuth();
-  // The research-signals route runs ONE INSERT statement per signal inside a
-  // single transaction, so a trigger that detonates on the SECOND signal proves
-  // cross-statement rollback: the first (already-executed) INSERT must be undone.
+  // A run package writes its immutable artifacts, its report snapshot and ONE
+  // INSERT per research signal inside a single transaction, so a trigger that
+  // detonates on the SECOND signal proves cross-statement rollback: the first
+  // (already-executed) INSERT must be undone, and so must the artifacts.
   const good = `sig-${rid()}`;
+  const runId = await beginLedgerRun("1999-01-03", "rollback-run");
   await sql`
     CREATE OR REPLACE FUNCTION rmtest_boom() RETURNS trigger AS $$
     BEGIN
@@ -314,13 +384,18 @@ test("forced mid-operation error rolls back the WHOLE mutation (nothing persists
     END $$ LANGUAGE plpgsql`;
   await sql`CREATE TRIGGER rmtest_boom_trg BEFORE INSERT ON research_signals FOR EACH ROW EXECUTE FUNCTION rmtest_boom()`;
   try {
-    const body = { signals: [
+    const body = packageBody({ runId, asof: "1999-01-03", researchSignals: [
       { key: good, date: "1999-01-03", payload: { v: 1 } }, // executes first
       { key: "zz-boom", date: "1999-01-03", payload: { v: 2 } }, // detonates second
-    ] };
-    await expect(call(req("POST", A.researchSignals, body, TOKEN))).rejects.toThrow(/forced mid-operation failure/);
+    ] });
+    await expect(call(req("POST", A.runPackage, body, TOKEN))).rejects.toThrow(/forced mid-operation failure/);
     const [{ n }] = await sql`SELECT COUNT(*)::int AS n FROM research_signals WHERE signal_key IN (${good}, 'zz-boom')`;
     expect(n).toBe(0); // full rollback — the earlier good row did not survive
+    // And the immutable side rolled back with it: no artifact, no report.
+    const [{ a }] = await sql`SELECT COUNT(*)::int AS a FROM analytics_output_snapshots WHERE run_id = ${runId}::bigint`;
+    expect(a).toBe(0);
+    const [{ r }] = await sql`SELECT COUNT(*)::int AS r FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
+    expect(r).toBe(0);
   } finally {
     await sql`DROP TRIGGER IF EXISTS rmtest_boom_trg ON research_signals`;
     await sql`DROP FUNCTION IF EXISTS rmtest_boom()`;

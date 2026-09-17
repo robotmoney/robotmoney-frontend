@@ -38,6 +38,13 @@ export interface SubmissionDraft extends AuthoredTake {
   subjectId: string;
   nonce: string;
   memoUrl?: string;
+  // Issue #978 AC6. Naming the report snapshot this session's brief is bound
+  // to is what makes the submission schema 2.0: the contract canonicalizer
+  // appends it to the signed bytes, and the API refuses (409) any take that
+  // names a different one than the brief carries. OMITTED — never null, never
+  // empty — when the brief has no binding, so a pre-#978 brief keeps signing
+  // and verifying as schema 1.0.
+  reportSnapshotId?: string;
 }
 
 export interface StarterCredentials {
@@ -79,6 +86,19 @@ export function canonicalizeDraftForTransport(
   draft: SubmissionDraft,
 ): string {
   return canonicalizeSubmission(draft);
+}
+
+/**
+ * The optional, immutable report-snapshot binding a public brief advertises
+ * (issue #978 AC6). Narrowed to a NON-EMPTY STRING: the route serves `null`
+ * for an unbound brief, and only a real id may enter the signed payload.
+ */
+export function reportSnapshotIdFromBrief(
+  brief: { reportSnapshotId?: unknown } | null | undefined,
+): string | undefined {
+  return typeof brief?.reportSnapshotId === "string" && brief.reportSnapshotId.length > 0
+    ? brief.reportSnapshotId
+    : undefined;
 }
 
 const encoder = new TextEncoder();
@@ -149,12 +169,19 @@ async function runRest(options: StarterOptions): Promise<StarterResult> {
     "discover open session",
   );
   if (!session) throw new Error("no swarm session is currently collecting");
+  // Read the brief of THIS session by its id, not by (date, subject).
+  // Since migration 0022 a subject may convene several times a day, and the
+  // date/subject form deliberately resolves to the LATEST session of that day
+  // — which need not be the one just discovered as collecting. `?session=` is
+  // the unambiguous handle (migration 0028 keys a brief on its session), and
+  // getting the RIGHT brief is what makes its report binding below correct
+  // rather than merely plausible.
   const brief = await restJson<SwarmBrief | null>(
     options.backendUrl,
-    `${ROUTES.swarm.brief}?date=${encodeURIComponent(session.date)}&subject=${encodeURIComponent(session.subjectId)}`,
+    `${ROUTES.swarm.brief}?session=${encodeURIComponent(String(session.id))}`,
     "read swarm brief",
   );
-  if (!brief) throw new Error(`no brief exists for ${session.date}/${session.subjectId}`);
+  if (!brief) throw new Error(`no brief exists for session ${session.id} (${session.date}/${session.subjectId})`);
 
   const authored = await (options.authorTake ?? deterministicAuthorTake)({ session, brief });
   assertAuthoredTake(authored);
@@ -177,6 +204,13 @@ async function runRest(options: StarterOptions): Promise<StarterResult> {
   );
   if (!memo.ok || !memo.url) throw new Error(`post swarm memo was rejected: ${memo.error ?? "missing URL"}`);
 
+  // Issue #978 AC6: carry the brief's immutable report binding into the
+  // SIGNED payload. Without this the API's binding gate refuses the take with
+  // `HTTP 409 reportSnapshotId does not match this session's brief`, because
+  // an omitted field can never equal a bound id. A brief with no binding
+  // (`reportSnapshotId: null`) leaves the field off entirely — spreading
+  // `undefined` in would serialize it and change the canonical bytes.
+  const reportSnapshotId = reportSnapshotIdFromBrief(brief);
   const draft: SubmissionDraft = {
     memberId: options.memberId,
     date: session.date,
@@ -184,6 +218,7 @@ async function runRest(options: StarterOptions): Promise<StarterResult> {
     nonce: crypto.randomUUID(),
     ...authored,
     memoUrl: memo.url,
+    ...(reportSnapshotId === undefined ? {} : { reportSnapshotId }),
   };
   const { canonical, signature } = await signDraft("rest", draft, options.privateKey);
   const submitted = await restJson<{ ok?: boolean; verified?: boolean; error?: string }>(

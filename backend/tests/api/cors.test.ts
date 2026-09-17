@@ -46,7 +46,7 @@ test("isPublicRead: false for a write method", () => {
 test("isPublicRead: false under every credentialed prefix, even probed anonymously", () => {
   expect(isPublicRead(req(), "/api/admin/anything")).toBe(false);
   expect(isPublicRead(req(), "/api/swarm/admin/members")).toBe(false);
-  expect(isPublicRead(req(), "/api/analytics/regime-snapshots")).toBe(false);
+  expect(isPublicRead(req(), "/api/analytics/run-packages")).toBe(false);
 });
 
 test("isPublicRead: false when the request carries any credential header", () => {

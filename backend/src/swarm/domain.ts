@@ -11,6 +11,12 @@ import {
   verifyClaimChallengeSignature,
   verifySubmissionSignature,
 } from "../lib/signing.ts";
+// Pure canonicalization shared with the #977/#978 analytics ledgers — no DB
+// import, so pulling it in here carries no cycle risk. Every brief revision's
+// body is hashed the SAME way an analytics report/output snapshot is, so "the
+// stored checksum recomputes clean from the retrieved bytes" is one proof
+// technique across both ledgers.
+import { canonicalStringify, sha256Hex } from "../analytics/run-ledger.ts";
 // Issue #562: a new member's public handle comes from its name, not from the
 // UUID applyMember minted for it. Leaf module — imports nothing from here, so
 // admin.ts can call it on the manual-add path too without a cycle.
@@ -640,7 +646,7 @@ export async function getBriefBySession(sessionId: string) {
   // `session_id` is a uuid column, so a non-uuid handle would make Postgres
   // throw rather than return no rows; screen it here (mirrors getSessionById).
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return null;
-  const r = await sql`SELECT id, date, subject_id, session_id, body, created_at FROM swarm_briefs
+  const r = await sql`SELECT id, date, subject_id, session_id, report_snapshot_id, body, created_at FROM swarm_briefs
                       WHERE session_id = ${sessionId} LIMIT 1`;
   return r[0] ? toBrief(r[0]) : null;
 }
@@ -669,7 +675,7 @@ export async function getBrief(date: string, subjectId: string) {
   // 0028 deliberately preserved v0-archived briefs whose session was never
   // archived, and an inner join would silently hide them. `NULLS LAST` ranks a
   // real session's brief above such a row when both exist for a day.
-  const r = await sql`SELECT b.id, b.date, b.subject_id, b.session_id, b.body, b.created_at
+  const r = await sql`SELECT b.id, b.date, b.subject_id, b.session_id, b.report_snapshot_id, b.body, b.created_at
                       FROM swarm_briefs b
                       LEFT JOIN swarm_sessions s ON s.id = b.session_id
                       WHERE b.date = ${date} AND b.subject_id = ${subjectId}
@@ -681,6 +687,12 @@ export async function getBrief(date: string, subjectId: string) {
 export interface SubmissionInput {
   memberId: string; date: string; subjectId: string; nonce: string;
   stance: string; confidence: number; body?: string; memoUrl?: string;
+  // Issue #978 AC6: naming a reportSnapshotId signs schema 2.0
+  // (canonicalizeSubmission) and binds the take to the exact analytics
+  // report snapshot its author saw. Optional so a schema-1.0 (legacy)
+  // submission still verifies unchanged; submitRecommendation below rejects
+  // one that does not match the session's OWN brief.
+  reportSnapshotId?: string;
   weights?: { bucket: string; weight: number }[]; signature: string;
 }
 
@@ -733,6 +745,40 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   }
   if (session.window_closes_at && new Date(session.window_closes_at).getTime() < Date.now())
     return { ok: false, status: 409, error: "submission window closed" };
+
+  // Report-snapshot binding (issue #978 AC6). Once this session's brief is
+  // bound to an analytics report snapshot, every take must name the SAME
+  // one — a stale or mismatched reportSnapshotId is refused here, BEFORE the
+  // Ed25519 verify (same "cheap refusals first" discipline as the checks
+  // below): a genuinely tampered id is instead caught by the signature
+  // itself failing to verify (schema 2.0's canonical bytes include it), so
+  // this check exists for the HONEST-but-wrong case, not the forged one.
+  // A brief with no bound report snapshot (report_snapshot_id NULL — no
+  // analytics run has submitted a report for this session's date) names
+  // NOTHING, so a schema-1.0 (legacy) submission with no reportSnapshotId
+  // keeps working — but a submission that DOES name one is refused rather
+  // than waved through. The skipped-when-unbound version of this check let a
+  // take signed under schema 2.0 carry a cryptographically-signed binding to
+  // an arbitrary report (another date's, say) that the brief never
+  // referenced, straight into the consensus receipt.
+  const brief = (await sql<{ report_snapshot_id: string | null }[]>`
+    SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`)[0];
+  const boundReportSnapshotId = brief?.report_snapshot_id != null ? String(brief.report_snapshot_id) : null;
+  if (boundReportSnapshotId === null) {
+    if (sub.reportSnapshotId != null) {
+      return {
+        ok: false,
+        status: 409,
+        error: "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId",
+      };
+    }
+  } else if (sub.reportSnapshotId !== boundReportSnapshotId) {
+    return {
+      ok: false,
+      status: 409,
+      error: `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`,
+    };
+  }
 
   // Roster gate (issue #152, AC6): sessions created through the admin surface
   // (swarm/admin.ts createSessionAdmin) carry a FROZEN expected roster in
@@ -868,12 +914,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // the two-statement path explainable in the audit row.
     const rows = await sql`
       INSERT INTO swarm_recommendations
-        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision, signing_key_id)
+        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision, signing_key_id, report_snapshot_id)
       SELECT s.id, ${memberId}, ${sub.subjectId}, ${sub.date}, ${sub.nonce}, ${sub.stance},
              ${sub.confidence}, ${sub.body ?? null}, ${sub.memoUrl ?? null}, ${sql.json(sub as any)}, ${sub.signature}, true,
              (SELECT coalesce(max(r.revision), 0) + 1 FROM swarm_recommendations r
               WHERE r.session_id = s.id AND r.member_id = ${memberId}),
-             ${key.id}
+             ${key.id}, ${sub.reportSnapshotId ?? null}::bigint
       FROM swarm_sessions s
       WHERE s.id = ${session.id}
         AND (s.window_closes_at IS NULL OR s.window_closes_at > now())
@@ -902,6 +948,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     return { ok: true, status: 201, recommendationId: rows[0].id, verified: true, revision };
   } catch (e: any) {
     const message = String(e?.message ?? e);
+    // A reportSnapshotId naming a row that does not exist trips the FK on
+    // swarm_recommendations.report_snapshot_id. That is a caller bug, not a
+    // server fault, so it is a 400 — never the 500 an unhandled 23503 became.
+    if (e?.code === "23503" && `${e?.constraint_name ?? e?.constraint ?? ""} ${message}`.includes("report_snapshot")) {
+      return { ok: false, status: 400, error: "reportSnapshotId does not name an existing analytics report snapshot" };
+    }
     if (message.includes("duplicate") || e?.code === "23505") {
       // Which constraint lost tells the agent what to do next, and the two
       // answers are opposite: re-mint a nonce, or simply retry.
@@ -1620,6 +1672,29 @@ export async function openSession(subjectId: string) {
   return r;
 }
 
+// Append one immutable brief revision — never edits a prior one. Exported on
+// its own (issue #978), same reason output-snapshot-store.ts exports
+// insertOutputSnapshots/insertReportSnapshot/applyCurrentProjections
+// separately: a test can compose this with a deliberately injected failure
+// in its OWN sql.begin to prove the whole publish rolls back atomically,
+// using the exact production code path rather than a duplicated copy of it.
+export async function appendBriefRevision(
+  sessionId: string,
+  body: Record<string, unknown>,
+  reportSnapshotId: string | null,
+  tx: DbHandle,
+): Promise<{ revision: number; checksum: string }> {
+  const bodyBytes = Buffer.from(canonicalStringify(body), "utf8");
+  const checksum = sha256Hex(bodyBytes);
+  await tx`SELECT pg_advisory_xact_lock(hashtextextended('swarm_brief_revisions:' || ${sessionId}, 0))`;
+  const [{ next }] = await tx`
+    SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM swarm_brief_revisions WHERE session_id = ${sessionId}`;
+  await tx`
+    INSERT INTO swarm_brief_revisions (session_id, revision, body_bytes, checksum, report_snapshot_id)
+    VALUES (${sessionId}, ${next}, ${bodyBytes}, ${checksum}, ${reportSnapshotId}::bigint)`;
+  return { revision: Number(next), checksum };
+}
+
 export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   const regime = (await sql`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
@@ -1656,16 +1731,84 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     },
     windowClosesAt,
   };
+
+  // Issue #978 AC5/AC6: bind this brief to the exact, immutable analytics
+  // report snapshot that produced the regime numbers this brief BODY shows —
+  // derived from the embedded `regime` row above, NOT from the session's own
+  // market date.
+  //
+  // NOT the newest snapshot for the date. The producer arms TWO runs per
+  // `asof` — regime (22:30) and research (23:00, RESEARCH_TOOL_GROUP) — and
+  // each freezes its own report snapshot, so a plain `ORDER BY id DESC`
+  // always won the research run, whose report bytes contain no regime data at
+  // all. Hence the join: only a run that froze a NON-EMPTY `regime_snapshots`
+  // output artifact is a candidate. Since issue #978 that artifact and the
+  // current-view projection are written by one transaction
+  // (applyCurrentProjections), so "froze regime rows" and "published the
+  // regime rows the brief reads" are the same run.
+  //
+  // NOT `rs.asof = s.date` either, which is what the committed schedules make
+  // permanently unsatisfiable: a session convenes 06:00 and publishes its
+  // brief 07:00 UTC on day D (SWARM_OPEN_SESSION_CRON / SWARM_PUBLISH_BRIEF_
+  // CRON, config.ts), but day D's regime run does not fire until 22:30 UTC
+  // (PRODUCER_REGIME_CRON) — 15.5 hours after the session is over. Keying on
+  // the session date bound every real brief to NULL, and NULL is
+  // indistinguishable from the legitimate "this subject has no analytics
+  // report" case, so nothing went red while every schema-2.0 take was 409'd.
+  //
+  // Keying on `regime.date` is correct under ANY schedule because it is a
+  // derivation rather than a guess: `buildDateAxis(BACKFILL_START, asof)`
+  // (analytics/index.ts) always ends the published row set exactly at the
+  // run's own `asof`, so the MAX-dated row in `regime_snapshots` — the one
+  // line 1700 reads into the body — is by construction the newest
+  // regime-bearing run's `asof`. Looking that date up in
+  // `analytics_report_snapshots.asof` therefore names that run's report, the
+  // one whose bytes contain the exact numbers displayed. `ORDER BY rs.id
+  // DESC` breaks a same-date re-run tie toward the last writer, which is the
+  // run whose rows actually won the upsert.
+  //
+  // A brief with no regime row at all to show (a fresh database, a
+  // smoke/legacy subject), or one whose newest regime row predates the
+  // snapshot layer / was seeded outside it (import-regime-eq.ts), gets
+  // `report_snapshot_id = NULL` — the same documented cutover shape as
+  // migration 0049's signing_key_id, and honest: there is no frozen report
+  // holding those numbers.
+  const regimeDate: string | null = regime
+    ? regime.date instanceof Date
+      ? regime.date.toISOString().slice(0, 10)
+      : String(regime.date).slice(0, 10)
+    : null;
+  const [report] = regimeDate === null
+    ? []
+    : await sql`
+        SELECT rs.id FROM analytics_report_snapshots rs
+        JOIN analytics_output_snapshots os
+          ON os.run_id = rs.run_id
+         AND os.artifact_kind = 'regime_snapshots'
+         AND os.payload_bytes <> convert_to('[]', 'UTF8')
+        WHERE rs.asof = ${regimeDate}::date
+        ORDER BY rs.id DESC LIMIT 1`;
+  const reportSnapshotId: string | null = report ? String(report.id) : null;
+
   // Keyed on the SESSION (migration 0028), not the day. The old
   // `ON CONFLICT (date, subject_id)` made every session after the first of a
   // day overwrite its predecessor's brief — destroying the `windowClosesAt`
   // that session had already advertised to its members. Re-publishing the SAME
-  // session still updates in place (the brief driver may retry), but a second
-  // session on the same day now INSERTs its own row.
-  await sql`INSERT INTO swarm_briefs (session_id, date, subject_id, body)
-            VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${sql.json(jsonValue(body))})
-            ON CONFLICT (session_id) DO UPDATE SET body = EXCLUDED.body`;
-  await sql`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
+  // session still updates swarm_briefs (the current-view projection) in place
+  // (the brief driver may retry), but a second session on the same day now
+  // INSERTs its own row.
+  //
+  // ISSUE #978: every publish call also APPENDS a new, immutable
+  // swarm_brief_revisions row via appendBriefRevision — never edits a prior
+  // one — in the SAME transaction as the current-view update, so a failure
+  // partway (see appendBriefRevision's header) leaves neither side changed.
+  await sql.begin(async (tx) => {
+    await appendBriefRevision(sessionId, body, reportSnapshotId, tx);
+    await tx`INSERT INTO swarm_briefs (session_id, date, subject_id, body, report_snapshot_id)
+              VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${tx.json(jsonValue(body))}, ${reportSnapshotId}::bigint)
+              ON CONFLICT (session_id) DO UPDATE SET body = EXCLUDED.body, report_snapshot_id = EXCLUDED.report_snapshot_id`;
+    await tx`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
+  });
   return { sessionId, state: "collecting", windowClosesAt };
 }
 

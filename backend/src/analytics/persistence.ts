@@ -16,6 +16,7 @@ import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
 import type { SourceAcquisitionEvidence } from "./source-ledger.ts";
 import type { MethodologyIdentity, RunLifecycleEvent, VintageManifest } from "./run-ledger.ts";
+import type { OutputArtifactKind, TerminalRunPackageInput } from "./output-snapshots.ts";
 
 export interface FloorSeedResult {
   seededPoints: number; // rows actually written this run (gap-fill only)
@@ -33,6 +34,24 @@ export interface FreezeVintageResult {
   vintageId: string;
   manifest: VintageManifest;
   memberCount: number;
+  replayed: boolean;
+}
+
+// Issue #978: the frozen output/report snapshot layer's own result shape —
+// structurally identical to store/output-snapshot-store.ts's own
+// OutputSnapshotRecord/TerminalRunPackageResult (same split as
+// BeginRunResult/FreezeVintageResult above: this file stays pure/I/O-free so
+// the producer's api-client.ts can import it without ever importing SQL).
+export interface OutputSnapshotRecord {
+  id: string;
+  artifactKind: OutputArtifactKind;
+  checksum: string;
+  byteLength: number;
+}
+
+export interface TerminalRunPackageResult {
+  outputSnapshots: OutputSnapshotRecord[];
+  reportSnapshotId: string | null;
   replayed: boolean;
 }
 
@@ -60,6 +79,13 @@ export interface AnalyticsPersistence {
     methodologyVersionId: string;
     buildIdentity: string;
   }): Promise<FreezeVintageResult>;
+  // Issue #978: submit one terminal run package (see output-snapshots.ts's
+  // header) bound to this run's id — the complete, immutable output/report
+  // evidence for a run that reached a terminal outcome. Mandatory, like
+  // freezeVintage above, NOT best-effort like telemetry: a run whose
+  // outputs/report (or warning/log/exception artifacts) could not be
+  // durably frozen must not read as quiet success.
+  submitTerminalRunPackage(input: TerminalRunPackageInput): Promise<TerminalRunPackageResult>;
   // Append one complete provider acquisition atomically. The producer-generated
   // UUID is the replay key; prior evidence is never mutated on replay.
   saveSourceAcquisition?(evidence: SourceAcquisitionEvidence): Promise<{ acquisitionId: string; replayed: boolean }>;
@@ -72,10 +98,11 @@ export interface AnalyticsPersistence {
   // Cold-DB gap-fill: write only (date, indicator) points NOT already persisted
   // (existing rows always win). Idempotent — a warm floor makes this a no-op.
   seedRawHistory(byIndicator: RawIndicatorHistory): Promise<FloorSeedResult>;
-  // Upsert regime snapshot rows on (date).
-  saveRegimeSnapshots(rows: RegimeSnapshotRow[]): Promise<void>;
-  // Upsert one research signal payload on (signal_key, date).
-  saveResearchSignal(key: string, asof: string, payload: ResearchPayload): Promise<void>;
+  // RETIRED (issue #978): saveRegimeSnapshots / saveResearchSignal. Publishing
+  // regime_snapshots or research_signals outside a terminal run package is no
+  // longer expressible through this port — submitTerminalRunPackage above is
+  // the single publisher, and it writes the immutable artifacts and the report
+  // snapshot in the same transaction as the current-view rows.
   // Which (signal_key, date) pairs are persisted on/after `sinceDate` (issue
   // #614 AC4): the independent producer has no DATABASE_URL, so this is the
   // ONLY way it can tell which recent days it needs to catch up — the read

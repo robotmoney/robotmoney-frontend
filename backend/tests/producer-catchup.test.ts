@@ -21,7 +21,7 @@ const iso = (offsetDays: number) => new Date(NOW.getTime() - offsetDays * DAY_MS
 // These fixtures test the PRODUCER's catch-up scheduling, never runAnalytics
 // itself — none of them are ever wired through the issue #977 run ledger, so
 // this stub only needs to satisfy AnalyticsPersistence's shape.
-const NOOP_RUN_LEDGER: Pick<AnalyticsPersistence, "beginRun" | "appendRunEvent" | "freezeVintage"> = {
+const NOOP_RUN_LEDGER: Pick<AnalyticsPersistence, "beginRun" | "appendRunEvent" | "freezeVintage" | "submitTerminalRunPackage"> = {
   beginRun: async () => ({ runId: "0", methodologyVersionId: "0", replayed: false }),
   appendRunEvent: async () => {},
   freezeVintage: async () => ({
@@ -33,6 +33,7 @@ const NOOP_RUN_LEDGER: Pick<AnalyticsPersistence, "beginRun" | "appendRunEvent" 
     memberCount: 0,
     replayed: false,
   }),
+  submitTerminalRunPackage: async () => ({ outputSnapshots: [], reportSnapshotId: null, replayed: false }),
 };
 
 test("computeMissingResearchDays: a fully-populated window reports nothing missing", () => {
@@ -84,8 +85,6 @@ test("catchUpMissedResearchDays: repairs exactly the missing days via the inject
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
-    saveRegimeSnapshots: async () => {},
-    saveResearchSignal: async () => {},
     loadResearchSignalDates: async (since) => {
       expect(since).toBe(iso(14));
       return present;
@@ -114,8 +113,6 @@ test("catchUpMissedResearchDays: a repair failure for one day does not stop the 
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
-    saveRegimeSnapshots: async () => {},
-    saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => [],
     loadRawHistoryGapDates: async () => [],
   };
@@ -136,8 +133,6 @@ test("catchUpMissedResearchDays: a read failure is swallowed — never throws, r
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
-    saveRegimeSnapshots: async () => {},
-    saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => { throw new Error("network unreachable"); },
     loadRawHistoryGapDates: async () => [],
   };
@@ -158,8 +153,6 @@ test("catchUpMissedResearchDays: running it twice converges — the second pass 
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
-    saveRegimeSnapshots: async () => {},
-    saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => [...store].map((s) => {
       const [signalKey, date] = s.split("|") as [string, string];
       return { signalKey, date };
@@ -200,7 +193,6 @@ test("missing-day indicator repair persists an acquisition independent of an ana
     saveSourceAcquisition: async (e) => { acquisitions.push(e); return { acquisitionId: e.id, replayed: false }; },
     loadRawHistory: async () => ({}), saveRawHistory: async () => {},
     seedRawHistory: async (history) => { seeded = history; return { seededPoints: 1, existingPoints: 0, indicators: 1 }; },
-    saveRegimeSnapshots: async () => {}, saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => [], loadRawHistoryGapDates: async () => [iso(1)],
   };
   const source: AnalyticsDataSource = {
@@ -231,7 +223,6 @@ test("missing-day repair never persists fetched values when acquisition evidence
     saveSourceAcquisition: async () => { throw new Error("evidence store unavailable"); },
     loadRawHistory: async () => ({}), saveRawHistory: async () => { currentViewWrites++; },
     seedRawHistory: async () => { currentViewWrites++; return { seededPoints: 1, existingPoints: 0, indicators: 1 }; },
-    saveRegimeSnapshots: async () => {}, saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => [], loadRawHistoryGapDates: async () => [iso(1)],
   };
   const source: AnalyticsDataSource = {
