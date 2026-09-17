@@ -435,10 +435,14 @@ services:
     # backend/src/producer/index.ts for why that is the honest signal here.
     healthcheck:
       <<: *worker-healthcheck
-      # Longer than the lanes': startProducerSchedules blocks on waitForApi for
-      # up to 120s before the liveness loop writes its first heartbeat, and a
-      # producer that never gets there exits non-zero on its own.
-      start_period: 180s
+      # Longer than the lanes'. On a fresh database this process does real work
+      # for many minutes before the liveness loop exists: waitForApi (up to
+      # 120s), then a boot catch-up that repairs up to 14 EDGAR days one at a
+      # time. It stays green through all of it on records written from inside
+      # that work — a `boot` record before the API wait, then one per day from
+      # each catch-up loop (src/producer/index.ts). This window only has to
+      # cover container start up to that first record.
+      start_period: 300s
 
   # D21 retired the member-facing MCP server: swarm members reach the
   # swarm REST API on the `api` service directly (docs/decisions.md D21).

@@ -60,8 +60,8 @@ function installFetchDouble(localBaseUrl: string, edgarCountFor: (monthStart: st
     if (url.startsWith("https://efts.sec.gov/")) {
       edgarRequests.push(url);
       const count = edgarCountFor(startdtOf(url));
-      if (count == null) return { ok: false, status: 404, json: async () => ({}) } as Response;
-      return { ok: true, status: 200, json: async () => ({ hits: { total: { value: count } } }) } as Response;
+      if (count == null) return new Response(JSON.stringify({}), { status: 404 });
+      return Response.json({ hits: { total: { value: count } } });
     }
     if (url.startsWith(localBaseUrl)) return orig(input, init);
     throw new Error(`network disabled in test: ${url}`); // Yahoo/FRED — safe() degrades to []

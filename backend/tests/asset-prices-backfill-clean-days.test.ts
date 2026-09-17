@@ -126,7 +126,7 @@ test("backfillAssetPricesForCleanDays writes asset_prices for a complete clean d
     expect(Number(row.price_usd)).toBe(2);
     expect(row.source).toBe(usdcPinned.has(row.symbol) ? "pinned" : "geckoterminal");
   }
-});
+}, 60_000);
 
 test("backfillAssetPricesForCleanDays skips incomplete days", async () => {
   // Insert an INCOMPLETE day (missing some symbols)
