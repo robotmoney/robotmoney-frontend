@@ -136,10 +136,11 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     try {
       return {
         status: 200,
-        body: await ic.listSessions({ state, full, limit: limitRaw ? Number(limitRaw) : undefined, cursor }),
+        body: await ic.listSessions({ state, full, subject: url.searchParams.get("subject") ?? undefined, search: url.searchParams.get("search") ?? undefined, limit: limitRaw ? Number(limitRaw) : undefined, cursor }),
       };
     } catch (e) {
-      return { status: 400, body: { error: e instanceof Error ? e.message : "invalid request" } };
+      if (!(e instanceof Error) || !/^(malformed cursor|limit must|search must|filtered requests)/.test(e.message)) throw e;
+      return { status: 400, body: { error: e.message } };
     }
   }
   if (m === "GET" && p === C.openSession) return { status: 200, body: await ic.getOpenSession() };

@@ -1,78 +1,77 @@
-# Allocation research review
+# Allocation research
 
 Owner: David. Reference: RM-121. Updated: 17 September 2026.
-Status: draft PR for the reviewed frontend components and local page compositions. Production route replacement is a separate integration step.
-
-## Run and review
-
-From the repository root:
-
-```sh
-RM_RESEARCH_PORT=51087 bun --hot frontend/public/prototypes/research/preview.mjs
-bun test frontend/public/prototypes/research/research.test.js
-```
-
-Review these paths on the printed local origin:
-
-- `/swarm/subjects/robotmoney-allocation`: latest recommendation and history.
-- `/swarm/2026-06-24/robotmoney-allocation`: one session's recommendation, reasoning, disagreement and takes.
-- `/prototypes/research/components`: actual shared components, including interactive donut/bar variants and concept definitions.
-- Add `?data=stress` to the subject route for 96 sessions with 12 analysts each. Follow a session link to review long takes and missing fields.
-- Add `?format=json`, or `&format=json` after the stress query, for complete structured records.
-
-Other product links return to `RM_RESEARCH_PRODUCT_ORIGIN`, defaulting to the existing review server at `http://127.0.0.1:32782`. Set that environment variable to your own product server if needed. The preview binds to loopback, handles read requests only and does not mutate backend data. No package installation, backend or container is needed for these archive-backed pages.
+Status: production route and backend implementation in PR #990; not deployed.
 
 ## Page responsibilities
 
-Robot Money Allocation is the flagship policy guiding vault allocation. Other subjects are portfolios or books receiving swarm verdicts. Share components without forcing these different products into the same page hierarchy.
+Robot Money Allocation is the flagship policy guiding vault allocation. Other subjects are portfolios or books receiving swarm verdicts. The Allocation subject page answers what the latest published recommendation is and how recommendations changed. A session answers what was proposed, why, where analysts disagreed and what evidence exists.
 
-The subject page answers what the latest published recommendation is and how recommendations changed. The session answers what was proposed, why, where analysts disagreed and what source evidence exists. Recommendations, execution and observed holdings remain separate concepts. The archive does not establish execution, so that state stays visible as unreported.
+RM-115 supplies the visual direction and existing Allocation backend. Both RM-115 branches were compared with this branch; their relevant backend changes are already ancestors of main. This work extends the existing contract, database and router.
 
-RM-115 established the visual direction and is already merged through PR #924. This PR does not overwrite its production routes. It adds the reviewed two-page compositions and reusable components on top of `main`.
+Production routes:
 
-## Shared components and ownership
+- `/swarm/subjects/robotmoney-allocation`
+- `/swarm/<date>/robotmoney-allocation`, retained for existing links
+- `/swarm/sessions/<uuid>`, the unambiguous session link, including multiple reviews on one day
 
-| Source | Responsibility |
+Other subjects keep their portfolio pages. Allocation recommendations, published policy and observed holdings remain distinct. Neither a recommendation nor a verified consensus receipt proves execution.
+
+## Backend and data contract
+
+`GET /api/swarm/sessions` accepts `subject` and `search` alongside the existing state, limit and cursor. Search is a literal case-insensitive match on date or recommendation rationale, limited to 200 characters. Filters run before keyset pagination. Filtered requests cannot use the unbounded legacy `full=1` mode. Allocation uses 12 records per page.
+
+List rows include `takeCount` (distinct contributors, not revisions) and a compact `referenceAllocation` from that exact session's brief. Migration `0059_swarm_subject_session_history_idx.sql` indexes the subject/state/history access path. No historical records are rewritten.
+
+New Allocation briefs snapshot the database's allocation policy, including its date and constituents. Brief retries preserve the first reference, including an absent reference on an older brief. No seed fallback or today's policy is presented as a historical input. Brief recent-session entries include stable IDs.
+
+The session view requests its brief by session ID, reads the existing verified take projection, and reads the consensus receipt endpoint. Unsigned archive, verified signature and failed signature states remain distinct. Missing structured weights remain unavailable. Raw take vectors use the same proportional normalization as aggregation; no weights are extracted from prose.
+
+The subject page loads only one full session, plus one bounded history page. Takes within a session retain their full text and use client-side search and six-take pagination. The live roster cap is currently 10; the 12-analyst fixture exercises a larger display case without changing that backend rule.
+
+Requests have a 15-second timeout and are cancelled when the Allocation view is destroyed. History errors retain the previous results with an explicit error. Initial errors offer retry. An API outage never silently becomes an archive fallback. Optional brief/receipt failures do not conceal an otherwise readable session.
+
+## Shared components
+
+| Source under `frontend/public/assets/js/app/` | Responsibility |
 | --- | --- |
-| `frontend/public/assets/js/app/components/research.js` | Stance, identity, signed deltas, weight tables, safe prose, long-text disclosure and centrally defined concept help |
-| `frontend/public/assets/js/app/components/allocation-explorer.js` | Donut/bar renderers and shared sleeve-selection controller |
-| `frontend/public/assets/css/components/research.css` | Research components and responsive page composition |
-| `frontend/public/assets/js/app/lib/tooltip.js` | Existing tooltip behavior plus opt-in concept definitions |
-| `frontend/public/assets/css/components.css` | Existing tooltip presentation plus explicitly controlled definition state |
-| `frontend/public/prototypes/research/` | Archive adapter, labelled scale fixtures, page compositions, catalogue, enhancement, local server and tests |
+| `components/research.js` | Stance, identity, deltas, weight tables, safe prose, long-text disclosures and concept definitions |
+| `components/allocation-explorer.js` | Donut/bar rendering and sleeve interaction, independent of routes and fetching |
+| `research/data.js` | API/archive normalization, missing-value semantics and explicitly labelled scale fixtures |
+| `research/pages.js` | Subject/session compositions and component catalogue |
+| `research/enhance.js` | Component initialization, local take search/pagination and take-anchor disclosure; returns cleanup |
+| `research/live.js` | Live API orchestration, remote history pagination, loading/error/retry and route lifecycle |
+| `lib/tooltip.js` | Existing tooltip behavior plus scoped concept definitions with teardown |
 
-The preview reads the existing site shell from `index.html`; navigation and footer are not copied into a separate template. It imports the existing swarm disclaimer, stance mapping and categorical chart palette.
+Styles live in `assets/css/components/research.css`. Production and preview import these same components and compositions. Navigation, footer, disclaimer, stance colours, curated analyst logos and the categorical chart palette reuse the site sources. The preview files are adapters and a local server, not a second design implementation.
 
-The allocation explorer takes a unique instance ID, four total-allocation percentages in published sleeve order, optional reference percentages, within-sleeve fractions and asset labels. It knows nothing about routes or fetching. Hover/focus previews a sleeve; click/tap keeps the detail open; Close/Escape dismisses it. Labels retain exact weights and make small or zero sleeves selectable. Zero draws no segment. Asset rows distinguish percent of sleeve from percent of total allocation. The latter is calculated from the former and the sleeve weight. Long asset lists have a bounded, keyboard-focusable scroll area.
+The explorer accepts four allocation percentages in published sleeve order, optional reference percentages, within-sleeve fractions and asset labels. Hover/focus previews a sleeve; click/tap pins it; Close/Escape dismisses it. Labels retain exact weights and allow zero sleeves to be selected. Zero draws no segment. Asset rows distinguish percent of sleeve from percent of allocation.
 
-Production consumers should invoke these shared renderers with validated data and initialize the corresponding enhancements after rendering. The concept-tooltip initializer binds each new instance once; call it after replacing a route's markup. Existing Swarm, member and take templates are not migrated by this PR.
+Use a tooltip for a short definition, maintained once per concept. Use native disclosures for long explanations, lists or interactive content. Values, units, dates and execution status stay visible. Definitions open on hover, focus or tap, remain hoverable, dismiss on Escape/outside click, and clamp to the viewport. Each trigger has an `aria-describedby` target; definitions contain no links or controls.
 
-## Tooltip rule
+## Review locally
 
-Use a tooltip for a short definition that helps interpret an adjacent label. Keep definitions to one or two sentences and maintain one source per concept. Use a native disclosure for multi-paragraph explanations, lists or interactive content. Keep values, units, timestamps, source limitations and execution state visible.
+For the actual production routes, run the existing local stack and assemble current frontend assets with `bun run static:assemble`. Apply migrations before serving the updated API. A static-only preview cannot verify backend integration.
 
-The first definitions cover sleeve, session reference, percentage points, analyst conviction and share of sleeve. Dotted labels are appropriate for compact explanatory terms; a quiet question button can accompany a heading. Avoid adding a help icon to every row.
+For the lightweight design catalogue and explicitly synthetic scale review:
 
-Concept definitions use the existing `.rm-tip` styling with opt-in explicit visibility. They open on hover/focus or click/tap, remain readable while the pointer is over them, dismiss on Escape or outside click, and clamp to the viewport. Only one definition stays open. Text is connected with `aria-describedby`; definitions use `role="tooltip"` and contain no links or controls. This follows the interaction requirements described by [W3C's hover/focus guidance](https://www.w3.org/WAI/WCAG22/Understanding/content-on-hover-or-focus.html). Legacy tooltip consumers retain their existing behavior; this is not a site-wide tooltip migration or a complete accessibility certification.
+```sh
+RM_RESEARCH_PORT=51087 bun --hot frontend/public/prototypes/research/preview.mjs
+bun test scripts/tests/unit/allocation-research.test.js
+```
 
-## Data and verification
+The preview exposes both Allocation routes and `/prototypes/research/components`. Add `?data=stress` for 96 sessions, 12 synthetic analysts, long passages and missing fields. These controls are absent from production views. JSON exports belong to the preview; production links point directly to the public API. The public OpenAPI catalogue documents subject filtering and pagination for agents.
 
-Default data is six repository archive sessions with three analysts each. Reference weights are joined only to an exact-date brief. Missing references and structured take weights remain unavailable. No current policy is substituted for a historical reference, and no structured proposal is inferred from prose. Full archived text remains in server-rendered HTML; JSON includes source mode and units.
+## Verification
 
-The scale fixture has 96 unique sessions, 12 synthetic analysts, long names, missing weights and conviction, and deliberately repeated archive passages. It is labelled throughout. It validates information density and frontend interactions, not production capacity or API latency.
+Database tests cover subject filtering, pagination, same-day IDs, literal search, compact references and immutable policy snapshots across retries. The existing Swarm lifecycle suite also passes. The required unit tier includes the component/scale suite and production-envelope, signature-state, route-isolation and rendering checks.
 
-Validation: 14 unit tests, 465 assertions. Rendered checks covered desktop, 390px and 320px layouts, sleeve selection, keyboard controls, zero-sleeve handling, comparison disclosures, search, pagination, take permalinks, tooltip dismissal and viewport clamping. Browser errors were empty in the checked flow. Actual touch hardware and screen-reader sessions were not tested. Backend integration is not claimed.
+A local API and isolated PostgreSQL 18 database were loaded through the real v0 bootstrap: 72 sessions and 216 takes across subjects. Browser review covers the actual production router, API pagination/search, dated and stable-ID sessions, mobile overflow, sleeve drilldown, tooltip placement and dismissal, source status and API failure/retry. Historical takes without structured weights stay unavailable. These records establish integration behavior, not current production holdings.
 
-![Session composition and sleeve detail](allocation-audit/32-interactive-allocation-desktop.png)
+## Next
 
-![Shared donut and compact bar](allocation-audit/34-interactive-components.png)
+1. Review the integrated pages locally, then stage the frontend and backend together with the new index migration. Merge and deploy only after required checks and review.
+2. Adopt the shared primitives across other subjects, Swarm, members and takes, preserving portfolio-specific information hierarchy.
+3. Expand regime methodology/history and execution evidence only when their own source contracts establish those facts. Related backend issues: #960 through #965. This implementation addresses the page needs without treating all six issues as closed.
 
-![Shared concept definitions](allocation-audit/35-concept-help.png)
-
-## Next phases
-
-1. Integrate the two compositions into production routing and server rendering using the current contract. Map stable session/take IDs and exact session references; preserve archive URLs. Verify latest policy, recommendations, execution and holdings against their own sources. Related backend work: #960, #961, #962, #963, #964 and #965. Re-check each issue against the current contract before treating it as a blocker.
-2. Replace fixture pagination with backend pagination and verify loading, empty, failed and retry states. Confirm deep links, full-text loading, source provenance and agent-readable surfaces against real responses. Run production-path desktop/mobile checks, then review locally before staging.
-3. Adopt the shared components across other subjects, Swarm, members and takes. Give portfolio/books verdict pages their own information hierarchy. Expand the catalogue only when a recurring use case needs a variant.
-
-The current frontend chart rule mandates stable `CATEGORICAL` colours for entity composition. The context brand sheet still says to use a green bucket ramp, and conflicts with that newer frontend rule. This review follows the frontend palette; reconcile the canonical context documentation when the design is promoted. No remote context document was changed by this PR.
+The frontend's newer categorical colour rule conflicts with the green bucket ramp still described in the context brand sheet. This implementation follows `lib/chart-theme.js`. Reconcile the canonical context documentation when promoting the design; this PR does not change the remote context repository or claim that the release has shipped.

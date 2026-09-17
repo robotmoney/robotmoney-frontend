@@ -78,7 +78,7 @@ function detailFrom(text) {
 const NOT_THE_API =
   "The API did not answer this request — a web page came back instead of data, which means the backend is unreachable and something else answered in its place.";
 
-async function request(method, route, { query, body, headers } = {}) {
+async function request(method, route, { query, body, headers, signal } = {}) {
   let url = base() + route;
   if (query) {
     const qs = new URLSearchParams(query).toString();
@@ -92,6 +92,7 @@ async function request(method, route, { query, body, headers } = {}) {
   try {
     res = await fetch(url, {
       method,
+      signal,
       headers: Object.keys(merged).length ? merged : undefined,
       body: body ? JSON.stringify(body) : undefined,
       credentials: "include",
@@ -165,7 +166,7 @@ export class ApiError extends Error {
 }
 
 export const api = {
-  get: (route, query) => request("GET", route, { query }),
+  get: (route, query, { signal } = {}) => request("GET", route, { query, signal }),
   post: (route, body) => request("POST", route, { body }),
   health: () => request("GET", ROUTES.health),
   // Admin dashboard helpers: send the operator password as X-Admin-Token (the

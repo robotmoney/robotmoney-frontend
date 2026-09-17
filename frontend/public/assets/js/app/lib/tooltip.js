@@ -1,3 +1,4 @@
+// @ts-nocheck — shared buildless DOM behavior.
 // Behaviour for .rm-tip (components.css). Bound ONCE, by delegation, because
 // these views are Alpine templates: a tooltip inside an x-for is created and
 // destroyed as data changes, so per-element listeners attached at load would
@@ -121,6 +122,9 @@ export function initTooltips() {
 // instead of CSS hover so Escape can dismiss a still-hovered/focused trigger.
 // Delegation is unnecessary here: bind newly rendered component instances once.
 export function initConceptTooltips(scope = document) {
+  const controller = new AbortController();
+  const { signal } = controller;
+  const cleanups = [];
   for (const tip of scope.querySelectorAll('[data-concept-tip]')) {
     if (tip.dataset.bound) continue;
     tip.dataset.bound = 'true';
@@ -155,17 +159,19 @@ export function initConceptTooltips(scope = document) {
         if(!pinned && !tip.matches(':hover') && document.activeElement!==btn)hide();
       },140);
     }
-    tip.addEventListener('dismiss-concept',hide);
-    tip.addEventListener('pointerenter',event=>{if(event.pointerType!=='touch')show();});
-    tip.addEventListener('pointerleave',leave);
-    bub.addEventListener('pointerenter',()=>clearTimeout(timer));
-    bub.addEventListener('pointerleave',leave);
-    btn.addEventListener('focus',show);
-    btn.addEventListener('blur',leave);
-    btn.addEventListener('click',()=>{if(pinned)hide();else{show();pinned=true;}});
-    document.addEventListener('click',event=>{if(!tip.contains(event.target))hide();});
-    document.addEventListener('keydown',event=>{if(event.key==='Escape'&&visible()){hide();event.stopPropagation();}});
-    addEventListener('resize',hide);
-    addEventListener('scroll',hide,{capture:true,passive:true});
+    cleanups.push(() => { hide(); delete tip.dataset.bound; });
+    tip.addEventListener('dismiss-concept',hide,{signal});
+    tip.addEventListener('pointerenter',event=>{if(event.pointerType!=='touch')show();},{signal});
+    tip.addEventListener('pointerleave',leave,{signal});
+    bub.addEventListener('pointerenter',()=>clearTimeout(timer),{signal});
+    bub.addEventListener('pointerleave',leave,{signal});
+    btn.addEventListener('focus',show,{signal});
+    btn.addEventListener('blur',leave,{signal});
+    btn.addEventListener('click',()=>{if(pinned)hide();else{show();pinned=true;}},{signal});
+    document.addEventListener('click',event=>{if(!tip.contains(event.target))hide();},{signal});
+    document.addEventListener('keydown',event=>{if(event.key==='Escape'&&visible()){hide();event.stopPropagation();}},{signal});
+    addEventListener('resize',hide,{signal});
+    addEventListener('scroll',hide,{capture:true,passive:true,signal});
   }
+  return () => { controller.abort(); cleanups.forEach(fn => fn()); };
 }

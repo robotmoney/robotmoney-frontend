@@ -4,6 +4,8 @@
 // before that it was never typechecked, so this pragma preserves the status
 // quo rather than weakening existing coverage. JSDoc-typing this file is a
 // worthwhile follow-up, not a drive-by.
+import { allocationResearch } from "../research/live.js";
+
 import { api, ROUTES, path } from "../lib/api.js";
 import { ASSET_DOT, assetDot, subjectDot } from "./views/shared.js";
 import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
@@ -1716,6 +1718,9 @@ export function registerStaticViews(Alpine) {
   }));
 
   Alpine.data("swarmSessionDetail", () => ({
+    researchController: null,
+    researchDisposed: false,
+    destroy() { this.researchDisposed = true; this.researchController?.destroy(); },
     ...helpers,
     loading: true,
     error: null,
@@ -1733,6 +1738,8 @@ export function registerStaticViews(Alpine) {
     takes: [],
     members: [],
     async init() {
+      this.loading = true;
+      this.error = null;
       // TWO addressing forms reach this view:
       //   /swarm/sessions/<uuid>  — one exact session, the only form that can
       //                                 reach an earlier session of a day on which
@@ -1749,10 +1756,17 @@ export function registerStaticViews(Alpine) {
       if (byId) {
         try {
           const detail = await api.get(path(ROUTES.swarm.sessionById, { id: byId[1] }));
+          if (this.researchDisposed) return;
+          if (detail.session.subjectId === "robotmoney-allocation") {
+            this.researchController = allocationResearch(detail);
+            this.researchController.$el = this.$el;
+            await this.researchController.init();
+            return;
+          }
           const s = camelSession(detail.session);
           await this.loadApi(s.date, s.subjectId, detail);
-        } catch (_) {
-          this.error = "Session not found";
+        } catch (error) {
+          this.error = error?.status === 404 ? "Session not found" : "Session data is temporarily unavailable. Please try again.";
         } finally {
           this.loading = false;
         }

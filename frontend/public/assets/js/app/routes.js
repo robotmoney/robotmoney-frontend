@@ -239,6 +239,7 @@ export function viewFor(pathname) {
   // has published one per subject all along. Checked here (not by the catch-all)
   // because /swarm/subjects/<id> would otherwise resolve to a per-id
   // fragment that does not exist and 404.
+  if (/^\/swarm\/(subjects|\d{4}-\d{2}-\d{2})\/robotmoney-allocation\/?$/.test(pathname)) return `${VIEW_DIR}/swarm/allocation-research.html`;
   if (/^\/swarm\/subjects\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/swarm/subject.html`;
   }

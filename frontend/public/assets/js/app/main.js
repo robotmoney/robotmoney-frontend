@@ -2,6 +2,7 @@
 // CDN script (document order = execution order), so our `alpine:init` listener
 // is registered before Alpine boots and starts processing the DOM. No build
 // step, no Web Components — Alpine owns all behavior and lifecycle.
+import { allocationResearch } from "./research/live.js";
 import { registerSubstrate } from "./alpine/substrate.js";
 import { registerViews } from "./alpine/views.js";
 import { registerHeroes } from "./alpine/heroes.js";
@@ -91,6 +92,7 @@ initTooltips();
 
 document.addEventListener("alpine:init", () => {
   const Alpine = window.Alpine;
+  Alpine.data("allocationResearch", allocationResearch);
 
   // Chart.js CDN precedes Alpine in document order, so window.Chart is ready by
   // now — set the shared chart theme defaults once, before any chart draws.

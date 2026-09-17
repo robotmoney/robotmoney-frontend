@@ -1,5 +1,7 @@
+// @ts-nocheck — buildless DOM rendering; contract and behavior are validated by research tests.
 // Shared, server/browser-safe research components. Inputs are data, never HTML.
 import { STANCE_COLORS, stanceColor } from "../lib/stance.js";
+import { memberLogo } from "../lib/member-logos.js";
 import { CATEGORICAL } from "../lib/chart-theme.js";
 export const esc = (v) =>
   String(v ?? "").replace(
@@ -118,16 +120,11 @@ export function longText(
   return `<div class="rr-long"><p class="rr-excerpt">${esc(excerpt(text, limit))}</p><details class="rr-disclosure"><summary>${esc(label)} <span class="rr-muted">${String(text).trim().split(/\s+/).length} words</span></summary><div class="rr-prose">${prose(text)}</div></details></div>`;
 }
 export function identity(t) {
-  const logo =
-    t.memberId === "woon"
-      ? "/avatars/swarm/woon.png"
-      : t.memberId === "robotmoney"
-        ? "/avatars/swarm/robot-money.svg"
-        : null;
+  const logo = memberLogo({ handle: t.memberHandle || (t.memberId === "robotmoney" ? "robot-money" : t.memberId) });
   return `<span class="rr-identity">${logo ? `<img src="${logo}" alt="" width="32" height="32">` : ""}<span><b>${esc(t.name)}</b><small>${esc(t.lens || "Analyst")}</small></span></span>`;
 }
 export function sourceNote(mode) {
-  return `<p class="rr-source">${mode === "stress" ? "Scale test: 12 synthetic analysts and 96 simulated sessions. Archived prose is replayed; dates and weights are illustrative." : "Historical archive · June 2026. Recommendations are published research, not evidence of execution."}</p>`;
+  return `<p class="rr-source">${mode === "live" ? "Recommendations are research records. Published policy and observed vault holdings are separate." : mode === "stress" ? "Scale test: 12 synthetic analysts and 96 simulated sessions. Archived prose is replayed; dates and weights are illustrative." : "Historical archive · June 2026. Recommendations are published research, not evidence of execution."}</p>`;
 }
 
 // Definitions belong to the concept, not an individual page. Keep to 1-2

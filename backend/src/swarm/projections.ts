@@ -125,6 +125,11 @@ function toRegimeSummaryListItem(regimeSummary: Row["regime_summary"]): RegimeSu
 // label per row instead of falling back to session state.
 export function toSessionListItem(row: Row): SwarmSessionListItem {
   return {
+    takeCount: row.take_count == null ? null : Number(row.take_count),
+    referenceAllocation: row.reference_allocation ? {
+      asof: row.reference_allocation.asof,
+      buckets: (row.reference_allocation.buckets ?? []).map((b: any) => ({ id: b.id, target_weight: b.target_weight })),
+    } : null,
     id: row.id,
     date: day(row.date),
     subjectId: row.subject_id,

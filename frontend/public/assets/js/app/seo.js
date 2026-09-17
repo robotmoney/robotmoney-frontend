@@ -424,6 +424,12 @@ export function metaFor(pathname) {
   // page it actually renders. Without this, /committee/members/woon fell to
   // NOT_FOUND_META ("Page Not Found", noindex) while rendering a real member.
   const p = canonicalPath(pathname);
+  if (p === "/swarm/subjects/robotmoney-allocation" || /^\/swarm\/\d{4}-\d{2}-\d{2}\/robotmoney-allocation$/.test(p)) {
+    return {
+      title: p.includes("/subjects/") ? "Robot Money Allocation | Research record" : "Allocation review | Robot Money",
+      description: "Allocation recommendations, analyst takes and the session-time policy behind Robot Money’s flagship allocation.",
+    };
+  }
   if (META[p]) return META[p];
   for (const { prefix, suffix } of SECTIONS) {
     if (p === prefix || p.startsWith(prefix + "/")) {

@@ -6,6 +6,8 @@
     <p class="sv__loading" x-show="loading">Loading session…</p>
     <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
 
+    <button type="button" x-show="error && !loading" x-cloak @click="init()">Try again</button>
+
     <template x-if="!loading && session">
       <div>
         <header class="sv__detail-head">

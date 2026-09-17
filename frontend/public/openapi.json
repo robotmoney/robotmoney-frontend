@@ -457,9 +457,29 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/swarm"
+          "https://robotmoney.network/swarm",
+          "https://robotmoney.network/swarm/subjects/robotmoney-allocation"
         ],
         "parameters": [
+          {
+            "name": "subject",
+            "in": "query",
+            "required": false,
+            "description": "Subject id. Uses bounded pagination; cannot combine with full=1.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "robotmoney-allocation"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "description": "Literal case-insensitive match on date or rationale, at most 200 characters.",
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "state",
             "in": "query",

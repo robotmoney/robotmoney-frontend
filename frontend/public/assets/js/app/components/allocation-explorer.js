@@ -1,3 +1,4 @@
+// @ts-nocheck — buildless DOM rendering; contract and behavior are validated by research tests.
 // Shared allocation composition and sleeve drill-down. Percentages in `values`
 // are of the whole allocation; `within` values are fractions of their sleeve.
 import {

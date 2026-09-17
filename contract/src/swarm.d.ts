@@ -327,7 +327,14 @@ export interface SwarmSession {
 // RegimeSummaryListItem) so the swarm index can render the regime label
 // per row instead of falling back to session state — the >=8-point history
 // array stays detail-only to keep the list small.
+export interface SwarmAllocationReference {
+  asof: string;
+  buckets: { id: string; target_weight: number; items?: { id: string; name: string; target_weight: number }[] }[];
+}
+
 export interface SwarmSessionListItem {
+  takeCount?: number | null;
+  referenceAllocation?: SwarmAllocationReference | null;
   id: string;
   date: string;
   subjectId: string;
@@ -398,6 +405,8 @@ export interface SwarmBriefResearchSignalRef {
 }
 
 export interface SwarmBriefBody {
+  /** Policy supplied to this exact session. Absent for older briefs. */
+  allocation?: SwarmAllocationReference;
   regime: unknown;
   subject: SwarmSubject | null;
   recentSessions: unknown[];

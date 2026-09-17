@@ -344,6 +344,7 @@ function encodeSessionsCursor(row: Record<string, any>): string {
 // handler, never a silent "start from the top" that would mask client bugs.
 function decodeSessionsCursor(cursor?: string | null): SessionsCursor | null {
   if (cursor == null || cursor === "") return null;
+  if (cursor.length > 512) throw new Error("malformed cursor");
   let obj: unknown;
   try {
     obj = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
@@ -354,7 +355,12 @@ function decodeSessionsCursor(cursor?: string | null): SessionsCursor | null {
     obj && typeof obj === "object" &&
     typeof (obj as SessionsCursor).d === "string" &&
     typeof (obj as SessionsCursor).g === "string" &&
-    typeof (obj as SessionsCursor).i === "string"
+    typeof (obj as SessionsCursor).i === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test((obj as SessionsCursor).d) &&
+    Number.isFinite(Date.parse((obj as SessionsCursor).d)) &&
+    new Date((obj as SessionsCursor).d).toISOString().slice(0, 10) === (obj as SessionsCursor).d &&
+    Number.isFinite(Date.parse((obj as SessionsCursor).g)) &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test((obj as SessionsCursor).i)
   ) {
     return obj as SessionsCursor;
   }
@@ -374,6 +380,8 @@ function parseSessionsLimit(raw?: number): number {
 
 export interface ListSessionsOptions {
   state?: string;
+  subject?: string;
+  search?: string;
   limit?: number;
   cursor?: string | null;
   /** Reproduce the pre-#243 unpaginated, unprojected (every field, no state
@@ -404,6 +412,8 @@ async function getNextSwarmSessionAt(): Promise<string | null> {
 
 export async function listSessions(opts: ListSessionsOptions = {}) {
   const nextSessionAt = await getNextSwarmSessionAt();
+  if (opts.full && (opts.subject || opts.search)) throw new Error("filtered requests require pagination");
+  if (opts.search && opts.search.length > 200) throw new Error("search must be at most 200 characters");
   if (opts.full) {
     const rows = await sql`SELECT * FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
     return { sessions: rows.map(toSession), nextCursor: null as string | null, nextSessionAt };
@@ -412,6 +422,8 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   const limit = parseSessionsLimit(opts.limit);
   const conds = [];
   if (opts.state) conds.push(sql`state = ${opts.state}`);
+  if (opts.subject) conds.push(sql`subject_id = ${opts.subject}`);
+  if (opts.search?.trim()) conds.push(sql`strpos(lower(date::text || ' ' || COALESCE(swarm_recommendation->>'rationale', '')), lower(${opts.search.trim()})) > 0`);
   const cur = decodeSessionsCursor(opts.cursor);
   // Bind the timestamp as text before casting on the server.  If postgres.js
   // infers a timestamptz parameter directly it serializes the string through a
@@ -424,7 +436,9 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   // the cursor's row-comparison predicate, so pages are stable even as new
   // sessions are inserted between requests.
   const rows = await sql`
-    SELECT *, generated_at::text AS cursor_generated_at
+    SELECT *, generated_at::text AS cursor_generated_at,
+      (SELECT count(DISTINCT member_id)::int FROM swarm_recommendations WHERE session_id = swarm_sessions.id) AS take_count,
+      (SELECT body->'allocation' FROM swarm_briefs WHERE session_id = swarm_sessions.id) AS reference_allocation
     FROM swarm_sessions ${where}
     ORDER BY date DESC, generated_at DESC, id DESC
     LIMIT ${limit + 1}`;
@@ -1623,7 +1637,7 @@ export async function openSession(subjectId: string) {
 export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   const regime = (await sql`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
-  const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' ORDER BY date DESC LIMIT 5`;
+  const recent = await sql`SELECT id, date, subject_id, state FROM swarm_sessions WHERE state = 'published' AND subject_id = ${s.subject_id} ORDER BY date DESC, generated_at DESC, id DESC LIMIT 5`;
   const researchSignals = await sql`
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
@@ -1631,7 +1645,17 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
   const subject = await getSubject(s.subject_id);
   const closes = new Date(Date.now() + windowMinutes * 60_000);
   const windowClosesAt = closes.toISOString();
+  // Snapshot only a policy actually present at brief time. Never reconstruct
+  // historical references using today's framework or the fallback seed.
+  const framework = s.subject_id === "robotmoney-allocation"
+    ? (await sql`SELECT asof, buckets FROM allocation_framework WHERE id = 1`)[0]
+    : null;
+  const existingBrief = (await sql`SELECT body FROM swarm_briefs WHERE session_id = ${sessionId}`)[0];
+  const allocation = existingBrief
+    ? existingBrief.body?.allocation ?? null
+    : framework ? { asof: day(framework.asof), buckets: framework.buckets } : null;
   const body = {
+    ...(allocation ? { allocation } : {}),
     regime,
     subject,
     recentSessions: recent,
@@ -1664,7 +1688,9 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
   // session on the same day now INSERTs its own row.
   await sql`INSERT INTO swarm_briefs (session_id, date, subject_id, body)
             VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${sql.json(jsonValue(body))})
-            ON CONFLICT (session_id) DO UPDATE SET body = EXCLUDED.body`;
+            ON CONFLICT (session_id) DO UPDATE SET body =
+              (EXCLUDED.body - 'allocation') || CASE WHEN swarm_briefs.body ? 'allocation'
+                THEN jsonb_build_object('allocation', swarm_briefs.body->'allocation') ELSE '{}'::jsonb END`;
   await sql`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
   return { sessionId, state: "collecting", windowClosesAt };
 }
