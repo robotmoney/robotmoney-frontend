@@ -1428,3 +1428,27 @@ test("ordinal string formatting for percentiles in buildRationale and buildConse
     expect(found).toBe(true);
   }
 });
+
+import { toTake } from "../src/swarm/projections.ts";
+
+test("toTake constructs a public DTO where SwarmTake.weights === null if payload.weights is malformed", () => {
+  const row = {
+    id: "fake-id",
+    member_id: "fake-member",
+    member_handle: "fake-handle",
+    member_name: "Fake Member",
+    stance: "bullish",
+    confidence: 0.8,
+    body: "fake body",
+    memo_url: null,
+    verified: true,
+    payload: { weights: [{ bucket: "b", weight: -1 }] }, // Malformed!
+  };
+  const takeDto = toTake(row as any);
+  expect(takeDto.weights).toBeNull();
+
+  // And test valid weights just in case
+  const rowValid = { ...row, payload: { weights: [{ bucket: "b", weight: 1 }] } };
+  const takeDtoValid = toTake(rowValid as any);
+  expect(takeDtoValid.weights).toEqual([{ bucket: "b", weight: 1 }]);
+});
