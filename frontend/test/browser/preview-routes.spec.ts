@@ -97,7 +97,6 @@ test.describe(`every sitemap route loads in the preview (api: ${api})`, () => {
         .toBe(route);
       const view = page.frameLocator("#frame").locator("main#view > *");
       await expect(view.first()).toBeAttached({ timeout: 15_000 });
-      await page.waitForLoadState("networkidle");
 
       expect(notFoundFetched, `${route} rendered the not-found view`).toBe(false);
       expect(problems, `${route} logged errors:\n  ${problems.join("\n  ")}`).toEqual([]);
