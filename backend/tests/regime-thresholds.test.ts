@@ -11,7 +11,8 @@
 //   * synthetic backfill is smoke-gated (refused under RM_ENV=prod) and reserved
 //     for the smoke fixture path (ensureSmokeSubjectFixtures).
 import { test, expect, afterEach } from "bun:test";
-import { classifyRegime, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
+import { classifyRegime, REGIME_METHOD, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
+
 import { classifyRegime as classifierLabel } from "../src/analytics/analyze/regime.ts";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
@@ -42,6 +43,9 @@ async function snapshotCount(): Promise<number> {
 test("canonical thresholds are 0.33/0.67 and classifyRegime matches analyze/regime.ts's label rule", () => {
   expect(REGIME_RISK_OFF).toBe(0.33);
   expect(REGIME_RISK_ON).toBe(0.67);
+  expect(REGIME_METHOD.id).toBe("composite-v1");
+  expect(REGIME_METHOD.cuts).toEqual({ risk_off: 0.33, risk_on: 0.67 });
+
 
   // The analytics classifier re-exports the very same function — not a copy.
   expect(classifierLabel).toBe(classifyRegime);
@@ -143,3 +147,10 @@ test("backfillRegimeHistory REFUSES to write synthetic rows under RM_ENV=prod", 
   await backfillRegimeHistory("2026-07-07");
   expect(await snapshotCount()).toBe(0);
 });
+
+test("buildRegimeSummary output carries method === REGIME_METHOD.id", async () => {
+  await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-08', 0.50, 'neutral')`;
+  const summary = await buildRegimeSummary("2026-07-08", 1);
+  expect(summary.method).toBe(REGIME_METHOD.id);
+});
+

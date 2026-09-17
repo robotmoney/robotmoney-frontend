@@ -214,7 +214,9 @@ export interface RegimeSummary {
   onchain_percentile: number;
   factor_percentile: number;
   history: RegimeHistoryPoint[];
+  method?: string;
 }
+
 
 // The list endpoint's slim regimeSummary (issue #357): every field the detail
 // endpoint's RegimeSummary carries EXCEPT the >=8-point trailing history
