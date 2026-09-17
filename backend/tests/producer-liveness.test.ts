@@ -20,9 +20,45 @@ import {
   resetProducerSchedules,
   runProducerLiveness,
   startProducerSchedules,
+  withProducerBootstrapHeartbeat,
   type ProducerKind,
   type ScheduleState,
 } from "../src/producer/index.ts";
+
+test("boot-time catch-up emits progress heartbeats and always cancels its timer", async () => {
+  const beats: string[] = [];
+  let intervalCallback: (() => void) | undefined;
+  let cancelled = false;
+  const result = await withProducerBootstrapHeartbeat(async () => {
+    intervalCallback?.();
+    await Promise.resolve();
+    return "done";
+  }, {
+    beat: async (record) => { beats.push(record.detail); },
+    every: (callback) => {
+      intervalCallback = callback;
+      return 7 as unknown as ReturnType<typeof setInterval>;
+    },
+    cancel: () => { cancelled = true; },
+    tickMs: 10,
+  });
+  await Promise.resolve();
+  expect(result).toBe("done");
+  expect(beats).toEqual(["boot-time catch-up in progress", "boot-time catch-up in progress"]);
+  expect(cancelled).toBe(true);
+});
+
+test("boot-time catch-up cancels its progress timer when startup fails", async () => {
+  let cancelled = false;
+  await expect(withProducerBootstrapHeartbeat(async () => {
+    throw new Error("catch-up failed");
+  }, {
+    beat: async () => {},
+    every: () => 8 as unknown as ReturnType<typeof setInterval>,
+    cancel: () => { cancelled = true; },
+  })).rejects.toThrow("catch-up failed");
+  expect(cancelled).toBe(true);
+});
 
 afterEach(() => { resetProducerSchedules(); });
 

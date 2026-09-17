@@ -100,6 +100,8 @@ export interface ResearchCatchUpDeps {
   runner?: Runner;
   source?: AnalyticsDataSource;
   now?: () => Date;
+  /** Test seam: override the heartbeat writer so tests never touch /tmp. */
+  beat?: (rec: Omit<import("../ops/heartbeat.ts").HeartbeatRecord, "ts">) => Promise<void>;
 }
 
 /** Best-effort: a read or repair failure here must never take down the
@@ -111,6 +113,7 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
   const persistence = deps.persistence ?? analyticsApiClient();
   const now = (deps.now ?? (() => new Date()))();
   const since = new Date(now.getTime() - CATCHUP_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const beat = deps.beat ?? writeHeartbeat;
 
   let present: { signalKey: string; date: string }[];
   try {
@@ -123,6 +126,10 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
   const missing = computeMissingResearchDays(present, now);
   for (const day of missing) {
     console.log(`[analytics-producer] catch-up: repairing missed research day ${day}`);
+    // Write a heartbeat before each day's I/O so Docker sees liveness
+    // progress during a multi-day boot catch-up (staleAfterMs is generous
+    // enough to cover one full EDGAR day-repair round-trip).
+    await beat({ phase: "busy", staleAfterMs: 120_000, writer: "analytics-producer", detail: `catch-up: repairing missed research day ${day}` });
     try {
       await runProducerOnce("research", day, { runner: deps.runner, source: deps.source, persistence });
     } catch (err) {
@@ -162,6 +169,8 @@ export interface IndicatorCatchUpDeps {
   persistence?: AnalyticsPersistence;
   source?: AnalyticsDataSource;
   now?: () => Date;
+  /** Test seam: override the heartbeat writer so tests never touch /tmp. */
+  beat?: (rec: Omit<import("../ops/heartbeat.ts").HeartbeatRecord, "ts">) => Promise<void>;
 }
 
 /** Best-effort, same contract as catchUpMissedResearchDays: never throws,
@@ -174,6 +183,7 @@ export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}
   const source = deps.source ?? resolveAnalyticsSource();
   const now = (deps.now ?? (() => new Date()))();
   const since = new Date(now.getTime() - INDICATOR_CATCHUP_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const beat = deps.beat ?? writeHeartbeat;
 
   let missing: string[];
   try {
@@ -187,6 +197,9 @@ export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}
   if (missing.length === 0) return [];
 
   console.log(`[analytics-producer] indicator catch-up: ${missing.length} raw_indicator_history day(s) missing since ${since}, re-fetching the registry`);
+  // Write a heartbeat before the registry fetch so Docker sees liveness
+  // progress during boot-time catch-up (the fetch is the expensive I/O here).
+  await beat({ phase: "busy", staleAfterMs: 120_000, writer: "analytics-producer", detail: `indicator catch-up: fetching registry for ${missing.length} missing day(s)` });
   const missingSet = new Set(missing);
   let fetched: Record<string, { date: string; value: number }[]>;
   try {
@@ -401,6 +414,39 @@ export async function startProducerSchedules(deps: ProducerServeDeps = {}): Prom
 
 const PRODUCER_WRITER = "analytics-producer";
 
+/** Keep the container healthy while boot-time catch-up is making observable
+ * progress. The steady-state liveness loop cannot start until schedules have
+ * been armed, but a rate-limited catch-up can legitimately take several
+ * minutes. This heartbeat covers that bounded phase and is always cancelled
+ * before the normal liveness loop takes ownership of the same file. */
+export async function withProducerBootstrapHeartbeat<T>(
+  operation: () => Promise<T>,
+  deps: {
+    beat?: typeof writeHeartbeat;
+    every?: (callback: () => void, ms: number) => ReturnType<typeof setInterval>;
+    cancel?: (timer: ReturnType<typeof setInterval>) => void;
+    tickMs?: number;
+  } = {},
+): Promise<T> {
+  const tickMs = deps.tickMs ?? 30_000;
+  const beat = deps.beat ?? writeHeartbeat;
+  const pulse = () => beat({
+    phase: "armed",
+    staleAfterMs: tickMs * 4,
+    writer: PRODUCER_WRITER,
+    detail: "boot-time catch-up in progress",
+  }).catch((err) => {
+    console.error(`[analytics-producer] bootstrap heartbeat failed: ${err instanceof Error ? err.message : err}`);
+  });
+  await pulse();
+  const timer = (deps.every ?? setInterval)(() => { void pulse(); }, tickMs);
+  try {
+    return await operation();
+  } finally {
+    (deps.cancel ?? clearInterval)(timer);
+  }
+}
+
 /** Tolerance for a cron whose fire time has just passed but whose callback has
  *  not been entered yet — timer dispatch is not instantaneous. */
 const FIRE_SLACK_MS = 60_000;
@@ -526,7 +572,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command !== "serve") throw new Error(`usage: producer <serve|seed|regime|research> [YYYY-MM-DD]`);
-  const cfg = await startProducerSchedules();
+  const cfg = await withProducerBootstrapHeartbeat(() => startProducerSchedules());
   // Replaces a bare `new Promise<never>(() => {})`: the process still parks
   // here forever, but now it parks doing the liveness work above.
   await runProducerLiveness(cfg);

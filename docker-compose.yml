@@ -436,9 +436,13 @@ services:
     healthcheck:
       <<: *worker-healthcheck
       # Longer than the lanes': startProducerSchedules blocks on waitForApi for
-      # up to 120s before the liveness loop writes its first heartbeat, and a
-      # producer that never gets there exits non-zero on its own.
-      start_period: 180s
+      # up to 120s before the liveness loop writes its first heartbeat, and on
+      # a fresh database the boot-time catch-up can run up to 14 EDGAR days
+      # sequentially (~10-15s each) before the normal liveness loop takes over.
+      # The catch-up emits a heartbeat before each day so Docker sees progress,
+      # but 300s gives a full window for the first beat to land even on a slow
+      # network day.
+      start_period: 300s
 
   # D21 retired the member-facing MCP server: swarm members reach the
   # swarm REST API on the `api` service directly (docs/decisions.md D21).
