@@ -1,7 +1,18 @@
 // Swarm domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { canonicalizeApplication, classifyRegime, REGIME_METHOD, SWARM_ROSTER_CAP, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import {
+  canonicalizeApplication,
+  classifyRegime,
+  REGIME_METHOD,
+  type RegimeLabel,
+  type RegimeSummary,
+  SWARM_ROSTER_CAP,
+  SWARM_TAKE_REVISION_CAP,
+  path as routePath,
+  ROUTES,
+  STANCES,
+} from "@robotmoney/contract";
 import { config, resolveSwarmNotificationEmailFrom } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -1924,73 +1935,54 @@ export async function closeWindow(sessionId: string) {
 }
 
 // Build the reference-shaped regime_summary object from the trailing regime
-// snapshots (with deterministic IN-MEMORY padding so history.length >= 8). Kept
-// separate so tests and aggregation share one code path.
+// snapshots. Kept separate so tests and aggregation share one code path.
 //
 // LIVE-PATH honesty (finding 009): this is the live aggregation path, so it
 // never writes to regime_snapshots — stored labels are READ as-is (the
 // classifier owns them) and classifyRegime is only a fallback for rows whose
-// label is null. Sparse histories are padded in memory, not persisted; smoke
-// deployments get their >= 8 persisted points from ensureSmokeSubjectFixtures.
-export async function buildRegimeSummary(endDate: string, minPoints = 8) {
+// label is null. History is unpadded and emits only real points.
+export async function buildRegimeSummary(endDate: string, minPoints = 8): Promise<RegimeSummary> {
   const rows = await sql`
     SELECT date, composite, composite_percentile, regime,
            macro_regime, onchain_regime, factor_regime,
            macro_index, onchain_index, factor_index,
            macro_percentile, onchain_percentile, factor_percentile
-    FROM regime_snapshots ORDER BY date DESC LIMIT 14`;
+    FROM regime_snapshots
+    WHERE date <= ${endDate}
+    ORDER BY date DESC
+    LIMIT 14`;
   const chrono = rows.slice().reverse(); // chronological
-  const numOr = (v: unknown, fallback: number) => (v == null ? fallback : Number(v));
-  // Percentile fallback: use stored percentile else the value itself clamped 0..1.
-  const pct = (v: unknown, base: unknown) => {
-    const p = v == null ? null : Number(v);
-    if (p != null && Number.isFinite(p)) return round(Math.max(0, Math.min(1, p)));
-    const b = base == null ? 0.5 : Number(base);
-    return round(Math.max(0, Math.min(1, b)));
+  const num = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = typeof v === "number" ? v : Number(v);
+    return typeof n === "number" && Number.isFinite(n) ? round(n) : null;
   };
-  let history = chrono.map((r: any) => ({
-    date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
-    composite: numOr(r.composite, 0.5),
-    regime: r.regime ?? classifyRegime(numOr(r.composite, 0.5)),
-    macro: numOr(r.macro_index ?? r.macro_percentile, 0.6),
-    onchain: numOr(r.onchain_index ?? r.onchain_percentile, 0.35),
-    factor: numOr(r.factor_index ?? r.factor_percentile, 0.75),
-  }));
-
-  // Guarantee >= minPoints even if real rows exist but are sparse: prepend
-  // deterministic synthetic leading points dated before the earliest real one.
-  if (history.length < minPoints) {
-    const need = minPoints - history.length;
-    const anchor = history[0]?.date ?? endDate;
-    const rng = seeded(`pad:${anchor}`);
-    const pad = [];
-    for (let i = need; i >= 1; i--) {
-      const t = (need - i) / Math.max(1, need + history.length - 1);
-      pad.push(syntheticRegimePoint(shiftDay(anchor, -i), t, rng));
-    }
-    history = [...pad, ...history];
-  }
+  const history: RegimeSummary["history"] = chrono.map((r: any) => {
+    const c = num(r.composite);
+    return {
+      date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
+      composite: c,
+      composite_percentile: num(r.composite_percentile),
+      regime: (r.regime ?? (c != null ? classifyRegime(c) : "neutral")) as RegimeLabel,
+      macro_percentile: num(r.macro_percentile),
+      onchain_percentile: num(r.onchain_percentile),
+      factor_percentile: num(r.factor_percentile),
+    };
+  });
 
   const latest = chrono[chrono.length - 1] as any;
-  const lc = latest ? numOr(latest.composite, 0.5) : history[history.length - 1].composite;
+  const lc = latest ? num(latest.composite) ?? 0.5 : 0.5;
   return {
     composite: round(lc),
-    composite_percentile: pct(latest?.composite_percentile, lc),
-    regime: latest?.regime ?? classifyRegime(lc),
-    macro_regime: latest?.macro_regime ?? classifyRegime(history[history.length - 1].macro),
-    onchain_regime: latest?.onchain_regime ?? classifyRegime(history[history.length - 1].onchain),
-    factor_regime: latest?.factor_regime ?? classifyRegime(history[history.length - 1].factor),
-    macro_percentile: pct(latest?.macro_percentile, latest?.macro_index ?? history[history.length - 1].macro),
-    onchain_percentile: pct(latest?.onchain_percentile, latest?.onchain_index ?? history[history.length - 1].onchain),
-    factor_percentile: pct(latest?.factor_percentile, latest?.factor_index ?? history[history.length - 1].factor),
-    history: history.map((h) => ({
-      date: h.date,
-      composite: round(h.composite),
-      regime: h.regime,
-      macro: round(h.macro),
-      onchain: round(h.onchain),
-      factor: round(h.factor),
-    })),
+    composite_percentile: num(latest?.composite_percentile),
+    regime: (latest?.regime ?? classifyRegime(lc)) as RegimeLabel,
+    macro_regime: (latest?.macro_regime ?? (num(latest?.macro_percentile ?? latest?.macro_index) != null ? classifyRegime(num(latest?.macro_percentile ?? latest?.macro_index)!) : "neutral")) as RegimeLabel,
+    onchain_regime: (latest?.onchain_regime ?? (num(latest?.onchain_percentile ?? latest?.onchain_index) != null ? classifyRegime(num(latest?.onchain_percentile ?? latest?.onchain_index)!) : "neutral")) as RegimeLabel,
+    factor_regime: (latest?.factor_regime ?? (num(latest?.factor_percentile ?? latest?.factor_index) != null ? classifyRegime(num(latest?.factor_percentile ?? latest?.factor_index)!) : "neutral")) as RegimeLabel,
+    macro_percentile: num(latest?.macro_percentile),
+    onchain_percentile: num(latest?.onchain_percentile),
+    factor_percentile: num(latest?.factor_percentile),
+    history,
     method: REGIME_METHOD.id,
   };
 }
@@ -2106,7 +2098,7 @@ export function majorityStance(byStance: Record<string, number>): { stance: stri
 export function buildConsensus(
   active: number, submitted: number, participation: number,
   byStance: Record<string, number>, meanConfidence: number | null,
-  regimeSummary: { composite_percentile?: number; regime?: string } | null,
+  regimeSummary: { composite_percentile?: number | null; regime?: string } | null,
 ): string[] {
   if (submitted === 0) return [];
   const points: string[] = [`${submitted} of ${active} members submitted (${Math.round(participation * 100)}% participation).`];
@@ -2124,7 +2116,7 @@ export function buildConsensus(
 // the two can never collide (cheap check: rationale !== synthesis).
 export function buildRationale(
   subjectLabel: string, byStance: Record<string, number>, submitted: number,
-  meanConfidence: number | null, regimeSummary: { composite_percentile?: number } | null,
+  meanConfidence: number | null, regimeSummary: { composite_percentile?: number | null } | null,
 ): string {
   const majority = majorityStance(byStance);
   const parts: string[] = [];

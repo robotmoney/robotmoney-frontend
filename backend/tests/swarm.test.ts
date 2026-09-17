@@ -734,10 +734,8 @@ test("GET /api/swarm/sessions default: light-projected + cursor-paginated (no bi
 
 test("GET /api/swarm/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default carries both regimeSummary (issue #357) and synthesis (issue #358)", async () => {
   const subj = rid("fullproj");
-  await ic.ensureSubject(subj, "Full Projection Subject");
+  await ic.ensureSmokeSubjectFixtures(subj, "Full Projection Subject", "2026-07-05");
   const session = await ic.openSession(subj);
-  // The DATABASE dates the session (migration 0022) — read it back rather
-  // than asserting a date this test chose.
   const date = sessionDate(session);
   await ic.publishBrief(session.id, 60);
   const m = await activeMember();
