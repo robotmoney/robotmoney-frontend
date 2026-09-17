@@ -362,3 +362,41 @@ test("a sweep-sized acquisition persists in a handful of statements, not two per
   // is a floor against the per-row regression, not a benchmark.
   expect(elapsed).toBeLessThan(5_000);
 });
+
+test("re-acquiring a series stays fast as its revision history deepens", async () => {
+  // THE FAILURE THIS GUARDS
+  // Each re-acquisition of a series adds another generation of rows under the
+  // same source_key. If the prior-revision lookup cannot use the index, every
+  // value rescans every generation, so acquisition N costs N times acquisition
+  // 1 — fine at fixture scale, quadratic in production, and slow enough to hold
+  // a pooled api connection while the site waits behind it.
+  const POINTS = 2_000;
+  const points = Array.from({ length: POINTS }, (_, i) => ({
+    date: new Date(Date.UTC(2015, 0, i + 1)).toISOString().slice(0, 10),
+    value: i,
+  }));
+  const acquire = async (generation: number) => {
+    const startedAt = Date.now();
+    await captureSourceAcquisition(
+      { provider: "fixture", sourceKey: "series:deep", parserVersion: "fixture:1", cacheIdentity: `gen-${generation}` },
+      sink,
+      async () => points.map((p) => ({ ...p, value: p.value + generation })),
+    );
+    return Date.now() - startedAt;
+  };
+
+  const first = await acquire(0);
+  for (let generation = 1; generation <= 5; generation++) await acquire(generation);
+  const sixth = await acquire(6);
+
+  const [{ versions }] = await sql`
+    SELECT count(*)::int AS versions FROM source_value_versions WHERE source_key = 'series:deep'`;
+  // Nothing is collapsed: seven generations of every point are all retained.
+  expect(versions).toBe(POINTS * 7);
+
+  // The seventh acquisition searches seven generations instead of one. With an
+  // index-searchable lookup that is roughly flat; with a scan it grows with the
+  // history. 4x the first acquisition is far looser than the ~7x a linear scan
+  // would cost here, so this fails on the regression without being timing-flaky.
+  expect(sixth).toBeLessThan(Math.max(first * 4, 1_500));
+});
