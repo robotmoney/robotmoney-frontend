@@ -120,7 +120,8 @@ export interface SwarmTake {
   confidence: number | null;
   body: string | null;
   memoUrl?: string | null;
-  weights?: SwarmBucketWeight[];
+  weights?: SwarmBucketWeight[] | null;
+  cites?: string[];
   verified: boolean;
   /**
    * True when this take is v0 pre-launch archive content rather than a member
@@ -294,6 +295,7 @@ export interface SwarmRecommendation {
    */
   actions?: SwarmRecommendedAction[];
   weights?: SwarmBucketWeight[];
+  citedSignals?: Record<string, number>;
 }
 
 export interface SwarmSession {
@@ -422,6 +424,11 @@ export interface SwarmBriefBody {
         weight: { type: "number"; minimum: 0 };
       };
     };
+    cites: {
+      type: "array";
+      optional: true;
+      items: { type: "string" };
+    };
   };
   windowClosesAt: string;
 }
@@ -451,6 +458,7 @@ export interface SwarmSubmission {
   body: string;
   memoUrl?: string;
   weights?: SwarmBucketWeight[];
+  cites?: string[];
   signature: string;
 }
 
